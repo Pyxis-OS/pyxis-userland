@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define SYSCALL_PUTCHAR UINT64_C(0)
+#define SYSCALL_EXIT UINT64_C(1)
 
 /* Caelum's one-argument syscall ABI: RAX is the number/result, RDI is arg1.
  * RCX and R11 are destroyed by SYSCALL/SYSRET. The memory clobber keeps C
