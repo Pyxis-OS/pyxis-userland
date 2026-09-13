@@ -2,5 +2,5 @@
 
 int main(void)
 {
-  return print("Hello from C!");
+  return print("Hello from C!\n");
 }
