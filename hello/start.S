@@ -7,8 +7,9 @@ _start:
   xor %ebp, %ebp
   cld
   call main
-  /* There is no exit syscall yet; returning from main deliberately raises #GP. */
-  hlt
+
+  mov %eax, %edi
+  call exit
 .size _start, . - _start
 
 .section .note.GNU-stack,"",@progbits

@@ -8,7 +8,7 @@ LDFLAGS := -nostdlib -static -no-pie -Wl,-T,linker.ld \
            -Wl,--build-id=none -Wl,-z,max-page-size=0x1000
 
 HELLO_OBJECTS := ../build/userspace/hello/start.o ../build/userspace/hello/main.o \
-                 ../build/userspace/lib/io.o
+                 ../build/userspace/lib/io.o ../build/userspace/lib/exit.o
 
 .PHONY: all hello converter clean
 all: hello
