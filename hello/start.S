@@ -6,6 +6,7 @@ _start:
    * required by the C ABI. Clear inherited frame linkage and string direction. */
   xor %ebp, %ebp
   cld
+  /* Preserve the kernel's startup-record pointer in RDI as main's argument. */
   call main
 
   mov %eax, %edi
