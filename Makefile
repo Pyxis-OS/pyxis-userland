@@ -1,6 +1,6 @@
 CROSS_COMPILE ?= x86_64-elf-
 CC := $(CROSS_COMPILE)gcc
-CPPFLAGS := -Iinclude
+CPPFLAGS := -Iinclude -I../include
 CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only \
           -Wall -Wextra -MMD -MP
