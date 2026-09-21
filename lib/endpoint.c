@@ -28,16 +28,18 @@ enum call_status endpoint_request(handle_t endpoint, const void *bytes, size_t s
                                   const struct endpoint_grant *grant,
                                   struct endpoint_packet *reply)
 {
-  if (reply) {
-    *reply = (struct endpoint_packet){0};
-  }
-  if (size > ENDPOINT_DATA_MAX || (size && !bytes)) {
+  if (!reply || size > ENDPOINT_DATA_MAX || (size && !bytes)) {
+    if (reply) {
+      *reply = (struct endpoint_packet){0};
+    }
     return CALL_BAD_REQUEST;
   }
   struct endpoint_message message = {
     .header = {PROTOCOL_ENDPOINT, ENDPOINT_CALL},
     .body.call.size = size,
   };
+  /* Stage inputs before exchange_packet clears the reply: a caller may
+   * forward data/grant fields from the packet it also uses for the reply. */
   if (grant) {
     message.body.call.grant = *grant;
   }
