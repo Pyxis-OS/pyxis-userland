@@ -8,13 +8,16 @@ int console_write(handle_t output, const void *bytes, size_t size, size_t *writt
     return -1;
   }
   *written = 0;
-  struct console_write_request request = {
-    .address = (uintptr_t)bytes,
-    .length = size,
+  struct console_message message = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_WRITE},
+    .body.write = {
+      .address = (uintptr_t)bytes,
+      .length = size,
+    },
   };
   struct console_write_reply reply;
-  struct syscall_result result = syscall_call(output, CONSOLE_WRITE,
-      &request, sizeof(request), &reply, sizeof(reply));
+  struct syscall_result result = syscall_call(output, &message, sizeof(message),
+      &reply, sizeof(reply));
   if (result.status != CALL_OK || result.reply_size != sizeof(reply) ||
       reply.written > size || (size && !reply.written)) {
     return -1;
