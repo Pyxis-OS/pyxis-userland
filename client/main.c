@@ -20,7 +20,7 @@ static int run_client(const struct startup_info *startup)
   struct number_request request = {NUMBER_DOUBLE, 21};
   struct endpoint_packet packet;
   enum call_status status = endpoint_request(startup->endpoint, &request,
-      sizeof(request), &packet);
+      sizeof(request), NULL, &packet);
   if (status != CALL_OK || packet.size != sizeof(struct number_reply)) {
     return -1;
   }

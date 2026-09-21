@@ -11,7 +11,7 @@ static enum call_status exchange_packet(handle_t endpoint,
   struct endpoint_packet reply;
   struct syscall_result status = syscall_call(endpoint, message, sizeof(*message),
       &reply, sizeof(reply));
-  if (status.status > CALL_BUSY) {
+  if (status.status > CALL_LIMIT) {
     return CALL_UNAVAILABLE;
   }
   if (status.status != CALL_OK) {
@@ -25,6 +25,7 @@ static enum call_status exchange_packet(handle_t endpoint,
 }
 
 enum call_status endpoint_request(handle_t endpoint, const void *bytes, size_t size,
+                                  const struct endpoint_grant *grant,
                                   struct endpoint_packet *reply)
 {
   if (reply) {
@@ -37,6 +38,9 @@ enum call_status endpoint_request(handle_t endpoint, const void *bytes, size_t s
     .header = {PROTOCOL_ENDPOINT, ENDPOINT_CALL},
     .body.call.size = size,
   };
+  if (grant) {
+    message.body.call.grant = *grant;
+  }
   const uint8_t *source = bytes;
   for (size_t i = 0; i < size; ++i) {
     message.body.call.data[i] = source[i];
@@ -66,7 +70,7 @@ enum call_status endpoint_reply(handle_t endpoint, uint64_t id,
     message.body.reply.data[i] = source[i];
   }
   struct syscall_result result = syscall_call(endpoint, &message, sizeof(message), NULL, 0);
-  if (result.status > CALL_BUSY) {
+  if (result.status > CALL_LIMIT) {
     return CALL_UNAVAILABLE;
   }
   return result.reply_size == 0 ? result.status : CALL_BAD_REQUEST;
