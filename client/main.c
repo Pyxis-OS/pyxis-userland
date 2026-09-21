@@ -2,7 +2,8 @@
 #include <console.h>
 #include <endpoint.h>
 #include <handle.h>
-#include <number_service.h>
+#include <content_service.h>
+#include <abi/blob.h>
 
 static int print_number(handle_t output, uint64_t value)
 {
@@ -17,23 +18,24 @@ static int print_number(handle_t output, uint64_t value)
 
 static int run_client(const struct startup_info *startup)
 {
-  struct number_request request = {NUMBER_DOUBLE, 21};
+  struct content_request request = {CONTENT_PRINT};
+  struct endpoint_grant grant = {startup->content, BLOB_RIGHT_READ};
   struct endpoint_packet packet;
   enum call_status status = endpoint_request(startup->endpoint, &request,
-      sizeof(request), NULL, &packet);
-  if (status != CALL_OK || packet.size != sizeof(struct number_reply)) {
+      sizeof(request), &grant, &packet);
+  if (status != CALL_OK || packet.size != sizeof(struct content_reply)) {
     return -1;
   }
-  struct number_reply reply;
+  struct content_reply reply;
   for (size_t i = 0; i < sizeof(reply); ++i) {
     ((uint8_t *)&reply)[i] = packet.data[i];
   }
-  if (reply.status != NUMBER_OK) {
+  if (reply.status != CONTENT_OK) {
     return -1;
   }
-  if (console_print(startup->output, "client: server returned ") != 0 ||
-      print_number(startup->output, reply.value) != 0 ||
-      console_print(startup->output, "\n") != 0) {
+  if (console_print(startup->output, "client: server read ") != 0 ||
+      print_number(startup->output, reply.size) != 0 ||
+      console_print(startup->output, " bytes\n") != 0) {
     return -1;
   }
   return 0;
@@ -45,6 +47,9 @@ int main(const struct startup_info *startup)
     return 1;
   }
   int result = run_client(startup);
+  if (handle_close(startup->content) != 0) {
+    result = 1;
+  }
   if (handle_close(startup->endpoint) != 0) {
     result = 1;
   }

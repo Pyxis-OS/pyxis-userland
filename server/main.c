@@ -2,7 +2,29 @@
 #include <console.h>
 #include <endpoint.h>
 #include <handle.h>
-#include <number_service.h>
+#include <content_service.h>
+#include <blob.h>
+
+static int print_content(handle_t content, handle_t output, uint64_t *size)
+{
+  char buffer[128];
+  uint64_t offset = 0;
+  for (;;) {
+    size_t count;
+    if (blob_read(content, offset, buffer, sizeof(buffer), &count) != 0) {
+      return -1;
+    }
+    if (!count) {
+      *size = offset;
+      return 0;
+    }
+    if (count > UINT64_MAX - offset ||
+        console_write_all(output, buffer, count) != 0) {
+      return -1;
+    }
+    offset += count;
+  }
+}
 
 static int serve(const struct startup_info *startup)
 {
@@ -16,16 +38,19 @@ static int serve(const struct startup_info *startup)
       return -1;
     }
 
-    struct number_reply reply = {.status = NUMBER_INVALID};
-    if (packet.size == sizeof(struct number_request)) {
-      struct number_request request;
+    struct content_reply reply = {.status = CONTENT_INVALID};
+    if (packet.size == sizeof(struct content_request)) {
+      struct content_request request;
       for (size_t i = 0; i < sizeof(request); ++i) {
         ((uint8_t *)&request)[i] = packet.data[i];
       }
-      if (request.operation == NUMBER_DOUBLE && request.value <= UINT64_MAX / 2) {
-        reply.status = NUMBER_OK;
-        reply.value = request.value * 2;
+      if (request.operation == CONTENT_PRINT && packet.grant.handle != HANDLE_INVALID) {
+        reply.status = print_content(packet.grant.handle, startup->output, &reply.size) == 0 ?
+                       CONTENT_OK : CONTENT_IO_ERROR;
       }
+    }
+    if (packet.grant.handle != HANDLE_INVALID && handle_close(packet.grant.handle) != 0) {
+      return -1;
     }
     status = endpoint_reply(startup->endpoint, packet.id, &reply, sizeof(reply));
     if (status == CALL_ENDPOINT_CLOSED) {
