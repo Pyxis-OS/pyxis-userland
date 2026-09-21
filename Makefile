@@ -7,15 +7,19 @@ CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
 LDFLAGS := -nostdlib -static -no-pie -Wl,-T,linker.ld \
            -Wl,--build-id=none -Wl,-z,max-page-size=0x1000
 
-HELLO_OBJECTS := ../build/userspace/hello/start.o ../build/userspace/hello/main.o \
-                 ../build/userspace/lib/io.o ../build/userspace/lib/exit.o \
-                 ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
-                 ../build/userspace/lib/blob.o
+LIB_OBJECTS := ../build/userspace/lib/start.o ../build/userspace/lib/io.o \
+               ../build/userspace/lib/exit.o ../build/userspace/lib/console.o \
+               ../build/userspace/lib/handle.o ../build/userspace/lib/blob.o \
+               ../build/userspace/lib/endpoint.o
+PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
+                   ../build/userspace/server/main.o
 
-.PHONY: all hello converter clean
-all: hello
+.PHONY: all hello client server converter clean
+all: hello client server
 
 hello: ../build/userspace/hello.pxe ../build/userspace/hello.txt
+client: ../build/userspace/client.pxe
+server: ../build/userspace/server.pxe
 
 ../build/userspace/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
@@ -27,8 +31,8 @@ converter:
 # Consult the tools Makefile even when the converter binary already exists.
 ../build/tools/elf2pxe: converter
 
-../build/userspace/hello.elf: $(HELLO_OBJECTS) linker.ld
-	$(CC) $(LDFLAGS) -o $@ $(HELLO_OBJECTS)
+../build/userspace/%.elf: ../build/userspace/%/main.o $(LIB_OBJECTS) linker.ld
+	$(CC) $(LDFLAGS) -o $@ $< $(LIB_OBJECTS)
 
 ../build/userspace/%.o: %.c
 	@mkdir -p $(@D)
@@ -44,4 +48,7 @@ converter:
 clean:
 	rm -rf ../build/userspace
 
--include $(HELLO_OBJECTS:.o=.d)
+# Keep the ELF symbols and intermediate objects for debugging and rebuilds.
+.SECONDARY:
+
+-include $(LIB_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)
