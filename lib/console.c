@@ -23,20 +23,25 @@ int console_write(handle_t output, const void *bytes, size_t size, size_t *writt
   return 0;
 }
 
-int console_print(handle_t output, const char *text)
+int console_write_all(handle_t output, const void *bytes, size_t size)
 {
-  size_t remaining = 0;
-  while (text[remaining]) {
-    ++remaining;
-  }
-
-  while (remaining) {
+  const char *cursor = bytes;
+  while (size) {
     size_t written;
-    if (console_write(output, text, remaining, &written) != 0) {
+    if (console_write(output, cursor, size, &written) != 0) {
       return -1;
     }
-    text += written;
-    remaining -= written;
+    cursor += written;
+    size -= written;
   }
   return 0;
+}
+
+int console_print(handle_t output, const char *text)
+{
+  size_t size = 0;
+  while (text[size]) {
+    ++size;
+  }
+  return console_write_all(output, text, size);
 }
