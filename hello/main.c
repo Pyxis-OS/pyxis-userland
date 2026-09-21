@@ -1,4 +1,5 @@
 #include <console.h>
+#include <handle.h>
 #include <abi/startup.h>
 
 int main(const struct startup_info *startup)
@@ -8,5 +9,9 @@ int main(const struct startup_info *startup)
     return 1;
   }
 
-  return console_print(startup->output, "Hello from C!\n");
+  int result = console_print(startup->output, "Hello from C!\n");
+  if (handle_close(startup->output) != 0) {
+    return 1;
+  }
+  return result;
 }
