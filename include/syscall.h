@@ -5,7 +5,7 @@
 #include <abi/syscall.h>
 #include <stddef.h>
 
-/* Legacy one-argument calls: RAX is the number/result, RDI is arg1.
+/* One-argument calls that preserve RDX: RAX is the number/result, RDI is arg1.
  * RCX and R11 are destroyed by SYSCALL/SYSRET. The memory clobber keeps C
  * memory accesses ordered around the kernel call, including pointer arguments. */
 static inline int64_t syscall1(uint64_t number, uint64_t arg1)
@@ -33,7 +33,7 @@ static inline struct syscall_result syscall_call(handle_t handle,
   return (struct syscall_result){status, reply_size};
 }
 
-/* CLOSE overwrites RDX, so it cannot use the legacy syscall1 wrapper. */
+/* CLOSE overwrites RDX, so it cannot use the syscall1 wrapper. */
 static inline struct syscall_result syscall_close(handle_t handle)
 {
   uint64_t status = SYSCALL_CLOSE;

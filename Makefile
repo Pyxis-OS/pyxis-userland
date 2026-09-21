@@ -7,10 +7,9 @@ CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
 LDFLAGS := -nostdlib -static -no-pie -Wl,-T,linker.ld \
            -Wl,--build-id=none -Wl,-z,max-page-size=0x1000
 
-LIB_OBJECTS := ../build/userspace/lib/start.o ../build/userspace/lib/io.o \
-               ../build/userspace/lib/exit.o ../build/userspace/lib/console.o \
-               ../build/userspace/lib/handle.o ../build/userspace/lib/blob.o \
-               ../build/userspace/lib/endpoint.o
+LIB_OBJECTS := ../build/userspace/lib/start.o ../build/userspace/lib/exit.o \
+               ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
+               ../build/userspace/lib/blob.o ../build/userspace/lib/endpoint.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o
 
