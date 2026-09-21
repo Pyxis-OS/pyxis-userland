@@ -34,4 +34,16 @@ static inline struct syscall_result syscall_call(handle_t handle, uint64_t opera
   return (struct syscall_result){status, reply_size};
 }
 
+/* CLOSE overwrites RDX, so it cannot use the legacy syscall1 wrapper. */
+static inline struct syscall_result syscall_close(handle_t handle)
+{
+  uint64_t status = SYSCALL_CLOSE;
+  uint64_t reply_size;
+  __asm__ volatile("syscall"
+                   : "+a"(status), "=d"(reply_size)
+                   : "D"(handle)
+                   : "rcx", "r11", "cc", "memory");
+  return (struct syscall_result){status, reply_size};
+}
+
 #endif
