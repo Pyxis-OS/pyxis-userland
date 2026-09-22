@@ -23,7 +23,7 @@ static int print_content(handle_t output, handle_t content)
     if (!read) {
       return offset == size ? 0 : -1;
     }
-    /* This initrd file is immutable: counts must agree with its advertised size. */
+    /* These examples do not modify file contents while reading. */
     if (read > size - offset) {
       return -1;
     }
@@ -115,11 +115,51 @@ done:
   return result;
 }
 
+static int create_home_content(handle_t output, handle_t home)
+{
+  handle_t created_directory = HANDLE_INVALID, created_file = HANDLE_INVALID;
+  handle_t directory = HANDLE_INVALID, file = HANDLE_INVALID;
+  uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+                              DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_CREATE;
+  int result = -1;
+  if (directory_create(home, "notes", DIRECTORY_KIND_DIRECTORY, directory_rights,
+        &created_directory) != CALL_OK ||
+      directory_create(created_directory, "empty.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        &created_file) != CALL_OK) {
+    goto done;
+  }
+
+  /* Rediscover the published names through independent grants. The tree owns
+   * their lifetime; closing creation handles does not remove the entries. */
+  if (directory_lookup(home, "notes", DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES,
+        &directory) != CALL_OK ||
+      directory_lookup(directory, "empty.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        &file) != CALL_OK) {
+    goto done;
+  }
+  if (console_print(output, "home://\n") != 0 || list_directory(output, home) != 0 ||
+      console_print(output, "home://notes/\n") != 0 || list_directory(output, directory) != 0) {
+    goto done;
+  }
+  result = print_content(output, file);
+
+done:
+  handle_t owned[] = {file, directory, created_file, created_directory};
+  for (size_t i = 0; i < sizeof(owned) / sizeof(owned[0]); ++i) {
+    if (owned[i] != HANDLE_INVALID && handle_close(owned[i]) != 0) {
+      result = -1;
+    }
+  }
+  return result;
+}
+
 int main(int argc, char **argv)
 {
   handle_t output = startup_resource("output");
   handle_t root = startup_root("app");
-  if (output == HANDLE_INVALID || root == HANDLE_INVALID) {
+  handle_t home = startup_root("home");
+  if (output == HANDLE_INVALID || root == HANDLE_INVALID || home == HANDLE_INVALID) {
     return 1;
   }
 
@@ -139,6 +179,12 @@ int main(int argc, char **argv)
   }
   if (result == 0) {
     result = read_application_file(output, root);
+  }
+  if (result == 0) {
+    result = create_home_content(output, home);
+  }
+  if (handle_close(home) != 0) {
+    result = 1;
   }
   if (handle_close(root) != 0) {
     result = 1;
