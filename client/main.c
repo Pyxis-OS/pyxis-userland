@@ -1,4 +1,4 @@
-#include <abi/startup.h>
+#include <startup.h>
 #include <console.h>
 #include <endpoint.h>
 #include <handle.h>
@@ -16,12 +16,12 @@ static int print_number(handle_t output, uint64_t value)
   return console_write_all(output, digits + start, sizeof(digits) - start);
 }
 
-static int run_client(const struct startup_info *startup)
+static int run_client(handle_t output, handle_t content, handle_t endpoint)
 {
   struct content_request request = {CONTENT_PRINT};
-  struct endpoint_grant grant = {startup->content, BLOB_RIGHT_READ};
+  struct endpoint_grant grant = {content, BLOB_RIGHT_READ};
   struct endpoint_packet packet;
-  enum call_status status = endpoint_request(startup->endpoint, &request,
+  enum call_status status = endpoint_request(endpoint, &request,
       sizeof(request), &grant, &packet);
   if (status != CALL_OK || packet.size != sizeof(struct content_reply)) {
     return -1;
@@ -33,27 +33,33 @@ static int run_client(const struct startup_info *startup)
   if (reply.status != CONTENT_OK) {
     return -1;
   }
-  if (console_print(startup->output, "client: server read ") != 0 ||
-      print_number(startup->output, reply.size) != 0 ||
-      console_print(startup->output, " bytes\n") != 0) {
+  if (console_print(output, "client: server read ") != 0 ||
+      print_number(output, reply.size) != 0 ||
+      console_print(output, " bytes\n") != 0) {
     return -1;
   }
   return 0;
 }
 
-int main(const struct startup_info *startup)
+int main(int argc, char **argv)
 {
-  if (!startup || startup->version != STARTUP_VERSION || startup->size < sizeof(*startup)) {
+  (void)argc;
+  (void)argv;
+  handle_t output = startup_resource("output");
+  handle_t endpoint = startup_resource("endpoint");
+  handle_t content = startup_resource("content");
+  if (output == HANDLE_INVALID || endpoint == HANDLE_INVALID || content == HANDLE_INVALID) {
     return 1;
   }
-  int result = run_client(startup);
-  if (handle_close(startup->content) != 0) {
+
+  int result = run_client(output, content, endpoint);
+  if (handle_close(content) != 0) {
     result = 1;
   }
-  if (handle_close(startup->endpoint) != 0) {
+  if (handle_close(endpoint) != 0) {
     result = 1;
   }
-  if (handle_close(startup->output) != 0) {
+  if (handle_close(output) != 0) {
     result = 1;
   }
   return result != 0;

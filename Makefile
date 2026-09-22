@@ -10,7 +10,7 @@ LDFLAGS := -nostdlib -static -no-pie -Wl,-T,linker.ld \
 
 START_OBJECT := ../build/userspace/lib/start.o
 LIBPYXIS := ../build/userspace/libpyxis.a
-LIB_OBJECTS := ../build/userspace/lib/exit.o \
+LIB_OBJECTS := ../build/userspace/lib/startup.o ../build/userspace/lib/exit.o \
                ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
                ../build/userspace/lib/blob.o ../build/userspace/lib/endpoint.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
