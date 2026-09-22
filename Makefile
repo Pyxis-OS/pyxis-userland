@@ -14,7 +14,8 @@ LIB_OBJECTS := ../build/userspace/lib/startup.o \
                ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
                ../build/userspace/lib/file.o ../build/userspace/lib/endpoint.o \
                ../build/userspace/lib/directory.o ../build/userspace/lib/path.o \
-               ../build/userspace/lib/memory.o ../build/userspace/lib/process.o
+               ../build/userspace/lib/memory.o ../build/userspace/lib/process.o \
+               ../build/userspace/lib/launcher.o
 LIBC := ../build/userspace/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 LIBC_OBJECTS := $(patsubst %.c,../build/userspace/%.o,$(LIBC_SOURCES)) \

@@ -1,5 +1,8 @@
 #include <startup.h>
 #include <process.h>
+#include <launcher.h>
+#include <abi/console.h>
+#include <abi/memory.h>
 #include <stdio.h>
 #include <console.h>
 #include <endpoint.h>
@@ -62,6 +65,45 @@ static int wait_for_server(handle_t output, handle_t server)
   return completion.exit_status == 0 ? 0 : -1;
 }
 
+static int launch_server(handle_t output, handle_t *server)
+{
+  handle_t launcher = startup_resource("launcher");
+  handle_t image = startup_resource("server_image");
+  handle_t endpoint = startup_resource("server_endpoint");
+  handle_t memory = startup_resource("memory");
+  enum { SERVER_OUTPUT, SERVER_ENDPOINT, SERVER_MEMORY };
+  struct launch_grant grants[] = {
+    {output, CONSOLE_RIGHT_WRITE},
+    {endpoint, ENDPOINT_RIGHT_RECEIVE | ENDPOINT_RIGHT_REPLY},
+    {memory, MEMORY_RIGHT_MANAGE},
+  };
+  struct launch_binding resources[] = {
+    {(uintptr_t)"output", SERVER_OUTPUT},
+    {(uintptr_t)"endpoint", SERVER_ENDPOINT},
+    {(uintptr_t)"memory", SERVER_MEMORY},
+  };
+  const char *arguments[] = {"server.pxe"};
+  struct launch_request request = {
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .grant_count = sizeof(grants) / sizeof(grants[0]),
+    .resources = (uintptr_t)resources,
+    .resource_count = sizeof(resources) / sizeof(resources[0]),
+    .argv = (uintptr_t)arguments,
+    .argc = 1,
+  };
+  int result = launcher_launch(launcher, &request, server) == CALL_OK ? 0 : -1;
+  /* Launch copies grants. Drop our server end so endpoint closure reflects
+   * the two communicating programs, and release preparation-only authority. */
+  handle_t preparation[] = {endpoint, image, launcher};
+  for (size_t i = 0; i < sizeof(preparation) / sizeof(preparation[0]); ++i) {
+    if (handle_close(preparation[i]) != 0) {
+      result = -1;
+    }
+  }
+  return result;
+}
+
 int main(int argc, char **argv)
 {
   (void)argc;
@@ -69,23 +111,25 @@ int main(int argc, char **argv)
   handle_t output = startup_resource("output");
   handle_t endpoint = startup_resource("endpoint");
   handle_t content = startup_resource("content");
-  handle_t server = startup_resource("server_process");
-  if (output == HANDLE_INVALID || endpoint == HANDLE_INVALID || content == HANDLE_INVALID ||
-      server == HANDLE_INVALID) {
+  handle_t server = HANDLE_INVALID;
+  if (output == HANDLE_INVALID || endpoint == HANDLE_INVALID || content == HANDLE_INVALID) {
     return 1;
   }
 
-  int result = run_client(output, content, endpoint);
+  int result = launch_server(output, &server);
+  if (result == 0) {
+    result = run_client(output, content, endpoint);
+  }
   if (handle_close(content) != 0) {
     result = 1;
   }
   /* The server exits on endpoint closure; waiting before close would deadlock. */
   if (handle_close(endpoint) != 0) {
     result = 1;
-  } else if (wait_for_server(output, server) != 0) {
+  } else if (server != HANDLE_INVALID && wait_for_server(output, server) != 0) {
     result = 1;
   }
-  if (handle_close(server) != 0) {
+  if (server != HANDLE_INVALID && handle_close(server) != 0) {
     result = 1;
   }
   if (handle_close(output) != 0) {
