@@ -1,4 +1,6 @@
 #include <file.h>
+#include <directory.h>
+#include <abi/file.h>
 #include <console.h>
 #include <handle.h>
 #include <startup.h>
@@ -31,11 +33,63 @@ static int print_content(handle_t output, handle_t content)
   }
 }
 
+static int list_directory(handle_t output, handle_t directory)
+{
+  struct directory_cursor cursor = {0};
+  for (;;) {
+    char name[256];
+    struct directory_enumerate_reply entry;
+    if (directory_enumerate(directory, &cursor, name, sizeof(name), &entry) != CALL_OK) {
+      return -1;
+    }
+    if (entry.outcome == DIRECTORY_END) {
+      return 0;
+    }
+    if (entry.outcome != DIRECTORY_ENTRY) {
+      return -1; /* This fixed-buffer example reports oversized names as an error. */
+    }
+    if (console_print(output, name) != 0 ||
+        (entry.kind == DIRECTORY_KIND_DIRECTORY && console_print(output, "/") != 0) ||
+        console_print(output, "\n") != 0) {
+      return -1;
+    }
+    cursor = entry.cursor;
+  }
+}
+
+static int read_application_file(handle_t output, handle_t root)
+{
+  handle_t directory = HANDLE_INVALID;
+  handle_t file = HANDLE_INVALID;
+  int result = -1;
+  if (console_print(output, "app://\n") != 0 || list_directory(output, root) != 0 ||
+      directory_lookup(root, "share", DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES,
+        &directory) != CALL_OK) {
+    goto done;
+  }
+  if (console_print(output, "app://share/\n") != 0 || list_directory(output, directory) != 0 ||
+      directory_lookup(directory, "hello.txt", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &file) != CALL_OK) {
+    goto done;
+  }
+  result = print_content(output, file);
+
+done:
+  if (file != HANDLE_INVALID && handle_close(file) != 0) {
+    result = -1;
+  }
+  if (directory != HANDLE_INVALID && handle_close(directory) != 0) {
+    result = -1;
+  }
+  return result;
+}
+
 int main(int argc, char **argv)
 {
   handle_t output = startup_resource("output");
-  handle_t content = startup_resource("content");
-  if (output == HANDLE_INVALID || content == HANDLE_INVALID) {
+  handle_t root = startup_root("app");
+  if (output == HANDLE_INVALID || root == HANDLE_INVALID) {
     return 1;
   }
 
@@ -54,9 +108,9 @@ int main(int argc, char **argv)
     }
   }
   if (result == 0) {
-    result = print_content(output, content);
+    result = read_application_file(output, root);
   }
-  if (handle_close(content) != 0) {
+  if (handle_close(root) != 0) {
     result = 1;
   }
   if (handle_close(output) != 0) {

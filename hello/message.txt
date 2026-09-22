@@ -1,11 +1,11 @@
-This text came from the boot archive. The kernel gave hello a handle to an
-immutable file containing these bytes, along with a separate handle for its
-space's console. The program can read the content and write to that console;
-it does not need a filesystem path or access to the archive itself.
+This text came from the boot archive. Hello received an app directory capability,
+listed its entries, and looked up share and then this file with explicit rights.
+It did not need a global filesystem root or a kernel path parser.
 
-Hello asks for the file's size, reads at explicit byte offsets, and prints each
-chunk using the console capability. A console write may accept only part of a
-chunk, so the userspace helper keeps writing until that chunk is complete.
+The program queries the file size, reads at explicit byte offsets, and prints
+through its space's console. Directory enumeration does not grant handles;
+lookup returns a new reference which the program closes after reading.
 
-When the content reaches its end, hello closes both handles and exits. The
-space keeps its console, and the shared boot archive keeps its original bytes.
+The endpoint client passes its own read-only file capability to the server.
+Closing either handle leaves the other reference valid. The shared boot archive
+keeps its original bytes after the programs exit.
