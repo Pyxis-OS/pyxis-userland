@@ -11,6 +11,14 @@
 enum call_status directory_lookup(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle);
 
+/* Exclusive creation of an empty RAM file/directory. Requires CREATE; child
+ * rights are bounded exactly as for lookup. An existing name returns
+ * ALREADY_EXISTS, without opening/replacing it. Initrd rejects mutation even
+ * when a grant carries CREATE. Success owns *handle; failure clears it and
+ * publishes no entry. May wait for BSP allocation, table growth or disposal. */
+enum call_status directory_create(handle_t directory, const char *name,
+    uint64_t kind, uint64_t rights, handle_t *handle);
+
 /* Pass a zero cursor initially, then the returned cursor for the same directory.
  * On CALL_OK inspect reply->outcome: ENTRY, END, BUFFER_TOO_SMALL or CHANGED.
  * Only ENTRY writes name (including NUL). BUFFER_TOO_SMALL reports name_size
