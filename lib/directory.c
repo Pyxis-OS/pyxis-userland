@@ -12,7 +12,7 @@ static enum call_status call_status(struct syscall_result result, size_t reply_s
   return result.status;
 }
 
-enum call_status directory_lookup(handle_t directory, const char *name,
+static enum call_status child_call(handle_t directory, uint64_t operation, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle)
 {
   if (!handle) {
@@ -27,10 +27,15 @@ enum call_status directory_lookup(handle_t directory, const char *name,
     ++length;
   }
   struct directory_message message = {
-    .header = {PROTOCOL_DIRECTORY, DIRECTORY_LOOKUP},
-    .body.lookup = {(uintptr_t)name, length, kind, rights},
+    .header = {PROTOCOL_DIRECTORY, operation},
   };
-  struct directory_lookup_reply reply;
+  struct directory_child_request request = {(uintptr_t)name, length, kind, rights};
+  if (operation == DIRECTORY_LOOKUP) {
+    message.body.lookup = request;
+  } else {
+    message.body.create = request;
+  }
+  struct directory_child_reply reply;
   enum call_status status = call_status(syscall_call(directory, &message, sizeof(message),
       &reply, sizeof(reply)), sizeof(reply));
   *handle = HANDLE_INVALID;
@@ -42,6 +47,18 @@ enum call_status directory_lookup(handle_t directory, const char *name,
   }
   *handle = reply.handle;
   return CALL_OK;
+}
+
+enum call_status directory_lookup(handle_t directory, const char *name,
+    uint64_t kind, uint64_t rights, handle_t *handle)
+{
+  return child_call(directory, DIRECTORY_LOOKUP, name, kind, rights, handle);
+}
+
+enum call_status directory_create(handle_t directory, const char *name,
+    uint64_t kind, uint64_t rights, handle_t *handle)
+{
+  return child_call(directory, DIRECTORY_CREATE, name, kind, rights, handle);
 }
 
 enum call_status directory_enumerate(handle_t directory, const struct directory_cursor *cursor,
