@@ -16,7 +16,7 @@ const char *startup_environment(const char *name);
 
 /* The chain runs from the permitted parent-navigation boundary to the current
  * directory. Out-of-range indexes return HANDLE_INVALID. The optional display
- * path is descriptive only. Currently boot programs have no directory context. */
+ * path is descriptive only. Currently boot programs have no working-directory context. */
 size_t startup_working_directory_count(void);
 handle_t startup_working_directory(size_t index);
 const char *startup_working_path(void);

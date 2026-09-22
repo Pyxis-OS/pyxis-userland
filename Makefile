@@ -12,7 +12,8 @@ START_OBJECT := ../build/userspace/lib/start.o
 LIBPYXIS := ../build/userspace/libpyxis.a
 LIB_OBJECTS := ../build/userspace/lib/startup.o ../build/userspace/lib/exit.o \
                ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
-               ../build/userspace/lib/file.o ../build/userspace/lib/endpoint.o
+               ../build/userspace/lib/file.o ../build/userspace/lib/endpoint.o \
+               ../build/userspace/lib/directory.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o
 
@@ -20,11 +21,11 @@ PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/mai
 all: hello client server
 
 libpyxis: $(LIBPYXIS)
-hello: ../build/userspace/hello.pxe ../build/userspace/hello.txt
+hello: ../build/userspace/hello.pxe ../build/userspace/share/hello.txt
 client: ../build/userspace/client.pxe
 server: ../build/userspace/server.pxe
 
-../build/userspace/hello.txt: hello/message.txt
+../build/userspace/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
 	cp $< $@
 
