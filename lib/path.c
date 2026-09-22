@@ -182,11 +182,14 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
   *handle = HANDLE_INVALID;
   uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP;
   if (kind == DIRECTORY_KIND_FILE) {
-    if (rights & ~FILE_RIGHT_READ) {
+    if (rights & ~FILE_RIGHTS) {
       return CALL_BAD_REQUEST;
     }
     if (rights & FILE_RIGHT_READ) {
       directory_rights |= DIRECTORY_RIGHT_READ_FILES;
+    }
+    if (rights & FILE_RIGHT_WRITE) {
+      directory_rights |= DIRECTORY_RIGHT_WRITE_FILES;
     }
   } else if (kind == DIRECTORY_KIND_DIRECTORY) {
     if (rights & ~DIRECTORY_RIGHTS) {
