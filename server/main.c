@@ -3,7 +3,7 @@
 #include <endpoint.h>
 #include <handle.h>
 #include <content_service.h>
-#include <blob.h>
+#include <file.h>
 
 static int print_content(handle_t content, handle_t output, uint64_t *size)
 {
@@ -11,7 +11,7 @@ static int print_content(handle_t content, handle_t output, uint64_t *size)
   uint64_t offset = 0;
   for (;;) {
     size_t count;
-    if (blob_read(content, offset, buffer, sizeof(buffer), &count) != 0) {
+    if (file_read(content, offset, buffer, sizeof(buffer), &count) != 0) {
       return -1;
     }
     if (!count) {
