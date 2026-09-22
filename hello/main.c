@@ -172,14 +172,45 @@ done:
   return result;
 }
 
+static int receive_input(handle_t input, handle_t output)
+{
+  size_t columns, rows;
+  if (console_size(output, &columns, &rows) != CALL_OK) {
+    return -1;
+  }
+  char buffer[128];
+  int length = snprintf(buffer, sizeof(buffer),
+      "Terminal: %zu columns, %zu rows. Type a key to echo its bytes.\n", columns, rows);
+  if (length < 0 || (size_t)length >= sizeof(buffer) ||
+      console_write_all(output, buffer, length) != 0) {
+    return -1;
+  }
+
+  for (;;) {
+    size_t count;
+    enum call_status status = console_read(input, buffer, sizeof(buffer), &count);
+    if (status == CALL_INPUT_LOST) {
+      if (console_print(output, "Input lost; please try again.\n") != 0) {
+        return -1;
+      }
+      continue;
+    }
+    if (status == CALL_UNAVAILABLE) {
+      return console_print(output, "Keyboard input unavailable.\n");
+    }
+    return status == CALL_OK ? console_write_all(output, buffer, count) : -1;
+  }
+}
+
 int main(int argc, char **argv)
 {
+  handle_t input = startup_resource("input");
   handle_t output = startup_resource("output");
   handle_t root = startup_root("app");
   handle_t home = startup_root("home");
   handle_t memory = startup_resource("memory");
-  if (output == HANDLE_INVALID || root == HANDLE_INVALID || home == HANDLE_INVALID ||
-      memory == HANDLE_INVALID) {
+  if (input == HANDLE_INVALID || output == HANDLE_INVALID || root == HANDLE_INVALID ||
+      home == HANDLE_INVALID || memory == HANDLE_INVALID) {
     return 1;
   }
 
@@ -203,6 +234,12 @@ int main(int argc, char **argv)
   }
   if (result == 0) {
     result = create_home_content(output, home);
+  }
+  if (result == 0) {
+    result = receive_input(input, output);
+  }
+  if (handle_close(input) != 0) {
+    result = 1;
   }
   if (handle_close(memory) != 0) {
     result = 1;
