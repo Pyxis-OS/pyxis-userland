@@ -1,8 +1,5 @@
 #include <abi/startup.h>
-#include <exit.h>
 #include <startup.h>
-
-extern int main(int argc, char **argv);
 
 static const struct startup_info *startup;
 
@@ -112,16 +109,16 @@ static bool valid_startup(const struct startup_info *info)
   return true;
 }
 
-/* Called only by the assembly entry, before application code can mutate argv.
+/* Called by the runtime before application code can mutate argv.
  * The kernel supplies mapped storage; bounds checks do not probe arbitrary
  * user pointers or replace the kernel's startup preparation checks. */
-[[noreturn]] void startup_enter(const struct startup_info *info)
+bool startup_init(const struct startup_info *info)
 {
   if (!valid_startup(info)) {
-    exit(1);
+    return false;
   }
   startup = info;
-  exit(main((int)info->argc, (char **)(uintptr_t)info->argv));
+  return true;
 }
 
 static bool same_name(const char *left, const char *right)

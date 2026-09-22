@@ -1,27 +1,32 @@
 CROSS_COMPILE ?= x86_64-elf-
 CC := $(CROSS_COMPILE)gcc
 AR := $(CROSS_COMPILE)ar
-CPPFLAGS := -Iinclude -I../include
+CPPFLAGS := -Ilibc/include -Iinclude -I../include
 CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only \
           -Wall -Wextra -MMD -MP
 LDFLAGS := -nostdlib -static -no-pie -Wl,-T,linker.ld \
            -Wl,--build-id=none -Wl,-z,max-page-size=0x1000
 
-START_OBJECT := ../build/userspace/lib/start.o
+START_OBJECT := ../build/userspace/libc/start.o
 LIBPYXIS := ../build/userspace/libpyxis.a
-LIB_OBJECTS := ../build/userspace/lib/startup.o ../build/userspace/lib/exit.o \
+LIB_OBJECTS := ../build/userspace/lib/startup.o \
                ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
                ../build/userspace/lib/file.o ../build/userspace/lib/endpoint.o \
                ../build/userspace/lib/directory.o ../build/userspace/lib/path.o \
                ../build/userspace/lib/memory.o
+LIBC := ../build/userspace/libc.a
+LIBC_SOURCES := $(wildcard libc/*.c)
+LIBC_OBJECTS := $(patsubst %.c,../build/userspace/%.o,$(LIBC_SOURCES)) \
+                ../build/userspace/libc/tlsf.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o
 
-.PHONY: all libpyxis hello client server converter clean
+.PHONY: all libpyxis libc hello client server converter clean
 all: hello client server
 
 libpyxis: $(LIBPYXIS)
+libc: $(LIBC)
 hello: ../build/userspace/hello.pxe ../build/userspace/share/hello.txt
 client: ../build/userspace/client.pxe
 server: ../build/userspace/server.pxe
@@ -42,9 +47,20 @@ $(LIBPYXIS): $(LIB_OBJECTS) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(LIB_OBJECTS)
 
+$(LIBC): $(LIBC_OBJECTS) Makefile
+	@mkdir -p $(@D)
+	rm -f $@
+	$(AR) rcs $@ $(LIBC_OBJECTS)
+
+../build/userspace/libc/tlsf.o: ../third_party/tlsf/tlsf.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DTLSF_USERSPACE -Ilibc -c $< -o $@
+
+../build/userspace/libc/malloc.o: CPPFLAGS += -I../third_party/tlsf
+
 # Startup is always linked; the archive supplies only referenced wrappers.
-../build/userspace/%.elf: ../build/userspace/%/main.o $(START_OBJECT) $(LIBPYXIS) linker.ld
-	$(CC) $(LDFLAGS) -o $@ $(START_OBJECT) $< $(LIBPYXIS)
+../build/userspace/%.elf: ../build/userspace/%/main.o $(START_OBJECT) $(LIBPYXIS) $(LIBC) linker.ld
+	$(CC) $(LDFLAGS) -o $@ $(START_OBJECT) $< -Wl,--start-group $(LIBC) $(LIBPYXIS) -Wl,--end-group
 
 ../build/userspace/%.o: %.c
 	@mkdir -p $(@D)
@@ -63,4 +79,4 @@ clean:
 # Keep the ELF symbols and intermediate objects for debugging and rebuilds.
 .SECONDARY:
 
--include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)
+-include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)

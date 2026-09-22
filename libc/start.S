@@ -7,7 +7,7 @@ _start:
   xor %ebp, %ebp
   cld
   /* The C entry consumes RDI, initializes native bindings and calls main. */
-  call startup_enter
+  call libc_enter
   ud2
 .size _start, . - _start
 
