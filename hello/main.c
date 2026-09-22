@@ -1,4 +1,4 @@
-#include <blob.h>
+#include <file.h>
 #include <console.h>
 #include <handle.h>
 #include <startup.h>
@@ -6,7 +6,7 @@
 static int print_content(handle_t output, handle_t content)
 {
   uint64_t size;
-  if (blob_size(content, &size) != 0) {
+  if (file_size(content, &size) != 0) {
     return -1;
   }
 
@@ -14,13 +14,13 @@ static int print_content(handle_t output, handle_t content)
   uint64_t offset = 0;
   for (;;) {
     size_t read;
-    if (blob_read(content, offset, buffer, sizeof(buffer), &read) != 0) {
+    if (file_read(content, offset, buffer, sizeof(buffer), &read) != 0) {
       return -1;
     }
     if (!read) {
       return offset == size ? 0 : -1;
     }
-    /* The blob is immutable: counts must agree with its advertised size. */
+    /* This initrd file is immutable: counts must agree with its advertised size. */
     if (read > size - offset) {
       return -1;
     }

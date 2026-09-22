@@ -3,7 +3,7 @@
 #include <endpoint.h>
 #include <handle.h>
 #include <content_service.h>
-#include <abi/blob.h>
+#include <abi/file.h>
 
 static int print_number(handle_t output, uint64_t value)
 {
@@ -19,7 +19,7 @@ static int print_number(handle_t output, uint64_t value)
 static int run_client(handle_t output, handle_t content, handle_t endpoint)
 {
   struct content_request request = {CONTENT_PRINT};
-  struct endpoint_grant grant = {content, BLOB_RIGHT_READ};
+  struct endpoint_grant grant = {content, FILE_RIGHT_READ};
   struct endpoint_packet packet;
   enum call_status status = endpoint_request(endpoint, &request,
       sizeof(request), &grant, &packet);

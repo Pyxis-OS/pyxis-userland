@@ -1,9 +1,9 @@
 This text came from the boot archive. The kernel gave hello a handle to an
-immutable blob containing these bytes, along with a separate handle for its
+immutable file containing these bytes, along with a separate handle for its
 space's console. The program can read the content and write to that console;
 it does not need a filesystem path or access to the archive itself.
 
-Hello asks for the blob's size, reads at explicit byte offsets, and prints each
+Hello asks for the file's size, reads at explicit byte offsets, and prints each
 chunk using the console capability. A console write may accept only part of a
 chunk, so the userspace helper keeps writing until that chunk is complete.
 
