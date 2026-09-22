@@ -3,6 +3,7 @@
 #include <abi/file.h>
 #include <console.h>
 #include <handle.h>
+#include <path.h>
 #include <startup.h>
 
 static int print_content(handle_t output, handle_t content)
@@ -57,31 +58,60 @@ static int list_directory(handle_t output, handle_t directory)
   }
 }
 
+static int read_path(handle_t output, const struct path_context *context,
+                       const char *path, struct path_workspace *workspace)
+{
+  handle_t file;
+  if (path_resolve(context, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        workspace, &file) != CALL_OK) {
+    return -1;
+  }
+  int result = console_print(output, path);
+  if (!result) {
+    result = console_print(output, "\n");
+  }
+  if (!result) {
+    result = print_content(output, file);
+  }
+  if (handle_close(file) != 0) {
+    result = -1;
+  }
+  return result;
+}
+
 static int read_application_file(handle_t output, handle_t root)
 {
+  handle_t directories[8];
+  handle_t temporary[8];
+  char component[256];
+  struct path_workspace workspace = {temporary, 8, component, sizeof(component)};
+  struct path_context context;
+  uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+                    DIRECTORY_RIGHT_READ_FILES;
+  if (path_context_init(&context, directories, 8, startup_working_directories(),
+        startup_working_directory_count(), rights) != CALL_OK) {
+    return -1;
+  }
+
   handle_t directory = HANDLE_INVALID;
-  handle_t file = HANDLE_INVALID;
   int result = -1;
   if (console_print(output, "app://\n") != 0 || list_directory(output, root) != 0 ||
-      directory_lookup(root, "share", DIRECTORY_KIND_DIRECTORY,
-        DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES,
-        &directory) != CALL_OK) {
+      path_resolve(&context, "app://share", DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_ENUMERATE, &workspace, &directory) != CALL_OK) {
     goto done;
   }
   if (console_print(output, "app://share/\n") != 0 || list_directory(output, directory) != 0 ||
-      directory_lookup(directory, "hello.txt", DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &file) != CALL_OK) {
+      read_path(output, &context, "app://share/hello.txt", &workspace) != 0 ||
+      path_change(&context, "app://share", &workspace) != CALL_OK) {
     goto done;
   }
-  result = print_content(output, file);
+  result = read_path(output, &context, "hello.txt", &workspace);
 
 done:
-  if (file != HANDLE_INVALID && handle_close(file) != 0) {
-    result = -1;
-  }
   if (directory != HANDLE_INVALID && handle_close(directory) != 0) {
     result = -1;
   }
+  path_context_close(&context);
   return result;
 }
 
