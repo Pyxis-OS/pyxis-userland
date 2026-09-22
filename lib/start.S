@@ -6,11 +6,9 @@ _start:
    * required by the C ABI. Clear inherited frame linkage and string direction. */
   xor %ebp, %ebp
   cld
-  /* Preserve the kernel's startup-record pointer in RDI as main's argument. */
-  call main
-
-  mov %eax, %edi
-  call exit
+  /* The C entry consumes RDI, initializes native bindings and calls main. */
+  call startup_enter
+  ud2
 .size _start, . - _start
 
 .section .note.GNU-stack,"",@progbits

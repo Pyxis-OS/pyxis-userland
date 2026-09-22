@@ -1,7 +1,7 @@
 #include <blob.h>
 #include <console.h>
 #include <handle.h>
-#include <abi/startup.h>
+#include <startup.h>
 
 static int print_content(handle_t output, handle_t content)
 {
@@ -31,21 +31,35 @@ static int print_content(handle_t output, handle_t content)
   }
 }
 
-int main(const struct startup_info *startup)
+int main(int argc, char **argv)
 {
-  if (!startup || startup->version != STARTUP_VERSION ||
-      startup->size < sizeof(*startup)) {
+  handle_t output = startup_resource("output");
+  handle_t content = startup_resource("content");
+  if (output == HANDLE_INVALID || content == HANDLE_INVALID) {
     return 1;
   }
 
-  int result = console_print(startup->output, "Hello from C!\n");
-  if (result == 0) {
-    result = print_content(startup->output, startup->content);
+  const char *os_name = startup_environment("OS_NAME");
+  int result = console_print(output, "Hello from C!\n");
+  if (result == 0 && argc > 0 && os_name) {
+    result = console_print(output, argv[0]);
+    if (result == 0) {
+      result = console_print(output, " running on ");
+    }
+    if (result == 0) {
+      result = console_print(output, os_name);
+    }
+    if (result == 0) {
+      result = console_print(output, "\n");
+    }
   }
-  if (handle_close(startup->content) != 0) {
+  if (result == 0) {
+    result = print_content(output, content);
+  }
+  if (handle_close(content) != 0) {
     result = 1;
   }
-  if (handle_close(startup->output) != 0) {
+  if (handle_close(output) != 0) {
     result = 1;
   }
   return result != 0;
