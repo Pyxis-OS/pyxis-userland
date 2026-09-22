@@ -81,9 +81,16 @@ static bool valid_startup(const struct startup_info *info)
       (!info->working_directory_count && info->working_directories) ||
       (info->working_directory_count && !contains((uintptr_t)info, info->read_only_size,
         info->working_directories, info->working_directory_count * sizeof(handle_t))) ||
-      (info->working_path && !terminated((uintptr_t)info, info->read_only_size,
-        info->working_path))) {
+      (info->working_path && (!info->working_directory_count ||
+        !terminated((uintptr_t)info, info->read_only_size, info->working_path)))) {
     return false;
+  }
+
+  const handle_t *directories = (const void *)(uintptr_t)info->working_directories;
+  for (size_t i = 0; i < info->working_directory_count; ++i) {
+    if (directories[i] == HANDLE_INVALID) {
+      return false;
+    }
   }
 
   uint64_t arguments = (uintptr_t)info + info->read_only_size;
@@ -162,6 +169,11 @@ const char *startup_environment(const char *name)
     }
   }
   return NULL;
+}
+
+const handle_t *startup_working_directories(void)
+{
+  return (const void *)(uintptr_t)startup->working_directories;
 }
 
 size_t startup_working_directory_count(void)
