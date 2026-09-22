@@ -1,5 +1,6 @@
 CROSS_COMPILE ?= x86_64-elf-
 CC := $(CROSS_COMPILE)gcc
+AR := $(CROSS_COMPILE)ar
 CPPFLAGS := -Iinclude -I../include
 CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only \
@@ -7,15 +8,18 @@ CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
 LDFLAGS := -nostdlib -static -no-pie -Wl,-T,linker.ld \
            -Wl,--build-id=none -Wl,-z,max-page-size=0x1000
 
-LIB_OBJECTS := ../build/userspace/lib/start.o ../build/userspace/lib/exit.o \
+START_OBJECT := ../build/userspace/lib/start.o
+LIBPYXIS := ../build/userspace/libpyxis.a
+LIB_OBJECTS := ../build/userspace/lib/exit.o \
                ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
                ../build/userspace/lib/blob.o ../build/userspace/lib/endpoint.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o
 
-.PHONY: all hello client server converter clean
+.PHONY: all libpyxis hello client server converter clean
 all: hello client server
 
+libpyxis: $(LIBPYXIS)
 hello: ../build/userspace/hello.pxe ../build/userspace/hello.txt
 client: ../build/userspace/client.pxe
 server: ../build/userspace/server.pxe
@@ -30,8 +34,15 @@ converter:
 # Consult the tools Makefile even when the converter binary already exists.
 ../build/tools/elf2pxe: converter
 
-../build/userspace/%.elf: ../build/userspace/%/main.o $(LIB_OBJECTS) linker.ld
-	$(CC) $(LDFLAGS) -o $@ $< $(LIB_OBJECTS)
+$(LIBPYXIS): $(LIB_OBJECTS) Makefile
+	@mkdir -p $(@D)
+	# Recreate the archive so removed library objects cannot remain as members.
+	rm -f $@
+	$(AR) rcs $@ $(LIB_OBJECTS)
+
+# Startup is always linked; the archive supplies only referenced wrappers.
+../build/userspace/%.elf: ../build/userspace/%/main.o $(START_OBJECT) $(LIBPYXIS) linker.ld
+	$(CC) $(LDFLAGS) -o $@ $(START_OBJECT) $< $(LIBPYXIS)
 
 ../build/userspace/%.o: %.c
 	@mkdir -p $(@D)
@@ -50,4 +61,4 @@ clean:
 # Keep the ELF symbols and intermediate objects for debugging and rebuilds.
 .SECONDARY:
 
--include $(LIB_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)
+-include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)
