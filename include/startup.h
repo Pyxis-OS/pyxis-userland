@@ -2,7 +2,11 @@
 #define USERSPACE_STARTUP_H
 
 #include <abi/handle.h>
+#include <abi/startup.h>
 #include <stddef.h>
+
+/* Runtime entry only, before main and before argv can be modified. */
+bool startup_init(const struct startup_info *info);
 
 /* Allocation-free lookups in the immutable startup snapshot. Names are case
  * sensitive; absent handles are HANDLE_INVALID and absent strings are NULL.

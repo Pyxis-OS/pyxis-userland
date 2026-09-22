@@ -1,4 +1,5 @@
 #include <startup.h>
+#include <stdio.h>
 #include <console.h>
 #include <endpoint.h>
 #include <handle.h>
@@ -7,13 +8,12 @@
 
 static int print_number(handle_t output, uint64_t value)
 {
-  char digits[20];
-  size_t start = sizeof(digits);
-  do {
-    digits[--start] = '0' + value % 10;
-    value /= 10;
-  } while (value);
-  return console_write_all(output, digits + start, sizeof(digits) - start);
+  char digits[21];
+  int length = snprintf(digits, sizeof(digits), "%ju", (uintmax_t)value);
+  if (length < 0 || (size_t)length >= sizeof(digits)) {
+    return -1;
+  }
+  return console_write_all(output, digits, length);
 }
 
 static int run_client(handle_t output, handle_t content, handle_t endpoint)

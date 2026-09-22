@@ -1,5 +1,6 @@
 #include <file.h>
-#include <memory.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <directory.h>
 #include <abi/file.h>
 #include <console.h>
@@ -7,14 +8,15 @@
 #include <path.h>
 #include <startup.h>
 
-static int print_content(handle_t output, handle_t content, handle_t memory)
+static int print_content(handle_t output, handle_t content)
 {
   uint64_t size;
   if (file_size(content, &size) != CALL_OK) {
     return -1;
   }
-  struct memory_region buffer;
-  if (memory_allocate(memory, 512, &buffer) != CALL_OK) {
+  const size_t buffer_size = 4096;
+  char *buffer = malloc(buffer_size);
+  if (!buffer) {
     return -1;
   }
 
@@ -22,7 +24,7 @@ static int print_content(handle_t output, handle_t content, handle_t memory)
   uint64_t offset = 0;
   for (;;) {
     size_t read;
-    if (file_read(content, offset, (void *)buffer.address, buffer.size, &read) != CALL_OK) {
+    if (file_read(content, offset, buffer, buffer_size, &read) != CALL_OK) {
       break;
     }
     if (!read) {
@@ -31,14 +33,12 @@ static int print_content(handle_t output, handle_t content, handle_t memory)
     }
     /* These examples do not modify file contents while reading. */
     if (read > size - offset ||
-        console_write_all(output, (const char *)buffer.address, read) != 0) {
+        console_write_all(output, buffer, read) != 0) {
       break;
     }
     offset += read;
   }
-  if (memory_release(memory, buffer) != CALL_OK) {
-    result = -1;
-  }
+  free(buffer);
   return result;
 }
 
@@ -66,7 +66,7 @@ static int list_directory(handle_t output, handle_t directory)
   }
 }
 
-static int read_path(handle_t output, handle_t memory, const struct path_context *context,
+static int read_path(handle_t output, const struct path_context *context,
                        const char *path, struct path_workspace *workspace)
 {
   handle_t file;
@@ -79,7 +79,7 @@ static int read_path(handle_t output, handle_t memory, const struct path_context
     result = console_print(output, "\n");
   }
   if (!result) {
-    result = print_content(output, file, memory);
+    result = print_content(output, file);
   }
   if (handle_close(file) != 0) {
     result = -1;
@@ -87,12 +87,12 @@ static int read_path(handle_t output, handle_t memory, const struct path_context
   return result;
 }
 
-static int read_application_file(handle_t output, handle_t root, handle_t memory,
-                                   struct memory_region scratch)
+static int read_application_file(handle_t output, handle_t root, char *scratch,
+                                   size_t scratch_size)
 {
   handle_t directories[8];
   handle_t temporary[8];
-  struct path_workspace workspace = {temporary, 8, (char *)scratch.address, scratch.size};
+  struct path_workspace workspace = {temporary, 8, scratch, scratch_size};
   struct path_context context;
   uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
                     DIRECTORY_RIGHT_READ_FILES;
@@ -109,11 +109,11 @@ static int read_application_file(handle_t output, handle_t root, handle_t memory
     goto done;
   }
   if (console_print(output, "app://share/\n") != 0 || list_directory(output, directory) != 0 ||
-      read_path(output, memory, &context, "app://share/hello.txt", &workspace) != 0 ||
+      read_path(output, &context, "app://share/hello.txt", &workspace) != 0 ||
       path_change(&context, "app://share", &workspace) != CALL_OK) {
     goto done;
   }
-  result = read_path(output, memory, &context, "hello.txt", &workspace);
+  result = read_path(output, &context, "hello.txt", &workspace);
 
 done:
   if (directory != HANDLE_INVALID && handle_close(directory) != 0) {
@@ -123,7 +123,7 @@ done:
   return result;
 }
 
-static int create_home_content(handle_t output, handle_t home, handle_t memory)
+static int create_home_content(handle_t output, handle_t home)
 {
   handle_t created_directory = HANDLE_INVALID, created_file = HANDLE_INVALID;
   handle_t directory = HANDLE_INVALID, file = HANDLE_INVALID;
@@ -160,7 +160,7 @@ static int create_home_content(handle_t output, handle_t home, handle_t memory)
       file_resize(created_file, sizeof(greeting) - 1) != CALL_OK) {
     goto done;
   }
-  result = print_content(output, file, memory);
+  result = print_content(output, file);
 
 done:
   handle_t owned[] = {file, directory, created_file, created_directory};
@@ -183,32 +183,26 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  /* This path workspace lives until process exit; individual file buffers
-   * above are released after use. Neither lifetime needs a userspace heap yet. */
-  struct memory_region scratch;
-  if (memory_allocate(memory, 256, &scratch) != CALL_OK) {
+  /* The path workspace lives until exit; file buffers are freed after use. */
+  const size_t scratch_size = 256;
+  char *scratch = malloc(scratch_size);
+  if (!scratch) {
     return 1;
   }
 
-  const char *os_name = startup_environment("OS_NAME");
+  const char *os_name = getenv("OS_NAME");
   int result = console_print(output, "Hello from C!\n");
   if (result == 0 && argc > 0 && os_name) {
-    result = console_print(output, argv[0]);
-    if (result == 0) {
-      result = console_print(output, " running on ");
-    }
-    if (result == 0) {
-      result = console_print(output, os_name);
-    }
-    if (result == 0) {
-      result = console_print(output, "\n");
-    }
+    char greeting[256];
+    int length = snprintf(greeting, sizeof(greeting), "%s running on %s\n", argv[0], os_name);
+    result = length < 0 || (size_t)length >= sizeof(greeting) ? -1 :
+             console_write_all(output, greeting, length);
   }
   if (result == 0) {
-    result = read_application_file(output, root, memory, scratch);
+    result = read_application_file(output, root, scratch, scratch_size);
   }
   if (result == 0) {
-    result = create_home_content(output, home, memory);
+    result = create_home_content(output, home);
   }
   if (handle_close(memory) != 0) {
     result = 1;
