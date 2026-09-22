@@ -13,7 +13,8 @@ LIBPYXIS := ../build/userspace/libpyxis.a
 LIB_OBJECTS := ../build/userspace/lib/startup.o ../build/userspace/lib/exit.o \
                ../build/userspace/lib/console.o ../build/userspace/lib/handle.o \
                ../build/userspace/lib/file.o ../build/userspace/lib/endpoint.o \
-               ../build/userspace/lib/directory.o ../build/userspace/lib/path.o
+               ../build/userspace/lib/directory.o ../build/userspace/lib/path.o \
+               ../build/userspace/lib/memory.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o
 
