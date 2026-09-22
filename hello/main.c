@@ -120,11 +120,12 @@ static int create_home_content(handle_t output, handle_t home)
   handle_t created_directory = HANDLE_INVALID, created_file = HANDLE_INVALID;
   handle_t directory = HANDLE_INVALID, file = HANDLE_INVALID;
   uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-                              DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_CREATE;
+                              DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_CREATE |
+                              DIRECTORY_RIGHT_WRITE_FILES;
   int result = -1;
   if (directory_create(home, "notes", DIRECTORY_KIND_DIRECTORY, directory_rights,
         &created_directory) != CALL_OK ||
-      directory_create(created_directory, "empty.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+      directory_create(created_directory, "greeting.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE,
         &created_file) != CALL_OK) {
     goto done;
   }
@@ -134,12 +135,21 @@ static int create_home_content(handle_t output, handle_t home)
   if (directory_lookup(home, "notes", DIRECTORY_KIND_DIRECTORY,
         DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES,
         &directory) != CALL_OK ||
-      directory_lookup(directory, "empty.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+      directory_lookup(directory, "greeting.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
         &file) != CALL_OK) {
     goto done;
   }
   if (console_print(output, "home://\n") != 0 || list_directory(output, home) != 0 ||
       console_print(output, "home://notes/\n") != 0 || list_directory(output, directory) != 0) {
+    goto done;
+  }
+  static const char greeting[] = "Hello from a RAM file!\n";
+  static const char temporary[] = "This tail will be removed.\n";
+  size_t written;
+  if (file_write(created_file, 0, greeting, sizeof(greeting) - 1, &written) != CALL_OK ||
+      file_write(created_file, sizeof(greeting) - 1, temporary, sizeof(temporary) - 1,
+        &written) != CALL_OK ||
+      file_resize(created_file, sizeof(greeting) - 1) != CALL_OK) {
     goto done;
   }
   result = print_content(output, file);
