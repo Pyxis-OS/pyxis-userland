@@ -71,7 +71,7 @@ bool shell_launch(struct shell *shell, char **arguments, size_t count)
     .argc = count,
   };
   handle_t child;
-  status = launcher_launch(shell->launcher, &request, &child);
+  status = program_launch(shell->launcher, &request, &child);
   free(directories);
   free(grants);
   bool closed_image = handle_close(image) == 0;
