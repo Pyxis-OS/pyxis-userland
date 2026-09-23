@@ -21,6 +21,16 @@ size_t strnlen(const char *text, size_t limit)
   return length;
 }
 
+char *strcpy(char *restrict dest, const char *restrict src)
+{
+  char *start = dest;
+  while (*src) {
+    *dest++ = *src++;
+  }
+  *dest = '\0';
+  return start;
+}
+
 int strcmp(const char *left, const char *right)
 {
   while (*left && *left == *right) {
