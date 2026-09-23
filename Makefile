@@ -18,14 +18,14 @@ export SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/cat/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
-                   $(BUILD)/shell/main.o
+                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all hello client server cat ls mkdir shell clean FORCE
-all: shell cat ls mkdir $(BUILD)/share/hello.txt
+.PHONY: all hello client server cat ls mkdir shell mandelbrot clean FORCE
+all: shell cat ls mkdir mandelbrot $(BUILD)/share/hello.txt
 
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
@@ -34,6 +34,7 @@ cat: $(BUILD)/cat.pxe
 ls: $(BUILD)/ls.pxe
 mkdir: $(BUILD)/mkdir.pxe
 shell: $(BUILD)/shell.pxe
+mandelbrot: $(BUILD)/mandelbrot.pxe
 
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
