@@ -168,6 +168,16 @@ const char *startup_environment(const char *name)
   return NULL;
 }
 
+const struct startup_variable *startup_environment_variables(void)
+{
+  return (const void *)(uintptr_t)startup->environment;
+}
+
+size_t startup_environment_count(void)
+{
+  return startup->environment_count;
+}
+
 const handle_t *startup_working_directories(void)
 {
   return (const void *)(uintptr_t)startup->working_directories;

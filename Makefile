@@ -24,11 +24,14 @@ LIBC_OBJECTS := $(patsubst %.c,../build/userspace/%.o,$(LIBC_SOURCES)) \
                 ../build/userspace/libc/tlsf.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o ../build/userspace/cat/main.o \
-                   ../build/userspace/ls/main.o ../build/userspace/mkdir/main.o
+                   ../build/userspace/ls/main.o ../build/userspace/mkdir/main.o \
+                   ../build/userspace/shell/main.o
+SHELL_OBJECTS := ../build/userspace/shell/parse.o ../build/userspace/shell/directory.o \
+                 ../build/userspace/shell/launch.o
 UTILITY_OBJECT := ../build/userspace/common/directory.o
 
-.PHONY: all libpyxis libterm libc hello client server cat ls mkdir converter clean
-all: hello client server cat ls mkdir
+.PHONY: all libpyxis libterm libc hello client server cat ls mkdir shell converter clean
+all: hello client server cat ls mkdir shell
 
 libpyxis: $(LIBPYXIS)
 libterm: $(LIBTERM)
@@ -39,6 +42,9 @@ server: ../build/userspace/server.pxe
 cat: ../build/userspace/cat.pxe
 ls: ../build/userspace/ls.pxe
 mkdir: ../build/userspace/mkdir.pxe
+shell: ../build/userspace/shell.pxe
+
+../build/userspace/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
 ../build/userspace/ls.elf ../build/userspace/mkdir.elf: $(UTILITY_OBJECT)
 
@@ -95,4 +101,4 @@ clean:
 # Keep the ELF symbols and intermediate objects for debugging and rebuilds.
 .SECONDARY:
 
--include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d)
+-include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d)
