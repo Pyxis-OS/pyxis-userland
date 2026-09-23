@@ -227,7 +227,7 @@ int main(int argc, char **argv)
     char greeting[256];
     int length = snprintf(greeting, sizeof(greeting), "%s running on %s\n", argv[0], os_name);
     result = length < 0 || (size_t)length >= sizeof(greeting) ? -1 :
-             console_write_all(output, greeting, length);
+             (console_write_all(output, greeting, length) == CALL_OK ? 0 : -1);
   }
   if (result == 0) {
     result = read_application_file(output, root, scratch, scratch_size);

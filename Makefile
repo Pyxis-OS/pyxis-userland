@@ -16,6 +16,8 @@ LIB_OBJECTS := ../build/userspace/lib/startup.o \
                ../build/userspace/lib/directory.o ../build/userspace/lib/path.o \
                ../build/userspace/lib/memory.o ../build/userspace/lib/process.o \
                ../build/userspace/lib/launcher.o
+LIBTERM := ../build/userspace/libterm.a
+TERM_OBJECTS := ../build/userspace/libterm/term.o ../build/userspace/libterm/line.o
 LIBC := ../build/userspace/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 LIBC_OBJECTS := $(patsubst %.c,../build/userspace/%.o,$(LIBC_SOURCES)) \
@@ -23,10 +25,11 @@ LIBC_OBJECTS := $(patsubst %.c,../build/userspace/%.o,$(LIBC_SOURCES)) \
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
                    ../build/userspace/server/main.o
 
-.PHONY: all libpyxis libc hello client server converter clean
+.PHONY: all libpyxis libterm libc hello client server converter clean
 all: hello client server
 
 libpyxis: $(LIBPYXIS)
+libterm: $(LIBTERM)
 libc: $(LIBC)
 hello: ../build/userspace/hello.pxe ../build/userspace/share/hello.txt
 client: ../build/userspace/client.pxe
@@ -48,6 +51,11 @@ $(LIBPYXIS): $(LIB_OBJECTS) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(LIB_OBJECTS)
 
+$(LIBTERM): $(TERM_OBJECTS) Makefile
+	@mkdir -p $(@D)
+	rm -f $@
+	$(AR) rcs $@ $(TERM_OBJECTS)
+
 $(LIBC): $(LIBC_OBJECTS) Makefile
 	@mkdir -p $(@D)
 	rm -f $@
@@ -60,8 +68,8 @@ $(LIBC): $(LIBC_OBJECTS) Makefile
 ../build/userspace/libc/malloc.o: CPPFLAGS += -I../third_party/tlsf
 
 # Startup is always linked; the archive supplies only referenced wrappers.
-../build/userspace/%.elf: ../build/userspace/%/main.o $(START_OBJECT) $(LIBPYXIS) $(LIBC) linker.ld
-	$(CC) $(LDFLAGS) -o $@ $(START_OBJECT) $< -Wl,--start-group $(LIBC) $(LIBPYXIS) -Wl,--end-group
+../build/userspace/%.elf: ../build/userspace/%/main.o $(START_OBJECT) $(LIBPYXIS) $(LIBTERM) $(LIBC) linker.ld
+	$(CC) $(LDFLAGS) -o $@ $(START_OBJECT) $< -Wl,--start-group $(LIBC) $(LIBTERM) $(LIBPYXIS) -Wl,--end-group
 
 ../build/userspace/%.o: %.c
 	@mkdir -p $(@D)
@@ -80,4 +88,4 @@ clean:
 # Keep the ELF symbols and intermediate objects for debugging and rebuilds.
 .SECONDARY:
 
--include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)
+-include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d)
