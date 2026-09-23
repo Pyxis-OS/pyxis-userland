@@ -125,51 +125,48 @@ done:
   return result;
 }
 
-static int create_home_content(handle_t output, handle_t home)
+static int create_home_content(handle_t home)
 {
-  handle_t created_directory = HANDLE_INVALID, created_file = HANDLE_INVALID;
-  handle_t directory = HANDLE_INVALID, file = HANDLE_INVALID;
-  uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-                              DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_CREATE |
-                              DIRECTORY_RIGHT_WRITE_FILES;
+  handle_t directory;
+  uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE |
+                    DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
+  if (directory_create(home, "notes", DIRECTORY_KIND_DIRECTORY, rights, &directory) != CALL_OK) {
+    return -1;
+  }
+  if (handle_close(directory) != 0) {
+    return -1;
+  }
+
+  FILE *file = fopen("home://notes/greeting.txt", "w+");
+  if (!file) {
+    perror("open greeting");
+    return -1;
+  }
   int result = -1;
-  if (directory_create(home, "notes", DIRECTORY_KIND_DIRECTORY, directory_rights,
-        &created_directory) != CALL_OK ||
-      directory_create(created_directory, "greeting.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE,
-        &created_file) != CALL_OK) {
+  if (fprintf(file, "Hello from %s!\n", "stdio") < 0 ||
+      fseek(file, 0, SEEK_SET) != 0) {
+    perror("write greeting");
     goto done;
   }
 
-  /* Rediscover the published names through independent grants. The tree owns
-   * their lifetime; closing creation handles does not remove the entries. */
-  if (directory_lookup(home, "notes", DIRECTORY_KIND_DIRECTORY,
-        DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES,
-        &directory) != CALL_OK ||
-      directory_lookup(directory, "greeting.txt", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
-        &file) != CALL_OK) {
+  char buffer[128];
+  size_t count;
+  while ((count = fread(buffer, 1, sizeof(buffer), file)) != 0) {
+    if (fwrite(buffer, 1, count, stdout) != count) {
+      perror("print greeting");
+      goto done;
+    }
+  }
+  if (ferror(file)) {
+    perror("read greeting");
     goto done;
   }
-  if (console_print(output, "home://\n") != 0 || list_directory(output, home) != 0 ||
-      console_print(output, "home://notes/\n") != 0 || list_directory(output, directory) != 0) {
-    goto done;
-  }
-  static const char greeting[] = "Hello from a RAM file!\n";
-  static const char temporary[] = "This tail will be removed.\n";
-  size_t written;
-  if (file_write(created_file, 0, greeting, sizeof(greeting) - 1, &written) != CALL_OK ||
-      file_write(created_file, sizeof(greeting) - 1, temporary, sizeof(temporary) - 1,
-        &written) != CALL_OK ||
-      file_resize(created_file, sizeof(greeting) - 1) != CALL_OK) {
-    goto done;
-  }
-  result = print_content(output, file);
+  result = 0;
 
 done:
-  handle_t owned[] = {file, directory, created_file, created_directory};
-  for (size_t i = 0; i < sizeof(owned) / sizeof(owned[0]); ++i) {
-    if (owned[i] != HANDLE_INVALID && handle_close(owned[i]) != 0) {
-      result = -1;
-    }
+  if (fclose(file) != 0) {
+    perror("close greeting");
+    result = -1;
   }
   return result;
 }
@@ -248,18 +245,15 @@ int main(int argc, char **argv)
   }
 
   const char *os_name = getenv("OS_NAME");
-  int result = console_print(output, "Hello from C!\n");
+  int result = puts("Hello from C!") == EOF ? -1 : 0;
   if (result == 0 && argc > 0 && os_name) {
-    char greeting[256];
-    int length = snprintf(greeting, sizeof(greeting), "%s running on %s\n", argv[0], os_name);
-    result = length < 0 || (size_t)length >= sizeof(greeting) ? -1 :
-             (console_write_all(output, greeting, length) == CALL_OK ? 0 : -1);
+    result = printf("%s running on %s\n", argv[0], os_name) < 0 ? -1 : 0;
   }
   if (result == 0) {
     result = read_application_file(output, root, scratch, scratch_size);
   }
   if (result == 0) {
-    result = create_home_content(output, home);
+    result = create_home_content(home);
   }
   if (result == 0) {
     struct process_result completion;
