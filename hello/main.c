@@ -4,6 +4,8 @@
 #include <directory.h>
 #include <abi/file.h>
 #include <console.h>
+#include <term.h>
+#include <process.h>
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
@@ -174,32 +176,55 @@ done:
 
 static int receive_input(handle_t input, handle_t output)
 {
+  struct terminal term = {.input = input, .output = output};
   size_t columns, rows;
-  if (console_size(output, &columns, &rows) != CALL_OK) {
+  if (term_size(&term, &columns, &rows) != CALL_OK) {
     return -1;
   }
-  char buffer[128];
-  int length = snprintf(buffer, sizeof(buffer),
-      "Terminal: %zu columns, %zu rows. Type a key to echo its bytes.\n", columns, rows);
-  if (length < 0 || (size_t)length >= sizeof(buffer) ||
-      console_write_all(output, buffer, length) != 0) {
+  char message[128];
+  int length = snprintf(message, sizeof(message),
+      "Terminal: %zu columns, %zu rows. Enter a line; Ctrl+C cancels.\n", columns, rows);
+  if (length < 0 || (size_t)length >= sizeof(message) ||
+      term_write_all(&term, message, length) != CALL_OK) {
     return -1;
   }
 
+  /* Heap storage leaves room for wrapped input without enlarging the initial
+   * one-page user stack. Libterm itself never allocates. */
+  size_t capacity = 1024;
+  char *line = malloc(capacity);
+  if (!line) {
+    return -1;
+  }
+  int result = -1;
   for (;;) {
-    size_t count;
-    enum call_status status = console_read(input, buffer, sizeof(buffer), &count);
-    if (status == CALL_INPUT_LOST) {
-      if (console_print(output, "Input lost; please try again.\n") != 0) {
-        return -1;
+    struct term_line_result read = term_read_line(&term, "> ", line, capacity);
+    if (read.status == TERM_LINE_CANCELLED || read.status == TERM_LINE_INPUT_LOST) {
+      const char *notice = read.status == TERM_LINE_CANCELLED ?
+          "Line cancelled.\n" : "Input lost; please try again.\n";
+      if (term_print(&term, notice) != CALL_OK) {
+        break;
       }
       continue;
     }
-    if (status == CALL_UNAVAILABLE) {
-      return console_print(output, "Keyboard input unavailable.\n");
+    if (read.status == TERM_LINE_ERROR) {
+      if (read.error == CALL_UNAVAILABLE) {
+        result = term_print(&term, "Keyboard input unavailable.\n") == CALL_OK ? 0 : -1;
+      }
+      break;
     }
-    return status == CALL_OK ? console_write_all(output, buffer, count) : -1;
+    if (read.limit_reached && term_print(&term, "Line limit reached during editing.\n") != CALL_OK) {
+      break;
+    }
+    if (term_print(&term, "You entered: ") == CALL_OK &&
+        term_write_all(&term, line, read.length) == CALL_OK &&
+        term_print(&term, "\n") == CALL_OK) {
+      result = 0;
+    }
+    break;
   }
+  free(line);
+  return result;
 }
 
 int main(int argc, char **argv)
@@ -209,8 +234,9 @@ int main(int argc, char **argv)
   handle_t root = startup_root("app");
   handle_t home = startup_root("home");
   handle_t memory = startup_resource("memory");
+  handle_t client = startup_resource("client_process");
   if (input == HANDLE_INVALID || output == HANDLE_INVALID || root == HANDLE_INVALID ||
-      home == HANDLE_INVALID || memory == HANDLE_INVALID) {
+      home == HANDLE_INVALID || memory == HANDLE_INVALID || client == HANDLE_INVALID) {
     return 1;
   }
 
@@ -236,7 +262,16 @@ int main(int argc, char **argv)
     result = create_home_content(output, home);
   }
   if (result == 0) {
-    result = receive_input(input, output);
+    struct process_result completion;
+    if (process_wait(client, &completion) != CALL_OK ||
+        completion.kind != PROCESS_EXITED || completion.exit_status != 0) {
+      result = 1;
+    } else {
+      result = receive_input(input, output);
+    }
+  }
+  if (handle_close(client) != 0) {
+    result = 1;
   }
   if (handle_close(input) != 0) {
     result = 1;
