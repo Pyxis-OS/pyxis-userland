@@ -1,12 +1,6 @@
 #include <term.h>
 #include <string.h>
 
-/* Values above the byte range are local editor keys, not a physical-key API. */
-enum edit_key {
-  EDIT_LEFT = 256, EDIT_RIGHT, EDIT_HOME, EDIT_END, EDIT_DELETE,
-  EDIT_UP, EDIT_DOWN, EDIT_PAGE_UP, EDIT_PAGE_DOWN,
-};
-
 struct line_editor {
   struct terminal *term;
   const char *prompt;
@@ -15,79 +9,12 @@ struct line_editor {
   size_t length, cursor, displayed_length, displayed_cursor;
 };
 
-static enum call_status read_key(struct terminal *term, unsigned *key)
-{
-  enum { TEXT, ESCAPE, CSI, IGNORE_CSI } state = TEXT;
-  unsigned parameter = 0;
-
-  for (;;) {
-    unsigned char byte;
-    size_t count;
-    enum call_status status = term_read(term, &byte, 1, &count);
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (byte == '\x1b') {
-      state = ESCAPE;
-      parameter = 0;
-      continue;
-    }
-    if (byte == 3 || byte == '\n' || byte == '\r' || byte == '\b' || byte == 0x7f) {
-      *key = byte;
-      return CALL_OK;
-    }
-    if (state == ESCAPE) {
-      if (byte == '[') {
-        state = CSI;
-        continue;
-      }
-      /* Escape has no standalone action; an unrelated following byte still
-       * belongs to this line. No timer or read-ahead buffer is needed. */
-      state = TEXT;
-    }
-    if (state == CSI || state == IGNORE_CSI) {
-      if (byte >= 0x40 && byte <= 0x7e) {
-        bool valid = state == CSI;
-        state = TEXT;
-        if (valid && (parameter == 0 || parameter == 1)) {
-          switch (byte) {
-          case 'A': *key = EDIT_UP; return CALL_OK;
-          case 'B': *key = EDIT_DOWN; return CALL_OK;
-          case 'C': *key = EDIT_RIGHT; return CALL_OK;
-          case 'D': *key = EDIT_LEFT; return CALL_OK;
-          case 'H': *key = EDIT_HOME; return CALL_OK;
-          case 'F': *key = EDIT_END; return CALL_OK;
-          }
-        }
-        if (valid && byte == '~') {
-          switch (parameter) {
-          case 3: *key = EDIT_DELETE; return CALL_OK;
-          case 5: *key = EDIT_PAGE_UP; return CALL_OK;
-          case 6: *key = EDIT_PAGE_DOWN; return CALL_OK;
-          }
-        }
-      } else if (state == CSI) {
-        if (byte >= '0' && byte <= '9' && parameter < 100) {
-          parameter = parameter * 10 + byte - '0';
-        } else {
-          state = IGNORE_CSI;
-        }
-      }
-      continue;
-    }
-    if (byte >= ' ' && byte <= '~') {
-      *key = byte;
-      return CALL_OK;
-    }
-  }
-}
-
 static enum call_status move_between(struct line_editor *editor, size_t from, size_t to)
 {
   int rows = (int)(to / editor->columns) - (int)(from / editor->columns);
-  enum call_status status = term_move(editor->term, rows, 0);
+  enum call_status status = term_print(editor->term, "\r");
   if (status == CALL_OK) {
-    status = term_print(editor->term, "\r");
+    status = term_move(editor->term, rows, 0);
   }
   return status == CALL_OK ? term_move(editor->term, 0, to % editor->columns) : status;
 }
@@ -106,10 +33,14 @@ static enum call_status write_spaces(struct terminal *term, size_t count)
   return CALL_OK;
 }
 
-static enum call_status draw_line(struct line_editor *editor, bool highlight, bool full)
+static enum call_status draw_line(struct line_editor *editor, bool editing, bool full)
 {
   struct terminal *term = editor->term;
-  enum call_status status = move_between(editor, editor->displayed_cursor, 0);
+  enum call_status status = term_cursor_visible(term, false);
+  if (status != CALL_OK) {
+    return status;
+  }
+  status = move_between(editor, editor->displayed_cursor, 0);
   if (status != CALL_OK) {
     return status;
   }
@@ -118,53 +49,45 @@ static enum call_status draw_line(struct line_editor *editor, bool highlight, bo
     return status;
   }
 
-  size_t prefix = highlight ? editor->cursor : editor->length;
-  status = term_write_all(term, editor->buffer, prefix);
+  status = term_write_all(term, editor->buffer, editor->length);
   if (status != CALL_OK) {
     return status;
   }
-  if (highlight) {
-    if (full) {
-      status = term_colors(term, 9, -1);
-      if (status != CALL_OK) {
-        return status;
-      }
-    }
-    status = term_reverse(term, true);
-    if (status != CALL_OK) {
-      return status;
-    }
-    char cursor = prefix < editor->length ? editor->buffer[prefix] : ' ';
-    status = term_write_all(term, &cursor, 1);
-    if (status != CALL_OK) {
-      return status;
-    }
-    status = term_reset_style(term);
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (prefix < editor->length) {
-      status = term_write_all(term, editor->buffer + prefix + 1, editor->length - prefix - 1);
-      if (status != CALL_OK) {
-        return status;
-      }
-    }
-  }
 
-  /* Clear the old tail, including the previous highlighted end cell. Keeping
+  /* Clear the old tail, including the previous end cell. Keeping
    * this span on screen lets row-relative movement survive TTY scrolling. */
   size_t span = editor->length > editor->displayed_length ? editor->length : editor->displayed_length;
   size_t trailing = span - editor->length + 1;
-  if (highlight && prefix == editor->length) {
-    --trailing; /* The highlighted blank already occupies the end cell. */
-  }
   status = write_spaces(term, trailing);
   if (status != CALL_OK) {
     return status;
   }
+  /* The last byte leaves the cursor at the margin until another is printed.
+   * CR below cancels that pending wrap before relative movement. */
   size_t end = editor->prompt_length + span + 1;
-  size_t target = editor->prompt_length + (highlight ? editor->cursor : editor->length);
+  if (end % editor->columns == 0) {
+    --end;
+  }
+  size_t target = editor->prompt_length + (editing ? editor->cursor : editor->length);
   status = move_between(editor, end, target);
+  if (status == CALL_OK && full) {
+    /* Keep the existing overflow cue at the editing position. */
+    status = term_colors(term, -1, 9);
+    if (status == CALL_OK) {
+      char c = editor->cursor < editor->length ? editor->buffer[editor->cursor] : ' ';
+      status = term_write_all(term, &c, 1);
+    }
+    if (status == CALL_OK) {
+      status = term_reset_style(term);
+    }
+    if (status == CALL_OK) {
+      size_t after = target % editor->columns == editor->columns - 1 ? target : target + 1;
+      status = move_between(editor, after, target);
+    }
+  }
+  if (status == CALL_OK) {
+    status = term_cursor_visible(term, true);
+  }
   if (status == CALL_OK) {
     editor->displayed_length = editor->length;
     editor->displayed_cursor = target;
@@ -202,11 +125,11 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
   }
 
   size_t cells = columns * rows;
-  if (cells < 2 || prompt_length > cells - 2) {
+  if (cells < 1 || prompt_length > cells - 1) {
     result.error = CALL_LIMIT;
     return result;
   }
-  size_t limit = cells - prompt_length - 2;
+  size_t limit = cells - prompt_length - 1;
   if (limit > capacity - 1) {
     limit = capacity - 1;
   }
@@ -226,7 +149,7 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
 
   while (result.error == CALL_OK) {
     unsigned key;
-    result.error = read_key(term, &key);
+    result.error = term_read_key(term, &key);
     if (result.error == CALL_INPUT_LOST) {
       result.status = TERM_LINE_INPUT_LOST;
       break;
@@ -241,20 +164,20 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
 
     bool full = false;
     switch (key) {
-    case EDIT_LEFT:
+    case TERM_KEY_LEFT:
       if (editor.cursor) {
         --editor.cursor;
       }
       break;
-    case EDIT_RIGHT:
+    case TERM_KEY_RIGHT:
       if (editor.cursor < editor.length) {
         ++editor.cursor;
       }
       break;
-    case EDIT_HOME:
+    case TERM_KEY_HOME:
       editor.cursor = 0;
       break;
-    case EDIT_END:
+    case TERM_KEY_END:
       editor.cursor = editor.length;
       break;
     case '\b':
@@ -264,7 +187,7 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
       }
       --editor.cursor;
       [[fallthrough]];
-    case EDIT_DELETE:
+    case TERM_KEY_DELETE:
       if (editor.cursor == editor.length) {
         continue;
       }
@@ -297,6 +220,11 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
       result.status = TERM_LINE_ERROR;
       result.error = status;
     }
+  }
+  if (result.status == TERM_LINE_ERROR) {
+    /* An output failure can leave a partial redraw; still attempt restoration. */
+    term_reset_style(term);
+    term_cursor_visible(term, true);
   }
   if (result.status == TERM_LINE_OK) {
     result.length = editor.length;

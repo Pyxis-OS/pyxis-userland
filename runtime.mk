@@ -20,7 +20,7 @@ LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/launcher.o $(BUILD)/lib/program.o \
                $(BUILD)/lib/shebang.o
 LIBTERM := $(BUILD)/libterm.a
-TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/line.o
+TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \

@@ -22,6 +22,10 @@ enum call_status console_print(handle_t output, const char *text);
  * Nonempty READ blocks, may return a short byte sequence, and never reports EOF.
  * Zero capacity succeeds without waiting or acknowledging input loss. */
 enum call_status console_read(handle_t input, void *bytes, size_t capacity, size_t *read);
+/* Same transfer contract; 0 polls, UINT32_MAX is the largest finite wait.
+ * CALL_TIMED_OUT leaves *read zero and consumes nothing. */
+enum call_status console_read_timeout(handle_t input, void *bytes, size_t capacity,
+                                     uint32_t timeout_ms, size_t *read);
 
 /* Dimensions in character cells; requires either READ or WRITE authority. */
 enum call_status console_size(handle_t console, size_t *columns, size_t *rows);
