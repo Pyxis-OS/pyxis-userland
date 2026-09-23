@@ -16,3 +16,8 @@
   stdio_finish();
   _Exit(status);
 }
+
+[[noreturn]] void abort(void)
+{
+  _Exit(EXIT_FAILURE);
+}

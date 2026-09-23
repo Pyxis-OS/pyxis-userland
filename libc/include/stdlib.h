@@ -31,8 +31,15 @@ unsigned long long strtoull(const char *restrict text, char **restrict end, int 
  * As in C, an out-of-int-range input has no guaranteed result. */
 int atoi(const char *text);
 
-/* No stdio streams or exit handlers exist yet; both terminate immediately. */
+/* In-place, unstable heapsort with no allocation or recursion. compare returns
+ * negative, zero or positive for less than, equal to or greater than. */
+void qsort(void *base, size_t count, size_t size,
+  int (*compare)(const void *, const void *));
+
+/* exit closes stdio streams; _Exit skips libc cleanup. No exit handlers yet. */
 __attribute__((noreturn)) void exit(int status);
 __attribute__((noreturn)) void _Exit(int status);
+/* No signal delivery: terminate with EXIT_FAILURE, without libc cleanup. */
+__attribute__((noreturn)) void abort(void);
 
 #endif
