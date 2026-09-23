@@ -9,6 +9,8 @@ void *memset(void *dest, int value, size_t count);
 int memcmp(const void *left, const void *right, size_t count);
 size_t strlen(const char *text);
 size_t strnlen(const char *text, size_t limit);
+/* Copy through NUL; dest has enough space and does not overlap src. */
+char *strcpy(char *restrict dest, const char *restrict src);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 char *strchr(const char *text, int character);
