@@ -7,8 +7,10 @@
 #include <startup.h>
 #include <stdlib.h>
 
-enum command_result shell_launch(struct shell *shell, char **arguments, size_t count)
+enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
+    enum shell_launch_mode mode)
 {
+  bool session = mode == SHELL_SESSION;
   handle_t image;
   enum call_status status = shell_open_image(shell, arguments[0], &image);
   if (status != CALL_OK) {
@@ -20,11 +22,12 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
 
   enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - (session ? 1 : 0)) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
-  size_t grant_count = CHILD_DIRECTORY + depth;
+  size_t launcher_index = CHILD_DIRECTORY + depth;
+  size_t grant_count = launcher_index + (session ? 1 : 0);
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
   if (!grants || (depth && !directories)) {
@@ -43,10 +46,14 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i],
         shell->directory.directory_rights};
   }
+  if (session) {
+    grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
+  }
   struct launch_binding resources[] = {
     {(uintptr_t)"input", CHILD_INPUT},
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
+    {(uintptr_t)"launcher", launcher_index},
   };
   struct launch_binding roots[] = {
     {(uintptr_t)"app", CHILD_APP},
@@ -57,7 +64,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     .grants = (uintptr_t)grants,
     .grant_count = grant_count,
     .resources = (uintptr_t)resources,
-    .resource_count = sizeof(resources) / sizeof(resources[0]),
+    .resource_count = sizeof(resources) / sizeof(resources[0]) - (session ? 0 : 1),
     .roots = (uintptr_t)roots,
     .root_count = sizeof(roots) / sizeof(roots[0]),
     .working_directories = (uintptr_t)directories,
@@ -76,6 +83,17 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (status != CALL_OK) {
     enum command_result result = shell_directory_error(shell, "shell", arguments[0], status);
     return closed_image ? result : COMMAND_FATAL;
+  }
+
+  if (session) {
+    /* The child owns copies of its grants. Closing the observer does not stop
+     * it; never read input or resume the script after a successful handoff. */
+    bool closed_child = handle_close(child) == 0;
+    if (!closed_image || !closed_child) {
+      shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
+      return COMMAND_FATAL;
+    }
+    return COMMAND_EXIT;
   }
 
   /* No terminal reads until the child has stopped and its resources are gone. */
