@@ -3,9 +3,12 @@
 #include <stdio.h>
 #include <directory.h>
 #include <abi/file.h>
+#include <abi/console.h>
+#include <abi/memory.h>
 #include <console.h>
 #include <term.h>
 #include <process.h>
+#include <launcher.h>
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
@@ -171,6 +174,62 @@ done:
   return result;
 }
 
+static int run_cat(handle_t launcher, handle_t output, handle_t memory,
+                   handle_t app, handle_t home)
+{
+  handle_t image;
+  if (directory_lookup(app, "cat.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image) != CALL_OK) {
+    return -1;
+  }
+
+  enum { CAT_OUTPUT, CAT_MEMORY, CAT_APP, CAT_HOME };
+  uint64_t root_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
+  struct launch_grant grants[] = {
+    {output, CONSOLE_RIGHT_WRITE},
+    {memory, MEMORY_RIGHT_MANAGE},
+    {app, root_rights},
+    {home, root_rights},
+  };
+  struct launch_binding resources[] = {
+    {(uintptr_t)"output", CAT_OUTPUT},
+    {(uintptr_t)"memory", CAT_MEMORY},
+  };
+  struct launch_binding roots[] = {
+    {(uintptr_t)"app", CAT_APP},
+    {(uintptr_t)"home", CAT_HOME},
+  };
+  const char *arguments[] = {"cat", "app://share/hello.txt", "home://notes/greeting.txt"};
+  struct launch_request request = {
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .grant_count = sizeof(grants) / sizeof(grants[0]),
+    .resources = (uintptr_t)resources,
+    .resource_count = sizeof(resources) / sizeof(resources[0]),
+    .roots = (uintptr_t)roots,
+    .root_count = sizeof(roots) / sizeof(roots[0]),
+    .argv = (uintptr_t)arguments,
+    .argc = sizeof(arguments) / sizeof(arguments[0]),
+  };
+  handle_t child;
+  int result = launcher_launch(launcher, &request, &child) == CALL_OK ? 0 : -1;
+  if (handle_close(image) != 0) {
+    result = -1;
+  }
+
+  /* Finish all child output before starting the interactive line editor. */
+  if (child != HANDLE_INVALID) {
+    struct process_result completion;
+    if (process_wait(child, &completion) != CALL_OK ||
+        completion.kind != PROCESS_EXITED || completion.exit_status != 0) {
+      result = -1;
+    }
+    if (handle_close(child) != 0) {
+      result = -1;
+    }
+  }
+  return result;
+}
+
 static int receive_input(handle_t input, handle_t output)
 {
   struct terminal term = {.input = input, .output = output};
@@ -232,8 +291,10 @@ int main(int argc, char **argv)
   handle_t home = startup_root("home");
   handle_t memory = startup_resource("memory");
   handle_t client = startup_resource("client_process");
+  handle_t launcher = startup_resource("launcher");
   if (input == HANDLE_INVALID || output == HANDLE_INVALID || root == HANDLE_INVALID ||
-      home == HANDLE_INVALID || memory == HANDLE_INVALID || client == HANDLE_INVALID) {
+      home == HANDLE_INVALID || memory == HANDLE_INVALID || client == HANDLE_INVALID ||
+      launcher == HANDLE_INVALID) {
     return 1;
   }
 
@@ -261,8 +322,14 @@ int main(int argc, char **argv)
         completion.kind != PROCESS_EXITED || completion.exit_status != 0) {
       result = 1;
     } else {
-      result = receive_input(input, output);
+      result = run_cat(launcher, output, memory, root, home);
     }
+  }
+  if (handle_close(launcher) != 0) {
+    result = 1;
+  }
+  if (result == 0) {
+    result = receive_input(input, output);
   }
   if (handle_close(client) != 0) {
     result = 1;
