@@ -68,16 +68,17 @@ struct term_line_result {
  * the buffer must be separate writable storage, with room for at least NUL.
  * Starts on a fresh line, advancing only if not already at column zero, then
  * clears from there to screen end.
- * Uses default colors, and leaves them restored on normal completion.
+ * Uses default colors and the visible terminal cursor; both are restored on
+ * normal completion. Cursor visibility is enabled on return.
  *
  * Printable ASCII only, one byte per cell. Insert, Backspace/Delete, Left/Right,
  * Home/End, Enter and Ctrl+C are supported. Up/Down/Page keys are decoded but
- * ignored; no history, tabs, Unicode editing or EOF interpretation. Escape has
- * no standalone action; an incomplete sequence waits for another input byte.
+ * ignored; no history, tabs, Unicode editing or EOF interpretation. Standalone
+ * Escape is decoded with a timeout and ignored by this line editor.
  *
- * The prompt, line and highlighted cursor must fit in the visible terminal,
- * leaving the final cell unused to avoid immediate wrap losing the first row.
- * Buffer/display exhaustion rejects insertion, colors the cursor red and sets
+ * The prompt, line and one cursor cell must fit in the visible terminal.
+ * Redraws account for delayed wrapping at the right margin.
+ * Buffer/display exhaustion rejects insertion, colors its cell red and sets
  * limit_reached. Deletion, movement, submission and cancellation remain usable.
  * CANCELLED/INPUT_LOST/ERROR discard the line and clear buffer[0] when possible.
  * Reads one byte at a time: no unread bytes are retained for a future caller. */

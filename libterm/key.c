@@ -76,4 +76,3 @@ enum call_status term_read_key(struct terminal *term, unsigned *key)
     return CALL_OK;
   }
 }
-
