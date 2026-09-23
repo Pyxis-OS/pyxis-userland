@@ -2,13 +2,13 @@
 # as one directory; the compiler remains an external, prebuilt dependency.
 PYXIS_SDK := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 PYXIS_SYSROOT := $(PYXIS_SDK)/sysroot
-CROSS_COMPILE ?= x86_64-elf-
+CROSS_COMPILE ?= x86_64-unknown-pyxis-
 CC := $(CROSS_COMPILE)gcc
 AR := $(CROSS_COMPILE)ar
 PYXIS_COMPILER_ID := $(shell $(CC) -dumpmachine) $(shell $(CC) -dumpfullversion)
 
-# The current bare-metal GCC does not search sysroot/usr/include by default.
-# Keep only compiler-provided headers and exported target headers visible.
+# Keep SDK headers on a normal include path so -MMD tracks their changes.
+# Only compiler-provided headers and exported target headers are visible.
 PYXIS_CPPFLAGS := --sysroot=$(PYXIS_SYSROOT) -nostdinc \
                   -isystem $(shell $(CC) -print-file-name=include) \
                   -I$(PYXIS_SYSROOT)/usr/include
