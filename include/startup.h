@@ -18,6 +18,10 @@ handle_t startup_resource(const char *name);
 handle_t startup_root(const char *scheme);
 const char *startup_environment(const char *name);
 
+/* Borrowed immutable array for explicitly forwarding the initial environment. */
+const struct startup_variable *startup_environment_variables(void);
+size_t startup_environment_count(void);
+
 /* The chain runs from the permitted parent-navigation boundary to the current
  * directory. Out-of-range indexes return HANDLE_INVALID. The optional display
  * path describes the initial context only; changing directory does not update it.
