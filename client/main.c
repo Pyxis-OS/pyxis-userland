@@ -7,7 +7,7 @@
 #include <console.h>
 #include <endpoint.h>
 #include <handle.h>
-#include <content_service.h>
+#include "../common/content_service.h"
 #include <abi/file.h>
 
 static int print_number(handle_t output, uint64_t value)
