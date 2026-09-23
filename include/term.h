@@ -14,6 +14,8 @@ struct terminal {
 };
 
 enum call_status term_read(struct terminal *term, void *bytes, size_t capacity, size_t *read);
+enum call_status term_read_timeout(struct terminal *term, void *bytes, size_t capacity,
+                                  uint32_t timeout_ms, size_t *read);
 enum call_status term_write(struct terminal *term, const void *bytes, size_t size, size_t *written);
 enum call_status term_write_all(struct terminal *term, const void *bytes, size_t size);
 enum call_status term_print(struct terminal *term, const char *text);
@@ -32,6 +34,21 @@ enum call_status term_clear_line(struct terminal *term);
 enum call_status term_colors(struct terminal *term, int foreground, int background);
 enum call_status term_reverse(struct terminal *term, bool enabled);
 enum call_status term_reset_style(struct terminal *term);
+enum call_status term_cursor_visible(struct terminal *term, bool visible);
+
+/* Logical input keys, independent of physical keyboard events. Bytes retain
+ * their byte values, including Escape (27), Tab and control characters. */
+enum term_key {
+  TERM_KEY_UNKNOWN = 256,
+  TERM_KEY_LEFT, TERM_KEY_RIGHT, TERM_KEY_HOME, TERM_KEY_END, TERM_KEY_DELETE,
+  TERM_KEY_UP, TERM_KEY_DOWN, TERM_KEY_PAGE_UP, TERM_KEY_PAGE_DOWN,
+};
+
+/* Block for a key, then allow 100 ms between bytes of an escape sequence.
+ * Standalone Escape returns 27; incomplete/unsupported sequences return UNKNOWN.
+ * Reads one byte at a time with no retained input or read-ahead. INPUT_LOST and
+ * other native failures are returned to the caller; *key is UNKNOWN on error. */
+enum call_status term_read_key(struct terminal *term, unsigned *key);
 
 enum term_line_status {
   TERM_LINE_OK,

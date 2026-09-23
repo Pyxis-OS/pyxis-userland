@@ -54,7 +54,8 @@ enum call_status console_print(handle_t output, const char *text)
   return console_write_all(output, text, size);
 }
 
-enum call_status console_read(handle_t input, void *bytes, size_t capacity, size_t *read)
+static enum call_status read_console(handle_t input, void *bytes, size_t capacity,
+                                    uint64_t timeout_ms, size_t *read)
 {
   if (!read) {
     return CALL_BAD_REQUEST;
@@ -62,7 +63,7 @@ enum call_status console_read(handle_t input, void *bytes, size_t capacity, size
   *read = 0;
   struct console_message message = {
     .header = {PROTOCOL_CONSOLE, CONSOLE_READ},
-    .body.read = {.address = (uintptr_t)bytes, .capacity = capacity},
+    .body.read = {.address = (uintptr_t)bytes, .capacity = capacity, .timeout_ms = timeout_ms},
   };
   struct console_read_reply reply;
   struct syscall_result result = syscall_call(input, &message, sizeof(message),
@@ -77,6 +78,17 @@ enum call_status console_read(handle_t input, void *bytes, size_t capacity, size
   }
   *read = reply.read;
   return CALL_OK;
+}
+
+enum call_status console_read(handle_t input, void *bytes, size_t capacity, size_t *read)
+{
+  return read_console(input, bytes, capacity, CONSOLE_WAIT_FOREVER, read);
+}
+
+enum call_status console_read_timeout(handle_t input, void *bytes, size_t capacity,
+                                     uint32_t timeout_ms, size_t *read)
+{
+  return read_console(input, bytes, capacity, timeout_ms, read);
 }
 
 enum call_status console_size(handle_t console, size_t *columns, size_t *rows)

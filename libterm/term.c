@@ -7,6 +7,12 @@ enum call_status term_read(struct terminal *term, void *bytes, size_t capacity, 
   return console_read(term->input, bytes, capacity, read);
 }
 
+enum call_status term_read_timeout(struct terminal *term, void *bytes, size_t capacity,
+                                  uint32_t timeout_ms, size_t *read)
+{
+  return console_read_timeout(term->input, bytes, capacity, timeout_ms, read);
+}
+
 enum call_status term_write(struct terminal *term, const void *bytes, size_t size, size_t *written)
 {
   return console_write(term->output, bytes, size, written);
@@ -92,4 +98,9 @@ enum call_status term_reverse(struct terminal *term, bool enabled)
 enum call_status term_reset_style(struct terminal *term)
 {
   return term_print(term, "\x1b[0m");
+}
+
+enum call_status term_cursor_visible(struct terminal *term, bool visible)
+{
+  return term_print(term, visible ? "\x1b[?25h" : "\x1b[?25l");
 }

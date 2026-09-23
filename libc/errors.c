@@ -23,6 +23,7 @@ int libc_call_errno(enum call_status status)
   case CALL_ALREADY_EXISTS: return EEXIST;
   case CALL_READ_ONLY: return EROFS;
   case CALL_INPUT_LOST: return EIO;
+  case CALL_TIMED_OUT: return ETIMEDOUT;
   default: return EIO;
   }
 }
@@ -47,6 +48,7 @@ char *strerror(int error)
   case EROFS: return "Read-only filesystem";
   case EIO: return "Input/output error";
   case ESPIPE: return "Stream is not seekable";
+  case ETIMEDOUT: return "Operation timed out";
   default: return "Unknown error";
   }
 }
