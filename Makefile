@@ -1,11 +1,11 @@
-SDK ?= ../build/sdk
+SDK ?= build/sdk
 SDK := $(abspath $(SDK))
-BUILD ?= ../build/userspace
+BUILD ?= build/apps
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
 ifeq ($(wildcard $(SDK)/share/pyxis.mk),)
-$(error Missing SDK at $(SDK); run make sdk in Pyxis or supply SDK=/path/to/sdk)
+$(error Missing SDK at $(SDK); supply SDK=/path/to/sdk exported by Pyxis)
 endif
 include $(SDK)/share/pyxis.mk
 endif

@@ -1,12 +1,12 @@
-SDK ?= ../build/sdk
+SDK ?= build/sdk
 SDK := $(abspath $(SDK))
-BUILD ?= ../build/runtime
+BUILD ?= build/runtime
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
 include $(SDK)/share/pyxis.mk
 endif
-CPPFLAGS := $(PYXIS_CPPFLAGS)
+CPPFLAGS := -Ilibc/include -Iinclude $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
 export SDK CC CPPFLAGS CFLAGS PYXIS_COMPILER_ID
 
@@ -48,15 +48,15 @@ $(LIBC): $(LIBC_OBJECTS) runtime.mk
 	rm -f $@
 	$(AR) rcs $@ $(LIBC_OBJECTS)
 
-$(BUILD)/lib/shebang.o: ../lib/shebang.c $(SDK)/sysroot/usr/include/pxe/shebang.h
+$(BUILD)/lib/shebang.o: $(SDK)/share/pyxis/shebang.c $(SDK)/sysroot/usr/include/pxe/shebang.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/libc/tlsf.o: ../third_party/tlsf/tlsf.c
+$(BUILD)/libc/tlsf.o: third_party/tlsf/tlsf.c
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DTLSF_USERSPACE -Ilibc -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Ilibc -c $< -o $@
 
-$(BUILD)/libc/malloc.o: private CPPFLAGS += -I../third_party/tlsf
+$(BUILD)/libc/malloc.o: private CPPFLAGS += -Ithird_party/tlsf
 
 $(BUILD)/%.o: %.c runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
