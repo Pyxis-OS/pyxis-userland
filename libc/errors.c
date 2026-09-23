@@ -35,6 +35,7 @@ char *strerror(int error)
   case ENOMEM: return "Out of memory";
   case EINVAL: return "Invalid argument";
   case EOVERFLOW: return "Value too large";
+  case ERANGE: return "Result out of range";
   case EBADF: return "Invalid stream or handle";
   case EACCES: return "Permission denied";
   case ENOTSUP: return "Operation not supported";
