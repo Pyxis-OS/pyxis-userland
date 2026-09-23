@@ -24,5 +24,7 @@ for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
-helpers. `mandelbrot` renders a colored terminal image using double arithmetic;
-libc floating-point parsing/formatting and libm are not provided yet.
+helpers. `mandelbrot` draws through a mapped display buffer using double
+arithmetic; press a key after rendering to return to the TTY. It needs display
+and terminal input grants. Floating-point formatting and a full libm remain
+separate work.
