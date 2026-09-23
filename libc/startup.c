@@ -10,5 +10,6 @@ extern int main(int argc, char **argv);
     _Exit(EXIT_FAILURE);
   }
   malloc_init();
+  stdio_init();
   exit(main((int)info->argc, (char **)(uintptr_t)info->argv));
 }

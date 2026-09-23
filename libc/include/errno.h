@@ -8,4 +8,18 @@ extern int errno;
 #define EINVAL 2
 #define EOVERFLOW 3
 
+#define EBADF 4
+#define EACCES 5
+#define ENOTSUP 6
+#define EFAULT 7
+#define ENODEV 8
+#define EAGAIN 9
+#define EPIPE 10
+#define EBUSY 11
+#define ENOENT 12
+#define EEXIST 13
+#define EROFS 14
+#define EIO 15
+#define ESPIPE 16
+
 #endif

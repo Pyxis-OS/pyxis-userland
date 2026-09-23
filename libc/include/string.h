@@ -16,4 +16,7 @@ char *strrchr(const char *text, int character);
 char *strdup(const char *text);
 char *strndup(const char *text, size_t limit);
 
+/* Static message storage; callers must not modify it. */
+char *strerror(int error);
+
 #endif

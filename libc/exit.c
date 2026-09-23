@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <syscall.h>
+#include "runtime.h"
 
 [[noreturn]] void _Exit(int status)
 {
@@ -12,5 +13,6 @@
 
 [[noreturn]] void exit(int status)
 {
+  stdio_finish();
   _Exit(status);
 }
