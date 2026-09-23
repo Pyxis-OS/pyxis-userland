@@ -9,6 +9,7 @@ PYXIS_COMPILER_ID := $(shell $(CC) -dumpmachine) $(shell $(CC) -dumpfullversion)
 
 # Keep SDK headers on a normal include path so -MMD tracks their changes.
 # Only compiler-provided headers and exported target headers are visible.
+# SDK -I directories take precedence over the compiler's -isystem directory.
 PYXIS_CPPFLAGS := --sysroot=$(PYXIS_SYSROOT) -nostdinc \
                   -isystem $(shell $(CC) -print-file-name=include) \
                   -I$(PYXIS_SYSROOT)/usr/include
