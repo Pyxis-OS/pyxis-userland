@@ -2,7 +2,7 @@
 #include <console.h>
 #include <endpoint.h>
 #include <handle.h>
-#include <content_service.h>
+#include "../common/content_service.h"
 #include <file.h>
 
 static int print_content(handle_t content, handle_t output, uint64_t *size)
