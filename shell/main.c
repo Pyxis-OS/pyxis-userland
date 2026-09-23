@@ -96,37 +96,12 @@ int main(int argc, char **argv)
       }
       continue;
     }
-    size_t count;
-    const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &count);
-    if (error) {
-      if (fprintf(stderr, "shell: %s\n", error) < 0) {
-        break;
-      }
-      continue;
+    enum command_result command = shell_command(&shell, line, arguments);
+    if (command == COMMAND_EXIT) {
+      result = EXIT_SUCCESS;
+      break;
     }
-    if (!count) {
-      continue;
-    }
-    if (strcmp(arguments[0], "exit") == 0) {
-      if (count == 1) {
-        result = EXIT_SUCCESS;
-        break;
-      }
-      if (fputs("usage: exit\n", stderr) == EOF) {
-        break;
-      }
-    } else if (strcmp(arguments[0], "cd") == 0) {
-      if (count != 2) {
-        if (fputs("usage: cd path\n", stderr) == EOF) {
-          break;
-        }
-        continue;
-      }
-      status = shell_change_directory(&shell, arguments[1]);
-      if (status != CALL_OK && report_directory_error("shell: cd", arguments[1], status) < 0) {
-        break;
-      }
-    } else if (!shell_launch(&shell, arguments, count)) {
+    if (command == COMMAND_FATAL) {
       break;
     }
   }

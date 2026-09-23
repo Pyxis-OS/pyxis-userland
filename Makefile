@@ -28,7 +28,7 @@ PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/mai
                    ../build/userspace/ls/main.o ../build/userspace/mkdir/main.o \
                    ../build/userspace/shell/main.o
 SHELL_OBJECTS := ../build/userspace/shell/parse.o ../build/userspace/shell/directory.o \
-                 ../build/userspace/shell/launch.o
+                 ../build/userspace/shell/launch.o ../build/userspace/shell/command.o
 UTILITY_OBJECT := ../build/userspace/common/directory.o
 
 .PHONY: all libpyxis libterm libc hello client server cat ls mkdir shell converter clean
