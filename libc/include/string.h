@@ -13,6 +13,8 @@ int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 char *strchr(const char *text, int character);
 char *strrchr(const char *text, int character);
+/* First occurrence; an empty needle returns text. NULL when not found. */
+char *strstr(const char *text, const char *needle);
 char *strdup(const char *text);
 char *strndup(const char *text, size_t limit);
 

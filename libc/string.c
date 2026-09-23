@@ -61,6 +61,26 @@ char *strrchr(const char *text, int character)
   return (char *)last;
 }
 
+char *strstr(const char *text, const char *needle)
+{
+  if (!*needle) {
+    return (char *)text;
+  }
+
+  for (; *text; ++text) {
+    const char *candidate = text;
+    const char *match = needle;
+    while (*match && *candidate && *candidate == *match) {
+      ++candidate;
+      ++match;
+    }
+    if (!*match) {
+      return (char *)text;
+    }
+  }
+  return NULL;
+}
+
 char *strndup(const char *text, size_t limit)
 {
   size_t length = strnlen(text, limit);
