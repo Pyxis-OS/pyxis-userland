@@ -101,3 +101,11 @@ enum call_status console_size(handle_t console, size_t *columns, size_t *rows)
   *rows = reply.rows;
   return CALL_OK;
 }
+
+enum call_status console_fresh_line(handle_t output)
+{
+  struct console_message message = {.header = {PROTOCOL_CONSOLE, CONSOLE_FRESH_LINE}};
+  struct syscall_result result = syscall_call(output, &message, sizeof(message), NULL, 0);
+  return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+         (enum call_status)result.status : CALL_BAD_REQUEST;
+}

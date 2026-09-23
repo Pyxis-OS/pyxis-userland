@@ -214,6 +214,10 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
     .term = term, .prompt = prompt, .buffer = buffer,
     .columns = columns, .prompt_length = prompt_length,
   };
+  result.error = term_fresh_line(term);
+  if (result.error != CALL_OK) {
+    return result;
+  }
   result.error = term_print(term, "\x1b[0m\r\x1b[J");
   if (result.error != CALL_OK) {
     return result;
