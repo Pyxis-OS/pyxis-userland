@@ -13,7 +13,7 @@ PYXIS_CPPFLAGS := --sysroot=$(PYXIS_SYSROOT) -nostdinc \
                   -isystem $(shell $(CC) -print-file-name=include) \
                   -I$(PYXIS_SYSROOT)/usr/include
 PYXIS_CFLAGS := -std=gnu23 -O2 -g3 -ffreestanding -fno-stack-protector \
-               -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only \
+               -fno-pic -fno-pie -mno-red-zone -march=x86-64 \
                -Wall -Wextra -MMD -MP
 PYXIS_LINKER_SCRIPT := $(PYXIS_SYSROOT)/usr/lib/pyxis.ld
 PYXIS_LDFLAGS := --sysroot=$(PYXIS_SYSROOT) -nostdlib -static -no-pie \
