@@ -22,6 +22,11 @@ enum call_status term_print(struct terminal *term, const char *text)
   return console_print(term->output, text);
 }
 
+enum call_status term_fresh_line(struct terminal *term)
+{
+  return console_fresh_line(term->output);
+}
+
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows)
 {
   return console_size(term->output, columns, rows);

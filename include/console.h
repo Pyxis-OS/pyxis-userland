@@ -26,4 +26,8 @@ enum call_status console_read(handle_t input, void *bytes, size_t capacity, size
 /* Dimensions in character cells; requires either READ or WRITE authority. */
 enum call_status console_size(handle_t console, size_t *columns, size_t *rows);
 
+/* WRITE authority. Advance only when not already at column zero; also discard
+ * an incomplete output escape sequence. Does not clear text or reset colors. */
+enum call_status console_fresh_line(handle_t output);
+
 #endif

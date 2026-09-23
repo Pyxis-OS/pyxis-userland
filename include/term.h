@@ -17,6 +17,8 @@ enum call_status term_read(struct terminal *term, void *bytes, size_t capacity, 
 enum call_status term_write(struct terminal *term, const void *bytes, size_t size, size_t *written);
 enum call_status term_write_all(struct terminal *term, const void *bytes, size_t size);
 enum call_status term_print(struct terminal *term, const char *text);
+/* Begin a fresh line without adding a blank row when already at column zero. */
+enum call_status term_fresh_line(struct terminal *term);
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows);
 
 /* Movement clamps at screen edges and never scrolls. Position is zero-based;
@@ -47,7 +49,8 @@ struct term_line_result {
 
 /* Own input/output exclusively for the call. Prompt must be printable ASCII;
  * the buffer must be separate writable storage, with room for at least NUL.
- * Starts at column zero on the current row, clearing from there to screen end.
+ * Starts on a fresh line, advancing only if not already at column zero, then
+ * clears from there to screen end.
  * Uses default colors, and leaves them restored on normal completion.
  *
  * Printable ASCII only, one byte per cell. Insert, Backspace/Delete, Left/Right,

@@ -5,6 +5,41 @@
 #include <stdlib.h>
 #include <string.h>
 
+static struct term_line_result read_command(struct shell *shell, char *line)
+{
+  size_t columns, rows;
+  enum call_status status = term_size(&shell->terminal, &columns, &rows);
+  if (status != CALL_OK) {
+    return (struct term_line_result){.status = TERM_LINE_ERROR, .error = status};
+  }
+
+  /* Keep at least half the first row available for input. Only the displayed
+   * prompt is shortened; child startup metadata keeps the full working path. */
+  char prompt[SHELL_LINE_CAPACITY];
+  size_t budget = columns / 2;
+  if (budget > sizeof(prompt) - 1) {
+    budget = sizeof(prompt) - 1;
+  }
+  size_t available = budget > 2 ? budget - 2 : 0;
+  const char *path = shell->working_path;
+  size_t length = strlen(path);
+  size_t used = 0;
+  if (length > available) {
+    if (available >= 3) {
+      memcpy(prompt, "...", 3);
+      used = 3;
+    }
+    path += length - (available - used);
+    length = available - used;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    unsigned char byte = path[i];
+    prompt[used++] = byte >= ' ' && byte <= '~' ? byte : '?';
+  }
+  memcpy(prompt + used, "> ", 3);
+  return term_read_line(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
+}
+
 int main(int argc, char **argv)
 {
   (void)argc;
@@ -37,7 +72,7 @@ int main(int argc, char **argv)
   }
 
   for (;;) {
-    struct term_line_result read = term_read_line(&shell.terminal, "> ", line, SHELL_LINE_CAPACITY);
+    struct term_line_result read = read_command(&shell, line);
     if (read.status == TERM_LINE_CANCELLED) {
       continue;
     }

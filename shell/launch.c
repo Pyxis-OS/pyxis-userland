@@ -64,8 +64,7 @@ bool shell_launch(struct shell *shell, char **arguments, size_t count)
     .root_count = sizeof(roots) / sizeof(roots[0]),
     .working_directories = (uintptr_t)directories,
     .working_directory_count = depth,
-    /* The current chain is authoritative. Do not forward the stale startup
-     * display path after cd; a displayed current path is not maintained yet. */
+    .working_path = (uintptr_t)shell->working_path,
     .environment = (uintptr_t)startup_environment_variables(),
     .environment_count = startup_environment_count(),
     .argv = (uintptr_t)arguments,
@@ -92,9 +91,8 @@ bool shell_launch(struct shell *shell, char **arguments, size_t count)
     report_directory_error("shell: close", arguments[0], CALL_BAD_HANDLE);
     return false;
   }
-  /* Child output may end mid-line. Leave it intact when libterm clears the
-   * prompt's row, without querying or assuming the child's cursor position. */
-  if (putchar('\n') == EOF) {
+  /* Preserve partial child output before any completion diagnostic. */
+  if (term_fresh_line(&shell->terminal) != CALL_OK) {
     return false;
   }
   if (completion.kind == PROCESS_FAULTED) {
