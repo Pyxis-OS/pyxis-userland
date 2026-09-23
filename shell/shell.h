@@ -5,6 +5,8 @@
 #include <term.h>
 
 #define SHELL_LINE_CAPACITY 1024
+/* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
+#define SHELL_SCRIPT_LINE_MAX 1024
 #define APP_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 #define HOME_DIRECTORY_RIGHTS (APP_DIRECTORY_RIGHTS | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
 
@@ -37,5 +39,7 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
     const char *path, enum call_status status);
 enum command_result shell_command(struct shell *shell, char *line, char **arguments);
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count);
+/* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
+int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 
 #endif

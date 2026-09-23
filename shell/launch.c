@@ -91,7 +91,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     return COMMAND_FATAL;
   }
   /* Preserve partial child output before any completion diagnostic. */
-  if (term_fresh_line(&shell->terminal) != CALL_OK) {
+  status = term_fresh_line(&shell->terminal);
+  if (status != CALL_OK) {
+    shell_directory_error(shell, "shell", "terminal", status);
     return COMMAND_FATAL;
   }
   if (completion.kind == PROCESS_FAULTED) {

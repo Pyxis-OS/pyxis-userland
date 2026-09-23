@@ -42,13 +42,14 @@ static struct term_line_result read_command(struct shell *shell, char *line)
 
 int main(int argc, char **argv)
 {
-  (void)argc;
-  (void)argv;
-  if (startup_resource("script") != HANDLE_INVALID) {
-    fputs("shell: Script execution is not implemented yet\n", stderr);
+  handle_t script = startup_resource("script");
+  if (script != HANDLE_INVALID && argc < 2) {
+    fputs("shell: Missing script diagnostic name\n", stderr);
     return EXIT_FAILURE;
   }
   struct shell shell = {
+    .script_name = script != HANDLE_INVALID ? argv[1] : NULL,
+    .script_line = 1,
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
     .memory = startup_resource("memory"),
@@ -58,20 +59,25 @@ int main(int argc, char **argv)
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
       shell.app == HANDLE_INVALID || shell.home == HANDLE_INVALID) {
-    fputs("shell: Missing startup resource or filesystem root\n", stderr);
+    shell_error(&shell, "shell: Missing startup resource or filesystem root\n");
     return EXIT_FAILURE;
   }
 
   int result = EXIT_FAILURE;
-  char *line = malloc(SHELL_LINE_CAPACITY);
+  char *line = malloc(script != HANDLE_INVALID ? SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
   char **arguments = malloc(SHELL_LINE_CAPACITY * sizeof(*arguments));
   if (!line || !arguments) {
-    perror("shell");
+    shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
   }
   enum call_status status = shell_directory_init(&shell);
   if (status != CALL_OK) {
-    report_directory_error("shell", "working directory", status);
+    shell_directory_error(&shell, "shell", "working directory", status);
+    goto done;
+  }
+
+  if (script != HANDLE_INVALID) {
+    result = shell_script(&shell, script, line, arguments);
     goto done;
   }
 
