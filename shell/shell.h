@@ -13,6 +13,7 @@ struct shell {
   handle_t launcher, memory, app, home;
   struct path_context directory;
   struct path_workspace workspace;
+  char *working_path; /* Owned display metadata; directory handles authorize lookup. */
 };
 
 /* Compacts in place. Argument pointers borrow line; capacity includes final NULL.
