@@ -31,6 +31,15 @@ unsigned long long strtoull(const char *restrict text, char **restrict end, int 
  * As in C, an out-of-int-range input has no guaranteed result. */
 int atoi(const char *text);
 
+/* ASCII decimal/hexadecimal, infinity and NaN; '.' is the decimal separator.
+ * If no conversion occurs, return zero with *end at text and errno unchanged.
+ * Overflow, nonzero subnormals (including exact ones), and nonzero input rounded
+ * to zero set ERANGE. Other conversions preserve errno. end may be NULL.
+ * NaN payload text is consumed but does not select a payload or sign. */
+float strtof(const char *restrict text, char **restrict end);
+double strtod(const char *restrict text, char **restrict end);
+long double strtold(const char *restrict text, char **restrict end);
+
 /* In-place, unstable heapsort with no allocation or recursion. compare returns
  * negative, zero or positive for less than, equal to or greater than. */
 void qsort(void *base, size_t count, size_t size,

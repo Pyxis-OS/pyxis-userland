@@ -23,15 +23,16 @@ LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
-MUSL_MATH_SOURCES := third_party/musl/src/math/scalbn.c \
-                     third_party/musl/src/math/scalbnl.c \
-                     third_party/musl/src/math/ldexpl.c \
-                     third_party/musl/src/math/fabsl.c \
-                     third_party/musl/src/math/copysignl.c \
-                     third_party/musl/src/math/x86_64/fmodl.c
-MUSL_MATH_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_MATH_SOURCES))
+MUSL_SOURCES := third_party/musl/src/math/scalbn.c \
+                third_party/musl/src/math/scalbnl.c \
+                third_party/musl/src/math/ldexpl.c \
+                third_party/musl/src/math/fabsl.c \
+                third_party/musl/src/math/copysignl.c \
+                third_party/musl/src/math/x86_64/fmodl.c \
+                third_party/musl/src/internal/floatscan.c
+MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
-                $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(MUSL_MATH_OBJECTS)
+                $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(MUSL_OBJECTS)
 
 .PHONY: all libpyxis libterm libc clean FORCE
 all: $(START_OBJECT) libpyxis libterm libc
@@ -65,8 +66,11 @@ $(BUILD)/libc/tlsf.o: third_party/tlsf/tlsf.c
 
 $(BUILD)/libc/malloc.o: private CPPFLAGS += -Ithird_party/tlsf
 
-$(MUSL_MATH_OBJECTS): private CPPFLAGS += -Ithird_party/musl/src/internal
-$(MUSL_MATH_OBJECTS): private CFLAGS += -frounding-math -fexcess-precision=standard
+$(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CPPFLAGS += -Ithird_party/musl/src/internal
+$(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CFLAGS += -frounding-math -fexcess-precision=standard
+
+# Retain upstream's unsigned character tests and ring-index expressions.
+$(BUILD)/third_party/musl/src/internal/floatscan.o: private CFLAGS += -Wno-sign-compare -Wno-parentheses
 
 $(BUILD)/%.o: %.c runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
