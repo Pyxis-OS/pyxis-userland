@@ -57,5 +57,11 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     }
     return COMMAND_OK;
   }
-  return shell_launch(shell, arguments, count);
+  if (strcmp(arguments[0], "session") == 0) {
+    if (count < 2) {
+      return shell_error(shell, "usage: session program [arguments...]\n");
+    }
+    return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION);
+  }
+  return shell_launch(shell, arguments, count, SHELL_FOREGROUND);
 }

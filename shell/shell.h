@@ -17,6 +17,8 @@ enum command_result {
   COMMAND_FATAL, /* Terminal, wait or cleanup failed; input cannot resume. */
 };
 
+enum shell_launch_mode { SHELL_FOREGROUND, SHELL_SESSION };
+
 struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
@@ -38,7 +40,8 @@ enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
 enum command_result shell_command(struct shell *shell, char *line, char **arguments);
-enum command_result shell_launch(struct shell *shell, char **arguments, size_t count);
+enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
+    enum shell_launch_mode mode);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 
