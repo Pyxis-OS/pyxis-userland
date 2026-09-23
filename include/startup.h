@@ -3,6 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/startup.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Runtime entry only, before main and before argv can be modified. */

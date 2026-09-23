@@ -19,7 +19,7 @@ void *realloc(void *pointer, size_t size);
 char *getenv(const char *name);
 
 /* No stdio streams or exit handlers exist yet; both terminate immediately. */
-[[noreturn]] void exit(int status);
-[[noreturn]] void _Exit(int status);
+__attribute__((noreturn)) void exit(int status);
+__attribute__((noreturn)) void _Exit(int status);
 
 #endif
