@@ -31,7 +31,7 @@ SHELL_OBJECTS := ../build/userspace/shell/parse.o ../build/userspace/shell/direc
 UTILITY_OBJECT := ../build/userspace/common/directory.o
 
 .PHONY: all libpyxis libterm libc hello client server cat ls mkdir shell converter clean
-all: hello client server cat ls mkdir shell
+all: shell cat ls mkdir ../build/userspace/share/hello.txt
 
 libpyxis: $(LIBPYXIS)
 libterm: $(LIBTERM)
