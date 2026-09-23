@@ -174,31 +174,31 @@ done:
   return result;
 }
 
-static int run_cat(handle_t launcher, handle_t output, handle_t memory,
-                   handle_t app, handle_t home)
+static int run_utility(handle_t launcher, handle_t output, handle_t memory,
+                       handle_t app, handle_t home, const char **arguments, size_t count,
+                       uint64_t app_rights, uint64_t home_rights)
 {
   handle_t image;
-  if (directory_lookup(app, "cat.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image) != CALL_OK) {
+  if (directory_lookup(app, arguments[0], DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image) != CALL_OK) {
     return -1;
   }
 
-  enum { CAT_OUTPUT, CAT_MEMORY, CAT_APP, CAT_HOME };
-  uint64_t root_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
+  enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_APP, UTILITY_HOME };
   struct launch_grant grants[] = {
     {output, CONSOLE_RIGHT_WRITE},
     {memory, MEMORY_RIGHT_MANAGE},
-    {app, root_rights},
-    {home, root_rights},
+    {app, app_rights},
+    {home, home_rights},
   };
   struct launch_binding resources[] = {
-    {(uintptr_t)"output", CAT_OUTPUT},
-    {(uintptr_t)"memory", CAT_MEMORY},
+    {(uintptr_t)"output", UTILITY_OUTPUT},
+    {(uintptr_t)"memory", UTILITY_MEMORY},
   };
   struct launch_binding roots[] = {
-    {(uintptr_t)"app", CAT_APP},
-    {(uintptr_t)"home", CAT_HOME},
+    {(uintptr_t)"app", UTILITY_APP},
+    {(uintptr_t)"home", UTILITY_HOME},
   };
-  const char *arguments[] = {"cat", "app://share/hello.txt", "home://notes/greeting.txt"};
+  uint64_t working_directory = UTILITY_HOME;
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
@@ -207,8 +207,11 @@ static int run_cat(handle_t launcher, handle_t output, handle_t memory,
     .resource_count = sizeof(resources) / sizeof(resources[0]),
     .roots = (uintptr_t)roots,
     .root_count = sizeof(roots) / sizeof(roots[0]),
+    .working_directories = (uintptr_t)&working_directory,
+    .working_directory_count = 1,
+    .working_path = (uintptr_t)"home://",
     .argv = (uintptr_t)arguments,
-    .argc = sizeof(arguments) / sizeof(arguments[0]),
+    .argc = count,
   };
   handle_t child;
   int result = launcher_launch(launcher, &request, &child) == CALL_OK ? 0 : -1;
@@ -228,6 +231,28 @@ static int run_cat(handle_t launcher, handle_t output, handle_t memory,
     }
   }
   return result;
+}
+
+static int run_utilities(handle_t launcher, handle_t output, handle_t memory,
+                         handle_t app, handle_t home)
+{
+  uint64_t read_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
+  const char *cat_arguments[] = {"cat.pxe", "app://share/hello.txt", "home://notes/greeting.txt"};
+  if (run_utility(launcher, output, memory, app, home, cat_arguments, 3,
+        read_rights, read_rights) != 0) {
+    return -1;
+  }
+
+  const char *mkdir_arguments[] = {"mkdir.pxe", "home://documents"};
+  if (run_utility(launcher, output, memory, app, home, mkdir_arguments, 2,
+        0, DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE) != 0) {
+    return -1;
+  }
+
+  uint64_t list_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE;
+  const char *ls_arguments[] = {"ls.pxe", "app://", "home://", "home://documents"};
+  return run_utility(launcher, output, memory, app, home, ls_arguments, 4,
+      list_rights, list_rights);
 }
 
 static int receive_input(handle_t input, handle_t output)
@@ -322,7 +347,7 @@ int main(int argc, char **argv)
         completion.kind != PROCESS_EXITED || completion.exit_status != 0) {
       result = 1;
     } else {
-      result = run_cat(launcher, output, memory, root, home);
+      result = run_utilities(launcher, output, memory, root, home);
     }
   }
   if (handle_close(launcher) != 0) {
