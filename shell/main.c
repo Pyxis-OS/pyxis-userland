@@ -53,6 +53,7 @@ int main(int argc, char **argv)
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
     .memory = startup_resource("memory"),
+    .display = startup_resource("display"),
     .app = startup_root("app"),
     .home = startup_root("home"),
   };

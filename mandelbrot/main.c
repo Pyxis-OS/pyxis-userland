@@ -1,4 +1,6 @@
+#include <display.h>
 #include <startup.h>
+#include <stdio.h>
 #include <term.h>
 
 #define ITERATION_LIMIT 512
@@ -18,66 +20,76 @@ static unsigned escape_iterations(double real, double imaginary)
   return iteration;
 }
 
-static int render(struct terminal *term, size_t width, size_t height)
+static uint32_t pixel_color(const struct display_buffer *buffer, uint32_t rgb)
 {
-  const int palette[] = {4, 12, 6, 14, 2, 10, 3, 11, 1, 9, 5, 13, 7, 15};
-  const size_t palette_size = sizeof(palette) / sizeof(palette[0]);
-  double step = 3.5 / (double)width;
-  double imaginary_top = -step * (double)height / 2.0;
-  int previous_color = -1;
+  return ((rgb >> 16) & 0xff) << buffer->red_shift |
+         ((rgb >> 8) & 0xff) << buffer->green_shift |
+         (rgb & 0xff) << buffer->blue_shift;
+}
 
-  for (size_t row = 0; row < height; ++row) {
-    if (term_position(term, row, 0) != CALL_OK) {
-      return 1;
-    }
+static void render(const struct display_buffer *buffer)
+{
+  const uint32_t palette[] = {
+    0x487fd4, 0x76a8f2, 0x269d9a, 0x52c4c0, 0x52aa60, 0x80d080,
+    0xad9b49, 0xc7b461, 0xc26265, 0xe48383, 0xaf5bd1, 0xd58bf0,
+    0xb4bcca, 0xdfe5ee,
+  };
+  uint32_t colors[sizeof(palette) / sizeof(palette[0])];
+  for (size_t i = 0; i < sizeof(colors) / sizeof(colors[0]); ++i) {
+    colors[i] = pixel_color(buffer, palette[i]);
+  }
+  double step = 3.5 / (double)buffer->width;
+  double imaginary_top = -step * (double)buffer->height / 2.0;
+
+  for (size_t row = 0; row < buffer->height; ++row) {
+    volatile uint32_t *pixels = (volatile uint32_t *)(uintptr_t)
+        (buffer->address + row * buffer->pitch);
     double imaginary = imaginary_top + ((double)row + 0.5) * step;
 
-    for (size_t column = 0; column < width; ++column) {
+    for (size_t column = 0; column < buffer->width; ++column) {
       double real = -2.5 + ((double)column + 0.5) * step;
       unsigned iteration = escape_iterations(real, imaginary);
-      int color = iteration == ITERATION_LIMIT ? 0 : palette[iteration % palette_size];
-      if (color != previous_color) {
-        if (term_colors(term, -1, color) != CALL_OK) {
-          return 1;
-        }
-        previous_color = color;
-      }
-      /* Two 8x16 terminal cells form one square sample; no UTF-8 needed. */
-      if (term_print(term, "  ") != CALL_OK) {
-        return 1;
-      }
+      pixels[column] = iteration == ITERATION_LIMIT ? 0 :
+          colors[iteration % (sizeof(colors) / sizeof(colors[0]))];
     }
   }
-  return 0;
 }
 
 int main(void)
 {
+  handle_t display = startup_resource("display");
   struct terminal term = {
-    .input = HANDLE_INVALID,
+    .input = startup_resource("input"),
     .output = startup_resource("output"),
   };
-  size_t columns, rows;
-  if (term.output == HANDLE_INVALID ||
-      term_size(&term, &columns, &rows) != CALL_OK || columns < 2 || rows < 2) {
+  if (display == HANDLE_INVALID || term.input == HANDLE_INVALID) {
+    fputs("mandelbrot: display and input resources are required\n", stderr);
     return 1;
   }
 
-  int result = 1;
-  if (term_reset_style(&term) == CALL_OK &&
-      term_cursor_visible(&term, false) == CALL_OK && term_clear(&term) == CALL_OK) {
-    /* Leave a row for the shell prompt without scrolling the image. */
-    result = render(&term, columns / 2, rows - 1);
+  struct display_buffer buffer;
+  enum call_status status = display_acquire(display, &buffer);
+  if (status != CALL_OK) {
+    fprintf(stderr, "mandelbrot: cannot acquire display (status %u)\n", (unsigned)status);
+    return 1;
   }
 
-  if (term_reset_style(&term) != CALL_OK) {
-    result = 1;
+  /* Selecting the single buffer first lets periodic presentation show progress.
+   * The presenter may read pixels while we write them; tearing is allowed. */
+  status = display_present(display);
+  if (status == CALL_OK) {
+    render(&buffer);
+    unsigned key;
+    do {
+      status = term_read_key(&term, &key);
+    } while (status == CALL_INPUT_LOST);
   }
-  if (term_position(&term, rows - 1, 0) != CALL_OK) {
-    result = 1;
+
+  enum call_status released = display_release(display);
+  if (status != CALL_OK || released != CALL_OK) {
+    fprintf(stderr, "mandelbrot: display/input failed (status %u, release %u)\n",
+        (unsigned)status, (unsigned)released);
+    return 1;
   }
-  if (term_cursor_visible(&term, true) != CALL_OK) {
-    result = 1;
-  }
-  return result;
+  return 0;
 }

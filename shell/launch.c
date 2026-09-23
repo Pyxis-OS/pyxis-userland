@@ -1,6 +1,7 @@
 #include "shell.h"
 #include <abi/console.h>
 #include <abi/memory.h>
+#include <abi/display.h>
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
@@ -21,12 +22,14 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
 
   enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
+  bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - (session ? 1 : 0)) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 2) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
-  size_t launcher_index = CHILD_DIRECTORY + depth;
+  size_t display_index = CHILD_DIRECTORY + depth;
+  size_t launcher_index = display_index + (has_display ? 1 : 0);
   size_t grant_count = launcher_index + (session ? 1 : 0);
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
@@ -46,15 +49,24 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i],
         shell->directory.directory_rights};
   }
+  if (has_display) {
+    grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW};
+  }
   if (session) {
     grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
   }
-  struct launch_binding resources[] = {
+  struct launch_binding resources[5] = {
     {(uintptr_t)"input", CHILD_INPUT},
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
-    {(uintptr_t)"launcher", launcher_index},
   };
+  size_t resource_count = 3;
+  if (has_display) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", display_index};
+  }
+  if (session) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"launcher", launcher_index};
+  }
   struct launch_binding roots[] = {
     {(uintptr_t)"app", CHILD_APP},
     {(uintptr_t)"home", CHILD_HOME},
@@ -64,7 +76,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     .grants = (uintptr_t)grants,
     .grant_count = grant_count,
     .resources = (uintptr_t)resources,
-    .resource_count = sizeof(resources) / sizeof(resources[0]) - (session ? 0 : 1),
+    .resource_count = resource_count,
     .roots = (uintptr_t)roots,
     .root_count = sizeof(roots) / sizeof(roots[0]),
     .working_directories = (uintptr_t)directories,
