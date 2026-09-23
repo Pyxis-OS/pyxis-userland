@@ -15,7 +15,8 @@ LIB_OBJECTS := ../build/userspace/lib/startup.o \
                ../build/userspace/lib/file.o ../build/userspace/lib/endpoint.o \
                ../build/userspace/lib/directory.o ../build/userspace/lib/path.o \
                ../build/userspace/lib/memory.o ../build/userspace/lib/process.o \
-               ../build/userspace/lib/launcher.o
+               ../build/userspace/lib/launcher.o ../build/userspace/lib/program.o \
+               ../build/userspace/lib/shebang.o
 LIBTERM := ../build/userspace/libterm.a
 TERM_OBJECTS := ../build/userspace/libterm/term.o ../build/userspace/libterm/line.o
 LIBC := ../build/userspace/libc.a
@@ -73,6 +74,10 @@ $(LIBC): $(LIBC_OBJECTS) Makefile
 	@mkdir -p $(@D)
 	rm -f $@
 	$(AR) rcs $@ $(LIBC_OBJECTS)
+
+../build/userspace/lib/shebang.o: ../lib/shebang.c ../include/pxe/shebang.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 ../build/userspace/libc/tlsf.o: ../third_party/tlsf/tlsf.c
 	@mkdir -p $(@D)

@@ -44,6 +44,10 @@ int main(int argc, char **argv)
 {
   (void)argc;
   (void)argv;
+  if (startup_resource("script") != HANDLE_INVALID) {
+    fputs("shell: Script execution is not implemented yet\n", stderr);
+    return EXIT_FAILURE;
+  }
   struct shell shell = {
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
