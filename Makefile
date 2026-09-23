@@ -23,10 +23,10 @@ LIBC_SOURCES := $(wildcard libc/*.c)
 LIBC_OBJECTS := $(patsubst %.c,../build/userspace/%.o,$(LIBC_SOURCES)) \
                 ../build/userspace/libc/tlsf.o
 PROGRAM_OBJECTS := ../build/userspace/hello/main.o ../build/userspace/client/main.o \
-                   ../build/userspace/server/main.o
+                   ../build/userspace/server/main.o ../build/userspace/cat/main.o
 
-.PHONY: all libpyxis libterm libc hello client server converter clean
-all: hello client server
+.PHONY: all libpyxis libterm libc hello client server cat converter clean
+all: hello client server cat
 
 libpyxis: $(LIBPYXIS)
 libterm: $(LIBTERM)
@@ -34,6 +34,7 @@ libc: $(LIBC)
 hello: ../build/userspace/hello.pxe ../build/userspace/share/hello.txt
 client: ../build/userspace/client.pxe
 server: ../build/userspace/server.pxe
+cat: ../build/userspace/cat.pxe
 
 ../build/userspace/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
