@@ -2,10 +2,10 @@
 #include <console.h>
 #include <syscall.h>
 
-int console_write(handle_t output, const void *bytes, size_t size, size_t *written)
+enum call_status console_write(handle_t output, const void *bytes, size_t size, size_t *written)
 {
   if (!written) {
-    return -1;
+    return CALL_BAD_REQUEST;
   }
   *written = 0;
   struct console_message message = {
@@ -18,29 +18,34 @@ int console_write(handle_t output, const void *bytes, size_t size, size_t *writt
   struct console_write_reply reply;
   struct syscall_result result = syscall_call(output, &message, sizeof(message),
       &reply, sizeof(reply));
-  if (result.status != CALL_OK || result.reply_size != sizeof(reply) ||
-      reply.written > size || (size && !reply.written)) {
-    return -1;
+  if (result.status != CALL_OK) {
+    return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+           (enum call_status)result.status : CALL_BAD_REQUEST;
+  }
+  if (result.reply_size != sizeof(reply) || reply.written > size ||
+      (size && !reply.written)) {
+    return CALL_BAD_REQUEST;
   }
   *written = reply.written;
-  return 0;
+  return CALL_OK;
 }
 
-int console_write_all(handle_t output, const void *bytes, size_t size)
+enum call_status console_write_all(handle_t output, const void *bytes, size_t size)
 {
   const char *cursor = bytes;
   while (size) {
     size_t written;
-    if (console_write(output, cursor, size, &written) != 0) {
-      return -1;
+    enum call_status status = console_write(output, cursor, size, &written);
+    if (status != CALL_OK) {
+      return status;
     }
     cursor += written;
     size -= written;
   }
-  return 0;
+  return CALL_OK;
 }
 
-int console_print(handle_t output, const char *text)
+enum call_status console_print(handle_t output, const char *text)
 {
   size_t size = 0;
   while (text[size]) {
