@@ -24,7 +24,7 @@ TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
-                $(BUILD)/libc/tlsf.o
+                $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o
 
 .PHONY: all libpyxis libterm libc clean FORCE
 all: $(START_OBJECT) libpyxis libterm libc
