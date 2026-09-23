@@ -1,30 +1,28 @@
 #include "shell.h"
-#include "../common/directory.h"
 #include <abi/console.h>
 #include <abi/memory.h>
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
 #include <startup.h>
-#include <stdio.h>
 #include <stdlib.h>
 
-bool shell_launch(struct shell *shell, char **arguments, size_t count)
+enum command_result shell_launch(struct shell *shell, char **arguments, size_t count)
 {
   handle_t image;
   enum call_status status = shell_open_image(shell, arguments[0], &image);
   if (status != CALL_OK) {
     if (status == CALL_WRONG_TYPE) {
-      return fprintf(stderr, "shell: %s: Not a file\n", arguments[0]) >= 0;
+      return shell_error(shell, "shell: %s: Not a file\n", arguments[0]);
     }
-    return report_directory_error("shell", arguments[0], status) >= 0;
+    return shell_directory_error(shell, "shell", arguments[0], status);
   }
 
   enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   size_t depth = shell->directory.count;
   if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY) {
     handle_close(image);
-    return report_directory_error("shell", arguments[0], CALL_LIMIT) >= 0;
+    return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
   size_t grant_count = CHILD_DIRECTORY + depth;
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
@@ -33,7 +31,7 @@ bool shell_launch(struct shell *shell, char **arguments, size_t count)
     free(directories);
     free(grants);
     handle_close(image);
-    return report_directory_error("shell", arguments[0], CALL_NO_MEMORY) >= 0;
+    return shell_directory_error(shell, "shell", arguments[0], CALL_NO_MEMORY);
   }
   grants[CHILD_INPUT] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ};
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE};
@@ -76,7 +74,8 @@ bool shell_launch(struct shell *shell, char **arguments, size_t count)
   free(grants);
   bool closed_image = handle_close(image) == 0;
   if (status != CALL_OK) {
-    return report_directory_error("shell", arguments[0], status) >= 0 && closed_image;
+    enum command_result result = shell_directory_error(shell, "shell", arguments[0], status);
+    return closed_image ? result : COMMAND_FATAL;
   }
 
   /* No terminal reads until the child has stopped and its resources are gone. */
@@ -84,23 +83,25 @@ bool shell_launch(struct shell *shell, char **arguments, size_t count)
   status = process_wait(child, &completion);
   bool closed_child = handle_close(child) == 0;
   if (status != CALL_OK) {
-    report_directory_error("shell: wait", arguments[0], status);
-    return false;
+    shell_directory_error(shell, "shell: wait", arguments[0], status);
+    return COMMAND_FATAL;
   }
   if (!closed_image || !closed_child) {
-    report_directory_error("shell: close", arguments[0], CALL_BAD_HANDLE);
-    return false;
+    shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
+    return COMMAND_FATAL;
   }
   /* Preserve partial child output before any completion diagnostic. */
-  if (term_fresh_line(&shell->terminal) != CALL_OK) {
-    return false;
+  status = term_fresh_line(&shell->terminal);
+  if (status != CALL_OK) {
+    shell_directory_error(shell, "shell", "terminal", status);
+    return COMMAND_FATAL;
   }
   if (completion.kind == PROCESS_FAULTED) {
-    return fprintf(stderr, "shell: %s: Process faulted\n", arguments[0]) >= 0;
+    return shell_error(shell, "shell: %s: Process faulted\n", arguments[0]);
   }
   if (completion.exit_status != 0) {
-    return fprintf(stderr, "shell: %s: Exited with status %jd\n", arguments[0],
-        (intmax_t)completion.exit_status) >= 0;
+    return shell_error(shell, "shell: %s: Exited with status %jd\n", arguments[0],
+        (intmax_t)completion.exit_status);
   }
-  return true;
+  return COMMAND_OK;
 }

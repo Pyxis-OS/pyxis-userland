@@ -42,13 +42,14 @@ static struct term_line_result read_command(struct shell *shell, char *line)
 
 int main(int argc, char **argv)
 {
-  (void)argc;
-  (void)argv;
-  if (startup_resource("script") != HANDLE_INVALID) {
-    fputs("shell: Script execution is not implemented yet\n", stderr);
+  handle_t script = startup_resource("script");
+  if (script != HANDLE_INVALID && argc < 2) {
+    fputs("shell: Missing script diagnostic name\n", stderr);
     return EXIT_FAILURE;
   }
   struct shell shell = {
+    .script_name = script != HANDLE_INVALID ? argv[1] : NULL,
+    .script_line = 1,
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
     .memory = startup_resource("memory"),
@@ -58,20 +59,25 @@ int main(int argc, char **argv)
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
       shell.app == HANDLE_INVALID || shell.home == HANDLE_INVALID) {
-    fputs("shell: Missing startup resource or filesystem root\n", stderr);
+    shell_error(&shell, "shell: Missing startup resource or filesystem root\n");
     return EXIT_FAILURE;
   }
 
   int result = EXIT_FAILURE;
-  char *line = malloc(SHELL_LINE_CAPACITY);
+  char *line = malloc(script != HANDLE_INVALID ? SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
   char **arguments = malloc(SHELL_LINE_CAPACITY * sizeof(*arguments));
   if (!line || !arguments) {
-    perror("shell");
+    shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
   }
   enum call_status status = shell_directory_init(&shell);
   if (status != CALL_OK) {
-    report_directory_error("shell", "working directory", status);
+    shell_directory_error(&shell, "shell", "working directory", status);
+    goto done;
+  }
+
+  if (script != HANDLE_INVALID) {
+    result = shell_script(&shell, script, line, arguments);
     goto done;
   }
 
@@ -96,37 +102,12 @@ int main(int argc, char **argv)
       }
       continue;
     }
-    size_t count;
-    const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &count);
-    if (error) {
-      if (fprintf(stderr, "shell: %s\n", error) < 0) {
-        break;
-      }
-      continue;
+    enum command_result command = shell_command(&shell, line, arguments);
+    if (command == COMMAND_EXIT) {
+      result = EXIT_SUCCESS;
+      break;
     }
-    if (!count) {
-      continue;
-    }
-    if (strcmp(arguments[0], "exit") == 0) {
-      if (count == 1) {
-        result = EXIT_SUCCESS;
-        break;
-      }
-      if (fputs("usage: exit\n", stderr) == EOF) {
-        break;
-      }
-    } else if (strcmp(arguments[0], "cd") == 0) {
-      if (count != 2) {
-        if (fputs("usage: cd path\n", stderr) == EOF) {
-          break;
-        }
-        continue;
-      }
-      status = shell_change_directory(&shell, arguments[1]);
-      if (status != CALL_OK && report_directory_error("shell: cd", arguments[1], status) < 0) {
-        break;
-      }
-    } else if (!shell_launch(&shell, arguments, count)) {
+    if (command == COMMAND_FATAL) {
       break;
     }
   }
