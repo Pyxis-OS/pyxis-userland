@@ -22,7 +22,8 @@ int libc_call_errno(enum call_status status)
   case CALL_NOT_FOUND: return ENOENT;
   case CALL_ALREADY_EXISTS: return EEXIST;
   case CALL_READ_ONLY: return EROFS;
-  case CALL_INPUT_LOST: return EIO;
+  case CALL_INPUT_LOST:
+  case CALL_IO: return EIO;
   case CALL_TIMED_OUT: return ETIMEDOUT;
   case CALL_NOT_EMPTY: return ENOTEMPTY;
   default: return EIO;

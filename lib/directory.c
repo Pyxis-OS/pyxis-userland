@@ -136,7 +136,7 @@ enum call_status directory_enumerate(handle_t directory, const struct directory_
   switch (result.outcome) {
   case DIRECTORY_ENTRY:
     if (!result.name_size || result.name_size > capacity || !result.cursor.generation ||
-        previous.position == UINT64_MAX || result.cursor.position != previous.position + 1 ||
+        same_cursor ||
         (previous.generation && result.cursor.generation != previous.generation) ||
         name[result.name_size - 1]) {
       return CALL_BAD_REQUEST;
@@ -149,7 +149,6 @@ enum call_status directory_enumerate(handle_t directory, const struct directory_
     break;
   case DIRECTORY_END:
     if (result.name_size || result.kind || !result.cursor.generation ||
-        result.cursor.position != previous.position ||
         (previous.generation && result.cursor.generation != previous.generation)) {
       return CALL_BAD_REQUEST;
     }
@@ -163,7 +162,9 @@ enum call_status directory_enumerate(handle_t directory, const struct directory_
     return CALL_BAD_REQUEST;
   }
   if ((result.outcome == DIRECTORY_ENTRY || result.outcome == DIRECTORY_BUFFER_TOO_SMALL) &&
-      result.kind != DIRECTORY_KIND_FILE && result.kind != DIRECTORY_KIND_DIRECTORY) {
+      result.kind != DIRECTORY_KIND_FILE && result.kind != DIRECTORY_KIND_DIRECTORY &&
+      result.kind != DIRECTORY_KIND_UNKNOWN && result.kind != DIRECTORY_KIND_SYMLINK &&
+      result.kind != DIRECTORY_KIND_OTHER) {
     return CALL_BAD_REQUEST;
   }
   *reply = result;
