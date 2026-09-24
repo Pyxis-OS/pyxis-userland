@@ -2,19 +2,21 @@
 
 Freestanding C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
-`x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK.
+`x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
+also needs the Lua development files exported by the ports build.
 
 ```sh
-make SDK=/path/to/sdk                    # applications in build/apps
+make SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua
 make SDK=/path/to/sdk hello client server
 make -f runtime.mk SDK=/path/to/sdk      # runtime in build/runtime
-make install SDK=/path/to/sdk DESTDIR=/path/to/guest-tree
+make install SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua DESTDIR=/path/to/guest-tree
 make clean
 make -f runtime.mk clean
 ```
 
 `SDK` defaults to `build/sdk`; `BUILD` overrides the output directory for either
-phase. `install` recreates a payload tree of selected programs, init and assets;
+phase. `LUA_PREFIX` defaults to `build/ports-dev/lua` and supplies `include` and
+`lib/liblua.a` for `session`; the SDK/runtime has no Lua dependency. `install` recreates a payload tree of selected programs, init and assets;
 it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang source. TLSF is vendored locally with its license and pin.

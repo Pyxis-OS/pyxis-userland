@@ -2,7 +2,10 @@ SDK ?= build/sdk
 SDK := $(abspath $(SDK))
 BUILD ?= build/apps
 DESTDIR ?= $(BUILD)/install
-INSTALL_PROGRAMS := shell cat ls mkdir rm rmdir mv date mandelbrot
+LUA_PREFIX ?= build/ports-dev/lua
+LUA_PREFIX := $(abspath $(LUA_PREFIX))
+LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
+INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv date mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -15,20 +18,21 @@ CPPFLAGS := $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
 LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
-export SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
+export LUA_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
 PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/cat/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
                    $(BUILD)/mv/main.o $(BUILD)/date/main.o \
-                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o
+                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/session/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
+SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install hello client server cat ls mkdir rm rmdir mv date shell mandelbrot clean FORCE
+.PHONY: all install session hello client server cat ls mkdir rm rmdir mv date shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -49,6 +53,7 @@ install: all
 	    mv -- "$$staging" "$(DESTDIR)"; \
 	  fi
 
+session: $(BUILD)/session.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
 server: $(BUILD)/server.pxe
@@ -62,6 +67,11 @@ date: $(BUILD)/date.pxe
 shell: $(BUILD)/shell.pxe
 mandelbrot: $(BUILD)/mandelbrot.pxe
 
+$(SESSION_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(BUILD)/session.elf: $(SESSION_OBJECTS) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(LUA_LIBRARY) $(LDLIBS)
+
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
 $(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf: $(UTILITY_OBJECT)
@@ -70,7 +80,7 @@ $(BUILD)/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
 	cp $< $@
 
-# Only exported SDK objects/libraries participate in application links.
+# Runtime objects and libraries come from the selected SDK.
 $(BUILD)/%.elf: $(BUILD)/%/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(LDLIBS)
 
@@ -84,7 +94,7 @@ $(BUILD)/%.pxe: $(BUILD)/%.elf $(PYXIS_ELF2PXE) Makefile
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
-	@printf '%s\n' "$$SDK" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
+	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -95,4 +105,4 @@ clean:
 
 .SECONDARY:
 
--include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d)
+-include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d)
