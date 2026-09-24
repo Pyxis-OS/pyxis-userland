@@ -59,6 +59,7 @@ enum call_status term_read_key_timeout(struct terminal *term, uint32_t timeout_m
 enum term_line_status {
   TERM_LINE_OK,
   TERM_LINE_CANCELLED,
+  TERM_LINE_EOF,
   TERM_LINE_INPUT_LOST,
   TERM_LINE_ERROR,
 };
@@ -78,15 +79,16 @@ struct term_line_result {
  * normal completion. Cursor visibility is enabled on return.
  *
  * Printable ASCII only, one byte per cell. Insert, Backspace/Delete, Left/Right,
- * Home/End, Enter and Ctrl+C are supported. Up/Down/Page keys are decoded but
- * ignored; no history, tabs, Unicode editing or EOF interpretation. Standalone
- * Escape is decoded with a timeout and ignored by this line editor.
+ * Home/End, Enter and Ctrl+C are supported. Ctrl+D returns EOF only on an empty
+ * line; otherwise it is ignored. Up/Down/Page keys are decoded but ignored;
+ * no history, tabs or Unicode editing. Standalone Escape is decoded with a
+ * timeout and ignored by this line editor.
  *
  * The prompt, line and one cursor cell must fit in the visible terminal.
  * Redraws account for delayed wrapping at the right margin.
  * Buffer/display exhaustion rejects insertion, colors its cell red and sets
  * limit_reached. Deletion, movement, submission and cancellation remain usable.
- * CANCELLED/INPUT_LOST/ERROR discard the line and clear buffer[0] when possible.
+ * CANCELLED/EOF/INPUT_LOST/ERROR clear buffer[0] when possible.
  * Reads one byte at a time: no unread bytes are retained for a future caller. */
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity);

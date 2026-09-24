@@ -280,6 +280,10 @@ static int receive_input(handle_t input, handle_t output)
   int result = -1;
   for (;;) {
     struct term_line_result read = term_read_line(&term, "> ", line, capacity);
+    if (read.status == TERM_LINE_EOF) {
+      result = 0;
+      break;
+    }
     if (read.status == TERM_LINE_CANCELLED || read.status == TERM_LINE_INPUT_LOST) {
       const char *notice = read.status == TERM_LINE_CANCELLED ?
           "Line cancelled.\n" : "Input lost; please try again.\n";

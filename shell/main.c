@@ -86,6 +86,10 @@ int main(int argc, char **argv)
 
   for (;;) {
     struct term_line_result read = read_command(&shell, line);
+    if (read.status == TERM_LINE_EOF) {
+      result = EXIT_SUCCESS;
+      break;
+    }
     if (read.status == TERM_LINE_CANCELLED) {
       continue;
     }
