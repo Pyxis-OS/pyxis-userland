@@ -49,6 +49,12 @@ enum term_key {
  * Reads one byte at a time with no retained input or read-ahead. INPUT_LOST and
  * other native failures are returned to the caller; *key is UNKNOWN on error. */
 enum call_status term_read_key(struct terminal *term, unsigned *key);
+/* Bound the initial byte wait; zero polls. No byte returns TIMED_OUT with key
+ * UNKNOWN. Once input begins, use the same escape-sequence rules as read_key,
+ * even if decoding extends past the initial timeout. No partial key is lost
+ * to the caller's timeout. This is not a total key-decoding deadline. */
+enum call_status term_read_key_timeout(struct terminal *term, uint32_t timeout_ms,
+                                      unsigned *key);
 
 enum term_line_status {
   TERM_LINE_OK,
