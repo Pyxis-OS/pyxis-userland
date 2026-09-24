@@ -3,6 +3,7 @@
 #include <abi/memory.h>
 #include <abi/display.h>
 #include <abi/clock.h>
+#include <abi/echo.h>
 #include <abi/keyboard.h>
 #include <handle.h>
 #include <launcher.h>
@@ -26,16 +27,18 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   bool has_host = shell->host != HANDLE_INVALID;
   bool has_keyboard = shell->keyboard != HANDLE_INVALID;
+  bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 5) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 6) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
   size_t display_index = CHILD_DIRECTORY + depth;
   size_t clock_index = display_index + (has_display ? 1 : 0);
-  size_t keyboard_index = clock_index + (has_clock ? 1 : 0);
+  size_t echo_index = clock_index + (has_clock ? 1 : 0);
+  size_t keyboard_index = echo_index + (has_echo ? 1 : 0);
   size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = host_index + (has_host ? 1 : 0);
   size_t grant_count = launcher_index + (session ? 1 : 0);
@@ -63,6 +66,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_clock) {
     grants[clock_index] = (struct launch_grant){shell->clock, CLOCK_RIGHTS};
   }
+  if (has_echo) {
+    grants[echo_index] = (struct launch_grant){shell->echo, ECHO_RIGHT_SEND};
+  }
   if (has_keyboard) {
     grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT};
   }
@@ -72,7 +78,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (session) {
     grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
   }
-  struct launch_binding resources[7] = {
+  struct launch_binding resources[8] = {
     {(uintptr_t)"input", CHILD_INPUT},
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
@@ -83,6 +89,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
   if (has_clock) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"clock", clock_index};
+  }
+  if (has_echo) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"echo", echo_index};
   }
   if (has_keyboard) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"keyboard", keyboard_index};

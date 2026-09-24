@@ -56,6 +56,7 @@ int main(int argc, char **argv)
     .memory = startup_resource("memory"),
     .display = startup_resource("display"),
     .clock = startup_resource("clock"),
+    .echo = startup_resource("echo"),
     .keyboard = startup_resource("keyboard"),
     .app = startup_root("app"),
     .home = startup_root("home"),
