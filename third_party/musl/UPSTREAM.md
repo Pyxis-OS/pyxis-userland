@@ -57,4 +57,28 @@ sticky information when that workspace fills, continuing to consume digits;
 there is no heap allocation or artificial input-length limit.
 
 All functions are part of libc. No separate libm archive, locale state, stream
-implementation or floating-point formatting is included.
+implementation is imported.
+
+`src/time/__secs_to_tm.c` is copied unmodified from the same pin. The local
+`src/internal/time_impl.h` declares only that UTC conversion routine. Pyxis owns
+`time.h`, the clock-backed time/timespec_get calls, and gmtime/gmtime_r wrappers.
+The conversion uses the proleptic Gregorian calendar and rejects years that
+cannot fit tm_year. Timezone, locale and other musl time machinery are not
+imported. Existing COPYRIGHT covers this file too.
+
+`src/math/frexpl.c` is copied unmodified from the same pin.
+`src/stdio/format_float.c` extracts `fmt_u` and `fmt_fp` from that pin's
+`src/stdio/vfprintf.c`, retaining the numerical algorithm and upstream formatting.
+Local adaptations replace FILE output/padding with libc's bounded buffer helpers,
+retain the digit table terminator, map named formatting flags, use compiler builtins for FP classification, and
+widen precision/rounding-position arithmetic to int64_t so extreme requested
+precisions cannot overflow before the output-length checks. The entry point is
+renamed `format_float`; unrelated stream, integer and wide formatting is omitted.
+The source uses the same two warning exceptions as floatscan for upstream idioms.
+
+Pyxis's existing format parser supplies double or long-double arguments and owns
+termination, truncation and errno handling. Padding remains proportional to the
+available buffer, even for enormous precision/width. The decimal conversion has
+an approximately 8 KiB automatic workspace and does not allocate. It uses the
+current FP rounding mode; the process default is round-to-nearest, ties-to-even.
+No locale or separate libm is required.

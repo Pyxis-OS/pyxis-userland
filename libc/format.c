@@ -4,14 +4,10 @@
 #include <stdio.h>
 #include <string.h>
 
-struct output {
-  char *buffer;
-  size_t capacity;
-  size_t length;
-};
+#include "format.h"
 
 enum length_modifier { LENGTH_INT, LENGTH_HH, LENGTH_H, LENGTH_L, LENGTH_LL,
-                       LENGTH_J, LENGTH_Z, LENGTH_T };
+                       LENGTH_J, LENGTH_Z, LENGTH_T, LENGTH_BIG_L };
 
 struct conversion {
   bool left, plus, space, alternate, zero;
@@ -21,7 +17,7 @@ struct conversion {
 
 /* Count discarded bytes too, but saturate once the return value cannot fit.
  * Padding takes time proportional to the destination, not a huge field width. */
-static void append(struct output *out, const char *text, size_t count)
+void format_append(struct output *out, const char *text, size_t count)
 {
   size_t available = out->capacity && out->length < out->capacity - 1 ?
                      out->capacity - 1 - out->length : 0;
@@ -33,7 +29,7 @@ static void append(struct output *out, const char *text, size_t count)
                 (size_t)INT_MAX + 1 : out->length + count;
 }
 
-static void pad(struct output *out, char character, size_t count)
+void format_pad(struct output *out, char character, size_t count)
 {
   size_t available = out->capacity && out->length < out->capacity - 1 ?
                      out->capacity - 1 - out->length : 0;
@@ -117,6 +113,7 @@ width:
         spec->length = LENGTH_LL;
       }
       break;
+    case 'L': ++*format; spec->length = LENGTH_BIG_L; break;
     case 'j': ++*format; spec->length = LENGTH_J; break;
     case 'z': ++*format; spec->length = LENGTH_Z; break;
     case 't': ++*format; spec->length = LENGTH_T; break;
@@ -194,19 +191,38 @@ static void number(struct output *out, struct conversion spec, uintmax_t value,
     padding = 0;
   }
   if (!spec.left) {
-    pad(out, ' ', padding);
+    format_pad(out, ' ', padding);
   }
-  append(out, prefix, prefix_length);
-  pad(out, '0', zeroes);
-  append(out, digits + start, count);
+  format_append(out, prefix, prefix_length);
+  format_pad(out, '0', zeroes);
+  format_append(out, digits + start, count);
   if (spec.left) {
-    pad(out, ' ', padding);
+    format_pad(out, ' ', padding);
   }
 }
 
 static int format_conversion(struct output *out, const struct conversion *spec,
                                 char kind, va_list *args)
 {
+  if (kind == 'f' || kind == 'F' || kind == 'e' || kind == 'E' ||
+      kind == 'g' || kind == 'G' || kind == 'a' || kind == 'A') {
+    if (spec->length != LENGTH_INT && spec->length != LENGTH_L &&
+        spec->length != LENGTH_BIG_L) {
+      return EINVAL;
+    }
+    long double value = spec->length == LENGTH_BIG_L ?
+                        va_arg(*args, long double) : va_arg(*args, double);
+    unsigned flags = (spec->left ? FLOAT_LEFT : 0) |
+                     (spec->plus ? FLOAT_PLUS : 0) |
+                     (spec->space ? FLOAT_SPACE : 0) |
+                     (spec->alternate ? FLOAT_ALTERNATE : 0) |
+                     (spec->zero ? FLOAT_ZERO : 0);
+    return format_float(out, value, spec->width, spec->precision, flags, kind) < 0 ?
+           EOVERFLOW : 0;
+  }
+  if (spec->length == LENGTH_BIG_L) {
+    return EINVAL;
+  }
   if (kind == 'd' || kind == 'i') {
     intmax_t value = signed_argument(args, spec->length);
     /* Unsigned subtraction handles INTMAX_MIN without signed overflow. */
@@ -232,11 +248,11 @@ static int format_conversion(struct output *out, const struct conversion *spec,
     }
     size_t padding = (size_t)spec->width > length ? (size_t)spec->width - length : 0;
     if (!spec->left) {
-      pad(out, ' ', padding);
+      format_pad(out, ' ', padding);
     }
-    append(out, text, length);
+    format_append(out, text, length);
     if (spec->left) {
-      pad(out, ' ', padding);
+      format_pad(out, ' ', padding);
     }
   } else {
     return EINVAL;
@@ -256,7 +272,7 @@ int vsnprintf(char *restrict buffer, size_t capacity, const char *format, va_lis
       while (*format && *format != '%') {
         ++format;
       }
-      append(&out, start, format - start);
+      format_append(&out, start, format - start);
       continue;
     }
     ++format;

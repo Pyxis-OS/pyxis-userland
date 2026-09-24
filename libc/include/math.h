@@ -31,6 +31,7 @@ typedef double double_t;
  * These functions live in libc; callers do not need a separate -lm. */
 double scalbn(double value, int exponent);
 long double scalbnl(long double value, int exponent);
+long double frexpl(long double value, int *exponent);
 long double ldexpl(long double value, int exponent);
 long double fmodl(long double value, long double divisor);
 double fabs(double value);

@@ -23,7 +23,10 @@ LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
-MUSL_SOURCES := third_party/musl/src/math/fabs.c \
+MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
+                third_party/musl/src/math/frexpl.c \
+                third_party/musl/src/time/__secs_to_tm.c \
+                third_party/musl/src/math/fabs.c \
                 third_party/musl/src/math/scalbn.c \
                 third_party/musl/src/math/scalbnl.c \
                 third_party/musl/src/math/ldexpl.c \
@@ -67,8 +70,13 @@ $(BUILD)/libc/tlsf.o: third_party/tlsf/tlsf.c
 
 $(BUILD)/libc/malloc.o: private CPPFLAGS += -Ithird_party/tlsf
 
+$(BUILD)/libc/time.o: private CPPFLAGS += -Ithird_party/musl/src/internal
+
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CFLAGS += -frounding-math -fexcess-precision=standard
+
+$(BUILD)/third_party/musl/src/stdio/format_float.o: private CPPFLAGS += -Ilibc
+$(BUILD)/third_party/musl/src/stdio/format_float.o: private CFLAGS += -Wno-sign-compare -Wno-parentheses
 
 # Retain upstream's unsigned character tests and ring-index expressions.
 $(BUILD)/third_party/musl/src/internal/floatscan.o: private CFLAGS += -Wno-sign-compare -Wno-parentheses

@@ -19,15 +19,15 @@ PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/cat/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
-                   $(BUILD)/mv/main.o \
+                   $(BUILD)/mv/main.o $(BUILD)/date/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all hello client server cat ls mkdir rm rmdir mv shell mandelbrot clean FORCE
-all: shell cat ls mkdir rm rmdir mv mandelbrot $(BUILD)/share/hello.txt
+.PHONY: all hello client server cat ls mkdir rm rmdir mv date shell mandelbrot clean FORCE
+all: shell cat ls mkdir rm rmdir mv date mandelbrot $(BUILD)/share/hello.txt
 
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
@@ -38,6 +38,7 @@ mkdir: $(BUILD)/mkdir.pxe
 rm: $(BUILD)/rm.pxe
 rmdir: $(BUILD)/rmdir.pxe
 mv: $(BUILD)/mv.pxe
+date: $(BUILD)/date.pxe
 shell: $(BUILD)/shell.pxe
 mandelbrot: $(BUILD)/mandelbrot.pxe
 

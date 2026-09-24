@@ -23,6 +23,31 @@ enum call_status clock_now(handle_t clock, uint64_t *nanoseconds)
   return result.status;
 }
 
+enum call_status clock_wall_now(handle_t clock, struct clock_wall_reading *reading)
+{
+  if (!reading) {
+    return CALL_BAD_REQUEST;
+  }
+  *reading = (struct clock_wall_reading){0};
+  struct message_header message = {PROTOCOL_CLOCK, CLOCK_WALL_NOW};
+  struct clock_wall_reading reply;
+  struct syscall_result result = syscall_call(clock, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (reply.nanoseconds >= UINT64_C(1000000000)) {
+      return CALL_BAD_REQUEST;
+    }
+    *reading = reply;
+  }
+  return result.status;
+}
+
 enum call_status clock_sleep_until(handle_t clock, uint64_t deadline_ns)
 {
   struct clock_sleep_request message = {
