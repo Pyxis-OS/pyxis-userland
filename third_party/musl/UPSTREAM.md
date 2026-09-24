@@ -58,3 +58,10 @@ there is no heap allocation or artificial input-length limit.
 
 All functions are part of libc. No separate libm archive, locale state, stream
 implementation or floating-point formatting is included.
+
+`src/time/__secs_to_tm.c` is copied unmodified from the same pin. The local
+`src/internal/time_impl.h` declares only that UTC conversion routine. Pyxis owns
+`time.h`, the clock-backed time/timespec_get calls, and gmtime/gmtime_r wrappers.
+The conversion uses the proleptic Gregorian calendar and rejects years that
+cannot fit tm_year. Timezone, locale and other musl time machinery are not
+imported. Existing COPYRIGHT covers this file too.
