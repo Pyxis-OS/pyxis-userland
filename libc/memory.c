@@ -49,3 +49,16 @@ int memcmp(const void *a, const void *b, size_t count)
   }
   return 0;
 }
+
+void *memchr(const void *memory, int value, size_t count)
+{
+  const unsigned char *bytes = memory;
+  unsigned char target = (unsigned char)value;
+
+  for (size_t i = 0; i < count; ++i) {
+    if (bytes[i] == target) {
+      return (void *)(bytes + i);
+    }
+  }
+  return NULL;
+}

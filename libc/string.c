@@ -71,6 +71,25 @@ char *strrchr(const char *text, int character)
   return (char *)last;
 }
 
+size_t strspn(const char *text, const char *accept)
+{
+  size_t length = 0;
+  while (text[length] && strchr(accept, text[length])) {
+    ++length;
+  }
+  return length;
+}
+
+char *strpbrk(const char *text, const char *accept)
+{
+  for (; *text; ++text) {
+    if (strchr(accept, *text)) {
+      return (char *)text;
+    }
+  }
+  return NULL;
+}
+
 char *strstr(const char *text, const char *needle)
 {
   if (!*needle) {
