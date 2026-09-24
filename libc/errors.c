@@ -24,6 +24,7 @@ int libc_call_errno(enum call_status status)
   case CALL_READ_ONLY: return EROFS;
   case CALL_INPUT_LOST: return EIO;
   case CALL_TIMED_OUT: return ETIMEDOUT;
+  case CALL_NOT_EMPTY: return ENOTEMPTY;
   default: return EIO;
   }
 }
@@ -50,6 +51,7 @@ char *strerror(int error)
   case EIO: return "Input/output error";
   case ESPIPE: return "Stream is not seekable";
   case ETIMEDOUT: return "Operation timed out";
+  case ENOTEMPTY: return "Directory not empty";
   default: return "Unknown error";
   }
 }

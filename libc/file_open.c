@@ -1,5 +1,6 @@
 #include <abi/file.h>
 #include <directory.h>
+#include <errno.h>
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
@@ -70,8 +71,8 @@ enum call_status stream_open_path(const char *path, uint64_t rights,
   if (status == CALL_OK) {
     status = directory_create(directory, name, DIRECTORY_KIND_FILE, rights, handle);
     if (status == CALL_ALREADY_EXISTS) {
-      /* Another creator won. Open its entry without replacing it. There is no
-       * unlink/rename operation in this filesystem slice. */
+      /* Another creator won. Look up its entry; concurrent removal may make
+       * this fail with NOT_FOUND. Do not retry indefinitely under mutation. */
       status = directory_lookup(directory, name, DIRECTORY_KIND_FILE, rights, handle);
     }
     handle_close(directory);
@@ -81,4 +82,41 @@ done:
   free(component);
   free(directories);
   return status;
+}
+
+int remove(const char *path)
+{
+  if (!path || !*path) {
+    errno = EINVAL;
+    return -1;
+  }
+  size_t length = strlen(path);
+  size_t depth = startup_working_directory_count();
+  if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
+      depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+
+  size_t slots = depth + length + 1;
+  handle_t *directories = malloc(slots * sizeof(*directories));
+  char *component = malloc(length + 1);
+  if (!directories || !component) {
+    free(component);
+    free(directories);
+    errno = ENOMEM;
+    return -1;
+  }
+  struct path_workspace workspace = {directories, slots, component, length + 1};
+  struct path_context context = {
+    .directories = (handle_t *)startup_working_directories(), .count = depth,
+  };
+  enum call_status status = path_remove(&context, path, DIRECTORY_KIND_ANY, &workspace);
+  free(component);
+  free(directories);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  return 0;
 }

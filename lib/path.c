@@ -110,8 +110,14 @@ static enum call_status starting_chain(const struct path_context *context,
   return CALL_OK;
 }
 
+enum walk_target {
+  WALK_FILE,
+  WALK_DIRECTORY,
+  WALK_PARENT,
+};
+
 static enum call_status walk(const struct path_context *context, const char *path,
-    uint64_t kind, uint64_t rights, uint64_t directory_rights, bool preserve_rights,
+    enum walk_target target, uint64_t rights, uint64_t directory_rights, bool preserve_rights,
     struct path_workspace *workspace, size_t *count, handle_t *file)
 {
   if (!path || !path[0] || path[0] == '/' || !workspace ||
@@ -130,7 +136,10 @@ static enum call_status walk(const struct path_context *context, const char *pat
       ++path;
     }
     if (!*path) {
-      return kind == DIRECTORY_KIND_DIRECTORY ? CALL_OK : CALL_WRONG_TYPE;
+      if (target == WALK_PARENT) {
+        return CALL_BAD_REQUEST;
+      }
+      return target == WALK_DIRECTORY ? CALL_OK : CALL_WRONG_TYPE;
     }
     const char *start = path;
     while (*path && *path != '/') {
@@ -142,9 +151,15 @@ static enum call_status walk(const struct path_context *context, const char *pat
       ++path;
     }
     if (length == 1 && start[0] == '.') {
+      if (target == WALK_PARENT && !*path) {
+        return CALL_BAD_REQUEST;
+      }
       continue;
     }
     if (length == 2 && start[0] == '.' && start[1] == '.') {
+      if (target == WALK_PARENT && !*path) {
+        return CALL_BAD_REQUEST;
+      }
       if (*count == 1) {
         return CALL_DENIED;
       }
@@ -158,8 +173,11 @@ static enum call_status walk(const struct path_context *context, const char *pat
       return status;
     }
     handle_t parent = workspace->directories[*count - 1];
-    if (!*path && !trailing_separator && kind == DIRECTORY_KIND_FILE) {
-      return directory_lookup(parent, workspace->component, kind, rights, file);
+    if (!*path && target == WALK_PARENT) {
+      return CALL_OK;
+    }
+    if (!*path && !trailing_separator && target == WALK_FILE) {
+      return directory_lookup(parent, workspace->component, DIRECTORY_KIND_FILE, rights, file);
     }
     if (*count == workspace->directory_capacity) {
       return CALL_LIMIT;
@@ -201,10 +219,41 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
   }
 
   size_t count = 0;
-  enum call_status status = walk(context, path, kind, rights, directory_rights,
+  enum walk_target target = kind == DIRECTORY_KIND_FILE ? WALK_FILE : WALK_DIRECTORY;
+  enum call_status status = walk(context, path, target, rights, directory_rights,
       true, workspace, &count, handle);
   if (status == CALL_OK && kind == DIRECTORY_KIND_DIRECTORY) {
     status = handle_copy_restricted(workspace->directories[count - 1], rights, handle);
+  }
+  if (count) {
+    close_chain(workspace->directories, count);
+  }
+  return status;
+}
+
+enum call_status path_remove(const struct path_context *context, const char *path,
+    uint64_t kind, struct path_workspace *workspace)
+{
+  if (!path || !*path || (kind != DIRECTORY_KIND_ANY && kind != DIRECTORY_KIND_FILE &&
+      kind != DIRECTORY_KIND_DIRECTORY)) {
+    return CALL_BAD_REQUEST;
+  }
+  const char *end = path;
+  while (*end) {
+    ++end;
+  }
+  bool trailing_separator = end[-1] == '/';
+  size_t count = 0;
+  handle_t unused;
+  enum call_status status = walk(context, path, WALK_PARENT, 0,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, true, workspace, &count, &unused);
+  if (status == CALL_OK) {
+    if (trailing_separator && kind == DIRECTORY_KIND_FILE) {
+      status = CALL_WRONG_TYPE;
+    } else {
+      status = directory_remove(workspace->directories[count - 1], workspace->component,
+          trailing_separator ? DIRECTORY_KIND_DIRECTORY : kind);
+    }
   }
   if (count) {
     close_chain(workspace->directories, count);
@@ -220,7 +269,7 @@ enum call_status path_change(struct path_context *context, const char *path,
   }
   size_t count = 0;
   handle_t unused;
-  enum call_status status = walk(context, path, DIRECTORY_KIND_DIRECTORY,
+  enum call_status status = walk(context, path, WALK_DIRECTORY,
       context->directory_rights, context->directory_rights, false, workspace, &count, &unused);
   if (status == CALL_OK && count > context->capacity) {
     status = CALL_LIMIT;

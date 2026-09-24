@@ -22,6 +22,9 @@ extern FILE *stderr;
  * No fd API, setvbuf, freopen, pushback, scanning or wide I/O in this slice. */
 FILE *fopen(const char *restrict path, const char *restrict mode);
 int fclose(FILE *stream);
+/* Remove a file or empty directory through its parent capability. Existing
+ * streams keep their object; roots and final . or .. are not removable. */
+int remove(const char *path);
 int fflush(FILE *stream);
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
 size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream);

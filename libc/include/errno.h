@@ -23,5 +23,6 @@ extern int errno;
 #define ESPIPE 16
 #define ETIMEDOUT 17
 #define ERANGE 18
+#define ENOTEMPTY 19
 
 #endif

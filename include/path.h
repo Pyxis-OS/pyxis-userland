@@ -49,6 +49,15 @@ void path_context_close(struct path_context *context);
 enum call_status path_resolve(const struct path_context *context, const char *path,
     uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
 
+/* Resolve the parent and remove its final component in one directory operation.
+ * kind is FILE, DIRECTORY or ANY. A trailing / requires DIRECTORY; a FILE
+ * request with trailing / fails. Roots and final . or .. cannot be removed.
+ * Intermediate components retain normal ordered resolution/boundary checks.
+ * Requires REMOVE on the parent, never READ/WRITE on the child. No allocation;
+ * scratch storage is caller-owned and all temporary handles are closed. */
+enum call_status path_remove(const struct path_context *context, const char *path,
+    uint64_t kind, struct path_workspace *workspace);
+
 /* Prepare a complete owned chain, then replace context. All failures preserve
  * the old working directory. Requires room for the whole chain in both context
  * and scratch storage. No process-global cwd, allocation or kernel path parser. */
