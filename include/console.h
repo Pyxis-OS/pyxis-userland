@@ -34,4 +34,8 @@ enum call_status console_size(handle_t console, size_t *columns, size_t *rows);
  * an incomplete output escape sequence. Does not clear text or reset colors. */
 enum call_status console_fresh_line(handle_t output);
 
+/* WRITE authority; 1..32 columns, otherwise CALL_BAD_REQUEST. Affects future
+ * tabs on the shared TTY without moving the cursor or changing existing text. */
+enum call_status console_set_tab_width(handle_t output, size_t columns);
+
 #endif
