@@ -1,2 +1,2 @@
 #!app://shell.pxe
-session app://shell.pxe
+session app://session.pxe
