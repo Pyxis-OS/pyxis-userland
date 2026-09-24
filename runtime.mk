@@ -30,6 +30,17 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/time/__month_to_secs.c \
                 third_party/musl/src/time/rule_to_secs.c \
                 third_party/musl/src/math/fabs.c \
+                third_party/musl/src/math/floor.c \
+                third_party/musl/src/math/fmod.c \
+                third_party/musl/src/math/pow.c \
+                third_party/musl/src/math/frexp.c \
+                third_party/musl/src/math/ldexp.c \
+                third_party/musl/src/math/exp_data.c \
+                third_party/musl/src/math/pow_data.c \
+                third_party/musl/src/math/__math_xflow.c \
+                third_party/musl/src/math/__math_uflow.c \
+                third_party/musl/src/math/__math_oflow.c \
+                third_party/musl/src/math/__math_invalid.c \
                 third_party/musl/src/math/scalbn.c \
                 third_party/musl/src/math/scalbnl.c \
                 third_party/musl/src/math/ldexpl.c \
@@ -77,6 +88,9 @@ $(BUILD)/libc/time.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CFLAGS += -frounding-math -fexcess-precision=standard
+
+# libm.h forces FP evaluation by writing otherwise unread volatile locals.
+$(MUSL_OBJECTS): private CFLAGS += -Wno-unused-but-set-variable
 
 $(BUILD)/third_party/musl/src/time/rule_to_secs.o: private CPPFLAGS += -Ilibc
 

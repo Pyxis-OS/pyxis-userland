@@ -3,8 +3,9 @@ musl 1.2.5, pinned to commit
 https://git.musl-libc.org/cgit/musl/commit/?id=0784374d561435f7c787a555aeab8ede699ed298
 
 `COPYRIGHT` retains the complete upstream MIT license, contributor list and
-third-party notices. The selected files have no separate file-level license;
-they fall under musl's MIT terms as described there.
+third-party notices. The selected files fall under the MIT terms described
+there; the pow implementation and coefficient tables also retain their Arm
+copyright and MIT SPDX notices.
 
 The following files are copied without changes, including upstream formatting:
 
@@ -16,9 +17,10 @@ The following files are copied without changes, including upstream formatting:
 - `src/math/copysignl.c`
 - `src/math/x86_64/fmodl.c`
 
-Local adaptation: `src/internal/libm.h` retains only musl's little-endian 80-bit
-`ldshape` union, with Pyxis includes and compile-time layout checks. Unused
-architectures and internal math machinery are not imported. The public
+Local adaptation: `src/internal/libm.h` retains musl's little-endian 80-bit
+`ldshape` union, with Pyxis includes and compile-time layout checks, plus the
+evaluation/bit helpers described below. Unused architectures and unrelated
+internal math machinery are not imported. The public
 `libc/include/math.h` is a Pyxis header exposing these functions, evaluation
 types and musl's infinity/NaN constants. The math functions retain musl's
 FP-exception-only error convention (`errno` is unchanged).
@@ -29,6 +31,33 @@ x86-64 `fmodl` uses x87 FPREM and repeats while status bit C2 is set: large
 exponent differences can require several partial-remainder steps. Its quotient
 is truncated toward zero independently of the rounding mode. No libgcc or
 host-libc replacement is imported.
+
+The Lua core prerequisites add the following unmodified files from the same pin:
+
+- `src/math/floor.c`, `src/math/frexp.c`, `src/math/ldexp.c`, `src/math/pow.c`
+- `src/math/exp_data.c`, `src/math/pow_data.c`
+- `src/math/__math_xflow.c`, `src/math/__math_uflow.c`,
+  `src/math/__math_oflow.c`, `src/math/__math_invalid.c`
+
+`src/math/fmod.c` replaces only `isnan` with the compiler's `__builtin_isnan`,
+as used elsewhere in this subset. It does not add a public classification API.
+`src/math/exp_data.h` and `src/math/pow_data.h` omit musl's `features.h` include
+and internal `hidden` visibility marker; Pyxis links these libraries statically.
+The coefficient tables and numerical algorithms are unchanged.
+
+`src/internal/libm.h` now also extracts the required evaluation barriers,
+forced-evaluation helpers, double bit conversions, branch prediction macros and
+pow configuration from upstream. Internal error-helper declarations omit
+`hidden`. The generic `TOINT_INTRINSICS=0` path matches musl's x86-64 build;
+`WANT_ROUNDING=1` and `WANT_SNAN=0` retain upstream's policy. Signaling NaNs are
+not promised. The build suppresses `-Wunused-but-set-variable` for musl sources
+because its forced-evaluation helpers intentionally write unread volatile locals.
+
+These functions remain in libc with no separate `-lm`: `floor` rounds downward,
+`fmod` truncates the quotient toward zero, `frexp` splits a value into a fraction
+and binary exponent, `ldexp` reuses `scalbn`, and `pow` includes its range/domain
+handling. Errors leave errno unchanged and set FP exception flags. No public
+fenv API, full math library or changes to compiler defaults are introduced.
 
 `src/internal/floatscan.c` comes from the same pin, with local adaptations:
 
