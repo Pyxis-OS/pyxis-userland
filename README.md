@@ -8,12 +8,14 @@ scripts for Pyxis OS. Requires GNU Make, the prebuilt
 make SDK=/path/to/sdk                    # applications in build/apps
 make SDK=/path/to/sdk hello client server
 make -f runtime.mk SDK=/path/to/sdk      # runtime in build/runtime
+make install SDK=/path/to/sdk DESTDIR=/path/to/guest-tree
 make clean
 make -f runtime.mk clean
 ```
 
 `SDK` defaults to `build/sdk`; `BUILD` overrides the output directory for either
-phase. Application builds consume the complete SDK. Runtime builds use local
+phase. `install` recreates a payload tree of selected programs, init and assets;
+it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang source. TLSF is vendored locally with its license and pin.
 
