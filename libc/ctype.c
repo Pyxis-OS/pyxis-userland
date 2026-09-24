@@ -14,3 +14,13 @@ int isprint(int character)
 {
   return character >= ' ' && character <= '~';
 }
+
+int toupper(int character)
+{
+  return character >= 'a' && character <= 'z' ? character - ('a' - 'A') : character;
+}
+
+int tolower(int character)
+{
+  return character >= 'A' && character <= 'Z' ? character + ('a' - 'A') : character;
+}

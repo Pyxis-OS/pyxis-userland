@@ -33,6 +33,7 @@ double scalbn(double value, int exponent);
 long double scalbnl(long double value, int exponent);
 long double ldexpl(long double value, int exponent);
 long double fmodl(long double value, long double divisor);
+double fabs(double value);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
 

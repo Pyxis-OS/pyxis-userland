@@ -18,6 +18,9 @@ void *realloc(void *pointer, size_t size);
 /* Borrowed immutable startup value; do not modify or free the result. */
 char *getenv(const char *name);
 
+/* The absolute value must be representable as int (INT_MIN is excluded). */
+int abs(int value);
+
 /* ASCII whitespace/sign and bases 2..36; base 0 detects decimal, octal, 0x or
  * C23 0b prefixes. No digits returns zero and leaves *end at text. Overflow
  * saturates with ERANGE but still consumes all valid digits. Invalid bases

@@ -110,3 +110,16 @@ char *strdup(const char *text)
 {
   return strndup(text, SIZE_MAX);
 }
+
+char *strncpy(char *restrict dest, const char *restrict src, size_t count)
+{
+  size_t copied = 0;
+  while (copied < count && src[copied]) {
+    dest[copied] = src[copied];
+    ++copied;
+  }
+  while (copied < count) {
+    dest[copied++] = '\0';
+  }
+  return dest;
+}
