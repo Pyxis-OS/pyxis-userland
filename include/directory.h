@@ -19,6 +19,11 @@ enum call_status directory_lookup(handle_t directory, const char *name,
 enum call_status directory_create(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle);
 
+/* Remove a single name with REMOVE on its parent. kind is FILE, DIRECTORY or
+ * ANY; nonempty directories fail with NOT_EMPTY. Existing handles survive.
+ * Removed directories reject subsequent creation with NOT_FOUND. */
+enum call_status directory_remove(handle_t directory, const char *name, uint64_t kind);
+
 /* Pass a zero cursor initially, then the returned cursor for the same directory.
  * On CALL_OK inspect reply->outcome: ENTRY, END, BUFFER_TOO_SMALL or CHANGED.
  * Only ENTRY writes name (including NUL). BUFFER_TOO_SMALL reports name_size

@@ -61,6 +61,22 @@ enum call_status directory_create(handle_t directory, const char *name,
   return child_call(directory, DIRECTORY_CREATE, name, kind, rights, handle);
 }
 
+enum call_status directory_remove(handle_t directory, const char *name, uint64_t kind)
+{
+  if (!name) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t length = 0;
+  while (name[length]) {
+    ++length;
+  }
+  struct directory_message message = {
+    .header = {PROTOCOL_DIRECTORY, DIRECTORY_REMOVE},
+    .body.remove = {(uintptr_t)name, length, kind},
+  };
+  return call_status(syscall_call(directory, &message, sizeof(message), NULL, 0), 0);
+}
+
 enum call_status directory_enumerate(handle_t directory, const struct directory_cursor *cursor,
     char *name, size_t capacity, struct directory_enumerate_reply *reply)
 {
