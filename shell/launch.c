@@ -2,6 +2,7 @@
 #include <abi/console.h>
 #include <abi/memory.h>
 #include <abi/display.h>
+#include <abi/clock.h>
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
@@ -22,14 +23,16 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
 
   enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
+  bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 2) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 3) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
   size_t display_index = CHILD_DIRECTORY + depth;
-  size_t launcher_index = display_index + (has_display ? 1 : 0);
+  size_t clock_index = display_index + (has_display ? 1 : 0);
+  size_t launcher_index = clock_index + (has_clock ? 1 : 0);
   size_t grant_count = launcher_index + (session ? 1 : 0);
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
@@ -52,10 +55,13 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_display) {
     grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW};
   }
+  if (has_clock) {
+    grants[clock_index] = (struct launch_grant){shell->clock, CLOCK_RIGHTS};
+  }
   if (session) {
     grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
   }
-  struct launch_binding resources[5] = {
+  struct launch_binding resources[6] = {
     {(uintptr_t)"input", CHILD_INPUT},
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
@@ -63,6 +69,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t resource_count = 3;
   if (has_display) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", display_index};
+  }
+  if (has_clock) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"clock", clock_index};
   }
   if (session) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"launcher", launcher_index};

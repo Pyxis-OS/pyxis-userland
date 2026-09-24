@@ -23,7 +23,7 @@ struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   struct terminal terminal;
-  handle_t launcher, memory, display, app, home;
+  handle_t launcher, memory, display, clock, app, home;
   struct path_context directory;
   struct path_workspace workspace;
   char *working_path; /* Owned display metadata; directory handles authorize lookup. */
