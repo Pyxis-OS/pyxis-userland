@@ -2,7 +2,8 @@
 
 #define ESCAPE_TIMEOUT_MS 100
 
-enum call_status term_read_key(struct terminal *term, unsigned *key)
+static enum call_status read_key(struct terminal *term, unsigned *key,
+                                 bool timed, uint32_t timeout_ms)
 {
   if (!term || !key) {
     return CALL_BAD_REQUEST;
@@ -14,9 +15,17 @@ enum call_status term_read_key(struct terminal *term, unsigned *key)
   for (;;) {
     unsigned char byte;
     size_t count;
-    enum call_status status = state == TEXT ? term_read(term, &byte, 1, &count) :
-        term_read_timeout(term, &byte, 1, ESCAPE_TIMEOUT_MS, &count);
+    enum call_status status;
+    if (state == TEXT) {
+      status = timed ? term_read_timeout(term, &byte, 1, timeout_ms, &count) :
+                       term_read(term, &byte, 1, &count);
+    } else {
+      status = term_read_timeout(term, &byte, 1, ESCAPE_TIMEOUT_MS, &count);
+    }
     if (status == CALL_TIMED_OUT) {
+      if (state == TEXT) {
+        return CALL_TIMED_OUT;
+      }
       *key = state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
       return CALL_OK;
     }
@@ -75,4 +84,15 @@ enum call_status term_read_key(struct terminal *term, unsigned *key)
     *key = byte;
     return CALL_OK;
   }
+}
+
+enum call_status term_read_key(struct terminal *term, unsigned *key)
+{
+  return read_key(term, key, false, 0);
+}
+
+enum call_status term_read_key_timeout(struct terminal *term, uint32_t timeout_ms,
+                                      unsigned *key)
+{
+  return read_key(term, key, true, timeout_ms);
 }
