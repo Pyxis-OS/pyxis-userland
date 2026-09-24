@@ -63,8 +63,8 @@ implementation is imported.
 `src/internal/time_impl.h` declares only that UTC conversion routine. Pyxis owns
 `time.h`, the clock-backed time/timespec_get calls, and gmtime/gmtime_r wrappers.
 The conversion uses the proleptic Gregorian calendar and rejects years that
-cannot fit tm_year. Timezone, locale and other musl time machinery are not
-imported. Existing COPYRIGHT covers this file too.
+cannot fit tm_year. Existing COPYRIGHT covers this file too. Additional
+local-time arithmetic is described below; locale is not imported.
 
 `src/math/frexpl.c` is copied unmodified from the same pin.
 `src/stdio/format_float.c` extracts `fmt_u` and `fmt_fp` from that pin's
@@ -82,3 +82,19 @@ available buffer, even for enormous precision/width. The decimal conversion has
 an approximately 8 KiB automatic workspace and does not allocate. It uses the
 current FP rounding mode; the process default is round-to-nearest, ties-to-even.
 No locale or separate libm is required.
+
+Local-time conversion adds `src/time/__year_to_secs.c` and
+`src/time/__month_to_secs.c` unmodified from the same 1.2.5 pin.
+`src/time/rule_to_secs.c` extracts rule-to-calendar and UTC-year calculations from that
+pin's `src/time/__tz.c`, retaining upstream formatting. Local adaptations use
+named rule fields, a long-long year for neighboring years at tm_year's limits,
+an explicit month-length table, normalize negative weekdays before 1970, and
+bound the year estimate before arithmetic while allowing neighboring UTC years
+at the local calendar limits. Exact New Year belongs to the new rule year.
+
+Pyxis's `libc/timezone.c` owns checked TZif parsing, capability-path file loading,
+cache lifetime and error propagation. It evaluates adjacent rule years to handle
+transitions across UTC New Year, including southern-hemisphere/all-year DST.
+Musl's host filesystem lookup, mmap, POSIX TZ environment strings, reverse-time
+conversion, global timezone names and silent UTC fallback are not imported.
+TZif handling follows RFC 9636; only leap-free version 2/3/4 data is supported.

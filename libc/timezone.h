@@ -1,0 +1,20 @@
+#ifndef LIBC_TIMEZONE_H
+#define LIBC_TIMEZONE_H
+
+#include <stdint.h>
+
+/* POSIX rules appear inside TZif footers, never directly in the TZ setting. */
+enum tz_rule_kind { TZ_DAY_OF_YEAR, TZ_JULIAN_DAY, TZ_MONTH_WEEK_DAY };
+
+struct tz_rule {
+  enum tz_rule_kind kind;
+  int day, month, week, weekday;
+  int seconds; /* Signed wall time relative to midnight of the selected day. */
+};
+
+/* Calendar year is years since 1900, within int range plus neighboring years. */
+int __tz_year_for_secs(long long seconds, long long *year);
+long long __tz_rule_to_secs(const struct tz_rule *rule, long long year);
+int timezone_offset(int64_t seconds, long *offset, int *daylight);
+
+#endif
