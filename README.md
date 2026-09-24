@@ -25,6 +25,6 @@ See [import provenance](IMPORT.md) for the original history and dependency split
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double
-arithmetic; press a key after rendering to return to the TTY. It needs display
-and terminal input grants. Floating-point formatting and a full libm remain
-separate work.
+arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
+the TTY. It needs display, keyboard and clock grants. Floating-point formatting
+and a full libm remain separate work.
