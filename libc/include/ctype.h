@@ -8,4 +8,8 @@ int isspace(int character);
 int isdigit(int character);
 int isprint(int character);
 
+/* ASCII case conversion; EOF and non-ASCII bytes are unchanged. */
+int toupper(int character);
+int tolower(int character);
+
 #endif

@@ -11,6 +11,9 @@ size_t strlen(const char *text);
 size_t strnlen(const char *text, size_t limit);
 /* Copy through NUL; dest has enough space and does not overlap src. */
 char *strcpy(char *restrict dest, const char *restrict src);
+/* Copies exactly count bytes, padding with NUL after the source ends.
+ * Does not terminate when the source is count bytes or longer. No overlap. */
+char *strncpy(char *restrict dest, const char *restrict src, size_t count);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 char *strchr(const char *text, int character);

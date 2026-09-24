@@ -23,7 +23,8 @@ LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
-MUSL_SOURCES := third_party/musl/src/math/scalbn.c \
+MUSL_SOURCES := third_party/musl/src/math/fabs.c \
+                third_party/musl/src/math/scalbn.c \
                 third_party/musl/src/math/scalbnl.c \
                 third_party/musl/src/math/ldexpl.c \
                 third_party/musl/src/math/fabsl.c \

@@ -11,6 +11,7 @@ The following files are copied without changes, including upstream formatting:
 - `src/math/scalbn.c`
 - `src/math/scalbnl.c`
 - `src/math/ldexpl.c`
+- `src/math/fabs.c`
 - `src/math/fabsl.c`
 - `src/math/copysignl.c`
 - `src/math/x86_64/fmodl.c`
