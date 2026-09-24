@@ -24,18 +24,20 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
 
   enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
+  bool has_host = shell->host != HANDLE_INVALID;
   bool has_keyboard = shell->keyboard != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 4) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 5) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
   size_t display_index = CHILD_DIRECTORY + depth;
   size_t clock_index = display_index + (has_display ? 1 : 0);
   size_t keyboard_index = clock_index + (has_clock ? 1 : 0);
-  size_t launcher_index = keyboard_index + (has_keyboard ? 1 : 0);
+  size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
+  size_t launcher_index = host_index + (has_host ? 1 : 0);
   size_t grant_count = launcher_index + (session ? 1 : 0);
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
@@ -64,6 +66,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_keyboard) {
     grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT};
   }
+  if (has_host) {
+    grants[host_index] = (struct launch_grant){shell->host, APP_DIRECTORY_RIGHTS};
+  }
   if (session) {
     grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
   }
@@ -85,10 +90,15 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (session) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"launcher", launcher_index};
   }
-  struct launch_binding roots[] = {
+  struct launch_binding roots[3] = {
     {(uintptr_t)"app", CHILD_APP},
     {(uintptr_t)"home", CHILD_HOME},
   };
+  size_t root_count = 2;
+  if (has_host) {
+    roots[root_count++] = (struct launch_binding){(uintptr_t)"host", host_index};
+  }
+  /* Mount authority belongs to init; only directory access crosses handoff. */
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
@@ -96,7 +106,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     .resources = (uintptr_t)resources,
     .resource_count = resource_count,
     .roots = (uintptr_t)roots,
-    .root_count = sizeof(roots) / sizeof(roots[0]),
+    .root_count = root_count,
     .working_directories = (uintptr_t)directories,
     .working_directory_count = depth,
     .working_path = (uintptr_t)shell->working_path,

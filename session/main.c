@@ -40,13 +40,13 @@ static int launch_shell(const struct session_config *config)
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 3 ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 4 ||
       inherited >= SIZE_MAX / sizeof(struct startup_variable)) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 3 + depth) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 4 + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 1) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -82,16 +82,24 @@ static int launch_shell(const struct session_config *config)
     grants[grant_count++] = (struct launch_grant){keyboard, KEYBOARD_RIGHT_INPUT};
   }
 
+  struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
+  size_t root_count = 2;
+  handle_t host = startup_root("host");
+  if (host != HANDLE_INVALID) {
+    roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count};
+    grants[grant_count++] = (struct launch_grant){host, APP_RIGHTS};
+  }
+
   const char *working_path = startup_working_path();
-  /* Match the initial shell's two-root policy; display text never supplies a
+  /* Match the shell's root policy; display text never supplies a
    * capability. The kernel still checks every delegated right. */
-  uint64_t directory_rights = working_path && !strncmp(working_path, "app://", 6) ?
+  uint64_t directory_rights = working_path && (!strncmp(working_path, "app://", 6) ||
+      !strncmp(working_path, "host://", 7)) ?
       APP_RIGHTS : DIRECTORY_RIGHTS;
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
     grants[grant_count++] = (struct launch_grant){startup_working_directory(i), directory_rights};
   }
-  struct launch_binding roots[] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
 
   size_t environment_count = 0;
   const struct startup_variable *source = startup_environment_variables();
@@ -108,7 +116,7 @@ static int launch_shell(const struct session_config *config)
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = grant_count,
     .resources = (uintptr_t)resources, .resource_count = resource_count,
-    .roots = (uintptr_t)roots, .root_count = sizeof(roots) / sizeof(roots[0]),
+    .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
     .working_path = (uintptr_t)working_path,
     .environment = (uintptr_t)environment, .environment_count = environment_count,

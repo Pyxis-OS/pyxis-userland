@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "../common/directory.h"
 #include <startup.h>
+#include <handle.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,8 @@ int main(int argc, char **argv)
     .keyboard = startup_resource("keyboard"),
     .app = startup_root("app"),
     .home = startup_root("home"),
+    .host = startup_root("host"),
+    .host_mount = startup_resource("host_mount"),
   };
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
@@ -78,6 +81,12 @@ int main(int argc, char **argv)
     shell_directory_error(&shell, "shell", "working directory", status);
     goto done;
   }
+
+  shell.roots[0] = (struct path_root){"app", shell.app};
+  shell.roots[1] = (struct path_root){"home", shell.home};
+  shell.roots[2] = (struct path_root){"host", shell.host};
+  shell.directory.roots = shell.roots;
+  shell.directory.root_count = shell.host != HANDLE_INVALID ? 3 : 2;
 
   if (script != HANDLE_INVALID) {
     result = shell_script(&shell, script, line, arguments);
@@ -121,6 +130,9 @@ int main(int argc, char **argv)
 
 done:
   shell_directory_close(&shell);
+  if (shell.owns_host && handle_close(shell.host) != 0) {
+    result = EXIT_FAILURE;
+  }
   free(arguments);
   free(line);
   /* Runtime exit releases the original startup grants, which may alias. */

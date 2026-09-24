@@ -1,5 +1,6 @@
 #include "shell.h"
 #include "../common/directory.h"
+#include <mount.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,6 +32,32 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
   return COMMAND_FAILED;
 }
 
+static enum command_result mount_host(struct shell *shell, char **arguments, size_t count)
+{
+  bool optional = count == 3 && !strcmp(arguments[1], "--optional");
+  if ((count != 2 && !optional) || strcmp(arguments[count - 1], "host")) {
+    return shell_error(shell, "usage: mount [--optional] host\n");
+  }
+  if (shell->host != HANDLE_INVALID) {
+    return shell_directory_error(shell, "shell: mount", "host", CALL_ALREADY_EXISTS);
+  }
+  if (shell->host_mount == HANDLE_INVALID) {
+    return optional ? COMMAND_OK :
+        shell_directory_error(shell, "shell: mount", "host", CALL_UNAVAILABLE);
+  }
+
+  handle_t root;
+  enum call_status status = mount_open_root(shell->host_mount, &root);
+  if (status != CALL_OK) {
+    return shell_directory_error(shell, "shell: mount", "host", status);
+  }
+  shell->host = root;
+  shell->owns_host = true;
+  shell->roots[2] = (struct path_root){"host", root};
+  shell->directory.root_count = 3;
+  return COMMAND_OK;
+}
+
 enum command_result shell_command(struct shell *shell, char *line, char **arguments)
 {
   size_t count;
@@ -56,6 +83,9 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
       return shell_directory_error(shell, "shell: cd", arguments[1], status);
     }
     return COMMAND_OK;
+  }
+  if (strcmp(arguments[0], "mount") == 0) {
+    return mount_host(shell, arguments, count);
   }
   if (strcmp(arguments[0], "session") == 0) {
     if (count < 2) {
