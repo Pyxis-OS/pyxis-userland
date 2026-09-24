@@ -1,6 +1,8 @@
 SDK ?= build/sdk
 SDK := $(abspath $(SDK))
 BUILD ?= build/apps
+DESTDIR ?= $(BUILD)/install
+INSTALL_PROGRAMS := shell cat ls mkdir rm rmdir mv date mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -26,8 +28,26 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/script.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all hello client server cat ls mkdir rm rmdir mv date shell mandelbrot clean FORCE
-all: shell cat ls mkdir rm rmdir mv date mandelbrot $(BUILD)/share/hello.txt
+.PHONY: all install hello client server cat ls mkdir rm rmdir mv date shell mandelbrot clean FORCE
+all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
+
+# Publish only the boot payload, never objects or debug ELFs. Recreate it so
+# removed programs/assets cannot survive from an earlier install.
+install: all
+	@set -eu; \
+	  staging="$(DESTDIR).tmp"; \
+	  trap 'rm -rf -- "$$staging"' EXIT; \
+	  rm -rf -- "$$staging"; \
+	  mkdir -p "$$staging/share"; \
+	  for program in $(INSTALL_PROGRAMS); do \
+	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
+	  done; \
+	  install -m 644 init.sh "$$staging/init"; \
+	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
+	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
+	    rm -rf -- "$(DESTDIR)"; \
+	    mv -- "$$staging" "$(DESTDIR)"; \
+	  fi
 
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
