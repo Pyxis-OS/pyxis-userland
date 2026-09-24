@@ -2,6 +2,7 @@
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
+#include <string.h>
 
 static void close_chain(handle_t *directories, size_t count)
 {
@@ -34,7 +35,10 @@ enum call_status path_context_init(struct path_context *context,
       return status;
     }
   }
-  *context = (struct path_context){storage, count, capacity, rights};
+  *context = (struct path_context){
+    .directories = storage, .count = count, .capacity = capacity,
+    .directory_rights = rights,
+  };
   return CALL_OK;
 }
 
@@ -81,7 +85,17 @@ static enum call_status starting_chain(const struct path_context *context,
     if (status != CALL_OK) {
       return status;
     }
-    root = startup_root(workspace->component);
+    root = HANDLE_INVALID;
+    if (context && context->roots) {
+      for (size_t i = 0; i < context->root_count; ++i) {
+        if (!strcmp(context->roots[i].name, workspace->component)) {
+          root = context->roots[i].handle;
+          break;
+        }
+      }
+    } else {
+      root = startup_root(workspace->component);
+    }
     if (root == HANDLE_INVALID) {
       return CALL_NOT_FOUND;
     }

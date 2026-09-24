@@ -6,7 +6,7 @@
 
 static uint64_t path_rights(const char *path, uint64_t current)
 {
-  if (strncmp(path, "app://", 6) == 0) {
+  if (strncmp(path, "app://", 6) == 0 || strncmp(path, "host://", 7) == 0) {
     return APP_DIRECTORY_RIGHTS;
   }
   if (strncmp(path, "home://", 7) == 0) {
@@ -15,12 +15,22 @@ static uint64_t path_rights(const char *path, uint64_t current)
   return current;
 }
 
+static size_t root_prefix(const char *path)
+{
+  if (!strncmp(path, "app://", 6)) {
+    return 6;
+  }
+  if (!strncmp(path, "home://", 7) || !strncmp(path, "host://", 7)) {
+    return 7;
+  }
+  return 0;
+}
+
 /* Normalize only the display spelling. path_change still walks the original
  * input, so missing/.. cannot bypass a failed lookup or a capability boundary. */
 static enum call_status display_path(const char *current, const char *path, char **result)
 {
-  size_t root = strncmp(path, "home://", 7) == 0 ? 7 :
-                strncmp(path, "app://", 6) == 0 ? 6 : 0;
+  size_t root = root_prefix(path);
   const char *base = root ? path : current;
   size_t length = root ? root : strlen(base);
   const char *tail = root ? path + root : path;
@@ -33,7 +43,7 @@ static enum call_status display_path(const char *current, const char *path, char
     return CALL_NO_MEMORY;
   }
   memcpy(display, base, length);
-  root = strncmp(base, "home://", 7) == 0 ? 7 : 6;
+  root = root_prefix(base);
 
   while (*tail) {
     if (*tail == '/') {
@@ -111,9 +121,9 @@ enum call_status shell_directory_init(struct shell *shell)
     shell->directory.directory_rights = APP_DIRECTORY_RIGHTS;
     return shell_change_directory(shell, "home://");
   }
-  /* The initial shell contract names these two namespaces. The display prefix
+  /* The shell accepts app, home and optional host. The display prefix
    * selects requested rights, never a replacement for the supplied handles. */
-  if (!path || (strncmp(path, "app://", 6) && strncmp(path, "home://", 7))) {
+  if (!path || !root_prefix(path)) {
     return CALL_BAD_REQUEST;
   }
   if (depth > SIZE_MAX / sizeof(handle_t)) {

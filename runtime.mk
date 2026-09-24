@@ -15,7 +15,7 @@ LIBPYXIS := $(BUILD)/libpyxis.a
 LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/console.o $(BUILD)/lib/handle.o \
                $(BUILD)/lib/file.o $(BUILD)/lib/endpoint.o \
-               $(BUILD)/lib/directory.o $(BUILD)/lib/path.o \
+               $(BUILD)/lib/directory.o $(BUILD)/lib/path.o $(BUILD)/lib/mount.o \
                $(BUILD)/lib/keyboard.o $(BUILD)/lib/clock.o $(BUILD)/lib/memory.o $(BUILD)/lib/display.o $(BUILD)/lib/process.o \
                $(BUILD)/lib/launcher.o $(BUILD)/lib/program.o \
                $(BUILD)/lib/shebang.o

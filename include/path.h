@@ -3,6 +3,11 @@
 
 #include <directory.h>
 
+struct path_root {
+  const char *name;
+  handle_t handle;
+};
+
 /* Owns count handles in caller-owned storage, boundary first and current last.
  * directory_rights includes LOOKUP and is requested for each directory retained
  * by init/change. Do not close entries separately or copy this owning struct.
@@ -12,6 +17,11 @@ struct path_context {
   size_t count;
   size_t capacity;
   uint64_t directory_rights;
+  /* Optional caller-owned complete binding set, with borrowed names/handles.
+   * NULL selects immutable startup roots. Keep it alive through path calls;
+   * changes affect explicit URI resolution, not the retained cwd chain. */
+  const struct path_root *roots;
+  size_t root_count;
 };
 
 /* Scratch storage must be disjoint from the context, inputs and outputs.
@@ -27,14 +37,16 @@ struct path_workspace {
 /* Initialize a fresh/closed context by copying a borrowed directory chain.
  * Use startup_working_directories()/count() for the initial chain, or one
  * directory for a standalone subtree. Inputs must be directory capabilities.
- * Context, storage and input chain must be disjoint.
+ * Context, storage and input chain must be disjoint. Set optional root bindings
+ * after initialization; closing the context does not close their handles.
  * Failure leaves an empty context and preserves every input handle. */
 enum call_status path_context_init(struct path_context *context,
     handle_t *storage, size_t capacity, const handle_t *directories, size_t count,
     uint64_t rights);
 void path_context_close(struct path_context *context);
 
-/* Exact scheme:// prefixes select startup roots; otherwise use context.
+/* Exact scheme:// prefixes select context bindings (or startup roots);
+ * other paths use cwd.
  * No leading / or empty paths. Repeated / and . are accepted; .. walks the
  * retained chain, failing at its boundary. A trailing / requires a directory.
  * Names are case-sensitive literal bytes, with no URL decoding or expansion.
