@@ -77,6 +77,27 @@ enum call_status directory_remove(handle_t directory, const char *name, uint64_t
   return call_status(syscall_call(directory, &message, sizeof(message), NULL, 0), 0);
 }
 
+enum call_status directory_rename(handle_t source, const char *source_name,
+    handle_t destination, const char *destination_name, uint64_t policy)
+{
+  if (!source_name || !destination_name) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t source_length = 0, destination_length = 0;
+  while (source_name[source_length]) {
+    ++source_length;
+  }
+  while (destination_name[destination_length]) {
+    ++destination_length;
+  }
+  struct directory_message message = {
+    .header = {PROTOCOL_DIRECTORY, DIRECTORY_RENAME},
+    .body.rename = {(uintptr_t)source_name, source_length, destination,
+                   (uintptr_t)destination_name, destination_length, policy},
+  };
+  return call_status(syscall_call(source, &message, sizeof(message), NULL, 0), 0);
+}
+
 enum call_status directory_enumerate(handle_t directory, const struct directory_cursor *cursor,
     char *name, size_t capacity, struct directory_enumerate_reply *reply)
 {

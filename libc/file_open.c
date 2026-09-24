@@ -120,3 +120,47 @@ int remove(const char *path)
   }
   return 0;
 }
+
+int rename(const char *old_path, const char *new_path)
+{
+  const char *paths[] = {old_path, new_path};
+  struct path_workspace workspaces[2] = {0};
+  size_t depth = startup_working_directory_count();
+  enum call_status status = CALL_OK;
+  for (size_t i = 0; i < 2; ++i) {
+    if (!paths[i] || !*paths[i]) {
+      status = CALL_BAD_REQUEST;
+      goto done;
+    }
+    size_t length = strlen(paths[i]);
+    if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
+        depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+      status = CALL_LIMIT;
+      goto done;
+    }
+    workspaces[i].directory_capacity = depth + length + 1;
+    workspaces[i].component_capacity = length + 1;
+    workspaces[i].directories = malloc(workspaces[i].directory_capacity * sizeof(handle_t));
+    workspaces[i].component = malloc(length + 1);
+    if (!workspaces[i].directories || !workspaces[i].component) {
+      status = CALL_NO_MEMORY;
+      goto done;
+    }
+  }
+
+  struct path_context context = {
+    .directories = (handle_t *)startup_working_directories(), .count = depth,
+  };
+  status = path_rename(&context, old_path, new_path, DIRECTORY_RENAME_REPLACE,
+      &workspaces[0], &workspaces[1]);
+done:
+  for (size_t i = 0; i < 2; ++i) {
+    free(workspaces[i].component);
+    free(workspaces[i].directories);
+  }
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  return 0;
+}
