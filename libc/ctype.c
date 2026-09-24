@@ -1,5 +1,46 @@
 #include <ctype.h>
 
+int isalpha(int character)
+{
+  return islower(character) || isupper(character);
+}
+
+int isalnum(int character)
+{
+  return isalpha(character) || isdigit(character);
+}
+
+int iscntrl(int character)
+{
+  return (character >= 0 && character < ' ') || character == 0x7f;
+}
+
+int isgraph(int character)
+{
+  return character >= '!' && character <= '~';
+}
+
+int islower(int character)
+{
+  return character >= 'a' && character <= 'z';
+}
+
+int isupper(int character)
+{
+  return character >= 'A' && character <= 'Z';
+}
+
+int ispunct(int character)
+{
+  return isgraph(character) && !isalnum(character);
+}
+
+int isxdigit(int character)
+{
+  return isdigit(character) || (character >= 'a' && character <= 'f') ||
+      (character >= 'A' && character <= 'F');
+}
+
 int isspace(int character)
 {
   return character == ' ' || (character >= '\t' && character <= '\r');
