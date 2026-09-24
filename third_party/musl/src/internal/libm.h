@@ -6,8 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Only the x86-64 long-double representation from musl's libm.h is needed.
- * Keep its field names/layout so the imported numerical code stays unchanged. */
+/* Retain musl's x86-64 long-double layout and the helpers used by this subset. */
 #if LDBL_MANT_DIG != 64 || LDBL_MAX_EXP != 16384 || \
     __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error Unsupported long double representation
@@ -24,5 +23,105 @@ union ldshape {
 _Static_assert(sizeof(long double) == 16, "long double must use the x86-64 ABI");
 _Static_assert(offsetof(union ldshape, i.se) == 8,
   "long double sign/exponent must follow its 64-bit significand");
+
+/* Support non-nearest rounding mode.  */
+#define WANT_ROUNDING 1
+/* Support signaling NaNs.  */
+#define WANT_SNAN 0
+
+#if WANT_SNAN
+#error SNaN is unsupported
+#else
+#define issignalingf_inline(x) 0
+#define issignaling_inline(x) 0
+#endif
+
+#ifndef TOINT_INTRINSICS
+#define TOINT_INTRINSICS 0
+#endif
+
+/* Helps static branch prediction so hot path can be better optimized.  */
+#ifdef __GNUC__
+#define predict_true(x) __builtin_expect(!!(x), 1)
+#define predict_false(x) __builtin_expect(x, 0)
+#else
+#define predict_true(x) (x)
+#define predict_false(x) (x)
+#endif
+
+/* Evaluate an expression as the specified type. With standard excess
+   precision handling a type cast or assignment is enough (with
+   -ffloat-store an assignment is required, in old compilers argument
+   passing and return statement may not drop excess precision).  */
+
+static inline double eval_as_double(double x)
+{
+	double y = x;
+	return y;
+}
+
+/* fp_barrier returns its input, but limits code transformations
+   as if it had a side-effect (e.g. observable io) and returned
+   an arbitrary value.  */
+
+#ifndef fp_barrier
+#define fp_barrier fp_barrier
+static inline double fp_barrier(double x)
+{
+	volatile double y = x;
+	return y;
+}
+#endif
+
+/* fp_force_eval ensures that the input value is computed when that's
+   otherwise unused.  To prevent the constant folding of the input
+   expression, an additional fp_barrier may be needed or a compilation
+   mode that does so (e.g. -frounding-math in gcc). Then it can be
+   used to evaluate an expression for its fenv side-effects only.   */
+
+#ifndef fp_force_evalf
+#define fp_force_evalf fp_force_evalf
+static inline void fp_force_evalf(float x)
+{
+	volatile float y;
+	y = x;
+}
+#endif
+
+#ifndef fp_force_eval
+#define fp_force_eval fp_force_eval
+static inline void fp_force_eval(double x)
+{
+	volatile double y;
+	y = x;
+}
+#endif
+
+#ifndef fp_force_evall
+#define fp_force_evall fp_force_evall
+static inline void fp_force_evall(long double x)
+{
+	volatile long double y;
+	y = x;
+}
+#endif
+
+#define FORCE_EVAL(x) do {                        \
+	if (sizeof(x) == sizeof(float)) {         \
+		fp_force_evalf(x);                \
+	} else if (sizeof(x) == sizeof(double)) { \
+		fp_force_eval(x);                 \
+	} else {                                  \
+		fp_force_evall(x);                \
+	}                                         \
+} while(0)
+
+#define asuint64(f) ((union{double _f; uint64_t _i;}){f})._i
+#define asdouble(i) ((union{uint64_t _i; double _f;}){i})._f
+
+double __math_xflow(uint32_t, double);
+double __math_uflow(uint32_t);
+double __math_oflow(uint32_t);
+double __math_invalid(double);
 
 #endif

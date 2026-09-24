@@ -27,8 +27,14 @@ typedef double double_t;
 #define math_errhandling MATH_ERREXCEPT
 
 /* This subset reports math errors through FP exception flags, not errno.
- * The process starts with FP traps masked. There is no fenv API yet.
+ * The process starts with FP traps masked. There is no fenv API yet, and
+ * signaling NaNs are not supported.
  * These functions live in libc; callers do not need a separate -lm. */
+double floor(double value);
+double fmod(double value, double divisor);
+double pow(double base, double exponent);
+double frexp(double value, int *exponent);
+double ldexp(double value, int exponent);
 double scalbn(double value, int exponent);
 long double scalbnl(long double value, int exponent);
 long double frexpl(long double value, int *exponent);
