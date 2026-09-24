@@ -24,6 +24,13 @@ enum call_status directory_create(handle_t directory, const char *name,
  * Removed directories reject subsequent creation with NOT_FOUND. */
 enum call_status directory_remove(handle_t directory, const char *name, uint64_t kind);
 
+/* Atomic file-only move/replacement. Source needs REMOVE; destination needs
+ * CREATE and, only when replacing a different entry, REMOVE. policy is
+ * DIRECTORY_RENAME_NO_REPLACE or DIRECTORY_RENAME_REPLACE. Both names are
+ * single components. Existing handles survive; failure preserves both names. */
+enum call_status directory_rename(handle_t source, const char *source_name,
+    handle_t destination, const char *destination_name, uint64_t policy);
+
 /* Pass a zero cursor initially, then the returned cursor for the same directory.
  * On CALL_OK inspect reply->outcome: ENTRY, END, BUFFER_TOO_SMALL or CHANGED.
  * Only ENTRY writes name (including NUL). BUFFER_TOO_SMALL reports name_size

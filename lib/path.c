@@ -261,6 +261,67 @@ enum call_status path_remove(const struct path_context *context, const char *pat
   return status;
 }
 
+/* Leave the leaf name in component and transfer the last chain handle out.
+ * Ancestors are closed; no directory entry or child handle is looked up. */
+static enum call_status rename_parent(const struct path_context *context, const char *path,
+    uint64_t rights, struct path_workspace *workspace, handle_t *parent)
+{
+  *parent = HANDLE_INVALID;
+  size_t count = 0;
+  handle_t unused;
+  enum call_status status = walk(context, path, WALK_PARENT, 0,
+      DIRECTORY_RIGHT_LOOKUP | rights, true, workspace, &count, &unused);
+  if (status == CALL_OK) {
+    const char *end = path;
+    while (*end) {
+      ++end;
+    }
+    if (end[-1] == '/') {
+      status = CALL_WRONG_TYPE;
+    } else {
+      *parent = workspace->directories[--count];
+      workspace->directories[count] = HANDLE_INVALID;
+    }
+  }
+  if (count) {
+    close_chain(workspace->directories, count);
+  }
+  return status;
+}
+
+enum call_status path_rename(const struct path_context *context, const char *source,
+    const char *destination, uint64_t policy, struct path_workspace *source_workspace,
+    struct path_workspace *destination_workspace)
+{
+  if (policy != DIRECTORY_RENAME_NO_REPLACE && policy != DIRECTORY_RENAME_REPLACE) {
+    return CALL_BAD_REQUEST;
+  }
+  handle_t source_parent, destination_parent;
+  enum call_status status = rename_parent(context, source, DIRECTORY_RIGHT_REMOVE,
+      source_workspace, &source_parent);
+  if (status != CALL_OK) {
+    return status;
+  }
+  uint64_t rights = DIRECTORY_RIGHT_CREATE;
+  if (policy == DIRECTORY_RENAME_REPLACE) {
+    rights |= DIRECTORY_RIGHT_REMOVE;
+  }
+  status = rename_parent(context, destination, rights, destination_workspace, &destination_parent);
+  if (status == CALL_DENIED && policy == DIRECTORY_RENAME_REPLACE) {
+    /* CREATE alone suffices for an absent destination. Do not probe its name
+     * in userspace: the kernel checks replacement authority at publication. */
+    status = rename_parent(context, destination, DIRECTORY_RIGHT_CREATE,
+        destination_workspace, &destination_parent);
+  }
+  if (status == CALL_OK) {
+    status = directory_rename(source_parent, source_workspace->component,
+        destination_parent, destination_workspace->component, policy);
+    handle_close(destination_parent);
+  }
+  handle_close(source_parent);
+  return status;
+}
+
 enum call_status path_change(struct path_context *context, const char *path,
                               struct path_workspace *workspace)
 {

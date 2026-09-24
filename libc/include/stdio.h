@@ -25,6 +25,9 @@ int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
  * streams keep their object; roots and final . or .. are not removable. */
 int remove(const char *path);
+/* File-only atomic rename/replacement. Paths use explicit startup roots/cwd;
+ * directories and cross-filesystem copy fallbacks are not supported. */
+int rename(const char *old_path, const char *new_path);
 int fflush(FILE *stream);
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
 size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
