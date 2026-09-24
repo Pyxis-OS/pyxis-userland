@@ -35,6 +35,8 @@ enum call_status directory_rename(handle_t source, const char *source_name,
  * On CALL_OK inspect reply->outcome: ENTRY, END, BUFFER_TOO_SMALL or CHANGED.
  * Only ENTRY writes name (including NUL). BUFFER_TOO_SMALL reports name_size
  * and leaves the cursor unchanged. CHANGED requires restarting explicitly.
+ * Enumeration is live, not a snapshot; external changes may go undetected.
+ * Treat both cursor fields as opaque, not as entry counts.
  * reply and the name buffer must be disjoint. Input cursor may alias reply's
  * cursor; it is captured before reply is cleared. Errors clear *reply. */
 enum call_status directory_enumerate(handle_t directory, const struct directory_cursor *cursor,
