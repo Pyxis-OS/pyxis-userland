@@ -22,6 +22,9 @@ enum call_status term_print(struct terminal *term, const char *text);
 /* Begin a fresh line without adding a blank row when already at column zero. */
 enum call_status term_fresh_line(struct terminal *term);
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows);
+/* Set shared TTY tab spacing through output: 1..32 columns, default 8.
+ * Affects future tabs only; preserves existing text, cursor and parser state. */
+enum call_status term_set_tab_width(struct terminal *term, size_t columns);
 
 /* Movement clamps at screen edges and never scrolls. Position is zero-based;
  * relative movement accepts -65535..65535. Clear-screen also moves to (0, 0),

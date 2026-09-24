@@ -121,3 +121,14 @@ enum call_status console_fresh_line(handle_t output)
   return result.status < CALL_STATUS_COUNT && !result.reply_size ?
          (enum call_status)result.status : CALL_BAD_REQUEST;
 }
+
+enum call_status console_set_tab_width(handle_t output, size_t columns)
+{
+  struct console_message message = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_SET_TAB_WIDTH},
+    .body.tab_width = {.columns = columns},
+  };
+  struct syscall_result result = syscall_call(output, &message, sizeof(message), NULL, 0);
+  return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+         (enum call_status)result.status : CALL_BAD_REQUEST;
+}

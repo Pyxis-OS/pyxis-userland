@@ -38,6 +38,11 @@ enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows)
   return console_size(term->output, columns, rows);
 }
 
+enum call_status term_set_tab_width(struct terminal *term, size_t columns)
+{
+  return console_set_tab_width(term->output, columns);
+}
+
 static enum call_status move_axis(struct terminal *term, int distance, char positive, char negative)
 {
   if (!distance) {
