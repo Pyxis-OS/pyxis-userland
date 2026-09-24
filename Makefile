@@ -42,11 +42,12 @@ install: all
 	  staging="$(DESTDIR).tmp"; \
 	  trap 'rm -rf -- "$$staging"' EXIT; \
 	  rm -rf -- "$$staging"; \
-	  mkdir -p "$$staging/share"; \
+	  mkdir -p "$$staging/share" "$$staging/config"; \
 	  for program in $(INSTALL_PROGRAMS); do \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
 	  install -m 644 init.sh "$$staging/init"; \
+	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
 	    rm -rf -- "$(DESTDIR)"; \
