@@ -59,6 +59,8 @@ void perror(const char *prefix);
 
 /* All printf-family functions support s, c, d, i, u, o, x, X, p and %;
  * integer lengths hh/h/l/ll/j/z/t, flags -+ #0, width and precision (also *).
+ * Floating conversions f/F/e/E/g/G/a/A accept double (also l) or long double
+ * (L), including infinities, NaNs and signed zero. The radix is always a dot.
  * Unsupported formats fail with EINVAL; a count above INT_MAX uses EOVERFLOW.
  * snprintf/vsnprintf return the full length excluding NUL even when truncated;
  * their destination may be NULL for zero capacity. Stream formatting returns
