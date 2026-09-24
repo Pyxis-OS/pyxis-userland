@@ -26,6 +26,9 @@ LIBC_SOURCES := $(wildcard libc/*.c)
 MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/frexpl.c \
                 third_party/musl/src/time/__secs_to_tm.c \
+                third_party/musl/src/time/__year_to_secs.c \
+                third_party/musl/src/time/__month_to_secs.c \
+                third_party/musl/src/time/rule_to_secs.c \
                 third_party/musl/src/math/fabs.c \
                 third_party/musl/src/math/scalbn.c \
                 third_party/musl/src/math/scalbnl.c \
@@ -74,6 +77,8 @@ $(BUILD)/libc/time.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CFLAGS += -frounding-math -fexcess-precision=standard
+
+$(BUILD)/third_party/musl/src/time/rule_to_secs.o: private CPPFLAGS += -Ilibc
 
 $(BUILD)/third_party/musl/src/stdio/format_float.o: private CPPFLAGS += -Ilibc
 $(BUILD)/third_party/musl/src/stdio/format_float.o: private CFLAGS += -Wno-sign-compare -Wno-parentheses

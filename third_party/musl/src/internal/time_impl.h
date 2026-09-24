@@ -3,7 +3,9 @@
 
 #include <time.h>
 
-/* Only the pinned UTC calendar conversion is built. */
+/* Pinned calendar arithmetic, shared by UTC and local-time conversion. */
+long long __year_to_secs(long long year, int *is_leap);
+int __month_to_secs(int month, int is_leap);
 int __secs_to_tm(long long seconds, struct tm *result);
 
 #endif
