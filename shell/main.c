@@ -54,6 +54,7 @@ int main(int argc, char **argv)
     .launcher = startup_resource("launcher"),
     .memory = startup_resource("memory"),
     .display = startup_resource("display"),
+    .clock = startup_resource("clock"),
     .app = startup_root("app"),
     .home = startup_root("home"),
   };
