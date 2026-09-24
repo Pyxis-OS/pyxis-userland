@@ -5,7 +5,7 @@ DESTDIR ?= $(BUILD)/install
 LUA_PREFIX ?= build/ports-dev/lua
 LUA_PREFIX := $(abspath $(LUA_PREFIX))
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv date mandelbrot
+INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv date ping mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -24,7 +24,7 @@ PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/cat/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
-                   $(BUILD)/mv/main.o $(BUILD)/date/main.o \
+                   $(BUILD)/mv/main.o $(BUILD)/date/main.o $(BUILD)/ping/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/session/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
@@ -32,7 +32,7 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install session hello client server cat ls mkdir rm rmdir mv date shell mandelbrot clean FORCE
+.PHONY: all install session hello client server cat ls mkdir rm rmdir mv date ping shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -65,6 +65,7 @@ rm: $(BUILD)/rm.pxe
 rmdir: $(BUILD)/rmdir.pxe
 mv: $(BUILD)/mv.pxe
 date: $(BUILD)/date.pxe
+ping: $(BUILD)/ping.pxe
 shell: $(BUILD)/shell.pxe
 mandelbrot: $(BUILD)/mandelbrot.pxe
 
