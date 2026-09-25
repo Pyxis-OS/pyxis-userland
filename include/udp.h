@@ -8,8 +8,13 @@
 /* Host-order IPv4/port; zero port selects an ephemeral binding. OPEN returns
  * an owned handle with UDP_RIGHTS. Copy/restrict it with the handle helpers.
  * Failure clears output (including setting the handle to HANDLE_INVALID).
- * No helper discovers authority or selects a local address implicitly. */
+ * Neither helper discovers authority. */
 enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
+    struct udp_open_reply *reply);
+/* Select a source through the route to destination, then bind atomically with
+ * respect to configuration changes. Same port, ownership and output rules as
+ * udp_open. This does not connect the endpoint or restrict subsequent peers. */
+enum call_status udp_open_route(handle_t service, uint32_t destination, uint16_t port,
     struct udp_open_reply *reply);
 enum call_status udp_inspect(handle_t endpoint, struct udp_endpoint_info *reply);
 /* Idempotently stops the shared endpoint and releases its binding. Closing a
