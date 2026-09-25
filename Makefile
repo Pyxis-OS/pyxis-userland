@@ -29,7 +29,7 @@ PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
-SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o
+SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(BUILD)/libconfig/config.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
@@ -50,6 +50,7 @@ install: all
 	  done; \
 	  install -m 644 init.sh "$$staging/init"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
+	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
 	    rm -rf -- "$(DESTDIR)"; \

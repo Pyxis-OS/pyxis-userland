@@ -1,4 +1,5 @@
 #include "config.h"
+#include "network.h"
 #include <abi/clock.h>
 #include <abi/echo.h>
 #include <abi/console.h>
@@ -17,7 +18,7 @@
 
 #define APP_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 
-static int launch_shell(const struct session_config *config)
+static int launch_shell(const struct session_config *config, const struct network_config *network)
 {
   struct terminal terminal = {startup_resource("input"), startup_resource("output")};
   handle_t launcher = startup_resource("launcher");
@@ -129,6 +130,9 @@ static int launch_shell(const struct session_config *config)
     .argv = (uintptr_t)arguments, .argc = 1,
   };
 
+  if (!network_config_apply(network)) {
+    goto done;
+  }
   status = term_set_tab_width(&terminal, config->tab_width);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot set tab width (status %u)\n", status);
@@ -165,7 +169,12 @@ int main(int argc, char **argv)
   if (!session_config_read(&config)) {
     return EXIT_FAILURE;
   }
-  int result = launch_shell(&config);
+  struct network_config network;
+  if (!network_config_read(&network)) {
+    free(config.timezone);
+    return EXIT_FAILURE;
+  }
+  int result = launch_shell(&config, &network);
   free(config.timezone);
   return result;
 }
