@@ -230,10 +230,11 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   }
   size_t bytes = size * count, total = 0;
   while (total < bytes) {
+    size_t remaining = bytes - total;
     size_t written;
+    uint64_t position = stream->position;
     enum call_status status;
     if (stream->kind == STREAM_FILE) {
-      uint64_t position = stream->position;
       if (stream->append) {
         /* Deliberately non-atomic: another writer can change the end between
          * SIZE and WRITE. A native append operation remains future work. */
@@ -243,24 +244,26 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
           break;
         }
       }
-      if (bytes - total > UINT64_MAX - position) {
+      if (remaining > UINT64_MAX - position) {
         stream_error(stream, EOVERFLOW);
         break;
       }
       status = file_write(stream->handle, position, (const char *)buffer + total,
-          bytes - total, &written);
-      if (status == CALL_OK) {
-        stream->position = position + written;
-      }
+          remaining, &written);
     } else {
-      status = console_write(stream->handle, (const char *)buffer + total, bytes - total, &written);
+      status = console_write(stream->handle, (const char *)buffer + total, remaining, &written);
     }
-    if (status != CALL_OK || !written) {
+    if (status != CALL_OK || !written || written > remaining) {
       stream_error(stream, status == CALL_OK ? EIO : libc_call_errno(status));
       break;
     }
+    if (stream->kind == STREAM_FILE) {
+      stream->position = position + written;
+    }
     total += written;
   }
+  /* Report whole elements, but retain every confirmed byte in the position,
+   * including a partial final element before a later failure. */
   return total / size;
 }
 
