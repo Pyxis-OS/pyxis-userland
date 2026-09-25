@@ -5,9 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum call_status resolve_directory(const char *path, uint64_t rights, handle_t *directory)
+static enum call_status resolve_path(const char *path, uint64_t kind, uint64_t rights,
+    handle_t *handle)
 {
-  *directory = HANDLE_INVALID;
+  *handle = HANDLE_INVALID;
   size_t length = strlen(path);
   size_t depth = startup_working_directory_count();
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
@@ -29,11 +30,20 @@ enum call_status resolve_directory(const char *path, uint64_t rights, handle_t *
   struct path_context context = {
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };
-  enum call_status status = path_resolve(&context, path, DIRECTORY_KIND_DIRECTORY,
-      rights, &workspace, directory);
+  enum call_status status = path_resolve(&context, path, kind, rights, &workspace, handle);
   free(component);
   free(directories);
   return status;
+}
+
+enum call_status resolve_directory(const char *path, uint64_t rights, handle_t *directory)
+{
+  return resolve_path(path, DIRECTORY_KIND_DIRECTORY, rights, directory);
+}
+
+enum call_status resolve_file(const char *path, uint64_t rights, handle_t *file)
+{
+  return resolve_path(path, DIRECTORY_KIND_FILE, rights, file);
 }
 
 enum call_status remove_path(const char *path, uint64_t kind)

@@ -5,7 +5,7 @@ DESTDIR ?= $(BUILD)/install
 LUA_PREFIX ?= build/ports-dev/lua
 LUA_PREFIX := $(abspath $(LUA_PREFIX))
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -24,7 +24,7 @@ PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/cat/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
-                   $(BUILD)/mv/main.o $(BUILD)/date/main.o $(BUILD)/ping/main.o \
+                   $(BUILD)/mv/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/ping/main.o \
                    $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o $(BUILD)/tcp/main.o \
                    $(BUILD)/ttcp/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/session/main.o
@@ -39,7 +39,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install session hello client server cat ls mkdir rm rmdir mv date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install session hello client server cat ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -74,6 +74,7 @@ mkdir: $(BUILD)/mkdir.pxe
 rm: $(BUILD)/rm.pxe
 rmdir: $(BUILD)/rmdir.pxe
 mv: $(BUILD)/mv.pxe
+sync: $(BUILD)/sync.pxe
 date: $(BUILD)/date.pxe
 ping: $(BUILD)/ping.pxe
 dig: $(BUILD)/dig.pxe
@@ -101,7 +102,7 @@ $(BUILD)/dig.elf $(BUILD)/ping.elf $(BUILD)/tcp.elf $(BUILD)/ttcp.elf: $(DNS_OBJ
 
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf: $(UTILITY_OBJECT)
+$(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf $(BUILD)/sync.elf: $(UTILITY_OBJECT)
 
 $(BUILD)/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)

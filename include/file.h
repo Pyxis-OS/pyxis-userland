@@ -31,4 +31,9 @@ enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
  * its unchanged-on-failure guarantee; resizing to zero releases RAM storage. */
 enum call_status file_resize(handle_t file, uint64_t size);
 
+/* Requires WRITE. Flushes this file's data and metadata to its backing store.
+ * RAM backing succeeds without work. A submitted call with an untrustworthy
+ * reply reports CALL_OUTCOME_UNKNOWN; callers must not retry automatically. */
+enum call_status file_sync(handle_t file);
+
 #endif

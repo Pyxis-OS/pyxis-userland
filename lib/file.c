@@ -104,3 +104,9 @@ enum call_status file_resize(handle_t file, uint64_t size)
   };
   return mutation_status(syscall_call(file, &message, sizeof(message), NULL, 0), 0);
 }
+
+enum call_status file_sync(handle_t file)
+{
+  struct file_message message = {.header = {PROTOCOL_FILE, FILE_SYNC}};
+  return mutation_status(syscall_call(file, &message, sizeof(message), NULL, 0), 0);
+}
