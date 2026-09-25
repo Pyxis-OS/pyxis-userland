@@ -9,14 +9,13 @@ struct path_root {
 };
 
 /* Owns count handles in caller-owned storage, boundary first and current last.
- * directory_rights includes LOOKUP and is requested for each directory retained
- * by init/change. Do not close entries separately or copy this owning struct.
+ * Each handle retains its own rights; changing directory requests the parent
+ * grant for each child. Do not close entries separately or copy this owning struct.
  * The startup display path remains an initial description, not runtime authority. */
 struct path_context {
   handle_t *directories;
   size_t count;
   size_t capacity;
-  uint64_t directory_rights;
   /* Optional caller-owned complete binding set, with borrowed names/handles.
    * NULL selects immutable startup roots. Keep it alive through path calls;
    * changes affect explicit URI resolution, not the retained cwd chain. */
@@ -41,8 +40,7 @@ struct path_workspace {
  * after initialization; closing the context does not close their handles.
  * Failure leaves an empty context and preserves every input handle. */
 enum call_status path_context_init(struct path_context *context,
-    handle_t *storage, size_t capacity, const handle_t *directories, size_t count,
-    uint64_t rights);
+    handle_t *storage, size_t capacity, const handle_t *directories, size_t count);
 void path_context_close(struct path_context *context);
 
 /* Exact scheme:// prefixes select context bindings (or startup roots);
@@ -80,7 +78,7 @@ enum call_status path_rename(const struct path_context *context, const char *sou
     struct path_workspace *destination_workspace);
 
 /* Prepare a complete owned chain, then replace context. All failures preserve
- * the old working directory. Requires room for the whole chain in both context
+ * the old working directory. The final directory must allow LOOKUP. Requires room for the whole chain in both context
  * and scratch storage. No process-global cwd, allocation or kernel path parser. */
 enum call_status path_change(struct path_context *context, const char *path,
                               struct path_workspace *workspace);

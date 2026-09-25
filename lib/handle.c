@@ -7,6 +7,26 @@ int handle_close(handle_t handle)
   return result.status == CALL_OK && result.reply_size == 0 ? 0 : -1;
 }
 
+enum call_status handle_rights(handle_t handle, uint64_t *rights)
+{
+  if (!rights) {
+    return CALL_BAD_REQUEST;
+  }
+  *rights = 0;
+  uint64_t granted;
+  struct syscall_result result = syscall_handle_rights(handle, &granted);
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(granted) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    *rights = granted;
+  }
+  return result.status;
+}
+
 static enum call_status copy(handle_t source, uint64_t rights, uint64_t flags,
                               handle_t *destination)
 {

@@ -14,22 +14,20 @@ static void close_chain(handle_t *directories, size_t count)
 }
 
 enum call_status path_context_init(struct path_context *context,
-    handle_t *storage, size_t capacity, const handle_t *directories, size_t count,
-    uint64_t rights)
+    handle_t *storage, size_t capacity, const handle_t *directories, size_t count)
 {
   if (!context) {
     return CALL_BAD_REQUEST;
   }
   *context = (struct path_context){0};
-  if ((capacity && !storage) || (count && !directories) ||
-      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~DIRECTORY_RIGHTS)) {
+  if ((capacity && !storage) || (count && !directories)) {
     return CALL_BAD_REQUEST;
   }
   if (count > capacity) {
     return CALL_LIMIT;
   }
   for (size_t i = 0; i < count; ++i) {
-    enum call_status status = handle_copy_restricted(directories[i], rights, &storage[i]);
+    enum call_status status = handle_copy(directories[i], &storage[i]);
     if (status != CALL_OK) {
       close_chain(storage, i);
       return status;
@@ -37,7 +35,6 @@ enum call_status path_context_init(struct path_context *context,
   }
   *context = (struct path_context){
     .directories = storage, .count = count, .capacity = capacity,
-    .directory_rights = rights,
   };
   return CALL_OK;
 }
@@ -66,8 +63,7 @@ static enum call_status copy_component(struct path_workspace *workspace,
 /* Only a leading scheme:// selects a root; colons elsewhere are ordinary name
  * bytes. Startup scheme names exclude ':' and '/', so the prefix is unambiguous. */
 static enum call_status starting_chain(const struct path_context *context,
-    const char **path, uint64_t rights, bool preserve_rights,
-    struct path_workspace *workspace, size_t *count)
+    const char **path, struct path_workspace *workspace, size_t *count)
 {
   const char *start = *path;
   const char *end = start;
@@ -114,8 +110,7 @@ static enum call_status starting_chain(const struct path_context *context,
   }
   while (*count < source_count) {
     handle_t *destination = &workspace->directories[*count];
-    enum call_status status = preserve_rights ? handle_copy(source[*count], destination) :
-                             handle_copy_restricted(source[*count], rights, destination);
+    enum call_status status = handle_copy(source[*count], destination);
     if (status != CALL_OK) {
       return status;
     }
@@ -131,16 +126,16 @@ enum walk_target {
 };
 
 static enum call_status walk(const struct path_context *context, const char *path,
-    enum walk_target target, uint64_t rights, uint64_t directory_rights, bool preserve_rights,
-    struct path_workspace *workspace, size_t *count, handle_t *file)
+    enum walk_target target, uint64_t rights, uint64_t directory_rights,
+    bool preserve_directory_rights, struct path_workspace *workspace, size_t *count,
+    handle_t *file)
 {
   if (!path || !path[0] || path[0] == '/' || !workspace ||
       (workspace->directory_capacity && !workspace->directories) ||
       (workspace->component_capacity && !workspace->component)) {
     return CALL_BAD_REQUEST;
   }
-  enum call_status status = starting_chain(context, &path, directory_rights,
-      preserve_rights, workspace, count);
+  enum call_status status = starting_chain(context, &path, workspace, count);
   if (status != CALL_OK) {
     return status;
   }
@@ -196,6 +191,12 @@ static enum call_status walk(const struct path_context *context, const char *pat
     if (*count == workspace->directory_capacity) {
       return CALL_LIMIT;
     }
+    if (preserve_directory_rights) {
+      status = handle_rights(parent, &directory_rights);
+      if (status != CALL_OK) {
+        return status;
+      }
+    }
     status = directory_lookup(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
         directory_rights, &workspace->directories[*count]);
     if (status != CALL_OK) {
@@ -235,7 +236,7 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
   size_t count = 0;
   enum walk_target target = kind == DIRECTORY_KIND_FILE ? WALK_FILE : WALK_DIRECTORY;
   enum call_status status = walk(context, path, target, rights, directory_rights,
-      true, workspace, &count, handle);
+      false, workspace, &count, handle);
   if (status == CALL_OK && kind == DIRECTORY_KIND_DIRECTORY) {
     status = handle_copy_restricted(workspace->directories[count - 1], rights, handle);
   }
@@ -260,7 +261,7 @@ enum call_status path_remove(const struct path_context *context, const char *pat
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, true, workspace, &count, &unused);
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, false, workspace, &count, &unused);
   if (status == CALL_OK) {
     if (trailing_separator && kind == DIRECTORY_KIND_FILE) {
       status = CALL_WRONG_TYPE;
@@ -284,7 +285,7 @@ static enum call_status rename_parent(const struct path_context *context, const 
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0,
-      DIRECTORY_RIGHT_LOOKUP | rights, true, workspace, &count, &unused);
+      DIRECTORY_RIGHT_LOOKUP | rights, false, workspace, &count, &unused);
   if (status == CALL_OK) {
     const char *end = path;
     while (*end) {
@@ -339,13 +340,20 @@ enum call_status path_rename(const struct path_context *context, const char *sou
 enum call_status path_change(struct path_context *context, const char *path,
                               struct path_workspace *workspace)
 {
-  if (!context || !(context->directory_rights & DIRECTORY_RIGHT_LOOKUP)) {
+  if (!context || (context->capacity && !context->directories)) {
     return CALL_BAD_REQUEST;
   }
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_DIRECTORY,
-      context->directory_rights, context->directory_rights, false, workspace, &count, &unused);
+      0, 0, true, workspace, &count, &unused);
+  if (status == CALL_OK) {
+    uint64_t rights;
+    status = handle_rights(workspace->directories[count - 1], &rights);
+    if (status == CALL_OK && !(rights & DIRECTORY_RIGHT_LOOKUP)) {
+      status = CALL_DENIED;
+    }
+  }
   if (status == CALL_OK && count > context->capacity) {
     status = CALL_LIMIT;
   }

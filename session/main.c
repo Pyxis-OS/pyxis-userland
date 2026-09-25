@@ -19,8 +19,6 @@
 #include <string.h>
 #include <term.h>
 
-#define APP_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
-
 static int launch_shell(const struct session_config *config, const struct network_config *network,
     bool configure_network)
 {
@@ -65,8 +63,8 @@ static int launch_shell(const struct session_config *config, const struct networ
   grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE};
   grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE};
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH};
-  grants[APP] = (struct launch_grant){app, APP_RIGHTS};
-  grants[HOME] = (struct launch_grant){home, DIRECTORY_RIGHTS};
+  grants[APP] = (struct launch_grant){app, 0};
+  grants[HOME] = (struct launch_grant){home, 0};
   struct launch_binding resources[11] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
@@ -113,18 +111,31 @@ static int launch_shell(const struct session_config *config, const struct networ
   handle_t host = startup_root("host");
   if (host != HANDLE_INVALID) {
     roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count};
-    grants[grant_count++] = (struct launch_grant){host, APP_RIGHTS};
+    grants[grant_count++] = (struct launch_grant){host, 0};
   }
 
   const char *working_path = startup_working_path();
-  /* Match the shell's root policy; display text never supplies a
-   * capability. The kernel still checks every delegated right. */
-  uint64_t directory_rights = working_path && (!strncmp(working_path, "app://", 6) ||
-      !strncmp(working_path, "host://", 7)) ?
-      APP_RIGHTS : DIRECTORY_RIGHTS;
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
-    grants[grant_count++] = (struct launch_grant){startup_working_directory(i), directory_rights};
+    grants[grant_count++] = (struct launch_grant){startup_working_directory(i), 0};
+  }
+
+  /* Root names and display paths do not determine delegated authority. */
+  for (size_t i = 0; i < root_count; ++i) {
+    struct launch_grant *grant = &grants[roots[i].grant];
+    status = handle_rights(grant->source, &grant->rights);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
+      goto done;
+    }
+  }
+  for (size_t i = 0; i < depth; ++i) {
+    struct launch_grant *grant = &grants[directories[i]];
+    status = handle_rights(grant->source, &grant->rights);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
+      goto done;
+    }
   }
 
   size_t environment_count = 0;

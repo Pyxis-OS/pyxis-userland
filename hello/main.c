@@ -99,10 +99,8 @@ static int read_application_file(handle_t output, handle_t root, char *scratch,
   handle_t temporary[8];
   struct path_workspace workspace = {temporary, 8, scratch, scratch_size};
   struct path_context context;
-  uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-                    DIRECTORY_RIGHT_READ_FILES;
   if (path_context_init(&context, directories, 8, startup_working_directories(),
-        startup_working_directory_count(), rights) != CALL_OK) {
+        startup_working_directory_count()) != CALL_OK) {
     return -1;
   }
 

@@ -1,13 +1,13 @@
 #include <mount.h>
 #include <syscall.h>
 
-enum call_status mount_open_root(handle_t mount, handle_t *root)
+enum call_status mount_open_root(handle_t mount, uint64_t access, handle_t *root)
 {
   if (!root) {
     return CALL_BAD_REQUEST;
   }
   *root = HANDLE_INVALID;
-  struct message_header message = {PROTOCOL_MOUNT, MOUNT_OPEN_ROOT};
+  struct mount_message message = {{PROTOCOL_MOUNT, MOUNT_OPEN_ROOT}, {access}};
   struct mount_reply reply;
   struct syscall_result result = syscall_call(mount, &message, sizeof(message),
       &reply, sizeof(reply));

@@ -69,12 +69,11 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE};
-  grants[CHILD_APP] = (struct launch_grant){shell->app, APP_DIRECTORY_RIGHTS};
-  grants[CHILD_HOME] = (struct launch_grant){shell->home, HOME_DIRECTORY_RIGHTS};
+  grants[CHILD_APP] = (struct launch_grant){shell->app, 0};
+  grants[CHILD_HOME] = (struct launch_grant){shell->home, 0};
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = CHILD_DIRECTORY + i;
-    grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i],
-        shell->directory.directory_rights};
+    grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i], 0};
   }
   if (has_display) {
     grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW};
@@ -98,7 +97,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT};
   }
   if (has_host) {
-    grants[host_index] = (struct launch_grant){shell->host, APP_DIRECTORY_RIGHTS};
+    grants[host_index] = (struct launch_grant){shell->host, 0};
   }
   if (session) {
     grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
@@ -149,6 +148,23 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_host) {
     roots[root_count++] = (struct launch_binding){(uintptr_t)"host", host_index};
   }
+
+  /* Root names and display paths do not determine delegated authority. */
+  for (size_t i = 0; i < root_count; ++i) {
+    struct launch_grant *grant = &grants[roots[i].grant];
+    status = handle_rights(grant->source, &grant->rights);
+    if (status != CALL_OK) {
+      goto release_launch;
+    }
+  }
+  for (size_t i = 0; i < depth; ++i) {
+    struct launch_grant *grant = &grants[directories[i]];
+    status = handle_rights(grant->source, &grant->rights);
+    if (status != CALL_OK) {
+      goto release_launch;
+    }
+  }
+
   /* Mount authority belongs to init; only directory access crosses handoff. */
   struct launch_request request = {
     .image = image,
@@ -168,6 +184,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   };
   handle_t child;
   status = program_launch(shell->launcher, &request, &child);
+
+release_launch:
   free(directories);
   free(grants);
   bool closed_image = handle_close(image) == 0;

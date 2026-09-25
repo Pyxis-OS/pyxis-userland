@@ -34,9 +34,23 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
 
 static enum command_result mount_host(struct shell *shell, char **arguments, size_t count)
 {
-  bool optional = count == 3 && !strcmp(arguments[1], "--optional");
-  if ((count != 2 && !optional) || strcmp(arguments[count - 1], "host")) {
-    return shell_error(shell, "usage: mount [--optional] host\n");
+  bool optional = false, access_set = false;
+  uint64_t access = MOUNT_ACCESS_READ_ONLY;
+  if (count < 2 || strcmp(arguments[count - 1], "host")) {
+    goto usage;
+  }
+  for (size_t i = 1; i + 1 < count; ++i) {
+    if (!strcmp(arguments[i], "--optional") && !optional) {
+      optional = true;
+    } else if (!strcmp(arguments[i], "--read-only") && !access_set) {
+      access = MOUNT_ACCESS_READ_ONLY;
+      access_set = true;
+    } else if (!strcmp(arguments[i], "--read-write") && !access_set) {
+      access = MOUNT_ACCESS_READ_WRITE;
+      access_set = true;
+    } else {
+      goto usage;
+    }
   }
   if (shell->host != HANDLE_INVALID) {
     return shell_directory_error(shell, "shell: mount", "host", CALL_ALREADY_EXISTS);
@@ -47,7 +61,7 @@ static enum command_result mount_host(struct shell *shell, char **arguments, siz
   }
 
   handle_t root;
-  enum call_status status = mount_open_root(shell->host_mount, &root);
+  enum call_status status = mount_open_root(shell->host_mount, access, &root);
   if (status != CALL_OK) {
     return shell_directory_error(shell, "shell: mount", "host", status);
   }
@@ -56,6 +70,9 @@ static enum command_result mount_host(struct shell *shell, char **arguments, siz
   shell->roots[2] = (struct path_root){"host", root};
   shell->directory.root_count = 3;
   return COMMAND_OK;
+
+usage:
+  return shell_error(shell, "usage: mount [--optional] [--read-only | --read-write] host\n");
 }
 
 enum command_result shell_command(struct shell *shell, char *line, char **arguments)
