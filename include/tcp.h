@@ -13,6 +13,9 @@ enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
 enum call_status tcp_inspect(handle_t stream, struct tcp_connection_info *reply);
 /* Idempotent shared abort. INSPECT remains available afterward. */
 enum call_status tcp_abort(handle_t stream);
+/* Commit shared write shutdown after accepted data; reads stay usable. This
+ * does not wait for delivery. Repeating a committed shutdown succeeds. */
+enum call_status tcp_shutdown_write(handle_t stream);
 
 /* Capacity is clamped to TCP_READ_MAX_BYTES. Timeout preserves queued bytes;
  * zero capacity validates authority/deadline but does not poll stream state. */
