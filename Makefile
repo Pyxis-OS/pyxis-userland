@@ -5,7 +5,7 @@ DESTDIR ?= $(BUILD)/install
 LUA_PREFIX ?= build/ports-dev/lua
 LUA_PREFIX := $(abspath $(LUA_PREFIX))
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv date ping udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv date ping dig udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -25,7 +25,7 @@ PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
                    $(BUILD)/mv/main.o $(BUILD)/date/main.o $(BUILD)/ping/main.o \
-                   $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o \
+                   $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/session/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
@@ -33,10 +33,11 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(BUILD)/libconfig/config.o
+DNS_OBJECTS := $(BUILD)/dig/message.o $(BUILD)/dig/query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install session hello client server cat ls mkdir rm rmdir mv date ping udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install session hello client server cat ls mkdir rm rmdir mv date ping dig udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -71,6 +72,7 @@ rmdir: $(BUILD)/rmdir.pxe
 mv: $(BUILD)/mv.pxe
 date: $(BUILD)/date.pxe
 ping: $(BUILD)/ping.pxe
+dig: $(BUILD)/dig.pxe
 udp-send: $(BUILD)/udp-send.pxe
 udp-echo: $(BUILD)/udp-echo.pxe
 shell: $(BUILD)/shell.pxe
@@ -86,6 +88,8 @@ $(BUILD)/session.elf: $(SESSION_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXI
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
 $(BUILD)/udp-send.elf $(BUILD)/udp-echo.elf: $(UDP_OBJECT)
+
+$(BUILD)/dig.elf: $(DNS_OBJECTS) $(UDP_OBJECT)
 
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
@@ -120,4 +124,4 @@ clean:
 
 .SECONDARY:
 
--include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d)
+-include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d)
