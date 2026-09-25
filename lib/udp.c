@@ -1,7 +1,7 @@
 #include <udp.h>
 #include <syscall.h>
 
-enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
+static enum call_status open_endpoint(handle_t service, uint64_t operation, uint32_t address, uint16_t port,
     struct udp_open_reply *reply)
 {
   if (!reply) {
@@ -9,7 +9,7 @@ enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
   }
   *reply = (struct udp_open_reply){.handle = HANDLE_INVALID};
   struct udp_open_request request = {
-    .header = {PROTOCOL_UDP_SERVICE, UDP_OPEN}, .address = address, .port = port,
+    .header = {PROTOCOL_UDP_SERVICE, operation}, .address = address, .port = port,
   };
   struct udp_open_reply response;
   struct syscall_result result = syscall_call(service, &request, sizeof(request),
@@ -24,6 +24,18 @@ enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
     *reply = response;
   }
   return result.status;
+}
+
+enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
+    struct udp_open_reply *reply)
+{
+  return open_endpoint(service, UDP_OPEN, address, port, reply);
+}
+
+enum call_status udp_open_route(handle_t service, uint32_t destination, uint16_t port,
+    struct udp_open_reply *reply)
+{
+  return open_endpoint(service, UDP_OPEN_ROUTE, destination, port, reply);
 }
 
 enum call_status udp_inspect(handle_t endpoint, struct udp_endpoint_info *reply)
