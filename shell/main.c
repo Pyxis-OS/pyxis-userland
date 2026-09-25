@@ -62,6 +62,7 @@ int main(int argc, char **argv)
     .random = startup_resource("random"),
     .net_config = startup_resource("net_config"),
     .keyboard = startup_resource("keyboard"),
+    .space = startup_resource("space"),
     .app = startup_root("app"),
     .home = startup_root("home"),
     .host = startup_root("host"),

@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "../common/directory.h"
 #include <mount.h>
+#include <space.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -75,6 +76,23 @@ usage:
   return shell_error(shell, "usage: mount [--optional] [--read-only | --read-write] host\n");
 }
 
+static enum command_result set_title(struct shell *shell, char **arguments, size_t count)
+{
+  bool optional = count > 1 && !strcmp(arguments[1], "--optional");
+  if (count != (optional ? 3 : 2)) {
+    return shell_error(shell, "usage: title [--optional] name\n");
+  }
+  enum call_status status = space_set_title(shell->space, arguments[count - 1]);
+  /* libpyxis validates the text even when the fallback has no title grant. */
+  if (optional && shell->space == HANDLE_INVALID && status == CALL_BAD_HANDLE) {
+    return COMMAND_OK;
+  }
+  if (status != CALL_OK) {
+    return shell_error(shell, "shell: title failed (status %u)\n", status);
+  }
+  return COMMAND_OK;
+}
+
 enum command_result shell_command(struct shell *shell, char *line, char **arguments)
 {
   size_t count;
@@ -87,7 +105,8 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     return COMMAND_OK;
   }
   if (background && (!strcmp(arguments[0], "exit") || !strcmp(arguments[0], "cd") ||
-      !strcmp(arguments[0], "mount") || !strcmp(arguments[0], "session"))) {
+      !strcmp(arguments[0], "mount") || !strcmp(arguments[0], "title") ||
+      !strcmp(arguments[0], "session"))) {
     return shell_error(shell, "shell: & is only supported for external commands\n");
   }
   if (strcmp(arguments[0], "exit") == 0) {
@@ -105,6 +124,9 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
       return shell_directory_error(shell, "shell: cd", arguments[1], status);
     }
     return COMMAND_OK;
+  }
+  if (strcmp(arguments[0], "title") == 0) {
+    return set_title(shell, arguments, count);
   }
   if (strcmp(arguments[0], "mount") == 0) {
     return mount_host(shell, arguments, count);
