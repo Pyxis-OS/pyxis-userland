@@ -10,6 +10,7 @@
 #include <abi/file.h>
 #include <abi/keyboard.h>
 #include <abi/space.h>
+#include <abi/profile.h>
 #include <abi/memory.h>
 #include <directory.h>
 #include <handle.h>
@@ -45,13 +46,13 @@ static int launch_shell(const struct session_config *config, const struct networ
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 9 ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 10 ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 9 + depth) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 10 + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -66,7 +67,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH};
   grants[APP] = (struct launch_grant){app, 0};
   grants[HOME] = (struct launch_grant){home, 0};
-  struct launch_binding resources[12] = {
+  struct launch_binding resources[13] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -111,6 +112,12 @@ static int launch_shell(const struct session_config *config, const struct networ
   if (space != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"space", grant_count};
     grants[grant_count++] = (struct launch_grant){space, SPACE_RIGHT_SET_TITLE};
+  }
+
+  handle_t profile = startup_resource("profile");
+  if (profile != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", grant_count};
+    grants[grant_count++] = (struct launch_grant){profile, PROFILE_RIGHT_MEMORY};
   }
 
   struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
