@@ -21,7 +21,8 @@
 
 #define APP_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 
-static int launch_shell(const struct session_config *config, const struct network_config *network)
+static int launch_shell(const struct session_config *config, const struct network_config *network,
+    bool configure_network)
 {
   struct terminal terminal = {startup_resource("input"), startup_resource("output")};
   handle_t launcher = startup_resource("launcher");
@@ -152,7 +153,7 @@ static int launch_shell(const struct session_config *config, const struct networ
     .argv = (uintptr_t)arguments, .argc = 1,
   };
 
-  if (!network_config_apply(network)) {
+  if (configure_network && !network_config_apply(network)) {
     goto done;
   }
   status = term_set_tab_width(&terminal, config->tab_width);
@@ -182,9 +183,9 @@ done:
 
 int main(int argc, char **argv)
 {
-  (void)argv;
-  if (argc != 1 || startup_resource("script") != HANDLE_INVALID) {
-    fputs("Usage: session.pxe (native init or session handoff; no arguments)\n", stderr);
+  bool configure_network = argc == 2 && !strcmp(argv[1], "--configure-network");
+  if ((argc != 1 && !configure_network) || startup_resource("script") != HANDLE_INVALID) {
+    fputs("Usage: session.pxe [--configure-network] (native init or session handoff)\n", stderr);
     return EXIT_FAILURE;
   }
   struct session_config config;
@@ -196,7 +197,7 @@ int main(int argc, char **argv)
     free(config.timezone);
     return EXIT_FAILURE;
   }
-  int result = launch_shell(&config, &network);
+  int result = launch_shell(&config, &network, configure_network);
   free(config.timezone);
   return result;
 }
