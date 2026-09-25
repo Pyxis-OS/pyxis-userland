@@ -20,7 +20,7 @@ struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   struct terminal terminal;
-  handle_t space, launcher, memory, display, clock, echo, udp, tcp, random, net_config, keyboard, app, home, host, host_mount;
+  handle_t profile, space, launcher, memory, display, clock, echo, udp, tcp, random, net_config, keyboard, app, home, host, host_mount;
   bool owns_host;
   struct path_root roots[3];
   struct path_context directory;
