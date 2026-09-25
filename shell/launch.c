@@ -5,6 +5,7 @@
 #include <abi/clock.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
+#include <abi/tcp.h>
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
@@ -33,12 +34,13 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   bool has_keyboard = !background && shell->keyboard != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
   bool has_random = shell->random != HANDLE_INVALID;
+  bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 10) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 11) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
@@ -46,7 +48,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t clock_index = display_index + (has_display ? 1 : 0);
   size_t echo_index = clock_index + (has_clock ? 1 : 0);
   size_t udp_index = echo_index + (has_echo ? 1 : 0);
-  size_t random_index = udp_index + (has_udp ? 1 : 0);
+  size_t tcp_index = udp_index + (has_udp ? 1 : 0);
+  size_t random_index = tcp_index + (has_tcp ? 1 : 0);
   size_t keyboard_index = random_index + (has_random ? 1 : 0);
   size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = host_index + (has_host ? 1 : 0);
@@ -85,6 +88,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_udp) {
     grants[udp_index] = (struct launch_grant){shell->udp, UDP_SERVICE_RIGHT_OPEN};
   }
+  if (has_tcp) {
+    grants[tcp_index] = (struct launch_grant){shell->tcp, TCP_SERVICE_RIGHT_CONNECT};
+  }
   if (has_random) {
     grants[random_index] = (struct launch_grant){shell->random, RANDOM_RIGHT_READ};
   }
@@ -100,7 +106,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_net_config) {
     grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS};
   }
-  struct launch_binding resources[11] = {
+  struct launch_binding resources[12] = {
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
   };
@@ -119,6 +125,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
   if (has_udp) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", udp_index};
+  }
+  if (has_tcp) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", tcp_index};
   }
   if (has_random) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"random", random_index};
