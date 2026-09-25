@@ -58,6 +58,7 @@ int main(int argc, char **argv)
     .clock = startup_resource("clock"),
     .echo = startup_resource("echo"),
     .udp = startup_resource("udp"),
+    .random = startup_resource("random"),
     .net_config = startup_resource("net_config"),
     .keyboard = startup_resource("keyboard"),
     .app = startup_root("app"),

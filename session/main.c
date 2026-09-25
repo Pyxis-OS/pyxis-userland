@@ -3,6 +3,7 @@
 #include <abi/clock.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
+#include <abi/random.h>
 #include <abi/console.h>
 #include <abi/display.h>
 #include <abi/file.h>
@@ -43,13 +44,13 @@ static int launch_shell(const struct session_config *config, const struct networ
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 6 ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 7 ||
       inherited >= SIZE_MAX / sizeof(struct startup_variable)) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 6 + depth) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 7 + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 1) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -64,7 +65,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH};
   grants[APP] = (struct launch_grant){app, APP_RIGHTS};
   grants[HOME] = (struct launch_grant){home, DIRECTORY_RIGHTS};
-  struct launch_binding resources[9] = {
+  struct launch_binding resources[10] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -88,6 +89,11 @@ static int launch_shell(const struct session_config *config, const struct networ
   if (udp != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", grant_count};
     grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN};
+  }
+  handle_t random = startup_resource("random");
+  if (random != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"random", grant_count};
+    grants[grant_count++] = (struct launch_grant){random, RANDOM_RIGHT_READ};
   }
   handle_t keyboard = startup_resource("keyboard");
   if (keyboard != HANDLE_INVALID) {
