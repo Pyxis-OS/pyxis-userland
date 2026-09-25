@@ -54,6 +54,12 @@ enum call_status tcp_abort(handle_t stream)
   return response_status(syscall_call(stream, &request, sizeof(request), NULL, 0), 0);
 }
 
+enum call_status tcp_shutdown_write(handle_t stream)
+{
+  struct message_header request = {PROTOCOL_TCP, TCP_SHUTDOWN_WRITE};
+  return response_status(syscall_call(stream, &request, sizeof(request), NULL, 0), 0);
+}
+
 enum call_status tcp_read(handle_t stream, void *data, size_t capacity,
     uint64_t deadline_ns, struct tcp_read_reply *reply)
 {
