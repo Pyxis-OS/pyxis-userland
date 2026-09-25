@@ -1,4 +1,5 @@
 return {
+  dns = { server = "1.1.1.1" },
   net0 = {
     optional = true,
     address = "10.0.2.15",

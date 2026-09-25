@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
+
 static uint32_t read_address(lua_State *state, const char *field)
 {
   if (lua_type(state, -1) != LUA_TSTRING) {
@@ -36,12 +38,36 @@ static uint32_t read_address(lua_State *state, const char *field)
   return address;
 }
 
+/* Leaves the root table alone; DNS is independent of net0 being absent/false. */
+static void decode_dns(lua_State *state, struct network_config *config)
+{
+  config_field(state, 1, "dns");
+  if (!lua_isnil(state, 2)) {
+    const char *keys[] = {"server"};
+    config_keys(state, 2, keys, 1);
+    config_field(state, 2, "server");
+    if (!lua_isnil(state, 3)) {
+      uint32_t address = read_address(state, "dns.server");
+      /* Exclude 0/8, multicast and reserved high addresses. Loopback is useful
+       * for a local resolver; subnet validity/reachability belongs to routing. */
+      if (!(address >> 24) || address >= IPV4_MULTICAST_BASE) {
+        luaL_error(state, "dns.server must be a unicast IPv4 address");
+      }
+      snprintf(config->dns_server, sizeof(config->dns_server), "%u.%u.%u.%u",
+          address >> 24, (address >> 16) & 255, (address >> 8) & 255, address & 255);
+    }
+    lua_pop(state, 1);
+  }
+  lua_pop(state, 1);
+}
+
 static int decode_network(lua_State *state)
 {
   struct network_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"net0"};
-  config_keys(state, 1, keys, 1);
+  const char *keys[] = {"net0", "dns"};
+  config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
+  decode_dns(state, config);
   config_field(state, 1, "net0");
   if (lua_isnil(state, 2)) {
     return 0;
@@ -83,7 +109,7 @@ static int decode_network(lua_State *state)
 
 bool network_config_read(struct network_config *config)
 {
-  *config = (struct network_config){0};
+  *config = (struct network_config){.dns_server = "1.1.1.1"};
   return config_read(NETWORK_CONFIG_PATH, decode_network, config) != CONFIG_ERROR;
 }
 
