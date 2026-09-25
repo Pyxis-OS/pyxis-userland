@@ -1,15 +1,27 @@
 #include "dns.h"
-#include "../common/udp.h"
+#include "udp.h"
 #include <clock.h>
 #include <handle.h>
 #include <random.h>
+#include <stdlib.h>
 
+#define DNS_DEFAULT_SERVER "1.1.1.1"
+#define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
 #define DNS_PORT 53
 #define DNS_ATTEMPTS 2
 #define DNS_BIND_ATTEMPTS 16
 #define DNS_ATTEMPT_NS UINT64_C(3000000000)
 #define DNS_EPHEMERAL_FIRST 49152
 #define DNS_EPHEMERAL_COUNT 16384
+
+bool dns_select_server(const char *override, uint32_t *server)
+{
+  const char *text = override ? override : getenv("DNS_SERVER");
+  if (!text) {
+    text = DNS_DEFAULT_SERVER;
+  }
+  return udp_parse_address(text, server) && (*server >> 24) && *server < IPV4_MULTICAST_BASE;
+}
 
 static enum call_status check_deadline(handle_t clock, uint64_t deadline)
 {

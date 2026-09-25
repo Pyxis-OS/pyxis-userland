@@ -1,12 +1,8 @@
-#include "dns.h"
-#include "../common/udp.h"
+#include "../common/dns.h"
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define DNS_DEFAULT_SERVER "1.1.1.1"
-#define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
 
 static void print_address(uint32_t address)
 {
@@ -33,22 +29,9 @@ static void print_name(const struct dns_name *name)
   }
 }
 
-static const char *response_status(unsigned rcode)
-{
-  switch (rcode) {
-  case 0: return "NOERROR";
-  case 1: return "FORMERR";
-  case 2: return "SERVFAIL";
-  case 3: return "NXDOMAIN";
-  case 4: return "NOTIMP";
-  case 5: return "REFUSED";
-  default: return "UNKNOWN";
-  }
-}
-
 static bool print_answers(const struct dns_reply *reply)
 {
-  printf("status: %s (%u), answers: %u\n", response_status(reply->rcode), reply->rcode,
+  printf("status: %s (%u), answers: %u\n", dns_response_status(reply->rcode), reply->rcode,
       (unsigned)reply->answer_count);
   size_t offset = reply->answers_offset;
   for (unsigned i = 0; i < reply->answer_count; ++i) {
@@ -94,14 +77,8 @@ int main(int argc, char **argv)
     fputs("dig: invalid ASCII hostname or DNS name length\n", stderr);
     return EXIT_FAILURE;
   }
-  if (!server_text) {
-    server_text = getenv("DNS_SERVER");
-    if (!server_text) {
-      server_text = DNS_DEFAULT_SERVER;
-    }
-  }
   uint32_t server;
-  if (!udp_parse_address(server_text, &server) || !(server >> 24) || server >= IPV4_MULTICAST_BASE) {
+  if (!dns_select_server(server_text, &server)) {
     fputs("dig: server must be a numeric unicast IPv4 address\n", stderr);
     return EXIT_FAILURE;
   }
