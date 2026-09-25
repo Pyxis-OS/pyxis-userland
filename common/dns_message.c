@@ -229,3 +229,62 @@ enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
   memcpy(reply->bytes, bytes, length);
   return DNS_COMPLETE;
 }
+
+const char *dns_response_status(unsigned rcode)
+{
+  switch (rcode) {
+  case 0: return "NOERROR";
+  case 1: return "FORMERR";
+  case 2: return "SERVFAIL";
+  case 3: return "NXDOMAIN";
+  case 4: return "NOTIMP";
+  case 5: return "REFUSED";
+  default: return "UNKNOWN";
+  }
+}
+
+enum dns_address_result dns_select_address(const struct dns_reply *reply,
+    const struct dns_name *question, uint32_t *address)
+{
+  struct dns_name current = *question;
+  /* Every distinct hop needs an answer record. Exceeding this bound means a
+   * cycle; rescanning keeps selection independent of answer ordering. */
+  for (unsigned hops = 0; hops <= reply->answer_count; ++hops) {
+    size_t offset = reply->answers_offset;
+    struct dns_name next;
+    bool found_alias = false, found_address = false;
+    uint32_t candidate = 0;
+    for (unsigned i = 0; i < reply->answer_count; ++i) {
+      struct dns_record record;
+      if (!dns_read_record(reply->bytes, reply->length, &offset, &record)) {
+        return DNS_ADDRESS_INVALID;
+      }
+      if (record.class != DNS_CLASS_IN || !same_name(&current, &record.owner)) {
+        continue;
+      }
+      if (record.type == DNS_TYPE_CNAME) {
+        if (found_alias && !same_name(&next, &record.target)) {
+          return DNS_ADDRESS_INVALID;
+        }
+        next = record.target;
+        found_alias = true;
+      } else if (record.type == DNS_TYPE_A && !found_address) {
+        candidate = record.address;
+        found_address = true;
+      }
+    }
+
+    if (found_alias && found_address) {
+      return DNS_ADDRESS_INVALID;
+    }
+    if (found_address) {
+      *address = candidate;
+      return DNS_ADDRESS_FOUND;
+    }
+    if (!found_alias) {
+      return DNS_ADDRESS_MISSING;
+    }
+    current = next;
+  }
+  return DNS_ADDRESS_INVALID;
+}

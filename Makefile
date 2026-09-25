@@ -33,7 +33,7 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(BUILD)/libconfig/config.o
-DNS_OBJECTS := $(BUILD)/dig/message.o $(BUILD)/dig/query.o
+DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
@@ -89,7 +89,7 @@ $(BUILD)/session.elf: $(SESSION_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXI
 
 $(BUILD)/udp-send.elf $(BUILD)/udp-echo.elf: $(UDP_OBJECT)
 
-$(BUILD)/dig.elf: $(DNS_OBJECTS) $(UDP_OBJECT)
+$(BUILD)/dig.elf $(BUILD)/ping.elf: $(DNS_OBJECTS) $(UDP_OBJECT)
 
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 

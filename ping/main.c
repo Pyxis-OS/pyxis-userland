@@ -1,3 +1,5 @@
+#include "../common/dns.h"
+#include "../common/udp.h"
 #include <clock.h>
 #include <echo.h>
 #include <startup.h>
@@ -11,27 +13,52 @@
 #define PING_INTERVAL_NS UINT64_C(1000000000)
 #define PING_TIMEOUT_NS UINT64_C(1000000000)
 
-/* Numeric dotted decimal only; no signs, shorthand, octal or DNS. */
-static bool parse_address(const char *text, uint32_t *address)
+static bool resolve_address(const char *target, handle_t clock, uint32_t *address)
 {
-  uint32_t result = 0;
-  for (unsigned i = 0; i < 4; ++i) {
-    unsigned value = 0, digits = 0;
-    while (*text >= '0' && *text <= '9') {
-      if (++digits > 3) {
-        return false;
-      }
-      value = value * 10 + (unsigned)(*text++ - '0');
-    }
-    if (!digits || value > 255 || (i != 3 && *text++ != '.')) {
-      return false;
-    }
-    result = (result << 8) | value;
-  }
-  if (*text) {
+  struct dns_name question;
+  if (!dns_name_from_text(target, &question)) {
+    fputs("ping: invalid ASCII hostname or DNS name length\n", stderr);
     return false;
   }
-  *address = result;
+  uint32_t server;
+  if (!dns_select_server(NULL, &server)) {
+    fputs("ping: DNS server must be a numeric unicast IPv4 address\n", stderr);
+    return false;
+  }
+  handle_t udp = startup_resource("udp"), random = startup_resource("random");
+  if (udp == HANDLE_INVALID || random == HANDLE_INVALID) {
+    fputs("ping: missing udp or random capability for DNS\n", stderr);
+    return false;
+  }
+
+  struct dns_exchange exchange;
+  dns_query(udp, clock, random, server, &question, &exchange);
+  if (exchange.status != CALL_OK) {
+    fprintf(stderr, "ping: DNS %s failed (status %u)%s\n",
+        exchange.operation, (unsigned)exchange.status,
+        exchange.status == CALL_TIMED_OUT ? ": timed out after two attempts" :
+        exchange.status == CALL_NO_ROUTE ? ": no route to server" :
+        exchange.status == CALL_UNAVAILABLE ? ": unavailable" : "");
+    return false;
+  }
+  if (exchange.response != DNS_COMPLETE) {
+    fputs(exchange.response == DNS_TRUNCATED ?
+        "ping: truncated DNS response; TCP fallback is unavailable\n" :
+        "ping: response exceeds the supported 512-byte DNS limit\n", stderr);
+    return false;
+  }
+  if (exchange.reply.rcode) {
+    fprintf(stderr, "ping: DNS status %s (%u)\n",
+        dns_response_status(exchange.reply.rcode), exchange.reply.rcode);
+    return false;
+  }
+  enum dns_address_result result = dns_select_address(&exchange.reply, &question, address);
+  if (result != DNS_ADDRESS_FOUND) {
+    fputs(result == DNS_ADDRESS_MISSING ?
+        "ping: DNS reply has no IPv4 address for the requested name\n" :
+        "ping: DNS reply has a looping or conflicting CNAME chain\n", stderr);
+    return false;
+  }
   return true;
 }
 
@@ -77,12 +104,7 @@ int main(int argc, char **argv)
   } else if (argc == 4 && !strcmp(argv[1], "-c") && parse_count(argv[2], &count)) {
     target = argv[3];
   } else {
-    fputs("Usage: ping [-c count] IPv4-address\n", stderr);
-    return EXIT_FAILURE;
-  }
-  uint32_t address;
-  if (!parse_address(target, &address)) {
-    fprintf(stderr, "ping: invalid numeric IPv4 address: %s\n", target);
+    fputs("Usage: ping [-c count] IPv4-address-or-hostname\n", stderr);
     return EXIT_FAILURE;
   }
   handle_t echo = startup_resource("echo"), clock = startup_resource("clock");
@@ -91,7 +113,22 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-  if (printf("PING %s: %u data bytes\n", target, ECHO_PAYLOAD_BYTES) < 0) {
+  uint32_t address;
+  bool numeric = udp_parse_address(target, &address);
+  if (!numeric && !resolve_address(target, clock, &address)) {
+    return EXIT_FAILURE;
+  }
+  char resolved[sizeof("255.255.255.255")];
+  const char *peer = target;
+  if (!numeric) {
+    snprintf(resolved, sizeof(resolved), "%u.%u.%u.%u",
+        address >> 24, (address >> 16) & 255, (address >> 8) & 255, address & 255);
+    peer = resolved;
+  }
+
+  int printed = numeric ? printf("PING %s: %u data bytes\n", target, ECHO_PAYLOAD_BYTES) :
+      printf("PING %s (%s): %u data bytes\n", target, peer, ECHO_PAYLOAD_BYTES);
+  if (printed < 0) {
     perror("ping: output");
     return EXIT_FAILURE;
   }
@@ -119,7 +156,7 @@ int main(int argc, char **argv)
       }
       total += reply.round_trip_ns;
       printf("%u bytes from %s: seq=%u time=%.3f ms\n",
-          ECHO_PAYLOAD_BYTES, target, (unsigned)reply.sequence,
+          ECHO_PAYLOAD_BYTES, peer, (unsigned)reply.sequence,
           (double)reply.round_trip_ns / 1000000.0);
     } else {
       printf("request %u: %s (status %u)\n", i + 1, echo_error(status), (unsigned)status);

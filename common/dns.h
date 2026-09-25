@@ -1,5 +1,5 @@
-#ifndef DIG_DNS_H
-#define DIG_DNS_H
+#ifndef COMMON_DNS_H
+#define COMMON_DNS_H
 
 #include <abi/handle.h>
 #include <abi/syscall.h>
@@ -34,6 +34,8 @@ struct dns_reply {
   unsigned rcode;
 };
 
+enum dns_address_result { DNS_ADDRESS_FOUND, DNS_ADDRESS_MISSING, DNS_ADDRESS_INVALID };
+
 enum dns_response { DNS_IGNORE, DNS_COMPLETE, DNS_TRUNCATED, DNS_OVERSIZED };
 
 bool dns_name_from_text(const char *text, struct dns_name *name);
@@ -44,6 +46,14 @@ size_t dns_make_query(const struct dns_name *name, uint16_t id, uint8_t bytes[DN
 enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
     const struct dns_name *question, uint16_t id, struct dns_reply *reply);
 bool dns_read_record(const uint8_t *bytes, size_t length, size_t *offset, struct dns_record *record);
+
+/* A validated NOERROR reply; only answer-section IN records are candidates.
+ * Conflicting aliases, alias/address coexistence and CNAME loops are invalid. */
+enum dns_address_result dns_select_address(const struct dns_reply *reply,
+    const struct dns_name *question, uint32_t *address);
+const char *dns_response_status(unsigned rcode);
+/* NULL override selects DNS_SERVER, or 1.1.1.1 only when it is absent. */
+bool dns_select_server(const char *override, uint32_t *server);
 
 struct dns_exchange {
   struct dns_reply reply;
