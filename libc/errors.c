@@ -13,6 +13,7 @@ int libc_call_errno(enum call_status status)
   case CALL_BAD_REQUEST:
   case CALL_WRONG_TYPE: return EINVAL;
   case CALL_BAD_BUFFER: return EFAULT;
+  case CALL_BUFFER_TOO_SMALL: return ERANGE;
   case CALL_UNAVAILABLE: return ENODEV;
   case CALL_QUEUE_FULL: return EAGAIN;
   case CALL_ENDPOINT_CLOSED: return EPIPE;
