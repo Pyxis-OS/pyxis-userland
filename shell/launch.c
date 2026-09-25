@@ -9,6 +9,7 @@
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
+#include <abi/space.h>
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
@@ -32,6 +33,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   bool has_host = shell->host != HANDLE_INVALID;
   bool has_keyboard = !background && shell->keyboard != HANDLE_INVALID;
+  bool has_space = session && shell->space != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
@@ -40,7 +42,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 11) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 12) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
@@ -54,7 +56,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = host_index + (has_host ? 1 : 0);
   size_t net_config_index = launcher_index + (session ? 1 : 0);
-  size_t input_index = net_config_index + (has_net_config ? 1 : 0);
+  size_t space_index = net_config_index + (has_net_config ? 1 : 0);
+  size_t input_index = space_index + (has_space ? 1 : 0);
   size_t grant_count = input_index + (background ? 0 : 1);
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
@@ -105,7 +108,10 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_net_config) {
     grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS};
   }
-  struct launch_binding resources[12] = {
+  if (has_space) {
+    grants[space_index] = (struct launch_grant){shell->space, SPACE_RIGHT_SET_TITLE};
+  }
+  struct launch_binding resources[13] = {
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
   };
@@ -139,6 +145,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
   if (has_net_config) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", net_config_index};
+  }
+  if (has_space) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"space", space_index};
   }
   struct launch_binding roots[3] = {
     {(uintptr_t)"app", CHILD_APP},
