@@ -29,7 +29,9 @@ PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
-SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o
+SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o
+CONFIG_LIBRARY := $(BUILD)/libconfig.a
+CONFIG_OBJECT := $(BUILD)/libconfig/config.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: all install session hello client server cat ls mkdir rm rmdir mv date ping shell mandelbrot clean FORCE
@@ -48,6 +50,7 @@ install: all
 	  done; \
 	  install -m 644 init.sh "$$staging/init"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
+	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
 	    rm -rf -- "$(DESTDIR)"; \
@@ -69,10 +72,14 @@ ping: $(BUILD)/ping.pxe
 shell: $(BUILD)/shell.pxe
 mandelbrot: $(BUILD)/mandelbrot.pxe
 
-$(SESSION_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include
-$(SESSION_OBJECTS): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
-$(BUILD)/session.elf: $(SESSION_OBJECTS) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(LUA_LIBRARY) $(LDLIBS)
+$(SESSION_OBJECTS) $(CONFIG_OBJECT): private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS) $(CONFIG_OBJECT): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
+	rm -f $@
+	$(AR) rcs $@ $(CONFIG_OBJECT)
+
+$(BUILD)/session.elf: $(SESSION_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
@@ -107,4 +114,4 @@ clean:
 
 .SECONDARY:
 
--include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d)
+-include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d)
