@@ -17,6 +17,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     enum shell_launch_mode mode)
 {
   bool session = mode == SHELL_SESSION;
+  bool background = mode == SHELL_BACKGROUND;
   handle_t image;
   enum call_status status = shell_open_image(shell, arguments[0], &image);
   if (status != CALL_OK) {
@@ -26,16 +27,16 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     return shell_directory_error(shell, "shell", arguments[0], status);
   }
 
-  enum { CHILD_INPUT, CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
+  enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   bool has_host = shell->host != HANDLE_INVALID;
-  bool has_keyboard = shell->keyboard != HANDLE_INVALID;
+  bool has_keyboard = !background && shell->keyboard != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 8) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 9) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
@@ -47,7 +48,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = host_index + (has_host ? 1 : 0);
   size_t net_config_index = launcher_index + (session ? 1 : 0);
-  size_t grant_count = net_config_index + (has_net_config ? 1 : 0);
+  size_t input_index = net_config_index + (has_net_config ? 1 : 0);
+  size_t grant_count = input_index + (background ? 0 : 1);
   struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
   if (!grants || (depth && !directories)) {
@@ -56,7 +58,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_NO_MEMORY);
   }
-  grants[CHILD_INPUT] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ};
+  if (!background) {
+    grants[input_index] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ};
+  }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE};
   grants[CHILD_APP] = (struct launch_grant){shell->app, APP_DIRECTORY_RIGHTS};
@@ -91,11 +95,13 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS};
   }
   struct launch_binding resources[10] = {
-    {(uintptr_t)"input", CHILD_INPUT},
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
   };
-  size_t resource_count = 3;
+  size_t resource_count = 2;
+  if (!background) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"input", input_index};
+  }
   if (has_display) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", display_index};
   }
@@ -152,15 +158,15 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     return closed_image ? result : COMMAND_FATAL;
   }
 
-  if (session) {
+  if (session || background) {
     /* The child owns copies of its grants. Closing the observer does not stop
-     * it; never read input or resume the script after a successful handoff. */
+     * it. Background children have no input grants; session handoff ends us. */
     bool closed_child = handle_close(child) == 0;
     if (!closed_image || !closed_child) {
       shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
-    return COMMAND_EXIT;
+    return session ? COMMAND_EXIT : COMMAND_OK;
   }
 
   /* No terminal reads until the child has stopped and its resources are gone. */

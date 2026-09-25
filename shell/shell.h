@@ -18,7 +18,7 @@ enum command_result {
   COMMAND_FATAL, /* Terminal, wait or cleanup failed; input cannot resume. */
 };
 
-enum shell_launch_mode { SHELL_FOREGROUND, SHELL_SESSION };
+enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION };
 
 struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
@@ -33,8 +33,9 @@ struct shell {
 };
 
 /* Compacts in place. Argument pointers borrow line; capacity includes final NULL.
+ * An unquoted trailing & selects background launch; no other operators.
  * Returns a static diagnostic on malformed input, NULL on success. */
-const char *parse_line(char *line, char **arguments, size_t capacity, size_t *count);
+const char *parse_line(char *line, char **arguments, size_t capacity, size_t *count, bool *background);
 enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);
