@@ -12,6 +12,15 @@ static enum call_status call_status(struct syscall_result result, size_t reply_s
   return result.status;
 }
 
+static enum call_status mutation_status(struct syscall_result result)
+{
+  /* A malformed reply cannot establish whether a submitted sync took effect. */
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
 static enum call_status child_call(handle_t directory, uint64_t operation, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle)
 {
@@ -96,6 +105,12 @@ enum call_status directory_rename(handle_t source, const char *source_name,
                    (uintptr_t)destination_name, destination_length, policy},
   };
   return call_status(syscall_call(source, &message, sizeof(message), NULL, 0), 0);
+}
+
+enum call_status directory_sync(handle_t directory)
+{
+  struct directory_message message = {.header = {PROTOCOL_DIRECTORY, DIRECTORY_SYNC}};
+  return mutation_status(syscall_call(directory, &message, sizeof(message), NULL, 0));
 }
 
 enum call_status directory_enumerate(handle_t directory, const struct directory_cursor *cursor,
