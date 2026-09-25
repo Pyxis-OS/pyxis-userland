@@ -13,55 +13,6 @@
 #define PING_INTERVAL_NS UINT64_C(1000000000)
 #define PING_TIMEOUT_NS UINT64_C(1000000000)
 
-static bool resolve_address(const char *target, handle_t clock, uint32_t *address)
-{
-  struct dns_name question;
-  if (!dns_name_from_text(target, &question)) {
-    fputs("ping: invalid ASCII hostname or DNS name length\n", stderr);
-    return false;
-  }
-  uint32_t server;
-  if (!dns_select_server(NULL, &server)) {
-    fputs("ping: DNS server must be a numeric unicast IPv4 address\n", stderr);
-    return false;
-  }
-  handle_t udp = startup_resource("udp"), random = startup_resource("random");
-  if (udp == HANDLE_INVALID || random == HANDLE_INVALID) {
-    fputs("ping: missing udp or random capability for DNS\n", stderr);
-    return false;
-  }
-
-  struct dns_exchange exchange;
-  dns_query(udp, clock, random, server, &question, &exchange);
-  if (exchange.status != CALL_OK) {
-    fprintf(stderr, "ping: DNS %s failed (status %u)%s\n",
-        exchange.operation, (unsigned)exchange.status,
-        exchange.status == CALL_TIMED_OUT ? ": timed out after two attempts" :
-        exchange.status == CALL_NO_ROUTE ? ": no route to server" :
-        exchange.status == CALL_UNAVAILABLE ? ": unavailable" : "");
-    return false;
-  }
-  if (exchange.response != DNS_COMPLETE) {
-    fputs(exchange.response == DNS_TRUNCATED ?
-        "ping: truncated DNS response; TCP fallback is unavailable\n" :
-        "ping: response exceeds the supported 512-byte DNS limit\n", stderr);
-    return false;
-  }
-  if (exchange.reply.rcode) {
-    fprintf(stderr, "ping: DNS status %s (%u)\n",
-        dns_response_status(exchange.reply.rcode), exchange.reply.rcode);
-    return false;
-  }
-  enum dns_address_result result = dns_select_address(&exchange.reply, &question, address);
-  if (result != DNS_ADDRESS_FOUND) {
-    fputs(result == DNS_ADDRESS_MISSING ?
-        "ping: DNS reply has no IPv4 address for the requested name\n" :
-        "ping: DNS reply has a looping or conflicting CNAME chain\n", stderr);
-    return false;
-  }
-  return true;
-}
-
 static bool parse_count(const char *text, unsigned *count)
 {
   unsigned value = 0;
@@ -115,7 +66,7 @@ int main(int argc, char **argv)
 
   uint32_t address;
   bool numeric = udp_parse_address(target, &address);
-  if (!numeric && !resolve_address(target, clock, &address)) {
+  if (!numeric && !dns_resolve_address("ping", target, clock, &address)) {
     return EXIT_FAILURE;
   }
   char resolved[sizeof("255.255.255.255")];
