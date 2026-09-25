@@ -24,5 +24,8 @@ extern int errno;
 #define ETIMEDOUT 17
 #define ERANGE 18
 #define ENOTEMPTY 19
+#define ENOSPC 20
+#define EDQUOT 21
+#define EFBIG 22
 
 #endif
