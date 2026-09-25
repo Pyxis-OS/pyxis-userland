@@ -5,7 +5,7 @@ DESTDIR ?= $(BUILD)/install
 LUA_PREFIX ?= build/ports-dev/lua
 LUA_PREFIX := $(abspath $(LUA_PREFIX))
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := session shell cat ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := allocbench session shell cat ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -20,7 +20,7 @@ LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
 export LUA_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/allocbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/cat/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -39,7 +39,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install session hello client server cat ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install allocbench session hello client server cat ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -63,6 +63,8 @@ install: all
 	    rm -rf -- "$(DESTDIR)"; \
 	    mv -- "$$staging" "$(DESTDIR)"; \
 	  fi
+
+allocbench: $(BUILD)/allocbench.pxe
 
 session: $(BUILD)/session.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
