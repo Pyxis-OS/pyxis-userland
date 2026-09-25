@@ -81,3 +81,27 @@ enum call_status tcp_read(handle_t stream, void *data, size_t capacity,
   }
   return status;
 }
+
+enum call_status tcp_write(handle_t stream, const void *data, size_t length,
+    uint64_t deadline_ns, struct tcp_write_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  struct tcp_write_request request = {
+    .header = {PROTOCOL_TCP, TCP_WRITE}, .buffer = (uintptr_t)data,
+    .length = length, .deadline_ns = deadline_ns,
+  };
+  struct tcp_write_reply response;
+  struct syscall_result result = syscall_call(stream, &request, sizeof(request),
+      &response, sizeof(response));
+  enum call_status status = response_status(result, sizeof(response));
+  if (status == CALL_OK) {
+    size_t limit = length < TCP_WRITE_MAX_BYTES ? length : TCP_WRITE_MAX_BYTES;
+    if (response.length > limit || (length && !response.length)) {
+      return CALL_BAD_REQUEST;
+    }
+    *reply = response;
+  }
+  return status;
+}

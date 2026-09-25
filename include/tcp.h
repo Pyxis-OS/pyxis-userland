@@ -19,4 +19,9 @@ enum call_status tcp_abort(handle_t stream);
 enum call_status tcp_read(handle_t stream, void *data, size_t capacity,
     uint64_t deadline_ns, struct tcp_read_reply *reply);
 
+/* Success means copied into send storage, not acknowledged by the peer. Retry
+ * only the unaccepted suffix. Length is clamped to TCP_WRITE_MAX_BYTES. */
+enum call_status tcp_write(handle_t stream, const void *data, size_t length,
+    uint64_t deadline_ns, struct tcp_write_reply *reply);
+
 #endif
