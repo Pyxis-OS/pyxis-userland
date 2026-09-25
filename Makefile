@@ -53,7 +53,9 @@ install: all
 	  for program in $(INSTALL_PROGRAMS); do \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
-	  install -m 644 init.sh "$$staging/init"; \
+	  install -m 644 init/development.sh "$$staging/init"; \
+	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
+	  install -m 644 init/idle.sh "$$staging/init-idle"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
