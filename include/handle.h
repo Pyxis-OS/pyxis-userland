@@ -9,6 +9,11 @@
  * invalid and already-closed handles are errors. */
 int handle_close(handle_t handle);
 
+/* Queries this handle's granted, object-specific rights, including zero.
+ * Does not expose object identity, allocate or change ownership. Failure clears
+ * *rights. Possessing a handle is sufficient; no extra query right is needed. */
+enum call_status handle_rights(handle_t handle, uint64_t *rights);
+
 /* Both forms install a new owned handle in this process and preserve source.
  * copy keeps its rights; copy_restricted requests an exact subset (zero is
  * allowed). No transfer permission is needed. Failure clears *destination.

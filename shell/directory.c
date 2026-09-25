@@ -4,17 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static uint64_t path_rights(const char *path, uint64_t current)
-{
-  if (strncmp(path, "app://", 6) == 0 || strncmp(path, "host://", 7) == 0) {
-    return APP_DIRECTORY_RIGHTS;
-  }
-  if (strncmp(path, "home://", 7) == 0) {
-    return HOME_DIRECTORY_RIGHTS;
-  }
-  return current;
-}
-
 static size_t root_prefix(const char *path)
 {
   if (!strncmp(path, "app://", 6)) {
@@ -118,11 +107,9 @@ enum call_status shell_directory_init(struct shell *shell)
   const char *path = startup_working_path();
   size_t depth = startup_working_directory_count();
   if (!depth) {
-    shell->directory.directory_rights = APP_DIRECTORY_RIGHTS;
     return shell_change_directory(shell, "home://");
   }
-  /* The shell accepts app, home and optional host. The display prefix
-   * selects requested rights, never a replacement for the supplied handles. */
+  /* Display spelling is separate from authority in the supplied handles. */
   if (!path || !root_prefix(path)) {
     return CALL_BAD_REQUEST;
   }
@@ -140,7 +127,7 @@ enum call_status shell_directory_init(struct shell *shell)
     return status;
   }
   status = path_context_init(&shell->directory, storage, depth,
-      startup_working_directories(), depth, path_rights(path, 0));
+      startup_working_directories(), depth);
   if (status != CALL_OK) {
     free(display);
     free(storage);
@@ -171,11 +158,8 @@ enum call_status shell_change_directory(struct shell *shell, const char *path)
   if (status != CALL_OK) {
     return status;
   }
-  uint64_t previous_rights = shell->directory.directory_rights;
-  shell->directory.directory_rights = path_rights(path, previous_rights);
   status = path_change(&shell->directory, path, &shell->workspace);
   if (status != CALL_OK) {
-    shell->directory.directory_rights = previous_rights;
     free(display);
   } else {
     free(shell->working_path);
