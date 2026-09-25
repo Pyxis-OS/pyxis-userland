@@ -66,4 +66,9 @@ struct dns_exchange {
 void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
     const struct dns_name *name, struct dns_exchange *exchange);
 
+/* Resolve one hostname, reporting failures to stderr with the program label.
+ * Uses the startup UDP/random authorities and configured DNS server. */
+bool dns_resolve_address(const char *program, const char *target,
+    handle_t clock, uint32_t *address);
+
 #endif
