@@ -74,6 +74,10 @@ int report_directory_error(const char *program, const char *path, enum call_stat
   case CALL_UNAVAILABLE: message = "Working directory or resource unavailable"; break;
   case CALL_BUSY: message = "Resource busy"; break;
   case CALL_NO_MEMORY: message = "Out of memory"; break;
+  case CALL_NO_SPACE: message = "No space left on device"; break;
+  case CALL_QUOTA: message = "Storage quota exceeded"; break;
+  case CALL_FILE_TOO_LARGE: message = "File too large"; break;
+  case CALL_OUTCOME_UNKNOWN: message = "Operation outcome unknown; changes may have occurred"; break;
   case CALL_LIMIT: message = "Resource limit exceeded"; break;
   case CALL_NOT_FOUND: message = "Not found"; break;
   case CALL_WRONG_TYPE: message = "Unexpected object type"; break;

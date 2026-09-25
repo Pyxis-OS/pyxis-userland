@@ -19,12 +19,16 @@ int libc_call_errno(enum call_status status)
   case CALL_ENDPOINT_CLOSED: return EPIPE;
   case CALL_BUSY: return EBUSY;
   case CALL_NO_MEMORY: return ENOMEM;
+  case CALL_NO_SPACE: return ENOSPC;
+  case CALL_QUOTA: return EDQUOT;
+  case CALL_FILE_TOO_LARGE: return EFBIG;
   case CALL_LIMIT: return EOVERFLOW;
   case CALL_NOT_FOUND: return ENOENT;
   case CALL_ALREADY_EXISTS: return EEXIST;
   case CALL_READ_ONLY: return EROFS;
   case CALL_INPUT_LOST:
-  case CALL_IO: return EIO;
+  case CALL_IO:
+  case CALL_OUTCOME_UNKNOWN: return EIO;
   case CALL_TIMED_OUT: return ETIMEDOUT;
   case CALL_NOT_EMPTY: return ENOTEMPTY;
   default: return EIO;
@@ -36,6 +40,9 @@ char *strerror(int error)
   switch (error) {
   case 0: return "No error";
   case ENOMEM: return "Out of memory";
+  case ENOSPC: return "No space left on device";
+  case EDQUOT: return "Storage quota exceeded";
+  case EFBIG: return "File too large";
   case EINVAL: return "Invalid argument";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";

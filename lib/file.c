@@ -13,6 +13,16 @@ static enum call_status call_status(struct syscall_result result, size_t reply_s
   return result.status;
 }
 
+static enum call_status mutation_status(struct syscall_result result, size_t reply_size)
+{
+  /* Once submitted, an untrustworthy reply cannot establish no side effects. */
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? reply_size : 0)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
 enum call_status file_size(handle_t file, uint64_t *size)
 {
   if (!size) {
@@ -71,15 +81,16 @@ enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
     .body.write = {offset, (uintptr_t)bytes, size},
   };
   struct file_write_reply reply;
-  enum call_status status = call_status(syscall_call(file, &message, sizeof(message),
+  enum call_status status = mutation_status(syscall_call(file, &message, sizeof(message),
       &reply, sizeof(reply)), sizeof(reply));
   /* Consume the source first, even when written aliases it. */
   *written = 0;
   if (status != CALL_OK) {
     return status;
   }
-  if (reply.written != size || reply.written > UINT64_MAX - offset) {
-    return CALL_BAD_REQUEST;
+  if (reply.written > size || (size && !reply.written) ||
+      reply.written > UINT64_MAX - offset) {
+    return CALL_OUTCOME_UNKNOWN;
   }
   *written = reply.written;
   return CALL_OK;
@@ -91,5 +102,5 @@ enum call_status file_resize(handle_t file, uint64_t size)
     .header = {PROTOCOL_FILE, FILE_RESIZE},
     .body.resize.size = size,
   };
-  return call_status(syscall_call(file, &message, sizeof(message), NULL, 0), 0);
+  return mutation_status(syscall_call(file, &message, sizeof(message), NULL, 0), 0);
 }
