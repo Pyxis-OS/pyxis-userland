@@ -13,16 +13,27 @@
 #include <abi/space.h>
 #include <abi/profile.h>
 #include <handle.h>
+#include <file.h>
 #include <launcher.h>
 #include <process.h>
 #include <startup.h>
 #include <stdlib.h>
 
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
-    enum shell_launch_mode mode)
+    enum shell_launch_mode mode, const struct shell_redirection *redirections,
+    size_t redirection_count)
 {
   bool session = mode == SHELL_SESSION;
   bool background = mode == SHELL_BACKGROUND;
+  bool terminal_input = !background;
+  for (size_t i = 0; i < redirection_count; ++i) {
+    if (redirections[i].stream == STARTUP_STDIN) {
+      terminal_input = false;
+    }
+  }
+  handle_t redirected[STARTUP_STREAM_COUNT] = {0};
+  const char *failure_path = arguments[0];
+  const char *failure_operation = "shell";
   handle_t image;
   enum call_status status = shell_open_image(shell, arguments[0], &image);
   if (status != CALL_OK) {
@@ -34,7 +45,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
 
   enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   bool has_host = shell->host != HANDLE_INVALID;
-  bool has_keyboard = !background && shell->keyboard != HANDLE_INVALID;
+  bool has_keyboard = terminal_input && shell->keyboard != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
@@ -62,7 +73,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t space_index = net_config_index + (has_net_config ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
-  size_t grant_count = input_index + (background ? 0 : 1);
+  size_t grant_count = input_index + (terminal_input ? 1 : 0);
   struct launch_grant *grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
   if (!grants || (depth && !directories)) {
@@ -71,7 +82,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_NO_MEMORY);
   }
-  if (!background) {
+  if (terminal_input) {
     grants[input_index] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ};
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE};
@@ -123,7 +134,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     {(uintptr_t)"memory", CHILD_MEMORY},
   };
   size_t resource_count = 2;
-  if (!background) {
+  if (terminal_input) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"input", input_index};
   }
   if (has_display) {
@@ -184,6 +195,17 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     }
   }
 
+  for (size_t i = 0; i < redirection_count; ++i) {
+    const struct shell_redirection *redirect = &redirections[i];
+    status = shell_open_redirect(shell, redirect->path, redirect->stream == STARTUP_STDIN,
+        &redirected[redirect->stream]);
+    if (status != CALL_OK) {
+      failure_path = redirect->path;
+      failure_operation = "shell: redirect";
+      goto release_launch;
+    }
+  }
+
   /* Mount authority belongs to init; only directory access crosses handoff. */
   struct launch_request request = {
     .image = image,
@@ -202,7 +224,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     .argc = count,
   };
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    struct startup_stream stream = startup_stream(i);
+    struct startup_stream stream = redirected[i] != HANDLE_INVALID ?
+        (struct startup_stream){PROTOCOL_FILE, redirected[i]} : startup_stream(i);
     if (stream.protocol == STARTUP_STREAM_NONE || (background && i == STARTUP_STDIN)) {
       continue;
     }
@@ -213,23 +236,42 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
   }
+  /* All target opens succeeded. From here, failure may leave truncated files;
+   * no path reopening or rollback can restore their previous contents. */
+  for (size_t i = 0; i < redirection_count; ++i) {
+    const struct shell_redirection *redirect = &redirections[i];
+    if (redirect->stream == STARTUP_STDIN) {
+      continue;
+    }
+    status = file_resize(redirected[redirect->stream], 0);
+    if (status != CALL_OK) {
+      failure_path = redirect->path;
+      failure_operation = "shell: truncate";
+      goto release_launch;
+    }
+  }
   handle_t child;
   status = program_launch(shell->launcher, &request, &child);
 
 release_launch:
   free(directories);
   free(grants);
-  bool closed_image = handle_close(image) == 0;
+  bool closed_sources = handle_close(image) == 0;
+  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+    if (redirected[i] != HANDLE_INVALID && handle_close(redirected[i]) != 0) {
+      closed_sources = false;
+    }
+  }
   if (status != CALL_OK) {
-    enum command_result result = shell_directory_error(shell, "shell", arguments[0], status);
-    return closed_image ? result : COMMAND_FATAL;
+    enum command_result result = shell_directory_error(shell, failure_operation, failure_path, status);
+    return closed_sources ? result : COMMAND_FATAL;
   }
 
   if (session || background) {
     /* The child owns copies of its grants. Closing the observer does not stop
      * it. Background children have no input grants; session handoff ends us. */
     bool closed_child = handle_close(child) == 0;
-    if (!closed_image || !closed_child) {
+    if (!closed_sources || !closed_child) {
       shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
@@ -244,7 +286,7 @@ release_launch:
     shell_directory_error(shell, "shell: wait", arguments[0], status);
     return COMMAND_FATAL;
   }
-  if (!closed_image || !closed_child) {
+  if (!closed_sources || !closed_child) {
     shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
     return COMMAND_FATAL;
   }

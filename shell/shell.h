@@ -1,6 +1,7 @@
 #ifndef USERSPACE_SHELL_H
 #define USERSPACE_SHELL_H
 
+#include <abi/startup.h>
 #include <path.h>
 #include <term.h>
 
@@ -16,6 +17,18 @@ enum command_result {
 
 enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION };
 
+struct shell_redirection {
+  enum startup_stream_index stream;
+  const char *path;
+};
+
+struct shell_command_line {
+  size_t count;
+  bool background;
+  size_t redirection_count;
+  struct shell_redirection redirections[STARTUP_STREAM_COUNT];
+};
+
 struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
@@ -28,20 +41,25 @@ struct shell {
   char *working_path; /* Owned display metadata; directory handles authorize lookup. */
 };
 
-/* Compacts in place. Argument pointers borrow line; capacity includes final NULL.
- * An unquoted trailing & selects background launch; no other operators.
+/* Compacts in place. Argument and redirection paths borrow line; capacity
+ * includes the final NULL. Redirections remain in source order.
+ * An unquoted trailing & selects background launch.
  * Returns a static diagnostic on malformed input, NULL on success. */
-const char *parse_line(char *line, char **arguments, size_t capacity, size_t *count, bool *background);
+const char *parse_line(char *line, char **arguments, size_t capacity,
+    struct shell_command_line *command);
 enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);
 enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image);
+enum call_status shell_open_redirect(struct shell *shell, const char *path,
+    bool input, handle_t *file);
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
 enum command_result shell_command(struct shell *shell, char *line, char **arguments);
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
-    enum shell_launch_mode mode);
+    enum shell_launch_mode mode, const struct shell_redirection *redirections,
+    size_t redirection_count);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 
