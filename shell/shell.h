@@ -1,6 +1,7 @@
 #ifndef USERSPACE_SHELL_H
 #define USERSPACE_SHELL_H
 
+#include <abi/launcher.h>
 #include <abi/startup.h>
 #include <path.h>
 #include <term.h>
@@ -22,11 +23,17 @@ struct shell_redirection {
   const char *path;
 };
 
-struct shell_command_line {
+struct shell_stage {
+  char **arguments;
   size_t count;
-  bool background;
   size_t redirection_count;
   struct shell_redirection redirections[STARTUP_STREAM_COUNT];
+};
+
+struct shell_command_line {
+  size_t stage_count;
+  bool background;
+  struct shell_stage stages[LAUNCH_BATCH_MAX];
 };
 
 struct shell {
@@ -41,8 +48,8 @@ struct shell {
   char *working_path; /* Owned display metadata; directory handles authorize lookup. */
 };
 
-/* Compacts in place. Argument and redirection paths borrow line; capacity
- * includes the final NULL. Redirections remain in source order.
+/* Compacts in place. Arguments and redirection paths borrow line; capacity
+ * includes a NULL after each stage's arguments. Redirections remain in source order.
  * An unquoted trailing & selects background launch.
  * Returns a static diagnostic on malformed input, NULL on success. */
 const char *parse_line(char *line, char **arguments, size_t capacity,
@@ -60,6 +67,8 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
     enum shell_launch_mode mode, const struct shell_redirection *redirections,
     size_t redirection_count);
+enum command_result shell_launch_pipeline(struct shell *shell,
+    const struct shell_command_line *command);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 

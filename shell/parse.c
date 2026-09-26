@@ -11,23 +11,30 @@ static bool digit(char character)
   return character >= '0' && character <= '9';
 }
 
-static const char *background_tail(const char *tail, size_t count, bool *background)
+static const char *background_tail(const char *tail,
+    struct shell_command_line *command)
 {
   while (separator(*tail)) {
     ++tail;
   }
-  if (*tail || !count) {
+  if (*tail || !command->stage_count) {
     return "& requires a preceding command and must end the line";
   }
-  *background = true;
+  if (!command->stages[command->stage_count - 1].count) {
+    return "Pipeline stage requires a command";
+  }
+  if (command->stage_count > 1) {
+    return "Background pipelines are unsupported";
+  }
+  command->background = true;
   return NULL;
 }
 
-static const char *begin_redirection(struct shell_command_line *command,
+static const char *begin_redirection(struct shell_stage *stage,
     struct shell_redirection **pending, enum startup_stream_index stream,
     const char *tail)
 {
-  if (!command->count) {
+  if (!stage->count) {
     return "Redirection requires a preceding command";
   }
   if (*pending) {
@@ -36,14 +43,32 @@ static const char *begin_redirection(struct shell_command_line *command,
   if (*tail == '<' || *tail == '>' || *tail == '&' || *tail == '|') {
     return "Unsupported operator";
   }
-  for (size_t i = 0; i < command->redirection_count; ++i) {
-    if (command->redirections[i].stream == stream) {
+  for (size_t i = 0; i < stage->redirection_count; ++i) {
+    if (stage->redirections[i].stream == stream) {
       return "Duplicate redirection";
     }
   }
-  *pending = &command->redirections[command->redirection_count++];
+  *pending = &stage->redirections[stage->redirection_count++];
   (*pending)->stream = stream;
   (*pending)->path = NULL;
+  return NULL;
+}
+
+static const char *begin_next_stage(char **arguments, size_t *used,
+    struct shell_command_line *command, const char *tail)
+{
+  if (*tail == '|' || *tail == '&') {
+    return "Unsupported operator";
+  }
+  if (!command->stage_count || !command->stages[command->stage_count - 1].count) {
+    return "Pipeline stage requires a command";
+  }
+  if (command->stage_count == LAUNCH_BATCH_MAX) {
+    return "Too many pipeline stages";
+  }
+  arguments[(*used)++] = NULL;
+  command->stages[command->stage_count++] =
+      (struct shell_stage){.arguments = arguments + *used};
   return NULL;
 }
 
@@ -52,9 +77,12 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
 {
   char *read = line, *write = line;
   struct shell_redirection *pending = NULL;
-  command->count = 0;
+  size_t used = 0;
+  command->stage_count = 0;
   command->background = false;
-  command->redirection_count = 0;
+  if (!capacity) {
+    return "Too many arguments";
+  }
 
   for (;;) {
     while (separator(*read)) {
@@ -67,15 +95,31 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
       if (pending) {
         return "Redirection requires a filename";
       }
-      arguments[command->count] = NULL;
-      return background_tail(read + 1, command->count, &command->background);
+      const char *error = background_tail(read + 1, command);
+      if (!error) {
+        arguments[used] = NULL;
+      }
+      return error;
     }
     if (*read == '|') {
-      return "Unsupported operator";
+      if (pending) {
+        return "Redirection requires a filename";
+      }
+      const char *error = begin_next_stage(arguments, &used, command, read + 1);
+      if (error) {
+        return error;
+      }
+      ++read;
+      continue;
     }
     if (*read == '<' || *read == '>') {
       char operator = *read++;
-      const char *error = begin_redirection(command, &pending,
+      struct shell_stage *stage = command->stage_count ?
+          &command->stages[command->stage_count - 1] : NULL;
+      if (!stage) {
+        return "Redirection requires a preceding command";
+      }
+      const char *error = begin_redirection(stage, &pending,
           operator == '<' ? STARTUP_STDIN : STARTUP_STDOUT, read);
       if (error) {
         return error;
@@ -92,7 +136,12 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
           return "Unsupported descriptor redirection";
         }
         read = after_digits + 1;
-        const char *error = begin_redirection(command, &pending, STARTUP_STDERR, read);
+        struct shell_stage *stage = command->stage_count ?
+            &command->stages[command->stage_count - 1] : NULL;
+        if (!stage) {
+          return "Redirection requires a preceding command";
+        }
+        const char *error = begin_redirection(stage, &pending, STARTUP_STDERR, read);
         if (error) {
           return error;
         }
@@ -137,29 +186,44 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
       pending->path = word;
       pending = NULL;
     } else {
-      if (command->count + 1 >= capacity) {
+      if (used >= capacity - 1) {
         return "Too many arguments";
       }
-      arguments[command->count++] = word;
+      if (!command->stage_count) {
+        command->stages[command->stage_count++] =
+            (struct shell_stage){.arguments = arguments};
+      }
+      arguments[used++] = word;
+      ++command->stages[command->stage_count - 1].count;
     }
 
     if (delimiter == '<' || delimiter == '>') {
-      const char *error = begin_redirection(command, &pending,
+      const char *error = begin_redirection(&command->stages[command->stage_count - 1],
+          &pending,
           delimiter == '<' ? STARTUP_STDIN : STARTUP_STDOUT, read);
       if (error) {
         return error;
       }
     } else if (delimiter == '&') {
-      arguments[command->count] = NULL;
-      return background_tail(read, command->count, &command->background);
+      const char *error = background_tail(read, command);
+      if (!error) {
+        arguments[used] = NULL;
+      }
+      return error;
     } else if (delimiter == '|') {
-      return "Unsupported operator";
+      const char *error = begin_next_stage(arguments, &used, command, read);
+      if (error) {
+        return error;
+      }
     }
   }
 
   if (pending) {
     return "Redirection requires a filename";
   }
-  arguments[command->count] = NULL;
+  if (command->stage_count && !command->stages[command->stage_count - 1].count) {
+    return "Pipeline stage requires a command";
+  }
+  arguments[used] = NULL;
   return NULL;
 }

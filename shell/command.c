@@ -93,6 +93,13 @@ static enum command_result set_title(struct shell *shell, char **arguments, size
   return COMMAND_OK;
 }
 
+static bool is_builtin(const char *name)
+{
+  return !strcmp(name, "exit") || !strcmp(name, "cd") ||
+      !strcmp(name, "mount") || !strcmp(name, "title") ||
+      !strcmp(name, "session");
+}
+
 enum command_result shell_command(struct shell *shell, char *line, char **arguments)
 {
   struct shell_command_line command;
@@ -100,14 +107,31 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
   if (error) {
     return shell_error(shell, "shell: %s\n", error);
   }
-  size_t count = command.count;
-  if (!count) {
+  if (!command.stage_count) {
     return COMMAND_OK;
   }
-  bool builtin = !strcmp(arguments[0], "exit") || !strcmp(arguments[0], "cd") ||
-      !strcmp(arguments[0], "mount") || !strcmp(arguments[0], "title") ||
-      !strcmp(arguments[0], "session");
-  if (command.redirection_count && (builtin || command.background)) {
+  if (command.stage_count > 1) {
+    for (size_t i = 0; i < command.stage_count; ++i) {
+      const struct shell_stage *stage = &command.stages[i];
+      if (!stage->count || !stage->arguments[0][0]) {
+        return shell_error(shell, "shell: Pipeline stage requires a command name\n");
+      }
+      if (is_builtin(stage->arguments[0])) {
+        return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
+            stage->arguments[0]);
+      }
+    }
+    return shell_launch_pipeline(shell, &command);
+  }
+
+  const struct shell_stage *stage = &command.stages[0];
+  arguments = stage->arguments;
+  size_t count = stage->count;
+  if (!arguments[0][0]) {
+    return shell_error(shell, "shell: Empty command name\n");
+  }
+  bool builtin = is_builtin(arguments[0]);
+  if (stage->redirection_count && (builtin || command.background)) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }
   if (command.background && builtin) {
@@ -143,5 +167,5 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
   }
   return shell_launch(shell, arguments, count,
       command.background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
-      command.redirections, command.redirection_count);
+      stage->redirections, stage->redirection_count);
 }
