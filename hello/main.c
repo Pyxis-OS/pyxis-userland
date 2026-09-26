@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <directory.h>
 #include <abi/file.h>
+#include <abi/pipe.h>
 #include <abi/console.h>
 #include <abi/memory.h>
 #include <console.h>
@@ -219,6 +220,8 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
     bool input = i == STARTUP_STDIN;
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
         (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        stream.protocol == PROTOCOL_PIPE ?
+        (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};

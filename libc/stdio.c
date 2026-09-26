@@ -1,10 +1,12 @@
 #include <abi/console.h>
 #include <abi/file.h>
+#include <abi/pipe.h>
 #include <console.h>
 #include <errno.h>
 #include <file.h>
 #include <handle.h>
 #include <limits.h>
+#include <pipe.h>
 #include <startup.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +51,8 @@ static void standard_stream(FILE *stream, enum startup_stream_index index)
 {
   struct startup_stream binding = startup_stream(index);
   *stream = (FILE){
-    .kind = binding.protocol == PROTOCOL_FILE ? STREAM_FILE : STREAM_CONSOLE,
+    .kind = binding.protocol == PROTOCOL_FILE ? STREAM_FILE :
+        binding.protocol == PROTOCOL_PIPE ? STREAM_PIPE : STREAM_CONSOLE,
     .handle = binding.handle,
     .readable = index == STARTUP_STDIN,
     .writable = index != STARTUP_STDIN,
@@ -170,6 +173,47 @@ void stdio_finish(void)
   }
 }
 
+static size_t read_some(void *buffer, size_t capacity, FILE *stream)
+{
+  size_t read;
+  enum call_status status;
+  if (stream->kind == STREAM_FILE) {
+    if (capacity > UINT64_MAX - stream->position) {
+      stream_error(stream, EOVERFLOW);
+      return 0;
+    }
+    status = file_read(stream->handle, stream->position, buffer, capacity, &read);
+  } else if (stream->kind == STREAM_PIPE) {
+    status = pipe_read(stream->handle, buffer, capacity, &read);
+  } else {
+    status = console_read(stream->handle, buffer, capacity, &read);
+  }
+  if (status != CALL_OK) {
+    stream_error(stream, libc_call_errno(status));
+    return 0;
+  }
+  if (!read) {
+    if (stream->kind == STREAM_CONSOLE) {
+      stream_error(stream, EIO); /* A nonempty terminal read has no EOF. */
+    } else {
+      stream->eof = true;
+    }
+    return 0;
+  }
+  if (stream->kind == STREAM_FILE) {
+    stream->position += read;
+  }
+  return read;
+}
+
+size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
+{
+  if (!capacity || !stream_ready(stream, false) || stream->eof) {
+    return 0;
+  }
+  return read_some(buffer, capacity, stream);
+}
+
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
 {
   if (!size || !count) {
@@ -187,32 +231,9 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
   }
   size_t bytes = size * count, total = 0;
   while (total < bytes) {
-    size_t read;
-    enum call_status status;
-    if (stream->kind == STREAM_FILE) {
-      if (bytes - total > UINT64_MAX - stream->position) {
-        stream_error(stream, EOVERFLOW);
-        break;
-      }
-      status = file_read(stream->handle, stream->position,
-          (char *)buffer + total, bytes - total, &read);
-    } else {
-      status = console_read(stream->handle, (char *)buffer + total, bytes - total, &read);
-    }
-    if (status != CALL_OK) {
-      stream_error(stream, libc_call_errno(status));
-      break;
-    }
+    size_t read = read_some((char *)buffer + total, bytes - total, stream);
     if (!read) {
-      if (stream->kind == STREAM_FILE) {
-        stream->eof = true;
-      } else {
-        stream_error(stream, EIO); /* A nonempty terminal read has no EOF. */
-      }
       break;
-    }
-    if (stream->kind == STREAM_FILE) {
-      stream->position += read;
     }
     total += read;
   }
@@ -254,6 +275,8 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
       }
       status = file_write(stream->handle, position, (const char *)buffer + total,
           remaining, &written);
+    } else if (stream->kind == STREAM_PIPE) {
+      status = pipe_write(stream->handle, (const char *)buffer + total, remaining, &written);
     } else {
       status = console_write(stream->handle, (const char *)buffer + total, remaining, &written);
     }

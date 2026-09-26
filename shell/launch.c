@@ -7,6 +7,7 @@
 #include <abi/echo.h>
 #include <abi/udp.h>
 #include <abi/tcp.h>
+#include <abi/pipe.h>
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
@@ -51,12 +52,13 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
+  bool has_pipe = session && shell->pipe != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 13 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 14 - STARTUP_STREAM_COUNT) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
@@ -70,7 +72,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = host_index + (has_host ? 1 : 0);
   size_t net_config_index = launcher_index + (session ? 1 : 0);
-  size_t space_index = net_config_index + (has_net_config ? 1 : 0);
+  size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
+  size_t space_index = pipe_index + (has_pipe ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
   size_t grant_count = input_index + (terminal_input ? 1 : 0);
@@ -123,13 +126,16 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_net_config) {
     grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS};
   }
+  if (has_pipe) {
+    grants[pipe_index] = (struct launch_grant){shell->pipe, PIPE_SERVICE_RIGHT_CREATE};
+  }
   if (has_space) {
     grants[space_index] = (struct launch_grant){shell->space, SPACE_RIGHT_SET_TITLE};
   }
   if (has_profile) {
     grants[profile_index] = (struct launch_grant){shell->profile, PROFILE_RIGHT_MEMORY};
   }
-  struct launch_binding resources[14] = {
+  struct launch_binding resources[15] = {
     {(uintptr_t)"output", CHILD_OUTPUT},
     {(uintptr_t)"memory", CHILD_MEMORY},
   };
@@ -163,6 +169,9 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   }
   if (has_net_config) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", net_config_index};
+  }
+  if (has_pipe) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", pipe_index};
   }
   if (has_space) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"space", space_index};
@@ -232,6 +241,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     bool input = i == STARTUP_STDIN;
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
         (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        stream.protocol == PROTOCOL_PIPE ?
+        (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
