@@ -59,6 +59,7 @@ int main(int argc, char **argv)
     .echo = startup_resource("echo"),
     .udp = startup_resource("udp"),
     .tcp = startup_resource("tcp"),
+    .pipe = startup_resource("pipe"),
     .random = startup_resource("random"),
     .net_config = startup_resource("net_config"),
     .keyboard = startup_resource("keyboard"),

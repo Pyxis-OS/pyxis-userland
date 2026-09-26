@@ -8,6 +8,7 @@
 #include <abi/console.h>
 #include <abi/display.h>
 #include <abi/file.h>
+#include <abi/pipe.h>
 #include <abi/keyboard.h>
 #include <abi/space.h>
 #include <abi/profile.h>
@@ -46,13 +47,13 @@ static int launch_shell(const struct session_config *config, const struct networ
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 10 - STARTUP_STREAM_COUNT ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 11 - STARTUP_STREAM_COUNT ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 10 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 11 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -67,7 +68,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH};
   grants[APP] = (struct launch_grant){app, 0};
   grants[HOME] = (struct launch_grant){home, 0};
-  struct launch_binding resources[13] = {
+  struct launch_binding resources[14] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -96,6 +97,11 @@ static int launch_shell(const struct session_config *config, const struct networ
   if (tcp != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", grant_count};
     grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT};
+  }
+  handle_t pipe = startup_resource("pipe");
+  if (pipe != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", grant_count};
+    grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE};
   }
   handle_t random = startup_resource("random");
   if (random != HANDLE_INVALID) {
@@ -186,6 +192,8 @@ static int launch_shell(const struct session_config *config, const struct networ
     bool input = i == STARTUP_STDIN;
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
         (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        stream.protocol == PROTOCOL_PIPE ?
+        (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};

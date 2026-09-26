@@ -59,7 +59,8 @@ static bool valid_streams(const struct startup_info *info)
       continue;
     }
     if ((stream->protocol != PROTOCOL_CONSOLE &&
-         stream->protocol != PROTOCOL_FILE) || stream->handle == HANDLE_INVALID) {
+         stream->protocol != PROTOCOL_FILE &&
+         stream->protocol != PROTOCOL_PIPE) || stream->handle == HANDLE_INVALID) {
       return false;
     }
     for (size_t j = 0; j < i; ++j) {

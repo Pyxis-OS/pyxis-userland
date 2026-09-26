@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdint.h>
 
-enum stream_kind { STREAM_FILE, STREAM_CONSOLE };
+enum stream_kind { STREAM_FILE, STREAM_CONSOLE, STREAM_PIPE };
 
 struct pyxis_file {
   struct pyxis_file *next;

@@ -72,9 +72,11 @@ static enum call_status read_console(handle_t input, void *bytes, size_t capacit
     return result.status < CALL_STATUS_COUNT && !result.reply_size ?
            (enum call_status)result.status : CALL_BAD_REQUEST;
   }
-  if (result.reply_size != sizeof(reply) || reply.read > capacity ||
-      (capacity && !reply.read)) {
+  if (result.reply_size != sizeof(reply) || reply.read > capacity) {
     return CALL_BAD_REQUEST;
+  }
+  if (capacity && !reply.read) {
+    return CALL_IO;
   }
   *read = reply.read;
   return CALL_OK;
