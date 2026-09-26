@@ -1,5 +1,6 @@
 #include "shell.h"
 #include <abi/console.h>
+#include <abi/file.h>
 #include <abi/memory.h>
 #include <abi/display.h>
 #include <abi/clock.h>
@@ -44,7 +45,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 13) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 13 - STARTUP_STREAM_COUNT) {
     handle_close(image);
     return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
   }
@@ -62,7 +63,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
   size_t grant_count = input_index + (background ? 0 : 1);
-  struct launch_grant *grants = malloc(grant_count * sizeof(*grants));
+  struct launch_grant *grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = malloc(depth * sizeof(*directories));
   if (!grants || (depth && !directories)) {
     free(directories);
@@ -200,6 +201,18 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     .argv = (uintptr_t)arguments,
     .argc = count,
   };
+  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+    struct startup_stream stream = startup_stream(i);
+    if (stream.protocol == STARTUP_STREAM_NONE || (background && i == STARTUP_STDIN)) {
+      continue;
+    }
+    bool input = i == STARTUP_STDIN;
+    uint64_t rights = stream.protocol == PROTOCOL_FILE ?
+        (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
+    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+  }
   handle_t child;
   status = program_launch(shell->launcher, &request, &child);
 

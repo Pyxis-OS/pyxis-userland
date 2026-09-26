@@ -71,8 +71,8 @@ static int launch_server(handle_t output, handle_t *server)
   handle_t image = startup_resource("server_image");
   handle_t endpoint = startup_resource("server_endpoint");
   handle_t memory = startup_resource("memory");
-  enum { SERVER_OUTPUT, SERVER_ENDPOINT, SERVER_MEMORY };
-  struct launch_grant grants[] = {
+  enum { SERVER_OUTPUT, SERVER_ENDPOINT, SERVER_MEMORY, SERVER_GRANTS };
+  struct launch_grant grants[SERVER_GRANTS + STARTUP_STREAM_COUNT] = {
     {output, CONSOLE_RIGHT_WRITE},
     {endpoint, ENDPOINT_RIGHT_RECEIVE | ENDPOINT_RIGHT_REPLY},
     {memory, MEMORY_RIGHT_MANAGE},
@@ -86,12 +86,24 @@ static int launch_server(handle_t output, handle_t *server)
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
-    .grant_count = sizeof(grants) / sizeof(grants[0]),
+    .grant_count = SERVER_GRANTS,
     .resources = (uintptr_t)resources,
     .resource_count = sizeof(resources) / sizeof(resources[0]),
     .argv = (uintptr_t)arguments,
     .argc = 1,
   };
+  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+    struct startup_stream stream = startup_stream(i);
+    if (stream.protocol == STARTUP_STREAM_NONE || i == STARTUP_STDIN) {
+      continue;
+    }
+    bool input = i == STARTUP_STDIN;
+    uint64_t rights = stream.protocol == PROTOCOL_FILE ?
+        (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
+    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+  }
   int result = launcher_launch(launcher, &request, server) == CALL_OK ? 0 : -1;
   /* Launch copies grants. Drop our server end so endpoint closure reflects
    * the two communicating programs, and release preparation-only authority. */

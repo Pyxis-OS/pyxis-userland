@@ -106,7 +106,8 @@ static enum call_status launch_script(handle_t launcher, const struct launch_req
   request.argv = (uintptr_t)arguments;
   request.argc++;
   /* The low-level launcher accepts only PXE, so another script cannot recurse.
-   * Appending the new grant leaves every caller-supplied index unchanged. */
+   * Appending the new grant preserves ordinary and standard-stream indices;
+   * streams still refer to their sole child grant, without a script-side copy. */
   status = launcher_launch(launcher, &request, child);
 
 done:
