@@ -16,37 +16,96 @@
 #include <handle.h>
 #include <file.h>
 #include <launcher.h>
+#include <pipe.h>
 #include <process.h>
 #include <startup.h>
 #include <stdlib.h>
+#include <string.h>
 
-enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
-    enum shell_launch_mode mode, const struct shell_redirection *redirections,
-    size_t redirection_count)
+enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
+
+struct prepared_stage {
+  handle_t image;
+  handle_t redirected[STARTUP_STREAM_COUNT];
+  struct launch_grant *grants;
+  uint64_t *directories;
+  struct launch_binding resources[15];
+  struct launch_binding roots[3];
+  struct launch_request request;
+};
+
+static bool close_handle(handle_t *handle)
+{
+  if (*handle == HANDLE_INVALID) {
+    return true;
+  }
+  bool closed = handle_close(*handle) == 0;
+  if (closed) {
+    *handle = HANDLE_INVALID;
+  }
+  return closed;
+}
+
+static bool release_sources(struct prepared_stage *stages, size_t stage_count,
+    struct pipe_create_reply *pipes)
+{
+  bool closed = true;
+  for (size_t i = 0; i < stage_count; ++i) {
+    if (!close_handle(&stages[i].image)) {
+      closed = false;
+    }
+    for (size_t stream = 0; stream < STARTUP_STREAM_COUNT; ++stream) {
+      if (!close_handle(&stages[i].redirected[stream])) {
+        closed = false;
+      }
+    }
+  }
+  for (size_t i = 0; i + 1 < stage_count; ++i) {
+    if (!close_handle(&pipes[i].reader)) {
+      closed = false;
+    }
+    if (!close_handle(&pipes[i].writer)) {
+      closed = false;
+    }
+  }
+  return closed;
+}
+
+static void free_preparation(struct prepared_stage *stages, size_t stage_count)
+{
+  for (size_t i = 0; i < stage_count; ++i) {
+    free(stages[i].directories);
+    free(stages[i].grants);
+  }
+  free(stages);
+}
+
+static enum command_result launch_error(struct shell *shell, const struct shell_stage *stages,
+    size_t stage_count, size_t stage, const char *operation, const char *path,
+    enum call_status status)
+{
+  if (stage_count > 1 && stage < stage_count) {
+    return shell_error(shell, "shell: stage %zu (%s): %s %s failed (status %u)\n",
+        stage + 1, stages[stage].arguments[0], operation, path, status);
+  }
+  if (stage_count == 1 && !strcmp(operation, "shell: open") &&
+      status == CALL_WRONG_TYPE) {
+    return shell_error(shell, "shell: %s: Not a file\n", path);
+  }
+  if (stage_count == 1 && (!strcmp(operation, "shell: open") ||
+      !strcmp(operation, "shell: prepare") || !strcmp(operation, "shell: launch"))) {
+    operation = "shell";
+  }
+  return shell_directory_error(shell, operation, path, status);
+}
+
+static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
+    const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
+    const struct startup_stream streams[STARTUP_STREAM_COUNT])
 {
   bool session = mode == SHELL_SESSION;
-  bool background = mode == SHELL_BACKGROUND;
-  bool terminal_input = !background;
-  for (size_t i = 0; i < redirection_count; ++i) {
-    if (redirections[i].stream == STARTUP_STDIN) {
-      terminal_input = false;
-    }
-  }
-  handle_t redirected[STARTUP_STREAM_COUNT] = {0};
-  const char *failure_path = arguments[0];
-  const char *failure_operation = "shell";
-  handle_t image;
-  enum call_status status = shell_open_image(shell, arguments[0], &image);
-  if (status != CALL_OK) {
-    if (status == CALL_WRONG_TYPE) {
-      return shell_error(shell, "shell: %s: Not a file\n", arguments[0]);
-    }
-    return shell_directory_error(shell, "shell", arguments[0], status);
-  }
-
-  enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
   bool has_host = shell->host != HANDLE_INVALID;
-  bool has_keyboard = terminal_input && shell->keyboard != HANDLE_INVALID;
+  bool has_keyboard = named_input && shell->keyboard != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
@@ -59,8 +118,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
   if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 14 - STARTUP_STREAM_COUNT) {
-    handle_close(image);
-    return shell_directory_error(shell, "shell", arguments[0], CALL_LIMIT);
+    return CALL_LIMIT;
   }
   size_t display_index = CHILD_DIRECTORY + depth;
   size_t clock_index = display_index + (has_display ? 1 : 0);
@@ -76,16 +134,15 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   size_t space_index = pipe_index + (has_pipe ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
-  size_t grant_count = input_index + (terminal_input ? 1 : 0);
-  struct launch_grant *grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*grants));
-  uint64_t *directories = malloc(depth * sizeof(*directories));
-  if (!grants || (depth && !directories)) {
-    free(directories);
-    free(grants);
-    handle_close(image);
-    return shell_directory_error(shell, "shell", arguments[0], CALL_NO_MEMORY);
+  size_t grant_count = input_index + (named_input ? 1 : 0);
+  prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
+  prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
+  if (!prepared->grants || (depth && !prepared->directories)) {
+    return CALL_NO_MEMORY;
   }
-  if (terminal_input) {
+  struct launch_grant *grants = prepared->grants;
+  uint64_t *directories = prepared->directories;
+  if (named_input) {
     grants[input_index] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ};
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE};
@@ -135,12 +192,12 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_profile) {
     grants[profile_index] = (struct launch_grant){shell->profile, PROFILE_RIGHT_MEMORY};
   }
-  struct launch_binding resources[15] = {
-    {(uintptr_t)"output", CHILD_OUTPUT},
-    {(uintptr_t)"memory", CHILD_MEMORY},
-  };
+
+  struct launch_binding *resources = prepared->resources;
+  resources[0] = (struct launch_binding){(uintptr_t)"output", CHILD_OUTPUT};
+  resources[1] = (struct launch_binding){(uintptr_t)"memory", CHILD_MEMORY};
   size_t resource_count = 2;
-  if (terminal_input) {
+  if (named_input) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"input", input_index};
   }
   if (has_display) {
@@ -179,45 +236,32 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   if (has_profile) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", profile_index};
   }
-  struct launch_binding roots[3] = {
-    {(uintptr_t)"app", CHILD_APP},
-    {(uintptr_t)"home", CHILD_HOME},
-  };
+  struct launch_binding *roots = prepared->roots;
+  roots[0] = (struct launch_binding){(uintptr_t)"app", CHILD_APP};
+  roots[1] = (struct launch_binding){(uintptr_t)"home", CHILD_HOME};
   size_t root_count = 2;
   if (has_host) {
     roots[root_count++] = (struct launch_binding){(uintptr_t)"host", host_index};
   }
-
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
     struct launch_grant *grant = &grants[roots[i].grant];
-    status = handle_rights(grant->source, &grant->rights);
+    enum call_status status = handle_rights(grant->source, &grant->rights);
     if (status != CALL_OK) {
-      goto release_launch;
+      return status;
     }
   }
   for (size_t i = 0; i < depth; ++i) {
     struct launch_grant *grant = &grants[directories[i]];
-    status = handle_rights(grant->source, &grant->rights);
+    enum call_status status = handle_rights(grant->source, &grant->rights);
     if (status != CALL_OK) {
-      goto release_launch;
+      return status;
     }
   }
 
-  for (size_t i = 0; i < redirection_count; ++i) {
-    const struct shell_redirection *redirect = &redirections[i];
-    status = shell_open_redirect(shell, redirect->path, redirect->stream == STARTUP_STDIN,
-        &redirected[redirect->stream]);
-    if (status != CALL_OK) {
-      failure_path = redirect->path;
-      failure_operation = "shell: redirect";
-      goto release_launch;
-    }
-  }
-
-  /* Mount authority belongs to init; only directory access crosses handoff. */
-  struct launch_request request = {
-    .image = image,
+  struct launch_request *request = &prepared->request;
+  *request = (struct launch_request){
+    .image = prepared->image,
     .grants = (uintptr_t)grants,
     .grant_count = grant_count,
     .resources = (uintptr_t)resources,
@@ -229,13 +273,12 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     .working_path = (uintptr_t)shell->working_path,
     .environment = (uintptr_t)startup_environment_variables(),
     .environment_count = startup_environment_count(),
-    .argv = (uintptr_t)arguments,
-    .argc = count,
+    .argv = (uintptr_t)stage->arguments,
+    .argc = stage->count,
   };
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    struct startup_stream stream = redirected[i] != HANDLE_INVALID ?
-        (struct startup_stream){PROTOCOL_FILE, redirected[i]} : startup_stream(i);
-    if (stream.protocol == STARTUP_STREAM_NONE || (background && i == STARTUP_STDIN)) {
+    struct startup_stream stream = streams[i];
+    if (stream.protocol == STARTUP_STREAM_NONE) {
       continue;
     }
     bool input = i == STARTUP_STDIN;
@@ -244,75 +287,236 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
         stream.protocol == PROTOCOL_PIPE ?
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
-    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+    request->streams[i] = (struct launch_stream){stream.protocol, request->grant_count};
+    grants[request->grant_count++] = (struct launch_grant){stream.handle, rights};
   }
-  /* All target opens succeeded. From here, failure may leave truncated files;
-   * no path reopening or rollback can restore their previous contents. */
-  for (size_t i = 0; i < redirection_count; ++i) {
-    const struct shell_redirection *redirect = &redirections[i];
-    if (redirect->stream == STARTUP_STDIN) {
+  return CALL_OK;
+}
+
+static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
+    size_t stage_count, enum shell_launch_mode mode)
+{
+  struct prepared_stage *prepared = calloc(stage_count, sizeof(*prepared));
+  struct launch_request *requests = malloc(stage_count * sizeof(*requests));
+  if (!prepared || !requests) {
+    free(requests);
+    free(prepared);
+    return shell_directory_error(shell, "shell", stages[0].arguments[0], CALL_NO_MEMORY);
+  }
+  struct pipe_create_reply pipes[LAUNCH_BATCH_MAX - 1] = {0};
+  struct startup_stream streams[LAUNCH_BATCH_MAX][STARTUP_STREAM_COUNT] = {0};
+  const char *operation = "shell: open";
+  const char *path = stages[0].arguments[0];
+  size_t failed_stage = 0;
+  enum call_status status = CALL_OK;
+  handle_t children[LAUNCH_BATCH_MAX] = {0};
+  uint64_t failed_index = LAUNCH_NO_STAGE;
+  bool cleanup_failure = false;
+
+  /* Open every image before opening or creating any redirect target. */
+  for (size_t i = 0; i < stage_count; ++i) {
+    failed_stage = i;
+    path = stages[i].arguments[0];
+    status = shell_open_image(shell, path, &prepared[i].image);
+    if (status != CALL_OK) {
+      goto failed;
+    }
+  }
+  for (size_t i = 0; i < stage_count; ++i) {
+    for (size_t stream = 0; stream < STARTUP_STREAM_COUNT; ++stream) {
+      streams[i][stream] = startup_stream(stream);
+    }
+    if (mode == SHELL_BACKGROUND) {
+      streams[i][STARTUP_STDIN] = (struct startup_stream){0};
+    }
+    for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+      const struct shell_redirection *redirect = &stages[i].redirections[j];
+      failed_stage = i;
+      operation = "shell: redirect";
+      path = redirect->path;
+      status = shell_open_redirect(shell, path, redirect->stream == STARTUP_STDIN,
+          &prepared[i].redirected[redirect->stream]);
+      if (status != CALL_OK) {
+        goto failed;
+      }
+      streams[i][redirect->stream] =
+          (struct startup_stream){PROTOCOL_FILE, prepared[i].redirected[redirect->stream]};
+    }
+  }
+
+  for (size_t i = 0; i + 1 < stage_count; ++i) {
+    bool writer = prepared[i].redirected[STARTUP_STDOUT] == HANDLE_INVALID;
+    bool reader = prepared[i + 1].redirected[STARTUP_STDIN] == HANDLE_INVALID;
+    if (!writer && !reader) {
       continue;
     }
-    status = file_resize(redirected[redirect->stream], 0);
+    failed_stage = i;
+    operation = "shell: pipe";
+    path = stages[i].arguments[0];
+    status = pipe_create(shell->pipe, &pipes[i]);
     if (status != CALL_OK) {
-      failure_path = redirect->path;
-      failure_operation = "shell: truncate";
-      goto release_launch;
+      goto failed;
+    }
+    if (writer) {
+      streams[i][STARTUP_STDOUT] = (struct startup_stream){PROTOCOL_PIPE, pipes[i].writer};
+    } else if (!close_handle(&pipes[i].writer)) {
+      status = CALL_BAD_HANDLE;
+      cleanup_failure = true;
+      goto failed;
+    }
+    if (reader) {
+      streams[i + 1][STARTUP_STDIN] =
+          (struct startup_stream){PROTOCOL_PIPE, pipes[i].reader};
+    } else if (!close_handle(&pipes[i].reader)) {
+      status = CALL_BAD_HANDLE;
+      cleanup_failure = true;
+      goto failed;
     }
   }
-  handle_t child;
-  status = program_launch(shell->launcher, &request, &child);
 
-release_launch:
-  free(directories);
-  free(grants);
-  bool closed_sources = handle_close(image) == 0;
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    if (redirected[i] != HANDLE_INVALID && handle_close(redirected[i]) != 0) {
-      closed_sources = false;
+  /* A redirected pipe side is absent from every grant, so its peer sees
+   * EOF or a broken reader once the remaining owned endpoint closes. */
+  for (size_t i = 0; i < stage_count; ++i) {
+    failed_stage = i;
+    operation = "shell: prepare";
+    path = stages[i].arguments[0];
+    bool named_input = mode != SHELL_BACKGROUND && i == 0 &&
+        streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
+    status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input, streams[i]);
+    if (status != CALL_OK) {
+      goto failed;
     }
+    requests[i] = prepared[i].request;
+  }
+
+  /* All opens, pipe creation and grant preparation precede any truncation.
+   * Created files and truncated contents cannot be rolled back. */
+  for (size_t i = 0; i < stage_count; ++i) {
+    for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+      const struct shell_redirection *redirect = &stages[i].redirections[j];
+      if (redirect->stream == STARTUP_STDIN) {
+        continue;
+      }
+      failed_stage = i;
+      operation = "shell: truncate";
+      path = redirect->path;
+      status = file_resize(prepared[i].redirected[redirect->stream], 0);
+      if (status != CALL_OK) {
+        goto failed;
+      }
+    }
+  }
+
+  operation = "shell: launch";
+  path = stages[0].arguments[0];
+  if (stage_count == 1) {
+    status = program_launch(shell->launcher, &requests[0], &children[0]);
+  } else {
+    status = program_launch_batch(shell->launcher, requests, stage_count, children,
+        &failed_index);
   }
   if (status != CALL_OK) {
-    enum command_result result = shell_directory_error(shell, failure_operation, failure_path, status);
-    return closed_sources ? result : COMMAND_FATAL;
+    failed_stage = failed_index == LAUNCH_NO_STAGE ? stage_count : failed_index;
+    if (failed_stage < stage_count) {
+      path = stages[failed_stage].arguments[0];
+    }
+    goto failed;
   }
 
-  if (session || background) {
-    /* The child owns copies of its grants. Closing the observer does not stop
-     * it. Background children have no input grants; session handoff ends us. */
-    bool closed_child = handle_close(child) == 0;
-    if (!closed_sources || !closed_child) {
-      shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
+  /* Release all source endpoints before waiting. Holding one writer here
+   * could prevent EOF, and holding one reader could prevent EPIPE. */
+  bool closed_sources = release_sources(prepared, stage_count, pipes);
+  free(requests);
+  free_preparation(prepared, stage_count);
+  if (!closed_sources) {
+    for (size_t i = 0; i < stage_count; ++i) {
+      close_handle(&children[i]);
+    }
+    shell_directory_error(shell, "shell: close", stages[0].arguments[0], CALL_BAD_HANDLE);
+    return COMMAND_FATAL;
+  }
+  if (mode == SHELL_SESSION || mode == SHELL_BACKGROUND) {
+    bool closed = close_handle(&children[0]);
+    if (!closed) {
+      shell_directory_error(shell, "shell: close", stages[0].arguments[0], CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
-    return session ? COMMAND_EXIT : COMMAND_OK;
+    return mode == SHELL_SESSION ? COMMAND_EXIT : COMMAND_OK;
   }
 
-  /* No terminal reads until the child has stopped and its resources are gone. */
-  struct process_result completion;
-  status = process_wait(child, &completion);
-  bool closed_child = handle_close(child) == 0;
-  if (status != CALL_OK) {
-    shell_directory_error(shell, "shell: wait", arguments[0], status);
-    return COMMAND_FATAL;
+  struct process_result completion[LAUNCH_BATCH_MAX] = {0};
+  for (size_t i = 0; i < stage_count; ++i) {
+    status = process_wait(children[i], &completion[i]);
+    bool closed = close_handle(&children[i]);
+    if (status != CALL_OK || !closed) {
+      for (size_t j = i + 1; j < stage_count; ++j) {
+        close_handle(&children[j]);
+      }
+      launch_error(shell, stages, stage_count, i,
+          status != CALL_OK ? "shell: wait" : "shell: close",
+          stages[i].arguments[0], status != CALL_OK ? status : CALL_BAD_HANDLE);
+      return COMMAND_FATAL;
+    }
   }
-  if (!closed_sources || !closed_child) {
-    shell_directory_error(shell, "shell: close", arguments[0], CALL_BAD_HANDLE);
-    return COMMAND_FATAL;
-  }
-  /* Preserve partial child output before any completion diagnostic. */
   status = term_fresh_line(&shell->terminal);
   if (status != CALL_OK) {
     shell_directory_error(shell, "shell", "terminal", status);
     return COMMAND_FATAL;
   }
-  if (completion.kind == PROCESS_FAULTED) {
-    return shell_error(shell, "shell: %s: Process faulted\n", arguments[0]);
+  enum command_result result = COMMAND_OK;
+  for (size_t i = 0; i < stage_count; ++i) {
+    enum command_result diagnostic = COMMAND_OK;
+    if (completion[i].kind == PROCESS_FAULTED) {
+      diagnostic = stage_count == 1 ?
+          shell_error(shell, "shell: %s: Process faulted\n", stages[i].arguments[0]) :
+          shell_error(shell, "shell: stage %zu (%s): Process faulted\n",
+              i + 1, stages[i].arguments[0]);
+    } else if (completion[i].exit_status != 0) {
+      diagnostic = stage_count == 1 ?
+          shell_error(shell, "shell: %s: Exited with status %jd\n",
+              stages[i].arguments[0], (intmax_t)completion[i].exit_status) :
+          shell_error(shell, "shell: stage %zu (%s): Exited with status %jd\n",
+              i + 1, stages[i].arguments[0], (intmax_t)completion[i].exit_status);
+    }
+    if (diagnostic == COMMAND_FATAL) {
+      return COMMAND_FATAL;
+    }
+    if (i + 1 == stage_count) {
+      result = diagnostic;
+    }
   }
-  if (completion.exit_status != 0) {
-    return shell_error(shell, "shell: %s: Exited with status %jd\n", arguments[0],
-        (intmax_t)completion.exit_status);
+  return result;
+
+failed:
+  closed_sources = release_sources(prepared, stage_count, pipes);
+  free(requests);
+  free_preparation(prepared, stage_count);
+  enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
+      operation, path, status);
+  if (!closed_sources || cleanup_failure || status == CALL_OUTCOME_UNKNOWN) {
+    return COMMAND_FATAL;
   }
-  return COMMAND_OK;
+  return error;
+}
+
+enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
+    enum shell_launch_mode mode, const struct shell_redirection *redirections,
+    size_t redirection_count)
+{
+  struct shell_stage stage = {.arguments = arguments, .count = count,
+      .redirection_count = redirection_count};
+  for (size_t i = 0; i < redirection_count; ++i) {
+    stage.redirections[i] = redirections[i];
+  }
+  return launch_stages(shell, &stage, 1, mode);
+}
+
+enum command_result shell_launch_pipeline(struct shell *shell,
+    const struct shell_command_line *command)
+{
+  if (command->stage_count < 2 || command->stage_count > LAUNCH_BATCH_MAX ||
+      command->background) {
+    return shell_error(shell, "shell: Invalid foreground pipeline\n");
+  }
+  return launch_stages(shell, command->stages, command->stage_count, SHELL_FOREGROUND);
 }
