@@ -95,18 +95,22 @@ static enum command_result set_title(struct shell *shell, char **arguments, size
 
 enum command_result shell_command(struct shell *shell, char *line, char **arguments)
 {
-  size_t count;
-  bool background;
-  const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &count, &background);
+  struct shell_command_line command;
+  const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &command);
   if (error) {
     return shell_error(shell, "shell: %s\n", error);
   }
+  size_t count = command.count;
   if (!count) {
     return COMMAND_OK;
   }
-  if (background && (!strcmp(arguments[0], "exit") || !strcmp(arguments[0], "cd") ||
+  bool builtin = !strcmp(arguments[0], "exit") || !strcmp(arguments[0], "cd") ||
       !strcmp(arguments[0], "mount") || !strcmp(arguments[0], "title") ||
-      !strcmp(arguments[0], "session"))) {
+      !strcmp(arguments[0], "session");
+  if (command.redirection_count && (builtin || command.background)) {
+    return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
+  }
+  if (command.background && builtin) {
     return shell_error(shell, "shell: & is only supported for external commands\n");
   }
   if (strcmp(arguments[0], "exit") == 0) {
@@ -135,7 +139,9 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     if (count < 2) {
       return shell_error(shell, "usage: session program [arguments...]\n");
     }
-    return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION);
+    return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION, NULL, 0);
   }
-  return shell_launch(shell, arguments, count, background ? SHELL_BACKGROUND : SHELL_FOREGROUND);
+  return shell_launch(shell, arguments, count,
+      command.background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
+      command.redirections, command.redirection_count);
 }

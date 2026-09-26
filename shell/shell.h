@@ -51,12 +51,15 @@ enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);
 enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image);
+enum call_status shell_open_redirect(struct shell *shell, const char *path,
+    bool input, handle_t *file);
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
 enum command_result shell_command(struct shell *shell, char *line, char **arguments);
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
-    enum shell_launch_mode mode);
+    enum shell_launch_mode mode, const struct shell_redirection *redirections,
+    size_t redirection_count);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 
