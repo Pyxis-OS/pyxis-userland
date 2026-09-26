@@ -181,8 +181,8 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
     return -1;
   }
 
-  enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_APP, UTILITY_HOME };
-  struct launch_grant grants[] = {
+  enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_APP, UTILITY_HOME, UTILITY_GRANTS };
+  struct launch_grant grants[UTILITY_GRANTS + STARTUP_STREAM_COUNT] = {
     {output, CONSOLE_RIGHT_WRITE},
     {memory, MEMORY_RIGHT_MANAGE},
     {app, app_rights},
@@ -200,7 +200,7 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
-    .grant_count = sizeof(grants) / sizeof(grants[0]),
+    .grant_count = UTILITY_GRANTS,
     .resources = (uintptr_t)resources,
     .resource_count = sizeof(resources) / sizeof(resources[0]),
     .roots = (uintptr_t)roots,
@@ -211,6 +211,18 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
     .argv = (uintptr_t)arguments,
     .argc = count,
   };
+  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+    struct startup_stream stream = startup_stream(i);
+    if (stream.protocol == STARTUP_STREAM_NONE || i == STARTUP_STDIN) {
+      continue;
+    }
+    bool input = i == STARTUP_STDIN;
+    uint64_t rights = stream.protocol == PROTOCOL_FILE ?
+        (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
+    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+  }
   handle_t child;
   int result = launcher_launch(launcher, &request, &child) == CALL_OK ? 0 : -1;
   if (handle_close(image) != 0) {

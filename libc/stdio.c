@@ -45,22 +45,26 @@ static void register_stream(FILE *stream)
   streams = stream;
 }
 
-static void standard_stream(FILE *stream, handle_t source, bool input)
+static void standard_stream(FILE *stream, enum startup_stream_index index)
 {
-  *stream = (FILE){.kind = STREAM_CONSOLE, .readable = input, .writable = !input};
-  uint64_t rights = input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE;
-  enum call_status status = handle_copy_restricted(source, rights, &stream->handle);
-  stream->open_error = libc_call_errno(status);
+  struct startup_stream binding = startup_stream(index);
+  *stream = (FILE){
+    .kind = binding.protocol == PROTOCOL_FILE ? STREAM_FILE : STREAM_CONSOLE,
+    .handle = binding.handle,
+    .readable = index == STARTUP_STDIN,
+    .writable = index != STARTUP_STDIN,
+    .open_error = binding.protocol == STARTUP_STREAM_NONE ? EBADF : 0,
+  };
   register_stream(stream);
 }
 
 void stdio_init(void)
 {
-  /* Separate copies keep stdio alive when native users close startup grants,
-   * and make stdout/stderr independent even though they target one console. */
-  standard_stream(stdin, startup_resource("input"), true);
-  standard_stream(stdout, startup_resource("output"), false);
-  standard_stream(stderr, startup_resource("output"), false);
+  /* Startup validated exclusive stream handles. Adopt each directly: retaining
+   * another copy would keep a future pipe endpoint alive after fclose. */
+  standard_stream(stdin, STARTUP_STDIN);
+  standard_stream(stdout, STARTUP_STDOUT);
+  standard_stream(stderr, STARTUP_STDERR);
 }
 
 static bool parse_mode(const char *mode, FILE *stream, bool *create, bool *truncate)

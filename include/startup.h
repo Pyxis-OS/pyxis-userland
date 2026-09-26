@@ -15,6 +15,11 @@ bool startup_init(const struct startup_info *info);
  * alias one handle; close each owned handle once. Closing does not edit the
  * snapshot, so later lookup can return that stale handle. Strings remain valid
  * until exit. These helpers are available when main begins. */
+/* Borrow the dedicated handle owned by the corresponding libc FILE. Never
+ * close it with handle_close; use fclose on that stream. The immutable binding
+ * becomes stale after close. An absent/out-of-range stream returns NONE/invalid. */
+struct startup_stream startup_stream(enum startup_stream_index index);
+
 handle_t startup_resource(const char *name);
 handle_t startup_root(const char *scheme);
 const char *startup_environment(const char *name);

@@ -9,7 +9,7 @@ extern int main(int argc, char **argv);
   if (!startup_init(info)) {
     _Exit(EXIT_FAILURE);
   }
-  malloc_init();
   stdio_init();
+  malloc_init();
   exit(main((int)info->argc, (char **)(uintptr_t)info->argv));
 }

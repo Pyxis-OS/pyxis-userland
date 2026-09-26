@@ -45,6 +45,47 @@ static bool valid_bindings(const struct startup_info *info, uint64_t address,
   return true;
 }
 
+static bool valid_streams(const struct startup_info *info)
+{
+  const struct startup_binding *resources = (const void *)(uintptr_t)info->resources;
+  const struct startup_binding *roots = (const void *)(uintptr_t)info->roots;
+  const handle_t *directories = (const void *)(uintptr_t)info->working_directories;
+  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+    const struct startup_stream *stream = &info->streams[i];
+    if (stream->protocol == STARTUP_STREAM_NONE) {
+      if (stream->handle != HANDLE_INVALID) {
+        return false;
+      }
+      continue;
+    }
+    if ((stream->protocol != PROTOCOL_CONSOLE &&
+         stream->protocol != PROTOCOL_FILE) || stream->handle == HANDLE_INVALID) {
+      return false;
+    }
+    for (size_t j = 0; j < i; ++j) {
+      if (stream->handle == info->streams[j].handle) {
+        return false;
+      }
+    }
+    for (size_t j = 0; j < info->resource_count; ++j) {
+      if (stream->handle == resources[j].handle) {
+        return false;
+      }
+    }
+    for (size_t j = 0; j < info->root_count; ++j) {
+      if (stream->handle == roots[j].handle) {
+        return false;
+      }
+    }
+    for (size_t j = 0; j < info->working_directory_count; ++j) {
+      if (stream->handle == directories[j]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 static bool valid_startup(const struct startup_info *info)
 {
   if (!info || (uintptr_t)info % _Alignof(struct startup_info) ||
@@ -88,6 +129,10 @@ static bool valid_startup(const struct startup_info *info)
     if (directories[i] == HANDLE_INVALID) {
       return false;
     }
+  }
+
+  if (!valid_streams(info)) {
+    return false;
   }
 
   uint64_t arguments = (uintptr_t)info + info->read_only_size;
@@ -200,4 +245,12 @@ handle_t startup_working_directory(size_t index)
 const char *startup_working_path(void)
 {
   return (const char *)(uintptr_t)startup->working_path;
+}
+
+struct startup_stream startup_stream(enum startup_stream_index index)
+{
+  if ((unsigned)index >= STARTUP_STREAM_COUNT) {
+    return (struct startup_stream){0};
+  }
+  return startup->streams[index];
 }

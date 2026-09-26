@@ -46,13 +46,13 @@ static int launch_shell(const struct session_config *config, const struct networ
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 10 ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 10 - STARTUP_STREAM_COUNT ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 10 + depth) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 10 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -177,6 +177,19 @@ static int launch_shell(const struct session_config *config, const struct networ
     .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = 1,
   };
+
+  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+    struct startup_stream stream = startup_stream(i);
+    if (stream.protocol == STARTUP_STREAM_NONE) {
+      continue;
+    }
+    bool input = i == STARTUP_STDIN;
+    uint64_t rights = stream.protocol == PROTOCOL_FILE ?
+        (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
+        (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
+    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+  }
 
   if (configure_network && !network_config_apply(network)) {
     goto done;
