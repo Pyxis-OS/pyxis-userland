@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <stdio.h>
+#include <startup.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,8 +29,11 @@ int main(int argc, char **argv)
       continue;
     }
 
+    /* fread fills its request, but console input has no EOF to end a batch. */
+    size_t read_size = input && startup_stream(STARTUP_STDIN).protocol == PROTOCOL_CONSOLE ?
+        1 : sizeof(buffer);
     for (;;) {
-      size_t count = fread(buffer, 1, sizeof(buffer), file);
+      size_t count = fread(buffer, 1, read_size, file);
       /* A read can return bytes and an error together. Preserve the error
        * across output, but still copy the bytes that were read. */
       int read_error = ferror(file) ? errno : 0;
