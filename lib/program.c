@@ -52,8 +52,27 @@ static enum call_status open_interpreter(const char *uri, handle_t *image)
   return status;
 }
 
-static enum call_status launch_script(handle_t launcher, const struct launch_request *source,
-    const char *interpreter, handle_t *child)
+struct script_scratch {
+  char *prefix;
+  struct launch_grant *grants;
+  struct launch_binding *resources;
+  const char **arguments;
+  handle_t image;
+};
+
+static void release_script(struct script_scratch *scratch)
+{
+  if (scratch->image != HANDLE_INVALID) {
+    handle_close(scratch->image);
+  }
+  free(scratch->arguments);
+  free(scratch->resources);
+  free(scratch->grants);
+  free(scratch->prefix);
+}
+
+static enum call_status prepare_script(const struct launch_request *source,
+    const char *interpreter, struct launch_request *request, struct script_scratch *scratch)
 {
   if (!source->argc || !source->argv ||
       (source->grant_count && !source->grants) ||
@@ -72,51 +91,72 @@ static enum call_status launch_script(handle_t launcher, const struct launch_req
     }
   }
 
-  struct launch_grant *grants = malloc((source->grant_count + 1) * sizeof(*grants));
-  struct launch_binding *resources = malloc((source->resource_count + 1) * sizeof(*resources));
-  const char **arguments = malloc((source->argc + 2) * sizeof(*arguments));
-  handle_t image = HANDLE_INVALID;
-  enum call_status status = CALL_NO_MEMORY;
-  if (!grants || !resources || !arguments) {
-    goto done;
+  scratch->grants = malloc((source->grant_count + 1) * sizeof(*scratch->grants));
+  scratch->resources = malloc((source->resource_count + 1) * sizeof(*scratch->resources));
+  scratch->arguments = malloc((source->argc + 2) * sizeof(*scratch->arguments));
+  if (!scratch->grants || !scratch->resources || !scratch->arguments) {
+    return CALL_NO_MEMORY;
   }
-  status = open_interpreter(interpreter, &image);
+  enum call_status status = open_interpreter(interpreter, &scratch->image);
   if (status != CALL_OK) {
-    goto done;
+    return status;
   }
 
   if (source->grant_count) {
-    memcpy(grants, (const void *)(uintptr_t)source->grants, source->grant_count * sizeof(*grants));
+    memcpy(scratch->grants, (const void *)(uintptr_t)source->grants,
+        source->grant_count * sizeof(*scratch->grants));
   }
-  grants[source->grant_count] = (struct launch_grant){source->image, FILE_RIGHT_READ};
+  scratch->grants[source->grant_count] = (struct launch_grant){source->image, FILE_RIGHT_READ};
   if (source->resource_count) {
-    memcpy(resources, original_resources, source->resource_count * sizeof(*resources));
+    memcpy(scratch->resources, original_resources,
+        source->resource_count * sizeof(*scratch->resources));
   }
-  resources[source->resource_count] = (struct launch_binding){(uintptr_t)"script", source->grant_count};
-  arguments[0] = interpreter;
-  memcpy(arguments + 1, (const void *)(uintptr_t)source->argv, source->argc * sizeof(*arguments));
-  arguments[source->argc + 1] = NULL;
+  scratch->resources[source->resource_count] =
+      (struct launch_binding){(uintptr_t)"script", source->grant_count};
+  scratch->arguments[0] = interpreter;
+  memcpy(scratch->arguments + 1, (const void *)(uintptr_t)source->argv,
+      source->argc * sizeof(*scratch->arguments));
+  scratch->arguments[source->argc + 1] = NULL;
 
-  struct launch_request request = *source;
-  request.image = image;
-  request.grants = (uintptr_t)grants;
-  request.grant_count++;
-  request.resources = (uintptr_t)resources;
-  request.resource_count++;
-  request.argv = (uintptr_t)arguments;
-  request.argc++;
+  request->image = scratch->image;
+  request->grants = (uintptr_t)scratch->grants;
+  request->grant_count++;
+  request->resources = (uintptr_t)scratch->resources;
+  request->resource_count++;
+  request->argv = (uintptr_t)scratch->arguments;
+  request->argc++;
   /* The low-level launcher accepts only PXE, so another script cannot recurse.
    * Appending the new grant preserves ordinary and standard-stream indices;
    * streams still refer to their sole child grant, without a script-side copy. */
-  status = launcher_launch(launcher, &request, child);
+  return CALL_OK;
+}
 
-done:
-  if (image != HANDLE_INVALID) {
-    handle_close(image);
+static enum call_status prepare_program(const struct launch_request *source,
+    struct launch_request *request, struct script_scratch *scratch)
+{
+  *request = *source;
+  /* Keep the bounded file prefix out of the caller's stack budget. */
+  scratch->prefix = malloc(SHEBANG_PREFIX_SIZE);
+  if (!scratch->prefix) {
+    return CALL_NO_MEMORY;
   }
-  free(arguments);
-  free(resources);
-  free(grants);
+  size_t size;
+  enum call_status status = read_prefix(source->image, scratch->prefix, &size);
+  if (status == CALL_OK) {
+    struct shebang script;
+    enum shebang_result format = shebang_parse(scratch->prefix, size, &script);
+    if (format == SHEBANG_NONE) {
+      free(scratch->prefix);
+      scratch->prefix = NULL;
+    } else if (format == SHEBANG_OK) {
+      /* The limit leaves one byte beyond the URI for this terminator, even
+       * when EOF rather than LF ends a maximum-length shebang. */
+      scratch->prefix[script.interpreter - scratch->prefix + script.length] = '\0';
+      status = prepare_script(source, script.interpreter, request, scratch);
+    } else {
+      status = format == SHEBANG_TOO_LONG ? CALL_LIMIT : CALL_BAD_REQUEST;
+    }
+  }
   return status;
 }
 
@@ -130,27 +170,51 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
   if (!request) {
     return CALL_BAD_REQUEST;
   }
-  /* The first user stack is one page: keep the bounded file prefix on the heap. */
-  char *prefix = malloc(SHEBANG_PREFIX_SIZE);
-  if (!prefix) {
-    return CALL_NO_MEMORY;
-  }
-  size_t size;
-  enum call_status status = read_prefix(request->image, prefix, &size);
+
+  struct script_scratch scratch = {0};
+  struct launch_request prepared;
+  enum call_status status = prepare_program(request, &prepared, &scratch);
   if (status == CALL_OK) {
-    struct shebang script;
-    enum shebang_result format = shebang_parse(prefix, size, &script);
-    if (format == SHEBANG_NONE) {
-      status = launcher_launch(launcher, request, child);
-    } else if (format == SHEBANG_OK) {
-      /* The limit leaves one byte beyond the URI for this terminator, even
-       * when EOF rather than LF ends a maximum-length shebang. */
-      prefix[script.interpreter - prefix + script.length] = '\0';
-      status = launch_script(launcher, request, script.interpreter, child);
-    } else {
-      status = format == SHEBANG_TOO_LONG ? CALL_LIMIT : CALL_BAD_REQUEST;
+    status = launcher_launch(launcher, &prepared, child);
+  }
+  release_script(&scratch);
+  return status;
+}
+
+enum call_status program_launch_batch(handle_t launcher, const struct launch_request *requests,
+    size_t count, handle_t *children, uint64_t *failed_index)
+{
+  if (failed_index) {
+    *failed_index = LAUNCH_NO_STAGE;
+  }
+  if (children && count > 0 && count <= LAUNCH_BATCH_MAX) {
+    for (size_t i = 0; i < count; ++i) {
+      children[i] = HANDLE_INVALID;
     }
   }
-  free(prefix);
+  if (!requests || !children || !failed_index || !count || count > LAUNCH_BATCH_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+
+  struct launch_request *prepared = malloc(count * sizeof(*prepared));
+  if (!prepared) {
+    return CALL_NO_MEMORY;
+  }
+  struct script_scratch scratch[LAUNCH_BATCH_MAX] = {0};
+  enum call_status status = CALL_OK;
+  for (size_t i = 0; i < count; ++i) {
+    status = prepare_program(&requests[i], &prepared[i], &scratch[i]);
+    if (status != CALL_OK) {
+      *failed_index = i;
+      break;
+    }
+  }
+  if (status == CALL_OK) {
+    status = launcher_launch_batch(launcher, prepared, count, children, failed_index);
+  }
+  for (size_t i = 0; i < count; ++i) {
+    release_script(&scratch[i]);
+  }
+  free(prepared);
   return status;
 }
