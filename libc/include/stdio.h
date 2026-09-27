@@ -7,6 +7,7 @@
 typedef struct pyxis_file FILE;
 
 #define EOF (-1)
+#define BUFSIZ 8192
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -19,7 +20,7 @@ extern FILE *stderr;
  * (no effect), resolving native capability paths and the initial directory.
  * Private descriptors own handles and file offsets; FILE owns its association
  * and indicators. Standard descriptors adopt exclusive startup handles once.
- * No fd API, setvbuf, freopen, pushback, scanning or wide I/O in this slice. */
+ * No fdopen/fileno, setvbuf, freopen, pushback, scanning or wide I/O here. */
 FILE *fopen(const char *restrict path, const char *restrict mode);
 int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
