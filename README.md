@@ -38,6 +38,14 @@ receiver after receiving a call and starts another client against a retained
 caller grant; `--exit` lets process teardown close the receiver. The shell
 delegates endpoint creation and launch authority only to `session` commands.
 
+`session app://server.pxe --send` grants a client send-only authority. It sends
+4 KiB and four file grants, closes its sources and exits before the server
+receives the message. The server finishes the receipt and then reads the
+retained file grants. `--mixed` holds one call receipt while a send-only client
+admits fifteen sends and gets `QUEUE_FULL` on its sixteenth. The server waits
+for that sender to exit, receives and finishes the sends, then replies to the
+held call.
+
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double
 arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to

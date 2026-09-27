@@ -20,6 +20,10 @@ static bool packet_valid(const struct endpoint_packet *packet, size_t size,
   if (received ? packet->receipt == HANDLE_INVALID : packet->receipt != HANDLE_INVALID) {
     return false;
   }
+  if (received ? (packet->kind != ENDPOINT_MESSAGE_CALL &&
+      packet->kind != ENDPOINT_MESSAGE_SEND) : packet->kind != ENDPOINT_MESSAGE_CALL) {
+    return false;
+  }
   for (size_t i = 0; i < packet->grant_count; ++i) {
     if (packet->grants[i].handle == HANDLE_INVALID) {
       return false;
@@ -103,11 +107,25 @@ enum call_status endpoint_request(handle_t caller, const void *bytes, size_t siz
   }
   if (result.reply_size != ENDPOINT_PACKET_HEADER_SIZE ||
       packet.delivery > ENDPOINT_DELIVERED || packet.receipt != HANDLE_INVALID ||
-      packet.grant_count != 0 || packet.size != 0) {
+      packet.kind != ENDPOINT_MESSAGE_CALL || packet.grant_count != 0 || packet.size != 0) {
     return CALL_OUTCOME_UNKNOWN;
   }
   reply->delivery = packet.delivery;
   return status;
+}
+
+enum call_status endpoint_send(handle_t caller, const void *bytes, size_t size,
+    const struct endpoint_grant *grants, size_t grant_count)
+{
+  struct endpoint_message message;
+  enum call_status status = make_message(&message, PROTOCOL_ENDPOINT, ENDPOINT_SEND,
+      bytes, size, grants, grant_count);
+  if (status != CALL_OK) {
+    return status;
+  }
+  struct syscall_result result = syscall_call(caller, &message, sizeof(message), NULL, 0);
+  status = checked_status(result);
+  return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
 }
 
 enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request)
@@ -145,5 +163,12 @@ enum call_status endpoint_reply(handle_t receipt, uint64_t application_result,
   message.result = application_result;
   struct syscall_result result = syscall_call(receipt, &message, sizeof(message), NULL, 0);
   status = checked_status(result);
+  return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
+}
+
+enum call_status endpoint_finish(handle_t receipt)
+{
+  struct syscall_result result = syscall_close(receipt);
+  enum call_status status = checked_status(result);
   return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
 }
