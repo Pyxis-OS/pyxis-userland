@@ -46,6 +46,18 @@ admits fifteen sends and gets `QUEUE_FULL` on its sixteenth. The server waits
 for that sender to exit, receives and finishes the sends, then replies to the
 held call.
 
+Deadline examples use the session's explicit monotonic clock grant. `--expired`
+rejects a past deadline before admission. `--queued-timeout` leaves a call in
+the queue until its deadline and confirms that a later send is received first.
+`--deadline-reply` completes a call before its deadline. `--delivered-timeout`
+blocks in RECEIVE for cancellation, rejects a late reply without consuming its
+receipt, then finishes it. `--cancel-full` holds one received call and fifteen
+queued sends through expiry, confirming that the cancellation notice arrives
+before the ordinary queue despite all sixteen slots being occupied. Admission
+remains full until the provider finishes the canceled receipt.
+`--cancel-finish` closes an expired receipt before RECEIVE and confirms that
+its pending notice is removed.
+
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double
 arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
