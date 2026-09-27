@@ -144,7 +144,9 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
     .position = position, .readable = mode->readable, .writable = mode->writable,
     .append = mode->append, .stream = stream,
   };
-  stream->descriptor = descriptor;
+  if (stream) {
+    stream->descriptor = descriptor;
+  }
   return descriptor;
 }
 

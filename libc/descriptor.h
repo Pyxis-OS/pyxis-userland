@@ -14,6 +14,7 @@ struct descriptor_mode {
 /* Entries own their native handle and cursor. A FILE association owns neither;
  * close invalidates it before reuse. No entry pointer escapes this module. */
 void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream);
+/* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
 bool descriptor_ready(int descriptor, bool writing);
 int descriptor_close(int descriptor);
