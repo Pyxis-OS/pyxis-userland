@@ -36,7 +36,8 @@ abandonment. `--saturate` retains sixteen receipts while a seventeenth client
 reports queue saturation, then replies in reverse order. `--close` closes the
 receiver after receiving a call and starts another client against a retained
 caller grant; `--exit` lets process teardown close the receiver. The shell
-delegates endpoint creation and launch authority only to `session` commands.
+delegates launch authority through `session`; endpoint creation is also
+delegated to providers launched with `service start` or `service replace`.
 
 `session app://server.pxe --send` grants a client send-only authority. It sends
 4 KiB and four file grants, closes its sources and exits before the server
@@ -72,6 +73,59 @@ its export, then withdraws while the client's following CALL waits in the queue;
 the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
+
+The init script creates a namespace before handing off to the interactive
+session. The shell keeps management authority; ordinary children receive
+LOOKUP only. A provider launched through `service start` gets an endpoint
+creation grant and a one-use publication CALL endpoint, without a namespace
+grant. The shell publishes its attached export and replies before the provider
+starts serving. For example:
+
+```sh
+service start clicks app://counter.pxe --provide
+counter --lookup clicks
+counter --add clicks
+counter --restrict clicks
+counter --hold clicks &
+service replace clicks app://counter.pxe --provide
+counter --lookup clicks
+service replace clicks app://counter.pxe --provide-once
+counter --lookup clicks
+counter --lookup clicks
+namespace remove clicks
+counter --lookup clicks
+```
+
+The first lookup prints 4, ADD prints 7, and `--restrict` reports denied
+namespace removal and denied ADD. The held client later prints 7 from the old
+provider; a fresh lookup after replacement prints 4. `--provide-once` answers
+one lookup and exits. The following lookup reports ENDPOINT_CLOSED, and after
+removal it reports NOT_FOUND.
+
+`service start` requires an absent binding; `service replace` requires an
+existing one, including a dead binding. Both reject names that also select a
+filesystem root. The provider's publication CALL expires after ten seconds,
+but the shell can remain waiting if a provider exits before sending its CALL:
+RECEIVE cannot wait on provider exit at the same time. `namespace create`
+selects a fresh namespace, also when the shell already has one. In a trusted
+interactive shell, the following creates a separately populated namespace;
+new ordinary children cannot see `first`, while the old namespace remains
+held by the previous session until its owners exit:
+
+```sh
+service start first app://counter.pxe --provide
+namespace create
+counter --lookup first
+service start second app://counter.pxe --provide
+counter --lookup second
+```
+
+The first lookup reports NOT_FOUND; the second prints 4.
+Script interpreter paths also resolve against the shell's current namespace
+after a switch, so a name bound as both service and filesystem root is rejected.
+
+`namespace remove NAME` releases a binding without closing client grants
+already looked up elsewhere.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double

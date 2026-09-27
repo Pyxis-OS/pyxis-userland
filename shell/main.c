@@ -61,6 +61,8 @@ int main(int argc, char **argv)
     .tcp = startup_resource("tcp"),
     .pipe = startup_resource("pipe"),
     .service = startup_resource("service"),
+    .namespace_service = startup_resource("namespace_service"),
+    .namespace = startup_namespace(),
     .random = startup_resource("random"),
     .net_config = startup_resource("net_config"),
     .keyboard = startup_resource("keyboard"),
@@ -96,6 +98,7 @@ int main(int argc, char **argv)
   shell.roots[2] = (struct path_root){"host", shell.host};
   shell.directory.roots = shell.roots;
   shell.directory.root_count = shell.host != HANDLE_INVALID ? 3 : 2;
+  shell.directory.namespace = shell.namespace;
 
   if (script != HANDLE_INVALID) {
     result = shell_script(&shell, script, line, arguments);
@@ -138,6 +141,9 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
+    result = EXIT_FAILURE;
+  }
   shell_directory_close(&shell);
   if (shell.owns_host && handle_close(shell.host) != 0) {
     result = EXIT_FAILURE;

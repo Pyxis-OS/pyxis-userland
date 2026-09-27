@@ -24,6 +24,8 @@ struct startup_stream startup_stream(enum startup_stream_index index);
 
 handle_t startup_resource(const char *name);
 handle_t startup_root(const char *scheme);
+/* Borrow the dedicated namespace handle; absent means HANDLE_INVALID. */
+handle_t startup_namespace(void);
 const char *startup_environment(const char *name);
 
 /* Borrowed immutable array for explicitly forwarding the initial environment. */

@@ -473,6 +473,13 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
 
 int main(int argc, char **argv)
 {
+  if (argc > 1 && (!strcmp(argv[1], "--provide") ||
+      !strcmp(argv[1], "--provide-once") || !strcmp(argv[1], "--lookup") ||
+      !strcmp(argv[1], "--add") || !strcmp(argv[1], "--restrict") ||
+      !strcmp(argv[1], "--hold"))) {
+    extern int counter_namespace_main(int argc, char **argv);
+    return counter_namespace_main(argc, argv);
+  }
   if (argc == 2 && !strcmp(argv[1], "client-basic")) {
     return client_basic();
   }

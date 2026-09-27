@@ -16,7 +16,8 @@ enum command_result {
   COMMAND_FATAL, /* Terminal, wait or cleanup failed; input cannot resume. */
 };
 
-enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION };
+enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
+    SHELL_SERVICE };
 
 struct shell_redirection {
   enum startup_stream_index stream;
@@ -40,8 +41,11 @@ struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   struct terminal terminal;
-  handle_t profile, space, launcher, memory, display, clock, echo, udp, tcp, pipe, service, random, net_config, keyboard, app, home, host, host_mount;
+  handle_t profile, space, launcher, memory, display, clock, echo, udp, tcp, pipe,
+      service, namespace_service, namespace, random, net_config, keyboard,
+      app, home, host, host_mount;
   bool owns_host;
+  bool owns_namespace;
   struct path_root roots[3];
   struct path_context directory;
   struct path_workspace workspace;
@@ -69,6 +73,8 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
     size_t redirection_count);
 enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_command_line *command);
+enum command_result shell_launch_service(struct shell *shell, const char *name,
+    bool replace, char **arguments, size_t count);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 

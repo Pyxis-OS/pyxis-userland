@@ -83,6 +83,9 @@ static bool valid_streams(const struct startup_info *info)
         return false;
       }
     }
+    if (stream->handle == info->namespace) {
+      return false;
+    }
   }
   return true;
 }
@@ -198,6 +201,11 @@ handle_t startup_resource(const char *name)
 handle_t startup_root(const char *scheme)
 {
   return find_binding(startup->roots, startup->root_count, scheme);
+}
+
+handle_t startup_namespace(void)
+{
+  return startup->namespace;
 }
 
 const char *startup_environment(const char *name)

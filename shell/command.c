@@ -1,6 +1,8 @@
 #include "shell.h"
 #include "../common/directory.h"
 #include <mount.h>
+#include <namespace.h>
+#include <handle.h>
 #include <space.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -97,7 +99,8 @@ static bool is_builtin(const char *name)
 {
   return !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "title") ||
-      !strcmp(name, "session");
+      !strcmp(name, "session") || !strcmp(name, "namespace") ||
+      !strcmp(name, "service");
 }
 
 enum command_result shell_command(struct shell *shell, char *line, char **arguments)
@@ -164,6 +167,42 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
       return shell_error(shell, "usage: session program [arguments...]\n");
     }
     return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION, NULL, 0);
+  }
+  if (strcmp(arguments[0], "namespace") == 0) {
+    if (count == 2 && !strcmp(arguments[1], "create")) {
+      handle_t namespace_handle;
+      enum call_status status = namespace_create(shell->namespace_service,
+          &namespace_handle);
+      if (status != CALL_OK) {
+        return shell_error(shell, "namespace: create failed (status %u)\n", status);
+      }
+      if (shell->owns_namespace && handle_close(shell->namespace) != 0) {
+        handle_close(namespace_handle);
+        return shell_error(shell, "namespace: close previous namespace failed\n");
+      }
+      shell->namespace = namespace_handle;
+      shell->owns_namespace = true;
+      shell->directory.namespace = namespace_handle;
+      return COMMAND_OK;
+    }
+    if (count == 3 && !strcmp(arguments[1], "remove")) {
+      enum call_status status = namespace_remove(shell->namespace, arguments[2]);
+      if (status != CALL_OK) {
+        return shell_error(shell, "namespace: remove %s failed (status %u)\n",
+            arguments[2], status);
+      }
+      return COMMAND_OK;
+    }
+    return shell_error(shell, "usage: namespace create | namespace remove NAME\n");
+  }
+  if (strcmp(arguments[0], "service") == 0) {
+    if (count < 4 || (strcmp(arguments[1], "start") &&
+        strcmp(arguments[1], "replace"))) {
+      return shell_error(shell,
+          "usage: service start|replace NAME IMAGE [arguments...]\n");
+    }
+    return shell_launch_service(shell, arguments[2],
+        !strcmp(arguments[1], "replace"), arguments + 3, count - 3);
   }
   return shell_launch(shell, arguments, count,
       command.background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
