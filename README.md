@@ -120,6 +120,8 @@ counter --lookup second
 ```
 
 The first lookup reports NOT_FOUND; the second prints 4.
+Script interpreter paths also resolve against the shell's current namespace
+after a switch, so a name bound as both service and filesystem root is rejected.
 
 `namespace remove NAME` releases a binding without closing client grants
 already looked up elsewhere.

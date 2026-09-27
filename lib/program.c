@@ -34,7 +34,8 @@ static enum call_status read_prefix(handle_t file, char *bytes, size_t *size)
   return CALL_OK;
 }
 
-static enum call_status open_interpreter(const char *uri, handle_t *image)
+static enum call_status open_interpreter(const struct path_context *context,
+    const char *uri, handle_t *image)
 {
   size_t capacity = strlen(uri) + 1; /* Bounded by the shebang parser. */
   handle_t *directories = malloc(capacity * sizeof(*directories));
@@ -45,7 +46,7 @@ static enum call_status open_interpreter(const char *uri, handle_t *image)
     return CALL_NO_MEMORY;
   }
   struct path_workspace workspace = {directories, capacity, component, capacity};
-  enum call_status status = path_resolve(NULL, uri, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+  enum call_status status = path_resolve(context, uri, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
       &workspace, image);
   free(component);
   free(directories);
@@ -72,7 +73,8 @@ static void release_script(struct script_scratch *scratch)
 }
 
 static enum call_status prepare_script(const struct launch_request *source,
-    const char *interpreter, struct launch_request *request, struct script_scratch *scratch)
+    const char *interpreter, const struct path_context *interpreter_context,
+    struct launch_request *request, struct script_scratch *scratch)
 {
   if (!source->argc || !source->argv ||
       (source->grant_count && !source->grants) ||
@@ -97,7 +99,8 @@ static enum call_status prepare_script(const struct launch_request *source,
   if (!scratch->grants || !scratch->resources || !scratch->arguments) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = open_interpreter(interpreter, &scratch->image);
+  enum call_status status = open_interpreter(interpreter_context, interpreter,
+      &scratch->image);
   if (status != CALL_OK) {
     return status;
   }
@@ -132,7 +135,8 @@ static enum call_status prepare_script(const struct launch_request *source,
 }
 
 static enum call_status prepare_program(const struct launch_request *source,
-    struct launch_request *request, struct script_scratch *scratch)
+    const struct path_context *interpreter_context, struct launch_request *request,
+    struct script_scratch *scratch)
 {
   *request = *source;
   /* Keep the bounded file prefix out of the caller's stack budget. */
@@ -152,7 +156,8 @@ static enum call_status prepare_program(const struct launch_request *source,
       /* The limit leaves one byte beyond the URI for this terminator, even
        * when EOF rather than LF ends a maximum-length shebang. */
       scratch->prefix[script.interpreter - scratch->prefix + script.length] = '\0';
-      status = prepare_script(source, script.interpreter, request, scratch);
+      status = prepare_script(source, script.interpreter, interpreter_context,
+          request, scratch);
     } else {
       status = format == SHEBANG_TOO_LONG ? CALL_LIMIT : CALL_BAD_REQUEST;
     }
@@ -161,7 +166,7 @@ static enum call_status prepare_program(const struct launch_request *source,
 }
 
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
-                                 handle_t *child)
+    const struct path_context *interpreter_context, handle_t *child)
 {
   if (!child) {
     return CALL_BAD_REQUEST;
@@ -173,7 +178,8 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
 
   struct script_scratch scratch = {0};
   struct launch_request prepared;
-  enum call_status status = prepare_program(request, &prepared, &scratch);
+  enum call_status status = prepare_program(request, interpreter_context,
+      &prepared, &scratch);
   if (status == CALL_OK) {
     status = launcher_launch(launcher, &prepared, child);
   }
@@ -182,7 +188,8 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
 }
 
 enum call_status program_launch_batch(handle_t launcher, const struct launch_request *requests,
-    size_t count, handle_t *children, uint64_t *failed_index)
+    size_t count, const struct path_context *interpreter_context,
+    handle_t *children, uint64_t *failed_index)
 {
   if (failed_index) {
     *failed_index = LAUNCH_NO_STAGE;
@@ -203,7 +210,8 @@ enum call_status program_launch_batch(handle_t launcher, const struct launch_req
   struct script_scratch scratch[LAUNCH_BATCH_MAX] = {0};
   enum call_status status = CALL_OK;
   for (size_t i = 0; i < count; ++i) {
-    status = prepare_program(&requests[i], &prepared[i], &scratch[i]);
+    status = prepare_program(&requests[i], interpreter_context,
+        &prepared[i], &scratch[i]);
     if (status != CALL_OK) {
       *failed_index = i;
       break;

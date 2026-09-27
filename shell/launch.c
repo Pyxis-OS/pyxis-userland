@@ -465,11 +465,13 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
 
   operation = "shell: launch";
   path = stages[0].arguments[0];
+  struct path_context interpreter_context = {.namespace = shell->namespace};
   if (stage_count == 1) {
-    status = program_launch(shell->launcher, &requests[0], &children[0]);
+    status = program_launch(shell->launcher, &requests[0], &interpreter_context,
+        &children[0]);
   } else {
-    status = program_launch_batch(shell->launcher, requests, stage_count, children,
-        &failed_index);
+    status = program_launch_batch(shell->launcher, requests, stage_count,
+        &interpreter_context, children, &failed_index);
   }
   if (status != CALL_OK) {
     failed_stage = failed_index == LAUNCH_NO_STAGE ? stage_count : failed_index;
