@@ -55,11 +55,11 @@ static enum call_status launch_client(handle_t launcher, handle_t image,
       !strcmp(mode, "delivered-timeout") || !strcmp(mode, "cancel-full") ||
       !strcmp(mode, "cancel-finish") || !strcmp(mode, "deadline-reply");
   struct launch_grant grants[GRANT_COUNT] = {
-    [OUTPUT] = {output, CONSOLE_RIGHT_WRITE},
-    [MEMORY] = {memory, MEMORY_RIGHT_MANAGE},
+    [OUTPUT] = {output, CONSOLE_RIGHT_WRITE, 0},
+    [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CALLER] = {caller, 0, send_only ? HANDLE_TRANSPORT_SEND : HANDLE_TRANSPORT_CALL},
-    [CONTENT] = {content, FILE_RIGHT_READ},
-    [CLOCK] = {clock, CLOCK_RIGHT_READ},
+    [CONTENT] = {content, FILE_RIGHT_READ, 0},
+    [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
   };
   struct launch_binding resources[] = {
     {(uintptr_t)"output", OUTPUT},

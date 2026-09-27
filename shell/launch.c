@@ -146,57 +146,57 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   struct launch_grant *grants = prepared->grants;
   uint64_t *directories = prepared->directories;
   if (named_input) {
-    grants[input_index] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ};
+    grants[input_index] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ, 0};
   }
-  grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE};
-  grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE};
-  grants[CHILD_APP] = (struct launch_grant){shell->app, 0};
-  grants[CHILD_HOME] = (struct launch_grant){shell->home, 0};
+  grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
+  grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
+  grants[CHILD_APP] = (struct launch_grant){shell->app, 0, 0};
+  grants[CHILD_HOME] = (struct launch_grant){shell->home, 0, 0};
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = CHILD_DIRECTORY + i;
-    grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i], 0};
+    grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i], 0, 0};
   }
   if (has_display) {
-    grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW};
+    grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW, 0};
   }
   if (has_clock) {
-    grants[clock_index] = (struct launch_grant){shell->clock, CLOCK_RIGHTS};
+    grants[clock_index] = (struct launch_grant){shell->clock, CLOCK_RIGHTS, 0};
   }
   if (has_echo) {
-    grants[echo_index] = (struct launch_grant){shell->echo, ECHO_RIGHT_SEND};
+    grants[echo_index] = (struct launch_grant){shell->echo, ECHO_RIGHT_SEND, 0};
   }
   if (has_udp) {
-    grants[udp_index] = (struct launch_grant){shell->udp, UDP_SERVICE_RIGHT_OPEN};
+    grants[udp_index] = (struct launch_grant){shell->udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   if (has_tcp) {
-    grants[tcp_index] = (struct launch_grant){shell->tcp, TCP_SERVICE_RIGHT_CONNECT};
+    grants[tcp_index] = (struct launch_grant){shell->tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
   }
   if (has_random) {
-    grants[random_index] = (struct launch_grant){shell->random, RANDOM_RIGHT_READ};
+    grants[random_index] = (struct launch_grant){shell->random, RANDOM_RIGHT_READ, 0};
   }
   if (has_keyboard) {
-    grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT};
+    grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT, 0};
   }
   if (has_host) {
-    grants[host_index] = (struct launch_grant){shell->host, 0};
+    grants[host_index] = (struct launch_grant){shell->host, 0, 0};
   }
   if (session) {
-    grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH};
+    grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   }
   if (has_net_config) {
-    grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS};
+    grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS, 0};
   }
   if (has_pipe) {
-    grants[pipe_index] = (struct launch_grant){shell->pipe, PIPE_SERVICE_RIGHT_CREATE};
+    grants[pipe_index] = (struct launch_grant){shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
   }
   if (has_service) {
-    grants[service_index] = (struct launch_grant){shell->service, ENDPOINT_SERVICE_RIGHT_CREATE};
+    grants[service_index] = (struct launch_grant){shell->service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
   }
   if (has_space) {
-    grants[space_index] = (struct launch_grant){shell->space, SPACE_RIGHT_SET_TITLE};
+    grants[space_index] = (struct launch_grant){shell->space, SPACE_RIGHT_SET_TITLE, 0};
   }
   if (has_profile) {
-    grants[profile_index] = (struct launch_grant){shell->profile, PROFILE_RIGHT_MEMORY};
+    grants[profile_index] = (struct launch_grant){shell->profile, PROFILE_RIGHT_MEMORY, 0};
   }
 
   struct launch_binding *resources = prepared->resources;
@@ -299,7 +299,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request->streams[i] = (struct launch_stream){stream.protocol, request->grant_count};
-    grants[request->grant_count++] = (struct launch_grant){stream.handle, rights};
+    grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, 0};
   }
   return CALL_OK;
 }

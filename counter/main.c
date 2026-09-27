@@ -87,6 +87,9 @@ static int client_basic(void)
         reply.delivery == ENDPOINT_NOT_DELIVERED;
   }
   if (ok) {
+    ok = invoke_value(read_copy, COUNTER_ADD, 99, COUNTER_RESULT_DENIED);
+  }
+  if (ok) {
     ok = invoke_value(second, COUNTER_ADD, 3, 12);
   }
   if (ok) {
@@ -191,48 +194,55 @@ static bool receive_retire(handle_t receiver, uint64_t first_id, uint64_t second
   return true;
 }
 
-static bool serve_call(handle_t receiver, uint64_t *first, uint64_t *second)
+static bool serve_packet(struct endpoint_packet *packet, uint64_t *first,
+    uint64_t *second)
 {
-  struct endpoint_packet packet;
-  if (endpoint_receive(receiver, &packet) != CALL_OK ||
-      (packet.kind != ENDPOINT_MESSAGE_CALL && packet.kind != ENDPOINT_MESSAGE_SEND) ||
-      packet.protocol != COUNTER_PROTOCOL || packet.reason != 0 ||
-      (packet.object_id != COUNTER_FIRST_ID &&
-      packet.object_id != COUNTER_SECOND_ID)) {
+  if ((packet->kind != ENDPOINT_MESSAGE_CALL &&
+      packet->kind != ENDPOINT_MESSAGE_SEND) ||
+      packet->protocol != COUNTER_PROTOCOL || packet->reason != 0 ||
+      (packet->object_id != COUNTER_FIRST_ID &&
+      packet->object_id != COUNTER_SECOND_ID)) {
     return false;
   }
-  uint64_t *value = packet.object_id == COUNTER_FIRST_ID ? first : second;
+  uint64_t *value = packet->object_id == COUNTER_FIRST_ID ? first : second;
   uint64_t result = COUNTER_RESULT_BAD_REQUEST;
-  if (packet.operation == COUNTER_GET && (packet.rights & COUNTER_RIGHT_READ) &&
-      packet.size == 0) {
+  if (packet->operation == COUNTER_GET && (packet->rights & COUNTER_RIGHT_READ) &&
+      packet->size == 0) {
     result = *value;
-  } else if (packet.operation == COUNTER_ADD &&
-      (packet.rights & COUNTER_RIGHT_WRITE) && packet.size == sizeof(uint64_t)) {
+  } else if (packet->operation == COUNTER_ADD &&
+      (packet->rights & COUNTER_RIGHT_WRITE) && packet->size == sizeof(uint64_t)) {
     uint64_t increment;
-    memcpy(&increment, packet.data, sizeof(increment));
+    memcpy(&increment, packet->data, sizeof(increment));
     *value += increment;
     result = *value;
-  } else if ((packet.operation == COUNTER_GET && !(packet.rights & COUNTER_RIGHT_READ)) ||
-      (packet.operation == COUNTER_ADD && !(packet.rights & COUNTER_RIGHT_WRITE))) {
+  } else if ((packet->operation == COUNTER_GET && !(packet->rights & COUNTER_RIGHT_READ)) ||
+      (packet->operation == COUNTER_ADD && !(packet->rights & COUNTER_RIGHT_WRITE))) {
     result = COUNTER_RESULT_DENIED;
   }
-  bool grant_ok = packet.grant_count ==
-      (packet.object_id == COUNTER_FIRST_ID ? 1 : 0);
-  if (packet.grant_count == 1) {
-    grant_ok = grant_ok && authority(packet.grants[0].handle,
+  bool grant_ok = packet->grant_count ==
+      (packet->object_id == COUNTER_FIRST_ID ? 1 : 0);
+  if (packet->grant_count == 1) {
+    grant_ok = grant_ok && authority(packet->grants[0].handle,
         COUNTER_RIGHT_READ, HANDLE_TRANSPORT_CALL);
   }
   enum call_status status;
-  if (packet.kind == ENDPOINT_MESSAGE_CALL) {
-    status = endpoint_reply(packet.receipt, result, NULL, 0,
-        packet.grant_count ? packet.grants : NULL, packet.grant_count);
+  if (packet->kind == ENDPOINT_MESSAGE_CALL) {
+    status = endpoint_reply(packet->receipt, result, NULL, 0,
+        packet->grant_count ? packet->grants : NULL, packet->grant_count);
   } else {
-    status = endpoint_finish(packet.receipt);
+    status = endpoint_finish(packet->receipt);
   }
-  for (size_t i = 0; i < packet.grant_count; ++i) {
-    grant_ok = close_handle(&packet.grants[i].handle) && grant_ok;
+  for (size_t i = 0; i < packet->grant_count; ++i) {
+    grant_ok = close_handle(&packet->grants[i].handle) && grant_ok;
   }
   return grant_ok && status == CALL_OK;
+}
+
+static bool serve_call(handle_t receiver, uint64_t *first, uint64_t *second)
+{
+  struct endpoint_packet packet;
+  return endpoint_receive(receiver, &packet) == CALL_OK &&
+      serve_packet(&packet, first, second);
 }
 
 static bool serve_basic(handle_t service, handle_t receiver, handle_t launcher,
@@ -252,14 +262,27 @@ static bool serve_basic(handle_t service, handle_t receiver, handle_t launcher,
   bool second_closed = close_handle(&second);
   ok = first_closed && second_closed && ok;
   uint64_t first_value = 4, second_value = 9;
-  for (size_t i = 0; ok && i < 3; ++i) {
-    ok = serve_call(receiver, &first_value, &second_value);
+  size_t deliveries = 0;
+  uint64_t retired = 0;
+  while (ok && (deliveries < 4 || retired != 3)) {
+    struct endpoint_packet packet;
+    ok = endpoint_receive(receiver, &packet) == CALL_OK;
+    if (!ok) {
+      break;
+    }
+    if (packet.kind == ENDPOINT_MESSAGE_RETIRE) {
+      uint64_t bit = packet.object_id == COUNTER_FIRST_ID ? 1 :
+          packet.object_id == COUNTER_SECOND_ID ? 2 : 0;
+      ok = bit && !(retired & bit) &&
+          endpoint_retire_ack(receiver, packet.object_id) == CALL_OK;
+      retired |= bit;
+    } else {
+      ok = deliveries < 4 && serve_packet(&packet, &first_value, &second_value);
+      ++deliveries;
+    }
   }
   if (ok) {
     ok = wait_child(child) && first_value == 4 && second_value == 14;
-  }
-  if (ok) {
-    ok = receive_retire(receiver, COUNTER_FIRST_ID, COUNTER_SECOND_ID);
   }
   return close_handle(&child) && ok;
 }
