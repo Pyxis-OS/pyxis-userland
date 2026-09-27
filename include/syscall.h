@@ -46,25 +46,27 @@ static inline struct syscall_result syscall_close(handle_t handle)
 }
 
 static inline struct syscall_result syscall_copy(handle_t source, uint64_t rights,
-    uint64_t flags, handle_t *destination)
+    uint64_t transport, uint64_t flags, handle_t *destination)
 {
   uint64_t status = SYSCALL_COPY;
-  uint64_t reply_size = flags;
-  register uint64_t arg4 __asm__("r10") = (uintptr_t)destination;
+  uint64_t reply_size = transport;
+  register uint64_t arg4 __asm__("r10") = flags;
+  register uint64_t arg5 __asm__("r8") = (uintptr_t)destination;
   __asm__ volatile("syscall"
                    : "+a"(status), "+d"(reply_size)
-                   : "D"(source), "S"(rights), "r"(arg4)
+                   : "D"(source), "S"(rights), "r"(arg4), "r"(arg5)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }
 
-static inline struct syscall_result syscall_handle_rights(handle_t handle, uint64_t *rights)
+static inline struct syscall_result syscall_handle_rights(handle_t handle,
+    struct handle_authority *authority)
 {
   uint64_t status = SYSCALL_HANDLE_RIGHTS;
   uint64_t reply_size;
   __asm__ volatile("syscall"
                    : "+a"(status), "=d"(reply_size)
-                   : "D"(handle), "S"(rights)
+                   : "D"(handle), "S"(authority)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }

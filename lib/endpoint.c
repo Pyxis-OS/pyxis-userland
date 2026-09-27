@@ -8,31 +8,40 @@ static enum call_status checked_status(struct syscall_result result)
 }
 
 static bool packet_valid(const struct endpoint_packet *packet, size_t size,
-    bool received, uint64_t deadline_ns)
+    bool received, uint64_t deadline_ns, uint64_t protocol, uint64_t operation)
 {
   if (size < ENDPOINT_PACKET_HEADER_SIZE ||
       packet->size > ENDPOINT_DATA_MAX ||
       size != ENDPOINT_PACKET_HEADER_SIZE + packet->size ||
-      packet->grant_count > ENDPOINT_GRANTS_MAX ||
-      packet->delivery != ENDPOINT_DELIVERED) {
-    return false;
-  }
-  if (received ? packet->receipt == HANDLE_INVALID : packet->receipt != HANDLE_INVALID) {
-    return false;
-  }
-  if (received ? (packet->kind != ENDPOINT_MESSAGE_CALL &&
-      packet->kind != ENDPOINT_MESSAGE_SEND &&
-      packet->kind != ENDPOINT_MESSAGE_CANCEL) : packet->kind != ENDPOINT_MESSAGE_CALL) {
+      packet->grant_count > ENDPOINT_GRANTS_MAX) {
     return false;
   }
   if (received) {
-    if (packet->result != 0 ||
+    if (packet->kind == ENDPOINT_MESSAGE_RETIRE) {
+      return packet->receipt == HANDLE_INVALID &&
+          packet->delivery == ENDPOINT_NOT_DELIVERED &&
+          packet->object_id != 0 && packet->protocol != 0 &&
+          packet->operation == 0 && packet->rights == 0 &&
+          packet->reason == 0 && packet->deadline_ns == 0 &&
+          packet->result == 0 && packet->size == 0 && packet->grant_count == 0;
+    }
+    if (packet->receipt == HANDLE_INVALID ||
+        packet->delivery != ENDPOINT_DELIVERED || packet->result != 0 ||
+        (packet->kind != ENDPOINT_MESSAGE_CALL &&
+        packet->kind != ENDPOINT_MESSAGE_SEND &&
+        packet->kind != ENDPOINT_MESSAGE_CANCEL) ||
         (packet->kind == ENDPOINT_MESSAGE_SEND && packet->deadline_ns != 0) ||
         (packet->kind == ENDPOINT_MESSAGE_CANCEL &&
-        (packet->deadline_ns == 0 || packet->size != 0 || packet->grant_count != 0))) {
+        ((packet->reason != CALL_TIMED_OUT && packet->reason != CALL_ENDPOINT_CLOSED) ||
+        packet->size != 0 || packet->grant_count != 0))) {
       return false;
     }
-  } else if (packet->deadline_ns != deadline_ns) {
+  } else if (packet->receipt != HANDLE_INVALID ||
+      packet->delivery != ENDPOINT_DELIVERED ||
+      packet->kind != ENDPOINT_MESSAGE_CALL ||
+      packet->deadline_ns != deadline_ns ||
+      packet->protocol != protocol || packet->operation != operation ||
+      packet->reason != 0) {
     return false;
   }
   for (size_t i = 0; i < packet->grant_count; ++i) {
@@ -44,7 +53,9 @@ static bool packet_valid(const struct endpoint_packet *packet, size_t size,
 }
 
 static enum call_status make_message(struct endpoint_message *message,
-    uint64_t protocol, uint64_t operation, const void *bytes, size_t size,
+    uint64_t outer_protocol, uint64_t endpoint_operation,
+    uint64_t protocol, uint64_t operation,
+    const void *bytes, size_t size,
     const struct endpoint_grant *grants, size_t grant_count)
 {
   if (size > ENDPOINT_DATA_MAX || (size && !bytes) ||
@@ -52,10 +63,12 @@ static enum call_status make_message(struct endpoint_message *message,
     return CALL_BAD_REQUEST;
   }
   *message = (struct endpoint_message){
-    .header = {protocol, operation},
+    .header = {outer_protocol, endpoint_operation},
     .buffer = (uintptr_t)bytes,
     .size = size,
     .grant_count = grant_count,
+    .protocol = protocol,
+    .operation = operation,
   };
   for (size_t i = 0; i < grant_count; ++i) {
     message->grants[i] = grants[i];
@@ -87,7 +100,61 @@ enum call_status endpoint_create(handle_t service, struct endpoint_create_reply 
   return result.reply_size == 0 || status == CALL_OUTCOME_UNKNOWN ? status : CALL_BAD_REQUEST;
 }
 
-enum call_status endpoint_request(handle_t caller, const void *bytes, size_t size,
+enum call_status endpoint_export(handle_t service, handle_t receiver,
+    uint64_t object_id, uint64_t protocol, uint64_t rights, uint64_t transport,
+    handle_t *client)
+{
+  if (!client) {
+    return CALL_BAD_REQUEST;
+  }
+  *client = HANDLE_INVALID;
+  struct endpoint_export_message request = {
+    .header = {PROTOCOL_ENDPOINT_SERVICE, ENDPOINT_EXPORT},
+    .receiver = receiver,
+    .object_id = object_id,
+    .protocol = protocol,
+    .rights = rights,
+    .transport = transport,
+  };
+  struct endpoint_export_reply reply = {0};
+  struct syscall_result result = syscall_call(service, &request, sizeof(request),
+      &reply, sizeof(reply));
+  enum call_status status = checked_status(result);
+  if (status != CALL_OK) {
+    return result.reply_size == 0 ? status : CALL_BAD_REQUEST;
+  }
+  if (result.reply_size != sizeof(reply) || reply.client == HANDLE_INVALID) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *client = reply.client;
+  return CALL_OK;
+}
+
+static enum call_status control(handle_t receiver, uint64_t operation,
+    uint64_t object_id)
+{
+  struct endpoint_control_message message = {
+    .header = {PROTOCOL_ENDPOINT_RECEIVER, operation},
+    .object_id = object_id,
+  };
+  struct syscall_result result = syscall_call(receiver, &message, sizeof(message),
+      NULL, 0);
+  enum call_status status = checked_status(result);
+  return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
+}
+
+enum call_status endpoint_withdraw(handle_t receiver, uint64_t object_id)
+{
+  return control(receiver, ENDPOINT_WITHDRAW, object_id);
+}
+
+enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id)
+{
+  return control(receiver, ENDPOINT_RETIRE_ACK, object_id);
+}
+
+enum call_status endpoint_invoke(handle_t caller, uint64_t protocol,
+    uint64_t operation, const void *bytes, size_t size,
     const struct endpoint_grant *grants, size_t grant_count, uint64_t deadline_ns,
     struct endpoint_packet *reply)
 {
@@ -96,7 +163,7 @@ enum call_status endpoint_request(handle_t caller, const void *bytes, size_t siz
   }
   struct endpoint_message message;
   enum call_status status = make_message(&message, PROTOCOL_ENDPOINT, ENDPOINT_CALL,
-      bytes, size, grants, grant_count);
+      protocol, operation, bytes, size, grants, grant_count);
   if (status != CALL_OK) {
     *reply = (struct endpoint_packet){0};
     return status;
@@ -107,7 +174,8 @@ enum call_status endpoint_request(handle_t caller, const void *bytes, size_t siz
       &packet, sizeof(packet));
   status = checked_status(result);
   if (status == CALL_OK) {
-    if (!packet_valid(&packet, result.reply_size, false, deadline_ns)) {
+    if (!packet_valid(&packet, result.reply_size, false, deadline_ns,
+        protocol, operation)) {
       *reply = (struct endpoint_packet){0};
       return CALL_OUTCOME_UNKNOWN;
     }
@@ -133,18 +201,33 @@ enum call_status endpoint_request(handle_t caller, const void *bytes, size_t siz
   return status;
 }
 
-enum call_status endpoint_send(handle_t caller, const void *bytes, size_t size,
+enum call_status endpoint_request(handle_t caller, const void *bytes, size_t size,
+    const struct endpoint_grant *grants, size_t grant_count, uint64_t deadline_ns,
+    struct endpoint_packet *reply)
+{
+  return endpoint_invoke(caller, 0, 0, bytes, size, grants, grant_count,
+      deadline_ns, reply);
+}
+
+enum call_status endpoint_notify(handle_t caller, uint64_t protocol,
+    uint64_t operation, const void *bytes, size_t size,
     const struct endpoint_grant *grants, size_t grant_count)
 {
   struct endpoint_message message;
   enum call_status status = make_message(&message, PROTOCOL_ENDPOINT, ENDPOINT_SEND,
-      bytes, size, grants, grant_count);
+      protocol, operation, bytes, size, grants, grant_count);
   if (status != CALL_OK) {
     return status;
   }
   struct syscall_result result = syscall_call(caller, &message, sizeof(message), NULL, 0);
   status = checked_status(result);
   return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
+}
+
+enum call_status endpoint_send(handle_t caller, const void *bytes, size_t size,
+    const struct endpoint_grant *grants, size_t grant_count)
+{
+  return endpoint_notify(caller, 0, 0, bytes, size, grants, grant_count);
 }
 
 enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request)
@@ -161,7 +244,7 @@ enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *req
     *request = (struct endpoint_packet){0};
     return result.reply_size == 0 ? status : CALL_BAD_REQUEST;
   }
-  if (!packet_valid(&packet, result.reply_size, true, 0)) {
+  if (!packet_valid(&packet, result.reply_size, true, 0, 0, 0)) {
     *request = (struct endpoint_packet){0};
     return CALL_OUTCOME_UNKNOWN;
   }
@@ -175,7 +258,7 @@ enum call_status endpoint_reply(handle_t receipt, uint64_t application_result,
 {
   struct endpoint_message message;
   enum call_status status = make_message(&message, PROTOCOL_ENDPOINT_RECEIPT,
-      ENDPOINT_REPLY, bytes, size, grants, grant_count);
+      ENDPOINT_REPLY, 0, 0, bytes, size, grants, grant_count);
   if (status != CALL_OK) {
     return status;
   }

@@ -255,14 +255,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
     struct launch_grant *grant = &grants[roots[i].grant];
-    enum call_status status = handle_rights(grant->source, &grant->rights);
+    enum call_status status = handle_rights(grant->source, &grant->rights,
+        &grant->transport);
     if (status != CALL_OK) {
       return status;
     }
   }
   for (size_t i = 0; i < depth; ++i) {
     struct launch_grant *grant = &grants[directories[i]];
-    enum call_status status = handle_rights(grant->source, &grant->rights);
+    enum call_status status = handle_rights(grant->source, &grant->rights,
+        &grant->transport);
     if (status != CALL_OK) {
       return status;
     }

@@ -149,7 +149,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
     struct launch_grant *grant = &grants[roots[i].grant];
-    status = handle_rights(grant->source, &grant->rights);
+    status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
       goto done;
@@ -157,7 +157,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   }
   for (size_t i = 0; i < depth; ++i) {
     struct launch_grant *grant = &grants[directories[i]];
-    status = handle_rights(grant->source, &grant->rights);
+    status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
       goto done;
