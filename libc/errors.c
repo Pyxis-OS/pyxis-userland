@@ -1,7 +1,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include "stream.h"
+#include "errors.h"
 
 int libc_call_errno(enum call_status status)
 {
@@ -40,6 +40,7 @@ char *strerror(int error)
   switch (error) {
   case 0: return "No error";
   case ENOMEM: return "Out of memory";
+  case EMFILE: return "Too many open files";
   case ENOSPC: return "No space left on device";
   case EDQUOT: return "Storage quota exceeded";
   case EFBIG: return "File too large";

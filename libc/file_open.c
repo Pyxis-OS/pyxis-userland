@@ -6,10 +6,11 @@
 #include <startup.h>
 #include <stdlib.h>
 #include <string.h>
-#include "stream.h"
+#include "descriptor.h"
+#include "errors.h"
 
-enum call_status stream_open_path(const char *path, uint64_t rights,
-                                 bool create, handle_t *handle)
+enum call_status file_open_path(const char *path, uint64_t rights,
+                               bool create, handle_t *handle)
 {
   *handle = HANDLE_INVALID;
   if (!path || !*path) {

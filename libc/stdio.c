@@ -1,15 +1,8 @@
-#include <abi/console.h>
-#include <abi/file.h>
-#include <abi/pipe.h>
-#include <console.h>
 #include <errno.h>
-#include <file.h>
-#include <handle.h>
-#include <limits.h>
-#include <pipe.h>
-#include <startup.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "descriptor.h"
 #include "runtime.h"
 #include "stream.h"
 
@@ -30,12 +23,12 @@ int stream_error(FILE *stream, int error)
 
 bool stream_ready(FILE *stream, bool writing)
 {
-  if (!stream || stream->closed || stream->handle == HANDLE_INVALID) {
-    stream_error(stream, stream && stream->open_error ? stream->open_error : EBADF);
+  if (!stream || stream->closed) {
+    stream_error(stream, EBADF);
     return false;
   }
-  if (writing ? !stream->writable : !stream->readable) {
-    stream_error(stream, EBADF);
+  if (!descriptor_ready(stream->descriptor, writing)) {
+    stream_error(stream, errno);
     return false;
   }
   return true;
@@ -49,45 +42,35 @@ static void register_stream(FILE *stream)
 
 static void standard_stream(FILE *stream, enum startup_stream_index index)
 {
-  struct startup_stream binding = startup_stream(index);
-  *stream = (FILE){
-    .kind = binding.protocol == PROTOCOL_FILE ? STREAM_FILE :
-        binding.protocol == PROTOCOL_PIPE ? STREAM_PIPE : STREAM_CONSOLE,
-    .handle = binding.handle,
-    .readable = index == STARTUP_STDIN,
-    .writable = index != STARTUP_STDIN,
-    .open_error = binding.protocol == STARTUP_STREAM_NONE ? EBADF : 0,
-  };
+  *stream = (FILE){.descriptor = -1};
+  descriptor_adopt_standard(index, stream);
   register_stream(stream);
 }
 
 void stdio_init(void)
 {
-  /* Startup validated exclusive stream handles. Adopt each directly: retaining
-   * another copy would keep a future pipe endpoint alive after fclose. */
   standard_stream(stdin, STARTUP_STDIN);
   standard_stream(stdout, STARTUP_STDOUT);
   standard_stream(stderr, STARTUP_STDERR);
 }
 
-static bool parse_mode(const char *mode, FILE *stream, bool *create, bool *truncate)
+static bool parse_mode(const char *text, struct descriptor_mode *mode)
 {
-  if (!mode || (*mode != 'r' && *mode != 'w' && *mode != 'a')) {
+  if (!text || (*text != 'r' && *text != 'w' && *text != 'a')) {
     return false;
   }
-  stream->readable = *mode == 'r';
-  stream->writable = *mode != 'r';
-  stream->append = *mode == 'a';
-  *create = *mode != 'r';
-  *truncate = *mode == 'w';
+  *mode = (struct descriptor_mode){
+    .readable = *text == 'r', .writable = *text != 'r',
+    .append = *text == 'a', .create = *text != 'r', .truncate = *text == 'w',
+  };
   bool binary = false, update = false;
-  while (*++mode) {
-    if (*mode == 'b' && !binary) {
+  while (*++text) {
+    if (*text == 'b' && !binary) {
       binary = true;
-    } else if (*mode == '+' && !update) {
+    } else if (*text == '+' && !update) {
       update = true;
-      stream->readable = true;
-      stream->writable = true;
+      mode->readable = true;
+      mode->writable = true;
     } else {
       return false;
     }
@@ -97,9 +80,8 @@ static bool parse_mode(const char *mode, FILE *stream, bool *create, bool *trunc
 
 FILE *fopen(const char *restrict path, const char *restrict mode)
 {
-  FILE initial = {.kind = STREAM_FILE, .allocated = true};
-  bool create, truncate;
-  if (!parse_mode(mode, &initial, &create, &truncate)) {
+  struct descriptor_mode options;
+  if (!parse_mode(mode, &options)) {
     errno = EINVAL;
     return NULL;
   }
@@ -107,24 +89,9 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
   if (!stream) {
     return NULL;
   }
-  *stream = initial;
-  uint64_t rights = (stream->readable ? FILE_RIGHT_READ : 0) |
-                    (stream->writable ? FILE_RIGHT_WRITE : 0);
-  enum call_status status = stream_open_path(path, rights, create, &stream->handle);
-  if (status == CALL_OK && truncate) {
-    /* Allocate the FILE and resolve all authority before truncating. Nothing
-     * fallible remains after a successful resize. */
-    status = file_resize(stream->handle, 0);
-  }
-  if (status == CALL_OK && stream->append && !stream->readable) {
-    status = file_size(stream->handle, &stream->position);
-  }
-  if (status != CALL_OK) {
-    if (stream->handle != HANDLE_INVALID) {
-      handle_close(stream->handle);
-    }
+  *stream = (FILE){.descriptor = -1, .allocated = true};
+  if (descriptor_open(path, &options, stream) < 0) {
     free(stream);
-    errno = libc_call_errno(status);
     return NULL;
   }
   register_stream(stream);
@@ -141,15 +108,8 @@ int fflush(FILE *stream)
   return 0;
 }
 
-int fclose(FILE *stream)
+static void dispose_stream(FILE *stream)
 {
-  if (!stream || stream->closed) {
-    return stream_error(stream, EBADF);
-  }
-  int result = fflush(stream);
-  if (stream->handle == HANDLE_INVALID || handle_close(stream->handle) != 0) {
-    result = stream_error(stream, stream->open_error ? stream->open_error : EBADF);
-  }
   FILE **link = &streams;
   while (*link && *link != stream) {
     link = &(*link)->next;
@@ -158,50 +118,42 @@ int fclose(FILE *stream)
     *link = stream->next;
   }
   stream->closed = true;
-  stream->handle = HANDLE_INVALID;
   if (stream->allocated) {
     free(stream);
   }
-  return result;
+}
+
+int fclose(FILE *stream)
+{
+  if (!stream || stream->closed) {
+    return stream_error(stream, EBADF);
+  }
+  int result = descriptor_close(stream->descriptor);
+  if (result < 0) {
+    stream_error(stream, errno);
+  }
+  dispose_stream(stream);
+  return result < 0 ? EOF : 0;
 }
 
 void stdio_finish(void)
 {
   fflush(NULL);
+  descriptor_finish();
   while (streams) {
-    fclose(streams);
+    dispose_stream(streams);
   }
 }
 
 static size_t read_some(void *buffer, size_t capacity, FILE *stream)
 {
   size_t read;
-  enum call_status status;
-  if (stream->kind == STREAM_FILE) {
-    if (capacity > UINT64_MAX - stream->position) {
-      stream_error(stream, EOVERFLOW);
-      return 0;
-    }
-    status = file_read(stream->handle, stream->position, buffer, capacity, &read);
-  } else if (stream->kind == STREAM_PIPE) {
-    status = pipe_read(stream->handle, buffer, capacity, &read);
-  } else {
-    status = console_read(stream->handle, buffer, capacity, &read);
-  }
-  if (status != CALL_OK) {
-    stream_error(stream, libc_call_errno(status));
+  if (descriptor_read(stream->descriptor, buffer, capacity, &read) < 0) {
+    stream_error(stream, errno);
     return 0;
   }
   if (!read) {
-    if (stream->kind == STREAM_CONSOLE) {
-      stream_error(stream, EIO); /* A nonempty terminal read has no EOF. */
-    } else {
-      stream->eof = true;
-    }
-    return 0;
-  }
-  if (stream->kind == STREAM_FILE) {
-    stream->position += read;
+    stream->eof = true;
   }
   return read;
 }
@@ -255,37 +207,11 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   }
   size_t bytes = size * count, total = 0;
   while (total < bytes) {
-    size_t remaining = bytes - total;
     size_t written;
-    uint64_t position = stream->position;
-    enum call_status status;
-    if (stream->kind == STREAM_FILE) {
-      if (stream->append) {
-        /* Deliberately non-atomic: another writer can change the end between
-         * SIZE and WRITE. A native append operation remains future work. */
-        status = file_size(stream->handle, &position);
-        if (status != CALL_OK) {
-          stream_error(stream, libc_call_errno(status));
-          break;
-        }
-      }
-      if (remaining > UINT64_MAX - position) {
-        stream_error(stream, EOVERFLOW);
-        break;
-      }
-      status = file_write(stream->handle, position, (const char *)buffer + total,
-          remaining, &written);
-    } else if (stream->kind == STREAM_PIPE) {
-      status = pipe_write(stream->handle, (const char *)buffer + total, remaining, &written);
-    } else {
-      status = console_write(stream->handle, (const char *)buffer + total, remaining, &written);
-    }
-    if (status != CALL_OK || !written || written > remaining) {
-      stream_error(stream, status == CALL_OK ? EIO : libc_call_errno(status));
+    if (descriptor_write(stream->descriptor, (const char *)buffer + total,
+                         bytes - total, &written) < 0) {
+      stream_error(stream, errno);
       break;
-    }
-    if (stream->kind == STREAM_FILE) {
-      stream->position = position + written;
     }
     total += written;
   }
@@ -385,51 +311,24 @@ void clearerr(FILE *stream)
 
 int fseek(FILE *stream, long offset, int origin)
 {
-  if (!stream || stream->closed || stream->handle == HANDLE_INVALID) {
+  if (!stream || stream->closed) {
     errno = EBADF;
     return -1;
   }
-  if (stream->kind != STREAM_FILE) {
-    errno = ESPIPE;
+  if (descriptor_seek(stream->descriptor, offset, origin) < 0) {
     return -1;
   }
-  uint64_t base;
-  if (origin == SEEK_SET) {
-    base = 0;
-  } else if (origin == SEEK_CUR) {
-    base = stream->position;
-  } else if (origin == SEEK_END) {
-    enum call_status status = file_size(stream->handle, &base);
-    if (status != CALL_OK) {
-      errno = libc_call_errno(status);
-      return -1;
-    }
-  } else {
-    errno = EINVAL;
-    return -1;
-  }
-  uint64_t distance = offset < 0 ? 0 - (uint64_t)offset : (uint64_t)offset;
-  if ((offset < 0 && distance > base) || (offset >= 0 && distance > UINT64_MAX - base)) {
-    errno = offset < 0 ? EINVAL : EOVERFLOW;
-    return -1;
-  }
-  stream->position = offset < 0 ? base - distance : base + distance;
   stream->eof = false;
   return 0;
 }
 
 long ftell(FILE *stream)
 {
-  if (!stream || stream->closed || stream->handle == HANDLE_INVALID) {
+  if (!stream || stream->closed) {
     errno = EBADF;
-  } else if (stream->kind != STREAM_FILE) {
-    errno = ESPIPE;
-  } else if (stream->position > LONG_MAX) {
-    errno = EOVERFLOW;
-  } else {
-    return stream->position;
+    return -1;
   }
-  return -1;
+  return descriptor_tell(stream->descriptor);
 }
 
 void rewind(FILE *stream)
