@@ -628,8 +628,8 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
   }
   uint64_t rights, transport;
   enum call_status status = handle_rights(shell->namespace, &rights, &transport);
-  if (status != CALL_OK || !(rights & NAMESPACE_RIGHT_MANAGE)) {
-    return shell_error(shell, "service: namespace management denied\n");
+  if (status != CALL_OK || (rights & NAMESPACE_RIGHTS) != NAMESPACE_RIGHTS) {
+    return shell_error(shell, "service: namespace lookup or management denied\n");
   }
   for (size_t i = 0; i < shell->directory.root_count; ++i) {
     if (!strcmp(shell->directory.roots[i].name, name)) {

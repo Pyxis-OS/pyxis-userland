@@ -21,8 +21,8 @@ struct path_context {
    * changes affect explicit URI resolution, not the retained cwd chain. */
   const struct path_root *roots;
   size_t root_count;
-  /* Optional borrowed namespace override. Zero selects startup_namespace().
-   * Shells can update this after creating a namespace during init. */
+  /* Optional borrowed namespace override with LOOKUP. Zero selects
+   * startup_namespace(). Shells can update this after creating a namespace. */
   handle_t namespace;
 };
 
