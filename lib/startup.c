@@ -83,6 +83,9 @@ static bool valid_streams(const struct startup_info *info)
         return false;
       }
     }
+    if (stream->handle == info->namespace) {
+      return false;
+    }
   }
   return true;
 }
@@ -129,6 +132,26 @@ static bool valid_startup(const struct startup_info *info)
   for (size_t i = 0; i < info->working_directory_count; ++i) {
     if (directories[i] == HANDLE_INVALID) {
       return false;
+    }
+  }
+
+  if (info->namespace != HANDLE_INVALID) {
+    const struct startup_binding *resources = (const void *)(uintptr_t)info->resources;
+    const struct startup_binding *roots = (const void *)(uintptr_t)info->roots;
+    for (size_t i = 0; i < info->resource_count; ++i) {
+      if (resources[i].handle == info->namespace) {
+        return false;
+      }
+    }
+    for (size_t i = 0; i < info->root_count; ++i) {
+      if (roots[i].handle == info->namespace) {
+        return false;
+      }
+    }
+    for (size_t i = 0; i < info->working_directory_count; ++i) {
+      if (directories[i] == info->namespace) {
+        return false;
+      }
     }
   }
 
@@ -198,6 +221,11 @@ handle_t startup_resource(const char *name)
 handle_t startup_root(const char *scheme)
 {
   return find_binding(startup->roots, startup->root_count, scheme);
+}
+
+handle_t startup_namespace(void)
+{
+  return startup->namespace;
 }
 
 const char *startup_environment(const char *name)

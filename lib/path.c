@@ -1,5 +1,6 @@
 #include <abi/file.h>
 #include <handle.h>
+#include <namespace.h>
 #include <path.h>
 #include <startup.h>
 #include <string.h>
@@ -91,6 +92,22 @@ static enum call_status starting_chain(const struct path_context *context,
       }
     } else {
       root = startup_root(workspace->component);
+    }
+    handle_t namespace_handle = context && context->namespace != HANDLE_INVALID ?
+        context->namespace : startup_namespace();
+    if (namespace_handle != HANDLE_INVALID) {
+      handle_t binding = HANDLE_INVALID;
+      enum call_status lookup = namespace_lookup(namespace_handle,
+          workspace->component, &binding);
+      if (lookup == CALL_OK) {
+        handle_close(binding);
+      }
+      if (lookup == CALL_OK || lookup == CALL_ENDPOINT_CLOSED) {
+        return CALL_BAD_REQUEST;
+      }
+      if (lookup != CALL_NOT_FOUND && lookup != CALL_BAD_REQUEST) {
+        return lookup;
+      }
     }
     if (root == HANDLE_INVALID) {
       return CALL_NOT_FOUND;

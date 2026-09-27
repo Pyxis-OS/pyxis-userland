@@ -21,6 +21,9 @@ struct path_context {
    * changes affect explicit URI resolution, not the retained cwd chain. */
   const struct path_root *roots;
   size_t root_count;
+  /* Optional borrowed namespace override. Zero selects startup_namespace().
+   * Shells can update this after creating a namespace during init. */
+  handle_t namespace;
 };
 
 /* Scratch storage must be disjoint from the context, inputs and outputs.
@@ -43,7 +46,10 @@ enum call_status path_context_init(struct path_context *context,
     handle_t *storage, size_t capacity, const handle_t *directories, size_t count);
 void path_context_close(struct path_context *context);
 
-/* Exact scheme:// prefixes select context bindings (or startup roots);
+/* Exact scheme:// prefixes select context bindings (or startup roots).
+ * A name also bound in the startup namespace is ambiguous and fails with
+ * BAD_REQUEST, including if its provider has since closed. Namespace exports
+ * are endpoint clients, not directory roots.
  * other paths use cwd.
  * No leading / or empty paths. Repeated / and . are accepted; .. walks the
  * retained chain, failing at its boundary. A trailing / requires a directory.
