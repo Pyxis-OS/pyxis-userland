@@ -2,6 +2,7 @@
 #include <abi/endpoint.h>
 #include <abi/file.h>
 #include <abi/memory.h>
+#include <clock.h>
 #include <console.h>
 #include <directory.h>
 #include <endpoint.h>
@@ -146,6 +147,25 @@ static int client_reuse(void)
   if (output != HANDLE_INVALID) {
     console_print(output, ok ? "reused export: complete\n" :
         "reused export: failed\n");
+  }
+  return close_handle(&client) && ok ? 0 : 1;
+}
+
+static int client_queued(void)
+{
+  handle_t client = startup_resource("second");
+  handle_t output = startup_resource("output");
+  uint64_t zero = 0, increment = 3;
+  struct endpoint_packet reply;
+  bool ok = client != HANDLE_INVALID &&
+      endpoint_notify(client, COUNTER_PROTOCOL, COUNTER_ADD,
+          &zero, sizeof(zero), NULL, 0) == CALL_OK &&
+      endpoint_invoke(client, COUNTER_PROTOCOL, COUNTER_ADD,
+          &increment, sizeof(increment), NULL, 0, 0, &reply) ==
+          CALL_ENDPOINT_CLOSED && reply.delivery == ENDPOINT_NOT_DELIVERED;
+  if (output != HANDLE_INVALID) {
+    console_print(output, ok ? "queued client: closed before delivery\n" :
+        "queued client: failed\n");
   }
   return close_handle(&client) && ok ? 0 : 1;
 }
@@ -380,6 +400,74 @@ static bool start_exit_call(handle_t service, handle_t receiver, handle_t launch
   return ok;
 }
 
+static bool serve_queued_withdraw(handle_t service, handle_t receiver,
+    handle_t launcher, handle_t image, handle_t memory, handle_t output,
+    handle_t clock)
+{
+  handle_t client = HANDLE_INVALID, child = HANDLE_INVALID;
+  bool ok = endpoint_export(service, receiver, COUNTER_SECOND_ID,
+      COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
+      HANDLE_TRANSPORT_CALL, &client) == CALL_OK;
+  if (ok) {
+    ok = launch_client(launcher, image, memory, output, HANDLE_INVALID,
+        client, "client-queued", &child) == CALL_OK;
+  }
+  if (ok) {
+    uint64_t first_value = 4, second_value = 9;
+    struct endpoint_packet marker;
+    ok = endpoint_receive(receiver, &marker) == CALL_OK &&
+        marker.kind == ENDPOINT_MESSAGE_SEND &&
+        marker.object_id == COUNTER_SECOND_ID &&
+        marker.operation == COUNTER_ADD &&
+        serve_packet(&marker, &first_value, &second_value) &&
+        second_value == 9;
+  }
+  /* The first SEND shows the child reached the export. Parking this process
+   * gives the child time to admit its following CALL before withdrawal. */
+  if (ok) {
+    ok = clock_sleep_for(clock, UINT64_C(1000000000)) == CALL_OK &&
+        endpoint_withdraw(receiver, COUNTER_SECOND_ID) == CALL_OK;
+  }
+  if (ok) {
+    ok = wait_child(child) && receive_retire(receiver, COUNTER_SECOND_ID, 0);
+  }
+  bool client_closed = close_handle(&client);
+  bool child_closed = close_handle(&child);
+  return ok && client_closed && child_closed;
+}
+
+static bool serve_retire_full(handle_t service, handle_t receiver, handle_t caller)
+{
+  handle_t client = HANDLE_INVALID;
+  bool ok = endpoint_export(service, receiver, COUNTER_FIRST_ID,
+      COUNTER_PROTOCOL, COUNTER_RIGHT_READ, HANDLE_TRANSPORT_CALL,
+      &client) == CALL_OK;
+  for (size_t i = 0; ok && i < ENDPOINT_DELIVERIES_MAX; ++i) {
+    ok = endpoint_send(caller, NULL, 0, NULL, 0) == CALL_OK;
+  }
+  if (ok) {
+    ok = endpoint_send(caller, NULL, 0, NULL, 0) == CALL_QUEUE_FULL;
+  }
+  ok = close_handle(&client) && ok;
+  if (ok) {
+    struct endpoint_packet notice;
+    ok = endpoint_receive(receiver, &notice) == CALL_OK &&
+        notice.kind == ENDPOINT_MESSAGE_RETIRE &&
+        notice.object_id == COUNTER_FIRST_ID &&
+        endpoint_send(caller, NULL, 0, NULL, 0) == CALL_QUEUE_FULL &&
+        endpoint_retire_ack(receiver, COUNTER_FIRST_ID) == CALL_OK;
+  }
+  for (size_t i = 0; ok && i < ENDPOINT_DELIVERIES_MAX; ++i) {
+    struct endpoint_packet packet;
+    ok = endpoint_receive(receiver, &packet) == CALL_OK &&
+        packet.kind == ENDPOINT_MESSAGE_SEND && packet.object_id == 0 &&
+        packet.protocol == 0 && packet.operation == 0 &&
+        packet.rights == 0 && packet.size == 0 && packet.grant_count == 0 &&
+        endpoint_finish(packet.receipt) == CALL_OK;
+  }
+  return ok;
+}
+
 int main(int argc, char **argv)
 {
   if (argc == 2 && !strcmp(argv[1], "client-basic")) {
@@ -391,17 +479,24 @@ int main(int argc, char **argv)
   if (argc == 2 && !strcmp(argv[1], "client-reuse")) {
     return client_reuse();
   }
+  if (argc == 2 && !strcmp(argv[1], "client-queued")) {
+    return client_queued();
+  }
   if (argc > 2 || (argc == 2 && strcmp(argv[1], "--withdraw") &&
-      strcmp(argv[1], "--exit"))) {
+      strcmp(argv[1], "--queued-withdraw") &&
+      strcmp(argv[1], "--retire-full") && strcmp(argv[1], "--exit"))) {
     return 1;
   }
   handle_t service = startup_resource("service");
   handle_t launcher = startup_resource("launcher");
   handle_t memory = startup_resource("memory");
   handle_t output = startup_resource("output");
+  handle_t clock = startup_resource("clock");
   handle_t app = startup_root("app");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
+      (argc == 2 && !strcmp(argv[1], "--queued-withdraw") &&
+      clock == HANDLE_INVALID) ||
       app == HANDLE_INVALID) {
     return 1;
   }
@@ -422,9 +517,17 @@ int main(int argc, char **argv)
         "counter provider: failed\n");
     return launched ? 0 : 1;
   }
-  bool ok = argc == 2 ?
-      serve_withdraw(service, endpoint.receiver, launcher, image, memory, output) :
-      serve_basic(service, endpoint.receiver, launcher, image, memory, output);
+  bool ok;
+  if (argc == 2 && !strcmp(argv[1], "--withdraw")) {
+    ok = serve_withdraw(service, endpoint.receiver, launcher, image, memory, output);
+  } else if (argc == 2 && !strcmp(argv[1], "--queued-withdraw")) {
+    ok = serve_queued_withdraw(service, endpoint.receiver, launcher, image,
+        memory, output, clock);
+  } else if (argc == 2 && !strcmp(argv[1], "--retire-full")) {
+    ok = serve_retire_full(service, endpoint.receiver, endpoint.caller);
+  } else {
+    ok = serve_basic(service, endpoint.receiver, launcher, image, memory, output);
+  }
   ok = close_handle(&endpoint.caller) && close_handle(&endpoint.receiver) &&
       close_handle(&image) && ok;
   console_print(output, ok ? "counter provider: complete\n" :

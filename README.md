@@ -67,6 +67,11 @@ withdraws an export during a delivered call, finishes its cancellation receipt,
 acknowledges retirement while an old client handle remains open, and reuses the
 same ID for a new export. `--exit` ends the provider with a delivered call; its
 client reports closure after owner-process teardown.
+`--queued-withdraw` parks the provider after the client sends a marker through
+its export, then withdraws while the client's following CALL waits in the queue;
+the client reports closure before delivery. `--retire-full` fills all sixteen
+ordinary delivery slots with raw SENDs, closes an unused export client, receives
+its retirement notice ahead of those SENDs, acknowledges it and drains them.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double
