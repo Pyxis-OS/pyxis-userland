@@ -94,6 +94,12 @@ static int provide(bool once)
     status = packet.kind == ENDPOINT_MESSAGE_CALL ?
         endpoint_reply(packet.receipt, result, NULL, 0, NULL, 0) :
         endpoint_finish(packet.receipt);
+    if (status == CALL_TIMED_OUT) {
+      status = endpoint_finish(packet.receipt);
+      if (status == CALL_OK) {
+        continue;
+      }
+    }
     if (status != CALL_OK) {
       fprintf(stderr, "counter: reply failed (status %u)\n", status);
       goto done;
