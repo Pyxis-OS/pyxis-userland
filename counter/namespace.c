@@ -119,6 +119,9 @@ static int lookup(const char *name, bool restrict_grant, bool hold, bool add)
     fputs("counter: namespace management unexpectedly available\n", stderr);
     return 1;
   }
+  if (restrict_grant) {
+    fputs("counter: namespace REMOVE denied\n", stdout);
+  }
   handle_t client = HANDLE_INVALID;
   enum call_status status = namespace_lookup(namespace_handle, name, &client);
   if (status != CALL_OK) {
@@ -137,6 +140,10 @@ static int lookup(const char *name, bool restrict_grant, bool hold, bool add)
     client = restricted;
   }
   handle_t clock = startup_resource("clock");
+  if (hold) {
+    printf("counter: retained %s; waiting\n", name);
+    fflush(stdout);
+  }
   if (hold && (clock == HANDLE_INVALID ||
       clock_sleep_for(clock, UINT64_C(30000000000)) != CALL_OK)) {
     fputs("counter: hold clock unavailable\n", stderr);

@@ -170,14 +170,15 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
   }
   if (strcmp(arguments[0], "namespace") == 0) {
     if (count == 2 && !strcmp(arguments[1], "create")) {
-      if (shell->namespace != HANDLE_INVALID) {
-        return shell_error(shell, "namespace: already present\n");
-      }
       handle_t namespace_handle;
       enum call_status status = namespace_create(shell->namespace_service,
           &namespace_handle);
       if (status != CALL_OK) {
         return shell_error(shell, "namespace: create failed (status %u)\n", status);
+      }
+      if (shell->owns_namespace && handle_close(shell->namespace) != 0) {
+        handle_close(namespace_handle);
+        return shell_error(shell, "namespace: close previous namespace failed\n");
       }
       shell->namespace = namespace_handle;
       shell->owns_namespace = true;

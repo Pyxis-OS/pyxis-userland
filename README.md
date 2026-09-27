@@ -82,27 +82,47 @@ starts serving. For example:
 
 ```sh
 service start clicks app://counter.pxe --provide
-counter --lookup clicks          # 4
-counter --add clicks             # 7
-counter --restrict clicks        # namespace REMOVE denied; restricted ADD denied
-counter --hold clicks &          # retains the old grant for 30 seconds
+counter --lookup clicks
+counter --add clicks
+counter --restrict clicks
+counter --hold clicks &
 service replace clicks app://counter.pxe --provide
-counter --lookup clicks          # 4 from the new provider
-                              # held client later prints 7 from the old provider
+counter --lookup clicks
 service replace clicks app://counter.pxe --provide-once
-counter --lookup clicks          # 4, then provider exits
-counter --lookup clicks          # ENDPOINT_CLOSED; binding remains
+counter --lookup clicks
+counter --lookup clicks
 namespace remove clicks
-counter --lookup clicks          # NOT_FOUND
+counter --lookup clicks
 ```
+
+The first lookup prints 4, ADD prints 7, and `--restrict` reports denied
+namespace removal and denied ADD. The held client later prints 7 from the old
+provider; a fresh lookup after replacement prints 4. `--provide-once` answers
+one lookup and exits. The following lookup reports ENDPOINT_CLOSED, and after
+removal it reports NOT_FOUND.
 
 `service start` requires an absent binding; `service replace` requires an
 existing one, including a dead binding. Both reject names that also select a
 filesystem root. The provider's publication CALL expires after ten seconds,
 but the shell can remain waiting if a provider exits before sending its CALL:
 RECEIVE cannot wait on provider exit at the same time. `namespace create`
-creates the init namespace; `namespace remove NAME` releases a binding without
-closing client grants already looked up elsewhere.
+selects a fresh namespace, also when the shell already has one. In a trusted
+interactive shell, the following creates a separately populated namespace;
+new ordinary children cannot see `first`, while the old namespace remains
+held by the previous session until its owners exit:
+
+```sh
+service start first app://counter.pxe --provide
+namespace create
+counter --lookup first
+service start second app://counter.pxe --provide
+counter --lookup second
+```
+
+The first lookup reports NOT_FOUND; the second prints 4.
+
+`namespace remove NAME` releases a binding without closing client grants
+already looked up elsewhere.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double
