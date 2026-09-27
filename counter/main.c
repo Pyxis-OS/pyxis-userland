@@ -328,6 +328,31 @@ static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launche
   return close_handle(&child) && close_handle(&reused_child) && ok;
 }
 
+static bool start_exit_call(handle_t service, handle_t receiver, handle_t launcher,
+    handle_t image, handle_t memory, handle_t output)
+{
+  handle_t client = HANDLE_INVALID, child = HANDLE_INVALID;
+  if (endpoint_export(service, receiver, COUNTER_SECOND_ID,
+      COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
+      HANDLE_TRANSPORT_CALL, &client) != CALL_OK) {
+    return false;
+  }
+  bool ok = launch_client(launcher, image, memory, output, HANDLE_INVALID,
+      client, "client-withdraw", &child) == CALL_OK;
+  if (ok) {
+    struct endpoint_packet packet;
+    ok = endpoint_receive(receiver, &packet) == CALL_OK &&
+        packet.kind == ENDPOINT_MESSAGE_CALL &&
+        packet.object_id == COUNTER_SECOND_ID;
+  }
+  if (!ok) {
+    close_handle(&child);
+    close_handle(&client);
+  }
+  /* Success leaves the receiver and live receipt to owner-process teardown. */
+  return ok;
+}
+
 int main(int argc, char **argv)
 {
   if (argc == 2 && !strcmp(argv[1], "client-basic")) {
@@ -339,7 +364,8 @@ int main(int argc, char **argv)
   if (argc == 2 && !strcmp(argv[1], "client-reuse")) {
     return client_reuse();
   }
-  if (argc > 2 || (argc == 2 && strcmp(argv[1], "--withdraw"))) {
+  if (argc > 2 || (argc == 2 && strcmp(argv[1], "--withdraw") &&
+      strcmp(argv[1], "--exit"))) {
     return 1;
   }
   handle_t service = startup_resource("service");
@@ -361,6 +387,13 @@ int main(int argc, char **argv)
   if (endpoint_create(service, &endpoint) != CALL_OK) {
     close_handle(&image);
     return 1;
+  }
+  if (argc == 2 && !strcmp(argv[1], "--exit")) {
+    bool launched = start_exit_call(service, endpoint.receiver, launcher,
+        image, memory, output);
+    console_print(output, launched ? "counter provider: exiting with call\n" :
+        "counter provider: failed\n");
+    return launched ? 0 : 1;
   }
   bool ok = argc == 2 ?
       serve_withdraw(service, endpoint.receiver, launcher, image, memory, output) :
