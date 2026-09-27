@@ -103,7 +103,10 @@ static enum call_status starting_chain(const struct path_context *context,
         handle_close(binding);
       }
       if (lookup == CALL_OK || lookup == CALL_ENDPOINT_CLOSED) {
-        return CALL_BAD_REQUEST;
+        if (root != HANDLE_INVALID) {
+          return CALL_BAD_REQUEST;
+        }
+        return lookup == CALL_OK ? CALL_UNAVAILABLE : CALL_ENDPOINT_CLOSED;
       }
       if (lookup != CALL_NOT_FOUND && lookup != CALL_BAD_REQUEST) {
         return lookup;

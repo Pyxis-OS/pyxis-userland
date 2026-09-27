@@ -47,9 +47,10 @@ enum call_status path_context_init(struct path_context *context,
 void path_context_close(struct path_context *context);
 
 /* Exact scheme:// prefixes select context bindings (or startup roots).
- * A name also bound in the startup namespace is ambiguous and fails with
- * BAD_REQUEST, including if its provider has since closed. Namespace exports
- * are endpoint clients, not directory roots.
+ * A name bound as both root and namespace service is ambiguous and fails with
+ * BAD_REQUEST, including if its provider has closed. Namespace-only names
+ * return UNAVAILABLE while their provider is live, or ENDPOINT_CLOSED once
+ * it closes; no file bridge exists yet.
  * other paths use cwd.
  * No leading / or empty paths. Repeated / and . are accepted; .. walks the
  * retained chain, failing at its boundary. A trailing / requires a directory.

@@ -9,14 +9,17 @@
 #include <abi/tcp.h>
 #include <abi/pipe.h>
 #include <abi/endpoint.h>
+#include <abi/namespace.h>
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
 #include <abi/space.h>
 #include <abi/profile.h>
 #include <handle.h>
+#include <endpoint.h>
 #include <file.h>
 #include <launcher.h>
+#include <namespace.h>
 #include <pipe.h>
 #include <process.h>
 #include <startup.h>
@@ -30,7 +33,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[16];
+  struct launch_binding resources[18];
   struct launch_binding roots[3];
   struct launch_request request;
 };
@@ -102,9 +105,10 @@ static enum command_result launch_error(struct shell *shell, const struct shell_
 
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
-    const struct startup_stream streams[STARTUP_STREAM_COUNT])
+    const struct startup_stream streams[STARTUP_STREAM_COUNT], handle_t publication)
 {
   bool session = mode == SHELL_SESSION;
+  bool provider = mode == SHELL_SERVICE;
   bool has_host = shell->host != HANDLE_INVALID;
   bool has_keyboard = named_input && shell->keyboard != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
@@ -113,13 +117,15 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
-  bool has_service = session && shell->service != HANDLE_INVALID;
+  bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
+  bool has_namespace_service = session && shell->namespace_service != HANDLE_INVALID;
+  bool has_namespace = !provider && shell->namespace != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 15 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 18 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = CHILD_DIRECTORY + depth;
@@ -137,7 +143,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t space_index = service_index + (has_service ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
-  size_t grant_count = input_index + (named_input ? 1 : 0);
+  size_t namespace_index = input_index + (named_input ? 1 : 0);
+  size_t publication_index = namespace_index + (has_namespace ? 1 : 0);
+  size_t namespace_service_index = publication_index + (provider ? 1 : 0);
+  size_t grant_count = namespace_service_index + (has_namespace_service ? 1 : 0);
   prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -198,6 +207,18 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_profile) {
     grants[profile_index] = (struct launch_grant){shell->profile, PROFILE_RIGHT_MEMORY, 0};
   }
+  if (has_namespace) {
+    grants[namespace_index] = (struct launch_grant){shell->namespace,
+        session ? NAMESPACE_RIGHTS : NAMESPACE_RIGHT_LOOKUP, 0};
+  }
+  if (provider) {
+    grants[publication_index] = (struct launch_grant){publication,
+        0, HANDLE_TRANSPORT_CALL};
+  }
+  if (has_namespace_service) {
+    grants[namespace_service_index] = (struct launch_grant){shell->namespace_service,
+        NAMESPACE_SERVICE_RIGHT_CREATE, 0};
+  }
 
   struct launch_binding *resources = prepared->resources;
   resources[0] = (struct launch_binding){(uintptr_t)"output", CHILD_OUTPUT};
@@ -245,6 +266,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_profile) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", profile_index};
   }
+  if (provider) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"publication", publication_index};
+  }
+  if (has_namespace_service) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"namespace_service", namespace_service_index};
+  }
   struct launch_binding *roots = prepared->roots;
   roots[0] = (struct launch_binding){(uintptr_t)"app", CHILD_APP};
   roots[1] = (struct launch_binding){(uintptr_t)"home", CHILD_HOME};
@@ -286,6 +315,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     .environment_count = startup_environment_count(),
     .argv = (uintptr_t)stage->arguments,
     .argc = stage->count,
+    .namespace_grant = has_namespace ? namespace_index + 1 : 0,
   };
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     struct startup_stream stream = streams[i];
@@ -305,7 +335,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
 }
 
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
-    size_t stage_count, enum shell_launch_mode mode)
+    size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace)
 {
   struct prepared_stage *prepared = calloc(stage_count, sizeof(*prepared));
   struct launch_request *requests = malloc(stage_count * sizeof(*requests));
@@ -323,6 +353,15 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   handle_t children[LAUNCH_BATCH_MAX] = {0};
   uint64_t failed_index = LAUNCH_NO_STAGE;
   bool cleanup_failure = false;
+  struct endpoint_create_reply publication = {0};
+
+  if (mode == SHELL_SERVICE) {
+    status = endpoint_create(shell->service, &publication);
+    if (status != CALL_OK) {
+      operation = "shell: publication endpoint";
+      goto failed;
+    }
+  }
 
   /* Open every image before opening or creating any redirect target. */
   for (size_t i = 0; i < stage_count; ++i) {
@@ -337,7 +376,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     for (size_t stream = 0; stream < STARTUP_STREAM_COUNT; ++stream) {
       streams[i][stream] = startup_stream(stream);
     }
-    if (mode == SHELL_BACKGROUND) {
+    if (mode == SHELL_BACKGROUND || mode == SHELL_SERVICE) {
       streams[i][STARTUP_STDIN] = (struct startup_stream){0};
     }
     for (size_t j = 0; j < stages[i].redirection_count; ++j) {
@@ -391,9 +430,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     failed_stage = i;
     operation = "shell: prepare";
     path = stages[i].arguments[0];
-    bool named_input = mode != SHELL_BACKGROUND && i == 0 &&
+    bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE && i == 0 &&
         streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
-    status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input, streams[i]);
+    status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
+        streams[i], publication.caller);
     if (status != CALL_OK) {
       goto failed;
     }
@@ -445,6 +485,44 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     shell_directory_error(shell, "shell: close", stages[0].arguments[0], CALL_BAD_HANDLE);
     return COMMAND_FATAL;
+  }
+  if (mode == SHELL_SERVICE) {
+    struct endpoint_packet packet = {0};
+    status = endpoint_receive(publication.receiver, &packet);
+    if (status != CALL_OK) {
+      close_handle(&children[0]);
+      close_handle(&publication.caller);
+      close_handle(&publication.receiver);
+      return shell_error(shell, "service: publication receive failed (status %u)\n", status);
+    }
+    enum call_status published = CALL_BAD_REQUEST;
+    if (packet.kind == ENDPOINT_MESSAGE_CALL && packet.protocol == 0 &&
+        packet.operation == 0 && packet.object_id == 0 && packet.size == 0 &&
+        packet.grant_count == 1) {
+      struct endpoint_grant *grant = &packet.grants[0];
+      published = replace ? namespace_replace(shell->namespace, service_name,
+          grant->handle, grant->rights, grant->transport) :
+          namespace_publish(shell->namespace, service_name, grant->handle,
+          grant->rights, grant->transport);
+    }
+    for (size_t i = 0; i < packet.grant_count; ++i) {
+      close_handle(&packet.grants[i].handle);
+    }
+    enum call_status reply_status = packet.kind == ENDPOINT_MESSAGE_CALL ?
+        endpoint_reply(packet.receipt, published, NULL, 0, NULL, 0) :
+        endpoint_finish(packet.receipt);
+    if (packet.kind == ENDPOINT_MESSAGE_CALL && reply_status != CALL_OK) {
+      endpoint_finish(packet.receipt);
+    }
+    bool closed = close_handle(&children[0]);
+    closed = close_handle(&publication.caller) && closed;
+    closed = close_handle(&publication.receiver) && closed;
+    if (published != CALL_OK || reply_status != CALL_OK || !closed) {
+      return shell_error(shell,
+          "service: %s %s failed (status %u, reply %u)\n",
+          replace ? "replace" : "start", service_name, published, reply_status);
+    }
+    return COMMAND_OK;
   }
   if (mode == SHELL_SESSION || mode == SHELL_BACKGROUND) {
     bool closed = close_handle(&children[0]);
@@ -500,6 +578,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
 
 failed:
   closed_sources = release_sources(prepared, stage_count, pipes);
+  close_handle(&publication.caller);
+  close_handle(&publication.receiver);
   free(requests);
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
@@ -519,7 +599,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   for (size_t i = 0; i < redirection_count; ++i) {
     stage.redirections[i] = redirections[i];
   }
-  return launch_stages(shell, &stage, 1, mode);
+  return launch_stages(shell, &stage, 1, mode, NULL, false);
 }
 
 enum command_result shell_launch_pipeline(struct shell *shell,
@@ -529,5 +609,45 @@ enum command_result shell_launch_pipeline(struct shell *shell,
       command->background) {
     return shell_error(shell, "shell: Invalid foreground pipeline\n");
   }
-  return launch_stages(shell, command->stages, command->stage_count, SHELL_FOREGROUND);
+  return launch_stages(shell, command->stages, command->stage_count,
+      SHELL_FOREGROUND, NULL, false);
+}
+
+enum command_result shell_launch_service(struct shell *shell, const char *name,
+    bool replace, char **arguments, size_t count)
+{
+  if (shell->namespace == HANDLE_INVALID || shell->service == HANDLE_INVALID ||
+      shell->clock == HANDLE_INVALID) {
+    return shell_error(shell,
+        "service: namespace, endpoint or clock authority unavailable\n");
+  }
+  uint64_t rights, transport;
+  enum call_status status = handle_rights(shell->namespace, &rights, &transport);
+  if (status != CALL_OK || !(rights & NAMESPACE_RIGHT_MANAGE)) {
+    return shell_error(shell, "service: namespace management denied\n");
+  }
+  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+    if (!strcmp(shell->directory.roots[i].name, name)) {
+      return shell_error(shell, "service: %s conflicts with a filesystem root\n", name);
+    }
+  }
+  handle_t existing = HANDLE_INVALID;
+  status = namespace_lookup(shell->namespace, name, &existing);
+  if (existing != HANDLE_INVALID) {
+    handle_close(existing);
+  }
+  if (status == CALL_BAD_REQUEST) {
+    return shell_error(shell, "service: invalid name %s\n", name);
+  }
+  bool present = status == CALL_OK || status == CALL_ENDPOINT_CLOSED;
+  if (present != replace) {
+    return shell_error(shell, "service: %s %s failed (status %u)\n",
+        replace ? "replace" : "start", name,
+        replace ? CALL_NOT_FOUND : CALL_ALREADY_EXISTS);
+  }
+  if (!present && status != CALL_NOT_FOUND) {
+    return shell_error(shell, "service: lookup %s failed (status %u)\n", name, status);
+  }
+  struct shell_stage stage = {.arguments = arguments, .count = count};
+  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace);
 }

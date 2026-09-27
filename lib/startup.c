@@ -135,26 +135,6 @@ static bool valid_startup(const struct startup_info *info)
     }
   }
 
-  if (info->namespace != HANDLE_INVALID) {
-    const struct startup_binding *resources = (const void *)(uintptr_t)info->resources;
-    const struct startup_binding *roots = (const void *)(uintptr_t)info->roots;
-    for (size_t i = 0; i < info->resource_count; ++i) {
-      if (resources[i].handle == info->namespace) {
-        return false;
-      }
-    }
-    for (size_t i = 0; i < info->root_count; ++i) {
-      if (roots[i].handle == info->namespace) {
-        return false;
-      }
-    }
-    for (size_t i = 0; i < info->working_directory_count; ++i) {
-      if (directories[i] == info->namespace) {
-        return false;
-      }
-    }
-  }
-
   if (!valid_streams(info)) {
     return false;
   }

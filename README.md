@@ -73,6 +73,37 @@ the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
 
+The init script creates a namespace before handing off to the interactive
+session. The shell keeps management authority; ordinary children receive
+LOOKUP only. A provider launched through `service start` gets an endpoint
+creation grant and a one-use publication CALL endpoint, without a namespace
+grant. The shell publishes its attached export and replies before the provider
+starts serving. For example:
+
+```sh
+service start clicks app://counter.pxe --provide
+counter --lookup clicks          # 4
+counter --add clicks             # 7
+counter --restrict clicks        # namespace REMOVE denied; restricted ADD denied
+counter --hold clicks &          # retains the old grant for 30 seconds
+service replace clicks app://counter.pxe --provide
+counter --lookup clicks          # 4 from the new provider
+                              # held client later prints 7 from the old provider
+service replace clicks app://counter.pxe --provide-once
+counter --lookup clicks          # 4, then provider exits
+counter --lookup clicks          # ENDPOINT_CLOSED; binding remains
+namespace remove clicks
+counter --lookup clicks          # NOT_FOUND
+```
+
+`service start` requires an absent binding; `service replace` requires an
+existing one, including a dead binding. Both reject names that also select a
+filesystem root. The provider's publication CALL expires after ten seconds,
+but the shell can remain waiting if a provider exits before sending its CALL:
+RECEIVE cannot wait on provider exit at the same time. `namespace create`
+creates the init namespace; `namespace remove NAME` releases a binding without
+closing client grants already looked up elsewhere.
+
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double
 arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to

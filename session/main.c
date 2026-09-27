@@ -14,6 +14,7 @@
 #include <abi/profile.h>
 #include <abi/memory.h>
 #include <abi/endpoint.h>
+#include <abi/namespace.h>
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
@@ -48,13 +49,13 @@ static int launch_shell(const struct session_config *config, const struct networ
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 12 - STARTUP_STREAM_COUNT ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 14 - STARTUP_STREAM_COUNT ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 12 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 14 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -69,7 +70,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   grants[APP] = (struct launch_grant){app, 0, 0};
   grants[HOME] = (struct launch_grant){home, 0, 0};
-  struct launch_binding resources[15] = {
+  struct launch_binding resources[16] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -108,6 +109,13 @@ static int launch_shell(const struct session_config *config, const struct networ
   if (service != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"service", grant_count};
     grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
+  }
+  handle_t namespace_service = startup_resource("namespace_service");
+  if (namespace_service != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"namespace_service", grant_count};
+    grants[grant_count++] = (struct launch_grant){namespace_service,
+        NAMESPACE_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t random = startup_resource("random");
   if (random != HANDLE_INVALID) {
@@ -189,6 +197,13 @@ static int launch_shell(const struct session_config *config, const struct networ
     .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = 1,
   };
+  handle_t namespace_handle = startup_namespace();
+  if (namespace_handle != HANDLE_INVALID) {
+    request.namespace_grant = grant_count + 1;
+    grants[grant_count++] = (struct launch_grant){namespace_handle,
+        NAMESPACE_RIGHTS, 0};
+    request.grant_count = grant_count;
+  }
 
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     struct startup_stream stream = startup_stream(i);
