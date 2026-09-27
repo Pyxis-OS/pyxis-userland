@@ -184,10 +184,10 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
 
   enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_APP, UTILITY_HOME, UTILITY_GRANTS };
   struct launch_grant grants[UTILITY_GRANTS + STARTUP_STREAM_COUNT] = {
-    {output, CONSOLE_RIGHT_WRITE},
-    {memory, MEMORY_RIGHT_MANAGE},
-    {app, app_rights},
-    {home, home_rights},
+    {output, CONSOLE_RIGHT_WRITE, 0},
+    {memory, MEMORY_RIGHT_MANAGE, 0},
+    {app, app_rights, 0},
+    {home, home_rights, 0},
   };
   struct launch_binding resources[] = {
     {(uintptr_t)"output", UTILITY_OUTPUT},
@@ -224,7 +224,7 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
-    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, 0};
   }
   handle_t child;
   int result = launcher_launch(launcher, &request, &child) == CALL_OK ? 0 : -1;

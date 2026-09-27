@@ -106,7 +106,7 @@ static enum call_status prepare_script(const struct launch_request *source,
     memcpy(scratch->grants, (const void *)(uintptr_t)source->grants,
         source->grant_count * sizeof(*scratch->grants));
   }
-  scratch->grants[source->grant_count] = (struct launch_grant){source->image, FILE_RIGHT_READ};
+  scratch->grants[source->grant_count] = (struct launch_grant){source->image, FILE_RIGHT_READ, 0};
   if (source->resource_count) {
     memcpy(scratch->resources, original_resources,
         source->resource_count * sizeof(*scratch->resources));

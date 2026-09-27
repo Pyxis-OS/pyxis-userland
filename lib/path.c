@@ -192,7 +192,7 @@ static enum call_status walk(const struct path_context *context, const char *pat
       return CALL_LIMIT;
     }
     if (preserve_directory_rights) {
-      status = handle_rights(parent, &directory_rights);
+      status = handle_rights(parent, &directory_rights, NULL);
       if (status != CALL_OK) {
         return status;
       }
@@ -238,7 +238,7 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
   enum call_status status = walk(context, path, target, rights, directory_rights,
       false, workspace, &count, handle);
   if (status == CALL_OK && kind == DIRECTORY_KIND_DIRECTORY) {
-    status = handle_copy_restricted(workspace->directories[count - 1], rights, handle);
+    status = handle_copy_restricted(workspace->directories[count - 1], rights, 0, handle);
   }
   if (count) {
     close_chain(workspace->directories, count);
@@ -349,7 +349,7 @@ enum call_status path_change(struct path_context *context, const char *path,
       0, 0, true, workspace, &count, &unused);
   if (status == CALL_OK) {
     uint64_t rights;
-    status = handle_rights(workspace->directories[count - 1], &rights);
+    status = handle_rights(workspace->directories[count - 1], &rights, NULL);
     if (status == CALL_OK && !(rights & DIRECTORY_RIGHT_LOOKUP)) {
       status = CALL_DENIED;
     }

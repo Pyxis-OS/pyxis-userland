@@ -28,7 +28,7 @@ void malloc_init(void)
 
   /* Keep allocator authority even if main closes its original startup grant.
    * Missing authority does not prevent a program without a heap from running. */
-  handle_copy_restricted(startup_resource("memory"), MEMORY_RIGHT_MANAGE, &memory);
+  handle_copy_restricted(startup_resource("memory"), MEMORY_RIGHT_MANAGE, 0, &memory);
 }
 
 static bool add_pool(size_t request)

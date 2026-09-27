@@ -63,12 +63,12 @@ static int launch_shell(const struct session_config *config, const struct networ
     goto done;
   }
 
-  grants[INPUT] = (struct launch_grant){terminal.input, CONSOLE_RIGHT_READ};
-  grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE};
-  grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE};
-  grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH};
-  grants[APP] = (struct launch_grant){app, 0};
-  grants[HOME] = (struct launch_grant){home, 0};
+  grants[INPUT] = (struct launch_grant){terminal.input, CONSOLE_RIGHT_READ, 0};
+  grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
+  grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
+  grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  grants[APP] = (struct launch_grant){app, 0, 0};
+  grants[HOME] = (struct launch_grant){home, 0, 0};
   struct launch_binding resources[15] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
@@ -77,59 +77,59 @@ static int launch_shell(const struct session_config *config, const struct networ
   handle_t display = startup_resource("display");
   if (display != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", grant_count};
-    grants[grant_count++] = (struct launch_grant){display, DISPLAY_RIGHT_DRAW};
+    grants[grant_count++] = (struct launch_grant){display, DISPLAY_RIGHT_DRAW, 0};
   }
   handle_t clock = startup_resource("clock");
   if (clock != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"clock", grant_count};
-    grants[grant_count++] = (struct launch_grant){clock, CLOCK_RIGHTS};
+    grants[grant_count++] = (struct launch_grant){clock, CLOCK_RIGHTS, 0};
   }
   handle_t echo = startup_resource("echo");
   if (echo != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"echo", grant_count};
-    grants[grant_count++] = (struct launch_grant){echo, ECHO_RIGHT_SEND};
+    grants[grant_count++] = (struct launch_grant){echo, ECHO_RIGHT_SEND, 0};
   }
   handle_t udp = startup_resource("udp");
   if (udp != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", grant_count};
-    grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN};
+    grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   handle_t tcp = startup_resource("tcp");
   if (tcp != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", grant_count};
-    grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT};
+    grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
   }
   handle_t pipe = startup_resource("pipe");
   if (pipe != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", grant_count};
-    grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE};
+    grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t service = startup_resource("service");
   if (service != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"service", grant_count};
-    grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE};
+    grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t random = startup_resource("random");
   if (random != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"random", grant_count};
-    grants[grant_count++] = (struct launch_grant){random, RANDOM_RIGHT_READ};
+    grants[grant_count++] = (struct launch_grant){random, RANDOM_RIGHT_READ, 0};
   }
   handle_t keyboard = startup_resource("keyboard");
   if (keyboard != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"keyboard", grant_count};
-    grants[grant_count++] = (struct launch_grant){keyboard, KEYBOARD_RIGHT_INPUT};
+    grants[grant_count++] = (struct launch_grant){keyboard, KEYBOARD_RIGHT_INPUT, 0};
   }
 
   handle_t space = startup_resource("space");
   if (space != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"space", grant_count};
-    grants[grant_count++] = (struct launch_grant){space, SPACE_RIGHT_SET_TITLE};
+    grants[grant_count++] = (struct launch_grant){space, SPACE_RIGHT_SET_TITLE, 0};
   }
 
   handle_t profile = startup_resource("profile");
   if (profile != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", grant_count};
-    grants[grant_count++] = (struct launch_grant){profile, PROFILE_RIGHT_MEMORY};
+    grants[grant_count++] = (struct launch_grant){profile, PROFILE_RIGHT_MEMORY, 0};
   }
 
   struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
@@ -137,19 +137,19 @@ static int launch_shell(const struct session_config *config, const struct networ
   handle_t host = startup_root("host");
   if (host != HANDLE_INVALID) {
     roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count};
-    grants[grant_count++] = (struct launch_grant){host, 0};
+    grants[grant_count++] = (struct launch_grant){host, 0, 0};
   }
 
   const char *working_path = startup_working_path();
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
-    grants[grant_count++] = (struct launch_grant){startup_working_directory(i), 0};
+    grants[grant_count++] = (struct launch_grant){startup_working_directory(i), 0, 0};
   }
 
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
     struct launch_grant *grant = &grants[roots[i].grant];
-    status = handle_rights(grant->source, &grant->rights);
+    status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
       goto done;
@@ -157,7 +157,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   }
   for (size_t i = 0; i < depth; ++i) {
     struct launch_grant *grant = &grants[directories[i]];
-    status = handle_rights(grant->source, &grant->rights);
+    status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
       goto done;
@@ -202,7 +202,7 @@ static int launch_shell(const struct session_config *config, const struct networ
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
-    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights};
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, 0};
   }
 
   if (configure_network && !network_config_apply(network)) {

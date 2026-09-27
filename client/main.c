@@ -80,7 +80,7 @@ int main(int argc, char **argv)
   size_t grant_count = wide || sending ? ENDPOINT_GRANTS_MAX : 1;
   struct endpoint_grant grants[ENDPOINT_GRANTS_MAX] = {0};
   for (size_t i = 0; i < grant_count; ++i) {
-    grants[i] = (struct endpoint_grant){content, FILE_RIGHT_READ};
+    grants[i] = (struct endpoint_grant){content, FILE_RIGHT_READ, 0};
   }
 
   bool ok = false;
