@@ -46,13 +46,14 @@ static enum call_status open_content(handle_t app, handle_t *content)
 
 static enum call_status launch_client(handle_t launcher, handle_t image,
     handle_t output, handle_t memory, handle_t caller, handle_t content,
-    const char *mode, const char *id, handle_t *child)
+    const char *mode, const char *id, bool send_only, handle_t *child)
 {
   enum { OUTPUT, MEMORY, CALLER, CONTENT, GRANT_COUNT };
   struct launch_grant grants[GRANT_COUNT] = {
     [OUTPUT] = {output, CONSOLE_RIGHT_WRITE},
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE},
-    [CALLER] = {caller, ENDPOINT_RIGHT_CALL},
+    [CALLER] = {caller, send_only ? ENDPOINT_RIGHT_SEND :
+        ENDPOINT_RIGHT_SEND | ENDPOINT_RIGHT_RECEIVE},
     [CONTENT] = {content, FILE_RIGHT_READ},
   };
   struct launch_binding resources[] = {
@@ -97,10 +98,23 @@ static uint64_t print_content(const struct endpoint_packet *packet, handle_t out
   }
 }
 
+static bool read_grants(const struct endpoint_packet *packet)
+{
+  for (size_t i = 0; i < packet->grant_count; ++i) {
+    char byte;
+    size_t count;
+    if (file_read(packet->grants[i].handle, 0, &byte, 1, &count) != CALL_OK || count != 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool finish_request(struct endpoint_packet *packet, handle_t output, bool abandon)
 {
-  bool valid = packet->size == sizeof(struct content_request) ||
-      packet->size == ENDPOINT_DATA_MAX;
+  bool valid = packet->kind == ENDPOINT_MESSAGE_CALL &&
+      (packet->size == sizeof(struct content_request) ||
+      packet->size == ENDPOINT_DATA_MAX);
   struct content_request request;
   if (valid) {
     memcpy(&request, packet->data, sizeof(request));
@@ -130,6 +144,25 @@ static bool finish_request(struct endpoint_packet *packet, handle_t output, bool
   return close_grants(packet) && status == CALL_OK;
 }
 
+static bool finish_send(struct endpoint_packet *packet, handle_t output, uint64_t client)
+{
+  bool valid = packet->kind == ENDPOINT_MESSAGE_SEND &&
+      packet->size == ENDPOINT_DATA_MAX && packet->grant_count == ENDPOINT_GRANTS_MAX;
+  struct content_request request;
+  if (valid) {
+    memcpy(&request, packet->data, sizeof(request));
+    valid = request.operation == CONTENT_PRINT && request.client == client;
+  }
+  for (size_t i = sizeof(request); valid && i < packet->size; ++i) {
+    valid = packet->data[i] == (uint8_t)i;
+  }
+  enum call_status status = endpoint_finish(packet->receipt);
+  /* The received file grants remain owned after finishing the delivery. */
+  bool usable = valid && read_grants(packet) && print_content(packet, output) == CONTENT_OK;
+  bool closed = close_grants(packet);
+  return status == CALL_OK && usable && closed;
+}
+
 static bool wait_client(handle_t child)
 {
   struct process_result result;
@@ -151,7 +184,8 @@ int main(int argc, char **argv)
 {
   if (argc > 2 || (argc == 2 && strcmp(argv[1], "--wide") &&
       strcmp(argv[1], "--abandon") && strcmp(argv[1], "--saturate") &&
-      strcmp(argv[1], "--close") && strcmp(argv[1], "--exit"))) {
+      strcmp(argv[1], "--close") && strcmp(argv[1], "--exit") &&
+      strcmp(argv[1], "--send") && strcmp(argv[1], "--mixed"))) {
     return 1;
   }
   const char *mode = argc == 1 ? "normal" : argv[1] + 2;
@@ -172,9 +206,10 @@ int main(int argc, char **argv)
   }
   handle_t image = HANDLE_INVALID, content = HANDLE_INVALID;
   handle_t children[ENDPOINT_DELIVERIES_MAX + 1] = {0};
-  size_t count = !strcmp(mode, "saturate") ? ENDPOINT_DELIVERIES_MAX :
+  size_t count = !strcmp(mode, "send") || !strcmp(mode, "mixed") ? 0 :
+      !strcmp(mode, "saturate") ? ENDPOINT_DELIVERIES_MAX :
       (!strcmp(mode, "close") || !strcmp(mode, "exit") ? 1 : 2);
-  struct endpoint_packet *packets = malloc(count * sizeof(*packets));
+  struct endpoint_packet *packets = malloc(ENDPOINT_DELIVERIES_MAX * sizeof(*packets));
   bool ok = false;
   if (!packets) {
     goto done;
@@ -191,7 +226,7 @@ int main(int argc, char **argv)
       goto done;
     }
     status = launch_client(launcher, image, output, memory, endpoint.caller,
-        content, mode, label, &children[i]);
+        content, mode, label, false, &children[i]);
     if (status != CALL_OK) {
       goto done;
     }
@@ -201,7 +236,50 @@ int main(int argc, char **argv)
     }
   }
 
-  if (!strcmp(mode, "close") || !strcmp(mode, "exit")) {
+  if (!strcmp(mode, "send") || !strcmp(mode, "mixed")) {
+    bool mixed = !strcmp(mode, "mixed");
+    if (mixed) {
+      status = launch_client(launcher, image, output, memory, endpoint.caller,
+          content, mode, "1", false, &children[0]);
+      if (status != CALL_OK) {
+        goto done;
+      }
+      count = 1;
+      if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK ||
+          packets[0].kind != ENDPOINT_MESSAGE_CALL) {
+        goto done;
+      }
+    }
+    status = launch_client(launcher, image, output, memory, endpoint.caller,
+        content, mode, mixed ? "2" : "1", true, &children[mixed ? 1 : 0]);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    count = mixed ? 2 : 1;
+    if (!wait_client(children[mixed ? 1 : 0])) {
+      goto done;
+    }
+    if (handle_close(children[mixed ? 1 : 0]) != 0) {
+      goto done;
+    }
+    children[mixed ? 1 : 0] = HANDLE_INVALID;
+    if (handle_close(endpoint.caller) != 0) {
+      goto done;
+    }
+    endpoint.caller = HANDLE_INVALID;
+    ok = true;
+    size_t sends = mixed ? ENDPOINT_DELIVERIES_MAX - 1 : 1;
+    for (size_t i = 0; i < sends; ++i) {
+      if (endpoint_receive(endpoint.receiver, &packets[mixed ? i + 1 : 0]) != CALL_OK ||
+          !finish_send(&packets[mixed ? i + 1 : 0], output, mixed ? i + 2 : 1)) {
+        ok = false;
+        break;
+      }
+    }
+    if (mixed && !finish_request(&packets[0], output, false)) {
+      ok = false;
+    }
+  } else if (!strcmp(mode, "close") || !strcmp(mode, "exit")) {
     if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK) {
       goto done;
     }
@@ -217,7 +295,7 @@ int main(int argc, char **argv)
     bool receipt_closed = handle_close(packets[0].receipt) == 0;
     bool grants_closed = close_grants(&packets[0]);
     status = launch_client(launcher, image, output, memory, endpoint.caller,
-        content, mode, "2", &children[1]);
+        content, mode, "2", false, &children[1]);
     if (status != CALL_OK) {
       goto done;
     }
@@ -226,7 +304,7 @@ int main(int argc, char **argv)
   } else if (!strcmp(mode, "saturate")) {
     /* All sixteen receipts remain live, so admission of the next call fails. */
     status = launch_client(launcher, image, output, memory, endpoint.caller,
-        content, mode, "17", &children[count]);
+        content, mode, "17", false, &children[count]);
     if (status != CALL_OK || !wait_client(children[count])) {
       goto done;
     }
@@ -255,7 +333,7 @@ int main(int argc, char **argv)
     ok = reverse_ok && first_ok;
   }
   for (size_t i = 0; i < count; ++i) {
-    if (!wait_client(children[i])) {
+    if (children[i] != HANDLE_INVALID && !wait_client(children[i])) {
       ok = false;
     }
   }
