@@ -39,8 +39,8 @@ static bool wait_child(handle_t child)
       result.kind != PROCESS_FAULTED && result.exit_status == 0;
 }
 
-static bool invoke_value(handle_t client, uint64_t operation, uint64_t argument,
-    uint64_t expected)
+static bool invoke_value(handle_t client, uint64_t object_id,
+    uint64_t rights, uint64_t operation, uint64_t argument, uint64_t expected)
 {
   struct endpoint_packet reply;
   const void *bytes = operation == COUNTER_ADD ? &argument : NULL;
@@ -48,7 +48,7 @@ static bool invoke_value(handle_t client, uint64_t operation, uint64_t argument,
   return endpoint_invoke(client, COUNTER_PROTOCOL, operation, bytes, size,
       NULL, 0, 0, &reply) == CALL_OK && reply.result == expected &&
       reply.size == 0 && reply.grant_count == 0 &&
-      reply.object_id != 0 && reply.rights != 0;
+      reply.object_id == object_id && reply.rights == rights;
 }
 
 static int client_basic(void)
@@ -87,10 +87,12 @@ static int client_basic(void)
         reply.delivery == ENDPOINT_NOT_DELIVERED;
   }
   if (ok) {
-    ok = invoke_value(read_copy, COUNTER_ADD, 99, COUNTER_RESULT_DENIED);
+    ok = invoke_value(read_copy, COUNTER_SECOND_ID, COUNTER_RIGHT_READ,
+        COUNTER_ADD, 99, COUNTER_RESULT_DENIED);
   }
   if (ok) {
-    ok = invoke_value(second, COUNTER_ADD, 3, 12);
+    ok = invoke_value(second, COUNTER_SECOND_ID,
+        COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE, COUNTER_ADD, 3, 12);
   }
   if (ok) {
     ok = handle_copy_restricted(second, COUNTER_RIGHT_WRITE,
@@ -138,7 +140,9 @@ static int client_reuse(void)
 {
   handle_t client = startup_resource("second");
   handle_t output = startup_resource("output");
-  bool ok = client != HANDLE_INVALID && invoke_value(client, COUNTER_GET, 0, 9);
+  bool ok = client != HANDLE_INVALID &&
+      invoke_value(client, COUNTER_SECOND_ID,
+          COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE, COUNTER_GET, 0, 9);
   if (output != HANDLE_INVALID) {
     console_print(output, ok ? "reused export: complete\n" :
         "reused export: failed\n");
