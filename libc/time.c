@@ -2,7 +2,7 @@
 #include <errno.h>
 #include <startup.h>
 #include <time.h>
-#include "stream.h"
+#include "errors.h"
 #include "time_impl.h"
 #include "timezone.h"
 

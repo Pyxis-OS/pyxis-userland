@@ -17,8 +17,8 @@ extern FILE *stderr;
 
 /* All streams are unbuffered. fopen accepts r/w/a, optional + and optional b
  * (no effect), resolving native capability paths and the initial directory.
- * FILE owns its handle and independent file offset. Standard streams adopt
- * exclusive startup console, file or pipe handles directly.
+ * Private descriptors own handles and file offsets; FILE owns its association
+ * and indicators. Standard descriptors adopt exclusive startup handles once.
  * No fd API, setvbuf, freopen, pushback, scanning or wide I/O in this slice. */
 FILE *fopen(const char *restrict path, const char *restrict mode);
 int fclose(FILE *stream);

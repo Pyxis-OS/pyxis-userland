@@ -27,5 +27,6 @@ extern int errno;
 #define ENOSPC 20
 #define EDQUOT 21
 #define EFBIG 22
+#define EMFILE 23
 
 #endif
