@@ -8,6 +8,7 @@
 #include <abi/udp.h>
 #include <abi/tcp.h>
 #include <abi/pipe.h>
+#include <abi/endpoint.h>
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
@@ -29,7 +30,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[15];
+  struct launch_binding resources[16];
   struct launch_binding roots[3];
   struct launch_request request;
 };
@@ -112,12 +113,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
+  bool has_service = session && shell->service != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 14 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 15 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = CHILD_DIRECTORY + depth;
@@ -131,7 +133,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t launcher_index = host_index + (has_host ? 1 : 0);
   size_t net_config_index = launcher_index + (session ? 1 : 0);
   size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
-  size_t space_index = pipe_index + (has_pipe ? 1 : 0);
+  size_t service_index = pipe_index + (has_pipe ? 1 : 0);
+  size_t space_index = service_index + (has_service ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
   size_t grant_count = input_index + (named_input ? 1 : 0);
@@ -186,6 +189,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_pipe) {
     grants[pipe_index] = (struct launch_grant){shell->pipe, PIPE_SERVICE_RIGHT_CREATE};
   }
+  if (has_service) {
+    grants[service_index] = (struct launch_grant){shell->service, ENDPOINT_SERVICE_RIGHT_CREATE};
+  }
   if (has_space) {
     grants[space_index] = (struct launch_grant){shell->space, SPACE_RIGHT_SET_TITLE};
   }
@@ -229,6 +235,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_pipe) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", pipe_index};
+  }
+  if (has_service) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"service", service_index};
   }
   if (has_space) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"space", space_index};
