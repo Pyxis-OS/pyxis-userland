@@ -36,7 +36,8 @@ abandonment. `--saturate` retains sixteen receipts while a seventeenth client
 reports queue saturation, then replies in reverse order. `--close` closes the
 receiver after receiving a call and starts another client against a retained
 caller grant; `--exit` lets process teardown close the receiver. The shell
-delegates endpoint creation and launch authority only to `session` commands.
+delegates launch authority through `session`; endpoint creation is also
+delegated to providers launched with `service start` or `service replace`.
 
 `session app://server.pxe --send` grants a client send-only authority. It sends
 4 KiB and four file grants, closes its sources and exits before the server
