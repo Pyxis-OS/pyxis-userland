@@ -1,16 +1,33 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include "descriptor.h"
 
 int open(const char *path, int flags, ...)
 {
-  if (flags != O_RDONLY) {
+  if ((flags & ~(O_WRONLY | O_CREAT | O_TRUNC)) ||
+      (!(flags & O_WRONLY) && (flags & (O_CREAT | O_TRUNC)))) {
     errno = EINVAL;
     return -1;
   }
-  const struct descriptor_mode mode = {.readable = true};
+  if (flags & O_CREAT) {
+    va_list args;
+    va_start(args, flags);
+    mode_t creation_mode = va_arg(args, mode_t);
+    va_end(args);
+    /* Native creation has no permission-mode argument. Accept only the
+     * agreed default; never silently discard a restrictive mode request. */
+    if (creation_mode != 0666) {
+      errno = ENOTSUP;
+      return -1;
+    }
+  }
+  const struct descriptor_mode mode = {
+    .readable = !(flags & O_WRONLY), .writable = flags & O_WRONLY,
+    .create = flags & O_CREAT, .truncate = flags & O_TRUNC,
+  };
   return descriptor_open(path, &mode, NULL);
 }
 
