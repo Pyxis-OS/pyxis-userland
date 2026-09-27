@@ -215,12 +215,13 @@ int main(int argc, char **argv)
     }
     endpoint.receiver = HANDLE_INVALID;
     bool receipt_closed = handle_close(packets[0].receipt) == 0;
-    ok = close_grants(&packets[0]) && receipt_closed;
+    bool grants_closed = close_grants(&packets[0]);
     status = launch_client(launcher, image, output, memory, endpoint.caller,
         content, mode, "2", &children[1]);
     if (status != CALL_OK) {
       goto done;
     }
+    ok = grants_closed && receipt_closed;
     count = 2;
   } else if (!strcmp(mode, "saturate")) {
     /* All sixteen receipts remain live, so admission of the next call fails. */
