@@ -199,9 +199,15 @@ static int launch_shell(const struct session_config *config, const struct networ
   };
   handle_t namespace_handle = startup_namespace();
   if (namespace_handle != HANDLE_INVALID) {
+    uint64_t rights, transport;
+    status = handle_rights(namespace_handle, &rights, &transport);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query namespace rights (status %u)\n", status);
+      goto done;
+    }
     request.namespace_grant = grant_count + 1;
     grants[grant_count++] = (struct launch_grant){namespace_handle,
-        NAMESPACE_RIGHTS, 0};
+        rights, transport};
     request.grant_count = grant_count;
   }
 
