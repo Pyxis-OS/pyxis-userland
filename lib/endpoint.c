@@ -118,10 +118,14 @@ enum call_status endpoint_request(handle_t caller, const void *bytes, size_t siz
   if (result.reply_size == 0) {
     return status;
   }
+  /* Descriptor validation can fail before the kernel trusts its deadline. */
+  bool unread_deadline = packet.deadline_ns == 0 &&
+      packet.delivery == ENDPOINT_NOT_DELIVERED &&
+      (status == CALL_BAD_REQUEST || status == CALL_BAD_BUFFER);
   if (result.reply_size != ENDPOINT_PACKET_HEADER_SIZE ||
       packet.delivery > ENDPOINT_DELIVERED || packet.receipt != HANDLE_INVALID ||
       packet.kind != ENDPOINT_MESSAGE_CALL || packet.grant_count != 0 || packet.size != 0 ||
-      packet.result != 0) {
+      packet.result != 0 || (packet.deadline_ns != deadline_ns && !unread_deadline)) {
     return CALL_OUTCOME_UNKNOWN;
   }
   reply->delivery = packet.delivery;
