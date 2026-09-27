@@ -12,7 +12,8 @@ enum call_status endpoint_create(handle_t service, struct endpoint_create_reply 
 /* CALL and REPLY borrow bytes and source grants until return. A successful CALL
  * returns an owned packet with reply grants; size is the actual payload length,
  * result is the opaque application result, and receipt is zero. On failure,
- * delivery says whether the call was admitted if output was validated. Do not
+ * delivery says whether the receiver obtained the call if output was validated.
+ * A queued call can still be NOT_DELIVERED when the endpoint closes. Do not
  * retry a delivered call merely because its transport failed. */
 enum call_status endpoint_request(handle_t caller, const void *bytes, size_t size,
     const struct endpoint_grant *grants, size_t grant_count, struct endpoint_packet *reply);

@@ -5,6 +5,7 @@
 #include <handle.h>
 #include <startup.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../common/content_service.h"
 
@@ -34,7 +35,13 @@ static bool read_grants(const struct endpoint_packet *packet)
 int main(int argc, char **argv)
 {
   if (argc != 3 || (strcmp(argv[1], "normal") && strcmp(argv[1], "wide") &&
-      strcmp(argv[1], "abandon"))) {
+      strcmp(argv[1], "abandon") && strcmp(argv[1], "saturate") &&
+      strcmp(argv[1], "close") && strcmp(argv[1], "exit"))) {
+    return 1;
+  }
+  char *end;
+  unsigned long id = strtoul(argv[2], &end, 10);
+  if (*end || id < 1 || id > ENDPOINT_DELIVERIES_MAX + 1) {
     return 1;
   }
   handle_t output = startup_resource("output");
@@ -45,9 +52,11 @@ int main(int argc, char **argv)
   }
 
   bool wide = !strcmp(argv[1], "wide");
-  bool abandoned = !strcmp(argv[1], "abandon") && !strcmp(argv[2], "1");
+  bool abandoned = !strcmp(argv[1], "abandon") && id == 1;
+  bool saturated = !strcmp(argv[1], "saturate") && id == ENDPOINT_DELIVERIES_MAX + 1;
+  bool closed = !strcmp(argv[1], "close") || !strcmp(argv[1], "exit");
   uint8_t payload[ENDPOINT_DATA_MAX] = {0};
-  struct content_request request = {CONTENT_PRINT, argv[2][0] == '1' ? 1 : 2};
+  struct content_request request = {CONTENT_PRINT, id};
   memcpy(payload, &request, sizeof(request));
   size_t size = wide ? sizeof(payload) : sizeof(request);
   for (size_t i = sizeof(request); i < size; ++i) {
@@ -65,6 +74,12 @@ int main(int argc, char **argv)
   bool ok = false;
   if (abandoned) {
     ok = status == CALL_ABANDONED && reply.delivery == ENDPOINT_DELIVERED;
+  } else if (saturated) {
+    ok = status == CALL_QUEUE_FULL && reply.delivery == ENDPOINT_NOT_DELIVERED;
+  } else if (closed) {
+    ok = status == CALL_ENDPOINT_CLOSED && reply.delivery ==
+        ((!strcmp(argv[1], "exit") || id == 1) ?
+        ENDPOINT_DELIVERED : ENDPOINT_NOT_DELIVERED);
   } else if (status == CALL_OK) {
     ok = reply.result == CONTENT_OK && reply.size == size &&
         reply.grant_count == grant_count &&

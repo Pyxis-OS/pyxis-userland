@@ -32,8 +32,11 @@ The server creates its receiver, launches two clients with caller grants, receiv
 both requests and replies in reverse order. `session app://server.pxe --wide`
 uses 4 KiB requests and replies with four file grants in each direction;
 `session app://server.pxe --abandon` closes one receipt so its caller sees
-abandonment. The shell delegates endpoint creation and launch authority only to
-`session` commands.
+abandonment. `--saturate` retains sixteen receipts while a seventeenth client
+reports queue saturation, then replies in reverse order. `--close` closes the
+receiver after receiving a call and starts another client against a retained
+caller grant; `--exit` lets process teardown close the receiver. The shell
+delegates endpoint creation and launch authority only to `session` commands.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double

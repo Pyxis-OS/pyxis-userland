@@ -11,6 +11,7 @@
 #include <process.h>
 #include <startup.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../common/content_service.h"
 
@@ -104,7 +105,7 @@ static bool finish_request(struct endpoint_packet *packet, handle_t output, bool
   if (valid) {
     memcpy(&request, packet->data, sizeof(request));
     valid = request.operation == CONTENT_PRINT && request.client >= 1 &&
-        request.client <= 2 && packet->grant_count ==
+        request.client <= ENDPOINT_DELIVERIES_MAX && packet->grant_count ==
         (packet->size == ENDPOINT_DATA_MAX ? ENDPOINT_GRANTS_MAX : 1);
   }
   if (valid && packet->size == ENDPOINT_DATA_MAX) {
@@ -149,7 +150,8 @@ static bool from_client_one(const struct endpoint_packet *packet)
 int main(int argc, char **argv)
 {
   if (argc > 2 || (argc == 2 && strcmp(argv[1], "--wide") &&
-      strcmp(argv[1], "--abandon"))) {
+      strcmp(argv[1], "--abandon") && strcmp(argv[1], "--saturate") &&
+      strcmp(argv[1], "--close") && strcmp(argv[1], "--exit"))) {
     return 1;
   }
   const char *mode = argc == 1 ? "normal" : argv[1] + 2;
@@ -169,48 +171,89 @@ int main(int argc, char **argv)
     return 1;
   }
   handle_t image = HANDLE_INVALID, content = HANDLE_INVALID;
-  handle_t children[2] = {HANDLE_INVALID, HANDLE_INVALID};
+  handle_t children[ENDPOINT_DELIVERIES_MAX + 1] = {0};
+  size_t count = !strcmp(mode, "saturate") ? ENDPOINT_DELIVERIES_MAX :
+      (!strcmp(mode, "close") || !strcmp(mode, "exit") ? 1 : 2);
+  struct endpoint_packet *packets = malloc(count * sizeof(*packets));
   bool ok = false;
+  if (!packets) {
+    goto done;
+  }
   status = directory_lookup(app, "client.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK || open_content(app, &content) != CALL_OK) {
     goto done;
   }
-  for (size_t i = 0; i < 2; ++i) {
+  for (size_t i = 0; i < count; ++i) {
+    char label[3];
+    int length = snprintf(label, sizeof(label), "%zu", i + 1);
+    if (length < 0 || (size_t)length >= sizeof(label)) {
+      goto done;
+    }
     status = launch_client(launcher, image, output, memory, endpoint.caller,
-        content, mode, i == 0 ? "1" : "2", &children[i]);
+        content, mode, label, &children[i]);
     if (status != CALL_OK) {
       goto done;
     }
+    if (!strcmp(mode, "saturate") &&
+        endpoint_receive(endpoint.receiver, &packets[i]) != CALL_OK) {
+      goto done;
+    }
   }
-  if (handle_close(endpoint.caller) != 0) {
-    goto done;
-  }
-  endpoint.caller = HANDLE_INVALID;
-  if (handle_close(content) != 0) {
-    goto done;
-  }
-  content = HANDLE_INVALID;
-  if (handle_close(image) != 0) {
-    goto done;
-  }
-  image = HANDLE_INVALID;
 
-  struct endpoint_packet first, second;
-  if (endpoint_receive(endpoint.receiver, &first) != CALL_OK) {
-    goto done;
+  if (!strcmp(mode, "close") || !strcmp(mode, "exit")) {
+    if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK) {
+      goto done;
+    }
+    if (!strcmp(mode, "exit")) {
+      console_print(output, "server: exiting with a received call\n");
+      /* Process teardown closes its receiver and receipt, waking the caller. */
+      return 0;
+    }
+    if (handle_close(endpoint.receiver) != 0) {
+      goto done;
+    }
+    endpoint.receiver = HANDLE_INVALID;
+    bool receipt_closed = handle_close(packets[0].receipt) == 0;
+    ok = close_grants(&packets[0]) && receipt_closed;
+    status = launch_client(launcher, image, output, memory, endpoint.caller,
+        content, mode, "2", &children[1]);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    count = 2;
+  } else if (!strcmp(mode, "saturate")) {
+    /* All sixteen receipts remain live, so admission of the next call fails. */
+    status = launch_client(launcher, image, output, memory, endpoint.caller,
+        content, mode, "17", &children[count]);
+    if (status != CALL_OK || !wait_client(children[count])) {
+      goto done;
+    }
+    ++count;
+    ok = true;
+    for (size_t i = ENDPOINT_DELIVERIES_MAX; i > 0; --i) {
+      if (!finish_request(&packets[i - 1], output, false)) {
+        ok = false;
+      }
+    }
+  } else {
+    if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK) {
+      goto done;
+    }
+    if (endpoint_receive(endpoint.receiver, &packets[1]) != CALL_OK) {
+      handle_close(packets[0].receipt);
+      close_grants(&packets[0]);
+      goto done;
+    }
+    /* Both calls remain admitted while we complete the second before the first. */
+    bool abandon = !strcmp(mode, "abandon");
+    bool reverse_ok = finish_request(&packets[1], output,
+        abandon && from_client_one(&packets[1]));
+    bool first_ok = finish_request(&packets[0], output,
+        abandon && from_client_one(&packets[0]));
+    ok = reverse_ok && first_ok;
   }
-  if (endpoint_receive(endpoint.receiver, &second) != CALL_OK) {
-    handle_close(first.receipt);
-    close_grants(&first);
-    goto done;
-  }
-  /* Both calls remain admitted while we complete the second before the first. */
-  bool abandon = !strcmp(mode, "abandon");
-  bool reverse_ok = finish_request(&second, output, abandon && from_client_one(&second));
-  bool first_ok = finish_request(&first, output, abandon && from_client_one(&first));
-  ok = reverse_ok && first_ok;
-  for (size_t i = 0; i < 2; ++i) {
+  for (size_t i = 0; i < count; ++i) {
     if (!wait_client(children[i])) {
       ok = false;
     }
@@ -220,6 +263,7 @@ int main(int argc, char **argv)
   }
 
 done:
+  free(packets);
   if (endpoint.caller != HANDLE_INVALID && handle_close(endpoint.caller) != 0) {
     ok = false;
   }
@@ -232,7 +276,7 @@ done:
   if (image != HANDLE_INVALID && handle_close(image) != 0) {
     ok = false;
   }
-  for (size_t i = 0; i < 2; ++i) {
+  for (size_t i = 0; i < ENDPOINT_DELIVERIES_MAX + 1; ++i) {
     if (children[i] != HANDLE_INVALID && handle_close(children[i]) != 0) {
       ok = false;
     }
