@@ -70,8 +70,8 @@ client reports closure after owner-process teardown.
 `--queued-withdraw` parks the provider after the client sends a marker through
 its export, then withdraws while the client's following CALL waits in the queue;
 the client reports closure before delivery. `--retire-full` fills all sixteen
-ordinary delivery slots with raw SENDs, closes an unused export client, receives
-its retirement notice ahead of those SENDs, acknowledges it and drains them.
+ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
+retirement notice ahead of those SENDs, acknowledges it and drains them.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point libgcc
 helpers. `mandelbrot` draws through a mapped display buffer using double

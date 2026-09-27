@@ -448,6 +448,9 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
   if (ok) {
     ok = endpoint_send(caller, NULL, 0, NULL, 0) == CALL_QUEUE_FULL;
   }
+  if (ok) {
+    ok = endpoint_withdraw(receiver, COUNTER_FIRST_ID) == CALL_OK;
+  }
   ok = close_handle(&client) && ok;
   if (ok) {
     struct endpoint_packet notice;
