@@ -4,7 +4,7 @@ Freestanding C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
 `x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
 also needs the Lua development files exported by the ports build; the HTTP
-development consumer needs the picohttpparser development files.
+provider needs the picohttpparser development files.
 
 ```sh
 make SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser
@@ -18,7 +18,7 @@ make -f runtime.mk clean
 `SDK` defaults to `build/sdk`; `BUILD` overrides the output directory for either
 phase. `LUA_PREFIX` defaults to `build/ports-dev/lua` and supplies `include` and
 `lib/liblua.a` for `session`. `PICOHTTPPARSER_PREFIX` defaults to
-`build/ports-dev/picohttpparser` for `http-fetch`; the SDK/runtime depends on
+`build/ports-dev/picohttpparser` for `httpfs`; the SDK/runtime depends on
 neither application library. `install` recreates a payload tree of selected programs, init and assets;
 it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
@@ -136,10 +136,12 @@ arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
 the TTY. It needs display, keyboard and clock grants. Libc supports floating-point
 formatting and a small math subset; it does not provide a full libm.
 
-`http-fetch URI` exercises the task-8 HTTP library before provider integration.
-It writes a complete successful body to stdout and result/size/type diagnostics
-to stderr. For example, with networking enabled, run
-`http-fetch http://example.com/ > home://example.html`. It supports bounded
-plaintext GET only, with no redirects or decompression. Build it with
-`PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser`; the library borrows
-explicit networking/clock authority and owns body reservations until release.
+`httpfs` publishes read-only HTTP snapshots. Configured boot sessions use
+`--start-services` to publish it after selecting `DNS_SERVER`; publication itself
+does not fetch remotely. With networking enabled, ordinary consumers can run
+`cat http://example.com/` or
+`cat http://example.com/ | tee home://example.html | cksum`.
+Each open fetches independently under a 30-second budget, capped by any native
+caller's earlier deadline. Retained snapshots share a 64 MiB storage account and
+63 export slots. Build the provider with
+`PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser`.

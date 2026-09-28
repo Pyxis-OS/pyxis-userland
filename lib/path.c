@@ -168,8 +168,14 @@ static enum call_status walk(const struct path_context *context, const char *pat
     if (provider_route) {
       *provider_route = true;
     }
-    status = target == WALK_FILE ? provider_open(provider, uri, rights, NULL, file) :
-        CALL_UNAVAILABLE;
+    status = CALL_UNAVAILABLE;
+    if (target == WALK_FILE) {
+      struct provider_result result;
+      status = provider_open(provider, uri, rights, 0, &result, file);
+      if (status == CALL_OK) {
+        status = result.status;
+      }
+    }
     handle_close(provider);
     return status;
   }

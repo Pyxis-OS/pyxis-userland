@@ -8,7 +8,7 @@ PICOHTTPPARSER_PREFIX ?= build/ports-dev/picohttpparser
 PICOHTTPPARSER_PREFIX := $(abspath $(PICOHTTPPARSER_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := http-fetch allocbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := httpfs allocbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -23,7 +23,7 @@ LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
 export LUA_PREFIX PICOHTTPPARSER_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/http-fetch/main.o $(BUILD)/allocbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/head/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -45,7 +45,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install http-fetch allocbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install httpfs allocbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -62,6 +62,7 @@ install: all
 	  install -m 644 init/development.sh "$$staging/init"; \
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
 	  install -m 644 init/idle.sh "$$staging/init-idle"; \
+	  install -m 644 init/services.sh "$$staging/init-services"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
@@ -72,7 +73,7 @@ install: all
 
 allocbench: $(BUILD)/allocbench.pxe
 
-http-fetch: $(BUILD)/http-fetch.pxe
+httpfs: $(BUILD)/httpfs.pxe
 
 session: $(BUILD)/session.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
@@ -104,8 +105,8 @@ $(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
 
-$(BUILD)/http-fetch.elf: $(BUILD)/http-fetch/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/http-fetch/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(LDLIBS)
+$(BUILD)/httpfs.elf: $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(LDLIBS)
 
 $(SESSION_OBJECTS) $(CONFIG_OBJECT): private CPPFLAGS += -I$(LUA_PREFIX)/include
 $(SESSION_OBJECTS) $(CONFIG_OBJECT): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h

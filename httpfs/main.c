@@ -8,20 +8,19 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "guide.h"
+#include "../common/dns.h"
+#include "../libhttp/http.h"
 
 #define SERVICE_ID UINT64_C(1)
 #define FILE_FIRST_ID UINT64_C(2)
 #define FILE_SLOTS (ENDPOINT_EXPORTS_MAX - 1)
 #define PUBLICATION_TIMEOUT_NS UINT64_C(10000000000)
 
-static const char default_welcome[] =
-    "Welcome to Pyxis. This immutable file comes from a userspace provider.\n"
-    "Read text://guide for file, namespace and service commands.\n";
+_Static_assert(HTTP_MEDIA_TYPE_MAX <= PROVIDER_MEDIA_TYPE_MAX_BYTES,
+    "HTTP media type fits OPEN metadata");
 
 struct file_export {
-  const char *bytes;
-  size_t size;
+  struct http_body body;
   /* A slot remains reserved until its export's RETIRE is acknowledged. */
   bool live;
 };
@@ -29,7 +28,8 @@ struct file_export {
 struct provider {
   handle_t service;
   handle_t receiver;
-  const char *welcome;
+  struct http_authority authority;
+  struct http_storage storage;
   bool published;
   struct file_export files[FILE_SLOTS];
 };
@@ -59,12 +59,6 @@ static enum call_status close_grants(struct endpoint_packet *packet)
 static enum call_status reply(struct endpoint_packet *packet, uint64_t result,
     const void *bytes, size_t size, const struct endpoint_grant *grant)
 {
-  struct provider_open_reply open_result = {0};
-  if (packet->protocol == PROTOCOL_PROVIDER && packet->operation == PROVIDER_OPEN &&
-      result != CALL_OK) {
-    bytes = &open_result;
-    size = sizeof(open_result);
-  }
   enum call_status status = endpoint_reply(packet->receipt, result, bytes, size,
       grant, grant ? 1 : 0);
   if (status == CALL_OK) {
@@ -80,100 +74,124 @@ static enum call_status reply(struct endpoint_packet *packet, uint64_t result,
   return status;
 }
 
-static bool scheme_letter(uint8_t byte)
+static enum call_status open_error(struct endpoint_packet *packet,
+    enum call_status status, unsigned http_status)
 {
-  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
+  struct provider_open_reply response = {.provider_status = http_status};
+  return reply(packet, status, &response, sizeof(response), NULL);
 }
 
-static bool uri_name(const uint8_t *uri, size_t size, const char *name)
+static enum call_status fetch_status(const struct http_result *result)
 {
-  if (size == 0 || !scheme_letter(uri[0])) {
-    return false;
-  }
-  size_t separator = 1;
-  while (separator < size && uri[separator] != ':') {
-    uint8_t byte = uri[separator];
-    if (!scheme_letter(byte) && !(byte >= '0' && byte <= '9') &&
-        byte != '+' && byte != '-' && byte != '.') {
-      return false;
+  switch (result->error) {
+  case HTTP_OK:
+    return CALL_OK;
+  case HTTP_INVALID_URI:
+    return CALL_BAD_REQUEST;
+  case HTTP_UNSUPPORTED:
+    return CALL_BAD_OPERATION;
+  case HTTP_BAD_RESPONSE:
+    return CALL_IO;
+  case HTTP_REJECTED_STATUS:
+    if (result->status == 404 || result->status == 410) {
+      return CALL_NOT_FOUND;
     }
-    ++separator;
+    if (result->status == 401 || result->status == 403) {
+      return CALL_DENIED;
+    }
+    if (result->status >= 200 && result->status < 400) {
+      return CALL_BAD_OPERATION;
+    }
+    return CALL_IO;
+  case HTTP_LIMIT:
+    return CALL_FILE_TOO_LARGE;
+  case HTTP_QUOTA:
+    return CALL_QUOTA;
+  case HTTP_NO_MEMORY:
+    return CALL_NO_MEMORY;
+  case HTTP_NETWORK_ERROR:
+    return result->network_status;
+  case HTTP_DNS_ERROR:
+    /* Only NXDOMAIN unambiguously identifies an absent name. */
+    return result->dns_rcode == 3 ? CALL_NOT_FOUND : CALL_IO;
   }
-  size_t name_size = strlen(name);
-  return separator < size && size - separator == 3 + name_size &&
-      uri[separator + 1] == '/' && uri[separator + 2] == '/' &&
-      memcmp(uri + separator + 3, name, name_size) == 0;
+  return CALL_IO;
 }
 
 static enum call_status open_file(struct provider *provider,
     struct endpoint_packet *packet)
 {
   if (packet->operation != PROVIDER_OPEN) {
-    return reply(packet, CALL_BAD_OPERATION, NULL, 0, NULL);
+    return open_error(packet, CALL_BAD_OPERATION, 0);
   }
   if (packet->size < sizeof(struct provider_open_request)) {
-    return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+    return open_error(packet, CALL_BAD_REQUEST, 0);
   }
   struct provider_open_request request;
   memcpy(&request, packet->data, sizeof(request));
   if (request.rights == 0 || (request.rights & ~FILE_RIGHTS) ||
       request.uri_size == 0 || request.uri_size > PROVIDER_URI_MAX_BYTES ||
       packet->size - sizeof(request) != request.uri_size) {
-    return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+    return open_error(packet, CALL_BAD_REQUEST, 0);
   }
   if (((request.rights & FILE_RIGHT_READ) &&
       !(packet->rights & PROVIDER_RIGHT_OPEN_READ)) ||
       ((request.rights & FILE_RIGHT_WRITE) &&
       !(packet->rights & PROVIDER_RIGHT_OPEN_WRITE))) {
-    return reply(packet, CALL_DENIED, NULL, 0, NULL);
+    return open_error(packet, CALL_DENIED, 0);
   }
   if (request.rights & FILE_RIGHT_WRITE) {
-    return reply(packet, CALL_READ_ONLY, NULL, 0, NULL);
+    return open_error(packet, CALL_DENIED, 0);
   }
-  const uint8_t *uri = packet->data + sizeof(request);
-  const char *bytes;
-  size_t size;
-  if (uri_name(uri, request.uri_size, "welcome")) {
-    bytes = provider->welcome;
-    size = strlen(bytes);
-  } else if (uri_name(uri, request.uri_size, "guide")) {
-    bytes = guide;
-    size = sizeof(guide) - 1;
-  } else {
-    return reply(packet, CALL_NOT_FOUND, NULL, 0, NULL);
+  if (request.uri_size > HTTP_URI_MAX) {
+    return open_error(packet, CALL_FILE_TOO_LARGE, 0);
+  }
+  const uint8_t *uri_bytes = packet->data + sizeof(request);
+  if (memchr(uri_bytes, 0, request.uri_size)) {
+    return open_error(packet, CALL_BAD_REQUEST, 0);
   }
   size_t slot = 0;
   while (slot < FILE_SLOTS && provider->files[slot].live) {
     ++slot;
   }
   if (slot == FILE_SLOTS) {
-    return reply(packet, CALL_LIMIT, NULL, 0, NULL);
+    return open_error(packet, CALL_QUEUE_FULL, 0);
+  }
+  char uri[HTTP_URI_MAX + 1];
+  memcpy(uri, uri_bytes, request.uri_size);
+  uri[request.uri_size] = 0;
+  struct http_result result;
+  http_fetch(&provider->authority, &provider->storage, uri, packet->deadline_ns, &result);
+  enum call_status status = fetch_status(&result);
+  if (status != CALL_OK) {
+    return open_error(packet, status, result.status);
   }
   handle_t client = HANDLE_INVALID;
-  enum call_status status = endpoint_export(provider->service, provider->receiver,
+  status = endpoint_export(provider->service, provider->receiver,
       FILE_FIRST_ID + slot, PROTOCOL_FILE, FILE_RIGHT_READ,
       HANDLE_TRANSPORT_CALL, &client);
   if (status != CALL_OK) {
+    http_body_release(&result.body);
     if (status == CALL_OUTCOME_UNKNOWN) {
       endpoint_finish(packet->receipt);
       return status;
     }
-    return reply(packet, status, NULL, 0, NULL);
+    return open_error(packet, status, result.status);
   }
-  provider->files[slot] = (struct file_export){bytes, size, true};
-  static const char media_type[] = "text/plain; charset=utf-8";
+  provider->files[slot] = (struct file_export){.body = result.body, .live = true};
   struct provider_open_reply header = {
     .protocol = PROTOCOL_FILE,
     .representation = PROVIDER_REPRESENTATION_BYTES,
-    .media_type_size = sizeof(media_type) - 1,
+    .media_type_size = strlen(result.media_type),
+    .provider_status = result.status,
   };
-  uint8_t response[sizeof(header) + sizeof(media_type) - 1];
+  uint8_t response[sizeof(header) + HTTP_MEDIA_TYPE_MAX];
   memcpy(response, &header, sizeof(header));
-  memcpy(response + sizeof(header), media_type, sizeof(media_type) - 1);
-  struct endpoint_grant grant = {client, request.rights, HANDLE_TRANSPORT_CALL};
-  status = endpoint_reply(packet->receipt, CALL_OK, response, sizeof(response),
-      &grant, 1);
-  /* The export state survives until RETIRE, including when reply transfer fails. */
+  memcpy(response + sizeof(header), result.media_type, header.media_type_size);
+  struct endpoint_grant grant = {client, FILE_RIGHT_READ, HANDLE_TRANSPORT_CALL};
+  status = endpoint_reply(packet->receipt, CALL_OK, response,
+      sizeof(header) + header.media_type_size, &grant, 1);
+  /* Canceled transfers retain their body until RETIRE acknowledges the export. */
   enum call_status withdrawn = CALL_OK;
   if (status != CALL_OK) {
     withdrawn = endpoint_withdraw(provider->receiver, FILE_FIRST_ID + slot);
@@ -212,7 +230,7 @@ static enum call_status serve_file(struct file_export *file,
     if (packet->size != 0) {
       return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
     }
-    struct file_size_reply response = {file->size};
+    struct file_size_reply response = {file->body.size};
     return reply(packet, CALL_OK, &response, sizeof(response), NULL);
   }
   if (packet->size != sizeof(struct file_read_request)) {
@@ -224,8 +242,8 @@ static enum call_status serve_file(struct file_export *file,
     return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
   }
   size_t read = 0;
-  if (request.offset < file->size) {
-    read = file->size - request.offset;
+  if (request.offset < file->body.size) {
+    read = file->body.size - request.offset;
     if (read > request.capacity) {
       read = request.capacity;
     }
@@ -234,7 +252,7 @@ static enum call_status serve_file(struct file_export *file,
   struct file_read_reply header = {read};
   memcpy(response, &header, sizeof(header));
   if (read != 0) {
-    memcpy(response + sizeof(header), file->bytes + request.offset, read);
+    memcpy(response + sizeof(header), file->body.data + request.offset, read);
   }
   return reply(packet, CALL_OK, response, sizeof(header) + read, NULL);
 }
@@ -255,13 +273,16 @@ static enum call_status serve(struct provider *provider)
           packet.object_id - FILE_FIRST_ID < FILE_SLOTS &&
           packet.protocol == PROTOCOL_FILE &&
           provider->files[packet.object_id - FILE_FIRST_ID].live) {
-        provider->files[packet.object_id - FILE_FIRST_ID] = (struct file_export){0};
+        http_body_release(&provider->files[packet.object_id - FILE_FIRST_ID].body);
       } else {
         return CALL_BAD_REQUEST;
       }
       status = endpoint_retire_ack(provider->receiver, packet.object_id);
       if (status != CALL_OK) {
         return status;
+      }
+      if (packet.object_id != SERVICE_ID) {
+        provider->files[packet.object_id - FILE_FIRST_ID].live = false;
       }
       bool live = provider->published;
       for (size_t i = 0; i < FILE_SLOTS; ++i) {
@@ -280,7 +301,11 @@ static enum call_status serve(struct provider *provider)
     if (packet.kind == ENDPOINT_MESSAGE_CANCEL || packet.kind == ENDPOINT_MESSAGE_SEND) {
       status = endpoint_finish(packet.receipt);
     } else if (packet.grant_count != 0 || packet.reason != 0) {
-      status = reply(&packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+      if (packet.object_id == SERVICE_ID && packet.protocol == PROTOCOL_PROVIDER) {
+        status = open_error(&packet, CALL_BAD_REQUEST, 0);
+      } else {
+        status = reply(&packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+      }
     } else if (packet.object_id == SERVICE_ID && packet.protocol == PROTOCOL_PROVIDER &&
         provider->published) {
       status = open_file(provider, &packet);
@@ -289,7 +314,11 @@ static enum call_status serve(struct provider *provider)
         provider->files[packet.object_id - FILE_FIRST_ID].live) {
       status = serve_file(&provider->files[packet.object_id - FILE_FIRST_ID], &packet);
     } else {
-      status = reply(&packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+      if (packet.object_id == SERVICE_ID && packet.protocol == PROTOCOL_PROVIDER) {
+        status = open_error(&packet, CALL_BAD_REQUEST, 0);
+      } else {
+        status = reply(&packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+      }
     }
     if (status != CALL_OK) {
       return status;
@@ -299,31 +328,39 @@ static enum call_status serve(struct provider *provider)
 
 int main(int argc, char **argv)
 {
-  const char *welcome = default_welcome;
-  if (argc == 3 && !strcmp(argv[1], "--welcome")) {
-    welcome = argv[2];
-  } else if (argc != 1) {
-    fputs("usage: textfs [--welcome MESSAGE]\n", stderr);
+  (void)argv;
+  if (argc != 1) {
+    fputs("usage: httpfs\n", stderr);
+    return 1;
+  }
+  struct http_authority authority = {
+    .tcp = startup_resource("tcp"),
+    .udp = startup_resource("udp"),
+    .random = startup_resource("random"),
+    .clock = startup_resource("clock"),
+  };
+  if (!dns_select_server(NULL, &authority.dns_server)) {
+    fputs("httpfs: invalid DNS_SERVER\n", stderr);
     return 1;
   }
   handle_t service = startup_resource("service");
   handle_t publication = startup_resource("publication");
-  handle_t clock = startup_resource("clock");
+  handle_t clock = authority.clock;
   if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
-    fputs("textfs: missing provider authority\n", stderr);
+    fputs("httpfs: missing provider authority\n", stderr);
     return 1;
   }
   struct endpoint_create_reply endpoint = {0};
   enum call_status status = endpoint_create(service, &endpoint);
   if (status != CALL_OK) {
-    fprintf(stderr, "textfs: create failed (status %u)\n", status);
+    fprintf(stderr, "httpfs: create failed (status %u)\n", status);
     return 1;
   }
   handle_t client = HANDLE_INVALID;
   struct provider provider = {
     .service = service,
     .receiver = endpoint.receiver,
-    .welcome = welcome,
+    .authority = authority,
   };
   status = close_handle(&endpoint.caller);
   if (status != CALL_OK) {
@@ -359,8 +396,7 @@ int main(int argc, char **argv)
   }
   provider.published = true;
   closed = close_handle(&publication);
-  enum call_status clock_closed = close_handle(&clock);
-  status = closed != CALL_OK ? closed : clock_closed;
+  status = closed;
   if (status == CALL_OK) {
     status = serve(&provider);
   }
@@ -372,8 +408,11 @@ done:
   if (status == CALL_OK) {
     status = receiver_closed;
   }
+  for (size_t i = 0; i < FILE_SLOTS; ++i) {
+    http_body_release(&provider.files[i].body);
+  }
   if (status != CALL_OK) {
-    fprintf(stderr, "textfs: provider failed (status %u)\n", status);
+    fprintf(stderr, "httpfs: provider failed (status %u)\n", status);
   }
   return status == CALL_OK ? 0 : 1;
 }
