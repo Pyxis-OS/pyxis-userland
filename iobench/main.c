@@ -9,15 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define FIXTURE_BYTES (1024 * 1024)
-#define MAX_BUFFER_BYTES 65536
-#define MAX_ROUNDS 100
-#define CLOCK_READS 1000
-
-struct options {
-  const char *uri;
-  size_t buffer, rounds;
-};
+#include "iobench.h"
 
 struct result {
   size_t bytes, calls, short_reads;
@@ -47,65 +39,51 @@ static bool number(const char *text, size_t maximum, size_t *result)
 
 static bool parse_options(int argc, char **argv, struct options *options)
 {
-  if (argc < 3 || strcmp(argv[1], "read") || !*argv[2]) {
+  if (argc < 3 || !*argv[2]) {
     return false;
   }
-  *options = (struct options){argv[2], 4088, 5};
+  *options = (struct options){.buffer = 4080, .rounds = 5};
+  int first_option = 3;
+  if (!strcmp(argv[1], "read")) {
+    options->mode = IO_READ;
+    options->source = argv[2];
+    options->buffer = 4088;
+  } else if (!strcmp(argv[1], "write")) {
+    options->mode = IO_WRITE;
+    options->output = argv[2];
+  } else if (!strcmp(argv[1], "copy") && argc >= 4 && *argv[3]) {
+    options->mode = IO_COPY;
+    options->source = argv[2];
+    options->output = argv[3];
+    first_option = 4;
+  } else {
+    return false;
+  }
+
   bool have_buffer = false, have_rounds = false;
-  for (int i = 3; i < argc; i += 2) {
-    if (i + 1 == argc) {
-      return false;
-    }
-    if (!strcmp(argv[i], "--buffer") && !have_buffer) {
-      have_buffer = true;
-      if (!number(argv[i + 1], MAX_BUFFER_BYTES, &options->buffer)) {
-        return false;
-      }
-    } else if (!strcmp(argv[i], "--rounds") && !have_rounds) {
-      have_rounds = true;
-      if (!number(argv[i + 1], MAX_ROUNDS, &options->rounds)) {
-        return false;
-      }
+  for (int i = first_option; i < argc; ++i) {
+    const char *option = argv[i];
+    if (!strcmp(option, "--prepared") && options->mode != IO_READ && !options->prepared) {
+      options->prepared = true;
+    } else if (!strcmp(option, "--sync") && options->mode != IO_READ && !options->sync) {
+      options->sync = true;
     } else {
-      return false;
-    }
-  }
-  return true;
-}
-
-static bool measure_clock(handle_t clock, uint64_t *cost)
-{
-  uint64_t start, end;
-  enum call_status status = clock_now(clock, &start);
-  if (status == CALL_OK) {
-    for (size_t i = 0; i < CLOCK_READS; ++i) {
-      status = clock_now(clock, &end);
-      if (status != CALL_OK) {
-        break;
+      if (++i == argc) {
+        return false;
       }
-    }
-  }
-  if (status != CALL_OK) {
-    fprintf(stderr, "iobench: clock calibration failed (status %u)\n", status);
-    return false;
-  }
-  if (end <= start) {
-    fputs("iobench: clock calibration did not advance\n", stderr);
-    return false;
-  }
-  *cost = (end - start) / CLOCK_READS;
-  return true;
-}
-
-static bool verify(const unsigned char *bytes)
-{
-  /* The build-time fixture generator uses the same offset-dependent pattern. */
-  for (size_t i = 0; i < FIXTURE_BYTES; ++i) {
-    unsigned char expected = (unsigned char)(i ^ (i >> 8) ^ (i >> 16) ^ 0xa5);
-    if (bytes[i] != expected) {
-      fprintf(stderr, "iobench: content mismatch at byte %zu (got %u, expected %u)\n",
-          i, (unsigned)bytes[i], (unsigned)expected);
-      return false;
+      if (!strcmp(option, "--buffer") && !have_buffer) {
+        have_buffer = true;
+        if (!number(argv[i], MAX_BUFFER_BYTES, &options->buffer)) {
+          return false;
+        }
+      } else if (!strcmp(option, "--rounds") && !have_rounds) {
+        have_rounds = true;
+        if (!number(argv[i], MAX_ROUNDS, &options->rounds)) {
+          return false;
+        }
+      } else {
+        return false;
+      }
     }
   }
   return true;
@@ -116,7 +94,7 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
 {
   *result = (struct result){0};
   memset(bytes, 0, FIXTURE_BYTES);
-  int descriptor = open(options->uri, O_RDONLY);
+  int descriptor = open(options->source, O_RDONLY);
   if (descriptor < 0) {
     fprintf(stderr, "iobench: open failed (errno %d)\n", errno);
     return false;
@@ -187,7 +165,7 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
       success = false;
     }
     if (success) {
-      success = verify(bytes);
+      success = verify_fixture(bytes);
     }
   }
   if (close(descriptor) < 0) {
@@ -215,19 +193,16 @@ static void report(const char *phase, size_t pass, const struct result *result,
   }
 }
 
-static int compare_time(const void *left, const void *right)
-{
-  uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
-  return (a > b) - (a < b);
-}
-
 int main(int argc, char **argv)
 {
   struct options options;
   if (!parse_options(argc, argv, &options)) {
-    fputs("usage: iobench read URI [--buffer bytes] [--rounds count]\n"
-          "buffer: 1..65536 (default 4088); rounds: 1..100 (default 5)\n"
-          "URI must contain the exact 1 MiB share/iobench.bin fixture\n", stderr);
+    fputs("usage: iobench read SOURCE [--buffer bytes] [--rounds count]\n"
+          "       iobench write OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
+          "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
+          "buffer: 1..65536 (default read=4088, write/copy=4080); rounds: 1..100 (default 5)\n"
+          "SOURCE must contain the exact 1 MiB share/iobench.bin fixture\n"
+          "OUTPUT must be a new file; it is retained even on failure\n", stderr);
     return EXIT_FAILURE;
   }
   handle_t clock = startup_resource("clock");
@@ -243,31 +218,28 @@ int main(int argc, char **argv)
   uint64_t times[MAX_ROUNDS], clock_cost;
   bool success = measure_clock(clock, &clock_cost);
   if (success) {
-    fprintf(stderr, "iobench read: uri=%s buffer=%zu rounds=%zu warmup=1 "
-        "fixture=%u bytes\n", options.uri, options.buffer, options.rounds, FIXTURE_BYTES);
+    fprintf(stderr, "iobench %s: source=%s output=%s buffer=%zu rounds=%zu warmup=1 "
+        "fixture=%u bytes\n", argv[1], options.source ? options.source : "generated",
+        options.output ? options.output : "none", options.buffer, options.rounds, FIXTURE_BYTES);
     fprintf(stderr, "Clock-call loop: %llu ns/read (%u reads); not subtracted\n",
         (unsigned long long)clock_cost, CLOCK_READS);
-    struct result result;
-    success = read_pass(&options, bytes, clock, false, &result);
-    report("warmup", 1, &result, success);
-    for (size_t i = 0; success && i < options.rounds; ++i) {
-      success = read_pass(&options, bytes, clock, true, &result);
-      report("sample", i + 1, &result, success);
-      times[i] = result.elapsed;
+    if (options.mode != IO_READ) {
+      success = run_output(&options, bytes, clock);
+    } else {
+      struct result result;
+      success = read_pass(&options, bytes, clock, false, &result);
+      report("warmup", 1, &result, success);
+      for (size_t i = 0; success && i < options.rounds; ++i) {
+        success = read_pass(&options, bytes, clock, true, &result);
+        report("sample", i + 1, &result, success);
+        times[i] = result.elapsed;
+      }
+      if (success) {
+        print_summary("Read", times, options.rounds, true);
+      }
     }
   }
-  if (success) {
-    qsort(times, options.rounds, sizeof(*times), compare_time);
-    size_t middle = options.rounds / 2;
-    double median = times[middle];
-    if (!(options.rounds % 2)) {
-      median = times[middle - 1] / 2.0 + times[middle] / 2.0;
-    }
-    fprintf(stderr, "Summary: %zu verified samples; elapsed median=%.3f ms "
-        "range=%.3f..%.3f ms; throughput at median elapsed=%.3f MiB/s\n", options.rounds,
-        median / 1000000.0, times[0] / 1000000.0,
-        times[options.rounds - 1] / 1000000.0, 1000000000.0 / median);
-  } else {
+  if (!success) {
     fputs("iobench: FAILED; no successful-run summary\n", stderr);
   }
   free(bytes);
