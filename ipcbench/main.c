@@ -692,7 +692,7 @@ static void report_sample(const struct options *options, const struct sample *sa
       fprintf(stderr, "; batch mean=%.3f ns/round_trip", (double)sample->elapsed_ns / sample->round_trips);
     }
   } else {
-    fprintf(stderr, "; admitted=%llu rejected=%llu consumed=%llu; admitted_bytes=%llu consumed_bytes=%llu",
+    fprintf(stderr, "; admitted=%llu rejected=%llu acknowledged_consumed=%llu; admitted_bytes=%llu acknowledged_bytes=%llu",
         (unsigned long long)sample->admitted, (unsigned long long)sample->rejected,
         (unsigned long long)sample->consumed, (unsigned long long)sample->request_bytes,
         (unsigned long long)(sample->consumed * options->size));

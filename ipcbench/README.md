@@ -37,7 +37,7 @@ replies; export dispatch is included. Round trips and confirmed request/reply
 bytes are reported separately. A failed CALL reports its transport status and
 delivery state, without retrying. NOT_DELIVERED does not imply rejection before
 admission: an admitted queued call may expire without delivery. Bytes from a
-failed round trip are excluded from the confirmed byte totals.
+transport-failed round trip are excluded from the confirmed byte totals.
 
 SEND uses separate raw data and control endpoints. The sender admits groups of
 at most eight data messages while the receiver waits on the control endpoint.
@@ -51,8 +51,10 @@ and receiver concurrency.
 The SEND admission result sums intervals around the group admission loops.
 Completion elapsed spans all admissions, their clock boundaries and DRAIN
 acknowledgments. QUEUE_FULL stops the sample: its admitted prefix is drained
-through control, admitted/rejected/consumed counts remain visible, and rejected
-data is never retried. Any transport, count, content or cleanup failure returns
+through control, admitted/rejected/acknowledged-consumed counts remain visible, and rejected
+data is never retried. After a failed DRAIN, acknowledged consumption is only a
+confirmed lower bound: a delivered call can consume data without returning its
+acknowledgment before its deadline. Any transport, count, content or cleanup failure returns
 nonzero. Failed samples and zero-byte workloads have no throughput result.
 
 Allocation, deterministic payload preparation, receiver configuration, RESET,
