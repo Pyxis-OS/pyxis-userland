@@ -221,6 +221,18 @@ independent costs. Compare matching invocations without `--host-profile` to show
 perturbation; no constant overhead is subtracted. Profiling does not change
 transfer sizes, retry policy, caching, batching or scheduling.
 
+In the matched four-CPU nested-KVM investigation, profiled medians were
+13.7–16.1 times the unprofiled controls. Added clock boundaries can perturb
+request interleaving as well as consume time; those measurements cannot be used
+as a direct partition of unprofiled transfer time. Keep the controls beside any
+profile-based conclusion.
+
+Native requested bytes have already passed through the helper's transfer cap.
+For a 4088-byte copy read, libpyxis can confirm a 4080-byte write plus an 8-byte
+suffix. The benchmark reports the first as a short write, while HOST profiling
+reports two full native writes. HOST publication includes capturing incoming
+write payload bytes; caller-side read result copies follow its total interval.
+
 ### RAM buffer replacement profiling
 
 Add `--profile` to write/copy to collect caller-local RAM FILE replacement
