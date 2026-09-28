@@ -547,6 +547,9 @@ static bool resolve(struct fetch *fetch, const char *host, uint32_t *address)
     return fail(fetch, HTTP_INVALID_URI);
   }
   const struct http_authority *authority = fetch->authority;
+  if (authority->udp == HANDLE_INVALID || authority->random == HANDLE_INVALID) {
+    return network(fetch, CALL_DENIED);
+  }
   struct dns_exchange exchange;
   dns_query(authority->udp, authority->clock, authority->random, authority->dns_server,
       &name, fetch->deadline, &exchange);
@@ -588,6 +591,11 @@ void http_fetch(const struct http_authority *authority, struct http_storage *sto
     const char *uri_text, uint64_t deadline_ns, struct http_result *result)
 {
   *result = (struct http_result){0};
+  if (authority->tcp == HANDLE_INVALID || authority->clock == HANDLE_INVALID) {
+    result->error = HTTP_NETWORK_ERROR;
+    result->network_status = CALL_DENIED;
+    return;
+  }
   uint64_t now;
   result->network_status = clock_now(authority->clock, &now);
   if (result->network_status != CALL_OK) {

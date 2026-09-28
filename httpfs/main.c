@@ -16,6 +16,9 @@
 #define FILE_SLOTS (ENDPOINT_EXPORTS_MAX - 1)
 #define PUBLICATION_TIMEOUT_NS UINT64_C(10000000000)
 
+_Static_assert(HTTP_MEDIA_TYPE_MAX <= PROVIDER_MEDIA_TYPE_MAX_BYTES,
+    "HTTP media type fits OPEN metadata");
+
 struct file_export {
   struct http_body body;
   /* A slot remains reserved until its export's RETIRE is acknowledged. */
@@ -96,7 +99,7 @@ static enum call_status fetch_status(const struct http_result *result)
     if (result->status == 401 || result->status == 403) {
       return CALL_DENIED;
     }
-    if ((result->status >= 300 && result->status < 400) || result->status == 206) {
+    if (result->status >= 200 && result->status < 400) {
       return CALL_BAD_OPERATION;
     }
     return CALL_IO;

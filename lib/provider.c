@@ -30,7 +30,7 @@ enum call_status provider_open(handle_t provider, const char *uri, uint64_t righ
   size_t uri_size = 0;
   while (uri[uri_size]) {
     if (uri_size == PROVIDER_URI_MAX_BYTES) {
-      return CALL_LIMIT;
+      return CALL_FILE_TOO_LARGE;
     }
     ++uri_size;
   }
