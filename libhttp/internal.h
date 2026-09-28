@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 struct http_uri {
+  enum http_scheme scheme;
   char host[256];
   char authority[262];
   char target[HTTP_URI_MAX + 2];
