@@ -17,7 +17,7 @@ struct options {
   enum io_mode mode;
   const char *source, *output;
   size_t buffer, rounds, bytes;
-  bool prepared, sync;
+  bool prepared, sync, profile;
 };
 
 void fill_fixture(unsigned char *bytes, size_t size, bool contrast);
