@@ -205,7 +205,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[space_index] = (struct launch_grant){shell->space, SPACE_RIGHT_SET_TITLE, 0};
   }
   if (has_profile) {
-    grants[profile_index] = (struct launch_grant){shell->profile, PROFILE_RIGHT_MEMORY, 0};
+    uint64_t rights;
+    enum call_status status = handle_rights(shell->profile, &rights, NULL);
+    if (status != CALL_OK) {
+      return status;
+    }
+    grants[profile_index] = (struct launch_grant){shell->profile,
+        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE), 0};
   }
   if (has_namespace) {
     uint64_t rights, transport;

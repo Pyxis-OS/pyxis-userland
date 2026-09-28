@@ -72,6 +72,8 @@ static bool parse_options(int argc, char **argv, struct options *options)
     bool output = options->mode == IO_WRITE || options->mode == IO_COPY;
     if (!strcmp(option, "--prepared") && output && !options->prepared) {
       options->prepared = true;
+    } else if (!strcmp(option, "--profile") && output && !options->profile) {
+      options->profile = true;
     } else if (!strcmp(option, "--sync") && output && !options->sync) {
       options->sync = true;
     } else {
@@ -251,8 +253,8 @@ int main(int argc, char **argv)
   struct options options;
   if (!parse_options(argc, argv, &options)) {
     fputs("usage: iobench read SOURCE [--bytes count] [--buffer bytes] [--rounds count]\n"
-          "       iobench write OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
-          "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
+          "       iobench write OUTPUT [--prepared] [--sync] [--profile] [--buffer bytes] [--rounds count]\n"
+          "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--profile] [--buffer bytes] [--rounds count]\n"
           "       session app://iobench.pxe pipe [--buffer bytes] [--rounds count]\n"
           "buffer: 1..65536 (default read=4088, write/copy=4080, pipe=4096); rounds: 1..100 (default 5)\n"
           "read --bytes: 1..1048576 (default 1048576); exact fixture prefix and EOF required\n"

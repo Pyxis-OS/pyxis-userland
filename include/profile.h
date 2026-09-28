@@ -11,4 +11,9 @@ enum call_status profile_begin(handle_t profile);
 enum call_status profile_snapshot(handle_t profile, struct profile_snapshot *snapshot);
 enum call_status profile_end(handle_t profile, struct profile_snapshot *snapshot);
 
+/* RAM FILE buffer replacement, independent of private-memory collection. */
+enum call_status profile_file_begin(handle_t profile);
+enum call_status profile_file_snapshot(handle_t profile, struct profile_file_snapshot *snapshot);
+enum call_status profile_file_end(handle_t profile, struct profile_file_snapshot *snapshot);
+
 #endif
