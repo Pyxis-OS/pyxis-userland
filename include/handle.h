@@ -9,6 +9,11 @@
  * invalid and already-closed handles are errors. */
 int handle_close(handle_t handle);
 
+/* Kernel-authenticated grant authority, interface and native/exported kind.
+ * Failure clears the output. Querying a closed export still succeeds; subsequent
+ * invocation reports closure. No object identity or extra authority is exposed. */
+enum call_status handle_query(handle_t handle, struct handle_info *info);
+
 /* Queries independently granted resource and transport authority. At least one
  * output is required; omitted outputs are ignored. Failure clears both supplied
  * outputs. Possessing the handle is sufficient. */

@@ -211,48 +211,6 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
     return status;
   }
   uint64_t rights = input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE;
-  status = path_resolve(&shell->directory, path, DIRECTORY_KIND_FILE, rights,
+  return path_open_file(&shell->directory, path, rights, !input,
       &shell->workspace, file);
-  if (input || status != CALL_NOT_FOUND) {
-    return status;
-  }
-
-  const char *slash = strrchr(path, '/');
-  const char *name = slash ? slash + 1 : path;
-  if (!*name || !strcmp(name, ".") || !strcmp(name, "..")) {
-    return status;
-  }
-  char *parent_path = NULL;
-  const char *parent = ".";
-  if (slash) {
-    size_t parent_length = name - path;
-    parent_path = malloc(parent_length + 1);
-    if (!parent_path) {
-      return CALL_NO_MEMORY;
-    }
-    /* Retain the final slash so a root remains scheme://. */
-    memcpy(parent_path, path, parent_length);
-    parent_path[parent_length] = '\0';
-    parent = parent_path;
-  }
-  handle_t directory;
-  status = path_resolve(&shell->directory, parent, DIRECTORY_KIND_DIRECTORY,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES,
-      &shell->workspace, &directory);
-  free(parent_path);
-  if (status != CALL_OK) {
-    return status;
-  }
-  status = directory_create(directory, name, DIRECTORY_KIND_FILE, rights, file);
-  if (status == CALL_ALREADY_EXISTS) {
-    status = directory_lookup(directory, name, DIRECTORY_KIND_FILE, rights, file);
-  }
-  if (handle_close(directory) != 0) {
-    if (*file != HANDLE_INVALID) {
-      handle_close(*file);
-      *file = HANDLE_INVALID;
-    }
-    return CALL_BAD_HANDLE;
-  }
-  return status;
 }

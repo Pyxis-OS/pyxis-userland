@@ -59,14 +59,14 @@ static inline struct syscall_result syscall_copy(handle_t source, uint64_t right
   return (struct syscall_result){status, reply_size};
 }
 
-static inline struct syscall_result syscall_handle_rights(handle_t handle,
-    struct handle_authority *authority)
+static inline struct syscall_result syscall_handle_info(handle_t handle,
+    struct handle_info *info)
 {
-  uint64_t status = SYSCALL_HANDLE_RIGHTS;
+  uint64_t status = SYSCALL_HANDLE_INFO;
   uint64_t reply_size;
   __asm__ volatile("syscall"
                    : "+a"(status), "=d"(reply_size)
-                   : "D"(handle), "S"(authority)
+                   : "D"(handle), "S"(info)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }

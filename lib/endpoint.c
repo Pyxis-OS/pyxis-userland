@@ -1,4 +1,5 @@
 #include <endpoint.h>
+#include <handle.h>
 #include <syscall.h>
 #include <stdbool.h>
 
@@ -176,6 +177,17 @@ enum call_status endpoint_invoke(handle_t caller, uint64_t protocol,
   if (status == CALL_OK) {
     if (!packet_valid(&packet, result.reply_size, false, deadline_ns,
         protocol, operation)) {
+      /* Grants are kernel-installed, but only trust entries fully present
+       * in the returned envelope. The packet starts zeroed. */
+      size_t count = packet.grant_count < ENDPOINT_GRANTS_MAX ?
+          packet.grant_count : ENDPOINT_GRANTS_MAX;
+      for (size_t i = 0; i < count; ++i) {
+        size_t end = offsetof(struct endpoint_packet, grants) +
+            (i + 1) * sizeof(struct endpoint_grant);
+        if (end <= result.reply_size && packet.grants[i].handle != HANDLE_INVALID) {
+          handle_close(packet.grants[i].handle);
+        }
+      }
       *reply = (struct endpoint_packet){0};
       return CALL_OUTCOME_UNKNOWN;
     }

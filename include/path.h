@@ -49,12 +49,14 @@ void path_context_close(struct path_context *context);
 /* Exact scheme:// prefixes select context bindings (or startup roots).
  * A name bound as both root and namespace service is ambiguous and fails with
  * BAD_REQUEST, including if its provider has closed. Namespace-only names
- * return UNAVAILABLE while their provider is live, or ENDPOINT_CLOSED once
- * it closes; no file bridge exists yet.
- * other paths use cwd.
- * No leading / or empty paths. Repeated / and . are accepted; .. walks the
+ * open files through their provider using the full URI unchanged. Directory
+ * operations on providers return UNAVAILABLE while live, or ENDPOINT_CLOSED
+ * once closed. Other paths use cwd.
+ * Native paths reject leading / and empty input. Repeated / and . are accepted;
+ * .. walks the
  * retained chain, failing at its boundary. A trailing / requires a directory.
  * Names are case-sensitive literal bytes, with no URL decoding or expansion.
+ * Provider URI tails retain every separator and dot component unchanged.
  * Components are walked in order: missing/.. still fails at missing.
  *
  * Success returns a new owned handle of kind with exactly rights. context may
@@ -65,6 +67,14 @@ void path_context_close(struct path_context *context);
  * through. Buffer sizes are caller choices, not ABI path/depth limits. */
 enum call_status path_resolve(const struct path_context *context, const char *path,
     uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
+
+/* Shared file open/create route for libc and shell redirects. Provider opens
+ * never fall back to directory creation, including after provider NOT_FOUND.
+ * Native creation occurs only after an absent file lookup, with CREATE on the
+ * parent; an intervening creator is looked up once. No truncation or allocation.
+ * Outputs and workspace ownership follow path_resolve(). */
+enum call_status path_open_file(const struct path_context *context, const char *path,
+    uint64_t rights, bool create, struct path_workspace *workspace, handle_t *handle);
 
 /* Resolve the parent and remove its final component in one directory operation.
  * kind is FILE, DIRECTORY or ANY. A trailing / requires DIRECTORY; a FILE
