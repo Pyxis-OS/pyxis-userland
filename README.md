@@ -4,14 +4,15 @@ Freestanding C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
 `x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
 also needs the Lua development files exported by the ports build; the HTTP
-provider needs the picohttpparser development files. Host Lua 5.4 (`LUA`, default
+provider needs the picohttpparser development files. The native TLS application
+library needs the Mbed TLS development export. Host Lua 5.4 (`LUA`, default
 `lua`) generates the packaged [iobench fixture](iobench/README.md).
 
 ```sh
-make SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser
+make SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser MBEDTLS_PREFIX=/path/to/ports-dev/mbedtls
 make SDK=/path/to/sdk hello client server
 make -f runtime.mk SDK=/path/to/sdk      # runtime in build/runtime
-make install SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser DESTDIR=/path/to/guest-tree
+make install SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser MBEDTLS_PREFIX=/path/to/ports-dev/mbedtls DESTDIR=/path/to/guest-tree
 make clean
 make -f runtime.mk clean
 ```
@@ -20,7 +21,12 @@ make -f runtime.mk clean
 phase. `LUA_PREFIX` defaults to `build/ports-dev/lua` and supplies `include` and
 `lib/liblua.a` for `session`. `PICOHTTPPARSER_PREFIX` defaults to
 `build/ports-dev/picohttpparser` for `httpfs`; the SDK/runtime depends on
-neither application library. `install` recreates a payload tree of selected programs, init and assets;
+neither application library. `MBEDTLS_PREFIX` defaults to
+`build/ports-dev/mbedtls`; `make libtls` builds `BUILD/libtls.a`. Its native
+authority, trust and ownership contract is in [libtls/tls.h](libtls/tls.h).
+Applications link this archive with the export's `MBEDTLS_LIBRARIES` before SDK
+libraries; compile Mbed TLS consumers with `MBEDTLS_CPPFLAGS` from its
+`share/mbedtls.mk`. `install` recreates a payload tree of selected programs, init and assets;
 it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang source. TLSF is vendored locally with its license and pin.
