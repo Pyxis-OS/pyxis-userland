@@ -1,5 +1,5 @@
 -- Byte i is (i XOR (i >> 8) XOR (i >> 16) XOR 0xa5) modulo 256.
--- Keep this definition in step with the verifier in main.c.
+-- Keep this definition in step with the verifier in common.c.
 for base = 0, 1024 * 1024 - 1, 4096 do
   local bytes = {}
   for i = base, base + 4095 do
