@@ -9,11 +9,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "guide.h"
+#include "../common/provider_setup.h"
 
 #define SERVICE_ID UINT64_C(1)
 #define FILE_FIRST_ID UINT64_C(2)
 #define FILE_SLOTS (ENDPOINT_EXPORTS_MAX - 1)
-#define PUBLICATION_TIMEOUT_NS UINT64_C(10000000000)
 
 static const char default_welcome[] =
     "Welcome to Pyxis. This immutable file comes from a userspace provider.\n"
@@ -39,7 +39,7 @@ static enum call_status close_handle(handle_t *handle)
   if (*handle == HANDLE_INVALID) {
     return CALL_OK;
   }
-  enum call_status status = handle_close(*handle);
+  enum call_status status = handle_close(*handle) == 0 ? CALL_OK : CALL_BAD_HANDLE;
   *handle = HANDLE_INVALID;
   return status;
 }
@@ -299,34 +299,35 @@ static enum call_status serve(struct provider *provider)
 
 int main(int argc, char **argv)
 {
-  const char *welcome = default_welcome;
-  if (argc == 3 && !strcmp(argv[1], "--welcome")) {
-    welcome = argv[2];
-  } else if (argc != 1) {
-    fputs("usage: textfs [--welcome MESSAGE]\n", stderr);
-    return 1;
-  }
   handle_t service = startup_resource("service");
   handle_t publication = startup_resource("publication");
   handle_t clock = startup_resource("clock");
+  struct endpoint_create_reply endpoint = {0};
+  handle_t client = HANDLE_INVALID;
+  struct provider provider = {.service = service, .welcome = default_welcome};
+  enum call_status status = CALL_OK;
+  enum call_status cleanup_status = CALL_OK;
+  bool publication_attempted = false;
+  if (argc == 3 && !strcmp(argv[1], "--welcome")) {
+    provider.welcome = argv[2];
+  } else if (argc != 1) {
+    fputs("usage: textfs [--welcome MESSAGE]\n", stderr);
+    status = CALL_BAD_REQUEST;
+    goto done;
+  }
   if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
     fputs("textfs: missing provider authority\n", stderr);
-    return 1;
+    status = CALL_UNAVAILABLE;
+    goto done;
   }
-  struct endpoint_create_reply endpoint = {0};
-  enum call_status status = endpoint_create(service, &endpoint);
+  status = endpoint_create(service, &endpoint);
   if (status != CALL_OK) {
-    fprintf(stderr, "textfs: create failed (status %u)\n", status);
-    return 1;
+    goto done;
   }
-  handle_t client = HANDLE_INVALID;
-  struct provider provider = {
-    .service = service,
-    .receiver = endpoint.receiver,
-    .welcome = welcome,
-  };
+  provider.receiver = endpoint.receiver;
   status = close_handle(&endpoint.caller);
   if (status != CALL_OK) {
+    cleanup_status = status;
     goto done;
   }
   status = endpoint_export(service, endpoint.receiver, SERVICE_ID, PROTOCOL_PROVIDER,
@@ -334,25 +335,14 @@ int main(int argc, char **argv)
   if (status != CALL_OK) {
     goto done;
   }
-  uint64_t now;
-  status = clock_now(clock, &now);
-  if (status != CALL_OK || now > UINT64_MAX - PUBLICATION_TIMEOUT_NS) {
-    status = CALL_UNAVAILABLE;
-    goto done;
-  }
   struct endpoint_grant grant = {client, PROVIDER_RIGHT_OPEN_READ, HANDLE_TRANSPORT_CALL};
-  struct endpoint_packet response = {0};
-  status = endpoint_request(publication, NULL, 0, &grant, 1,
-      now + PUBLICATION_TIMEOUT_NS, &response);
+  status = provider_setup_report(publication, clock, CALL_OK, CALL_OK, &grant, &publication_attempted);
   enum call_status closed = close_handle(&client);
-  enum call_status grants_closed = close_grants(&response);
-  if (status == CALL_OK && (closed != CALL_OK || grants_closed != CALL_OK)) {
-    status = closed != CALL_OK ? closed : grants_closed;
+  if (closed != CALL_OK) {
+    cleanup_status = closed;
   }
-  if (status == CALL_OK && (response.result != CALL_OK || response.size != 0 ||
-      response.grant_count != 0)) {
-    status = response.result != CALL_OK && response.result < CALL_STATUS_COUNT ?
-        response.result : CALL_BAD_REQUEST;
+  if (status == CALL_OK) {
+    status = closed;
   }
   if (status != CALL_OK) {
     goto done;
@@ -366,11 +356,25 @@ int main(int argc, char **argv)
   }
 
 done:
-  close_handle(&client);
-  close_handle(&endpoint.caller);
+  enum call_status client_closed = close_handle(&client);
+  enum call_status caller_closed = close_handle(&endpoint.caller);
   enum call_status receiver_closed = close_handle(&endpoint.receiver);
+  if (client_closed != CALL_OK || caller_closed != CALL_OK || receiver_closed != CALL_OK) {
+    cleanup_status = CALL_BAD_HANDLE;
+  }
   if (status == CALL_OK) {
-    status = receiver_closed;
+    status = cleanup_status;
+  }
+  if (!publication_attempted && publication != HANDLE_INVALID) {
+    enum call_status reported = provider_setup_report(publication, clock,
+        status, cleanup_status, NULL, NULL);
+    if (reported != CALL_OK) {
+      fprintf(stderr, "textfs: setup report failed (status %u)\n", reported);
+    }
+  }
+  enum call_status publication_closed = close_handle(&publication);
+  if (status == CALL_OK) {
+    status = publication_closed;
   }
   if (status != CALL_OK) {
     fprintf(stderr, "textfs: provider failed (status %u)\n", status);

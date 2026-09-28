@@ -36,8 +36,8 @@ explicit HTTP or HTTPS client; HTTPS borrows a ready libtls runtime and verifies
 the URI's DNS hostname. It accepts authenticated TLS EOF for close-delimited
 bodies and returns structured fetch/cleanup diagnostics. Authority, body-storage
 ownership and result mappings are described in [libhttp/http.h](libhttp/http.h).
-The library loads no trust or startup resources. `httpfs` currently selects HTTP;
-HTTPS provider publication and packaged trust are separate integration work.
+The library loads no trust or startup resources. `httpfs --https` owns its ready
+TLS runtime and loads the packaged public roots before publication.
 
 The Pyxis parent repository pins this repository as its `userspace` submodule
 and orchestrates header export, runtime build, SDK assembly, application build
@@ -154,9 +154,26 @@ arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
 the TTY. It needs display, keyboard and clock grants. Libc supports floating-point
 formatting and a small math subset; it does not provide a full libm.
 
-`httpfs` publishes read-only HTTP snapshots. Configured boot sessions use
-`--start-services` to publish it after selecting `DNS_SERVER`; publication itself
-does not fetch remotely. With networking enabled, ordinary consumers can run
+`httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
+Configured boot sessions use `--start-services` to publish independent `http`
+and `https` instances after selecting `DNS_SERVER`. HTTPS loads
+`app://share/ca-certificates/cacert.pem` before publication, with bounded entropy
+initialization. Reported HTTPS setup failure leaves HTTP and local startup usable.
+To augment public roots, restart or replace the HTTPS instance:
+
+```
+service replace --read-only https app://httpfs.pxe --https --ca-bundle home://private-ca.pem
+```
+
+`--read-only` attenuates the launched provider's native filesystem roots and
+working directories. HTTPS accepts only this read-only native trust authority
+and receives no namespace. `service start --optional --read-only` continues only
+after an acknowledged setup failure with successful cleanup. Unexpected crashes
+before reporting can still leave service startup waiting.
+
+Each instance owns immutable trust and independent snapshot budgets. Existing
+snapshots remain readable after replacement until their grants retire. Publication
+itself does not fetch remotely. With networking enabled, ordinary consumers can run
 `cat http://example.com/` or
 `cat http://example.com/ | tee home://example.html | cksum`.
 Each open fetches independently under a 30-second budget, capped by any native
