@@ -22,7 +22,7 @@ bool dns_resolve_address(const char *program, const char *target,
   }
 
   struct dns_exchange exchange;
-  dns_query(udp, clock, random, server, &question, &exchange);
+  dns_query(udp, clock, random, server, &question, 0, &exchange);
   if (exchange.status != CALL_OK) {
     fprintf(stderr, "%s: DNS %s failed (status %u)%s\n",
         program, exchange.operation, (unsigned)exchange.status,

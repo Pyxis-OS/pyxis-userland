@@ -4,8 +4,11 @@ BUILD ?= build/apps
 DESTDIR ?= $(BUILD)/install
 LUA_PREFIX ?= build/ports-dev/lua
 LUA_PREFIX := $(abspath $(LUA_PREFIX))
+PICOHTTPPARSER_PREFIX ?= build/ports-dev/picohttpparser
+PICOHTTPPARSER_PREFIX := $(abspath $(PICOHTTPPARSER_PREFIX))
+HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := allocbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := http-fetch allocbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -18,9 +21,9 @@ CPPFLAGS := $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
 LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
-export LUA_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
+export LUA_PREFIX PICOHTTPPARSER_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/allocbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/http-fetch/main.o $(BUILD)/allocbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/head/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -33,6 +36,8 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/script.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o
+HTTP_LIBRARY := $(BUILD)/libhttp.a
+HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(BUILD)/libconfig/config.o
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
@@ -40,7 +45,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install allocbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install http-fetch allocbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -67,6 +72,8 @@ install: all
 
 allocbench: $(BUILD)/allocbench.pxe
 
+http-fetch: $(BUILD)/http-fetch.pxe
+
 session: $(BUILD)/session.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
@@ -90,6 +97,15 @@ udp-send: $(BUILD)/udp-send.pxe
 udp-echo: $(BUILD)/udp-echo.pxe
 shell: $(BUILD)/shell.pxe
 mandelbrot: $(BUILD)/mandelbrot.pxe
+
+$(HTTP_OBJECTS): private CPPFLAGS += -I$(PICOHTTPPARSER_PREFIX)/include
+$(HTTP_OBJECTS): $(PICOHTTPPARSER_PREFIX)/include/picohttpparser.h
+$(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
+	rm -f $@
+	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
+
+$(BUILD)/http-fetch.elf: $(BUILD)/http-fetch/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/http-fetch/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(LDLIBS)
 
 $(SESSION_OBJECTS) $(CONFIG_OBJECT): private CPPFLAGS += -I$(LUA_PREFIX)/include
 $(SESSION_OBJECTS) $(CONFIG_OBJECT): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
@@ -130,7 +146,7 @@ $(BUILD)/%.pxe: $(BUILD)/%.elf $(PYXIS_ELF2PXE) Makefile
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
-	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
+	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -141,4 +157,4 @@ clean:
 
 .SECONDARY:
 
--include $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d)
+-include $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d)
