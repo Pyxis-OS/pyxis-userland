@@ -109,7 +109,17 @@ static enum call_status prepare_script(const struct launch_request *source,
     memcpy(scratch->grants, (const void *)(uintptr_t)source->grants,
         source->grant_count * sizeof(*scratch->grants));
   }
-  scratch->grants[source->grant_count] = (struct launch_grant){source->image, FILE_RIGHT_READ, 0};
+  struct handle_info info;
+  enum call_status query = handle_query(source->image, &info);
+  if (query != CALL_OK) {
+    return query;
+  }
+  if (info.protocol != PROTOCOL_FILE) {
+    return CALL_WRONG_TYPE;
+  }
+  uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
+  scratch->grants[source->grant_count] =
+      (struct launch_grant){source->image, FILE_RIGHT_READ, transport};
   if (source->resource_count) {
     memcpy(scratch->resources, original_resources,
         source->resource_count * sizeof(*scratch->resources));
