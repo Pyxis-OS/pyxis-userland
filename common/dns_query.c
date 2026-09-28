@@ -31,13 +31,16 @@ static enum call_status check_deadline(handle_t clock, uint64_t deadline)
 }
 
 static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_t server,
-    const struct dns_name *name, struct dns_exchange *exchange)
+    const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
 {
   uint64_t deadline;
   exchange->operation = "clock";
   exchange->status = udp_deadline(clock, DNS_ATTEMPT_NS, &deadline);
   if (exchange->status != CALL_OK) {
     return;
+  }
+  if (deadline_ns && deadline_ns < deadline) {
+    deadline = deadline_ns;
   }
 
   struct udp_open_reply endpoint;
@@ -100,11 +103,18 @@ static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_
 }
 
 void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
-    const struct dns_name *name, struct dns_exchange *exchange)
+    const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
 {
   for (unsigned i = 0; i < DNS_ATTEMPTS; ++i) {
     *exchange = (struct dns_exchange){0};
-    query_attempt(udp, clock, random, server, name, exchange);
+    if (deadline_ns) {
+      exchange->operation = "clock";
+      exchange->status = check_deadline(clock, deadline_ns);
+      if (exchange->status != CALL_OK) {
+        return;
+      }
+    }
+    query_attempt(udp, clock, random, server, name, deadline_ns, exchange);
     if (exchange->status != CALL_TIMED_OUT) {
       return;
     }

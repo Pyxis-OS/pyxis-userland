@@ -62,9 +62,10 @@ struct dns_exchange {
   const char *operation; /* Diagnostic stage on native failure. */
 };
 
-/* Borrowed authorities; owns and closes each attempt's endpoint. */
+/* Borrowed authorities; owns and closes each attempt's endpoint. A nonzero
+ * absolute deadline caps both attempts; zero allows three seconds per attempt. */
 void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
-    const struct dns_name *name, struct dns_exchange *exchange);
+    const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange);
 
 /* Resolve one hostname, reporting failures to stderr with the program label.
  * Uses the startup UDP/random authorities and configured DNS server. */
