@@ -20,6 +20,7 @@
 #define IPCBENCH_OBJECT UINT64_C(1)
 #define CALL_BUDGET_NS UINT64_C(30000000000)
 #define MAX_MESSAGES 256
+#define DEFAULT_MESSAGES 8
 #define MAX_ROUNDS 100
 #define SEND_GROUP 8
 #define CLOCK_READS 1000
@@ -41,7 +42,7 @@ struct sample {
   uint64_t elapsed_ns, admission_ns, attempted, admitted, rejected, consumed;
   uint64_t request_bytes, reply_bytes, round_trips, failed_calls, failed_delivery;
   enum call_status status;
-  bool verified;
+  bool verified, cleanup;
 };
 
 struct receiver {
@@ -74,7 +75,7 @@ static bool number(const char *text, size_t maximum, size_t *result)
 
 static bool parse_options(int argc, char **argv, struct options *options)
 {
-  *options = (struct options){MODE_CALL, 64, MAX_MESSAGES, 5};
+  *options = (struct options){MODE_CALL, 64, DEFAULT_MESSAGES, 5};
   if (argc < 2) {
     return false;
   }
@@ -174,18 +175,12 @@ static enum call_status deadline(handle_t clock, uint64_t *value)
   return CALL_OK;
 }
 
-static enum call_status command_call(handle_t caller, enum mode mode,
+static enum call_status command_call(handle_t caller,
     const struct command *command, uint64_t deadline_ns, uint64_t *count)
 {
   struct endpoint_packet reply;
-  enum call_status status;
-  if (mode == MODE_CALL) {
-    status = endpoint_invoke(caller, IPCBENCH_PROTOCOL, command->operation,
-        command, sizeof(*command), NULL, 0, deadline_ns, &reply);
-  } else {
-    status = endpoint_request(caller, command, sizeof(*command), NULL, 0,
-        deadline_ns, &reply);
-  }
+  enum call_status status = endpoint_invoke(caller, IPCBENCH_PROTOCOL, command->operation,
+      command, sizeof(*command), NULL, 0, deadline_ns, &reply);
   if (status != CALL_OK) {
     return status;
   }
@@ -201,11 +196,11 @@ static enum call_status command_call(handle_t caller, enum mode mode,
 }
 
 static enum call_status untimed_command(handle_t clock, handle_t caller,
-    enum mode mode, const struct command *command, uint64_t *count)
+    const struct command *command, uint64_t *count)
 {
   uint64_t deadline_ns;
   enum call_status status = deadline(clock, &deadline_ns);
-  return status == CALL_OK ? command_call(caller, mode, command, deadline_ns, count) : status;
+  return status == CALL_OK ? command_call(caller, command, deadline_ns, count) : status;
 }
 
 static bool reply_packet(struct endpoint_packet *packet, uint64_t result,
@@ -267,10 +262,16 @@ static bool serve(struct receiver *receiver)
       }
       continue;
     }
-    bool envelope = packet.kind == ENDPOINT_MESSAGE_CALL && packet.grant_count == 0;
-    if (receiver->mode == MODE_CALL) {
-      envelope &= packet.protocol == IPCBENCH_PROTOCOL && packet.object_id == IPCBENCH_OBJECT;
+    if (packet.kind == ENDPOINT_MESSAGE_RETIRE) {
+      if (packet.protocol == IPCBENCH_PROTOCOL && packet.object_id == IPCBENCH_OBJECT) {
+        endpoint_retire_ack(receiver->control, packet.object_id);
+      }
+      /* Last-client retirement wakes a receiver whose STOP could not be
+       * admitted. Exiting closes its data receiver and releases queued SENDs. */
+      return false;
     }
+    bool envelope = packet.kind == ENDPOINT_MESSAGE_CALL && packet.grant_count == 0 &&
+        packet.protocol == IPCBENCH_PROTOCOL && packet.object_id == IPCBENCH_OBJECT;
     if (envelope && receiver->mode == MODE_CALL && packet.operation == ECHO) {
       bool valid = retain_packet(receiver, &packet);
       if (!reply_packet(&packet, valid ? RESULT_OK : RESULT_INVALID, packet.data, packet.size)) {
@@ -282,9 +283,7 @@ static bool serve(struct receiver *receiver)
     bool valid = envelope && packet.size == sizeof(command);
     if (valid) {
       memcpy(&command, packet.data, sizeof(command));
-      if (receiver->mode == MODE_CALL) {
-        valid = packet.operation == command.operation;
-      }
+      valid = packet.operation == command.operation;
     }
     uint64_t count = receiver->consumed;
     bool stop = false;
@@ -369,18 +368,17 @@ static int receiver_main(enum mode mode)
   }
   struct endpoint_grant grants[2];
   size_t grant_count;
+  if (endpoint_export(service, control.receiver, IPCBENCH_OBJECT, IPCBENCH_PROTOCOL,
+      0, HANDLE_TRANSPORT_CALL, &exported) != CALL_OK) {
+    goto done;
+  }
+  grants[0] = (struct endpoint_grant){exported, 0, HANDLE_TRANSPORT_CALL};
   if (mode == MODE_CALL) {
-    if (endpoint_export(service, control.receiver, IPCBENCH_OBJECT, IPCBENCH_PROTOCOL,
-        0, HANDLE_TRANSPORT_CALL, &exported) != CALL_OK) {
-      goto done;
-    }
-    grants[0] = (struct endpoint_grant){exported, 0, HANDLE_TRANSPORT_CALL};
     grant_count = 1;
   } else {
     if (endpoint_create(service, &data) != CALL_OK) {
       goto done;
     }
-    grants[0] = (struct endpoint_grant){control.caller, 0, HANDLE_TRANSPORT_CALL};
     grants[1] = (struct endpoint_grant){data.caller, 0, HANDLE_TRANSPORT_SEND};
     grant_count = 2;
   }
@@ -476,7 +474,7 @@ static enum call_status receive_ready(handle_t bootstrap, enum mode mode,
       uint64_t transport = i == 0 ? HANDLE_TRANSPORT_CALL : HANDLE_TRANSPORT_SEND;
       if (handle_query(packet.grants[i].handle, &info) != CALL_OK ||
           info.rights != 0 || info.transport != transport ||
-          (mode == MODE_CALL && (info.kind != HANDLE_KIND_EXPORTED || info.protocol != IPCBENCH_PROTOCOL))) {
+          (i == 0 && (info.kind != HANDLE_KIND_EXPORTED || info.protocol != IPCBENCH_PROTOCOL))) {
         valid = false;
       }
     }
@@ -613,7 +611,7 @@ static void measure_send(const struct options *options, handle_t clock,
     if (admitted != 0) {
       struct command command = {.operation = DRAIN, .count = admitted};
       uint64_t consumed = 0;
-      enum call_status drain_status = command_call(control, MODE_SEND, &command, deadline_ns, &consumed);
+      enum call_status drain_status = command_call(control, &command, deadline_ns, &consumed);
       if (drain_status == CALL_OK) {
         sample->consumed = consumed;
         if (consumed != sample->admitted && sample->status == CALL_OK) {
@@ -643,7 +641,7 @@ static bool run_pass(const struct options *options, handle_t clock,
 {
   struct command command = {.operation = RESET};
   uint64_t count = 0;
-  sample->status = untimed_command(clock, control, options->mode, &command, &count);
+  sample->status = untimed_command(clock, control, &command, &count);
   if (sample->status != CALL_OK || count != 0) {
     if (sample->status == CALL_OK) {
       sample->status = CALL_IO;
@@ -661,7 +659,7 @@ static bool run_pass(const struct options *options, handle_t clock,
     sample->status = CALL_IO;
   }
   command = (struct command){.operation = VERIFY, .count = sample->consumed};
-  enum call_status status = untimed_command(clock, control, options->mode, &command, &count);
+  enum call_status status = untimed_command(clock, control, &command, &count);
   sample->verified = status == CALL_OK && count == sample->consumed &&
       (options->mode == MODE_SEND || verify_payload(retained, options->size, sample->round_trips));
   if (!sample->verified && sample->status == CALL_OK) {
@@ -672,6 +670,77 @@ static bool run_pass(const struct options *options, handle_t clock,
   }
   return sample->status == CALL_OK && sample->verified &&
       sample->consumed == options->messages && sample->rejected == 0;
+}
+
+static bool run_sample(const struct options *options, handle_t clock,
+    handle_t memory, handle_t service, handle_t launcher, handle_t image,
+    const uint8_t *payload, uint8_t *retained, bool timed, struct sample *sample)
+{
+  handle_t child = HANDLE_INVALID, control = HANDLE_INVALID, data = HANDLE_INVALID;
+  struct endpoint_create_reply bootstrap = {0};
+  bool ok = false;
+  sample->cleanup = true;
+  sample->status = endpoint_create(service, &bootstrap);
+  if (sample->status != CALL_OK) {
+    goto done;
+  }
+  sample->status = launch_receiver(launcher, image, memory, service, clock,
+      bootstrap.caller, options->mode, &child);
+  if (sample->status != CALL_OK) {
+    goto done;
+  }
+  sample->status = receive_ready(bootstrap.receiver, options->mode, &control, &data);
+  if (sample->status != CALL_OK) {
+    goto done;
+  }
+  struct command command = {.operation = CONFIGURE, .size = options->size, .messages = options->messages};
+  uint64_t count = 0;
+  sample->status = untimed_command(clock, control, &command, &count);
+  if (sample->status != CALL_OK || count != 0) {
+    if (sample->status == CALL_OK) {
+      sample->status = CALL_IO;
+    }
+    goto done;
+  }
+  ok = run_pass(options, clock, control, data, payload, retained, timed, sample);
+done:
+  if (control != HANDLE_INVALID) {
+    struct command stop = {.operation = STOP};
+    uint64_t count = 0;
+    enum call_status stop_status = untimed_command(clock, control, &stop, &count);
+    if (stop_status != CALL_OK) {
+      fprintf(stderr, "ipcbench: stop failed (status %u); releasing control client\n", stop_status);
+      sample->cleanup = false;
+    }
+  }
+  if (!close_handle(&control)) {
+    sample->cleanup = false;
+  }
+  if (!close_handle(&data)) {
+    sample->cleanup = false;
+  }
+  if (!close_handle(&bootstrap.receiver)) {
+    sample->cleanup = false;
+  }
+  if (!close_handle(&bootstrap.caller)) {
+    sample->cleanup = false;
+  }
+  if (child != HANDLE_INVALID) {
+    struct process_result result;
+    enum call_status wait_status = process_wait(child, &result);
+    if (wait_status != CALL_OK || result.kind != PROCESS_EXITED || result.exit_status != 0) {
+      fprintf(stderr, "ipcbench: child cleanup failed (wait_status %u kind %llu exit %lld)\n",
+          wait_status, (unsigned long long)result.kind, (long long)result.exit_status);
+      sample->cleanup = false;
+    }
+  }
+  if (!close_handle(&child)) {
+    sample->cleanup = false;
+  }
+  if (!sample->cleanup && sample->status == CALL_OK) {
+    sample->status = CALL_IO;
+  }
+  return ok && sample->cleanup;
 }
 
 static void report_sample(const struct options *options, const struct sample *sample,
@@ -763,9 +832,7 @@ int main(int argc, char **argv)
   handle_t service = startup_resource("service");
   handle_t launcher = startup_resource("launcher");
   handle_t app = startup_root("app");
-  handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
-  handle_t control = HANDLE_INVALID, data = HANDLE_INVALID;
-  struct endpoint_create_reply bootstrap = {0};
+  handle_t image = HANDLE_INVALID;
   struct sample *samples = calloc(options.rounds + 1, sizeof(*samples));
   size_t bytes = options.size * options.messages;
   uint8_t *payload = malloc(bytes ? bytes : 1), *retained = malloc(bytes ? bytes : 1);
@@ -792,78 +859,29 @@ int main(int argc, char **argv)
   if (status != CALL_OK) {
     goto done;
   }
-  status = endpoint_create(service, &bootstrap);
-  if (status != CALL_OK) {
-    goto done;
-  }
-  status = launch_receiver(launcher, image, memory, service, clock, bootstrap.caller, options.mode, &child);
-  if (status != CALL_OK) {
-    goto done;
-  }
-  status = receive_ready(bootstrap.receiver, options.mode, &control, &data);
-  if (status != CALL_OK) {
-    goto done;
-  }
-  struct command command = {.operation = CONFIGURE, .size = options.size, .messages = options.messages};
-  uint64_t count = 0;
-  status = untimed_command(clock, control, options.mode, &command, &count);
-  if (status != CALL_OK) {
-    goto done;
-  }
   fprintf(stderr, "ipcbench: mode=%s size=%zu messages=%zu rounds=%zu; no payload attachments; "
-      "one untimed warmup; clock-read batch mean=%llu ns (not subtracted)\n",
+      "one untimed warmup; fresh receiver per pass; clock-read batch mean=%llu ns (not subtracted)\n",
       options.mode == MODE_CALL ? "exported CALL echo" : "raw SEND", options.size,
       options.messages, options.rounds, (unsigned long long)clock_cost);
   fputs("ipcbench: child uses launching CPU and space; current CPU number unavailable in public ABI; "
       "startup, allocation, readiness, verification and cleanup outside intervals\n", stderr);
   for (size_t i = 0; i <= options.rounds; ++i) {
-    bool pass = run_pass(&options, clock, control, data, payload, retained, i != 0, &samples[i]);
+    bool pass = run_sample(&options, clock, memory, service, launcher, image,
+        payload, retained, i != 0, &samples[i]);
     ++completed;
     if (!pass) {
       status = samples[i].status;
+      cleanup = samples[i].cleanup;
       goto done;
     }
   }
   ok = true;
 done:
-  if (control != HANDLE_INVALID) {
-    struct command stop = {.operation = STOP};
-    uint64_t count = 0;
-    enum call_status stop_status = untimed_command(clock, control, options.mode, &stop, &count);
-    if (stop_status != CALL_OK) {
-      fprintf(stderr, "ipcbench: stop failed (status %u)\n", stop_status);
-      cleanup = false;
-    }
-  }
-  if (!close_handle(&control)) {
-    cleanup = false;
-  }
-  if (!close_handle(&data)) {
-    cleanup = false;
-  }
-  if (!close_handle(&bootstrap.receiver)) {
-    cleanup = false;
-  }
-  if (!close_handle(&bootstrap.caller)) {
-    cleanup = false;
-  }
-  if (child != HANDLE_INVALID) {
-    struct process_result result;
-    enum call_status wait_status = process_wait(child, &result);
-    if (wait_status != CALL_OK || result.kind != PROCESS_EXITED || result.exit_status != 0) {
-      fprintf(stderr, "ipcbench: child cleanup failed (wait_status %u kind %llu exit %lld)\n",
-          wait_status, (unsigned long long)result.kind, (long long)result.exit_status);
-      cleanup = false;
-    }
-  }
-  if (!close_handle(&child)) {
-    cleanup = false;
-  }
   if (!close_handle(&image)) {
     cleanup = false;
   }
   for (size_t i = 0; i < completed; ++i) {
-    bool successful = cleanup && samples[i].status == CALL_OK && samples[i].verified &&
+    bool successful = cleanup && samples[i].cleanup && samples[i].status == CALL_OK && samples[i].verified &&
         samples[i].consumed == options.messages && samples[i].rejected == 0;
     report_sample(&options, &samples[i], i, successful);
   }
