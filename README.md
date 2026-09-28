@@ -4,7 +4,8 @@ Freestanding C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
 `x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
 also needs the Lua development files exported by the ports build; the HTTP
-provider needs the picohttpparser development files.
+provider needs the picohttpparser development files. Host Lua 5.4 (`LUA`, default
+`lua`) generates the packaged [iobench fixture](iobench/README.md).
 
 ```sh
 make SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser
