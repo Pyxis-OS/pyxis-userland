@@ -183,17 +183,19 @@ iobench copy host://iobench.bin home://copy-from-host.bin --host-profile --profi
 iobench copy host://iobench.bin host://copy-host.bin --prepared --host-profile
 ```
 
-Warmup is unprofiled. For read, collection begins immediately after the OPEN
-clock boundary and ends immediately after the payload-read clock boundary,
-before the extra EOF probe and close. It excludes namespace lookup and ordinary
-OPEN but includes lazy FUSE_OPEN when the first payload read needs it. Existing
-read timing boundaries remain unchanged: profile BEGIN overhead is inside payload
-and complete-consumption elapsed time, and END overhead is inside complete
-consumption only. For write/copy, collection brackets the existing transfer
-interval, after preparation and before sync, EOF checks, verification and
-reporting; BEGIN/END are outside the transfer timer. END is attempted for
-every successfully started collection even when transfer or clock reading fails. Any requested
-profiling failure fails the pass and suppresses its throughput and run summary.
+Warmup is unprofiled. For read, collection begins after buffer preparation,
+before the original first clock boundary and OPEN. It ends immediately after
+the payload-read clock boundary, before the extra EOF probe and close. The
+collection window covers OPEN, but the kernel counts only native host READ/WRITE
+work: namespace lookup and standalone OPEN metadata are excluded. Lazy FUSE_OPEN
+needed by the first payload read is included. Existing read timing boundaries
+remain unchanged: BEGIN is outside all elapsed intervals, and END overhead is
+inside complete consumption only. For write/copy, collection brackets the
+existing transfer interval, after preparation and before sync, EOF checks,
+verification and reporting; BEGIN/END are outside the transfer timer. END is
+attempted for every successfully started collection even when OPEN, transfer or
+clock reading fails. Any requested profiling failure fails the pass and
+suppresses its throughput and run summary.
 
 Reports separate native READ/WRITE requests, failures, requested/completed bytes,
 positive short transfers and EOF from lower-layer transport submissions,

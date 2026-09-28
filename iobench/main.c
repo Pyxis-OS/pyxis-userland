@@ -112,9 +112,25 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
 {
   *result = (struct result){0};
   fill_fixture(bytes, options->bytes, true);
+  bool host_profiled = timed && options->host_profile;
+  enum call_status profile_end_status = CALL_OK;
+  if (host_profiled) {
+    enum call_status status = profile_host_begin(profile);
+    if (status != CALL_OK) {
+      fprintf(stderr, "iobench: host profile begin failed (status %u)\n", status);
+      return false;
+    }
+  }
   uint64_t start = 0, opened = 0, read_end = 0, complete = 0;
   enum call_status clock_status = timed ? clock_now(clock, &start) : CALL_OK;
   if (clock_status != CALL_OK) {
+    if (host_profiled) {
+      profile_end_status = profile_host_end(profile, &result->host_profile);
+      result->host_profiled = profile_end_status == CALL_OK;
+      if (profile_end_status != CALL_OK) {
+        fprintf(stderr, "iobench: host profile end failed (status %u)\n", profile_end_status);
+      }
+    }
     fprintf(stderr, "iobench: clock failed before OPEN (status %u)\n", clock_status);
     return false;
   }
@@ -129,15 +145,9 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
     }
   }
 
-  enum call_status profile_begin_status = CALL_OK, profile_end_status = CALL_OK;
-  bool host_profiled = timed && options->host_profile && descriptor >= 0 &&
-      clock_status == CALL_OK;
-  if (host_profiled) {
-    profile_begin_status = profile_host_begin(profile);
-  }
   int read_error = 0, eof_error = 0, close_error = 0;
   bool early_eof = false, excess = false;
-  if (descriptor >= 0 && clock_status == CALL_OK && profile_begin_status == CALL_OK) {
+  if (descriptor >= 0 && clock_status == CALL_OK) {
     while (result->bytes < options->bytes) {
       size_t request = options->bytes - result->bytes;
       if (request > options->buffer) {
@@ -165,20 +175,20 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
         result->timed = true;
       }
     }
-    if (host_profiled) {
-      profile_end_status = profile_host_end(profile, &result->host_profile);
-      result->host_profiled = profile_end_status == CALL_OK;
-    }
-    if (!read_error && !early_eof && clock_status == CALL_OK &&
-        profile_end_status == CALL_OK) {
-      unsigned char extra;
-      result->eof_called = true;
-      ssize_t count = read(descriptor, &extra, 1);
-      if (count < 0) {
-        eof_error = errno;
-      } else {
-        excess = count != 0;
-      }
+  }
+  if (host_profiled) {
+    profile_end_status = profile_host_end(profile, &result->host_profile);
+    result->host_profiled = profile_end_status == CALL_OK;
+  }
+  if (descriptor >= 0 && !read_error && !early_eof && clock_status == CALL_OK &&
+      profile_end_status == CALL_OK) {
+    unsigned char extra;
+    result->eof_called = true;
+    ssize_t count = read(descriptor, &extra, 1);
+    if (count < 0) {
+      eof_error = errno;
+    } else {
+      excess = count != 0;
     }
   }
   if (descriptor >= 0 && close(descriptor) < 0) {
@@ -195,10 +205,6 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
   /* Diagnostics and content verification follow the final timestamp. The
    * complete interval includes EOF and close, not deferred provider retirement. */
   bool success = true;
-  if (profile_begin_status != CALL_OK) {
-    fprintf(stderr, "iobench: host profile begin failed (status %u)\n", profile_begin_status);
-    success = false;
-  }
   if (profile_end_status != CALL_OK) {
     fprintf(stderr, "iobench: host profile end failed (status %u)\n", profile_end_status);
     success = false;
@@ -206,7 +212,7 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
   if (clock_status != CALL_OK) {
     fprintf(stderr, "iobench: clock failed (status %u)\n", clock_status);
     success = false;
-  } else if (timed && descriptor >= 0 && profile_begin_status == CALL_OK &&
+  } else if (timed && descriptor >= 0 &&
       (!result->open_timed || !result->timed || !result->complete_timed)) {
     fputs("iobench: measured clock did not advance\n", stderr);
     success = false;
