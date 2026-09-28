@@ -140,7 +140,7 @@ static bool consume(handle_t receiver, unsigned char *bytes, size_t buffer)
       /* The writer closes before the coordinator requests verification. */
       unsigned char extra;
       success = result.bytes == FIXTURE_BYTES && !result.error &&
-          read(STDIN_FILENO, &extra, 1) == 0 && verify_fixture(bytes);
+          read(STDIN_FILENO, &extra, 1) == 0 && verify_fixture(bytes, FIXTURE_BYTES);
     }
     if (input_open) {
       if (close(STDIN_FILENO) < 0) {
@@ -237,7 +237,7 @@ int pipe_worker(int argc, char **argv)
   unsigned char *bytes = malloc(FIXTURE_BYTES);
   bool prepared = bytes != NULL;
   if (prepared) {
-    fill_fixture(bytes, !producer);
+    fill_fixture(bytes, FIXTURE_BYTES, !producer);
   }
   if (!producer && endpoint_create(startup_resource("service"), &control) != CALL_OK) {
     prepared = false;
@@ -484,8 +484,8 @@ bool run_pipe(const struct options *options, handle_t clock)
     success = false;
   }
   if (success) {
-    print_summary("pipe acceptance", accepted, options->rounds, true);
-    print_summary("pipe completion", completed, options->rounds, true);
+    print_summary("pipe acceptance", accepted, options->rounds, FIXTURE_BYTES);
+    print_summary("pipe completion", completed, options->rounds, FIXTURE_BYTES);
   }
   return success;
 }

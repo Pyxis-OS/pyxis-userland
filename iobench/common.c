@@ -7,9 +7,9 @@ static unsigned char fixture_byte(size_t offset)
   return (unsigned char)(offset ^ (offset >> 8) ^ (offset >> 16) ^ 0xa5);
 }
 
-void fill_fixture(unsigned char *bytes, bool contrast)
+void fill_fixture(unsigned char *bytes, size_t size, bool contrast)
 {
-  for (size_t i = 0; i < FIXTURE_BYTES; ++i) {
+  for (size_t i = 0; i < size; ++i) {
     bytes[i] = fixture_byte(i) ^ (contrast ? 0xff : 0);
   }
 }
@@ -38,10 +38,10 @@ bool measure_clock(handle_t clock, uint64_t *cost)
   return true;
 }
 
-bool verify_fixture(const unsigned char *bytes)
+bool verify_fixture(const unsigned char *bytes, size_t size)
 {
   /* The build-time fixture generator uses the same offset-dependent pattern. */
-  for (size_t i = 0; i < FIXTURE_BYTES; ++i) {
+  for (size_t i = 0; i < size; ++i) {
     unsigned char expected = fixture_byte(i);
     if (bytes[i] != expected) {
       fprintf(stderr, "iobench: content mismatch at byte %zu (got %u, expected %u)\n",
@@ -58,7 +58,7 @@ static int compare_time(const void *left, const void *right)
   return (a > b) - (a < b);
 }
 
-void print_summary(const char *name, uint64_t *times, size_t count, bool throughput)
+void print_summary(const char *name, uint64_t *times, size_t count, size_t bytes)
 {
   qsort(times, count, sizeof(*times), compare_time);
   size_t middle = count / 2;
@@ -69,8 +69,8 @@ void print_summary(const char *name, uint64_t *times, size_t count, bool through
   fprintf(stderr, "%s summary: %zu verified samples; elapsed median=%.3f ms "
       "range=%.3f..%.3f ms", name, count, median / 1000000.0,
       times[0] / 1000000.0, times[count - 1] / 1000000.0);
-  if (throughput) {
-    fprintf(stderr, "; throughput at median elapsed=%.3f MiB/s", 1000000000.0 / median);
+  if (bytes) {
+    fprintf(stderr, "; throughput at median elapsed=%.3f MiB/s", bytes * 1000000000.0 / (1024.0 * 1024.0) / median);
   }
   fputc('\n', stderr);
 }

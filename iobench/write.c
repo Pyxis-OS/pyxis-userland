@@ -73,7 +73,7 @@ static bool check_eof(handle_t file)
 
 static bool verify_file(handle_t file, unsigned char *scratch)
 {
-  fill_fixture(scratch, true);
+  fill_fixture(scratch, FIXTURE_BYTES, true);
   size_t offset = 0;
   while (offset < FIXTURE_BYTES) {
     size_t count;
@@ -87,14 +87,14 @@ static bool verify_file(handle_t file, unsigned char *scratch)
     }
     offset += count;
   }
-  return check_eof(file) && verify_fixture(scratch);
+  return check_eof(file) && verify_fixture(scratch, FIXTURE_BYTES);
 }
 
 static bool prepare_output(const struct options *options, handle_t output,
     unsigned char *scratch)
 {
   if (options->prepared) {
-    fill_fixture(scratch, true);
+    fill_fixture(scratch, FIXTURE_BYTES, true);
     size_t offset = 0;
     while (offset < FIXTURE_BYTES) {
       size_t count;
@@ -167,7 +167,7 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
     return false;
   }
   if (options->mode == IO_COPY) {
-    fill_fixture(payload, true);
+    fill_fixture(payload, FIXTURE_BYTES, true);
   }
 
   uint64_t start = 0, end = 0, sync_start = 0, sync_end = 0;
@@ -270,7 +270,7 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
       success = false;
     }
   } else {
-    fill_fixture(payload, false);
+    fill_fixture(payload, FIXTURE_BYTES, false);
   }
   if (success) {
     success = check_status("exclusive output creation", create_output(options->output, &output));
@@ -302,9 +302,9 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
   }
   free(payload);
   if (success) {
-    print_summary("Transfer", times, options->rounds, true);
+    print_summary("Transfer", times, options->rounds, FIXTURE_BYTES);
     if (options->sync) {
-      print_summary("File sync", sync_times, options->rounds, false);
+      print_summary("File sync", sync_times, options->rounds, 0);
     }
   }
   return success;
