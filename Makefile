@@ -7,6 +7,8 @@ LUA_PREFIX ?= build/ports-dev/lua
 LUA_PREFIX := $(abspath $(LUA_PREFIX))
 PICOHTTPPARSER_PREFIX ?= build/ports-dev/picohttpparser
 PICOHTTPPARSER_PREFIX := $(abspath $(PICOHTTPPARSER_PREFIX))
+MBEDTLS_PREFIX ?= build/ports-dev/mbedtls
+MBEDTLS_PREFIX := $(abspath $(MBEDTLS_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 INSTALL_PROGRAMS := httpfs allocbench iobench ipcbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
@@ -17,12 +19,13 @@ ifeq ($(wildcard $(SDK)/share/pyxis.mk),)
 $(error Missing SDK at $(SDK); supply SDK=/path/to/sdk exported by Pyxis)
 endif
 include $(SDK)/share/pyxis.mk
+-include $(MBEDTLS_PREFIX)/share/mbedtls.mk
 endif
 CPPFLAGS := $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
 LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
-export LUA_PREFIX PICOHTTPPARSER_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
+export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
 PROGRAM_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/head/main.o \
@@ -40,6 +43,9 @@ IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/i
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
 HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o
+TLS_LIBRARY := $(BUILD)/libtls.a
+TLS_OBJECT := $(BUILD)/libtls/tls.o
+TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(BUILD)/libconfig/config.o
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
@@ -47,8 +53,8 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install httpfs allocbench iobench ipcbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
-all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
+.PHONY: all install libtls httpfs allocbench iobench ipcbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
 # removed programs/assets cannot survive from an earlier install.
@@ -80,6 +86,7 @@ iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-
 ipcbench: $(BUILD)/ipcbench.pxe
 
 httpfs: $(BUILD)/httpfs.pxe
+libtls: $(TLS_LIBRARY)
 
 session: $(BUILD)/session.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
@@ -110,6 +117,24 @@ $(HTTP_OBJECTS): $(PICOHTTPPARSER_PREFIX)/include/picohttpparser.h
 $(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
+
+$(TLS_OBJECT): private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
+$(TLS_OBJECT): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+$(TLS_LIBRARY): $(TLS_OBJECT) Makefile
+	rm -f $@
+	$(AR) rcs $@ $(TLS_OBJECT)
+
+# Ports exports normalize timestamps. Compare content before trusting objects
+# built against their configured headers and libraries.
+$(TLS_EXPORT_IDENTITY): FORCE
+	@mkdir -p $(@D)
+	@set -eu; \
+	  trap 'rm -f -- "$@.tmp" "$@.files.tmp"' EXIT; \
+	  cd "$(MBEDTLS_PREFIX)"; \
+	  find . -type f -print0 > "$@.files.tmp"; \
+	  LC_ALL=C sort -z "$@.files.tmp" -o "$@.files.tmp"; \
+	  xargs -0 sha256sum -- < "$@.files.tmp" > "$@.tmp"; \
+	  cmp -s "$@.tmp" "$@" || mv -- "$@.tmp" "$@"
 
 $(BUILD)/httpfs.elf: $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(LDLIBS)
@@ -165,7 +190,7 @@ $(BUILD)/%.pxe: $(BUILD)/%.elf $(PYXIS_ELF2PXE) Makefile
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
-	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
+	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -176,4 +201,4 @@ clean:
 
 .SECONDARY:
 
--include $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d)
+-include $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d)
