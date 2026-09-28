@@ -259,7 +259,7 @@ static bool library_result(struct tls_result *result, int code, enum tls_error f
   if (code == MBEDTLS_ERR_SSL_CONN_EOF) {
     return fail(result, TLS_TRUNCATED);
   }
-  if (code == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+  if (code == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED || code == MBEDTLS_ERR_SSL_BAD_CERTIFICATE) {
     return fail(result, TLS_CERTIFICATE_ERROR);
   }
   return fail(result, fallback);
@@ -322,6 +322,17 @@ void *tls_allocate(struct tls_runtime *runtime, size_t size, struct tls_result *
   return data;
 }
 
+static size_t certificate_count(const mbedtls_x509_crt *chain)
+{
+  size_t count = 0;
+  for (const mbedtls_x509_crt *crt = chain; crt; crt = crt->next) {
+    if (crt->version) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 bool tls_trust_import(struct tls_runtime *runtime, const unsigned char *pem,
     size_t length, struct tls_result *result)
 {
@@ -333,8 +344,8 @@ bool tls_trust_import(struct tls_runtime *runtime, const unsigned char *pem,
   if (!pem || length < 2 || pem[length - 1] || memchr(pem, 0, length - 1)) {
     return fail(result, TLS_TRUST_ERROR);
   }
-  /* The upstream bundle parser permits text but can ignore unmatched trailing
-   * delimiters. Validate pairing so a partially malformed bundle cannot pass. */
+  /* The upstream bundle parser can skip malformed blocks and report success.
+   * Validate delimiters and require every block to add a parsed certificate. */
   const char *cursor = (const char *)pem;
   size_t count = 0;
   for (;;) {
@@ -356,11 +367,15 @@ bool tls_trust_import(struct tls_runtime *runtime, const unsigned char *pem,
     cursor = stop + sizeof(pem_end) - 1;
     ++count;
   }
+  size_t previous = certificate_count(&runtime->trust);
   allocation_result = result;
   int code = mbedtls_x509_crt_parse(&runtime->trust, pem, length);
   allocation_result = NULL;
   if (!library_result(result, code, TLS_TRUST_ERROR)) {
     return false;
+  }
+  if (certificate_count(&runtime->trust) != previous + count) {
+    return fail(result, TLS_TRUST_ERROR);
   }
   runtime->poisoned = false;
   return true;

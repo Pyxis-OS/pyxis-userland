@@ -45,6 +45,7 @@ HTTP_LIBRARY := $(BUILD)/libhttp.a
 HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o
 TLS_LIBRARY := $(BUILD)/libtls.a
 TLS_OBJECT := $(BUILD)/libtls/tls.o
+TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(BUILD)/libconfig/config.o
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
@@ -118,10 +119,22 @@ $(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
 	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
 
 $(TLS_OBJECT): private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
-$(TLS_OBJECT): $(MBEDTLS_PREFIX)/share/mbedtls.mk
+$(TLS_OBJECT): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 $(TLS_LIBRARY): $(TLS_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(TLS_OBJECT)
+
+# Ports exports normalize timestamps. Compare content before trusting objects
+# built against their configured headers and libraries.
+$(TLS_EXPORT_IDENTITY): FORCE
+	@mkdir -p $(@D)
+	@set -eu; \
+	  trap 'rm -f -- "$@.tmp" "$@.files.tmp"' EXIT; \
+	  cd "$(MBEDTLS_PREFIX)"; \
+	  find . -type f -print0 > "$@.files.tmp"; \
+	  LC_ALL=C sort -z "$@.files.tmp" -o "$@.files.tmp"; \
+	  xargs -0 sha256sum -- < "$@.files.tmp" > "$@.tmp"; \
+	  cmp -s "$@.tmp" "$@" || mv -- "$@.tmp" "$@"
 
 $(BUILD)/httpfs.elf: $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(LDLIBS)
