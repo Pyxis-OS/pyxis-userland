@@ -110,11 +110,15 @@ cache, forced cold-cache state or provider-specific benchmark interface is added
 
 At 4088-byte requests, 32 KiB needs nine payload reads plus an EOF probe; 1 MiB
 needs 257 plus EOF. A 65536-byte request does not increase the native/exported
-4088-byte transfer limit. Exported FILE calls share their provider's endpoint
-capacity, and completed receipts retain records until BSP reclamation. Even
-sequential reads can therefore return EAGAIN (QUEUE_FULL). Reopening a snapshot
-in the same provider does not create a fresh endpoint. Failures retain confirmed
-progress and never introduce sleeps, retries or automatic fixture-size fallback.
+4088-byte transfer limit. Exported FILE calls share their provider's sixteen
+delivery records. Records become reusable when caller collection and receipt
+ownership have both ended, independently of deferred BSP storage destruction.
+Delivered canceled calls retain their records until the provider finishes their
+receipts. Genuine exhaustion still returns EAGAIN (QUEUE_FULL); reopening a
+snapshot in the same provider does not create a fresh endpoint. Failures retain
+confirmed progress and never introduce sleeps, retries or automatic fixture-size
+fallback. The 32 KiB fixture remains a comparison control alongside the full
+1 MiB workload.
 
 The provider bounds each HTTP fetch to thirty seconds, but ordinary libc OPEN
 and FILE helpers have no caller IPC deadline; queueing or an unresponsive provider

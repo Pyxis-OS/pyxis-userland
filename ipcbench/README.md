@@ -23,12 +23,13 @@ performs one untimed, verified warmup and then the requested measured passes.
 Each pass, including warmup, launches a fresh receiver with fresh endpoints.
 No measured request or reply carries capability attachments.
 
-The default eight-message samples fit within the current endpoint capacity even
-when completed receipts await deferred BSP reclamation. Reusing an endpoint can
-reach QUEUE_FULL after successful sequential calls or acknowledged SENDs, so
-larger `--messages` values expose capacity/reclamation failures rather than
-promise successful bulk transfer. Fresh endpoints and the small default do not
-change the kernel's queue or reclamation behavior.
+The default remains eight messages for comparison with the original baseline;
+larger batches are selected explicitly with `--messages`. Endpoint delivery
+records become reusable when caller collection and receipt ownership have both
+ended, independently of deferred BSP storage destruction. Delivered canceled
+calls retain their records until the provider finishes their receipts. Sixteen
+outstanding records still exhaust capacity and return QUEUE_FULL; fresh endpoints
+and the small default do not change that bound.
 
 The same executable supplies an internal receiver process. The launcher places
 it in the launching process's space on its assigned CPU. The public ABI cannot
