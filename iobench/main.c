@@ -13,8 +13,8 @@
 
 struct result {
   size_t bytes, calls, short_reads;
-  uint64_t elapsed;
-  bool timed;
+  uint64_t open_elapsed, elapsed, complete_elapsed;
+  bool open_timed, timed, complete_timed, eof_called;
 };
 
 static bool number(const char *text, size_t maximum, size_t *result)
@@ -42,7 +42,7 @@ static bool parse_options(int argc, char **argv, struct options *options)
   if (argc < 2) {
     return false;
   }
-  *options = (struct options){.buffer = 4080, .rounds = 5};
+  *options = (struct options){.buffer = 4080, .rounds = 5, .bytes = FIXTURE_BYTES};
   int first_option = 3;
   if (!strcmp(argv[1], "pipe")) {
     options->mode = IO_PIPE;
@@ -66,7 +66,7 @@ static bool parse_options(int argc, char **argv, struct options *options)
     return false;
   }
 
-  bool have_buffer = false, have_rounds = false;
+  bool have_buffer = false, have_rounds = false, have_bytes = false;
   for (int i = first_option; i < argc; ++i) {
     const char *option = argv[i];
     bool output = options->mode == IO_WRITE || options->mode == IO_COPY;
@@ -81,6 +81,11 @@ static bool parse_options(int argc, char **argv, struct options *options)
       if (!strcmp(option, "--buffer") && !have_buffer) {
         have_buffer = true;
         if (!number(argv[i], MAX_BUFFER_BYTES, &options->buffer)) {
+          return false;
+        }
+      } else if (!strcmp(option, "--bytes") && options->mode == IO_READ && !have_bytes) {
+        have_bytes = true;
+        if (!number(argv[i], FIXTURE_BYTES, &options->bytes)) {
           return false;
         }
       } else if (!strcmp(option, "--rounds") && !have_rounds) {
@@ -100,23 +105,29 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
     handle_t clock, bool timed, struct result *result)
 {
   *result = (struct result){0};
-  memset(bytes, 0, FIXTURE_BYTES);
-  int descriptor = open(options->source, O_RDONLY);
-  if (descriptor < 0) {
-    fprintf(stderr, "iobench: open failed (errno %d)\n", errno);
+  fill_fixture(bytes, options->bytes, true);
+  uint64_t start = 0, opened = 0, read_end = 0, complete = 0;
+  enum call_status clock_status = timed ? clock_now(clock, &start) : CALL_OK;
+  if (clock_status != CALL_OK) {
+    fprintf(stderr, "iobench: clock failed before OPEN (status %u)\n", clock_status);
     return false;
   }
 
-  uint64_t start = 0, end = 0;
-  enum call_status clock_status = CALL_OK;
+  int descriptor = open(options->source, O_RDONLY);
+  int open_error = descriptor < 0 ? errno : 0;
   if (timed) {
-    clock_status = clock_now(clock, &start);
+    clock_status = clock_now(clock, &opened);
+    if (clock_status == CALL_OK && opened > start) {
+      result->open_elapsed = opened - start;
+      result->open_timed = true;
+    }
   }
-  int read_error = 0;
-  bool early_eof = false;
-  if (clock_status == CALL_OK) {
-    while (result->bytes < FIXTURE_BYTES) {
-      size_t request = FIXTURE_BYTES - result->bytes;
+
+  int read_error = 0, eof_error = 0, close_error = 0;
+  bool early_eof = false, excess = false;
+  if (descriptor >= 0 && clock_status == CALL_OK) {
+    while (result->bytes < options->bytes) {
+      size_t request = options->bytes - result->bytes;
       if (request > options->buffer) {
         request = options->buffer;
       }
@@ -136,20 +147,47 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
       result->bytes += (size_t)count;
     }
     if (timed) {
-      clock_status = clock_now(clock, &end);
-      if (clock_status == CALL_OK && end > start) {
-        result->elapsed = end - start;
+      clock_status = clock_now(clock, &read_end);
+      if (clock_status == CALL_OK && read_end > opened) {
+        result->elapsed = read_end - opened;
         result->timed = true;
       }
     }
+    if (!read_error && !early_eof && clock_status == CALL_OK) {
+      unsigned char extra;
+      result->eof_called = true;
+      ssize_t count = read(descriptor, &extra, 1);
+      if (count < 0) {
+        eof_error = errno;
+      } else {
+        excess = count != 0;
+      }
+    }
+  }
+  if (descriptor >= 0 && close(descriptor) < 0) {
+    close_error = errno;
+  }
+  if (timed && clock_status == CALL_OK) {
+    clock_status = clock_now(clock, &complete);
+    if (clock_status == CALL_OK && complete > read_end && read_end > opened) {
+      result->complete_elapsed = complete - start;
+      result->complete_timed = true;
+    }
   }
 
+  /* Diagnostics and content verification follow the final timestamp. The
+   * complete interval includes EOF and close, not deferred provider retirement. */
   bool success = true;
   if (clock_status != CALL_OK) {
     fprintf(stderr, "iobench: clock failed (status %u)\n", clock_status);
     success = false;
-  } else if (timed && !result->timed) {
+  } else if (timed && descriptor >= 0 &&
+      (!result->open_timed || !result->timed || !result->complete_timed)) {
     fputs("iobench: measured clock did not advance\n", stderr);
+    success = false;
+  }
+  if (open_error) {
+    fprintf(stderr, "iobench: open failed (errno %d)\n", open_error);
     success = false;
   }
   if (read_error) {
@@ -157,44 +195,49 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
     success = false;
   }
   if (early_eof) {
-    fputs("iobench: fixture ended before 1048576 bytes\n", stderr);
+    fprintf(stderr, "iobench: fixture ended before %zu bytes\n", options->bytes);
     success = false;
   }
-  if (success) {
-    /* Size/content checks and close are outside the timed payload loop. */
-    unsigned char extra;
-    ssize_t count = read(descriptor, &extra, 1);
-    if (count < 0) {
-      fprintf(stderr, "iobench: EOF check failed (errno %d)\n", errno);
-      success = false;
-    } else if (count) {
-      fputs("iobench: fixture exceeds 1048576 bytes\n", stderr);
-      success = false;
-    }
-    if (success) {
-      success = verify_fixture(bytes);
-    }
-  }
-  if (close(descriptor) < 0) {
-    fprintf(stderr, "iobench: close failed (errno %d); not retried\n", errno);
+  if (eof_error) {
+    fprintf(stderr, "iobench: EOF check failed (errno %d)\n", eof_error);
     success = false;
   }
-  return success;
+  if (excess) {
+    fprintf(stderr, "iobench: fixture exceeds %zu bytes\n", options->bytes);
+    success = false;
+  }
+  if (close_error) {
+    fprintf(stderr, "iobench: close failed (errno %d); not retried\n", close_error);
+    success = false;
+  }
+  return success && verify_fixture(bytes, options->bytes);
 }
 
-static void report(const char *phase, size_t pass, const struct result *result,
-    bool success)
+static void report(const char *phase, size_t pass, size_t requested,
+    const struct result *result, bool success)
 {
-  fprintf(stderr, "%s %zu: %s; requested=%u completed=%zu bytes; "
-      "read_calls=%zu short_reads=%zu failed_pass=%u\n", phase, pass,
-      success ? "OK" : "FAILED", FIXTURE_BYTES, result->bytes,
-      result->calls, result->short_reads, success ? 0U : 1U);
+  fprintf(stderr, "%s %zu: %s; requested=%zu completed=%zu bytes; "
+      "read_calls=%zu short_reads=%zu eof_calls=%u failed_pass=%u\n", phase, pass,
+      success ? "OK" : "FAILED", requested, result->bytes,
+      result->calls, result->short_reads, result->eof_called ? 1U : 0U, success ? 0U : 1U);
+  if (result->open_timed) {
+    fprintf(stderr, "  open=%llu ns\n", (unsigned long long)result->open_elapsed);
+  }
   if (result->timed) {
-    fprintf(stderr, "  elapsed=%llu ns (%.3f ms)",
+    fprintf(stderr, "  payload=%llu ns (%.3f ms)",
         (unsigned long long)result->elapsed, result->elapsed / 1000000.0);
     if (success) {
       fprintf(stderr, "; %.3f MiB/s", result->bytes * 1000000000.0 /
           result->elapsed / (1024.0 * 1024.0));
+    }
+    fputc('\n', stderr);
+  }
+  if (result->complete_timed) {
+    fprintf(stderr, "  complete=%llu ns (%.3f ms)",
+        (unsigned long long)result->complete_elapsed, result->complete_elapsed / 1000000.0);
+    if (success) {
+      fprintf(stderr, "; %.3f MiB/s", result->bytes * 1000000000.0 /
+          result->complete_elapsed / (1024.0 * 1024.0));
     }
     fputc('\n', stderr);
   }
@@ -207,12 +250,12 @@ int main(int argc, char **argv)
   }
   struct options options;
   if (!parse_options(argc, argv, &options)) {
-    fputs("usage: iobench read SOURCE [--buffer bytes] [--rounds count]\n"
+    fputs("usage: iobench read SOURCE [--bytes count] [--buffer bytes] [--rounds count]\n"
           "       iobench write OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
           "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
           "       session app://iobench.pxe pipe [--buffer bytes] [--rounds count]\n"
           "buffer: 1..65536 (default read=4088, write/copy=4080, pipe=4096); rounds: 1..100 (default 5)\n"
-          "SOURCE must contain the exact 1 MiB share/iobench.bin fixture\n"
+          "read --bytes: 1..1048576 (default 1048576); exact fixture prefix and EOF required\n"
           "OUTPUT must be a new file; it is retained even on failure\n", stderr);
     return EXIT_FAILURE;
   }
@@ -221,17 +264,17 @@ int main(int argc, char **argv)
     fputs("iobench: missing clock grant\n", stderr);
     return EXIT_FAILURE;
   }
-  unsigned char *bytes = options.mode == IO_PIPE ? NULL : malloc(FIXTURE_BYTES);
+  unsigned char *bytes = options.mode == IO_PIPE ? NULL : malloc(options.bytes);
   if (options.mode != IO_PIPE && !bytes) {
-    fputs("iobench: cannot allocate 1 MiB result buffer\n", stderr);
+    fputs("iobench: cannot allocate result buffer\n", stderr);
     return EXIT_FAILURE;
   }
-  uint64_t times[MAX_ROUNDS], clock_cost;
+  uint64_t times[MAX_ROUNDS], open_times[MAX_ROUNDS], complete_times[MAX_ROUNDS], clock_cost;
   bool success = measure_clock(clock, &clock_cost);
   if (success) {
     fprintf(stderr, "iobench %s: source=%s output=%s buffer=%zu rounds=%zu warmup=1 "
-        "fixture=%u bytes\n", argv[1], options.source ? options.source : "generated",
-        options.output ? options.output : "none", options.buffer, options.rounds, FIXTURE_BYTES);
+        "fixture=%zu bytes\n", argv[1], options.source ? options.source : "generated",
+        options.output ? options.output : "none", options.buffer, options.rounds, options.bytes);
     fprintf(stderr, "Clock-call loop: %llu ns/read (%u reads); not subtracted\n",
         (unsigned long long)clock_cost, CLOCK_READS);
     if (options.mode == IO_PIPE) {
@@ -241,14 +284,18 @@ int main(int argc, char **argv)
     } else {
       struct result result;
       success = read_pass(&options, bytes, clock, false, &result);
-      report("warmup", 1, &result, success);
+      report("warmup", 1, options.bytes, &result, success);
       for (size_t i = 0; success && i < options.rounds; ++i) {
         success = read_pass(&options, bytes, clock, true, &result);
-        report("sample", i + 1, &result, success);
+        report("sample", i + 1, options.bytes, &result, success);
         times[i] = result.elapsed;
+        open_times[i] = result.open_elapsed;
+        complete_times[i] = result.complete_elapsed;
       }
       if (success) {
-        print_summary("Read", times, options.rounds, true);
+        print_summary("OPEN", open_times, options.rounds, 0);
+        print_summary("Payload read", times, options.rounds, options.bytes);
+        print_summary("Complete consumption", complete_times, options.rounds, options.bytes);
       }
     }
   }

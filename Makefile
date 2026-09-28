@@ -69,13 +69,14 @@ install: all
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  install -m 644 "$(BUILD)/share/iobench.bin" "$$staging/share/iobench.bin"; \
+	  install -m 644 "$(BUILD)/share/iobench-small.bin" "$$staging/share/iobench-small.bin"; \
 	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
 	    rm -rf -- "$(DESTDIR)"; \
 	    mv -- "$$staging" "$(DESTDIR)"; \
 	  fi
 
 allocbench: $(BUILD)/allocbench.pxe
-iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin
+iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-small.bin
 ipcbench: $(BUILD)/ipcbench.pxe
 
 httpfs: $(BUILD)/httpfs.pxe
@@ -143,6 +144,11 @@ $(BUILD)/share/hello.txt: hello/message.txt
 $(BUILD)/share/iobench.bin: iobench/fixture.lua Makefile
 	@mkdir -p $(@D)
 	$(LUA) $< > $@.tmp
+	mv $@.tmp $@
+
+$(BUILD)/share/iobench-small.bin: iobench/fixture.lua Makefile
+	@mkdir -p $(@D)
+	$(LUA) $< 32768 > $@.tmp
 	mv $@.tmp $@
 
 # Runtime objects and libraries come from the selected SDK.
