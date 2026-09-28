@@ -14,9 +14,9 @@ iobench read app://share/iobench.bin --buffer 64 --rounds 5
 ```
 
 Read and copy sources must contain exactly this fixture; arbitrary files are rejected.
-`--buffer` is a positive decimal application request size, 1..65536 (default
+For read, `--buffer` is a positive decimal application request size, 1..65536 (default
 4088). `--rounds` is 1..100 (default 5). There is always one untimed, verified
-warm-up pass. Every pass opens a fresh read-only descriptor and closes it after
+warm-up pass. Every read pass opens a fresh read-only descriptor and closes it after
 verification. No input file is created or modified.
 
 Prepare a disposable RAM copy manually, outside the benchmark. Shell output
