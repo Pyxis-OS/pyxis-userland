@@ -13,13 +13,23 @@ struct provider_metadata {
   char media_type[PROVIDER_MEDIA_TYPE_MAX_BYTES + 1];
 };
 
+struct provider_result {
+  enum call_status status;
+  uint64_t provider_status;
+  uint64_t delivery;
+  struct provider_metadata metadata;
+};
+
 /* OPEN sends the complete URI unchanged and requests exact FILE rights.
- * Success owns one exported byte-file grant with CALL transport. Optional
- * metadata describes the representation without granting extra authority.
- * Media-type bytes are copied and NUL-terminated here. Failure clears outputs
- * and closes every returned grant. Transport failures retain their status;
- * malformed application replies report BAD_REQUEST. No retry or allocation. */
+ * The return value reports transport or local validation failure. Only CALL_OK
+ * makes result->status and provider_status meaningful, including provider errors.
+ * delivery retains the endpoint's delivery state even when validation fails.
+ * Successful OPEN owns one exported byte-file grant with CALL transport; its
+ * metadata copies and NUL-terminates the media type. Other outcomes clear file
+ * and metadata and close every returned grant. result and file are required.
+ * deadline_ns is absolute monotonic time; zero waits without a deadline.
+ * Malformed application replies report BAD_REQUEST. No retry or allocation. */
 enum call_status provider_open(handle_t provider, const char *uri, uint64_t rights,
-    struct provider_metadata *metadata, handle_t *file);
+    uint64_t deadline_ns, struct provider_result *result, handle_t *file);
 
 #endif

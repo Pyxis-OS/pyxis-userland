@@ -59,6 +59,12 @@ static enum call_status close_grants(struct endpoint_packet *packet)
 static enum call_status reply(struct endpoint_packet *packet, uint64_t result,
     const void *bytes, size_t size, const struct endpoint_grant *grant)
 {
+  struct provider_open_reply open_result = {0};
+  if (packet->protocol == PROTOCOL_PROVIDER && packet->operation == PROVIDER_OPEN &&
+      result != CALL_OK) {
+    bytes = &open_result;
+    size = sizeof(open_result);
+  }
   enum call_status status = endpoint_reply(packet->receipt, result, bytes, size,
       grant, grant ? 1 : 0);
   if (status == CALL_OK) {
