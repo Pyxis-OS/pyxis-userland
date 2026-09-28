@@ -1,5 +1,8 @@
 #include <abi/file.h>
+#include <endpoint.h>
 #include <file.h>
+#include <handle.h>
+#include <stdbool.h>
 #include <string.h>
 #include <syscall.h>
 
@@ -30,23 +33,67 @@ _Static_assert(offsetof(struct file_write_message, bytes) ==
 _Static_assert(offsetof(struct file_read_response, bytes) ==
     sizeof(struct file_read_reply), "file read bytes follow the reply");
 
-static enum call_status call_status(struct syscall_result result, size_t reply_size)
+/* The capability selects native dispatch or userspace transport. Protocol and
+ * authority are immutable properties of the held grant, including after closure. */
+static struct syscall_result file_call(handle_t file, const void *message,
+    size_t message_size, void *reply, size_t capacity, bool mutation)
 {
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
+  const struct message_header *header = message;
+  struct handle_info info;
+  enum call_status status = handle_query(file, &info);
+  if (status != CALL_OK) {
+    return (struct syscall_result){status, 0};
   }
-  if (result.reply_size != (result.status == CALL_OK ? reply_size : 0)) {
-    return CALL_BAD_REQUEST;
+  if (info.protocol != PROTOCOL_FILE ||
+      (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+    return (struct syscall_result){CALL_WRONG_TYPE, 0};
   }
-  return result.status;
+  uint64_t required = header->operation == FILE_READ ? FILE_RIGHT_READ : FILE_RIGHT_WRITE;
+  if (header->operation == FILE_SIZE ? !(info.rights & FILE_RIGHTS) :
+      (info.rights & required) != required) {
+    return (struct syscall_result){CALL_DENIED, 0};
+  }
+  if (info.kind == HANDLE_KIND_NATIVE) {
+    if (info.transport != 0) {
+      return (struct syscall_result){CALL_BAD_REQUEST, 0};
+    }
+    return syscall_call(file, message, message_size, reply, capacity);
+  }
+  if ((info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
+    return (struct syscall_result){CALL_DENIED, 0};
+  }
+  struct endpoint_packet packet;
+  status = endpoint_invoke(file, PROTOCOL_FILE, header->operation,
+      (const unsigned char *)message + sizeof(*header), message_size - sizeof(*header),
+      NULL, 0, 0, &packet);
+  if (status != CALL_OK) {
+    if (mutation && packet.delivery == ENDPOINT_DELIVERED) {
+      status = CALL_OUTCOME_UNKNOWN;
+    } else if (!mutation && status == CALL_OUTCOME_UNKNOWN) {
+      status = CALL_BAD_REQUEST;
+    }
+    return (struct syscall_result){status, 0};
+  }
+  bool malformed = packet.grant_count != 0 || packet.result >= CALL_STATUS_COUNT ||
+      packet.size > capacity || (packet.result != CALL_OK && packet.size != 0);
+  for (size_t i = 0; i < packet.grant_count; ++i) {
+    handle_close(packet.grants[i].handle);
+  }
+  if (malformed) {
+    return (struct syscall_result){mutation ? CALL_OUTCOME_UNKNOWN : CALL_BAD_REQUEST, 0};
+  }
+  if (packet.size) {
+    memcpy(reply, packet.data, packet.size);
+  }
+  return (struct syscall_result){packet.result, packet.size};
 }
 
-static enum call_status mutation_status(struct syscall_result result, size_t reply_size)
+static enum call_status reply_status(struct syscall_result result, size_t reply_size,
+    bool mutation)
 {
-  /* Once submitted, an untrustworthy reply cannot establish no side effects. */
   if (result.status >= CALL_STATUS_COUNT ||
       result.reply_size != (result.status == CALL_OK ? reply_size : 0)) {
-    return CALL_OUTCOME_UNKNOWN;
+    return mutation ? CALL_OUTCOME_UNKNOWN : CALL_BAD_REQUEST;
   }
   return result.status;
 }
@@ -60,8 +107,8 @@ enum call_status file_size(handle_t file, uint64_t *size)
 
   struct message_header message = {PROTOCOL_FILE, FILE_SIZE};
   struct file_size_reply reply;
-  enum call_status status = call_status(syscall_call(file, &message, sizeof(message),
-      &reply, sizeof(reply)), sizeof(reply));
+  enum call_status status = reply_status(file_call(file, &message, sizeof(message),
+      &reply, sizeof(reply), false), sizeof(reply), false);
   if (status != CALL_OK) {
     return status;
   }
@@ -86,11 +133,11 @@ enum call_status file_read(handle_t file, uint64_t offset, void *bytes, size_t c
     .body = {offset, limit},
   };
   struct file_read_response reply;
-  struct syscall_result result = syscall_call(file, &message, sizeof(message),
-      &reply, sizeof(reply.body) + limit);
+  struct syscall_result result = file_call(file, &message, sizeof(message),
+      &reply, sizeof(reply.body) + limit, false);
   if (result.status >= CALL_STATUS_COUNT) {
     *read = 0;
-    return CALL_UNAVAILABLE;
+    return CALL_BAD_REQUEST;
   }
   if (result.status != CALL_OK) {
     *read = 0;
@@ -136,9 +183,9 @@ enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
     memcpy(message.bytes, bytes, limit);
   }
   struct file_write_reply reply;
-  enum call_status status = mutation_status(syscall_call(file, &message,
-      offsetof(struct file_write_message, bytes) + limit, &reply, sizeof(reply)),
-      sizeof(reply));
+  enum call_status status = reply_status(file_call(file, &message,
+      offsetof(struct file_write_message, bytes) + limit, &reply, sizeof(reply), true),
+      sizeof(reply), true);
   /* Consume the source first, even when written aliases it. */
   *written = 0;
   if (status != CALL_OK) {
@@ -157,11 +204,11 @@ enum call_status file_resize(handle_t file, uint64_t size)
     .header = {PROTOCOL_FILE, FILE_RESIZE},
     .body = {size},
   };
-  return mutation_status(syscall_call(file, &message, sizeof(message), NULL, 0), 0);
+  return reply_status(file_call(file, &message, sizeof(message), NULL, 0, true), 0, true);
 }
 
 enum call_status file_sync(handle_t file)
 {
   struct message_header message = {PROTOCOL_FILE, FILE_SYNC};
-  return mutation_status(syscall_call(file, &message, sizeof(message), NULL, 0), 0);
+  return reply_status(file_call(file, &message, sizeof(message), NULL, 0, true), 0, true);
 }

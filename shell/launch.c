@@ -334,7 +334,22 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request->streams[i] = (struct launch_stream){stream.protocol, request->grant_count};
-    grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, 0};
+    uint64_t transport = 0;
+    if (stream.protocol == PROTOCOL_FILE) {
+      struct handle_info info;
+      enum call_status status = handle_query(stream.handle, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (info.protocol != PROTOCOL_FILE ||
+          (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+        return CALL_WRONG_TYPE;
+      }
+      if (info.kind == HANDLE_KIND_EXPORTED) {
+        transport = HANDLE_TRANSPORT_CALL;
+      }
+    }
+    grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
   return CALL_OK;
 }

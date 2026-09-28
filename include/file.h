@@ -6,11 +6,14 @@
 #include <abi/syscall.h>
 #include <stddef.h>
 
-/* Return native status; output values are cleared on failure. Callers provide
+/* Dispatch native and exported FILE capabilities through their held interface.
+ * Exported files require CALL transport. Return operation/transport status;
+ * output values are cleared on failure. Callers provide
  * valid output storage and valid byte buffers for nonzero transfers. Output
  * counts are written after byte transfers if they alias the buffer. SIZE
  * accepts either READ or WRITE. Malformed mutation replies report
- * CALL_OUTCOME_UNKNOWN: they cannot prove that the operation had no effect. */
+ * CALL_OUTCOME_UNKNOWN: they cannot prove that the operation had no effect.
+ * Delivered transport failures on mutations are equally uncertain. */
 enum call_status file_size(handle_t file, uint64_t *size);
 
 /* Reads up to min(capacity, FILE_READ_MAX_BYTES) bytes at an explicit offset
