@@ -223,7 +223,24 @@ static int launch_shell(const struct session_config *config, const struct networ
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
-    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, 0};
+    uint64_t transport = 0;
+    if (stream.protocol == PROTOCOL_FILE) {
+      struct handle_info info;
+      status = handle_query(stream.handle, &info);
+      if (status != CALL_OK) {
+        fprintf(stderr, "session: cannot query stream (status %u)\n", status);
+        goto done;
+      }
+      if (info.protocol != PROTOCOL_FILE ||
+          (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+        fputs("session: invalid file stream\n", stderr);
+        goto done;
+      }
+      if (info.kind == HANDLE_KIND_EXPORTED) {
+        transport = HANDLE_TRANSPORT_CALL;
+      }
+    }
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
 
   if (configure_network && !network_config_apply(network)) {
