@@ -4,8 +4,7 @@ Freestanding C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
 `x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
 also needs the Lua development files exported by the ports build; the HTTP
-provider needs the picohttpparser development files. The native TLS application
-library needs the Mbed TLS development export. Host Lua 5.4 (`LUA`, default
+provider needs the picohttpparser and Mbed TLS development exports. Host Lua 5.4 (`LUA`, default
 `lua`) generates the packaged [iobench fixture](iobench/README.md).
 
 ```sh
@@ -20,8 +19,8 @@ make -f runtime.mk clean
 `SDK` defaults to `build/sdk`; `BUILD` overrides the output directory for either
 phase. `LUA_PREFIX` defaults to `build/ports-dev/lua` and supplies `include` and
 `lib/liblua.a` for `session`. `PICOHTTPPARSER_PREFIX` defaults to
-`build/ports-dev/picohttpparser` for `httpfs`; the SDK/runtime depends on
-neither application library. `MBEDTLS_PREFIX` defaults to
+`build/ports-dev/picohttpparser` for `libhttp` and `httpfs`; the SDK/runtime is
+independent of these application libraries. `MBEDTLS_PREFIX` defaults to
 `build/ports-dev/mbedtls`; `make libtls` builds `BUILD/libtls.a`. Its native
 authority, trust and ownership contract is in [libtls/tls.h](libtls/tls.h).
 Applications link this archive with the export's `MBEDTLS_LIBRARIES` before SDK
@@ -30,6 +29,15 @@ libraries; compile Mbed TLS consumers with `MBEDTLS_CPPFLAGS` from its
 it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang source. TLSF is vendored locally with its license and pin.
+
+`make libhttp` builds `BUILD/libhttp.a`. Consumers link it with picohttpparser,
+libtls and `MBEDTLS_LIBRARIES` before SDK libraries. Each fetch receives an
+explicit HTTP or HTTPS client; HTTPS borrows a ready libtls runtime and verifies
+the URI's DNS hostname. It accepts authenticated TLS EOF for close-delimited
+bodies and returns structured fetch/cleanup diagnostics. Authority, body-storage
+ownership and result mappings are described in [libhttp/http.h](libhttp/http.h).
+The library loads no trust or startup resources. `httpfs` currently selects HTTP;
+HTTPS provider publication and packaged trust are separate integration work.
 
 The Pyxis parent repository pins this repository as its `userspace` submodule
 and orchestrates header export, runtime build, SDK assembly, application build

@@ -60,13 +60,17 @@ enum http_error http_parse_uri(const char *text, struct http_uri *uri)
       return HTTP_INVALID_URI;
     }
   }
-  if (!http_equal(text, scheme_end - text, "http")) {
+  if (http_equal(text, scheme_end - text, "http")) {
+    uri->scheme = HTTP_SCHEME_HTTP;
+  } else if (http_equal(text, scheme_end - text, "https")) {
+    uri->scheme = HTTP_SCHEME_HTTPS;
+  } else {
     return HTTP_UNSUPPORTED;
   }
-  if (length < 7 || scheme_end[1] != '/' || scheme_end[2] != '/') {
+  if (scheme_end[1] != '/' || scheme_end[2] != '/') {
     return HTTP_INVALID_URI;
   }
-  const char *start = text + 7;
+  const char *start = scheme_end + 3;
   size_t authority_size = 0;
   while (start[authority_size] && !strchr("/?#", start[authority_size])) {
     ++authority_size;
@@ -87,7 +91,7 @@ enum http_error http_parse_uri(const char *text, struct http_uri *uri)
   }
   memcpy(uri->host, start, host_size);
   uri->host[host_size] = 0;
-  unsigned port = 80;
+  unsigned port = uri->scheme == HTTP_SCHEME_HTTPS ? 443 : 80;
   if (colon && (!udp_parse_number(colon + 1, UINT16_MAX, &port) || !port)) {
     return HTTP_INVALID_URI;
   }
@@ -96,6 +100,14 @@ enum http_error http_parse_uri(const char *text, struct http_uri *uri)
   struct dns_name name;
   if (!udp_parse_address(uri->host, &address) && !dns_name_from_text(uri->host, &name)) {
     return HTTP_INVALID_URI;
+  }
+  if (uri->scheme == HTTP_SCHEME_HTTPS) {
+    if (uri->host[host_size - 1] == '.') {
+      uri->host[--host_size] = 0;
+    }
+    if (udp_parse_address(uri->host, &address)) {
+      return HTTP_UNSUPPORTED;
+    }
   }
   const char *path = start + authority_size;
   const char *fragment = strchr(path, '#');

@@ -17,6 +17,7 @@ struct fetch {
   struct http_result *result;
   struct http_body body;
   handle_t stream;
+  struct tls_connection *tls;
   uint64_t deadline;
   size_t buffered, header_bytes, fields;
   char bytes[HTTP_HEADERS_MAX];
@@ -120,7 +121,8 @@ static void consume(struct fetch *fetch, size_t count)
   memmove(fetch->bytes, fetch->bytes + count, fetch->buffered);
 }
 
-/* EOF is separate from native failure; only close-delimited bodies accept it. */
+/* Only close-delimited bodies accept EOF. TLS reports it exclusively for an
+ * authenticated close_notify; incomplete framed input remains an HTTP error. */
 static bool receive(struct fetch *fetch, bool *eof)
 {
   if (!check_deadline(fetch)) {
@@ -130,13 +132,25 @@ static bool receive(struct fetch *fetch, bool *eof)
   if (!available) {
     return fail(fetch, HTTP_LIMIT);
   }
-  struct tcp_read_reply reply;
-  if (!network(fetch, tcp_read(fetch->stream, fetch->bytes + fetch->buffered,
-      available, fetch->deadline, &reply))) {
-    return false;
+  size_t length;
+  if (fetch->tls) {
+    if (!tls_read(fetch->tls, fetch->bytes + fetch->buffered, available,
+        &length, eof, &fetch->result->tls_failure)) {
+      return fail(fetch, HTTP_TLS_ERROR);
+    }
+  } else {
+    if (available > TCP_READ_MAX_BYTES) {
+      available = TCP_READ_MAX_BYTES;
+    }
+    struct tcp_read_reply reply;
+    if (!network(fetch, tcp_read(fetch->stream, fetch->bytes + fetch->buffered,
+        available, fetch->deadline, &reply))) {
+      return false;
+    }
+    length = reply.length;
+    *eof = length == 0;
   }
-  fetch->buffered += reply.length;
-  *eof = reply.length == 0;
+  fetch->buffered += length;
   return true;
 }
 
@@ -566,6 +580,29 @@ static bool resolve(struct fetch *fetch, const char *host, uint32_t *address)
   return true;
 }
 
+static bool send_bytes(struct fetch *fetch, const char *bytes, size_t size,
+    size_t *accepted)
+{
+  if (!check_deadline(fetch)) {
+    return false;
+  }
+  if (fetch->tls) {
+    if (!tls_write(fetch->tls, bytes, size, accepted, &fetch->result->tls_failure)) {
+      return fail(fetch, HTTP_TLS_ERROR);
+    }
+  } else {
+    if (size > TCP_WRITE_MAX_BYTES) {
+      size = TCP_WRITE_MAX_BYTES;
+    }
+    struct tcp_write_reply reply;
+    if (!network(fetch, tcp_write(fetch->stream, bytes, size, fetch->deadline, &reply))) {
+      return false;
+    }
+    *accepted = reply.length;
+  }
+  return *accepted > 0 || network(fetch, CALL_IO);
+}
+
 static bool send_request(struct fetch *fetch, const struct http_uri *uri)
 {
   char request[HTTP_URI_MAX + 384];
@@ -577,20 +614,20 @@ static bool send_request(struct fetch *fetch, const struct http_uri *uri)
   }
   size_t sent = 0;
   while (sent < (size_t)length) {
-    struct tcp_write_reply reply;
-    if (!network(fetch, tcp_write(fetch->stream, request + sent, length - sent,
-        fetch->deadline, &reply))) {
+    size_t accepted;
+    if (!send_bytes(fetch, request + sent, length - sent, &accepted)) {
       return false;
     }
-    sent += reply.length;
+    sent += accepted;
   }
   return true;
 }
 
-void http_fetch(const struct http_authority *authority, struct http_storage *storage,
+void http_fetch(const struct http_client *client, struct http_storage *storage,
     const char *uri_text, uint64_t deadline_ns, struct http_result *result)
 {
   *result = (struct http_result){0};
+  const struct http_authority *authority = &client->authority;
   if (authority->tcp == HANDLE_INVALID || authority->clock == HANDLE_INVALID) {
     result->error = HTTP_NETWORK_ERROR;
     result->network_status = CALL_DENIED;
@@ -615,6 +652,15 @@ void http_fetch(const struct http_authority *authority, struct http_storage *sto
   if (result->error != HTTP_OK) {
     return;
   }
+  if (uri.scheme != client->scheme) {
+    result->error = HTTP_UNSUPPORTED;
+    return;
+  }
+  if (uri.scheme == HTTP_SCHEME_HTTPS && !client->tls) {
+    result->error = HTTP_TLS_ERROR;
+    result->tls_failure.error = TLS_BAD_STATE;
+    return;
+  }
   struct fetch *fetch = calloc(1, sizeof(*fetch));
   if (!fetch) {
     result->error = HTTP_NO_MEMORY;
@@ -634,10 +680,27 @@ void http_fetch(const struct http_authority *authority, struct http_storage *sto
     goto done;
   }
   fetch->stream = connection.handle;
+  if (uri.scheme == HTTP_SCHEME_HTTPS) {
+    struct tls_authority tls_authority = {
+      .random = authority->random,
+      .clock = authority->clock,
+    };
+    if (!tls_connection_open(client->tls, &tls_authority, fetch->stream, uri.host,
+        deadline, &fetch->tls, &result->tls_failure)) {
+      fail(fetch, HTTP_TLS_ERROR);
+      goto done;
+    }
+  }
   success = send_request(fetch, &uri) && response_headers(fetch, &framing) &&
       response_body(fetch, &framing) && check_deadline(fetch);
 
 done:
+  if (fetch->tls) {
+    if (success) {
+      tls_close_notify(fetch->tls, &result->tls_cleanup);
+    }
+    tls_connection_free(fetch->tls);
+  }
   if (fetch->stream != HANDLE_INVALID) {
     if (!success) {
       tcp_abort(fetch->stream);
@@ -672,6 +735,75 @@ const char *http_error_name(enum http_error error)
   case HTTP_NO_MEMORY: return "allocation failed";
   case HTTP_NETWORK_ERROR: return "native network operation failed";
   case HTTP_DNS_ERROR: return "DNS answer unavailable or invalid";
+  case HTTP_TLS_ERROR: return "TLS operation failed";
   default: return "invalid result";
   }
+}
+
+static enum call_status tls_status(const struct tls_result *result)
+{
+  switch (result->error) {
+  case TLS_OK:
+    return CALL_OK;
+  case TLS_CERTIFICATE_ERROR:
+  case TLS_TRUST_ERROR:
+    return CALL_DENIED;
+  case TLS_BAD_STATE:
+  case TLS_UNSUPPORTED:
+    return CALL_BAD_OPERATION;
+  case TLS_PROTOCOL_ERROR:
+  case TLS_TRUNCATED:
+    return CALL_IO;
+  case TLS_LIMIT:
+    return CALL_FILE_TOO_LARGE;
+  case TLS_QUOTA:
+    return CALL_QUOTA;
+  case TLS_NO_MEMORY:
+    return CALL_NO_MEMORY;
+  case TLS_CLOCK_ERROR:
+  case TLS_ENTROPY_ERROR:
+  case TLS_TRANSPORT_ERROR:
+  case TLS_DEADLINE:
+    return result->native_status == CALL_OK ? CALL_IO : result->native_status;
+  }
+  return CALL_IO;
+}
+
+enum call_status http_result_status(const struct http_result *result)
+{
+  switch (result->error) {
+  case HTTP_OK:
+    return CALL_OK;
+  case HTTP_INVALID_URI:
+    return CALL_BAD_REQUEST;
+  case HTTP_UNSUPPORTED:
+    return CALL_BAD_OPERATION;
+  case HTTP_BAD_RESPONSE:
+    return CALL_IO;
+  case HTTP_REJECTED_STATUS:
+    if (result->status == 404 || result->status == 410) {
+      return CALL_NOT_FOUND;
+    }
+    if (result->status == 401 || result->status == 403) {
+      return CALL_DENIED;
+    }
+    if (result->status >= 200 && result->status < 400) {
+      return CALL_BAD_OPERATION;
+    }
+    return CALL_IO;
+  case HTTP_LIMIT:
+    return CALL_FILE_TOO_LARGE;
+  case HTTP_QUOTA:
+    return CALL_QUOTA;
+  case HTTP_NO_MEMORY:
+    return CALL_NO_MEMORY;
+  case HTTP_NETWORK_ERROR:
+    return result->network_status;
+  case HTTP_DNS_ERROR:
+    /* Only NXDOMAIN unambiguously identifies an absent name. */
+    return result->dns_rcode == 3 ? CALL_NOT_FOUND : CALL_IO;
+  case HTTP_TLS_ERROR:
+    return tls_status(&result->tls_failure);
+  }
+  return CALL_IO;
 }

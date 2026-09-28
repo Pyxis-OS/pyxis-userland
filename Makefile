@@ -53,7 +53,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install libtls httpfs allocbench iobench ipcbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install libhttp libtls httpfs allocbench iobench ipcbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -86,6 +86,7 @@ iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-
 ipcbench: $(BUILD)/ipcbench.pxe
 
 httpfs: $(BUILD)/httpfs.pxe
+libhttp: $(HTTP_LIBRARY)
 libtls: $(TLS_LIBRARY)
 
 session: $(BUILD)/session.pxe
@@ -136,8 +137,8 @@ $(TLS_EXPORT_IDENTITY): FORCE
 	  xargs -0 sha256sum -- < "$@.files.tmp" > "$@.tmp"; \
 	  cmp -s "$@.tmp" "$@" || mv -- "$@.tmp" "$@"
 
-$(BUILD)/httpfs.elf: $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(LDLIBS)
+$(BUILD)/httpfs.elf: $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/httpfs/main.o $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(SESSION_OBJECTS) $(CONFIG_OBJECT): private CPPFLAGS += -I$(LUA_PREFIX)/include
 $(SESSION_OBJECTS) $(CONFIG_OBJECT): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h

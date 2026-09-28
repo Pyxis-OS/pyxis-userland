@@ -28,7 +28,7 @@ struct file_export {
 struct provider {
   handle_t service;
   handle_t receiver;
-  struct http_authority authority;
+  struct http_client client;
   struct http_storage storage;
   bool published;
   struct file_export files[FILE_SLOTS];
@@ -81,43 +81,6 @@ static enum call_status open_error(struct endpoint_packet *packet,
   return reply(packet, status, &response, sizeof(response), NULL);
 }
 
-static enum call_status fetch_status(const struct http_result *result)
-{
-  switch (result->error) {
-  case HTTP_OK:
-    return CALL_OK;
-  case HTTP_INVALID_URI:
-    return CALL_BAD_REQUEST;
-  case HTTP_UNSUPPORTED:
-    return CALL_BAD_OPERATION;
-  case HTTP_BAD_RESPONSE:
-    return CALL_IO;
-  case HTTP_REJECTED_STATUS:
-    if (result->status == 404 || result->status == 410) {
-      return CALL_NOT_FOUND;
-    }
-    if (result->status == 401 || result->status == 403) {
-      return CALL_DENIED;
-    }
-    if (result->status >= 200 && result->status < 400) {
-      return CALL_BAD_OPERATION;
-    }
-    return CALL_IO;
-  case HTTP_LIMIT:
-    return CALL_FILE_TOO_LARGE;
-  case HTTP_QUOTA:
-    return CALL_QUOTA;
-  case HTTP_NO_MEMORY:
-    return CALL_NO_MEMORY;
-  case HTTP_NETWORK_ERROR:
-    return result->network_status;
-  case HTTP_DNS_ERROR:
-    /* Only NXDOMAIN unambiguously identifies an absent name. */
-    return result->dns_rcode == 3 ? CALL_NOT_FOUND : CALL_IO;
-  }
-  return CALL_IO;
-}
-
 static enum call_status open_file(struct provider *provider,
     struct endpoint_packet *packet)
 {
@@ -161,8 +124,8 @@ static enum call_status open_file(struct provider *provider,
   memcpy(uri, uri_bytes, request.uri_size);
   uri[request.uri_size] = 0;
   struct http_result result;
-  http_fetch(&provider->authority, &provider->storage, uri, packet->deadline_ns, &result);
-  enum call_status status = fetch_status(&result);
+  http_fetch(&provider->client, &provider->storage, uri, packet->deadline_ns, &result);
+  enum call_status status = http_result_status(&result);
   if (status != CALL_OK) {
     return open_error(packet, status, result.status);
   }
@@ -360,7 +323,7 @@ int main(int argc, char **argv)
   struct provider provider = {
     .service = service,
     .receiver = endpoint.receiver,
-    .authority = authority,
+    .client = {.authority = authority, .scheme = HTTP_SCHEME_HTTP},
   };
   status = close_handle(&endpoint.caller);
   if (status != CALL_OK) {
