@@ -12,7 +12,8 @@ struct output_result {
   size_t read_bytes, written_bytes, read_calls, write_calls;
   size_t short_reads, short_writes;
   uint64_t elapsed, sync_elapsed;
-  bool timed, sync_timed, early_eof, profiled;
+  bool timed, sync_timed, early_eof, profiled, host_profiled;
+  struct profile_host_snapshot host_profile;
   struct profile_file_snapshot profile;
   const char *operation;
 };
@@ -177,9 +178,19 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   if (profiled && !check_status("profile begin", profile_file_begin(profile))) {
     return false;
   }
+  bool host_profiled = timed && options->host_profile;
+  if (host_profiled && !check_status("host profile begin", profile_host_begin(profile))) {
+    if (profiled) {
+      check_status("profile end", profile_file_end(profile, &result->profile));
+    }
+    return false;
+  }
   uint64_t start = 0, end = 0, sync_start = 0, sync_end = 0;
   enum call_status start_status = timed ? clock_now(clock, &start) : CALL_OK;
   if (start_status != CALL_OK) {
+    if (host_profiled) {
+      check_status("host profile end", profile_host_end(profile, &result->host_profile));
+    }
     if (profiled) {
       check_status("profile end", profile_file_end(profile, &result->profile));
     }
@@ -188,6 +199,9 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   }
   enum call_status status = transfer(options, source, output, payload, result);
   enum call_status end_status = timed ? clock_now(clock, &end) : CALL_OK;
+  enum call_status host_profile_status = host_profiled ?
+      profile_host_end(profile, &result->host_profile) : CALL_OK;
+  result->host_profiled = host_profiled && host_profile_status == CALL_OK;
   enum call_status profile_status = profiled ? profile_file_end(profile, &result->profile) : CALL_OK;
   result->profiled = profiled && profile_status == CALL_OK;
   enum call_status sync_status = CALL_OK, sync_clock_status = CALL_OK;
@@ -203,6 +217,9 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
 
   /* All diagnostics and verification follow both measured intervals. */
   bool success = check_status(result->operation, status);
+  if (!check_status("host profile end", host_profile_status)) {
+    success = false;
+  }
   if (!check_status("profile end", profile_status)) {
     success = false;
   }
@@ -287,6 +304,9 @@ static void report_pass(size_t pass, const struct output_result *result, bool su
     }
     fputc('\n', stderr);
   }
+  if (result->host_profiled) {
+    report_host_profile(&result->host_profile);
+  }
   if (result->profiled) {
     report_profile(&result->profile);
   }
@@ -298,8 +318,9 @@ static void report_pass(size_t pass, const struct output_result *result, bool su
 
 bool run_output(const struct options *options, unsigned char *scratch, handle_t clock)
 {
-  handle_t profile = options->profile ? startup_resource("profile") : HANDLE_INVALID;
-  if (options->profile && profile == HANDLE_INVALID) {
+  handle_t profile = options->profile || options->host_profile ?
+      startup_resource("profile") : HANDLE_INVALID;
+  if ((options->profile || options->host_profile) && profile == HANDLE_INVALID) {
     fputs("iobench: missing requested profile grant\n", stderr);
     return false;
   }
@@ -315,6 +336,8 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
       options->sync ? "file (preparation untimed, completion separate)" : "none");
   fprintf(stderr, "RAM replacement profiling: %s (measured transfers only)\n",
       options->profile ? "on" : "off");
+  fprintf(stderr, "Host FILE profiling: %s (measured transfers only)\n",
+      options->host_profile ? "on" : "off");
   if (options->mode == IO_COPY) {
     success = check_status("open source", resolve_file(options->source, FILE_RIGHT_READ, &source));
     if (success && !verify_file(source, scratch)) {

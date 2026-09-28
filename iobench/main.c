@@ -14,7 +14,8 @@
 struct result {
   size_t bytes, calls, short_reads;
   uint64_t open_elapsed, elapsed, complete_elapsed;
-  bool open_timed, timed, complete_timed, eof_called;
+  bool open_timed, timed, complete_timed, eof_called, host_profiled;
+  struct profile_host_snapshot host_profile;
 };
 
 static bool number(const char *text, size_t maximum, size_t *result)
@@ -74,6 +75,9 @@ static bool parse_options(int argc, char **argv, struct options *options)
       options->prepared = true;
     } else if (!strcmp(option, "--profile") && output && !options->profile) {
       options->profile = true;
+    } else if (!strcmp(option, "--host-profile") && options->mode != IO_PIPE &&
+        !options->host_profile) {
+      options->host_profile = true;
     } else if (!strcmp(option, "--sync") && output && !options->sync) {
       options->sync = true;
     } else {
@@ -104,13 +108,29 @@ static bool parse_options(int argc, char **argv, struct options *options)
 }
 
 static bool read_pass(const struct options *options, unsigned char *bytes,
-    handle_t clock, bool timed, struct result *result)
+    handle_t clock, handle_t profile, bool timed, struct result *result)
 {
   *result = (struct result){0};
   fill_fixture(bytes, options->bytes, true);
+  bool host_profiled = timed && options->host_profile;
+  enum call_status profile_end_status = CALL_OK;
+  if (host_profiled) {
+    enum call_status status = profile_host_begin(profile);
+    if (status != CALL_OK) {
+      fprintf(stderr, "iobench: host profile begin failed (status %u)\n", status);
+      return false;
+    }
+  }
   uint64_t start = 0, opened = 0, read_end = 0, complete = 0;
   enum call_status clock_status = timed ? clock_now(clock, &start) : CALL_OK;
   if (clock_status != CALL_OK) {
+    if (host_profiled) {
+      profile_end_status = profile_host_end(profile, &result->host_profile);
+      result->host_profiled = profile_end_status == CALL_OK;
+      if (profile_end_status != CALL_OK) {
+        fprintf(stderr, "iobench: host profile end failed (status %u)\n", profile_end_status);
+      }
+    }
     fprintf(stderr, "iobench: clock failed before OPEN (status %u)\n", clock_status);
     return false;
   }
@@ -155,15 +175,20 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
         result->timed = true;
       }
     }
-    if (!read_error && !early_eof && clock_status == CALL_OK) {
-      unsigned char extra;
-      result->eof_called = true;
-      ssize_t count = read(descriptor, &extra, 1);
-      if (count < 0) {
-        eof_error = errno;
-      } else {
-        excess = count != 0;
-      }
+  }
+  if (host_profiled) {
+    profile_end_status = profile_host_end(profile, &result->host_profile);
+    result->host_profiled = profile_end_status == CALL_OK;
+  }
+  if (descriptor >= 0 && !read_error && !early_eof && clock_status == CALL_OK &&
+      profile_end_status == CALL_OK) {
+    unsigned char extra;
+    result->eof_called = true;
+    ssize_t count = read(descriptor, &extra, 1);
+    if (count < 0) {
+      eof_error = errno;
+    } else {
+      excess = count != 0;
     }
   }
   if (descriptor >= 0 && close(descriptor) < 0) {
@@ -180,6 +205,10 @@ static bool read_pass(const struct options *options, unsigned char *bytes,
   /* Diagnostics and content verification follow the final timestamp. The
    * complete interval includes EOF and close, not deferred provider retirement. */
   bool success = true;
+  if (profile_end_status != CALL_OK) {
+    fprintf(stderr, "iobench: host profile end failed (status %u)\n", profile_end_status);
+    success = false;
+  }
   if (clock_status != CALL_OK) {
     fprintf(stderr, "iobench: clock failed (status %u)\n", clock_status);
     success = false;
@@ -243,6 +272,9 @@ static void report(const char *phase, size_t pass, size_t requested,
     }
     fputc('\n', stderr);
   }
+  if (result->host_profiled) {
+    report_host_profile(&result->host_profile);
+  }
 }
 
 int main(int argc, char **argv)
@@ -252,9 +284,9 @@ int main(int argc, char **argv)
   }
   struct options options;
   if (!parse_options(argc, argv, &options)) {
-    fputs("usage: iobench read SOURCE [--bytes count] [--buffer bytes] [--rounds count]\n"
-          "       iobench write OUTPUT [--prepared] [--sync] [--profile] [--buffer bytes] [--rounds count]\n"
-          "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--profile] [--buffer bytes] [--rounds count]\n"
+    fputs("usage: iobench read SOURCE [--host-profile] [--bytes count] [--buffer bytes] [--rounds count]\n"
+          "       iobench write OUTPUT [--prepared] [--sync] [--profile] [--host-profile] [--buffer bytes] [--rounds count]\n"
+          "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--profile] [--host-profile] [--buffer bytes] [--rounds count]\n"
           "       session app://iobench.pxe pipe [--buffer bytes] [--rounds count]\n"
           "buffer: 1..65536 (default read=4088, write/copy=4080, pipe=4096); rounds: 1..100 (default 5)\n"
           "read --bytes: 1..1048576 (default 1048576); exact fixture prefix and EOF required\n"
@@ -264,6 +296,11 @@ int main(int argc, char **argv)
   handle_t clock = startup_resource("clock");
   if (clock == HANDLE_INVALID) {
     fputs("iobench: missing clock grant\n", stderr);
+    return EXIT_FAILURE;
+  }
+  handle_t profile = options.host_profile ? startup_resource("profile") : HANDLE_INVALID;
+  if (options.host_profile && profile == HANDLE_INVALID) {
+    fputs("iobench: missing requested profile grant\n", stderr);
     return EXIT_FAILURE;
   }
   unsigned char *bytes = options.mode == IO_PIPE ? NULL : malloc(options.bytes);
@@ -284,11 +321,13 @@ int main(int argc, char **argv)
     } else if (options.mode != IO_READ) {
       success = run_output(&options, bytes, clock);
     } else {
+      fprintf(stderr, "Host FILE profiling: %s (measured payload reads only)\n",
+          options.host_profile ? "on" : "off");
       struct result result;
-      success = read_pass(&options, bytes, clock, false, &result);
+      success = read_pass(&options, bytes, clock, profile, false, &result);
       report("warmup", 1, options.bytes, &result, success);
       for (size_t i = 0; success && i < options.rounds; ++i) {
-        success = read_pass(&options, bytes, clock, true, &result);
+        success = read_pass(&options, bytes, clock, profile, true, &result);
         report("sample", i + 1, options.bytes, &result, success);
         times[i] = result.elapsed;
         open_times[i] = result.open_elapsed;
