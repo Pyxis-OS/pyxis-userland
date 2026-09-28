@@ -7,34 +7,44 @@ int handle_close(handle_t handle)
   return result.status == CALL_OK && result.reply_size == 0 ? 0 : -1;
 }
 
+enum call_status handle_query(handle_t handle, struct handle_info *info)
+{
+  if (!info) {
+    return CALL_BAD_REQUEST;
+  }
+  *info = (struct handle_info){0};
+  struct handle_info reply;
+  struct syscall_result result = syscall_handle_info(handle, &reply);
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (!reply.protocol || (reply.kind != HANDLE_KIND_NATIVE &&
+        reply.kind != HANDLE_KIND_EXPORTED)) {
+      return CALL_BAD_REQUEST;
+    }
+    *info = reply;
+  }
+  return result.status;
+}
+
 enum call_status handle_rights(handle_t handle, uint64_t *rights, uint64_t *transport)
 {
   if (!rights && !transport) {
     return CALL_BAD_REQUEST;
   }
+  struct handle_info info;
+  enum call_status status = handle_query(handle, &info);
   if (rights) {
-    *rights = 0;
+    *rights = info.rights;
   }
   if (transport) {
-    *transport = 0;
+    *transport = info.transport;
   }
-  struct handle_authority granted = {0};
-  struct syscall_result result = syscall_handle_rights(handle, &granted);
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
-  }
-  if (result.reply_size != (result.status == CALL_OK ? sizeof(granted) : 0)) {
-    return CALL_BAD_REQUEST;
-  }
-  if (result.status == CALL_OK) {
-    if (rights) {
-      *rights = granted.rights;
-    }
-    if (transport) {
-      *transport = granted.transport;
-    }
-  }
-  return result.status;
+  return status;
 }
 
 static enum call_status copy(handle_t source, uint64_t rights, uint64_t transport,
