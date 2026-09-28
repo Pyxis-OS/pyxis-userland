@@ -24,8 +24,8 @@
 #include <string.h>
 #include <term.h>
 
-static int launch_shell(const struct session_config *config, const struct network_config *network,
-    bool configure_network)
+static int launch_session(const struct session_config *config, const struct network_config *network,
+    bool configure_network, bool start_services)
 {
   struct terminal terminal = {startup_resource("input"), startup_resource("output")};
   handle_t launcher = startup_resource("launcher");
@@ -38,11 +38,13 @@ static int launch_shell(const struct session_config *config, const struct networ
     return EXIT_FAILURE;
   }
 
+  const char *image_name = start_services ? "init-services" : "shell.pxe";
+  const char *image_uri = start_services ? "app://init-services" : "app://shell.pxe";
   handle_t image;
-  enum call_status status = directory_lookup(app, "shell.pxe", DIRECTORY_KIND_FILE,
+  enum call_status status = directory_lookup(app, image_name, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot open shell (status %u)\n", status);
+    fprintf(stderr, "session: cannot open %s (status %u)\n", image_uri, status);
     return EXIT_FAILURE;
   }
 
@@ -186,7 +188,7 @@ static int launch_shell(const struct session_config *config, const struct networ
   environment[environment_count++] = (struct startup_variable){
     (uintptr_t)"DNS_SERVER", (uintptr_t)network->dns_server,
   };
-  const char *arguments[] = {"app://shell.pxe"};
+  const char *arguments[] = {image_uri};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = grant_count,
@@ -252,13 +254,14 @@ static int launch_shell(const struct session_config *config, const struct networ
     goto done;
   }
   handle_t child;
-  status = launcher_launch(launcher, &request, &child);
+  status = start_services ? program_launch(launcher, &request, NULL, &child) :
+      launcher_launch(launcher, &request, &child);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot launch shell (status %u)\n", status);
+    fprintf(stderr, "session: cannot launch %s (status %u)\n", image_uri, status);
     goto done;
   }
   /* The child owns its copied grants and strings. Never read terminal input
-   * or wait after handing off; closing this observer leaves the shell alive. */
+   * or wait after handing off; closing this observer leaves the child alive. */
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
@@ -273,10 +276,18 @@ done:
 
 int main(int argc, char **argv)
 {
-  bool configure_network = argc == 2 && !strcmp(argv[1], "--configure-network");
-  if ((argc != 1 && !configure_network) || startup_resource("script") != HANDLE_INVALID) {
-    fputs("Usage: session.pxe [--configure-network] (native init or session handoff)\n", stderr);
-    return EXIT_FAILURE;
+  bool configure_network = false, start_services = false;
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--configure-network") && !configure_network) {
+      configure_network = true;
+    } else if (!strcmp(argv[i], "--start-services") && !start_services) {
+      start_services = true;
+    } else {
+      goto usage;
+    }
+  }
+  if (startup_resource("script") != HANDLE_INVALID) {
+    goto usage;
   }
   struct session_config config;
   if (!session_config_read(&config)) {
@@ -287,7 +298,12 @@ int main(int argc, char **argv)
     free(config.timezone);
     return EXIT_FAILURE;
   }
-  int result = launch_shell(&config, &network, configure_network);
+  int result = launch_session(&config, &network, configure_network, start_services);
   free(config.timezone);
   return result;
+
+usage:
+  fputs("Usage: session.pxe [--configure-network] [--start-services] "
+      "(native init or session handoff)\n", stderr);
+  return EXIT_FAILURE;
 }
