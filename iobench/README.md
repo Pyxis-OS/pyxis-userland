@@ -174,3 +174,54 @@ remaining passes and suppresses that pass's throughput and the run summary.
 Final handle-close errors also fail the run and suppress the summary, while
 earlier verified sample reports remain visible. Handles are closed once on every
 exit path, including setup failure; the benchmark never removes the output.
+
+## Pipes
+
+```
+session app://iobench.pxe pipe
+session app://iobench.pxe pipe --buffer 64
+session app://iobench.pxe pipe --buffer 65536 --rounds 5
+```
+
+`session` hands off the current shell, which exits; it does not return a prompt
+after the benchmark. Run each example in a fresh boot/session.
+
+Pipe mode requires the session's launcher, pipe-creation and endpoint-creation
+capabilities. It transfers the same deterministic 1 MiB fixture through libc
+`write()` and `read()`, using 1..65536-byte requests (default 4096). The native
+pipe transfers at most 4096 bytes per call and has 64 KiB storage. Both workers
+loop over positive short transfers. Reports identify producer/consumer bytes,
+descriptor-call counts and positive short counts separately.
+
+The coordinator batch-launches a producer with pipe stdout and a consumer with
+pipe stdin, then closes its own copies. These are exclusive startup stream
+grants; the workers receive memory, clock and private control authority, with
+endpoint creation delegated only to the consumer. They receive no launcher,
+filesystem roots or pipe-creation service. All three processes stay on the
+launching CPU and in its space; the public startup ABI supplies no numeric CPU
+ID, so the documented manual configuration/debugger inspection identifies it.
+
+Each pass uses a fresh pipe and fresh workers, with launch, allocation, fixture
+preparation and both readiness handshakes outside timing. There is one warmup
+and 1..100 measured passes (default five). The producer reads the clock before
+its first write, after its final write, and after a completion CALL returns from
+the consumer. The consumer acknowledges only after reading the full batch or
+encountering a transfer error. Completion elapsed includes the intermediate
+clock read and the acknowledgment exchange. These are elapsed measurements,
+including blocking and scheduling, rather than isolated kernel execution time.
+
+The consumer retains its data without checking it inside the transfer interval.
+After the final timestamp the producer closes stdout and reports to the
+coordinator, which separately requests EOF/content verification. Both workers
+must exit successfully and all owned handles must close before that sample is
+accepted. Reporting and verification are outside timing. A failed pass prints
+confirmed partial counts and no throughput or final summary. Output stays on
+the coordinator's stderr; the pipe payload never reaches its stdout.
+
+Control CALLs use a 30-second absolute deadline; the transfer/acknowledgment
+phase shares one deadline without per-transfer clock reads. This is not a
+whole-run timeout: native pipes, endpoint RECEIVE and process WAIT have no
+bounded wait or cancellation. A worker that faults before publication/reporting
+can leave the coordinator waiting. Routine transfer failures close their stream
+end to release the peer; the coordinator retains the consumer control grant for
+shutdown. No automatic retry or new scheduling interface is introduced.

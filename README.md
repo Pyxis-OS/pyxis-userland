@@ -31,6 +31,9 @@ and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
 for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
+For manually invoked performance measurements, see [iobench](iobench/README.md)
+for files and pipes and [ipcbench](ipcbench/README.md) for CALL/SEND.
+
 From the interactive shell, `session app://server.pxe` runs the endpoint example.
 The server creates its receiver, launches two clients with caller grants, receives
 both requests and replies in reverse order. `session app://server.pxe --wide`

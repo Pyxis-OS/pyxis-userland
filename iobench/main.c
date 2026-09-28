@@ -39,12 +39,18 @@ static bool number(const char *text, size_t maximum, size_t *result)
 
 static bool parse_options(int argc, char **argv, struct options *options)
 {
-  if (argc < 3 || !*argv[2]) {
+  if (argc < 2) {
     return false;
   }
   *options = (struct options){.buffer = 4080, .rounds = 5};
   int first_option = 3;
-  if (!strcmp(argv[1], "read")) {
+  if (!strcmp(argv[1], "pipe")) {
+    options->mode = IO_PIPE;
+    options->buffer = 4096;
+    first_option = 2;
+  } else if (argc < 3 || !*argv[2]) {
+    return false;
+  } else if (!strcmp(argv[1], "read")) {
     options->mode = IO_READ;
     options->source = argv[2];
     options->buffer = 4088;
@@ -63,9 +69,10 @@ static bool parse_options(int argc, char **argv, struct options *options)
   bool have_buffer = false, have_rounds = false;
   for (int i = first_option; i < argc; ++i) {
     const char *option = argv[i];
-    if (!strcmp(option, "--prepared") && options->mode != IO_READ && !options->prepared) {
+    bool output = options->mode == IO_WRITE || options->mode == IO_COPY;
+    if (!strcmp(option, "--prepared") && output && !options->prepared) {
       options->prepared = true;
-    } else if (!strcmp(option, "--sync") && options->mode != IO_READ && !options->sync) {
+    } else if (!strcmp(option, "--sync") && output && !options->sync) {
       options->sync = true;
     } else {
       if (++i == argc) {
@@ -195,12 +202,16 @@ static void report(const char *phase, size_t pass, const struct result *result,
 
 int main(int argc, char **argv)
 {
+  if (argc >= 2 && !strcmp(argv[1], "--pipe-worker")) {
+    return pipe_worker(argc, argv);
+  }
   struct options options;
   if (!parse_options(argc, argv, &options)) {
     fputs("usage: iobench read SOURCE [--buffer bytes] [--rounds count]\n"
           "       iobench write OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
           "       iobench copy SOURCE OUTPUT [--prepared] [--sync] [--buffer bytes] [--rounds count]\n"
-          "buffer: 1..65536 (default read=4088, write/copy=4080); rounds: 1..100 (default 5)\n"
+          "       session app://iobench.pxe pipe [--buffer bytes] [--rounds count]\n"
+          "buffer: 1..65536 (default read=4088, write/copy=4080, pipe=4096); rounds: 1..100 (default 5)\n"
           "SOURCE must contain the exact 1 MiB share/iobench.bin fixture\n"
           "OUTPUT must be a new file; it is retained even on failure\n", stderr);
     return EXIT_FAILURE;
@@ -210,8 +221,8 @@ int main(int argc, char **argv)
     fputs("iobench: missing clock grant\n", stderr);
     return EXIT_FAILURE;
   }
-  unsigned char *bytes = malloc(FIXTURE_BYTES);
-  if (!bytes) {
+  unsigned char *bytes = options.mode == IO_PIPE ? NULL : malloc(FIXTURE_BYTES);
+  if (options.mode != IO_PIPE && !bytes) {
     fputs("iobench: cannot allocate 1 MiB result buffer\n", stderr);
     return EXIT_FAILURE;
   }
@@ -223,7 +234,9 @@ int main(int argc, char **argv)
         options.output ? options.output : "none", options.buffer, options.rounds, FIXTURE_BYTES);
     fprintf(stderr, "Clock-call loop: %llu ns/read (%u reads); not subtracted\n",
         (unsigned long long)clock_cost, CLOCK_READS);
-    if (options.mode != IO_READ) {
+    if (options.mode == IO_PIPE) {
+      success = run_pipe(&options, clock);
+    } else if (options.mode != IO_READ) {
       success = run_output(&options, bytes, clock);
     } else {
       struct result result;
