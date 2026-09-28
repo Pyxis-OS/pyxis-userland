@@ -1,4 +1,5 @@
 SDK ?= build/sdk
+LUA ?= lua
 SDK := $(abspath $(SDK))
 BUILD ?= build/apps
 DESTDIR ?= $(BUILD)/install
@@ -8,7 +9,7 @@ PICOHTTPPARSER_PREFIX ?= build/ports-dev/picohttpparser
 PICOHTTPPARSER_PREFIX := $(abspath $(PICOHTTPPARSER_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := httpfs allocbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := httpfs allocbench iobench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -23,7 +24,7 @@ LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
 export LUA_PREFIX PICOHTTPPARSER_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/head/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -45,7 +46,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install httpfs allocbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: all install httpfs allocbench iobench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -66,12 +67,14 @@ install: all
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
+	  install -m 644 "$(BUILD)/share/iobench.bin" "$$staging/share/iobench.bin"; \
 	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
 	    rm -rf -- "$(DESTDIR)"; \
 	    mv -- "$$staging" "$(DESTDIR)"; \
 	  fi
 
 allocbench: $(BUILD)/allocbench.pxe
+iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin
 
 httpfs: $(BUILD)/httpfs.pxe
 
@@ -132,6 +135,11 @@ $(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf $(BUILD)/s
 $(BUILD)/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
 	cp $< $@
+
+$(BUILD)/share/iobench.bin: iobench/fixture.lua Makefile
+	@mkdir -p $(@D)
+	$(LUA) $< > $@.tmp
+	mv $@.tmp $@
 
 # Runtime objects and libraries come from the selected SDK.
 $(BUILD)/%.elf: $(BUILD)/%/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
