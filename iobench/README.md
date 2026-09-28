@@ -168,6 +168,57 @@ rm home://write.bin
 rm home://copy.bin
 ```
 
+### Host FILE profiling
+
+Add `--host-profile` to read/write/copy to collect caller-local host READ/WRITE
+statistics through the startup `profile` grant with `PROFILE_RIGHT_HOST`.
+The grant is required only when requested. This collection is independent of
+private-memory and RAM FILE profiling; write/copy may use `--profile` and
+`--host-profile` together. Each flag may appear once; pipe mode accepts neither.
+
+```text
+iobench read host://iobench.bin --host-profile
+iobench write host://grow-host.bin --host-profile
+iobench copy host://iobench.bin home://copy-from-host.bin --host-profile --profile
+iobench copy host://iobench.bin host://copy-host.bin --prepared --host-profile
+```
+
+Warmup is unprofiled. For read, collection begins immediately after the OPEN
+clock boundary and ends immediately after the payload-read clock boundary,
+before the extra EOF probe and close. It excludes namespace lookup and ordinary
+OPEN but includes lazy FUSE_OPEN when the first payload read needs it. Existing
+read timing boundaries remain unchanged: profile BEGIN overhead is inside payload
+and complete-consumption elapsed time, and END overhead is inside complete
+consumption only. For write/copy, collection brackets the existing transfer
+interval, after preparation and before sync, EOF checks, verification and
+reporting; BEGIN/END are outside the transfer timer. END is attempted for
+every successfully started collection even when transfer or clock reading fails. Any requested
+profiling failure fails the pass and suppresses its throughput and run summary.
+
+Reports separate native READ/WRITE requests, failures, requested/completed bytes,
+positive short transfers and EOF from lower-layer transport submissions,
+completions and failures. A transport completion means its response was observed,
+not that FUSE or the native FILE operation succeeded. Failed transport durations
+are reported separately from completed transport durations. Each active direction
+prints elapsed sum/max pairs for publication, BSP queue, worker queue, service,
+caller resumption, total, completed transport and failed transport. A direction
+with no requests prints a concise zero indication. Counter saturation is explicit.
+
+Only host READ/WRITE work is collected. Sync, create/resize and standalone
+metadata operations are excluded; any lower-layer operations needed to perform a
+counted READ/WRITE, including lazy FUSE_OPEN, contribute to that direction's
+service and transport totals. Sync keeps its separate elapsed result. Host
+profiling on RAM/archive operations yields no host requests.
+
+Durations include profiling clock overhead and scheduling; they are elapsed time,
+not kernel CPU time. The transport interval combines guest submission, device
+transport, host scheduling/service and guest completion observation. It cannot
+assign the whole interval to the host filesystem or separate those components.
+Service and transport are nested intervals, so do not add them together as
+independent costs. Compare matching invocations without `--host-profile` to show
+perturbation; no constant overhead is subtracted. Profiling does not change
+transfer sizes, retry policy, caching, batching or scheduling.
+
 ### RAM buffer replacement profiling
 
 Add `--profile` to write/copy to collect caller-local RAM FILE replacement

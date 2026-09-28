@@ -74,3 +74,43 @@ void print_summary(const char *name, uint64_t *times, size_t count, size_t bytes
   }
   fputc('\n', stderr);
 }
+
+static void report_host_durations(const char *first_name,
+    const struct profile_duration *first, const char *second_name,
+    const struct profile_duration *second)
+{
+  fprintf(stderr, "    %s=%llu/%llu %s=%llu/%llu ns (sum/max)\n",
+      first_name, (unsigned long long)first->total_ns,
+      (unsigned long long)first->maximum_ns, second_name,
+      (unsigned long long)second->total_ns, (unsigned long long)second->maximum_ns);
+}
+
+static void report_host_operation(const char *name, const struct profile_host_operation *operation)
+{
+  if (!operation->requests) {
+    fprintf(stderr, "  HOST %s: no requests\n", name);
+    return;
+  }
+  fprintf(stderr, "  HOST %s: requests=%llu failed=%llu short=%llu eof=%llu\n", name,
+      (unsigned long long)operation->requests, (unsigned long long)operation->failures,
+      (unsigned long long)operation->short_transfers, (unsigned long long)operation->eof);
+  fprintf(stderr, "    requested=%llu completed=%llu bytes\n",
+      (unsigned long long)operation->requested_bytes,
+      (unsigned long long)operation->completed_bytes);
+  fprintf(stderr, "    transport: submitted=%llu completed=%llu failed=%llu\n",
+      (unsigned long long)operation->submissions, (unsigned long long)operation->completions,
+      (unsigned long long)operation->transport_failures);
+  report_host_durations("publication", &operation->publication, "bsp_queue", &operation->bsp_queue);
+  report_host_durations("worker_queue", &operation->worker_queue, "service", &operation->service);
+  report_host_durations("resume", &operation->resume, "total", &operation->total);
+  report_host_durations("transport", &operation->transport, "transport_failed", &operation->transport_failed);
+}
+
+void report_host_profile(const struct profile_host_snapshot *profile)
+{
+  report_host_operation("read", &profile->read);
+  report_host_operation("write", &profile->write);
+  if (profile->flags & PROFILE_SATURATED) {
+    fputs("  HOST profile counters saturated\n", stderr);
+  }
+}
