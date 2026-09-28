@@ -74,7 +74,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
 enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_command_line *command);
 enum command_result shell_launch_service(struct shell *shell, const char *name,
-    bool replace, char **arguments, size_t count);
+    bool replace, bool optional, bool read_only, char **arguments, size_t count);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
 

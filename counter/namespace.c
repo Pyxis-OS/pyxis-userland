@@ -8,25 +8,28 @@
 #include <string.h>
 #include "../common/counter_service.h"
 
-#define PUBLICATION_TIMEOUT_NS UINT64_C(10000000000)
+#include "../common/provider_setup.h"
 
 static int provide(bool once)
 {
   handle_t service = startup_resource("service");
   handle_t publication = startup_resource("publication");
   handle_t clock = startup_resource("clock");
-  if (service == HANDLE_INVALID || publication == HANDLE_INVALID ||
-      clock == HANDLE_INVALID) {
-    fputs("counter: missing provider authority\n", stderr);
-    return 1;
-  }
   struct endpoint_create_reply endpoint = {0};
-  enum call_status status = endpoint_create(service, &endpoint);
+  handle_t client = HANDLE_INVALID;
+  enum call_status status = CALL_OK;
+  enum call_status cleanup_status = CALL_OK;
+  bool publication_attempted = false;
+  if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
+    fputs("counter: missing provider authority\n", stderr);
+    status = CALL_UNAVAILABLE;
+    goto done;
+  }
+  status = endpoint_create(service, &endpoint);
   if (status != CALL_OK) {
     fprintf(stderr, "counter: endpoint create failed (status %u)\n", status);
-    return 1;
+    goto done;
   }
-  handle_t client = HANDLE_INVALID;
   status = endpoint_export(service, endpoint.receiver, COUNTER_FIRST_ID,
       COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
       HANDLE_TRANSPORT_CALL, &client);
@@ -34,28 +37,26 @@ static int provide(bool once)
     fprintf(stderr, "counter: export failed (status %u)\n", status);
     goto done;
   }
-  uint64_t now;
-  if (clock_now(clock, &now) != CALL_OK || now > UINT64_MAX - PUBLICATION_TIMEOUT_NS) {
-    fputs("counter: clock unavailable\n", stderr);
-    status = CALL_UNAVAILABLE;
-    goto done;
-  }
   struct endpoint_grant grant = {client,
       COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE, HANDLE_TRANSPORT_CALL};
-  struct endpoint_packet reply = {0};
-  status = endpoint_request(publication, NULL, 0, &grant, 1,
-      now + PUBLICATION_TIMEOUT_NS, &reply);
-  handle_close(client);
-  client = HANDLE_INVALID;
-  if (status != CALL_OK || reply.result != CALL_OK || reply.size != 0 ||
-      reply.grant_count != 0) {
-    fprintf(stderr, "counter: publication failed (transport %u, result %ju)\n",
-        status, (uintmax_t)reply.result);
+  status = provider_setup_report(publication, clock, CALL_OK, CALL_OK, &grant, &publication_attempted);
+  if (handle_close(client) != 0) {
+    cleanup_status = CALL_BAD_HANDLE;
     if (status == CALL_OK) {
-      status = reply.result != CALL_OK ? reply.result : CALL_BAD_REQUEST;
+      status = cleanup_status;
     }
+  }
+  client = HANDLE_INVALID;
+  if (status != CALL_OK) {
+    fprintf(stderr, "counter: publication failed (status %u)\n", status);
     goto done;
   }
+  if (handle_close(publication) != 0) {
+    status = CALL_BAD_HANDLE;
+    publication = HANDLE_INVALID;
+    goto done;
+  }
+  publication = HANDLE_INVALID;
   uint64_t value = 4;
   for (;;) {
     struct endpoint_packet packet = {0};
@@ -110,11 +111,28 @@ static int provide(bool once)
   }
 
 done:
-  if (client != HANDLE_INVALID) {
-    handle_close(client);
+  if (client != HANDLE_INVALID && handle_close(client) != 0) {
+    cleanup_status = CALL_BAD_HANDLE;
   }
-  handle_close(endpoint.caller);
-  handle_close(endpoint.receiver);
+  if (endpoint.caller != HANDLE_INVALID && handle_close(endpoint.caller) != 0) {
+    cleanup_status = CALL_BAD_HANDLE;
+  }
+  if (endpoint.receiver != HANDLE_INVALID && handle_close(endpoint.receiver) != 0) {
+    cleanup_status = CALL_BAD_HANDLE;
+  }
+  if (status == CALL_OK) {
+    status = cleanup_status;
+  }
+  if (!publication_attempted && publication != HANDLE_INVALID) {
+    enum call_status reported = provider_setup_report(publication, clock,
+        status, cleanup_status, NULL, NULL);
+    if (reported != CALL_OK) {
+      fprintf(stderr, "counter: setup report failed (status %u)\n", reported);
+    }
+  }
+  if (publication != HANDLE_INVALID && handle_close(publication) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
   return status == CALL_OK ? 0 : 1;
 }
 

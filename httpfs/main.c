@@ -10,11 +10,12 @@
 #include <string.h>
 #include "../common/dns.h"
 #include "../libhttp/http.h"
+#include "../common/provider_setup.h"
+#include "trust.h"
 
 #define SERVICE_ID UINT64_C(1)
 #define FILE_FIRST_ID UINT64_C(2)
 #define FILE_SLOTS (ENDPOINT_EXPORTS_MAX - 1)
-#define PUBLICATION_TIMEOUT_NS UINT64_C(10000000000)
 
 _Static_assert(HTTP_MEDIA_TYPE_MAX <= PROVIDER_MEDIA_TYPE_MAX_BYTES,
     "HTTP media type fits OPEN metadata");
@@ -39,7 +40,7 @@ static enum call_status close_handle(handle_t *handle)
   if (*handle == HANDLE_INVALID) {
     return CALL_OK;
   }
-  enum call_status status = handle_close(*handle);
+  enum call_status status = handle_close(*handle) == 0 ? CALL_OK : CALL_BAD_HANDLE;
   *handle = HANDLE_INVALID;
   return status;
 }
@@ -126,6 +127,16 @@ static enum call_status open_file(struct provider *provider,
   struct http_result result;
   http_fetch(&provider->client, &provider->storage, uri, packet->deadline_ns, &result);
   enum call_status status = http_result_status(&result);
+  if (result.error == HTTP_TLS_ERROR) {
+    fprintf(stderr, "httpfs: TLS fetch failed (%s, native %u, library %d, verify 0x%x)\n",
+        tls_error_name(result.tls_failure.error), result.tls_failure.native_status,
+        result.tls_failure.library_error, result.tls_failure.verify_flags);
+  }
+  if (result.tls_cleanup.error != TLS_OK) {
+    fprintf(stderr, "httpfs: TLS close failed (%s, native %u, library %d)\n",
+        tls_error_name(result.tls_cleanup.error), result.tls_cleanup.native_status,
+        result.tls_cleanup.library_error);
+  }
   if (status != CALL_OK) {
     return open_error(packet, status, result.status);
   }
@@ -291,42 +302,76 @@ static enum call_status serve(struct provider *provider)
 
 int main(int argc, char **argv)
 {
-  (void)argv;
-  if (argc != 1) {
-    fputs("usage: httpfs\n", stderr);
-    return 1;
-  }
-  struct http_authority authority = {
-    .tcp = startup_resource("tcp"),
-    .udp = startup_resource("udp"),
-    .random = startup_resource("random"),
-    .clock = startup_resource("clock"),
-  };
-  if (!dns_select_server(NULL, &authority.dns_server)) {
-    fputs("httpfs: invalid DNS_SERVER\n", stderr);
-    return 1;
-  }
   handle_t service = startup_resource("service");
   handle_t publication = startup_resource("publication");
-  handle_t clock = authority.clock;
-  if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
-    fputs("httpfs: missing provider authority\n", stderr);
-    return 1;
-  }
+  handle_t clock = startup_resource("clock");
+  struct http_authority authority = {
+    .tcp = startup_resource("tcp"), .udp = startup_resource("udp"),
+    .random = startup_resource("random"), .clock = clock,
+  };
   struct endpoint_create_reply endpoint = {0};
-  enum call_status status = endpoint_create(service, &endpoint);
-  if (status != CALL_OK) {
-    fprintf(stderr, "httpfs: create failed (status %u)\n", status);
-    return 1;
-  }
   handle_t client = HANDLE_INVALID;
   struct provider provider = {
-    .service = service,
-    .receiver = endpoint.receiver,
-    .client = {.authority = authority, .scheme = HTTP_SCHEME_HTTP},
+    .service = service, .client = {.authority = authority, .scheme = HTTP_SCHEME_HTTP},
   };
+  enum call_status status = CALL_OK;
+  enum call_status cleanup_status = CALL_OK;
+  bool publication_attempted = false;
+  const char *custom_bundle = NULL;
+  if (argc == 2 && !strcmp(argv[1], "--https")) {
+    provider.client.scheme = HTTP_SCHEME_HTTPS;
+  } else if (argc == 4 && !strcmp(argv[1], "--https") &&
+      !strcmp(argv[2], "--ca-bundle") && argv[3][0]) {
+    provider.client.scheme = HTTP_SCHEME_HTTPS;
+    custom_bundle = argv[3];
+  } else if (argc != 1) {
+    fputs("usage: httpfs [--https [--ca-bundle URI]]\n", stderr);
+    status = CALL_BAD_REQUEST;
+    goto done;
+  }
+  if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
+    fputs("httpfs: missing provider authority\n", stderr);
+    status = CALL_UNAVAILABLE;
+    goto done;
+  }
+  if (!dns_select_server(NULL, &provider.client.authority.dns_server)) {
+    fputs("httpfs: invalid DNS_SERVER\n", stderr);
+    status = CALL_BAD_REQUEST;
+    goto done;
+  }
+  if (provider.client.scheme == HTTP_SCHEME_HTTPS) {
+    struct tls_authority tls_authority = {.random = authority.random, .clock = clock};
+    struct tls_result result;
+    if (!tls_runtime_create(&tls_authority, &provider.client.tls, &result)) {
+      struct http_result failure = {.error = HTTP_TLS_ERROR, .tls_failure = result};
+      status = http_result_status(&failure);
+    } else {
+      status = httpfs_trust_load(provider.client.tls, HTTPFS_PUBLIC_BUNDLE,
+          &result, &cleanup_status);
+      if (status == CALL_OK && custom_bundle) {
+        status = httpfs_trust_load(provider.client.tls, custom_bundle,
+            &result, &cleanup_status);
+      }
+      if (status == CALL_OK && !tls_runtime_ready(provider.client.tls, &result)) {
+        struct http_result failure = {.error = HTTP_TLS_ERROR, .tls_failure = result};
+        status = http_result_status(&failure);
+      }
+    }
+    if (status != CALL_OK) {
+      fprintf(stderr, "httpfs: TLS setup failed (%s, native %u, library %d, verify 0x%x)\n",
+          tls_error_name(result.error), result.native_status,
+          result.library_error, result.verify_flags);
+      goto done;
+    }
+  }
+  status = endpoint_create(service, &endpoint);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  provider.receiver = endpoint.receiver;
   status = close_handle(&endpoint.caller);
   if (status != CALL_OK) {
+    cleanup_status = status;
     goto done;
   }
   status = endpoint_export(service, endpoint.receiver, SERVICE_ID, PROTOCOL_PROVIDER,
@@ -334,45 +379,48 @@ int main(int argc, char **argv)
   if (status != CALL_OK) {
     goto done;
   }
-  uint64_t now;
-  status = clock_now(clock, &now);
-  if (status != CALL_OK || now > UINT64_MAX - PUBLICATION_TIMEOUT_NS) {
-    status = CALL_UNAVAILABLE;
-    goto done;
-  }
   struct endpoint_grant grant = {client, PROVIDER_RIGHT_OPEN_READ, HANDLE_TRANSPORT_CALL};
-  struct endpoint_packet response = {0};
-  status = endpoint_request(publication, NULL, 0, &grant, 1,
-      now + PUBLICATION_TIMEOUT_NS, &response);
+  status = provider_setup_report(publication, clock, CALL_OK, CALL_OK, &grant, &publication_attempted);
   enum call_status closed = close_handle(&client);
-  enum call_status grants_closed = close_grants(&response);
-  if (status == CALL_OK && (closed != CALL_OK || grants_closed != CALL_OK)) {
-    status = closed != CALL_OK ? closed : grants_closed;
+  if (closed != CALL_OK) {
+    cleanup_status = closed;
   }
-  if (status == CALL_OK && (response.result != CALL_OK || response.size != 0 ||
-      response.grant_count != 0)) {
-    status = response.result != CALL_OK && response.result < CALL_STATUS_COUNT ?
-        response.result : CALL_BAD_REQUEST;
+  if (status == CALL_OK) {
+    status = closed;
   }
   if (status != CALL_OK) {
     goto done;
   }
   provider.published = true;
-  closed = close_handle(&publication);
-  status = closed;
+  status = close_handle(&publication);
   if (status == CALL_OK) {
     status = serve(&provider);
   }
 
 done:
-  close_handle(&client);
-  close_handle(&endpoint.caller);
+  enum call_status closed_client = close_handle(&client);
+  enum call_status caller_closed = close_handle(&endpoint.caller);
   enum call_status receiver_closed = close_handle(&endpoint.receiver);
-  if (status == CALL_OK) {
-    status = receiver_closed;
+  if (closed_client != CALL_OK || caller_closed != CALL_OK || receiver_closed != CALL_OK) {
+    cleanup_status = CALL_BAD_HANDLE;
   }
   for (size_t i = 0; i < FILE_SLOTS; ++i) {
     http_body_release(&provider.files[i].body);
+  }
+  tls_runtime_free(provider.client.tls);
+  if (status == CALL_OK) {
+    status = cleanup_status;
+  }
+  if (!publication_attempted && publication != HANDLE_INVALID) {
+    enum call_status reported = provider_setup_report(publication, clock,
+        status, cleanup_status, NULL, NULL);
+    if (reported != CALL_OK) {
+      fprintf(stderr, "httpfs: setup report failed (status %u)\n", reported);
+    }
+  }
+  enum call_status publication_closed = close_handle(&publication);
+  if (status == CALL_OK) {
+    status = publication_closed;
   }
   if (status != CALL_OK) {
     fprintf(stderr, "httpfs: provider failed (status %u)\n", status);

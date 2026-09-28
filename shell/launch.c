@@ -1,4 +1,6 @@
 #include "shell.h"
+#include "../common/provider_setup.h"
+#include <abi/directory.h>
 #include <abi/console.h>
 #include <abi/file.h>
 #include <abi/memory.h>
@@ -105,7 +107,8 @@ static enum command_result launch_error(struct shell *shell, const struct shell_
 
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
-    const struct startup_stream streams[STARTUP_STREAM_COUNT], handle_t publication)
+    const struct startup_stream streams[STARTUP_STREAM_COUNT], handle_t publication,
+    bool read_only)
 {
   bool session = mode == SHELL_SESSION;
   bool provider = mode == SHELL_SERVICE;
@@ -300,6 +303,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     if (status != CALL_OK) {
       return status;
     }
+    if (read_only) {
+      grant->rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+          DIRECTORY_RIGHT_READ_FILES;
+    }
   }
   for (size_t i = 0; i < depth; ++i) {
     struct launch_grant *grant = &grants[directories[i]];
@@ -307,6 +314,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         &grant->transport);
     if (status != CALL_OK) {
       return status;
+    }
+    if (read_only) {
+      grant->rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+          DIRECTORY_RIGHT_READ_FILES;
     }
   }
 
@@ -361,7 +372,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
 }
 
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
-    size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace)
+    size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace,
+    bool optional, bool read_only)
 {
   struct prepared_stage *prepared = calloc(stage_count, sizeof(*prepared));
   struct launch_request *requests = malloc(stage_count * sizeof(*requests));
@@ -459,7 +471,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE && i == 0 &&
         streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
-        streams[i], publication.caller);
+        streams[i], publication.caller, read_only);
     if (status != CALL_OK) {
       goto failed;
     }
@@ -524,31 +536,63 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       return shell_error(shell, "service: publication receive failed (status %u)\n", status);
     }
     enum call_status published = CALL_BAD_REQUEST;
+    struct provider_setup setup = {0};
+    bool reported_failure = false;
     if (packet.kind == ENDPOINT_MESSAGE_CALL && packet.protocol == 0 &&
-        packet.operation == 0 && packet.object_id == 0 && packet.size == 0 &&
-        packet.grant_count == 1) {
-      struct endpoint_grant *grant = &packet.grants[0];
-      published = replace ? namespace_replace(shell->namespace, service_name,
-          grant->handle, grant->rights, grant->transport) :
-          namespace_publish(shell->namespace, service_name, grant->handle,
-          grant->rights, grant->transport);
+        packet.operation == 0 && packet.object_id == 0 && packet.reason == 0 &&
+        packet.size == sizeof(setup)) {
+      memcpy(&setup, packet.data, sizeof(setup));
+      if (setup.status < CALL_STATUS_COUNT && setup.cleanup_status < CALL_STATUS_COUNT) {
+        if (setup.status == CALL_OK && setup.cleanup_status == CALL_OK &&
+            packet.grant_count == 1) {
+          struct endpoint_grant *grant = &packet.grants[0];
+          struct handle_info info;
+          enum call_status queried = handle_query(grant->handle, &info);
+          if (queried == CALL_OK && info.kind == HANDLE_KIND_EXPORTED &&
+              grant->transport == HANDLE_TRANSPORT_CALL &&
+              info.rights == grant->rights && info.transport == grant->transport) {
+            published = replace ? namespace_replace(shell->namespace, service_name,
+                grant->handle, grant->rights, grant->transport) :
+                namespace_publish(shell->namespace, service_name, grant->handle,
+                grant->rights, grant->transport);
+          }
+        } else if (setup.status != CALL_OK && packet.grant_count == 0) {
+          reported_failure = true;
+          published = CALL_OK;
+        }
+      }
     }
+    bool closed_grants = true;
     for (size_t i = 0; i < packet.grant_count; ++i) {
-      close_handle(&packet.grants[i].handle);
+      closed_grants = close_handle(&packet.grants[i].handle) && closed_grants;
+    }
+    if (!closed_grants) {
+      published = CALL_BAD_HANDLE;
     }
     enum call_status reply_status = packet.kind == ENDPOINT_MESSAGE_CALL ?
         endpoint_reply(packet.receipt, published, NULL, 0, NULL, 0) :
         endpoint_finish(packet.receipt);
+    bool finished = true;
     if (packet.kind == ENDPOINT_MESSAGE_CALL && reply_status != CALL_OK) {
-      endpoint_finish(packet.receipt);
+      finished = endpoint_finish(packet.receipt) == CALL_OK;
     }
     bool closed = close_handle(&children[0]);
     closed = close_handle(&publication.caller) && closed;
     closed = close_handle(&publication.receiver) && closed;
-    if (published != CALL_OK || reply_status != CALL_OK || !closed) {
-      return shell_error(shell,
+    if (published != CALL_OK || reply_status != CALL_OK || !closed || !finished) {
+      enum command_result diagnostic = shell_error(shell,
           "service: %s %s failed (status %u, reply %u)\n",
           replace ? "replace" : "start", service_name, published, reply_status);
+      return !closed || !closed_grants || !finished ? COMMAND_FATAL : diagnostic;
+    }
+    if (reported_failure) {
+      enum command_result diagnostic = shell_error(shell,
+          "service: %s setup failed (status %ju, cleanup %ju)\n",
+          service_name, setup.status, setup.cleanup_status);
+      if (diagnostic == COMMAND_FATAL || setup.cleanup_status != CALL_OK) {
+        return diagnostic;
+      }
+      return optional ? COMMAND_OK : diagnostic;
     }
     return COMMAND_OK;
   }
@@ -627,7 +671,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   for (size_t i = 0; i < redirection_count; ++i) {
     stage.redirections[i] = redirections[i];
   }
-  return launch_stages(shell, &stage, 1, mode, NULL, false);
+  return launch_stages(shell, &stage, 1, mode, NULL, false, false, false);
 }
 
 enum command_result shell_launch_pipeline(struct shell *shell,
@@ -638,11 +682,11 @@ enum command_result shell_launch_pipeline(struct shell *shell,
     return shell_error(shell, "shell: Invalid foreground pipeline\n");
   }
   return launch_stages(shell, command->stages, command->stage_count,
-      SHELL_FOREGROUND, NULL, false);
+      SHELL_FOREGROUND, NULL, false, false, false);
 }
 
 enum command_result shell_launch_service(struct shell *shell, const char *name,
-    bool replace, char **arguments, size_t count)
+    bool replace, bool optional, bool read_only, char **arguments, size_t count)
 {
   if (shell->namespace == HANDLE_INVALID || shell->service == HANDLE_INVALID ||
       shell->clock == HANDLE_INVALID) {
@@ -677,5 +721,5 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
     return shell_error(shell, "service: lookup %s failed (status %u)\n", name, status);
   }
   struct shell_stage stage = {.arguments = arguments, .count = count};
-  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace);
+  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace, optional, read_only);
 }

@@ -196,13 +196,28 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     return shell_error(shell, "usage: namespace create | namespace remove NAME\n");
   }
   if (strcmp(arguments[0], "service") == 0) {
-    if (count < 4 || (strcmp(arguments[1], "start") &&
-        strcmp(arguments[1], "replace"))) {
-      return shell_error(shell,
-          "usage: service start|replace NAME IMAGE [arguments...]\n");
+    bool replace = count > 1 && !strcmp(arguments[1], "replace");
+    bool optional = false;
+    bool read_only = false;
+    size_t index = 2;
+    while (index < count && arguments[index][0] == '-') {
+      if (!strcmp(arguments[index], "--optional") && !replace && !optional) {
+        optional = true;
+      } else if (!strcmp(arguments[index], "--read-only") && !read_only) {
+        read_only = true;
+      } else {
+        break;
+      }
+      ++index;
     }
-    return shell_launch_service(shell, arguments[2],
-        !strcmp(arguments[1], "replace"), arguments + 3, count - 3);
+    if (count < index + 2 || (strcmp(arguments[1], "start") && !replace) ||
+        arguments[index][0] == '-') {
+      return shell_error(shell,
+          "usage: service start [--optional] [--read-only] NAME IMAGE [arguments...]\n"
+          "       service replace [--read-only] NAME IMAGE [arguments...]\n");
+    }
+    return shell_launch_service(shell, arguments[index], replace, optional, read_only,
+        arguments + index + 1, count - index - 1);
   }
   return shell_launch(shell, arguments, count,
       command.background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
