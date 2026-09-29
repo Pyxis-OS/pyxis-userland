@@ -180,3 +180,8 @@ Each open fetches independently under a 30-second budget, capped by any native
 caller's earlier deadline. Retained snapshots share a 64 MiB storage account and
 63 export slots. Build the provider with
 `PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser`.
+
+## License
+
+Original Pyxis material is licensed under [MPL-2.0](LICENSE). See
+[LICENSING.md](LICENSING.md) for scope and third-party exceptions.
