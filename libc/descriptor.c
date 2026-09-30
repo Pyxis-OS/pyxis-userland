@@ -319,8 +319,18 @@ int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *
   if (entry->kind == DESCRIPTOR_CONSOLE || size >= BUFSIZ || !ahead_available(entry)) {
     return read_exact(entry, buffer, size, read);
   }
+  /* Speculation must not turn a valid read into an error: cap a file fill at
+   * the representable offsets past the position. If even the request does not
+   * fit, the exact read reports what it always has. */
+  size_t fill = BUFSIZ;
+  if (entry->kind == DESCRIPTOR_FILE && UINT64_MAX - entry->position < fill) {
+    fill = (size_t)(UINT64_MAX - entry->position);
+  }
+  if (fill < size) {
+    return read_exact(entry, buffer, size, read);
+  }
   size_t fetched;
-  if (backend_read(entry, entry->ahead, BUFSIZ, &fetched) < 0) {
+  if (backend_read(entry, entry->ahead, fill, &fetched) < 0) {
     return -1;
   }
   entry->ahead_start = 0;
