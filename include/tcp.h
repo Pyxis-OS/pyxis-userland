@@ -10,6 +10,13 @@
  * READ may return short; a nonempty read returns zero only for orderly EOF. */
 enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
     uint64_t deadline_ns, struct tcp_connect_reply *reply);
+/* LISTEN requires separate service authority and binds an exact local address.
+ * ACCEPT returns an owned stream independent of the listener's lifetime. */
+enum call_status tcp_listen(handle_t service, uint32_t address, uint16_t port,
+    struct tcp_listen_reply *reply);
+enum call_status tcp_listener_inspect(handle_t listener, struct tcp_listener_info *reply);
+enum call_status tcp_accept(handle_t listener, uint64_t deadline_ns,
+    struct tcp_accept_reply *reply);
 enum call_status tcp_inspect(handle_t stream, struct tcp_connection_info *reply);
 /* Idempotent shared abort. INSPECT remains available afterward. */
 enum call_status tcp_abort(handle_t stream);

@@ -1,5 +1,7 @@
 #include "config.h"
 #include "network.h"
+#include "tcp_server.h"
+#include "../common/udp.h"
 #include <abi/clock.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
@@ -18,6 +20,7 @@
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
+#include <limits.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -284,17 +287,43 @@ done:
 int main(int argc, char **argv)
 {
   bool configure_network = false, start_services = false;
+  bool tcp_server = false;
+  uint32_t address = 0;
+  unsigned port = 0;
+  const char *count = NULL;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--configure-network") && !configure_network) {
       configure_network = true;
     } else if (!strcmp(argv[i], "--start-services") && !start_services) {
       start_services = true;
+    } else if (!strcmp(argv[i], "--tcp-server") && !tcp_server && i + 2 < argc) {
+      if (!udp_parse_address(argv[i + 1], &address) ||
+          !udp_parse_number(argv[i + 2], UINT16_MAX, &port) || !port) {
+        goto usage;
+      }
+      tcp_server = true;
+      i += 2;
+    } else if (!strcmp(argv[i], "--tcp-count") && !count && i + 1 < argc) {
+      unsigned value;
+      count = argv[++i];
+      if (!udp_parse_number(count, UINT_MAX, &value) || !value) {
+        goto usage;
+      }
     } else {
       goto usage;
     }
   }
-  if (startup_resource("script") != HANDLE_INVALID) {
+  if (startup_resource("script") != HANDLE_INVALID ||
+      (tcp_server && start_services) || (count && !tcp_server)) {
     goto usage;
+  }
+  if (tcp_server) {
+    struct network_config network;
+    if (!network_config_read(&network) ||
+        (configure_network && !network_config_apply(&network))) {
+      return EXIT_FAILURE;
+    }
+    return launch_tcp_server(address, (uint16_t)port, count);
   }
   struct session_config config;
   if (!session_config_read(&config)) {
@@ -310,7 +339,8 @@ int main(int argc, char **argv)
   return result;
 
 usage:
-  fputs("Usage: session.pxe [--configure-network] [--start-services] "
-      "(native init or session handoff)\n", stderr);
+  fputs("Usage: session.pxe [--configure-network] [--start-services]\n"
+      "       session.pxe [--configure-network] --tcp-server ADDRESS PORT [--tcp-count COUNT]\n"
+      "       (native init or trusted session handoff)\n", stderr);
   return EXIT_FAILURE;
 }
