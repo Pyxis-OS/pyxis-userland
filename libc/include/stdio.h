@@ -3,6 +3,7 @@
 
 #include <stdarg.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 typedef struct pyxis_file FILE;
 
@@ -41,6 +42,16 @@ int fgetc(FILE *stream);
 int getc(FILE *stream);
 int getchar(void);
 char *fgets(char *restrict buffer, int capacity, FILE *restrict stream);
+/* Read through the next newline, or to EOF for a final unterminated line, into
+ * *line, growing it with realloc and updating *capacity. A NULL *line starts
+ * with zero capacity. Returns the byte count including any newline and
+ * excluding the added NUL; embedded NUL bytes are ordinary input. EOF before
+ * any byte returns -1. Null arguments (EINVAL), read errors, allocation
+ * failure (ENOMEM) and a line longer than SSIZE_MAX (EOVERFLOW) return -1, set
+ * errno and the error indicator, and leave *line and *capacity describing the
+ * caller's current allocation. Reads one byte per call to the unbuffered
+ * stream, so each byte is a separate native read. */
+ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream);
 int fputc(int character, FILE *stream);
 int putc(int character, FILE *stream);
 int putchar(int character);
