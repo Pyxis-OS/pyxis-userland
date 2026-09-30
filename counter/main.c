@@ -37,7 +37,7 @@ static bool wait_child(handle_t child)
 {
   struct process_result result;
   return process_wait(child, &result) == CALL_OK &&
-      result.kind != PROCESS_FAULTED && result.exit_status == 0;
+      result.kind == PROCESS_EXITED && result.exit_status == 0;
 }
 
 static bool invoke_value(handle_t client, uint64_t object_id,

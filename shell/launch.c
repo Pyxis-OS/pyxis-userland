@@ -640,6 +640,11 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           shell_error(shell, "shell: %s: Process faulted\n", stages[i].arguments[0]) :
           shell_error(shell, "shell: stage %zu (%s): Process faulted\n",
               i + 1, stages[i].arguments[0]);
+    } else if (completion[i].kind == PROCESS_TERMINATED) {
+      diagnostic = stage_count == 1 ?
+          shell_error(shell, "shell: %s: Process terminated\n", stages[i].arguments[0]) :
+          shell_error(shell, "shell: stage %zu (%s): Process terminated\n",
+              i + 1, stages[i].arguments[0]);
     } else if (completion[i].exit_status != 0) {
       diagnostic = stage_count == 1 ?
           shell_error(shell, "shell: %s: Exited with status %jd\n",

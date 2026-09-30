@@ -8,7 +8,8 @@
 /* Requires WAIT authority. Blocks until execution resources have been reclaimed;
  * later calls return the same result. Does not consume or close the handle.
  * Preserves native statuses and clears *result on failure. The caller supplies
- * writable result storage. Closing an observer does not terminate its target. */
+ * writable result storage. EXITED carries the signed exit code; FAULTED and
+ * TERMINATED carry zero. Closing an observer does not terminate its target. */
 enum call_status process_wait(handle_t process, struct process_result *result);
 
 #endif

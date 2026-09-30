@@ -173,7 +173,7 @@ static bool wait_client(handle_t child)
 {
   struct process_result result;
   return process_wait(child, &result) == CALL_OK &&
-      result.kind != PROCESS_FAULTED && result.exit_status == 0;
+      result.kind == PROCESS_EXITED && result.exit_status == 0;
 }
 
 static bool from_client_one(const struct endpoint_packet *packet)

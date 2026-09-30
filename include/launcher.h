@@ -9,9 +9,9 @@
 struct path_context;
 
 /* CREATE_GROUP authority on an unbound launcher returns two owned, distinct
- * handles: a supervision grant with CONTROL and a group-bound launcher with
- * LAUNCH only. Closing the final CONTROL grant seals admission. Preserve
- * *reply on failure. An untrustworthy response returns CALL_OUTCOME_UNKNOWN;
+ * handles: a supervision grant with CONTROL|WAIT and a group-bound launcher
+ * with LAUNCH only. Closing the final CONTROL grant requests termination.
+ * Preserve *reply on failure. An untrustworthy response returns CALL_OUTCOME_UNKNOWN;
  * do not retry automatically, because the group may have been created. */
 enum call_status launcher_create_group(handle_t launcher,
     struct execution_group_create_reply *reply);
@@ -20,6 +20,20 @@ enum call_status launcher_create_group(handle_t launcher,
  * members continue running. An untrustworthy response returns
  * CALL_OUTCOME_UNKNOWN because admission may already have been sealed. */
 enum call_status execution_group_seal(handle_t supervision);
+
+/* Request termination with CONTROL authority. Seals admission and stops existing
+ * members at safe kernel boundaries. Idempotent success acknowledges the request;
+ * it does not report completion. An untrustworthy response returns
+ * CALL_OUTCOME_UNKNOWN because termination may already have been requested. */
+enum call_status execution_group_terminate(handle_t supervision);
+
+/* Observe completion with WAIT authority. Blocks until sealed admission, member
+ * reclamation and group-owned cleanup finish. Completion is repeatable, returns
+ * no payload and does not describe aggregate program success. Does not consume
+ * the handle or add CONTROL authority. WAIT-only observers do not supervise.
+ * An untrustworthy response returns CALL_OUTCOME_UNKNOWN. Open empty groups
+ * are not complete. */
+enum call_status execution_group_wait(handle_t observer);
 
 /* Explicit pointers/counts in request refer to caller storage, borrowed until
  * return. Native statuses; clears *child on failure. Success returns an owned
