@@ -57,7 +57,8 @@ memory, a readable clock and stdout/stderr. It grants no listening service,
 launcher or filesystem roots. Each connection echoes until peer EOF, then shuts
 down its writes and closes the stream. Accept and read timeouts keep waiting;
 a failed write or other connection error stops the server. With a positive COUNT
-it exits after that many completed connections; otherwise it keeps serving.
+it stops admission as soon as the last stream is accepted, finishes that stream
+and exits; otherwise it keeps serving.
 
 From the interactive shell, `session app://server.pxe` runs the endpoint example.
 The server creates its receiver, launches two clients with caller grants, receives

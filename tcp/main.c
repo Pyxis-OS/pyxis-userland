@@ -173,11 +173,22 @@ static int serve(unsigned count)
       report_status("accept", status);
       goto done;
     }
+    bool admitted = true;
+    if (count && served == count - 1) {
+      /* The final accepted stream is independent of the listener. Stop
+       * admission now, including aborting excess queued connections. */
+      if (handle_close(listener) != 0) {
+        fputs("tcp: cannot close listener\n", stderr);
+        admitted = false;
+      } else {
+        listener = HANDLE_INVALID;
+      }
+    }
     printed = printf("tcp: accepted %u.%u.%u.%u:%u\n", connection.connection.remote_address >> 24,
         (connection.connection.remote_address >> 16) & 255,
         (connection.connection.remote_address >> 8) & 255,
         connection.connection.remote_address & 255, connection.connection.remote_port);
-    bool echoed = printed >= 0 && echo_connection(connection.handle, clock);
+    bool echoed = admitted && printed >= 0 && echo_connection(connection.handle, clock);
     if (!echoed) {
       status = tcp_abort(connection.handle);
       if (status != CALL_OK) {
@@ -196,7 +207,7 @@ static int serve(unsigned count)
   success = true;
 
 done:
-  if (handle_close(listener) != 0) {
+  if (listener != HANDLE_INVALID && handle_close(listener) != 0) {
     fputs("tcp: cannot close listener\n", stderr);
     success = false;
   }
