@@ -20,8 +20,9 @@ enum call_status process_wait(handle_t process, struct process_result *result)
   if (call.status != CALL_OK) {
     return call.status;
   }
-  if ((reply.kind != PROCESS_EXITED && reply.kind != PROCESS_FAULTED) ||
-      (reply.kind == PROCESS_FAULTED && reply.exit_status) ||
+  if ((reply.kind != PROCESS_EXITED && reply.kind != PROCESS_FAULTED &&
+      reply.kind != PROCESS_TERMINATED) ||
+      (reply.kind != PROCESS_EXITED && reply.exit_status) ||
       reply.exit_status < INT32_MIN || reply.exit_status > INT32_MAX) {
     return CALL_BAD_REQUEST;
   }

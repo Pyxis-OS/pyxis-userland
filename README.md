@@ -45,14 +45,20 @@ and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
 for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
-[launcher.h](include/launcher.h) provides execution-group creation and sealing.
-`launcher_create_group` requires CREATE_GROUP authority and returns a supervision
-grant with CONTROL plus a group-bound launcher with LAUNCH only. It preserves
-the caller's reply on failure. Closing the final CONTROL grant seals admission.
-`execution_group_seal` closes admission idempotently while existing members
-continue running. Both report
-`CALL_OUTCOME_UNKNOWN` for an untrustworthy response; creation must not be
-retried automatically. These helpers do not provide termination or group waits.
+[launcher.h](include/launcher.h) provides execution-group creation, sealing,
+termination and completion observation. `launcher_create_group` requires
+CREATE_GROUP authority and returns a supervision grant with CONTROL|WAIT plus a
+group-bound launcher with LAUNCH only. It preserves the caller's reply on failure.
+Closing the final CONTROL grant requests termination. `execution_group_seal`
+closes admission idempotently while existing members continue running.
+`execution_group_terminate` requests stopping members at safe kernel boundaries;
+success acknowledges the request. `execution_group_wait` requires WAIT and returns
+when sealed admission, member reclamation and group-owned cleanup finish. Completion
+is repeatable and reports no aggregate program success. WAIT-only observers do not
+retain controlling supervision; open empty groups are not complete. These helpers
+report `CALL_OUTCOME_UNKNOWN` for an untrustworthy response; creation must not be
+retried automatically. `wait_many` observes WAIT_COMPLETE on group WAIT grants and
+can combine them with TCP and terminal attachment interests.
 
 [terminal.h](include/terminal.h) provides native terminal creation and attachment
 queue helpers. Applications use the returned CONSOLE input/output grants through

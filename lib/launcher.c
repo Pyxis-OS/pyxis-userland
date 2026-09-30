@@ -38,6 +38,26 @@ enum call_status execution_group_seal(handle_t supervision)
   return result.status;
 }
 
+enum call_status execution_group_terminate(handle_t supervision)
+{
+  struct message_header request = {PROTOCOL_EXECUTION_GROUP, EXECUTION_GROUP_TERMINATE};
+  struct syscall_result result = syscall_call(supervision, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
+enum call_status execution_group_wait(handle_t observer)
+{
+  struct message_header request = {PROTOCOL_EXECUTION_GROUP, EXECUTION_GROUP_WAIT};
+  struct syscall_result result = syscall_call(observer, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
 enum call_status launcher_launch(handle_t launcher, const struct launch_request *request,
                                   handle_t *child)
 {
