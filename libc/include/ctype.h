@@ -16,6 +16,8 @@ int isupper(int character);
 int ispunct(int character);
 int isxdigit(int character);
 int isspace(int character);
+/* True for ASCII space and horizontal tab only. */
+int isblank(int character);
 int isdigit(int character);
 int isprint(int character);
 

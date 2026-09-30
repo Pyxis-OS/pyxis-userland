@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -261,6 +262,62 @@ char *fgets(char *restrict buffer, int capacity, FILE *restrict stream)
   }
   buffer[length] = '\0';
   return buffer;
+}
+
+#define GETLINE_INITIAL_CAPACITY 128
+/* Room for a SSIZE_MAX-byte line and its terminator. */
+#define GETLINE_MAX_CAPACITY ((size_t)SSIZE_MAX + 1)
+
+static bool grow_line(char **line, size_t *capacity, size_t required)
+{
+  size_t grown = *capacity < GETLINE_INITIAL_CAPACITY ? GETLINE_INITIAL_CAPACITY : *capacity;
+  while (grown < required) {
+    grown = grown > GETLINE_MAX_CAPACITY / 2 ? GETLINE_MAX_CAPACITY : grown * 2;
+  }
+  char *resized = realloc(*line, grown);
+  if (!resized) {
+    return false;
+  }
+  *line = resized;
+  *capacity = grown;
+  return true;
+}
+
+ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream)
+{
+  if (!line || !capacity) {
+    return stream_error(stream, EINVAL);
+  }
+  if (!*line) {
+    *capacity = 0;
+  }
+  if (!stream_ready(stream, false)) {
+    return -1;
+  }
+  size_t length = 0;
+  while (true) {
+    int byte = fgetc(stream);
+    if (byte == EOF) {
+      /* A failed read leaves EOF clear; only real EOF ends a partial line. */
+      if (!length || !feof(stream)) {
+        return -1;
+      }
+      break;
+    }
+    /* The byte is already consumed; there is no pushback to return it. */
+    if (length == SSIZE_MAX) {
+      return stream_error(stream, EOVERFLOW);
+    }
+    if (length + 2 > *capacity && !grow_line(line, capacity, length + 2)) {
+      return stream_error(stream, ENOMEM);
+    }
+    (*line)[length++] = byte;
+    if (byte == '\n') {
+      break;
+    }
+  }
+  (*line)[length] = '\0';
+  return length;
 }
 
 int fputc(int character, FILE *stream)

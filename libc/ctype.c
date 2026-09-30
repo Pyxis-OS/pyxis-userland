@@ -51,6 +51,11 @@ int isspace(int character)
   return character == ' ' || (character >= '\t' && character <= '\r');
 }
 
+int isblank(int character)
+{
+  return character == ' ' || character == '\t';
+}
+
 int isdigit(int character)
 {
   return character >= '0' && character <= '9';
