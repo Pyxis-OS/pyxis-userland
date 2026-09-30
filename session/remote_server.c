@@ -82,21 +82,22 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
 
-  enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, OUTPUT, APP, HOME, LISTENER, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 9, RESOURCE_CAPACITY = 13 };
+  enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, APP, HOME, LISTENER, FIRST_OPTIONAL };
+  enum { OPTIONAL_COUNT = 9, RESOURCE_CAPACITY = 12 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
     [LAUNCHER] = {launcher, LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP, 0},
     [TERMINAL] = {terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0},
-    [OUTPUT] = {output, CONSOLE_RIGHT_WRITE, 0},
+    [STDOUT] = {output, CONSOLE_RIGHT_WRITE, 0},
+    [STDERR] = {output, CONSOLE_RIGHT_WRITE, 0},
   };
   struct launch_binding resources[RESOURCE_CAPACITY] = {
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"clock", CLOCK},
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal", TERMINAL},
-    {(uintptr_t)"output", OUTPUT}, {(uintptr_t)"tcp_listener", LISTENER},
+    {(uintptr_t)"tcp_listener", LISTENER},
   };
-  size_t resource_count = 6, grant_count = FIRST_OPTIONAL;
+  size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
   struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
   size_t root_count = 2;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
@@ -190,8 +191,8 @@ int launch_remote_server(const struct session_config *config,
     .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = 2,
     .streams = {
-      [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, OUTPUT},
-      [STARTUP_STDERR] = {PROTOCOL_CONSOLE, OUTPUT},
+      [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, STDOUT},
+      [STARTUP_STDERR] = {PROTOCOL_CONSOLE, STDERR},
     },
   };
   handle_t namespace_handle = startup_namespace();
