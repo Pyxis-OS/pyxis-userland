@@ -152,7 +152,7 @@ static bool partition_number(const char *text, uint64_t *number)
     return false;
   }
   for (; *text; ++text) {
-    if (*text < '0' || *text > '9' || *number > (UINT64_MAX - (*text - '0')) / 10) {
+    if (*text < '0' || *text > '9' || *number > (UINT32_MAX - (*text - '0')) / 10) {
       return false;
     }
     *number = *number * 10 + (*text - '0');

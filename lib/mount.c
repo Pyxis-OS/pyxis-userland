@@ -41,7 +41,8 @@ enum call_status mount_open_volume(handle_t mount, uint64_t partition,
     return CALL_BAD_REQUEST;
   }
   *root = HANDLE_INVALID;
-  if (!partition || !name || !(rights & DIRECTORY_RIGHT_LOOKUP) ||
+  if (!partition || partition > UINT32_MAX || !name ||
+      !(rights & DIRECTORY_RIGHT_LOOKUP) ||
       (rights & ~DIRECTORY_RIGHTS)) {
     return CALL_BAD_REQUEST;
   }
