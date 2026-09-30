@@ -71,6 +71,24 @@ enum call_status terminal_try_inject(handle_t attachment, const void *data, size
   return CALL_OK;
 }
 
+static bool valid_completion(uint64_t kind, int64_t status)
+{
+  switch (kind) {
+  case TERMINAL_COMPLETION_EXITED:
+    return status >= INT32_MIN && status <= INT32_MAX;
+  case TERMINAL_COMPLETION_BUILTIN:
+    return status == 0 || status == 1;
+  case TERMINAL_COMPLETION_FAULTED:
+  case TERMINAL_COMPLETION_TERMINATED:
+  case TERMINAL_COMPLETION_LAUNCH_FAILED:
+  case TERMINAL_COMPLETION_REJECTED:
+  case TERMINAL_COMPLETION_LAUNCHED:
+    return status == 0;
+  default:
+    return false;
+  }
+}
+
 static bool valid_record(const void *data, size_t length)
 {
   struct terminal_record record;
@@ -92,7 +110,7 @@ static bool valid_record(const void *data, size_t length)
     }
     struct terminal_command_complete completion;
     memcpy(&completion, (const char *)data + sizeof(record), sizeof(completion));
-    return completion.command && completion.status <= 1;
+    return completion.command && valid_completion(completion.kind, completion.status);
   }
   case TERMINAL_RECORD_TAB_WIDTH: {
     if (record.length != sizeof(uint64_t)) {
@@ -152,14 +170,14 @@ enum call_status terminal_hangup(handle_t attachment)
   return response_status(syscall_call(attachment, &request, sizeof(request), NULL, 0), 0);
 }
 
-enum call_status terminal_command_complete(handle_t events, unsigned status)
+enum call_status terminal_command_complete(handle_t events, uint64_t kind, int64_t status)
 {
-  if (status > 1) {
+  if (!valid_completion(kind, status)) {
     return CALL_BAD_REQUEST;
   }
   struct terminal_command_complete_request request = {
     .header = {PROTOCOL_TERMINAL_EVENTS, TERMINAL_COMMAND_COMPLETE},
-    .status = status,
+    .kind = kind, .status = status,
   };
   struct syscall_result result = syscall_call(events, &request, sizeof(request), NULL, 0);
   if (result.status >= CALL_STATUS_COUNT || result.reply_size) {

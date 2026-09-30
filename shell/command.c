@@ -258,43 +258,8 @@ static bool is_builtin(const char *name)
       !strcmp(name, "service");
 }
 
-enum command_result shell_command(struct shell *shell, char *line, char **arguments)
+static enum command_result builtin_command(struct shell *shell, char **arguments, size_t count)
 {
-  struct shell_command_line command;
-  const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &command);
-  if (error) {
-    return shell_error(shell, "shell: %s\n", error);
-  }
-  if (!command.stage_count) {
-    return COMMAND_OK;
-  }
-  if (command.stage_count > 1) {
-    for (size_t i = 0; i < command.stage_count; ++i) {
-      const struct shell_stage *stage = &command.stages[i];
-      if (!stage->count || !stage->arguments[0][0]) {
-        return shell_error(shell, "shell: Pipeline stage requires a command name\n");
-      }
-      if (is_builtin(stage->arguments[0])) {
-        return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
-            stage->arguments[0]);
-      }
-    }
-    return shell_launch_pipeline(shell, &command);
-  }
-
-  const struct shell_stage *stage = &command.stages[0];
-  arguments = stage->arguments;
-  size_t count = stage->count;
-  if (!arguments[0][0]) {
-    return shell_error(shell, "shell: Empty command name\n");
-  }
-  bool builtin = is_builtin(arguments[0]);
-  if (stage->redirection_count && (builtin || command.background)) {
-    return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
-  }
-  if (command.background && builtin) {
-    return shell_error(shell, "shell: & is only supported for external commands\n");
-  }
   if (strcmp(arguments[0], "exit") == 0) {
     if (count != 1) {
       return shell_error(shell, "usage: exit\n");
@@ -321,7 +286,7 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     if (count < 2) {
       return shell_error(shell, "usage: session program [arguments...]\n");
     }
-    return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION, NULL, 0);
+    return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION, NULL, 0, NULL);
   }
   if (strcmp(arguments[0], "namespace") == 0) {
     if (count == 2 && !strcmp(arguments[1], "create")) {
@@ -350,31 +315,80 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     }
     return shell_error(shell, "usage: namespace create | namespace remove NAME\n");
   }
-  if (strcmp(arguments[0], "service") == 0) {
-    bool replace = count > 1 && !strcmp(arguments[1], "replace");
-    bool optional = false;
-    bool read_only = false;
-    size_t index = 2;
-    while (index < count && arguments[index][0] == '-') {
-      if (!strcmp(arguments[index], "--optional") && !replace && !optional) {
-        optional = true;
-      } else if (!strcmp(arguments[index], "--read-only") && !read_only) {
-        read_only = true;
-      } else {
-        break;
+  /* is_builtin leaves only service. */
+  bool replace = count > 1 && !strcmp(arguments[1], "replace");
+  bool optional = false;
+  bool read_only = false;
+  size_t index = 2;
+  while (index < count && arguments[index][0] == '-') {
+    if (!strcmp(arguments[index], "--optional") && !replace && !optional) {
+      optional = true;
+    } else if (!strcmp(arguments[index], "--read-only") && !read_only) {
+      read_only = true;
+    } else {
+      break;
+    }
+    ++index;
+  }
+  if (count < index + 2 || (strcmp(arguments[1], "start") && !replace) ||
+      arguments[index][0] == '-') {
+    return shell_error(shell,
+        "usage: service start [--optional] [--read-only] NAME IMAGE [arguments...]\n"
+        "       service replace [--read-only] NAME IMAGE [arguments...]\n");
+  }
+  return shell_launch_service(shell, arguments[index], replace, optional, read_only,
+      arguments + index + 1, count - index - 1);
+}
+
+enum command_result shell_command(struct shell *shell, char *line, char **arguments,
+    struct shell_outcome *outcome)
+{
+  /* Syntax and command-form diagnostics below report a rejected line. */
+  *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
+  struct shell_command_line command;
+  const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &command);
+  if (error) {
+    return shell_error(shell, "shell: %s\n", error);
+  }
+  if (!command.stage_count) {
+    /* Only scripts reach this: interactive input skips blank lines. */
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0};
+    return COMMAND_OK;
+  }
+  if (command.stage_count > 1) {
+    for (size_t i = 0; i < command.stage_count; ++i) {
+      const struct shell_stage *stage = &command.stages[i];
+      if (!stage->count || !stage->arguments[0][0]) {
+        return shell_error(shell, "shell: Pipeline stage requires a command name\n");
       }
-      ++index;
+      if (is_builtin(stage->arguments[0])) {
+        return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
+            stage->arguments[0]);
+      }
     }
-    if (count < index + 2 || (strcmp(arguments[1], "start") && !replace) ||
-        arguments[index][0] == '-') {
-      return shell_error(shell,
-          "usage: service start [--optional] [--read-only] NAME IMAGE [arguments...]\n"
-          "       service replace [--read-only] NAME IMAGE [arguments...]\n");
-    }
-    return shell_launch_service(shell, arguments[index], replace, optional, read_only,
-        arguments + index + 1, count - index - 1);
+    return shell_launch_pipeline(shell, &command, outcome);
+  }
+
+  const struct shell_stage *stage = &command.stages[0];
+  arguments = stage->arguments;
+  size_t count = stage->count;
+  if (!arguments[0][0]) {
+    return shell_error(shell, "shell: Empty command name\n");
+  }
+  bool builtin = is_builtin(arguments[0]);
+  if (stage->redirection_count && (builtin || command.background)) {
+    return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
+  }
+  if (command.background && builtin) {
+    return shell_error(shell, "shell: & is only supported for external commands\n");
+  }
+  if (builtin) {
+    /* session and service remain builtin transactions, including their launches. */
+    enum command_result result = builtin_command(shell, arguments, count);
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED};
+    return result;
   }
   return shell_launch(shell, arguments, count,
       command.background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
-      stage->redirections, stage->redirection_count);
+      stage->redirections, stage->redirection_count, outcome);
 }

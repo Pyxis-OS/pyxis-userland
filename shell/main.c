@@ -42,12 +42,13 @@ static struct term_line_result read_command(struct shell *shell, char *line)
   return term_read_line(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
 }
 
-static bool report_completion(struct shell *shell, handle_t events, unsigned status)
+static bool report_completion(struct shell *shell, handle_t events,
+    struct shell_outcome outcome)
 {
   if (events == HANDLE_INVALID) {
     return true;
   }
-  enum call_status result = terminal_command_complete(events, status);
+  enum call_status result = terminal_command_complete(events, outcome.kind, outcome.status);
   if (result != CALL_OK) {
     shell_directory_error(shell, "shell", "command completion", result);
     return false;
@@ -154,7 +155,8 @@ int main(int argc, char **argv)
       if (fputs("shell: Line limit reached; command not executed\n", stderr) == EOF) {
         break;
       }
-      if (!report_completion(&shell, events, EXIT_FAILURE)) {
+      if (!report_completion(&shell, events,
+          (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0})) {
         break;
       }
       continue;
@@ -166,12 +168,12 @@ int main(int argc, char **argv)
     if (!*start) {
       continue;
     }
-    enum command_result command = shell_command(&shell, line, arguments);
+    struct shell_outcome outcome;
+    enum command_result command = shell_command(&shell, line, arguments, &outcome);
     if (command == COMMAND_FATAL) {
       break;
     }
-    unsigned status = command == COMMAND_FAILED ? EXIT_FAILURE : EXIT_SUCCESS;
-    if (!report_completion(&shell, events, status)) {
+    if (!report_completion(&shell, events, outcome)) {
       break;
     }
     if (command == COMMAND_EXIT) {
