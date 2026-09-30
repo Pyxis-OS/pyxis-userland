@@ -34,4 +34,13 @@ enum call_status tcp_read(handle_t stream, void *data, size_t capacity,
 enum call_status tcp_write(handle_t stream, const void *data, size_t length,
     uint64_t deadline_ns, struct tcp_write_reply *reply);
 
+/* One worker attempt; no network-readiness wait or pending operation remains
+ * after WOULD_BLOCK. A stale readiness event can normally produce WOULD_BLOCK.
+ * Transfer limits, short progress, EOF and failure outputs match blocking calls. */
+enum call_status tcp_try_accept(handle_t listener, struct tcp_accept_reply *reply);
+enum call_status tcp_try_read(handle_t stream, void *data, size_t capacity,
+    struct tcp_read_reply *reply);
+enum call_status tcp_try_write(handle_t stream, const void *data, size_t length,
+    struct tcp_write_reply *reply);
+
 #endif

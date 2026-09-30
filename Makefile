@@ -39,6 +39,7 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
+TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
                    $(BUILD)/session/tcp_server.o
@@ -155,6 +156,8 @@ $(BUILD)/udp-send.elf $(BUILD)/udp-echo.elf: $(UDP_OBJECT)
 
 $(BUILD)/ping.elf $(BUILD)/tcp.elf $(BUILD)/ttcp.elf: $(DNS_LOOKUP_OBJECT)
 
+$(BUILD)/tcp.elf: $(TCP_SERVE_OBJECT)
+
 $(BUILD)/dig.elf $(BUILD)/ping.elf $(BUILD)/tcp.elf $(BUILD)/ttcp.elf: $(DNS_OBJECTS) $(UDP_OBJECT)
 
 $(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
@@ -204,4 +207,4 @@ clean:
 
 .SECONDARY:
 
--include $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d)
+-include $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
