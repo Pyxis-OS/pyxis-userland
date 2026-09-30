@@ -7,11 +7,12 @@
 
 static size_t root_prefix(const char *path)
 {
-  if (!strncmp(path, "app://", 6)) {
-    return 6;
+  const char *end = path;
+  while (*end && *end != ':' && *end != '/') {
+    ++end;
   }
-  if (!strncmp(path, "home://", 7) || !strncmp(path, "host://", 7)) {
-    return 7;
+  if (end != path && *end == ':' && end[1] == '/' && end[2] == '/') {
+    return end - path + 3;
   }
   return 0;
 }

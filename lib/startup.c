@@ -203,6 +203,16 @@ handle_t startup_root(const char *scheme)
   return find_binding(startup->roots, startup->root_count, scheme);
 }
 
+const struct startup_binding *startup_roots(void)
+{
+  return (const void *)(uintptr_t)startup->roots;
+}
+
+size_t startup_root_count(void)
+{
+  return startup->root_count;
+}
+
 handle_t startup_namespace(void)
 {
   return startup->namespace;

@@ -6,6 +6,7 @@
 #include <space.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool report_location(const struct shell *shell)
@@ -35,13 +36,81 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
   return COMMAND_FAILED;
 }
 
+static enum call_status root_available(struct shell *shell, const char *binding)
+{
+  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+    if (!strcmp(shell->roots[i].name, binding)) {
+      return CALL_ALREADY_EXISTS;
+    }
+  }
+  if (shell->namespace != HANDLE_INVALID) {
+    handle_t existing;
+    enum call_status status = namespace_lookup(shell->namespace, binding, &existing);
+    if (existing != HANDLE_INVALID) {
+      handle_close(existing);
+    }
+    if (status == CALL_OK || status == CALL_ENDPOINT_CLOSED) {
+      return CALL_ALREADY_EXISTS;
+    }
+    /* Startup root names allow bytes outside the service namespace alphabet. */
+    if (status != CALL_NOT_FOUND && status != CALL_BAD_REQUEST) {
+      return status;
+    }
+  }
+  return CALL_OK;
+}
+
+/* Reserve shell-owned storage before acquisition. The shell runs one command
+ * at a time and publishes the selected binding only after a complete open. */
+static enum call_status reserve_root(struct shell *shell, const char *name,
+    size_t length, char **reserved)
+{
+  *reserved = NULL;
+  if (!length) {
+    return CALL_BAD_REQUEST;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    if (name[i] == ':' || name[i] == '/') {
+      return CALL_BAD_REQUEST;
+    }
+  }
+  if (length >= STARTUP_MAX_SIZE || shell->directory.root_count == STARTUP_ROOT_LIMIT) {
+    return CALL_LIMIT;
+  }
+  char *binding = malloc(length + 1);
+  if (!binding) {
+    return CALL_NO_MEMORY;
+  }
+  memcpy(binding, name, length);
+  binding[length] = 0;
+  enum call_status status = root_available(shell, binding);
+  if (status != CALL_OK) {
+    free(binding);
+    return status;
+  }
+  *reserved = binding;
+  return CALL_OK;
+}
+
+static enum call_status publish_root(struct shell *shell, char *name, handle_t root)
+{
+  /* Acquisition can wait while a provider changes the service namespace. */
+  enum call_status status = root_available(shell, name);
+  if (status != CALL_OK) {
+    handle_close(root);
+    free(name);
+    return status;
+  }
+  size_t index = shell->directory.root_count++;
+  shell->roots[index] = (struct path_root){name, root};
+  shell->owns_root[index] = true;
+  return CALL_OK;
+}
+
 static enum command_result mount_host(struct shell *shell, char **arguments, size_t count)
 {
   bool optional = false, access_set = false;
   uint64_t access = MOUNT_ACCESS_READ_ONLY;
-  if (count < 2 || strcmp(arguments[count - 1], "host")) {
-    goto usage;
-  }
   for (size_t i = 1; i + 1 < count; ++i) {
     if (!strcmp(arguments[i], "--optional") && !optional) {
       optional = true;
@@ -52,30 +121,102 @@ static enum command_result mount_host(struct shell *shell, char **arguments, siz
       access = MOUNT_ACCESS_READ_WRITE;
       access_set = true;
     } else {
-      goto usage;
+      return shell_error(shell, "usage: mount [--optional] [--read-only | --read-write] host\n");
     }
   }
-  if (shell->host != HANDLE_INVALID) {
-    return shell_directory_error(shell, "shell: mount", "host", CALL_ALREADY_EXISTS);
-  }
-  if (shell->host_mount == HANDLE_INVALID) {
-    return optional ? COMMAND_OK :
-        shell_directory_error(shell, "shell: mount", "host", CALL_UNAVAILABLE);
-  }
-
-  handle_t root;
-  enum call_status status = mount_open_root(shell->host_mount, access, &root);
+  char *name;
+  enum call_status status = reserve_root(shell, "host", 4, &name);
   if (status != CALL_OK) {
     return shell_directory_error(shell, "shell: mount", "host", status);
   }
-  shell->host = root;
-  shell->owns_host = true;
-  shell->roots[2] = (struct path_root){"host", root};
-  shell->directory.root_count = 3;
-  return COMMAND_OK;
+  if (shell->host_mount == HANDLE_INVALID) {
+    free(name);
+    return optional ? COMMAND_OK :
+        shell_directory_error(shell, "shell: mount", "host", CALL_UNAVAILABLE);
+  }
+  handle_t root;
+  status = mount_open_root(shell->host_mount, access, &root);
+  if (status != CALL_OK) {
+    free(name);
+    return shell_directory_error(shell, "shell: mount", "host", status);
+  }
+  status = publish_root(shell, name, root);
+  return status == CALL_OK ? COMMAND_OK :
+      shell_directory_error(shell, "shell: mount", arguments[count - 1], status);
+}
+
+static bool partition_number(const char *text, uint64_t *number)
+{
+  *number = 0;
+  if (!*text) {
+    return false;
+  }
+  for (; *text; ++text) {
+    if (*text < '0' || *text > '9' || *number > (UINT64_MAX - (*text - '0')) / 10) {
+      return false;
+    }
+    *number = *number * 10 + (*text - '0');
+  }
+  return *number != 0;
+}
+
+static enum command_result mount_volume(struct shell *shell, char **arguments, size_t count)
+{
+  if (count >= 2 && !strcmp(arguments[count - 1], "host")) {
+    return mount_host(shell, arguments, count);
+  }
+  bool optional = false, read_only = false;
+  uint64_t partition = 0;
+  const char *volume = NULL;
+  if (count < 2) {
+    goto usage;
+  }
+  for (size_t i = 1; i + 1 < count; ++i) {
+    if (!strcmp(arguments[i], "--optional") && !optional) {
+      optional = true;
+    } else if (!strcmp(arguments[i], "--read-only") && !read_only) {
+      read_only = true;
+    } else if (!strcmp(arguments[i], "--partition") && !partition && i + 2 < count) {
+      if (!partition_number(arguments[++i], &partition)) {
+        goto usage;
+      }
+    } else if (!strcmp(arguments[i], "--volume") && !volume && i + 2 < count) {
+      volume = arguments[++i];
+    } else {
+      goto usage;
+    }
+  }
+  const char *destination = arguments[count - 1];
+  size_t length = strlen(destination);
+  if (!read_only || !partition || !volume || !*volume || strlen(volume) > MOUNT_VOLUME_NAME_MAX || length < 4 ||
+      strcmp(destination + length - 3, "://")) {
+    goto usage;
+  }
+  char *name;
+  enum call_status status = reserve_root(shell, destination, length - 3, &name);
+  if (status != CALL_OK) {
+    return shell_directory_error(shell, "shell: mount", destination, status);
+  }
+  if (shell->native_mount == HANDLE_INVALID) {
+    free(name);
+    return optional ? COMMAND_OK :
+        shell_directory_error(shell, "shell: mount", destination, CALL_UNAVAILABLE);
+  }
+  handle_t root;
+  status = mount_open_volume(shell->native_mount, partition, volume,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES, &root);
+  if (status != CALL_OK) {
+    free(name);
+    return shell_directory_error(shell, "shell: mount", destination, status);
+  }
+  status = publish_root(shell, name, root);
+  return status == CALL_OK ? COMMAND_OK :
+      shell_directory_error(shell, "shell: mount", arguments[count - 1], status);
 
 usage:
-  return shell_error(shell, "usage: mount [--optional] [--read-only | --read-write] host\n");
+  return shell_error(shell,
+      "usage: mount [--optional] --partition N --volume NAME --read-only NAME://\n"
+      "       mount [--optional] [--read-only | --read-write] host\n");
 }
 
 static enum command_result set_title(struct shell *shell, char **arguments, size_t count)
@@ -160,7 +301,7 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     return set_title(shell, arguments, count);
   }
   if (strcmp(arguments[0], "mount") == 0) {
-    return mount_host(shell, arguments, count);
+    return mount_volume(shell, arguments, count);
   }
   if (strcmp(arguments[0], "session") == 0) {
     if (count < 2) {

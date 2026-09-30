@@ -89,8 +89,8 @@ int main(int argc, char **argv)
     .profile = startup_resource("profile"),
     .app = startup_root("app"),
     .home = startup_root("home"),
-    .host = startup_root("host"),
     .host_mount = startup_resource("host_mount"),
+    .native_mount = startup_resource("native_mount"),
   };
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
@@ -106,17 +106,24 @@ int main(int argc, char **argv)
     shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
   }
+  size_t root_count = startup_root_count();
+  if (root_count > STARTUP_ROOT_LIMIT) {
+    shell_directory_error(&shell, "shell", "selected roots", CALL_LIMIT);
+    goto done;
+  }
+  const struct startup_binding *roots = startup_roots();
+  for (size_t i = 0; i < root_count; ++i) {
+    shell.roots[i] = (struct path_root){(const char *)(uintptr_t)roots[i].name,
+        roots[i].handle};
+  }
   enum call_status status = shell_directory_init(&shell);
   if (status != CALL_OK) {
     shell_directory_error(&shell, "shell", "working directory", status);
     goto done;
   }
 
-  shell.roots[0] = (struct path_root){"app", shell.app};
-  shell.roots[1] = (struct path_root){"home", shell.home};
-  shell.roots[2] = (struct path_root){"host", shell.host};
   shell.directory.roots = shell.roots;
-  shell.directory.root_count = shell.host != HANDLE_INVALID ? 3 : 2;
+  shell.directory.root_count = root_count;
   shell.directory.namespace = shell.namespace;
 
   if (script != HANDLE_INVALID) {
@@ -177,10 +184,15 @@ done:
   if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
     result = EXIT_FAILURE;
   }
-  shell_directory_close(&shell);
-  if (shell.owns_host && handle_close(shell.host) != 0) {
-    result = EXIT_FAILURE;
+  for (size_t i = 0; i < shell.directory.root_count; ++i) {
+    if (shell.owns_root[i]) {
+      if (handle_close(shell.roots[i].handle) != 0) {
+        result = EXIT_FAILURE;
+      }
+      free((void *)shell.roots[i].name);
+    }
   }
+  shell_directory_close(&shell);
   free(arguments);
   free(line);
   /* Runtime exit releases the original startup grants, which may alias. */

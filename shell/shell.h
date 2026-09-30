@@ -5,6 +5,7 @@
 #include <abi/startup.h>
 #include <path.h>
 #include <term.h>
+#include <startup.h>
 
 #define SHELL_LINE_CAPACITY 1024
 /* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
@@ -43,10 +44,10 @@ struct shell {
   struct terminal terminal;
   handle_t profile, space, launcher, memory, display, clock, system_info, echo, udp, tcp, pipe,
       service, namespace_service, namespace, random, net_config, keyboard, terminal_service,
-      app, home, host, host_mount;
-  bool owns_host;
+      app, home, host_mount, native_mount;
   bool owns_namespace;
-  struct path_root roots[3];
+  struct path_root roots[STARTUP_ROOT_LIMIT];
+  bool owns_root[STARTUP_ROOT_LIMIT];
   struct path_context directory;
   struct path_workspace workspace;
   char *working_path; /* Owned display metadata; directory handles authorize lookup. */
