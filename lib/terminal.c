@@ -33,7 +33,9 @@ enum call_status terminal_create(handle_t service, size_t columns, size_t rows,
   }
   if (response.input == HANDLE_INVALID || response.output == HANDLE_INVALID ||
       response.attachment == HANDLE_INVALID || response.input == response.output ||
-      response.input == response.attachment || response.output == response.attachment) {
+      response.input == response.attachment || response.output == response.attachment ||
+      response.events == HANDLE_INVALID || response.events == response.input ||
+      response.events == response.output || response.events == response.attachment) {
     return CALL_BAD_REQUEST;
   }
   *reply = response;
@@ -84,6 +86,14 @@ static bool valid_record(const void *data, size_t length)
     return record.length && record.length <= TERMINAL_TRANSFER_MAX;
   case TERMINAL_RECORD_FRESH_LINE:
     return !record.length;
+  case TERMINAL_RECORD_COMMAND_COMPLETE: {
+    if (record.length != sizeof(struct terminal_command_complete)) {
+      return false;
+    }
+    struct terminal_command_complete completion;
+    memcpy(&completion, (const char *)data + sizeof(record), sizeof(completion));
+    return completion.command && completion.status <= 1;
+  }
   case TERMINAL_RECORD_TAB_WIDTH: {
     if (record.length != sizeof(uint64_t)) {
       return false;
@@ -140,4 +150,20 @@ enum call_status terminal_hangup(handle_t attachment)
 {
   struct message_header request = {PROTOCOL_TERMINAL_ATTACHMENT, TERMINAL_HANGUP};
   return response_status(syscall_call(attachment, &request, sizeof(request), NULL, 0), 0);
+}
+
+enum call_status terminal_command_complete(handle_t events, unsigned status)
+{
+  if (status > 1) {
+    return CALL_BAD_REQUEST;
+  }
+  struct terminal_command_complete_request request = {
+    .header = {PROTOCOL_TERMINAL_EVENTS, TERMINAL_COMMAND_COMPLETE},
+    .status = status,
+  };
+  struct syscall_result result = syscall_call(events, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
 }

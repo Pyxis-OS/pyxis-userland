@@ -51,7 +51,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
 
-  enum { INPUT, OUTPUT, LAUNCHER, APP, HOME, STDIN, STDOUT, STDERR, FIRST_OPTIONAL };
+  enum { INPUT, OUTPUT, LAUNCHER, APP, HOME, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
   struct launch_grant grants[24] = {
     [INPUT] = {terminal.input, CONSOLE_RIGHT_READ, 0},
     [OUTPUT] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
@@ -59,12 +59,13 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     [STDIN] = {terminal.input, CONSOLE_RIGHT_READ, 0},
     [STDOUT] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [STDERR] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
+    [EVENTS] = {terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0},
   };
   struct launch_binding resources[16] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
-    {(uintptr_t)"launcher", LAUNCHER},
+    {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
-  size_t grant_count = FIRST_OPTIONAL, resource_count = 3;
+  size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
   struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
   size_t root_count = 2;
   status = directory_grant(app, &grants[APP]);
@@ -141,6 +142,7 @@ done:
   }
   handle_close(terminal.input);
   handle_close(terminal.output);
+  handle_close(terminal.events);
   /* Keep attachment/supervision even on failure: the loop owns termination and
    * observes cleanup before returning this admission slot to the listener. */
   return status;

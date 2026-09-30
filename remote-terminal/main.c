@@ -326,6 +326,13 @@ static bool collect_output(struct client *client, uint64_t now)
     queue_frame(client, REMOTE_OUTPUT, payload, header.length);
   } else if (header.type == TERMINAL_RECORD_FRESH_LINE) {
     queue_frame(client, REMOTE_FRESH_LINE, NULL, 0);
+  } else if (header.type == TERMINAL_RECORD_COMMAND_COMPLETE) {
+    struct terminal_command_complete completion;
+    unsigned char encoded[REMOTE_COMMAND_COMPLETE_SIZE];
+    memcpy(&completion, payload, sizeof(completion));
+    remote_encode_u64(encoded, completion.command);
+    remote_encode_u32(encoded + 8, (uint32_t)completion.status);
+    queue_frame(client, REMOTE_COMMAND_COMPLETE, encoded, sizeof(encoded));
   } else {
     uint64_t width;
     unsigned char encoded[REMOTE_TAB_WIDTH_SIZE];

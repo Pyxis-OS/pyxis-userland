@@ -4,9 +4,10 @@
 #include <abi/terminal.h>
 #include <abi/syscall.h>
 
-/* Borrow CREATE authority. All three returned handles are caller-owned;
+/* Borrow CREATE authority. All four returned handles are caller-owned;
  * application input/output implement CONSOLE with READ/WRITE respectively.
- * Attachment authority is separate. Dimensions are immutable character cells.
+ * Attachment and event authority are separate. Events keep output open until
+ * their final EMIT-authorized grant closes. Dimensions are immutable character cells.
  * Helpers preserve native statuses and leave outputs unchanged on failure. */
 enum call_status terminal_create(handle_t service, size_t columns, size_t rows,
     struct terminal_create_reply *reply);
@@ -21,6 +22,14 @@ enum call_status terminal_try_inject(handle_t attachment, const void *data, size
     struct terminal_transfer_reply *reply);
 enum call_status terminal_try_drain(handle_t attachment, void *data, size_t capacity,
     struct terminal_transfer_reply *reply);
+
+/* Queue an indivisible completion record after previously accepted output.
+ * Requires EMIT on the separate events handle; status is 0 (success) or 1
+ * (failure). The kernel assigns consecutive command numbers starting at 1.
+ * Blocks for bounded queue space; hangup/stopping fails ENDPOINT_CLOSED.
+ * An untrustworthy response returns OUTCOME_UNKNOWN: never retry, since the
+ * event may already have been queued. Sequence exhaustion fails LIMIT. */
+enum call_status terminal_command_complete(handle_t events, unsigned status);
 
 /* Idempotently preserve queued input, then deliver application EOF. Later
  * nonempty injection reports ENDPOINT_CLOSED. Requires INJECT authority. */
