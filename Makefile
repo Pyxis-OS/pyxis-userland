@@ -11,7 +11,7 @@ MBEDTLS_PREFIX ?= build/ports-dev/mbedtls
 MBEDTLS_PREFIX := $(abspath $(MBEDTLS_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := httpfs allocbench iobench ipcbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := remote-terminal httpfs allocbench iobench ipcbench session shell client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -27,7 +27,7 @@ LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
 export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/head/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -39,10 +39,11 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
+REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
-                   $(BUILD)/session/tcp_server.o
+                   $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
 HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o
@@ -56,7 +57,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: all install libhttp libtls httpfs allocbench iobench ipcbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: remote-terminal all install libhttp libtls httpfs allocbench iobench ipcbench session hello client server counter textfs cat head ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -74,6 +75,8 @@ install: all
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
 	  install -m 644 init/idle.sh "$$staging/init-idle"; \
 	  install -m 644 init/services.sh "$$staging/init-services"; \
+	  install -m 644 init/remote.sh "$$staging/init-remote"; \
+	  install -m 644 init/remote-services.sh "$$staging/init-remote-services"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
@@ -91,6 +94,10 @@ ipcbench: $(BUILD)/ipcbench.pxe
 httpfs: $(BUILD)/httpfs.pxe
 libhttp: $(HTTP_LIBRARY)
 libtls: $(TLS_LIBRARY)
+
+remote-terminal: $(BUILD)/remote-terminal.pxe
+
+$(BUILD)/remote-terminal.elf: $(REMOTE_OBJECT)
 
 session: $(BUILD)/session.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
@@ -207,4 +214,4 @@ clean:
 
 .SECONDARY:
 
--include $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
+-include $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)

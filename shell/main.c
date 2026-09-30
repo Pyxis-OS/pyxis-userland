@@ -53,6 +53,7 @@ int main(int argc, char **argv)
     .script_line = 1,
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
+    .terminal_service = startup_resource("terminal"),
     .memory = startup_resource("memory"),
     .display = startup_resource("display"),
     .clock = startup_resource("clock"),

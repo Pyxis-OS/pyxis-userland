@@ -8,7 +8,7 @@
 /* Observe current readiness without reserving progress. Ordinary interests
  * also report relevant closure/errors under the same operation authority.
  * Deadline zero polls; readiness precedes timeout. Output is untouched on
- * failure. Group observers use WAIT_COMPLETE with group WAIT authority and
+ * failure. Process and group observers use WAIT_COMPLETE with their WAIT authority and
  * may share a list with TCP and terminal attachment interests. No registrations
  * survive return; see abi/wait.h for supported targets and event semantics. */
 enum call_status wait_many(const struct wait_interest *interests, size_t count,

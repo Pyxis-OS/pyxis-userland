@@ -1,5 +1,6 @@
 #include "config.h"
 #include "network.h"
+#include "remote_server.h"
 #include "tcp_server.h"
 #include "../common/udp.h"
 #include <abi/clock.h>
@@ -17,6 +18,8 @@
 #include <abi/memory.h>
 #include <abi/endpoint.h>
 #include <abi/namespace.h>
+#include <abi/net_config.h>
+#include <abi/terminal.h>
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
@@ -28,7 +31,7 @@
 #include <term.h>
 
 static int launch_session(const struct session_config *config, const struct network_config *network,
-    bool configure_network, bool start_services)
+    bool configure_network, bool start_services, bool start_remote_services)
 {
   struct terminal terminal = {startup_resource("input"), startup_resource("output")};
   handle_t launcher = startup_resource("launcher");
@@ -41,8 +44,11 @@ static int launch_session(const struct session_config *config, const struct netw
     return EXIT_FAILURE;
   }
 
-  const char *image_name = start_services ? "init-services" : "shell.pxe";
-  const char *image_uri = start_services ? "app://init-services" : "app://shell.pxe";
+  bool script = start_services || start_remote_services;
+  const char *image_name = start_remote_services ? "init-remote-services" :
+      start_services ? "init-services" : "shell.pxe";
+  const char *image_uri = start_remote_services ? "app://init-remote-services" :
+      start_services ? "app://init-services" : "app://shell.pxe";
   handle_t image;
   enum call_status status = directory_lookup(app, image_name, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
@@ -54,13 +60,13 @@ static int launch_session(const struct session_config *config, const struct netw
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 14 - STARTUP_STREAM_COUNT ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 16 - STARTUP_STREAM_COUNT ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 14 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 16 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -73,9 +79,19 @@ static int launch_session(const struct session_config *config, const struct netw
   grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  if (start_remote_services) {
+    uint64_t rights;
+    status = handle_rights(launcher, &rights, NULL);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query remote launcher rights (status %u)\n", status);
+      goto done;
+    }
+    grants[LAUNCHER].rights = rights &
+        (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP);
+  }
   grants[APP] = (struct launch_grant){app, 0, 0};
   grants[HOME] = (struct launch_grant){home, 0, 0};
-  struct launch_binding resources[16] = {
+  struct launch_binding resources[18] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -102,8 +118,36 @@ static int launch_session(const struct session_config *config, const struct netw
   }
   handle_t tcp = startup_resource("tcp");
   if (tcp != HANDLE_INVALID) {
+    uint64_t rights = TCP_SERVICE_RIGHT_CONNECT;
+    if (start_remote_services) {
+      status = handle_rights(tcp, &rights, NULL);
+      if (status != CALL_OK) {
+        fprintf(stderr, "session: cannot query remote TCP rights (status %u)\n", status);
+        goto done;
+      }
+      rights &= TCP_SERVICE_RIGHT_CONNECT | TCP_SERVICE_RIGHT_LISTEN;
+    }
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", grant_count};
-    grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
+    grants[grant_count++] = (struct launch_grant){tcp, rights, 0};
+  }
+  if (start_remote_services) {
+    handle_t terminal_service = startup_resource("terminal");
+    handle_t net_config = startup_resource("net_config");
+    if (terminal_service == HANDLE_INVALID || net_config == HANDLE_INVALID) {
+      fputs("session: missing remote service bootstrap authority\n", stderr);
+      goto done;
+    }
+    uint64_t rights;
+    status = handle_rights(net_config, &rights, NULL);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query remote network rights (status %u)\n", status);
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", grant_count};
+    grants[grant_count++] = (struct launch_grant){net_config, rights & NET_CONFIG_RIGHTS, 0};
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"terminal", grant_count};
+    grants[grant_count++] = (struct launch_grant){terminal_service,
+        TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t pipe = startup_resource("pipe");
   if (pipe != HANDLE_INVALID) {
@@ -264,7 +308,7 @@ static int launch_session(const struct session_config *config, const struct netw
     goto done;
   }
   handle_t child;
-  status = start_services ? program_launch(launcher, &request, NULL, &child) :
+  status = script ? program_launch(launcher, &request, NULL, &child) :
       launcher_launch(launcher, &request, &child);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot launch %s (status %u)\n", image_uri, status);
@@ -286,8 +330,8 @@ done:
 
 int main(int argc, char **argv)
 {
-  bool configure_network = false, start_services = false;
-  bool tcp_server = false;
+  bool configure_network = false, start_services = false, start_remote_services = false;
+  bool tcp_server = false, remote_server = false;
   uint32_t address = 0;
   unsigned port = 0;
   const char *count = NULL;
@@ -296,6 +340,8 @@ int main(int argc, char **argv)
       configure_network = true;
     } else if (!strcmp(argv[i], "--start-services") && !start_services) {
       start_services = true;
+    } else if (!strcmp(argv[i], "--start-remote-services") && !start_remote_services) {
+      start_remote_services = true;
     } else if (!strcmp(argv[i], "--tcp-server") && !tcp_server && i + 2 < argc) {
       if (!udp_parse_address(argv[i + 1], &address) ||
           !udp_parse_number(argv[i + 2], UINT16_MAX, &port) || !port) {
@@ -303,6 +349,11 @@ int main(int argc, char **argv)
       }
       tcp_server = true;
       i += 2;
+    } else if (!strcmp(argv[i], "--remote-server") && !remote_server && i + 1 < argc) {
+      if (!udp_parse_number(argv[++i], UINT16_MAX, &port) || !port) {
+        goto usage;
+      }
+      remote_server = true;
     } else if (!strcmp(argv[i], "--tcp-count") && !count && i + 1 < argc) {
       unsigned value;
       count = argv[++i];
@@ -314,7 +365,9 @@ int main(int argc, char **argv)
     }
   }
   if (startup_resource("script") != HANDLE_INVALID ||
-      (tcp_server && start_services) || (count && !tcp_server)) {
+      (tcp_server && start_services) || (count && !tcp_server) ||
+      (remote_server && (start_services || tcp_server || start_remote_services)) ||
+      (start_remote_services && (start_services || tcp_server))) {
     goto usage;
   }
   if (tcp_server) {
@@ -334,13 +387,24 @@ int main(int argc, char **argv)
     free(config.timezone);
     return EXIT_FAILURE;
   }
-  int result = launch_session(&config, &network, configure_network, start_services);
+  int result;
+  if (remote_server) {
+    if (configure_network && !network_config_apply(&network)) {
+      free(config.timezone);
+      return EXIT_FAILURE;
+    }
+    result = launch_remote_server(&config, &network, (uint16_t)port);
+  } else {
+    result = launch_session(&config, &network, configure_network,
+        start_services, start_remote_services);
+  }
   free(config.timezone);
   return result;
 
 usage:
-  fputs("Usage: session.pxe [--configure-network] [--start-services]\n"
+  fputs("Usage: session.pxe [--configure-network] [--start-services | --start-remote-services]\n"
       "       session.pxe [--configure-network] --tcp-server ADDRESS PORT [--tcp-count COUNT]\n"
+      "       session.pxe [--configure-network] --remote-server PORT\n"
       "       (native init or trusted session handoff)\n", stderr);
   return EXIT_FAILURE;
 }

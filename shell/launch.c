@@ -17,6 +17,7 @@
 #include <abi/keyboard.h>
 #include <abi/space.h>
 #include <abi/profile.h>
+#include <abi/terminal.h>
 #include <handle.h>
 #include <endpoint.h>
 #include <file.h>
@@ -35,7 +36,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[18];
+  struct launch_binding resources[19];
   struct launch_binding roots[3];
   struct launch_request request;
 };
@@ -111,6 +112,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     bool read_only)
 {
   bool session = mode == SHELL_SESSION;
+  bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
   bool has_host = shell->host != HANDLE_INVALID;
   bool has_keyboard = named_input && shell->keyboard != HANDLE_INVALID;
@@ -128,7 +130,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 18 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 19 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = CHILD_DIRECTORY + depth;
@@ -149,7 +151,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t namespace_index = input_index + (named_input ? 1 : 0);
   size_t publication_index = namespace_index + (has_namespace ? 1 : 0);
   size_t namespace_service_index = publication_index + (provider ? 1 : 0);
-  size_t grant_count = namespace_service_index + (has_namespace_service ? 1 : 0);
+  size_t terminal_index = namespace_service_index + (has_namespace_service ? 1 : 0);
+  size_t grant_count = terminal_index + (has_terminal ? 1 : 0);
   prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -201,7 +204,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[host_index] = (struct launch_grant){shell->host, 0, 0};
   }
   if (session) {
-    grants[launcher_index] = (struct launch_grant){shell->launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+    uint64_t rights;
+    enum call_status status = handle_rights(shell->launcher, &rights, NULL);
+    if (status != CALL_OK) {
+      return status;
+    }
+    grants[launcher_index] = (struct launch_grant){shell->launcher,
+        rights & (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP), 0};
+  }
+  if (has_terminal) {
+    grants[terminal_index] = (struct launch_grant){shell->terminal_service, TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   if (has_net_config) {
     grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS, 0};
@@ -295,6 +307,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_namespace_service) {
     resources[resource_count++] = (struct launch_binding){
         (uintptr_t)"namespace_service", namespace_service_index};
+  }
+  if (has_terminal) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"terminal", terminal_index};
   }
   struct launch_binding *roots = prepared->roots;
   roots[0] = (struct launch_binding){(uintptr_t)"app", CHILD_APP};
