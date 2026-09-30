@@ -74,6 +74,7 @@ int main(int argc, char **argv)
     .memory = startup_resource("memory"),
     .display = startup_resource("display"),
     .clock = startup_resource("clock"),
+    .system_info = startup_resource("system_info"),
     .echo = startup_resource("echo"),
     .udp = startup_resource("udp"),
     .tcp = startup_resource("tcp"),

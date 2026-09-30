@@ -4,6 +4,7 @@
 #include "tcp_server.h"
 #include "../common/udp.h"
 #include <abi/clock.h>
+#include <abi/system_info.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
 #include <abi/tcp.h>
@@ -60,13 +61,13 @@ static int launch_session(const struct session_config *config, const struct netw
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 16 - STARTUP_STREAM_COUNT ||
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 17 - STARTUP_STREAM_COUNT ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 16 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
+  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 17 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -91,7 +92,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
   grants[APP] = (struct launch_grant){app, 0, 0};
   grants[HOME] = (struct launch_grant){home, 0, 0};
-  struct launch_binding resources[18] = {
+  struct launch_binding resources[19] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -105,6 +106,11 @@ static int launch_session(const struct session_config *config, const struct netw
   if (clock != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"clock", grant_count};
     grants[grant_count++] = (struct launch_grant){clock, CLOCK_RIGHTS, 0};
+  }
+  handle_t system_info = startup_resource("system_info");
+  if (system_info != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};
+    grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
   }
   handle_t echo = startup_resource("echo");
   if (echo != HANDLE_INVALID) {
