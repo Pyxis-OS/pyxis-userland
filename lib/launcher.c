@@ -1,6 +1,43 @@
 #include <launcher.h>
 #include <syscall.h>
 
+enum call_status launcher_create_group(handle_t launcher,
+    struct execution_group_create_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header request = {PROTOCOL_LAUNCHER, LAUNCHER_CREATE_GROUP};
+  struct execution_group_create_reply response = {0};
+  struct syscall_result result = syscall_call(launcher, &request, sizeof(request),
+      &response, sizeof(response));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(response) : 0)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status != CALL_OK) {
+    return result.status;
+  }
+  if (response.supervision == HANDLE_INVALID || response.launcher == HANDLE_INVALID ||
+      response.supervision == response.launcher) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *reply = response;
+  return CALL_OK;
+}
+
+enum call_status execution_group_seal(handle_t supervision)
+{
+  struct message_header request = {PROTOCOL_EXECUTION_GROUP, EXECUTION_GROUP_SEAL};
+  struct syscall_result result = syscall_call(supervision, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
 enum call_status launcher_launch(handle_t launcher, const struct launch_request *request,
                                   handle_t *child)
 {

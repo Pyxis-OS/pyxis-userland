@@ -45,6 +45,15 @@ and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
 for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
+[launcher.h](include/launcher.h) provides execution-group creation and sealing.
+`launcher_create_group` requires CREATE_GROUP authority and returns a supervision
+grant with CONTROL plus a group-bound launcher with LAUNCH only. It preserves
+the caller's reply on failure. Closing the final CONTROL grant seals admission.
+`execution_group_seal` closes admission idempotently while existing members
+continue running. Both report
+`CALL_OUTCOME_UNKNOWN` for an untrustworthy response; creation must not be
+retried automatically. These helpers do not provide termination or group waits.
+
 [terminal.h](include/terminal.h) provides native terminal creation and attachment
 queue helpers. Applications use the returned CONSOLE input/output grants through
 libterm or libc streams. Input EOF returns `TERM_KEY_EOF` through key decoding and
