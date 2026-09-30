@@ -319,12 +319,17 @@ int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *
   if (entry->kind == DESCRIPTOR_CONSOLE || size >= BUFSIZ || !ahead_available(entry)) {
     return read_exact(entry, buffer, size, read);
   }
-  /* Speculation must not turn a valid read into an error: cap a file fill at
-   * the representable offsets past the position. If even the request does not
-   * fit, the exact read reports what it always has. */
+  /* Speculation must not turn a valid read into an error. A file fill stays
+   * below LONG_MAX, the stdio position range; host:// also rejects reads that
+   * end past the signed offset range. At or past that boundary, or if even the
+   * request does not fit below it, the exact read keeps the backend's result. */
   size_t fill = BUFSIZ;
-  if (entry->kind == DESCRIPTOR_FILE && UINT64_MAX - entry->position < fill) {
-    fill = (size_t)(UINT64_MAX - entry->position);
+  if (entry->kind == DESCRIPTOR_FILE) {
+    uint64_t limit = LONG_MAX;
+    uint64_t remaining = entry->position < limit ? limit - entry->position : 0;
+    if (remaining < fill) {
+      fill = (size_t)remaining;
+    }
   }
   if (fill < size) {
     return read_exact(entry, buffer, size, read);
