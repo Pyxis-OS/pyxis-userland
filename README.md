@@ -138,6 +138,23 @@ the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
 
+Trusted init can select a native read-only volume with
+`mount --partition 1 --volume system --read-only data://`. `--optional`
+continues only when `native_mount` is absent; failures from supplied authority
+stop the script. Names are explicit directory bindings, separate from service
+namespace entries. Duplicate or conflicting names fail without replacement.
+The shell reserves binding storage before opening and rechecks the service
+namespace before publication; it closes an unpublished root on conflict.
+The profile supports sixteen selected roots including app, home and HOST.
+Default scripts require no native disk; HOST keeps its existing command syntax.
+
+Shell, session and remote handoffs forward the selected root list with queried
+rights and transport masks. Providers requested with `--read-only` attenuate
+both roots and cwd. The cwd chain is an explicit selection too: a launcher
+selecting fewer roots must omit inherited cwd or select a safe cwd from that
+subset. Display paths confer no authority. Mount resources remain in trusted
+init and are excluded from child handoffs.
+
 The init script creates a namespace before handing off to the interactive
 session. The shell keeps management authority; ordinary children receive
 LOOKUP only. A provider launched through `service start` gets an endpoint

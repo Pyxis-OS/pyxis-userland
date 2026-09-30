@@ -35,24 +35,25 @@ enum call_status httpfs_trust_load(struct tls_runtime *runtime, const char *uri,
   *result = (struct tls_result){0};
   size_t depth = startup_working_directory_count();
   const handle_t *cwd = startup_working_directories();
-  struct path_root roots[3];
-  const char *names[] = {"app", "home", "host"};
-  size_t root_count = 0;
+  struct path_root roots[STARTUP_ROOT_LIMIT];
+  const struct startup_binding *selected_roots = startup_roots();
+  size_t root_count = startup_root_count();
   enum call_status status = CALL_OK;
   if (startup_namespace() != HANDLE_INVALID) {
     status = CALL_DENIED;
     goto failed;
   }
-  for (size_t i = 0; i < 3; ++i) {
-    handle_t handle = startup_root(names[i]);
-    if (handle == HANDLE_INVALID) {
-      continue;
-    }
+  if (root_count > STARTUP_ROOT_LIMIT) {
+    status = CALL_LIMIT;
+    goto failed;
+  }
+  for (size_t i = 0; i < root_count; ++i) {
+    handle_t handle = selected_roots[i].handle;
     status = readonly_directory(handle);
     if (status != CALL_OK) {
       goto failed;
     }
-    roots[root_count++] = (struct path_root){names[i], handle};
+    roots[i] = (struct path_root){(const char *)selected_roots[i].name, handle};
   }
   for (size_t i = 0; i < depth; ++i) {
     status = readonly_directory(cwd[i]);

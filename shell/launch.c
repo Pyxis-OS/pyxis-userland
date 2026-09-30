@@ -30,7 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_APP, CHILD_HOME, CHILD_DIRECTORY };
+enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_ROOT };
 
 struct prepared_stage {
   handle_t image;
@@ -38,7 +38,7 @@ struct prepared_stage {
   struct launch_grant *grants;
   uint64_t *directories;
   struct launch_binding resources[20];
-  struct launch_binding roots[3];
+  struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
 
@@ -115,7 +115,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool session = mode == SHELL_SESSION;
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
-  bool has_host = shell->host != HANDLE_INVALID;
   bool has_keyboard = named_input && shell->keyboard != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
@@ -131,11 +130,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_system_info = !provider && shell->system_info != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
-  size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 20 - STARTUP_STREAM_COUNT) {
+  size_t root_count = shell->directory.root_count;
+  if (root_count > STARTUP_ROOT_LIMIT) {
     return CALL_LIMIT;
   }
-  size_t display_index = CHILD_DIRECTORY + depth;
+  size_t directory_index = CHILD_ROOT + root_count;
+  size_t depth = shell->directory.count;
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 20 - STARTUP_STREAM_COUNT) {
+    return CALL_LIMIT;
+  }
+  size_t display_index = directory_index + depth;
   size_t clock_index = display_index + (has_display ? 1 : 0);
   size_t system_info_index = clock_index + (has_clock ? 1 : 0);
   size_t echo_index = system_info_index + (has_system_info ? 1 : 0);
@@ -143,8 +147,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t tcp_index = udp_index + (has_udp ? 1 : 0);
   size_t random_index = tcp_index + (has_tcp ? 1 : 0);
   size_t keyboard_index = random_index + (has_random ? 1 : 0);
-  size_t host_index = keyboard_index + (has_keyboard ? 1 : 0);
-  size_t launcher_index = host_index + (has_host ? 1 : 0);
+  size_t launcher_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t net_config_index = launcher_index + (session ? 1 : 0);
   size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
   size_t service_index = pipe_index + (has_pipe ? 1 : 0);
@@ -168,11 +171,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
-  grants[CHILD_APP] = (struct launch_grant){shell->app, 0, 0};
-  grants[CHILD_HOME] = (struct launch_grant){shell->home, 0, 0};
+  for (size_t i = 0; i < root_count; ++i) {
+    grants[CHILD_ROOT + i] = (struct launch_grant){shell->roots[i].handle, 0, 0};
+    prepared->roots[i] = (struct launch_binding){(uintptr_t)shell->roots[i].name,
+        CHILD_ROOT + i};
+  }
   for (size_t i = 0; i < depth; ++i) {
-    directories[i] = CHILD_DIRECTORY + i;
-    grants[CHILD_DIRECTORY + i] = (struct launch_grant){shell->directory.directories[i], 0, 0};
+    directories[i] = directory_index + i;
+    grants[directory_index + i] = (struct launch_grant){shell->directory.directories[i], 0, 0};
   }
   if (has_display) {
     grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW, 0};
@@ -205,9 +211,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_keyboard) {
     grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT, 0};
-  }
-  if (has_host) {
-    grants[host_index] = (struct launch_grant){shell->host, 0, 0};
   }
   if (session) {
     uint64_t rights;
@@ -321,12 +324,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"terminal", terminal_index};
   }
   struct launch_binding *roots = prepared->roots;
-  roots[0] = (struct launch_binding){(uintptr_t)"app", CHILD_APP};
-  roots[1] = (struct launch_binding){(uintptr_t)"home", CHILD_HOME};
-  size_t root_count = 2;
-  if (has_host) {
-    roots[root_count++] = (struct launch_binding){(uintptr_t)"host", host_index};
-  }
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
     struct launch_grant *grant = &grants[roots[i].grant];
@@ -340,6 +337,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           DIRECTORY_RIGHT_READ_FILES;
     }
   }
+  /* The cwd is explicitly selected alongside the complete root list. Apply
+   * profile attenuation to both; subset launchers must select their own cwd. */
   for (size_t i = 0; i < depth; ++i) {
     struct launch_grant *grant = &grants[directories[i]];
     enum call_status status = handle_rights(grant->source, &grant->rights,

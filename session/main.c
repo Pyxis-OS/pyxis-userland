@@ -58,16 +58,22 @@ static int launch_session(const struct session_config *config, const struct netw
     return EXIT_FAILURE;
   }
 
-  enum { INPUT, OUTPUT, MEMORY, LAUNCHER, APP, HOME, FIRST_OPTIONAL };
+  enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
+  enum { OPTIONAL_RESOURCE_COUNT = 15, NAMESPACE_GRANT_COUNT = 1 };
+  const struct startup_binding *selected_roots = startup_roots();
+  size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
   size_t inherited = startup_environment_count();
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - FIRST_OPTIONAL - 17 - STARTUP_STREAM_COUNT ||
+  size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
+      STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT;
+  if (root_count > STARTUP_ROOT_LIMIT ||
+      depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
       inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((FIRST_OPTIONAL + 17 + depth + STARTUP_STREAM_COUNT) * sizeof(*grants));
+  struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
   int result = EXIT_FAILURE;
@@ -90,9 +96,7 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[LAUNCHER].rights = rights &
         (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP);
   }
-  grants[APP] = (struct launch_grant){app, 0, 0};
-  grants[HOME] = (struct launch_grant){home, 0, 0};
-  struct launch_binding resources[19] = {
+  struct launch_binding resources[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -202,31 +206,25 @@ static int launch_session(const struct session_config *config, const struct netw
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST), 0};
   }
 
-  struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
-  size_t root_count = 2;
-  handle_t host = startup_root("host");
-  if (host != HANDLE_INVALID) {
-    roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count};
-    grants[grant_count++] = (struct launch_grant){host, 0, 0};
-  }
-
-  const char *working_path = startup_working_path();
-  for (size_t i = 0; i < depth; ++i) {
-    directories[i] = grant_count;
-    grants[grant_count++] = (struct launch_grant){startup_working_directory(i), 0, 0};
-  }
-
-  /* Root names and display paths do not determine delegated authority. */
+  struct launch_binding roots[STARTUP_ROOT_LIMIT];
   for (size_t i = 0; i < root_count; ++i) {
-    struct launch_grant *grant = &grants[roots[i].grant];
+    roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
+    struct launch_grant *grant = &grants[grant_count++];
+    *grant = (struct launch_grant){.source = selected_roots[i].handle};
     status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
       goto done;
     }
   }
+
+  /* This full-root handoff also preserves the explicitly selected cwd chain.
+   * The display path cannot authorize reopening roots or widening its grants. */
+  const char *working_path = startup_working_path();
   for (size_t i = 0; i < depth; ++i) {
-    struct launch_grant *grant = &grants[directories[i]];
+    directories[i] = grant_count;
+    struct launch_grant *grant = &grants[grant_count++];
+    *grant = (struct launch_grant){.source = startup_working_directory(i)};
     status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
