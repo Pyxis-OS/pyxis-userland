@@ -19,7 +19,8 @@ enum call_status console_write_all(handle_t output, const void *bytes, size_t si
 enum call_status console_print(handle_t output, const char *text);
 
 /* Native statuses are preserved, including INPUT_LOST and UNAVAILABLE.
- * Nonempty READ blocks, may return a short byte sequence, and never reports EOF.
+ * Nonempty READ blocks and may return a short byte sequence. Independent
+ * terminals return zero at input EOF; framebuffer consoles have no input EOF.
  * Zero capacity succeeds without waiting or acknowledging input loss. */
 enum call_status console_read(handle_t input, void *bytes, size_t capacity, size_t *read);
 /* Same transfer contract; 0 polls, UINT32_MAX is the largest finite wait.

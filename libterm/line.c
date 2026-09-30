@@ -161,7 +161,7 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
       result.status = key == 3 ? TERM_LINE_CANCELLED : TERM_LINE_OK;
       break;
     }
-    if (key == 4 && editor.length == 0) {
+    if (key == TERM_KEY_EOF || (key == 4 && editor.length == 0)) {
       result.status = TERM_LINE_EOF;
       break;
     }

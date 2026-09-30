@@ -33,7 +33,7 @@ int fflush(FILE *stream);
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
 /* Wait for initial data/EOF/error, returning up to capacity bytes without
  * filling a short result. Only backend EOF sets the EOF indicator; unavailable
- * input is EBADF and unexpected zero terminal input is EIO. Existing EOF
+ * input is EBADF and independent terminal input also reports EOF. Existing EOF
  * suppresses reads until cleared. Zero capacity changes no indicators. */
 size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream);
 size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream);

@@ -7,7 +7,7 @@
 #include <stddef.h>
 
 /* Borrowed handles. No allocation, global terminal, buffering or implicit close.
- * Input and output may be separate grants to the same console. */
+ * Input/output implement CONSOLE for a framebuffer or independent terminal. */
 struct terminal {
   handle_t input;
   handle_t output;
@@ -45,10 +45,13 @@ enum term_key {
   TERM_KEY_UNKNOWN = 256,
   TERM_KEY_LEFT, TERM_KEY_RIGHT, TERM_KEY_HOME, TERM_KEY_END, TERM_KEY_DELETE,
   TERM_KEY_UP, TERM_KEY_DOWN, TERM_KEY_PAGE_UP, TERM_KEY_PAGE_DOWN,
+  TERM_KEY_EOF,
 };
 
 /* Block for a key, then allow 100 ms between bytes of an escape sequence.
  * Standalone Escape returns 27; incomplete/unsupported sequences return UNKNOWN.
+ * Input EOF returns EOF, also when it interrupts an incomplete escape sequence;
+ * the Ctrl+D byte remains 4.
  * Reads one byte at a time with no retained input or read-ahead. INPUT_LOST and
  * other native failures are returned to the caller; *key is UNKNOWN on error. */
 enum call_status term_read_key(struct terminal *term, unsigned *key);
@@ -83,7 +86,8 @@ struct term_line_result {
  *
  * Printable ASCII only, one byte per cell. Insert, Backspace/Delete, Left/Right,
  * Home/End, Enter and Ctrl+C are supported. Ctrl+D returns EOF only on an empty
- * line; otherwise it is ignored. Up/Down/Page keys are decoded but ignored;
+ * line; otherwise it is ignored. Actual input EOF always discards a partial line
+ * and returns EOF. Up/Down/Page keys are decoded but ignored;
  * no history, tabs or Unicode editing. Standalone Escape is decoded with a
  * timeout and ignored by this line editor.
  *

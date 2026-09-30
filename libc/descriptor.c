@@ -218,7 +218,7 @@ int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
   if (status != CALL_OK) {
     return fail(libc_call_errno(status));
   }
-  if (*read > size || (!*read && entry->kind == DESCRIPTOR_CONSOLE)) {
+  if (*read > size) {
     *read = 0;
     return fail(EIO);
   }
