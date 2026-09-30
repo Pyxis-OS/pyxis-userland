@@ -1,5 +1,6 @@
 #include "config.h"
 #include "network.h"
+#include "remote_server.h"
 #include "tcp_server.h"
 #include "../common/udp.h"
 #include <abi/clock.h>
@@ -287,7 +288,7 @@ done:
 int main(int argc, char **argv)
 {
   bool configure_network = false, start_services = false;
-  bool tcp_server = false;
+  bool tcp_server = false, remote_server = false;
   uint32_t address = 0;
   unsigned port = 0;
   const char *count = NULL;
@@ -303,6 +304,11 @@ int main(int argc, char **argv)
       }
       tcp_server = true;
       i += 2;
+    } else if (!strcmp(argv[i], "--remote-server") && !remote_server && i + 1 < argc) {
+      if (!udp_parse_number(argv[++i], UINT16_MAX, &port) || !port) {
+        goto usage;
+      }
+      remote_server = true;
     } else if (!strcmp(argv[i], "--tcp-count") && !count && i + 1 < argc) {
       unsigned value;
       count = argv[++i];
@@ -314,7 +320,8 @@ int main(int argc, char **argv)
     }
   }
   if (startup_resource("script") != HANDLE_INVALID ||
-      (tcp_server && start_services) || (count && !tcp_server)) {
+      (tcp_server && start_services) || (count && !tcp_server) ||
+      (remote_server && (start_services || tcp_server))) {
     goto usage;
   }
   if (tcp_server) {
@@ -334,13 +341,23 @@ int main(int argc, char **argv)
     free(config.timezone);
     return EXIT_FAILURE;
   }
-  int result = launch_session(&config, &network, configure_network, start_services);
+  int result;
+  if (remote_server) {
+    if (configure_network && !network_config_apply(&network)) {
+      free(config.timezone);
+      return EXIT_FAILURE;
+    }
+    result = launch_remote_server(&config, &network, (uint16_t)port);
+  } else {
+    result = launch_session(&config, &network, configure_network, start_services);
+  }
   free(config.timezone);
   return result;
 
 usage:
   fputs("Usage: session.pxe [--configure-network] [--start-services]\n"
       "       session.pxe [--configure-network] --tcp-server ADDRESS PORT [--tcp-count COUNT]\n"
+      "       session.pxe [--configure-network] --remote-server PORT\n"
       "       (native init or trusted session handoff)\n", stderr);
   return EXIT_FAILURE;
 }

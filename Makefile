@@ -42,7 +42,7 @@ COUNTER_OBJECT := $(BUILD)/counter/namespace.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
-                   $(BUILD)/session/tcp_server.o
+                   $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
 HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o
@@ -74,6 +74,7 @@ install: all
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
 	  install -m 644 init/idle.sh "$$staging/init-idle"; \
 	  install -m 644 init/services.sh "$$staging/init-services"; \
+	  install -m 644 init/remote.sh "$$staging/init-remote"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
