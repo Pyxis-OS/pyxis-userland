@@ -23,6 +23,8 @@ size_t strspn(const char *text, const char *accept);
 char *strpbrk(const char *text, const char *accept);
 /* First occurrence; an empty needle returns text. NULL when not found. */
 char *strstr(const char *text, const char *needle);
+/* Same search with ASCII case folding; bytes outside ASCII are unchanged. */
+char *strcasestr(const char *text, const char *needle);
 char *strdup(const char *text);
 char *strndup(const char *text, size_t limit);
 

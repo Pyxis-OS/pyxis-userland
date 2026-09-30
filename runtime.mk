@@ -32,6 +32,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/time/rule_to_secs.c \
                 third_party/musl/src/math/fabs.c \
                 third_party/musl/src/math/floor.c \
+                third_party/musl/src/math/round.c \
                 third_party/musl/src/math/fmod.c \
                 third_party/musl/src/math/pow.c \
                 third_party/musl/src/math/frexp.c \

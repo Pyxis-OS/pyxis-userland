@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdint.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -100,6 +101,27 @@ char *strstr(const char *text, const char *needle)
     const char *candidate = text;
     const char *match = needle;
     while (*match && *candidate && *candidate == *match) {
+      ++candidate;
+      ++match;
+    }
+    if (!*match) {
+      return (char *)text;
+    }
+  }
+  return NULL;
+}
+
+char *strcasestr(const char *text, const char *needle)
+{
+  if (!*needle) {
+    return (char *)text;
+  }
+
+  for (; *text; ++text) {
+    const char *candidate = text;
+    const char *match = needle;
+    while (*match && *candidate &&
+           tolower((unsigned char)*candidate) == tolower((unsigned char)*match)) {
       ++candidate;
       ++match;
     }

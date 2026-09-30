@@ -59,6 +59,13 @@ and binary exponent, `ldexp` reuses `scalbn`, and `pow` includes its range/domai
 handling. Errors leave errno unchanged and set FP exception flags. No public
 fenv API, full math library or changes to compiler defaults are introduced.
 
+The fastfetch formatting prerequisites add `src/math/round.c` unmodified from
+the same 1.2.5 pin. It rounds to the nearest integral double, with halfway values
+away from zero independently of the current FP rounding mode. Signed zero,
+infinities and quiet NaNs are preserved; fractional finite inputs may raise
+inexact. It uses the existing libm helpers and rounding-aware compilation flags,
+leaves errno unchanged and lives in libc without a separate `-lm`.
+
 `src/internal/floatscan.c` comes from the same pin, with local adaptations:
 
 - Replace FILE/shgetc plumbing with the direct string cursor in the local
