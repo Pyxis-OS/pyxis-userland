@@ -2,10 +2,24 @@
 #define USERSPACE_LAUNCHER_H
 
 #include <stddef.h>
+#include <abi/execution_group.h>
 #include <abi/launcher.h>
 #include <abi/syscall.h>
 
 struct path_context;
+
+/* CREATE_GROUP authority on an unbound launcher returns two owned, distinct
+ * handles: a supervision grant with CONTROL and a group-bound launcher with
+ * LAUNCH only. Closing the final CONTROL grant seals admission. Preserve
+ * *reply on failure. An untrustworthy response returns CALL_OUTCOME_UNKNOWN;
+ * do not retry automatically, because the group may have been created. */
+enum call_status launcher_create_group(handle_t launcher,
+    struct execution_group_create_reply *reply);
+
+/* Seal group admission with CONTROL authority. Sealing is idempotent; existing
+ * members continue running. An untrustworthy response returns
+ * CALL_OUTCOME_UNKNOWN because admission may already have been sealed. */
+enum call_status execution_group_seal(handle_t supervision);
 
 /* Explicit pointers/counts in request refer to caller storage, borrowed until
  * return. Native statuses; clears *child on failure. Success returns an owned
