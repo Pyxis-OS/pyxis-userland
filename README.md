@@ -48,6 +48,18 @@ See [import provenance](IMPORT.md) for the original history and dependency split
 For manually invoked performance measurements, see [iobench](iobench/README.md)
 for files and pipes and [ipcbench](ipcbench/README.md) for CALL/SEND.
 
+`session.pxe --configure-network --tcp-server ADDRESS PORT [--tcp-count COUNT]`
+hands off to a sequential TCP echo server instead of the local shell. It needs
+explicit TCP LISTEN authority from native init or a trusted session handoff;
+normal interactive sessions retain only CONNECT authority. The launcher creates
+the exact bound listener, then gives `tcp --serve [COUNT]` only that listener,
+memory, a readable clock and stdout/stderr. It grants no listening service,
+launcher or filesystem roots. Each connection echoes until peer EOF, then shuts
+down its writes and closes the stream. Accept and read timeouts keep waiting;
+a failed write or other connection error stops the server. With a positive COUNT
+it stops admission as soon as the last stream is accepted, finishes that stream
+and exits; otherwise it keeps serving.
+
 From the interactive shell, `session app://server.pxe` runs the endpoint example.
 The server creates its receiver, launches two clients with caller grants, receives
 both requests and replies in reverse order. `session app://server.pxe --wide`
