@@ -56,7 +56,7 @@ static bool wait_for_address(handle_t authority, handle_t clock, uint32_t *addre
   }
 }
 
-static bool directory_grant(handle_t source, uint64_t allowed, struct launch_grant *grant)
+static bool directory_grant(handle_t source, bool read_only, struct launch_grant *grant)
 {
   *grant = (struct launch_grant){.source = source};
   enum call_status status = handle_rights(source, &grant->rights, &grant->transport);
@@ -64,7 +64,9 @@ static bool directory_grant(handle_t source, uint64_t allowed, struct launch_gra
     fprintf(stderr, "session: cannot query remote directory rights (status %u)\n", status);
     return false;
   }
-  grant->rights &= allowed;
+  if (read_only) {
+    grant->rights &= READ_ONLY_DIRECTORY_RIGHTS;
+  }
   return true;
 }
 
@@ -83,9 +85,16 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
 
-  enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, APP, HOME, LISTENER, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 10, RESOURCE_CAPACITY = 13 };
-  struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT] = {
+  const struct startup_binding *selected_roots = startup_roots();
+  size_t root_count = startup_root_count();
+  if (root_count > STARTUP_ROOT_LIMIT) {
+    fputs("session: too many filesystem roots\n", stderr);
+    return EXIT_FAILURE;
+  }
+
+  enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, LISTENER, FIRST_OPTIONAL };
+  enum { OPTIONAL_COUNT = 9, RESOURCE_CAPACITY = 13 };
+  struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
     [LAUNCHER] = {launcher, LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP, 0},
@@ -99,21 +108,27 @@ int launch_remote_server(const struct session_config *config,
     {(uintptr_t)"tcp_listener", LISTENER},
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
-  struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
-  size_t root_count = 2;
+  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  /* Reuse the selected home grant for cwd, including any withheld rights. */
+  uint64_t working_directory = SIZE_MAX;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
   struct startup_variable *environment = NULL;
   int result = EXIT_FAILURE;
-  if (!directory_grant(app, READ_ONLY_DIRECTORY_RIGHTS, &grants[APP]) ||
-      !directory_grant(home, DIRECTORY_RIGHTS, &grants[HOME])) {
-    goto done;
-  }
-  handle_t host = startup_root("host");
-  if (host != HANDLE_INVALID) {
-    if (!directory_grant(host, DIRECTORY_RIGHTS, &grants[grant_count])) {
+  for (size_t i = 0; i < root_count; ++i) {
+    const char *name = (const char *)selected_roots[i].name;
+    roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
+    if (!directory_grant(selected_roots[i].handle, !strcmp(name, "app"),
+        &grants[grant_count])) {
       goto done;
     }
-    roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count++};
+    if (!strcmp(name, "home")) {
+      working_directory = grant_count;
+    }
+    ++grant_count;
+  }
+  if (working_directory == SIZE_MAX) {
+    fputs("session: missing selected home root\n", stderr);
+    goto done;
   }
 
   handle_t system_info = startup_resource("system_info");
@@ -187,7 +202,6 @@ int launch_remote_server(const struct session_config *config,
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
   const char *arguments[] = {"app://remote-terminal.pxe", tab_width};
-  uint64_t working_directory = HOME;
   struct launch_request request = {
     .grants = (uintptr_t)grants, .grant_count = grant_count,
     .resources = (uintptr_t)resources, .resource_count = resource_count,

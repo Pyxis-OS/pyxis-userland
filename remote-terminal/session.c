@@ -17,6 +17,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <startup.h>
+#include <string.h>
 
 static enum call_status directory_grant(handle_t directory, struct launch_grant *grant)
 {
@@ -47,13 +48,25 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   handle_t app = startup_root("app"), home = startup_root("home");
+  if (app == HANDLE_INVALID || home == HANDLE_INVALID) {
+    status = CALL_NOT_FOUND;
+    goto done;
+  }
   status = directory_lookup(app, "shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     goto done;
   }
 
-  enum { INPUT, OUTPUT, LAUNCHER, APP, HOME, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  struct launch_grant grants[25] = {
+  const struct startup_binding *selected_roots = startup_roots();
+  size_t root_count = startup_root_count();
+  if (root_count > STARTUP_ROOT_LIMIT) {
+    status = CALL_LIMIT;
+    goto done;
+  }
+  enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
+  enum { OPTIONAL_RESOURCE_COUNT = 10, NAMESPACE_GRANT_COUNT = 1 };
+  struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
+      NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     [INPUT] = {terminal.input, CONSOLE_RIGHT_READ, 0},
     [OUTPUT] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [LAUNCHER] = {bound, LAUNCHER_RIGHT_LAUNCH, 0},
@@ -62,27 +75,28 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     [STDERR] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [EVENTS] = {terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0},
   };
-  struct launch_binding resources[17] = {
+  struct launch_binding resources[4 + OPTIONAL_RESOURCE_COUNT] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
-  struct launch_binding roots[3] = {{(uintptr_t)"app", APP}, {(uintptr_t)"home", HOME}};
-  size_t root_count = 2;
-  status = directory_grant(app, &grants[APP]);
-  if (status == CALL_OK) {
-    status = directory_grant(home, &grants[HOME]);
-  }
-  if (status != CALL_OK) {
-    goto done;
-  }
-  handle_t host = startup_root("host");
-  if (host != HANDLE_INVALID) {
-    roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count};
-    status = directory_grant(host, &grants[grant_count++]);
+  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  /* Reuse the selected home grant for cwd, including any withheld rights. */
+  uint64_t directory = SIZE_MAX;
+  for (size_t i = 0; i < root_count; ++i) {
+    roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
+    status = directory_grant(selected_roots[i].handle, &grants[grant_count]);
     if (status != CALL_OK) {
       goto done;
     }
+    if (!strcmp((const char *)selected_roots[i].name, "home")) {
+      directory = grant_count;
+    }
+    ++grant_count;
+  }
+  if (directory == SIZE_MAX) {
+    status = CALL_NOT_FOUND;
+    goto done;
   }
   static const struct {
     const char *name;
@@ -108,7 +122,6 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count};
     grants[grant_count++] = (struct launch_grant){source, rights & allowed[i].rights, 0};
   }
-  uint64_t directory = HOME;
   const char *arguments[] = {"app://shell.pxe"};
   struct launch_request request = {
     .image = image,
