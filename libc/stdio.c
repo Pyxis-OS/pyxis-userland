@@ -250,7 +250,9 @@ char *fgets(char *restrict buffer, int capacity, FILE *restrict stream)
   while (length < capacity - 1) {
     int byte = fgetc(stream);
     if (byte == EOF) {
-      if (ferror(stream) || !length) {
+      /* Decide from this call's outcome: a failed read leaves EOF clear, while
+       * an error indicator left by an earlier call must not reject a line. */
+      if (!length || !feof(stream)) {
         return NULL;
       }
       break;
