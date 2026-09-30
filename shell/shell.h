@@ -41,7 +41,7 @@ struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   struct terminal terminal;
-  handle_t profile, space, launcher, memory, display, clock, echo, udp, tcp, pipe,
+  handle_t profile, space, launcher, memory, display, clock, system_info, echo, udp, tcp, pipe,
       service, namespace_service, namespace, random, net_config, keyboard, terminal_service,
       app, home, host, host_mount;
   bool owns_host;

@@ -9,6 +9,7 @@
 #include <abi/pipe.h>
 #include <abi/profile.h>
 #include <abi/random.h>
+#include <abi/system_info.h>
 #include <abi/tcp.h>
 #include <abi/udp.h>
 #include <console.h>
@@ -52,7 +53,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   }
 
   enum { INPUT, OUTPUT, LAUNCHER, APP, HOME, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  struct launch_grant grants[24] = {
+  struct launch_grant grants[25] = {
     [INPUT] = {terminal.input, CONSOLE_RIGHT_READ, 0},
     [OUTPUT] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [LAUNCHER] = {bound, LAUNCHER_RIGHT_LAUNCH, 0},
@@ -61,7 +62,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     [STDERR] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [EVENTS] = {terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0},
   };
-  struct launch_binding resources[16] = {
+  struct launch_binding resources[17] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
@@ -88,6 +89,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     uint64_t rights;
   } allowed[] = {
     {"memory", MEMORY_RIGHT_MANAGE}, {"clock", CLOCK_RIGHTS},
+    {"system_info", SYSTEM_INFO_RIGHT_READ},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST},

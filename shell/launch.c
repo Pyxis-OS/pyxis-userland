@@ -6,6 +6,7 @@
 #include <abi/memory.h>
 #include <abi/display.h>
 #include <abi/clock.h>
+#include <abi/system_info.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
 #include <abi/tcp.h>
@@ -36,7 +37,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[19];
+  struct launch_binding resources[20];
   struct launch_binding roots[3];
   struct launch_request request;
 };
@@ -128,14 +129,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
+  bool has_system_info = !provider && shell->system_info != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 19 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - CHILD_DIRECTORY - 20 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = CHILD_DIRECTORY + depth;
   size_t clock_index = display_index + (has_display ? 1 : 0);
-  size_t echo_index = clock_index + (has_clock ? 1 : 0);
+  size_t system_info_index = clock_index + (has_clock ? 1 : 0);
+  size_t echo_index = system_info_index + (has_system_info ? 1 : 0);
   size_t udp_index = echo_index + (has_echo ? 1 : 0);
   size_t tcp_index = udp_index + (has_udp ? 1 : 0);
   size_t random_index = tcp_index + (has_tcp ? 1 : 0);
@@ -176,6 +179,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_clock) {
     grants[clock_index] = (struct launch_grant){shell->clock, CLOCK_RIGHTS, 0};
+  }
+  if (has_system_info) {
+    grants[system_info_index] = (struct launch_grant){shell->system_info, SYSTEM_INFO_RIGHT_READ, 0};
   }
   if (has_echo) {
     grants[echo_index] = (struct launch_grant){shell->echo, ECHO_RIGHT_SEND, 0};
@@ -266,6 +272,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_clock) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"clock", clock_index};
+  }
+  if (has_system_info) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", system_info_index};
   }
   if (has_echo) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"echo", echo_index};

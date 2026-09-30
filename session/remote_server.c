@@ -8,6 +8,7 @@
 #include <abi/pipe.h>
 #include <abi/profile.h>
 #include <abi/random.h>
+#include <abi/system_info.h>
 #include <abi/terminal.h>
 #include <abi/udp.h>
 #include <clock.h>
@@ -83,7 +84,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, APP, HOME, LISTENER, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 9, RESOURCE_CAPACITY = 12 };
+  enum { OPTIONAL_COUNT = 10, RESOURCE_CAPACITY = 13 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -115,6 +116,11 @@ int launch_remote_server(const struct session_config *config,
     roots[root_count++] = (struct launch_binding){(uintptr_t)"host", grant_count++};
   }
 
+  handle_t system_info = startup_resource("system_info");
+  if (system_info != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};
+    grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
+  }
   handle_t pipe = startup_resource("pipe");
   if (pipe != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", grant_count};

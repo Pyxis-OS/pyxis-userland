@@ -45,6 +45,13 @@ and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
 for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
+[system_info.h](include/system_info.h) queries the running kernel's identity,
+guest CPU and global allocator memory through a borrowed READ grant. Failed
+queries preserve caller output. Init scripts, sessions and local/remote shells
+forward `system_info` to ordinary children when supplied; provider launches and
+restricted launchers may omit it. Applications must treat a missing grant as
+unavailable information. Memory is allocator capacity, labeled **Memory (allocator)**.
+
 [launcher.h](include/launcher.h) provides execution-group creation, sealing,
 termination and completion observation. `launcher_create_group` requires
 CREATE_GROUP authority and returns a supervision grant with CONTROL|WAIT plus a
