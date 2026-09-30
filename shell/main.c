@@ -2,6 +2,7 @@
 #include "../common/directory.h"
 #include <startup.h>
 #include <handle.h>
+#include <terminal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,9 +42,25 @@ static struct term_line_result read_command(struct shell *shell, char *line)
   return term_read_line(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
 }
 
+static bool report_completion(struct shell *shell, handle_t events, unsigned status)
+{
+  if (events == HANDLE_INVALID) {
+    return true;
+  }
+  enum call_status result = terminal_command_complete(events, status);
+  if (result != CALL_OK) {
+    shell_directory_error(shell, "shell", "command completion", result);
+    return false;
+  }
+  return true;
+}
+
 int main(int argc, char **argv)
 {
   handle_t script = startup_resource("script");
+  /* Kept outside launch state: only this interactive shell can report events. */
+  handle_t events = script == HANDLE_INVALID ? startup_resource("terminal_events") :
+      HANDLE_INVALID;
   if (script != HANDLE_INVALID && argc < 2) {
     fputs("shell: Missing script diagnostic name\n", stderr);
     return EXIT_FAILURE;
@@ -129,14 +146,28 @@ int main(int argc, char **argv)
       if (fputs("shell: Line limit reached; command not executed\n", stderr) == EOF) {
         break;
       }
+      if (!report_completion(&shell, events, EXIT_FAILURE)) {
+        break;
+      }
+      continue;
+    }
+    const char *start = line;
+    while (*start == ' ' || *start == '\t') {
+      ++start;
+    }
+    if (!*start) {
       continue;
     }
     enum command_result command = shell_command(&shell, line, arguments);
-    if (command == COMMAND_EXIT) {
-      result = EXIT_SUCCESS;
+    if (command == COMMAND_FATAL) {
       break;
     }
-    if (command == COMMAND_FATAL) {
+    unsigned status = command == COMMAND_FAILED ? EXIT_FAILURE : EXIT_SUCCESS;
+    if (!report_completion(&shell, events, status)) {
+      break;
+    }
+    if (command == COMMAND_EXIT) {
+      result = EXIT_SUCCESS;
       break;
     }
   }
