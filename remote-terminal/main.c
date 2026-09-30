@@ -177,11 +177,14 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
   switch (type) {
   case REMOTE_HELLO: {
     uint32_t columns = remote_decode_u32(payload), rows = remote_decode_u32(payload + 4);
-    if (!columns || columns > REMOTE_COLUMNS_MAX || !rows || rows > REMOTE_ROWS_MAX) {
+    uint32_t options = remote_decode_u32(payload + 8);
+    if (!columns || columns > REMOTE_COLUMNS_MAX || !rows || rows > REMOTE_ROWS_MAX ||
+        (options & ~REMOTE_OPTIONS)) {
       reject(client, REMOTE_ERROR_BAD_FRAME, now);
       return true;
     }
-    status = remote_shell_launch(columns, rows, tab_width, &client->shell);
+    status = remote_shell_launch(columns, rows, tab_width,
+        options & REMOTE_OPTION_NO_SHELL_ECHO, &client->shell);
     if (status != CALL_OK) {
       report("launch shell", status);
       reject(client, REMOTE_ERROR_LAUNCH, now);
