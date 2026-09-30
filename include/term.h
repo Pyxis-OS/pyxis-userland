@@ -99,5 +99,11 @@ struct term_line_result {
  * Reads one byte at a time: no unread bytes are retained for a future caller. */
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity);
+/* Same editing, cancellation, EOF and limits as term_read_line, including the
+ * prompt geometry, but writes nothing: no prompt, fresh line, redraw, cursor or
+ * style control, overflow color, submission newline or ^C. The prompt is
+ * validated and measured only. Output state is left as the caller had it. */
+struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
+                                            char *buffer, size_t capacity);
 
 #endif
