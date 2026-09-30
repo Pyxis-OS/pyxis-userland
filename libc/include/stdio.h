@@ -76,4 +76,13 @@ int snprintf(char *restrict buffer, size_t capacity, const char *restrict format
 int vsnprintf(char *restrict buffer, size_t capacity, const char *restrict format, va_list args)
   __attribute__((format(printf, 3, 0)));
 
+/* Allocate a NUL-terminated result, including for an empty string. Success
+ * transfers ownership to the caller and returns the length excluding NUL.
+ * Failure returns -1, sets errno and leaves *output NULL. Uses the same formats
+ * and INT_MAX count limit as snprintf; vasprintf preserves its argument list. */
+int asprintf(char **restrict output, const char *restrict format, ...)
+  __attribute__((format(printf, 2, 3)));
+int vasprintf(char **restrict output, const char *restrict format, va_list args)
+  __attribute__((format(printf, 2, 0)));
+
 #endif

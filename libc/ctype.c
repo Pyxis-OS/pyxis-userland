@@ -1,5 +1,10 @@
 #include <ctype.h>
 
+int isascii(int character)
+{
+  return character >= 0 && character <= 0x7f;
+}
+
 int isalpha(int character)
 {
   return islower(character) || isupper(character);

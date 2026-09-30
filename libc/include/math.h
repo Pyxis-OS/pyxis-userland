@@ -31,6 +31,8 @@ typedef double double_t;
  * signaling NaNs are not supported.
  * These functions live in libc; callers do not need a separate -lm. */
 double floor(double value);
+/* Nearest integer, ties away from zero, independent of the FP rounding mode. */
+double round(double value);
 double fmod(double value, double divisor);
 double pow(double base, double exponent);
 double frexp(double value, int *exponent);

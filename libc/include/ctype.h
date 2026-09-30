@@ -1,6 +1,9 @@
 #ifndef LIBC_CTYPE_H
 #define LIBC_CTYPE_H
 
+/* Accepts any int; true exactly for ASCII values 0 through 127. */
+int isascii(int character);
+
 /* ASCII classification only, with no locale state. Arguments must be EOF or
  * representable as unsigned char; cast plain char before passing byte data.
  * EOF and bytes outside ASCII return zero. True results are nonzero. */
