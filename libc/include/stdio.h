@@ -17,11 +17,16 @@ extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 
-/* All streams are unbuffered. fopen accepts r/w/a, optional + and optional b
- * (no effect), resolving native capability paths and the initial directory.
- * Private descriptors own handles and file offsets; FILE owns its association
- * and indicators. Standard descriptors adopt exclusive startup handles once.
- * No fdopen/fileno, setvbuf, freopen, pushback, scanning or wide I/O here. */
+/* Output is unbuffered. fread, and the character and line input built on it,
+ * may read up to BUFSIZ bytes ahead from files and pipes, never from consoles.
+ * fopen accepts r/w/a, optional + and optional b (no effect), resolving native
+ * capability paths and the initial directory. Private descriptors own handles,
+ * file offsets and read-ahead; FILE owns its association and indicators.
+ * Read-ahead is private and never accompanies a delegated stream: do not read a
+ * stream you will delegate with buffered input. ftell excludes read-ahead; a
+ * successful fseek or a write drops it, a failed seek keeps it. Standard
+ * descriptors adopt exclusive startup handles once. No fdopen/fileno, setvbuf,
+ * freopen, pushback, scanning or wide I/O here. */
 FILE *fopen(const char *restrict path, const char *restrict mode);
 int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
@@ -32,8 +37,9 @@ int remove(const char *path);
 int rename(const char *old_path, const char *new_path);
 int fflush(FILE *stream);
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
-/* Wait for initial data/EOF/error, returning up to capacity bytes without
- * filling a short result. Only backend EOF sets the EOF indicator; unavailable
+/* Return bytes already read ahead, or else wait for initial data/EOF/error
+ * from one backend transfer of at most capacity bytes, without filling a short
+ * result or reading ahead. Only backend EOF sets the EOF indicator; unavailable
  * input is EBADF and independent terminal input also reports EOF. Existing EOF
  * suppresses reads until cleared. Zero capacity changes no indicators. */
 size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream);
@@ -49,8 +55,8 @@ char *fgets(char *restrict buffer, int capacity, FILE *restrict stream);
  * any byte returns -1. Null arguments (EINVAL), read errors, allocation
  * failure (ENOMEM) and a line longer than SSIZE_MAX (EOVERFLOW) return -1, set
  * errno and the error indicator, and leave *line and *capacity describing the
- * caller's current allocation. Reads one byte per call to the unbuffered
- * stream, so each byte is a separate native read. */
+ * caller's current allocation. Reads through fgetc, so file and pipe input is
+ * fetched in blocks while console input is one native read per byte. */
 ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream);
 int fputc(int character, FILE *stream);
 int putc(int character, FILE *stream);

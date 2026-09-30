@@ -101,10 +101,14 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
 
 int fflush(FILE *stream)
 {
-  /* There is neither output buffering nor input read-ahead to synchronize.
-   * In particular, a prior error indicator does not make an empty flush fail. */
+  /* There is no output buffering. Input fflush is undefined in ISO C; Pyxis
+   * drops file read-ahead so later reads refetch, and keeps pipe bytes. A prior
+   * error indicator does not make the flush fail, and NULL leaves input alone. */
   if (stream && stream->closed) {
     return stream_error(stream, EBADF);
+  }
+  if (stream) {
+    descriptor_discard_input(stream->descriptor);
   }
   return 0;
 }
@@ -146,10 +150,14 @@ void stdio_finish(void)
   }
 }
 
-static size_t read_some(void *buffer, size_t capacity, FILE *stream)
+/* Buffered reads may fetch ahead of the request; exact reads never do. */
+static size_t read_some(void *buffer, size_t capacity, FILE *stream, bool buffered)
 {
   size_t read;
-  if (descriptor_read(stream->descriptor, buffer, capacity, &read) < 0) {
+  int result = buffered ?
+      descriptor_read_buffered(stream->descriptor, buffer, capacity, &read) :
+      descriptor_read(stream->descriptor, buffer, capacity, &read);
+  if (result < 0) {
     stream_error(stream, errno);
     return 0;
   }
@@ -164,7 +172,7 @@ size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
   if (!capacity || !stream_ready(stream, false) || stream->eof) {
     return 0;
   }
-  return read_some(buffer, capacity, stream);
+  return read_some(buffer, capacity, stream, false);
 }
 
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
@@ -184,7 +192,7 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
   }
   size_t bytes = size * count, total = 0;
   while (total < bytes) {
-    size_t read = read_some((char *)buffer + total, bytes - total, stream);
+    size_t read = read_some((char *)buffer + total, bytes - total, stream, true);
     if (!read) {
       break;
     }
