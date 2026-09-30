@@ -42,7 +42,7 @@ struct shell {
   size_t script_line;
   struct terminal terminal;
   handle_t profile, space, launcher, memory, display, clock, echo, udp, tcp, pipe,
-      service, namespace_service, namespace, random, net_config, keyboard,
+      service, namespace_service, namespace, random, net_config, keyboard, terminal_service,
       app, home, host, host_mount;
   bool owns_host;
   bool owns_namespace;
