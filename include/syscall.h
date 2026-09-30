@@ -3,6 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/syscall.h>
+#include <abi/wait.h>
 #include <stddef.h>
 
 /* One-argument calls that preserve RDX: RAX is the number/result, RDI is arg1.
@@ -67,6 +68,19 @@ static inline struct syscall_result syscall_handle_info(handle_t handle,
   __asm__ volatile("syscall"
                    : "+a"(status), "=d"(reply_size)
                    : "D"(handle), "S"(info)
+                   : "rcx", "r11", "cc", "memory");
+  return (struct syscall_result){status, reply_size};
+}
+
+static inline struct syscall_result syscall_wait_many(const struct wait_interest *interests,
+    size_t count, uint64_t deadline_ns, uint64_t *events)
+{
+  uint64_t status = SYSCALL_WAIT_MANY;
+  uint64_t reply_size = deadline_ns;
+  register uint64_t arg4 __asm__("r10") = (uintptr_t)events;
+  __asm__ volatile("syscall"
+                   : "+a"(status), "+d"(reply_size)
+                   : "D"(interests), "S"(count), "r"(arg4)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }

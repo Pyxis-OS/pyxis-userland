@@ -18,7 +18,7 @@ LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/directory.o $(BUILD)/lib/path.o $(BUILD)/lib/mount.o \
                $(BUILD)/lib/profile.o $(BUILD)/lib/space.o $(BUILD)/lib/keyboard.o $(BUILD)/lib/clock.o $(BUILD)/lib/echo.o $(BUILD)/lib/net_config.o $(BUILD)/lib/udp.o $(BUILD)/lib/tcp.o $(BUILD)/lib/random.o $(BUILD)/lib/memory.o $(BUILD)/lib/display.o $(BUILD)/lib/process.o \
                $(BUILD)/lib/launcher.o $(BUILD)/lib/program.o \
-               $(BUILD)/lib/shebang.o
+               $(BUILD)/lib/shebang.o $(BUILD)/lib/wait.o
 LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
