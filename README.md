@@ -147,10 +147,29 @@ The shell reserves binding storage before opening and rechecks the service
 namespace before publication; it closes an unpublished root on conflict.
 The profile supports sixteen selected roots including app, home and HOST.
 Default scripts require no native disk; HOST keeps its existing command syntax.
+Native mounts request filesystem observation when the supplied mount authority
+holds OBSERVE; `--no-info` explicitly omits it. The option applies only to native
+mounts. A mount authority without OBSERVE can still mount content.
+
+[directory.h](include/directory.h) provides `directory_filesystem_info` through a
+borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies native
+type, read-only and GPT/filesystem degraded flags, opaque pool/volume IDs,
+volume name, retained selected generation and shared-pool allocatable capacity
+in bytes. Capacity excludes the two superblock slots but includes metadata and
+reserves; equal pool IDs identify shared capacity that must not be summed per
+binding or volume. Opening validates geometry and root envelopes, not global
+allocation accounting. All record fields are available on success; used/free
+bytes, charged bytes, guarantees, quotas and percentages are unavailable and
+never implied zero. Queries preserve caller output on failure, perform no
+whole-image check and acquire no additional authority. Other directory backends
+return BAD_OPERATION.
 
 Shell, session and remote handoffs forward the selected root list with queried
 rights and transport masks. Providers requested with `--read-only` attenuate
-both roots and cwd. The cwd chain is an explicit selection too: a launcher
+both roots and cwd.
+Read-only attenuation preserves held FILESYSTEM_INFO authority, including for
+the HTTPS provider's native trust roots, without adding it to other grants.
+The cwd chain is an explicit selection too: a launcher
 selecting fewer roots must omit inherited cwd or select a safe cwd from that
 subset. Display paths confer no authority. Mount resources remain in trusted
 init and are excluded from child handoffs.

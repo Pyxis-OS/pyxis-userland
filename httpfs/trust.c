@@ -17,7 +17,7 @@ static enum call_status readonly_directory(handle_t handle)
   if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_DIRECTORY ||
       info.transport != 0 ||
       (info.rights & ~(DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-          DIRECTORY_RIGHT_READ_FILES))) {
+          DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO))) {
     return CALL_DENIED;
   }
   return CALL_OK;

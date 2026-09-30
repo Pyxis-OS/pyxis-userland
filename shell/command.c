@@ -165,7 +165,7 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
   if (count >= 2 && !strcmp(arguments[count - 1], "host")) {
     return mount_host(shell, arguments, count);
   }
-  bool optional = false, read_only = false;
+  bool optional = false, read_only = false, no_info = false;
   uint64_t partition = 0;
   const char *volume = NULL;
   if (count < 2) {
@@ -176,6 +176,8 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
       optional = true;
     } else if (!strcmp(arguments[i], "--read-only") && !read_only) {
       read_only = true;
+    } else if (!strcmp(arguments[i], "--no-info") && !no_info) {
+      no_info = true;
     } else if (!strcmp(arguments[i], "--partition") && !partition && i + 2 < count) {
       if (!partition_number(arguments[++i], &partition)) {
         goto usage;
@@ -202,9 +204,21 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
     return optional ? COMMAND_OK :
         shell_directory_error(shell, "shell: mount", destination, CALL_UNAVAILABLE);
   }
+  uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+      DIRECTORY_RIGHT_READ_FILES;
+  if (!no_info) {
+    struct handle_info authority;
+    status = handle_query(shell->native_mount, &authority);
+    if (status != CALL_OK) {
+      free(name);
+      return shell_directory_error(shell, "shell: mount", destination, status);
+    }
+    if (authority.rights & MOUNT_RIGHT_OBSERVE) {
+      rights |= DIRECTORY_RIGHT_FILESYSTEM_INFO;
+    }
+  }
   handle_t root;
-  status = mount_open_volume(shell->native_mount, partition, volume,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES, &root);
+  status = mount_open_volume(shell->native_mount, partition, volume, rights, &root);
   if (status != CALL_OK) {
     free(name);
     return shell_directory_error(shell, "shell: mount", destination, status);
@@ -215,7 +229,7 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
 
 usage:
   return shell_error(shell,
-      "usage: mount [--optional] --partition N --volume NAME --read-only NAME://\n"
+      "usage: mount [--optional] [--no-info] --partition N --volume NAME --read-only NAME://\n"
       "       mount [--optional] [--read-only | --read-write] host\n");
 }
 

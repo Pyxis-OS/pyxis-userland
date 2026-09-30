@@ -12,8 +12,10 @@ enum call_status mount_open_root(handle_t mount, uint64_t access, handle_t *root
 /* Opens a native volume through disk-scoped authority. partition is one-based and
  * fits a GPT entry number (UINT32_MAX);
  * name is NUL-terminated and contains 1–255 bytes. rights is exact and must
- * include LOOKUP. Success returns an owned root, without consuming authority
- * or binding a URI. Failure clears root; malformed replies are outcome unknown. */
+ * include LOOKUP. FILESYSTEM_INFO additionally requires mount OBSERVE authority;
+ * observation is independent of core policy rights. Success returns an owned
+ * root, without consuming authority or binding a URI. Failure clears root;
+ * malformed replies are outcome unknown. */
 enum call_status mount_open_volume(handle_t mount, uint64_t partition,
     const char *name, uint64_t rights, handle_t *root);
 

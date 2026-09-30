@@ -1,4 +1,5 @@
 #include <directory.h>
+#include <string.h>
 #include <syscall.h>
 
 static enum call_status call_status(struct syscall_result result, size_t reply_size)
@@ -183,5 +184,39 @@ enum call_status directory_enumerate(handle_t directory, const struct directory_
     return CALL_BAD_REQUEST;
   }
   *reply = result;
+  return CALL_OK;
+}
+
+enum call_status directory_filesystem_info(handle_t directory,
+    struct directory_filesystem_info *info)
+{
+  if (!info) {
+    return CALL_BAD_REQUEST;
+  }
+  struct directory_message message;
+  memset(&message, 0, sizeof(message));
+  message.header = (struct message_header){PROTOCOL_DIRECTORY, DIRECTORY_FILESYSTEM_INFO};
+  struct directory_filesystem_info reply;
+  enum call_status status = call_status(syscall_call(directory, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  uint64_t known_flags = FILESYSTEM_FLAG_READ_ONLY | FILESYSTEM_FLAG_GPT_DEGRADED |
+      FILESYSTEM_FLAG_DEGRADED;
+  if (reply.type != FILESYSTEM_TYPE_PYXIS || (reply.flags & ~known_flags) ||
+      !(reply.flags & FILESYSTEM_FLAG_READ_ONLY)) {
+    return CALL_BAD_REQUEST;
+  }
+  const char *end = memchr(reply.volume_name, '\0', sizeof(reply.volume_name));
+  if (!end || end == reply.volume_name) {
+    return CALL_BAD_REQUEST;
+  }
+  for (; end < reply.volume_name + sizeof(reply.volume_name); ++end) {
+    if (*end) {
+      return CALL_BAD_REQUEST;
+    }
+  }
+  *info = reply;
   return CALL_OK;
 }
