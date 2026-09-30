@@ -12,7 +12,9 @@ static enum command_result script_command(struct shell *shell, char *line, char 
   if (*start == '#') {
     return COMMAND_OK;
   }
-  return shell_command(shell, line, arguments);
+  /* Scripts report no completion events; their policy uses the result only. */
+  struct shell_outcome outcome;
+  return shell_command(shell, line, arguments, &outcome);
 }
 
 int shell_script(struct shell *shell, handle_t script, char *line, char **arguments)

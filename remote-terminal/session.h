@@ -10,7 +10,8 @@ struct remote_shell {
   handle_t process;
 };
 
+/* No echo selects the root shell's quiet line editor; children never inherit it. */
 enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_width,
-    struct remote_shell *shell);
+    bool no_echo, struct remote_shell *shell);
 
 #endif

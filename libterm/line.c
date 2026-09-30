@@ -7,6 +7,7 @@ struct line_editor {
   char *buffer;
   size_t columns, prompt_length;
   size_t length, cursor, displayed_length, displayed_cursor;
+  bool quiet;
 };
 
 static enum call_status move_between(struct line_editor *editor, size_t from, size_t to)
@@ -35,6 +36,9 @@ static enum call_status write_spaces(struct terminal *term, size_t count)
 
 static enum call_status draw_line(struct line_editor *editor, bool editing, bool full)
 {
+  if (editor->quiet) {
+    return CALL_OK;
+  }
   struct terminal *term = editor->term;
   enum call_status status = term_cursor_visible(term, false);
   if (status != CALL_OK) {
@@ -95,8 +99,8 @@ static enum call_status draw_line(struct line_editor *editor, bool editing, bool
   return status;
 }
 
-struct term_line_result term_read_line(struct terminal *term, const char *prompt,
-                                      char *buffer, size_t capacity)
+static struct term_line_result read_line(struct terminal *term, const char *prompt,
+                                        char *buffer, size_t capacity, bool quiet)
 {
   struct term_line_result result = {.status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST};
   if (!buffer || !capacity) {
@@ -135,15 +139,17 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
   }
   struct line_editor editor = {
     .term = term, .prompt = prompt, .buffer = buffer,
-    .columns = columns, .prompt_length = prompt_length,
+    .columns = columns, .prompt_length = prompt_length, .quiet = quiet,
   };
-  result.error = term_fresh_line(term);
-  if (result.error != CALL_OK) {
-    return result;
-  }
-  result.error = term_print(term, "\x1b[0m\r\x1b[J");
-  if (result.error != CALL_OK) {
-    return result;
+  if (!quiet) {
+    result.error = term_fresh_line(term);
+    if (result.error != CALL_OK) {
+      return result;
+    }
+    result.error = term_print(term, "\x1b[0m\r\x1b[J");
+    if (result.error != CALL_OK) {
+      return result;
+    }
   }
   result.error = draw_line(&editor, true, false);
 
@@ -215,7 +221,7 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
     result.error = draw_line(&editor, true, full);
   }
 
-  if (result.status != TERM_LINE_ERROR) {
+  if (result.status != TERM_LINE_ERROR && !quiet) {
     enum call_status status = draw_line(&editor, false, false);
     if (status == CALL_OK) {
       status = term_print(term, result.status == TERM_LINE_CANCELLED ? "^C\n" : "\n");
@@ -225,7 +231,7 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
       result.error = status;
     }
   }
-  if (result.status == TERM_LINE_ERROR) {
+  if (result.status == TERM_LINE_ERROR && !quiet) {
     /* An output failure can leave a partial redraw; still attempt restoration. */
     term_reset_style(term);
     term_cursor_visible(term, true);
@@ -236,4 +242,16 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
     buffer[0] = '\0';
   }
   return result;
+}
+
+struct term_line_result term_read_line(struct terminal *term, const char *prompt,
+                                      char *buffer, size_t capacity)
+{
+  return read_line(term, prompt, buffer, capacity, false);
+}
+
+struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
+                                            char *buffer, size_t capacity)
+{
+  return read_line(term, prompt, buffer, capacity, true);
 }

@@ -88,6 +88,13 @@ static void free_preparation(struct prepared_stage *stages, size_t stage_count)
   free(stages);
 }
 
+static void set_outcome(struct shell_outcome *outcome, uint64_t kind, int64_t status)
+{
+  if (outcome) {
+    *outcome = (struct shell_outcome){kind, status};
+  }
+}
+
 static enum command_result launch_error(struct shell *shell, const struct shell_stage *stages,
     size_t stage_count, size_t stage, const char *operation, const char *path,
     enum call_status status)
@@ -404,13 +411,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
 
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
     size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace,
-    bool optional, bool read_only)
+    bool optional, bool read_only, struct shell_outcome *outcome)
 {
   struct prepared_stage *prepared = calloc(stage_count, sizeof(*prepared));
   struct launch_request *requests = malloc(stage_count * sizeof(*requests));
   if (!prepared || !requests) {
     free(requests);
     free(prepared);
+    set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
     return shell_directory_error(shell, "shell", stages[0].arguments[0], CALL_NO_MEMORY);
   }
   struct pipe_create_reply pipes[LAUNCH_BATCH_MAX - 1] = {0};
@@ -633,6 +641,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       shell_directory_error(shell, "shell: close", stages[0].arguments[0], CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
+    set_outcome(outcome, TERMINAL_COMPLETION_LAUNCHED, 0);
     return mode == SHELL_SESSION ? COMMAND_EXIT : COMMAND_OK;
   }
 
@@ -682,6 +691,18 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       result = diagnostic;
     }
   }
+  const struct process_result *last = &completion[stage_count - 1];
+  switch (last->kind) {
+  case PROCESS_EXITED:
+    set_outcome(outcome, TERMINAL_COMPLETION_EXITED, last->exit_status);
+    break;
+  case PROCESS_FAULTED:
+    set_outcome(outcome, TERMINAL_COMPLETION_FAULTED, 0);
+    break;
+  default:
+    set_outcome(outcome, TERMINAL_COMPLETION_TERMINATED, 0);
+    break;
+  }
   return result;
 
 failed:
@@ -692,6 +713,7 @@ failed:
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
       operation, path, status);
+  set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
   if (!closed_sources || cleanup_failure || status == CALL_OUTCOME_UNKNOWN) {
     return COMMAND_FATAL;
   }
@@ -700,25 +722,26 @@ failed:
 
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
     enum shell_launch_mode mode, const struct shell_redirection *redirections,
-    size_t redirection_count)
+    size_t redirection_count, struct shell_outcome *outcome)
 {
   struct shell_stage stage = {.arguments = arguments, .count = count,
       .redirection_count = redirection_count};
   for (size_t i = 0; i < redirection_count; ++i) {
     stage.redirections[i] = redirections[i];
   }
-  return launch_stages(shell, &stage, 1, mode, NULL, false, false, false);
+  return launch_stages(shell, &stage, 1, mode, NULL, false, false, false, outcome);
 }
 
 enum command_result shell_launch_pipeline(struct shell *shell,
-    const struct shell_command_line *command)
+    const struct shell_command_line *command, struct shell_outcome *outcome)
 {
   if (command->stage_count < 2 || command->stage_count > LAUNCH_BATCH_MAX ||
       command->background) {
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
     return shell_error(shell, "shell: Invalid foreground pipeline\n");
   }
   return launch_stages(shell, command->stages, command->stage_count,
-      SHELL_FOREGROUND, NULL, false, false, false);
+      SHELL_FOREGROUND, NULL, false, false, false, outcome);
 }
 
 enum command_result shell_launch_service(struct shell *shell, const char *name,
@@ -757,5 +780,6 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
     return shell_error(shell, "service: lookup %s failed (status %u)\n", name, status);
   }
   struct shell_stage stage = {.arguments = arguments, .count = count};
-  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace, optional, read_only);
+  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace, optional, read_only,
+      NULL);
 }

@@ -3,6 +3,7 @@
 
 #include <abi/launcher.h>
 #include <abi/startup.h>
+#include <abi/terminal.h>
 #include <path.h>
 #include <term.h>
 #include <startup.h>
@@ -15,6 +16,14 @@ enum command_result {
   COMMAND_FAILED,
   COMMAND_EXIT,
   COMMAND_FATAL, /* Terminal, wait or cleanup failed; input cannot resume. */
+};
+
+/* Reported completion, separate from command_result control flow. Kind is a
+ * TERMINAL_COMPLETION value; status is the exit code for EXITED, 0 or 1 for
+ * BUILTIN and zero otherwise. Undefined when the command result is FATAL. */
+struct shell_outcome {
+  uint64_t kind;
+  int64_t status;
 };
 
 enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
@@ -41,6 +50,7 @@ struct shell_command_line {
 struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
+  bool quiet_input; /* Root-shell option only; never forwarded to children. */
   struct terminal terminal;
   handle_t profile, space, launcher, memory, display, clock, system_info, echo, udp, tcp, pipe,
       service, namespace_service, namespace, random, net_config, keyboard, terminal_service,
@@ -68,12 +78,14 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
-enum command_result shell_command(struct shell *shell, char *line, char **arguments);
+enum command_result shell_command(struct shell *shell, char *line, char **arguments,
+    struct shell_outcome *outcome);
+/* Outcome is NULL for the session builtin, which reports its own result. */
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
     enum shell_launch_mode mode, const struct shell_redirection *redirections,
-    size_t redirection_count);
+    size_t redirection_count, struct shell_outcome *outcome);
 enum command_result shell_launch_pipeline(struct shell *shell,
-    const struct shell_command_line *command);
+    const struct shell_command_line *command, struct shell_outcome *outcome);
 enum command_result shell_launch_service(struct shell *shell, const char *name,
     bool replace, bool optional, bool read_only, char **arguments, size_t count);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */

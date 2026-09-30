@@ -19,6 +19,15 @@
 #define IDLE_WAIT_NS UINT64_C(10000000000)
 #define FRAME_SIZE (REMOTE_HEADER_SIZE + REMOTE_PAYLOAD_MAX)
 
+/* Native completion kinds cross the wire by value. */
+static_assert(REMOTE_COMPLETION_EXITED == TERMINAL_COMPLETION_EXITED);
+static_assert(REMOTE_COMPLETION_FAULTED == TERMINAL_COMPLETION_FAULTED);
+static_assert(REMOTE_COMPLETION_TERMINATED == TERMINAL_COMPLETION_TERMINATED);
+static_assert(REMOTE_COMPLETION_LAUNCH_FAILED == TERMINAL_COMPLETION_LAUNCH_FAILED);
+static_assert(REMOTE_COMPLETION_BUILTIN == TERMINAL_COMPLETION_BUILTIN);
+static_assert(REMOTE_COMPLETION_REJECTED == TERMINAL_COMPLETION_REJECTED);
+static_assert(REMOTE_COMPLETION_LAUNCHED == TERMINAL_COMPLETION_LAUNCHED);
+
 struct client {
   bool occupied;
   handle_t stream;
@@ -168,11 +177,14 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
   switch (type) {
   case REMOTE_HELLO: {
     uint32_t columns = remote_decode_u32(payload), rows = remote_decode_u32(payload + 4);
-    if (!columns || columns > REMOTE_COLUMNS_MAX || !rows || rows > REMOTE_ROWS_MAX) {
+    uint32_t options = remote_decode_u32(payload + 8);
+    if (!columns || columns > REMOTE_COLUMNS_MAX || !rows || rows > REMOTE_ROWS_MAX ||
+        (options & ~REMOTE_OPTIONS)) {
       reject(client, REMOTE_ERROR_BAD_FRAME, now);
       return true;
     }
-    status = remote_shell_launch(columns, rows, tab_width, &client->shell);
+    status = remote_shell_launch(columns, rows, tab_width,
+        options & REMOTE_OPTION_NO_SHELL_ECHO, &client->shell);
     if (status != CALL_OK) {
       report("launch shell", status);
       reject(client, REMOTE_ERROR_LAUNCH, now);
@@ -331,7 +343,8 @@ static bool collect_output(struct client *client, uint64_t now)
     unsigned char encoded[REMOTE_COMMAND_COMPLETE_SIZE];
     memcpy(&completion, payload, sizeof(completion));
     remote_encode_u64(encoded, completion.command);
-    remote_encode_u32(encoded + 8, (uint32_t)completion.status);
+    remote_encode_u32(encoded + 8, (uint32_t)completion.kind);
+    remote_encode_u32(encoded + 12, (uint32_t)completion.status);
     queue_frame(client, REMOTE_COMMAND_COMPLETE, encoded, sizeof(encoded));
   } else {
     uint64_t width;

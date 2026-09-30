@@ -26,7 +26,7 @@ static enum call_status directory_grant(handle_t directory, struct launch_grant 
 }
 
 enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_width,
-    struct remote_shell *shell)
+    bool no_echo, struct remote_shell *shell)
 {
   *shell = (struct remote_shell){0};
   struct terminal_create_reply terminal;
@@ -122,7 +122,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count};
     grants[grant_count++] = (struct launch_grant){source, rights & allowed[i].rights, 0};
   }
-  const char *arguments[] = {"app://shell.pxe"};
+  const char *arguments[] = {"app://shell.pxe", "--no-echo"};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
@@ -132,7 +132,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     .working_path = (uintptr_t)"home://",
     .environment = (uintptr_t)startup_environment_variables(),
     .environment_count = startup_environment_count(),
-    .argv = (uintptr_t)arguments, .argc = 1,
+    .argv = (uintptr_t)arguments, .argc = no_echo ? 2 : 1,
     .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
   };
   handle_t namespace = startup_namespace();
