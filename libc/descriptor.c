@@ -18,12 +18,19 @@
 enum descriptor_state { DESCRIPTOR_FREE, DESCRIPTOR_RESERVED, DESCRIPTOR_OPEN };
 enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE };
 
+/* Position is the logical position: the next byte the program receives. File
+ * read-ahead holds the bytes that follow it, so the next backend read starts at
+ * position + ahead_count. Only files discard read-ahead before close, because
+ * they can fetch those bytes again; pipe read-ahead lives until close. */
 struct descriptor_entry {
   enum descriptor_state state;
   enum descriptor_kind kind;
   handle_t handle;
   uint64_t position;
   bool readable, writable, append;
+  bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
+  unsigned char *ahead; /* Owned, BUFSIZ bytes, allocated on first fill. */
+  size_t ahead_start, ahead_count;
   FILE *stream; /* Non-owning; only one FILE can associate with an entry. */
 };
 
@@ -173,6 +180,8 @@ int descriptor_close(int descriptor)
   if (entry->stream) {
     entry->stream->descriptor = -1;
   }
+  /* Unread read-ahead is discarded with the descriptor, as on process exit. */
+  free(entry->ahead);
   *entry = (struct descriptor_entry){0};
   /* Never retry an uncertain release or reconnect a FILE after slot reuse.
    * Any residual native entry is reclaimed by kernel process teardown. */
@@ -194,6 +203,86 @@ void descriptor_finish(void)
   memset(startup_entries, 0, sizeof(startup_entries));
 }
 
+/* One backend transfer following any read-ahead; does not move the position. */
+static int backend_read(struct descriptor_entry *entry, void *buffer, size_t size,
+    size_t *read)
+{
+  enum call_status status;
+  if (entry->kind == DESCRIPTOR_FILE) {
+    uint64_t offset = entry->position + entry->ahead_count;
+    if (size > UINT64_MAX - offset) {
+      return fail(EOVERFLOW);
+    }
+    status = file_read(entry->handle, offset, buffer, size, read);
+  } else if (entry->kind == DESCRIPTOR_PIPE) {
+    status = pipe_read(entry->handle, buffer, size, read);
+  } else {
+    status = console_read(entry->handle, buffer, size, read);
+  }
+  if (status != CALL_OK) {
+    *read = 0;
+    return fail(libc_call_errno(status));
+  }
+  if (*read > size) {
+    *read = 0;
+    return fail(EIO);
+  }
+  return 0;
+}
+
+static size_t take_ahead(struct descriptor_entry *entry, void *buffer, size_t size)
+{
+  size_t count = size < entry->ahead_count ? size : entry->ahead_count;
+  memcpy(buffer, entry->ahead + entry->ahead_start, count);
+  entry->ahead_start += count;
+  entry->ahead_count -= count;
+  if (!entry->ahead_count) {
+    entry->ahead_start = 0;
+  }
+  if (entry->kind == DESCRIPTOR_FILE) {
+    entry->position += count;
+  }
+  return count;
+}
+
+static void discard_ahead(struct descriptor_entry *entry)
+{
+  entry->ahead_start = 0;
+  entry->ahead_count = 0;
+}
+
+static bool ahead_available(struct descriptor_entry *entry)
+{
+  if (entry->ahead) {
+    return true;
+  }
+  if (entry->unbuffered) {
+    return false;
+  }
+  /* Read-ahead is only an optimization: failure is neither an error nor
+   * repeated per read, and must not disturb the caller's errno. */
+  int saved = errno;
+  entry->ahead = malloc(BUFSIZ);
+  errno = saved;
+  if (!entry->ahead) {
+    entry->unbuffered = true;
+    return false;
+  }
+  return true;
+}
+
+static int read_exact(struct descriptor_entry *entry, void *buffer, size_t size,
+    size_t *read)
+{
+  if (backend_read(entry, buffer, size, read) < 0) {
+    return -1;
+  }
+  if (entry->kind == DESCRIPTOR_FILE) {
+    entry->position += *read;
+  }
+  return 0;
+}
+
 int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
 {
   *read = 0;
@@ -204,28 +293,60 @@ int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
     return 0;
   }
   struct descriptor_entry *entry = &entries[descriptor];
-  enum call_status status;
-  if (entry->kind == DESCRIPTOR_FILE) {
-    if (size > UINT64_MAX - entry->position) {
-      return fail(EOVERFLOW);
-    }
-    status = file_read(entry->handle, entry->position, buffer, size, read);
-  } else if (entry->kind == DESCRIPTOR_PIPE) {
-    status = pipe_read(entry->handle, buffer, size, read);
-  } else {
-    status = console_read(entry->handle, buffer, size, read);
+  if (entry->ahead_count) {
+    *read = take_ahead(entry, buffer, size);
+    return 0;
   }
-  if (status != CALL_OK) {
-    return fail(libc_call_errno(status));
+  return read_exact(entry, buffer, size, read);
+}
+
+int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *read)
+{
+  *read = 0;
+  if (!descriptor_ready(descriptor, false)) {
+    return -1;
   }
-  if (*read > size) {
-    *read = 0;
-    return fail(EIO);
+  if (!size) {
+    return 0;
   }
-  if (entry->kind == DESCRIPTOR_FILE) {
-    entry->position += *read;
+  struct descriptor_entry *entry = &entries[descriptor];
+  if (entry->ahead_count) {
+    *read = take_ahead(entry, buffer, size);
+    return 0;
   }
+  /* Consoles are shared interactive input and are never read ahead. A request
+   * of at least one buffer gains nothing from copying through it. */
+  if (entry->kind == DESCRIPTOR_CONSOLE || size >= BUFSIZ || !ahead_available(entry)) {
+    return read_exact(entry, buffer, size, read);
+  }
+  /* Speculation must not turn a valid read into an error: cap a file fill at
+   * the representable offsets past the position. If even the request does not
+   * fit, the exact read reports what it always has. */
+  size_t fill = BUFSIZ;
+  if (entry->kind == DESCRIPTOR_FILE && UINT64_MAX - entry->position < fill) {
+    fill = (size_t)(UINT64_MAX - entry->position);
+  }
+  if (fill < size) {
+    return read_exact(entry, buffer, size, read);
+  }
+  size_t fetched;
+  if (backend_read(entry, entry->ahead, fill, &fetched) < 0) {
+    return -1;
+  }
+  entry->ahead_start = 0;
+  entry->ahead_count = fetched;
+  *read = take_ahead(entry, buffer, size);
   return 0;
+}
+
+void descriptor_discard_input(int descriptor)
+{
+  if (descriptor < 0 || (size_t)descriptor >= capacity ||
+      entries[descriptor].state != DESCRIPTOR_OPEN ||
+      entries[descriptor].kind != DESCRIPTOR_FILE) {
+    return;
+  }
+  discard_ahead(&entries[descriptor]);
 }
 
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written)
@@ -238,6 +359,9 @@ int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *wr
     return 0;
   }
   struct descriptor_entry *entry = &entries[descriptor];
+  /* Only file update streams are both readable and writable. The logical
+   * position is unchanged, so discarding their read-ahead loses no input. */
+  discard_ahead(entry);
   uint64_t position = entry->position;
   enum call_status status;
   if (entry->kind == DESCRIPTOR_FILE) {
@@ -296,6 +420,8 @@ int descriptor_seek(int descriptor, long offset, int origin)
   if ((offset < 0 && distance > base) || (offset >= 0 && distance > UINT64_MAX - base)) {
     return fail(offset < 0 ? EINVAL : EOVERFLOW);
   }
+  /* Only a validated seek drops read-ahead; failures keep every byte. */
+  discard_ahead(entry);
   entry->position = offset < 0 ? base - distance : base + distance;
   return 0;
 }
