@@ -45,6 +45,12 @@ and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
 for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
+[terminal.h](include/terminal.h) provides native terminal creation and attachment
+queue helpers. Applications use the returned CONSOLE input/output grants through
+libterm or libc streams. Input EOF returns `TERM_KEY_EOF` through key decoding and
+`TERM_LINE_EOF` through line editing, discarding any partial line. Ctrl+D retains
+the line editor's empty-line-only behavior.
+
 For manually invoked performance measurements, see [iobench](iobench/README.md)
 for files and pipes and [ipcbench](ipcbench/README.md) for CALL/SEND.
 

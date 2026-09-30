@@ -32,6 +32,10 @@ static enum call_status read_key(struct terminal *term, unsigned *key,
     if (status != CALL_OK) {
       return status;
     }
+    if (!count) {
+      *key = TERM_KEY_EOF;
+      return CALL_OK;
+    }
     if (byte == '\x1b') {
       state = ESCAPE;
       parameter = 0;
