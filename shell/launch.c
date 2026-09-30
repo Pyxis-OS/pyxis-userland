@@ -334,7 +334,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     if (read_only) {
       grant->rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-          DIRECTORY_RIGHT_READ_FILES;
+          DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO;
     }
   }
   /* The cwd is explicitly selected alongside the complete root list. Apply
@@ -348,7 +348,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     if (read_only) {
       grant->rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-          DIRECTORY_RIGHT_READ_FILES;
+          DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO;
     }
   }
 
