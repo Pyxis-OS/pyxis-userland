@@ -41,7 +41,8 @@ enum call_status console_set_tab_width(handle_t output, size_t columns);
 
 /* INTERRUPT authority. On success *armed is a new handle that keeps Ctrl+C
  * armed on this input until it closes; observe it with wait_many
- * WAIT_INTERRUPT. CALL_BUSY means the input is already armed. Both calls
+ * WAIT_INTERRUPT. CALL_BUSY means the input is already armed, or briefly that
+ * another arm request is still installing its handle. Both calls
  * leave the output HANDLE_INVALID on failure. */
 enum call_status console_arm_interrupt(handle_t input, handle_t *armed);
 
