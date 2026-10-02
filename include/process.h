@@ -13,4 +13,10 @@
  * TERMINATED carry zero. Closing an observer does not terminate its target. */
 enum call_status process_wait(handle_t process, struct process_result *result);
 
+/* Requires TERMINATE authority; launch grants it with each child's observer.
+ * Requests that the process stop and returns without waiting. Idempotent, and
+ * successful after completion, which keeps an already committed exit or fault.
+ * Affects only that process. Use process_wait or WAIT_COMPLETE for the result. */
+enum call_status process_terminate(handle_t process);
+
 #endif
