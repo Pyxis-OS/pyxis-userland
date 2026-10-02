@@ -29,3 +29,16 @@ enum call_status process_wait(handle_t process, struct process_result *result)
   *result = reply;
   return CALL_OK;
 }
+
+enum call_status process_terminate(handle_t process)
+{
+  struct message_header message = {PROTOCOL_PROCESS, PROCESS_TERMINATE};
+  struct syscall_result call = syscall_call(process, &message, sizeof(message), NULL, 0);
+  if (call.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (call.reply_size) {
+    return CALL_BAD_REQUEST;
+  }
+  return call.status;
+}
