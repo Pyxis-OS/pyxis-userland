@@ -82,7 +82,15 @@ static int launch_session(const struct session_config *config, const struct netw
     goto done;
   }
 
-  grants[INPUT] = (struct launch_grant){terminal.input, CONSOLE_RIGHT_READ, 0};
+  /* Pass Ctrl+C arming on to the successor shell when this session has it. */
+  uint64_t input_rights;
+  status = handle_rights(terminal.input, &input_rights, NULL);
+  if (status != CALL_OK) {
+    fprintf(stderr, "session: cannot query input rights (status %u)\n", status);
+    goto done;
+  }
+  grants[INPUT] = (struct launch_grant){terminal.input,
+      input_rights & (CONSOLE_RIGHT_READ | CONSOLE_RIGHT_INTERRUPT), 0};
   grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};

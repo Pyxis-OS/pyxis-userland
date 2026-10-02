@@ -67,7 +67,8 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   enum { OPTIONAL_RESOURCE_COUNT = 10, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
-    [INPUT] = {terminal.input, CONSOLE_RIGHT_READ, 0},
+    /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
+    [INPUT] = {terminal.input, CONSOLE_RIGHT_READ | CONSOLE_RIGHT_INTERRUPT, 0},
     [OUTPUT] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [LAUNCHER] = {bound, LAUNCHER_RIGHT_LAUNCH, 0},
     [STDIN] = {terminal.input, CONSOLE_RIGHT_READ, 0},

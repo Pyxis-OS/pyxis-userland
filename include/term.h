@@ -25,6 +25,10 @@ enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows)
 /* Set shared TTY tab spacing through output: 1..32 columns, default 8.
  * Affects future tabs only; preserves existing text, cursor and parser state. */
 enum call_status term_set_tab_width(struct terminal *term, size_t columns);
+/* READ authority on input. On success *passthrough is a new handle; while it
+ * stays open, Ctrl+C reaches this application as data instead of interrupting
+ * the foreground job. Close it with handle_close to withdraw. */
+enum call_status term_passthrough(struct terminal *term, handle_t *passthrough);
 
 /* Movement clamps at screen edges and never scrolls. Position is zero-based;
  * relative movement accepts -65535..65535. Clear-screen also moves to (0, 0),
@@ -96,7 +100,10 @@ struct term_line_result {
  * Buffer/display exhaustion rejects insertion, colors its cell red and sets
  * limit_reached. Deletion, movement, submission and cancellation remain usable.
  * CANCELLED/EOF/INPUT_LOST/ERROR clear buffer[0] when possible.
- * Reads one byte at a time: no unread bytes are retained for a future caller. */
+ * Reads one byte at a time: no unread bytes are retained for a future caller.
+ * Holds passthrough for the call, so Ctrl+C cancels the line rather than
+ * interrupting the program; if the request fails, editing continues without
+ * it. Failing to withdraw passthrough returns ERROR with CALL_BAD_HANDLE. */
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity);
 /* Same editing, cancellation, EOF and limits as term_read_line, including the

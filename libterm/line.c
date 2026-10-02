@@ -1,3 +1,4 @@
+#include <handle.h>
 #include <term.h>
 #include <string.h>
 
@@ -244,14 +245,32 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   return result;
 }
 
+/* Ctrl+C belongs to the editor only while a line is being read; code the
+ * application runs between lines stays interruptible. */
+static struct term_line_result read_line_passthrough(struct terminal *term,
+    const char *prompt, char *buffer, size_t capacity, bool quiet)
+{
+  handle_t passthrough;
+  bool held = term_passthrough(term, &passthrough) == CALL_OK;
+  struct term_line_result result = read_line(term, prompt, buffer, capacity, quiet);
+  if (held && handle_close(passthrough) != 0) {
+    /* A retained grant would keep Ctrl+C from interrupting this program. */
+    result = (struct term_line_result){.status = TERM_LINE_ERROR, .error = CALL_BAD_HANDLE};
+    if (capacity) {
+      buffer[0] = '\0';
+    }
+  }
+  return result;
+}
+
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity)
 {
-  return read_line(term, prompt, buffer, capacity, false);
+  return read_line_passthrough(term, prompt, buffer, capacity, false);
 }
 
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity)
 {
-  return read_line(term, prompt, buffer, capacity, true);
+  return read_line_passthrough(term, prompt, buffer, capacity, true);
 }
