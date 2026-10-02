@@ -39,4 +39,14 @@ enum call_status console_fresh_line(handle_t output);
  * tabs on the shared TTY without moving the cursor or changing existing text. */
 enum call_status console_set_tab_width(handle_t output, size_t columns);
 
+/* INTERRUPT authority. On success *armed is a new handle that keeps Ctrl+C
+ * armed on this input until it closes; observe it with wait_many
+ * WAIT_INTERRUPT. CALL_BUSY means the input is already armed. Both calls
+ * leave the output HANDLE_INVALID on failure. */
+enum call_status console_arm_interrupt(handle_t input, handle_t *armed);
+
+/* READ authority. On success *passthrough is a new handle; while any such
+ * handle exists, Ctrl+C on this input is ordinary data. Close it to withdraw. */
+enum call_status console_passthrough(handle_t input, handle_t *passthrough);
+
 #endif
