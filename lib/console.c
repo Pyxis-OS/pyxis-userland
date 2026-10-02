@@ -131,3 +131,34 @@ enum call_status console_set_tab_width(handle_t output, size_t columns)
   return result.status < CALL_STATUS_COUNT && !result.reply_size ?
          (enum call_status)result.status : CALL_BAD_REQUEST;
 }
+
+static enum call_status console_handle(handle_t input, uint64_t operation, handle_t *handle)
+{
+  if (!handle) {
+    return CALL_BAD_REQUEST;
+  }
+  *handle = HANDLE_INVALID;
+  struct console_message message = {.header = {PROTOCOL_CONSOLE, operation}};
+  struct console_handle_reply reply;
+  struct syscall_result result = syscall_call(input, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status != CALL_OK) {
+    return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+           (enum call_status)result.status : CALL_BAD_REQUEST;
+  }
+  if (result.reply_size != sizeof(reply) || reply.handle == HANDLE_INVALID) {
+    return CALL_BAD_REQUEST;
+  }
+  *handle = reply.handle;
+  return CALL_OK;
+}
+
+enum call_status console_arm_interrupt(handle_t input, handle_t *armed)
+{
+  return console_handle(input, CONSOLE_ARM_INTERRUPT, armed);
+}
+
+enum call_status console_passthrough(handle_t input, handle_t *passthrough)
+{
+  return console_handle(input, CONSOLE_PASSTHROUGH, passthrough);
+}
