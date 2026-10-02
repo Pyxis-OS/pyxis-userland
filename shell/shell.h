@@ -51,6 +51,9 @@ struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   bool quiet_input; /* Root-shell option only; never forwarded to children. */
+  /* Input carries Ctrl+C arming and a clock bounds the waits. Only a root
+   * shell or session successor is granted it; commands get READ alone. */
+  bool interrupts;
   struct terminal terminal;
   handle_t profile, space, launcher, memory, display, clock, system_info, echo, udp, tcp, pipe,
       service, namespace_service, namespace, random, net_config, keyboard, terminal_service,

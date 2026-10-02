@@ -13,6 +13,11 @@ enum call_status term_read_timeout(struct terminal *term, void *bytes, size_t ca
   return console_read_timeout(term->input, bytes, capacity, timeout_ms, read);
 }
 
+enum call_status term_passthrough(struct terminal *term, handle_t *passthrough)
+{
+  return console_passthrough(term->input, passthrough);
+}
+
 enum call_status term_write(struct terminal *term, const void *bytes, size_t size, size_t *written)
 {
   return console_write(term->output, bytes, size, written);

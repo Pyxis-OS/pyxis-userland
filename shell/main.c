@@ -1,4 +1,5 @@
 #include "shell.h"
+#include <abi/console.h>
 #include "../common/directory.h"
 #include <startup.h>
 #include <handle.h>
@@ -109,6 +110,11 @@ int main(int argc, char **argv)
     shell_error(&shell, "shell: Missing startup resource or filesystem root\n");
     return EXIT_FAILURE;
   }
+
+  uint64_t input_rights = 0;
+  shell.interrupts = shell.clock != HANDLE_INVALID &&
+      handle_rights(shell.terminal.input, &input_rights, NULL) == CALL_OK &&
+      (input_rights & CONSOLE_RIGHT_INTERRUPT);
 
   int result = EXIT_FAILURE;
   char *line = malloc(script != HANDLE_INVALID ? SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);

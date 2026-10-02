@@ -19,6 +19,9 @@
 #include <abi/space.h>
 #include <abi/profile.h>
 #include <abi/terminal.h>
+#include <abi/wait.h>
+#include <clock.h>
+#include <console.h>
 #include <handle.h>
 #include <endpoint.h>
 #include <file.h>
@@ -27,6 +30,7 @@
 #include <pipe.h>
 #include <process.h>
 #include <startup.h>
+#include <wait.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -174,7 +178,17 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   struct launch_grant *grants = prepared->grants;
   uint64_t *directories = prepared->directories;
   if (named_input) {
-    grants[input_index] = (struct launch_grant){shell->terminal.input, CONSOLE_RIGHT_READ, 0};
+    /* A session successor replaces this shell and inherits Ctrl+C arming;
+     * ordinary commands receive READ alone. */
+    uint64_t input_rights = CONSOLE_RIGHT_READ;
+    if (session) {
+      enum call_status status = handle_rights(shell->terminal.input, &input_rights, NULL);
+      if (status != CALL_OK) {
+        return status;
+      }
+      input_rights &= CONSOLE_RIGHT_READ | CONSOLE_RIGHT_INTERRUPT;
+    }
+    grants[input_index] = (struct launch_grant){shell->terminal.input, input_rights, 0};
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
@@ -409,6 +423,81 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   return CALL_OK;
 }
 
+/* Arms Ctrl+C for one foreground job. Without interrupt authority the job
+ * runs as before, interruptible only by ending the session. */
+static handle_t arm_interrupt(struct shell *shell)
+{
+  if (!shell->interrupts) {
+    return HANDLE_INVALID;
+  }
+  handle_t armed;
+  enum call_status status = console_arm_interrupt(shell->terminal.input, &armed);
+  if (status != CALL_OK) {
+    shell_error(shell, "shell: Ctrl+C unavailable for this command (status %u)\n", status);
+    return HANDLE_INVALID;
+  }
+  return armed;
+}
+
+static_assert(LAUNCH_BATCH_MAX + 1 <= WAIT_MAX_INTERESTS,
+    "a foreground wait watches every stage and the interrupt");
+
+/* Waits until every stage completes or Ctrl+C arrives. On Ctrl+C, requests
+ * termination of every stage and stops watching the interrupt; the caller
+ * stays armed, so later presses are discarded, and collects results as usual.
+ * Terminating a stage that already finished keeps its real result. */
+static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *children,
+    size_t stage_count, handle_t armed)
+{
+  bool complete[LAUNCH_BATCH_MAX] = {0};
+  size_t remaining = stage_count;
+  while (remaining) {
+    struct wait_interest interests[LAUNCH_BATCH_MAX + 1];
+    size_t stage_of[LAUNCH_BATCH_MAX];
+    size_t count = 0;
+    for (size_t i = 0; i < stage_count; ++i) {
+      if (!complete[i]) {
+        stage_of[count] = i;
+        interests[count++] = (struct wait_interest){children[i], WAIT_COMPLETE};
+      }
+    }
+    interests[count] = (struct wait_interest){armed, WAIT_INTERRUPT};
+    uint64_t now;
+    enum call_status status = clock_now(shell->clock, &now);
+    if (status != CALL_OK) {
+      return status;
+    }
+    uint64_t events[LAUNCH_BATCH_MAX + 1];
+    status = wait_many(interests, count + 1, now + WAIT_MAX_WAIT_NS, events);
+    if (status == CALL_TIMED_OUT) {
+      continue;
+    }
+    if (status != CALL_OK) {
+      return status;
+    }
+    for (size_t j = 0; j < count; ++j) {
+      if (events[j]) {
+        complete[stage_of[j]] = true;
+        --remaining;
+      }
+    }
+    if (events[count] & WAIT_INTERRUPT) {
+      for (size_t i = 0; i < stage_count; ++i) {
+        status = process_terminate(children[i]);
+        if (status != CALL_OK) {
+          shell_error(shell, "shell: stage %zu: cannot terminate (status %u)\n", i + 1, status);
+        }
+      }
+      return CALL_OK;
+    }
+    if (events[count] & WAIT_ERROR) {
+      /* The terminal hung up; its readers fail on their own. */
+      return CALL_OK;
+    }
+  }
+  return CALL_OK;
+}
+
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
     size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace,
     bool optional, bool read_only, struct shell_outcome *outcome)
@@ -428,6 +517,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   size_t failed_stage = 0;
   enum call_status status = CALL_OK;
   handle_t children[LAUNCH_BATCH_MAX] = {0};
+  handle_t armed = HANDLE_INVALID;
   uint64_t failed_index = LAUNCH_NO_STAGE;
   bool cleanup_failure = false;
   struct endpoint_create_reply publication = {0};
@@ -537,6 +627,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
 
   operation = "shell: launch";
   path = stages[0].arguments[0];
+  /* Arm before launch so Ctrl+C during startup cannot reach a stage as data. */
+  if (mode == SHELL_FOREGROUND) {
+    armed = arm_interrupt(shell);
+  }
   struct path_context interpreter_context = {.namespace = shell->namespace};
   if (stage_count == 1) {
     status = program_launch(shell->launcher, &requests[0], &interpreter_context,
@@ -562,6 +656,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     for (size_t i = 0; i < stage_count; ++i) {
       close_handle(&children[i]);
     }
+    close_handle(&armed);
     shell_directory_error(shell, "shell: close", stages[0].arguments[0], CALL_BAD_HANDLE);
     return COMMAND_FATAL;
   }
@@ -645,6 +740,21 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     return mode == SHELL_SESSION ? COMMAND_EXIT : COMMAND_OK;
   }
 
+  if (armed != HANDLE_INVALID) {
+    status = wait_or_interrupt(shell, children, stage_count, armed);
+    if (status != CALL_OK) {
+      /* Nothing watches the interrupt now; disarm so Ctrl+C is data again
+       * rather than silently swallowed. */
+      shell_error(shell, "shell: Ctrl+C wait failed (status %u)\n", status);
+      if (!close_handle(&armed)) {
+        for (size_t i = 0; i < stage_count; ++i) {
+          close_handle(&children[i]);
+        }
+        shell_directory_error(shell, "shell: close", "Ctrl+C arming", CALL_BAD_HANDLE);
+        return COMMAND_FATAL;
+      }
+    }
+  }
   struct process_result completion[LAUNCH_BATCH_MAX] = {0};
   for (size_t i = 0; i < stage_count; ++i) {
     status = process_wait(children[i], &completion[i]);
@@ -653,11 +763,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       for (size_t j = i + 1; j < stage_count; ++j) {
         close_handle(&children[j]);
       }
+      close_handle(&armed);
       launch_error(shell, stages, stage_count, i,
           status != CALL_OK ? "shell: wait" : "shell: close",
           stages[i].arguments[0], status != CALL_OK ? status : CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
+  }
+  /* Disarm only after every stage finished, so no press reaches the editor. */
+  if (!close_handle(&armed)) {
+    shell_directory_error(shell, "shell: close", "Ctrl+C arming", CALL_BAD_HANDLE);
+    return COMMAND_FATAL;
   }
   status = term_fresh_line(&shell->terminal);
   if (status != CALL_OK) {
@@ -706,6 +822,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   return result;
 
 failed:
+  if (!close_handle(&armed)) {
+    cleanup_failure = true;
+  }
   closed_sources = release_sources(prepared, stage_count, pipes);
   close_handle(&publication.caller);
   close_handle(&publication.receiver);
