@@ -250,6 +250,10 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 static struct term_line_result read_line_passthrough(struct terminal *term,
     const char *prompt, char *buffer, size_t capacity, bool quiet)
 {
+  /* Invalid arguments keep read_line's handled BAD_REQUEST result. */
+  if (!term || !prompt || !buffer || !capacity) {
+    return read_line(term, prompt, buffer, capacity, quiet);
+  }
   handle_t passthrough;
   bool held = term_passthrough(term, &passthrough) == CALL_OK;
   struct term_line_result result = read_line(term, prompt, buffer, capacity, quiet);

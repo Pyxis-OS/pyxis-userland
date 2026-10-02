@@ -439,6 +439,9 @@ static handle_t arm_interrupt(struct shell *shell)
   return armed;
 }
 
+static_assert(LAUNCH_BATCH_MAX + 1 <= WAIT_MAX_INTERESTS,
+    "a foreground wait watches every stage and the interrupt");
+
 /* Waits until every stage completes or Ctrl+C arrives. On Ctrl+C, requests
  * termination of every stage and stops watching the interrupt; the caller
  * stays armed, so later presses are discarded, and collects results as usual.
@@ -740,7 +743,16 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (armed != HANDLE_INVALID) {
     status = wait_or_interrupt(shell, children, stage_count, armed);
     if (status != CALL_OK) {
+      /* Nothing watches the interrupt now; disarm so Ctrl+C is data again
+       * rather than silently swallowed. */
       shell_error(shell, "shell: Ctrl+C wait failed (status %u)\n", status);
+      if (!close_handle(&armed)) {
+        for (size_t i = 0; i < stage_count; ++i) {
+          close_handle(&children[i]);
+        }
+        shell_directory_error(shell, "shell: close", "Ctrl+C arming", CALL_BAD_HANDLE);
+        return COMMAND_FATAL;
+      }
     }
   }
   struct process_result completion[LAUNCH_BATCH_MAX] = {0};
