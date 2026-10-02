@@ -276,8 +276,15 @@ int main(int argc, char **argv)
       numeric = true;
     }
   }
-  for (size_t i = 0; i < count; ++i) {
+  /* stdout is unbuffered and fclose reports only descriptor closure, so a
+   * failed write is visible only through the stream error indicator. */
+  int write_error = 0;
+  errno = 0;
+  for (size_t i = 0; i < count && !write_error; ++i) {
     print_entry(&entries[i], segments, numeric);
+    if (ferror(stdout)) {
+      write_error = errno ? errno : EIO;
+    }
   }
   free_names(entries, count);
   free(entries);
@@ -286,8 +293,11 @@ int main(int argc, char **argv)
     fputs("lspci: PCI inventory incomplete; listed functions are valid\n", stderr);
     result = EXIT_FAILURE;
   }
-  if (fclose(stdout) != 0) {
-    fprintf(stderr, "lspci: stdout: %s\n", strerror(errno));
+  if (fclose(stdout) != 0 && !write_error) {
+    write_error = errno;
+  }
+  if (write_error) {
+    fprintf(stderr, "lspci: stdout: %s\n", strerror(write_error));
     result = EXIT_FAILURE;
   }
   return result;
