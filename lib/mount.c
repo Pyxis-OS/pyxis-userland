@@ -65,3 +65,13 @@ enum call_status mount_open_volume(handle_t mount, uint64_t partition,
       &reply, sizeof(reply));
   return mount_reply_status(result, &reply, root);
 }
+
+enum call_status mount_sync(handle_t mount)
+{
+  struct message_header message = {PROTOCOL_MOUNT, MOUNT_SYNC};
+  struct syscall_result result = syscall_call(mount, &message, sizeof(message), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
