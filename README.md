@@ -53,8 +53,8 @@ restricted launchers may omit it. Applications must treat a missing grant as
 unavailable information. Memory is allocator capacity, labeled **Memory (allocator)**.
 
 [lsusb](lsusb/README.md) lists the immutable boot USB inventory with controller
-state, physical root ports, speed, numeric IDs and checked interfaces. It uses
-the same borrowed `system_info` READ grant and optional packaged USB ID names.
+state, physical port paths through hubs, speed, numeric IDs and checked interfaces.
+It uses the same borrowed `system_info` READ grant and optional packaged USB ID names.
 
 [launcher.h](include/launcher.h) provides execution-group creation, sealing,
 termination and completion observation. `launcher_create_group` requires
