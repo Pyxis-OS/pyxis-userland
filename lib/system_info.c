@@ -223,7 +223,7 @@ enum call_status system_info_get_usb_device(handle_t system_info, uint64_t index
     return CALL_BAD_REQUEST;
   }
   if (result.status == CALL_OK) {
-    if (!reply.root_port || reply.speed > SYSTEM_INFO_USB_SPEED_SUPER || reply.reserved ||
+    if (!reply.root_port || reply.speed > SYSTEM_INFO_USB_SPEED_SUPER_PLUS || reply.reserved ||
         (reply.flags & ~(SYSTEM_INFO_USB_DEVICE_IDENTIFIED |
           SYSTEM_INFO_USB_DEVICE_INCOMPLETE | SYSTEM_INFO_USB_DEVICE_HUB)) ||
         reply.interface_count > UINT64_MAX - reply.interface_first) {
