@@ -204,7 +204,7 @@ enum call_status directory_filesystem_info(handle_t directory,
   }
   uint64_t known_flags = FILESYSTEM_FLAG_READ_ONLY | FILESYSTEM_FLAG_GPT_DEGRADED |
       FILESYSTEM_FLAG_DEGRADED;
-  if (reply.type != FILESYSTEM_TYPE_PYXIS || (reply.flags & ~known_flags)) {
+  if (reply.type != FILESYSTEM_TYPE_NPFS || (reply.flags & ~known_flags)) {
     return CALL_BAD_REQUEST;
   }
   const char *end = memchr(reply.volume_name, '\0', sizeof(reply.volume_name));
