@@ -26,23 +26,67 @@
 #define READ_ONLY_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | \
     DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO)
 
-static bool wait_for_address(handle_t authority, handle_t clock, uint32_t *address)
+static bool wait_for_address(handle_t authority, handle_t clock,
+    const struct network_config *network, uint32_t *address)
 {
   bool announced = false;
+  bool binding_observed = false;
   for (;;) {
     struct net_config_reply snapshot;
-    enum call_status status = net_config_query(authority, &snapshot);
-    if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
-      return false;
+    enum call_status status;
+    if (network->action == NETWORK_REPLACE) {
+      status = net_config_lookup(authority, &network->selector, &snapshot);
+      if (status == CALL_NOT_FOUND) {
+        fputs("session: selected remote network is absent\n", stderr);
+        return false;
+      }
+      if (status == CALL_BUSY) {
+        fputs("session: remote network selector is ambiguous\n", stderr);
+        return false;
+      }
+      if (status == CALL_UNAVAILABLE) {
+        fputs("session: remote network discovery or identity unavailable\n", stderr);
+        return false;
+      }
+      if (status != CALL_OK) {
+        fprintf(stderr, "session: cannot look up remote network (status %u)\n", status);
+        return false;
+      }
+      if (!(snapshot.flags & NET_CONFIG_BOUND)) {
+        if (binding_observed) {
+          fputs("session: remote network unavailable; a different controller is bound\n", stderr);
+          return false;
+        }
+        struct net_config_reply bound;
+        status = net_config_query(authority, &bound);
+        if (status != CALL_OK) {
+          fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
+          return false;
+        }
+        /* Binding is permanent. Repeat lookup after observing it because the
+         * selected controller may have bound between these two calls. */
+        binding_observed = (bound.flags & NET_CONFIG_BOUND) != 0;
+      }
+    } else {
+      status = net_config_query(authority, &snapshot);
+      if (status != CALL_OK) {
+        fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
+        return false;
+      }
+      if (!(snapshot.flags & NET_CONFIG_BOUND)) {
+        fputs("session: remote network unavailable; net0 is unbound\n", stderr);
+        return false;
+      }
     }
-    if (!(snapshot.flags & NET_CONFIG_PRESENT) || !(snapshot.flags & NET_CONFIG_READY)) {
-      fputs("session: remote network unavailable\n", stderr);
-      return false;
-    }
-    if (snapshot.flags & NET_CONFIG_ASSIGNED) {
-      *address = snapshot.address;
-      return true;
+    if (snapshot.flags & NET_CONFIG_BOUND) {
+      if (!(snapshot.flags & NET_CONFIG_PRESENT) || !(snapshot.flags & NET_CONFIG_READY)) {
+        fputs("session: remote network unavailable\n", stderr);
+        return false;
+      }
+      if (snapshot.flags & NET_CONFIG_ASSIGNED) {
+        *address = snapshot.address;
+        return true;
+      }
     }
     if (!announced) {
       fputs("session: waiting for remote network configuration\n", stdout);
@@ -236,7 +280,7 @@ int launch_remote_server(const struct session_config *config,
   }
   request.image = image;
   uint32_t address;
-  if (!wait_for_address(authority, clock, &address)) {
+  if (!wait_for_address(authority, clock, network, &address)) {
     goto done;
   }
   struct tcp_listen_reply reply;

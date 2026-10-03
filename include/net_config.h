@@ -5,10 +5,14 @@
 #include <abi/handle.h>
 #include <abi/syscall.h>
 
-/* Query clears output on failure. Addresses are host-order IPv4 integers;
- * replacement validates the complete address/prefix/optional gateway together.
+/* Snapshot helpers clear output on failure. Addresses are host-order IPv4
+ * integers; replacement validates the complete address/prefix/optional gateway together.
  * No helper looks up authority by name or parses userspace configuration. */
 enum call_status net_config_query(handle_t authority, struct net_config_reply *reply);
+enum call_status net_config_bind(handle_t authority, const struct net_selector *selector,
+    struct net_config_reply *reply);
+enum call_status net_config_lookup(handle_t authority, const struct net_selector *selector,
+    struct net_config_reply *reply);
 enum call_status net_config_replace(handle_t authority, uint32_t address,
     uint32_t prefix, uint32_t gateway);
 enum call_status net_config_clear(handle_t authority);
