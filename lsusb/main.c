@@ -101,9 +101,6 @@ static bool save_name(char **slot, const char *name)
 
 static void free_names(struct snapshot *snapshot)
 {
-  if (!snapshot->devices) {
-    return;
-  }
   for (size_t i = 0; i < snapshot->inventory.device_count; ++i) {
     free(snapshot->devices[i].vendor_name);
     free(snapshot->devices[i].product_name);
@@ -175,7 +172,9 @@ static int load_names(const char *path, struct snapshot *snapshot)
 
 static void free_snapshot(struct snapshot *snapshot)
 {
-  free_names(snapshot);
+  if (snapshot->devices) {
+    free_names(snapshot);
+  }
   free(snapshot->controllers);
   free(snapshot->devices);
   free(snapshot->interfaces);
