@@ -142,3 +142,128 @@ enum call_status system_info_get_pci_function(handle_t system_info, uint64_t ind
   }
   return result.status;
 }
+
+enum call_status system_info_get_usb(handle_t system_info, struct system_info_usb *usb)
+{
+  if (!usb) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header message = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_USB};
+  struct system_info_usb reply;
+  struct syscall_result result = syscall_call(system_info, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (reply.state < SYSTEM_INFO_USB_UNAVAILABLE || reply.state > SYSTEM_INFO_USB_COMPLETE ||
+        ((reply.state == SYSTEM_INFO_USB_UNAVAILABLE ||
+          reply.state == SYSTEM_INFO_USB_INITIALIZING) &&
+         (reply.controller_count || reply.device_count || reply.interface_count))) {
+      return CALL_BAD_REQUEST;
+    }
+    *usb = reply;
+  }
+  return result.status;
+}
+
+enum call_status system_info_get_usb_controller(handle_t system_info, uint64_t index,
+    struct system_info_usb_controller *controller)
+{
+  if (!controller) {
+    return CALL_BAD_REQUEST;
+  }
+  struct system_info_usb_request request = {
+    .header = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_USB_CONTROLLER},
+    .index = index,
+  };
+  struct system_info_usb_controller reply;
+  struct syscall_result result = syscall_call(system_info, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (reply.pci.device >= PCI_DEVICES_PER_BUS ||
+        reply.pci.function >= PCI_FUNCTIONS_PER_DEVICE ||
+        (reply.pci.header_type & ~PCI_HEADER_TYPE_MASK) ||
+        reply.pci.vendor_id == PCI_NO_VENDOR || reply.pci.reserved ||
+        reply.state < SYSTEM_INFO_USB_CONTROLLER_UNSUPPORTED ||
+        reply.state > SYSTEM_INFO_USB_CONTROLLER_COMPLETE) {
+      return CALL_BAD_REQUEST;
+    }
+    *controller = reply;
+  }
+  return result.status;
+}
+
+enum call_status system_info_get_usb_device(handle_t system_info, uint64_t index,
+    struct system_info_usb_device *device)
+{
+  if (!device) {
+    return CALL_BAD_REQUEST;
+  }
+  struct system_info_usb_request request = {
+    .header = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_USB_DEVICE},
+    .index = index,
+  };
+  struct system_info_usb_device reply;
+  struct syscall_result result = syscall_call(system_info, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (!reply.root_port || reply.speed > SYSTEM_INFO_USB_SPEED_SUPER || reply.reserved ||
+        (reply.flags & ~(SYSTEM_INFO_USB_DEVICE_IDENTIFIED |
+          SYSTEM_INFO_USB_DEVICE_INCOMPLETE | SYSTEM_INFO_USB_DEVICE_HUB)) ||
+        reply.interface_count > UINT64_MAX - reply.interface_first) {
+      return CALL_BAD_REQUEST;
+    }
+    if (!(reply.flags & SYSTEM_INFO_USB_DEVICE_IDENTIFIED) &&
+        (reply.vendor_id || reply.product_id || reply.device_class || reply.device_subclass ||
+         reply.device_protocol || reply.configuration_count || reply.interface_count ||
+         (reply.flags & SYSTEM_INFO_USB_DEVICE_HUB))) {
+      return CALL_BAD_REQUEST;
+    }
+    *device = reply;
+  }
+  return result.status;
+}
+
+enum call_status system_info_get_usb_interface(handle_t system_info, uint64_t index,
+    struct system_info_usb_interface *interface)
+{
+  if (!interface) {
+    return CALL_BAD_REQUEST;
+  }
+  struct system_info_usb_request request = {
+    .header = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_USB_INTERFACE},
+    .index = index,
+  };
+  struct system_info_usb_interface reply;
+  struct syscall_result result = syscall_call(system_info, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (reply.reserved || !reply.configuration) {
+      return CALL_BAD_REQUEST;
+    }
+    *interface = reply;
+  }
+  return result.status;
+}

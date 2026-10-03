@@ -21,4 +21,15 @@ enum call_status system_info_get_pci(handle_t system_info, struct system_info_pc
 enum call_status system_info_get_pci_function(handle_t system_info, uint64_t index,
     struct system_info_pci_function *function);
 
+/* Immutable boot USB snapshot. INITIALIZING and UNAVAILABLE carry zero counts;
+ * indexed queries use global indices and return NOT_FOUND beyond those counts.
+ * No query rescans hardware, sends transfers or adds device authority. */
+enum call_status system_info_get_usb(handle_t system_info, struct system_info_usb *usb);
+enum call_status system_info_get_usb_controller(handle_t system_info, uint64_t index,
+    struct system_info_usb_controller *controller);
+enum call_status system_info_get_usb_device(handle_t system_info, uint64_t index,
+    struct system_info_usb_device *device);
+enum call_status system_info_get_usb_interface(handle_t system_info, uint64_t index,
+    struct system_info_usb_interface *interface);
+
 #endif

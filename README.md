@@ -52,6 +52,10 @@ forward `system_info` to ordinary children when supplied; provider launches and
 restricted launchers may omit it. Applications must treat a missing grant as
 unavailable information. Memory is allocator capacity, labeled **Memory (allocator)**.
 
+[lsusb](lsusb/README.md) lists the immutable boot USB inventory with controller
+state, physical root ports, speed, numeric IDs and checked interfaces. It uses
+the same borrowed `system_info` READ grant and optional packaged USB ID names.
+
 [launcher.h](include/launcher.h) provides execution-group creation, sealing,
 termination and completion observation. `launcher_create_group` requires
 CREATE_GROUP authority and returns a supervision grant with CONTROL|WAIT plus a
