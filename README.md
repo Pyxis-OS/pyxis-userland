@@ -142,6 +142,21 @@ the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
 
+`app://init-install.pxe` is the dedicated trusted installer handoff. It requires
+the install entry's `disks` inventory service and read-only `boot_kernel` and
+`boot_archive` FILE grants, opens `app://installer.pxe`, and launches only that
+native program. The child receives these resources, memory, console input/output,
+a readable clock, random bytes and the read-only app root. It receives no launcher,
+home root or generic session handoff. Standard streams use separate grants.
+Missing authority or an unpackaged installer reports failure and stops; this
+entry does not supply an installer stub. Init waits for completion and reports
+its status.
+
+[disk.h](include/disk.h) provides bounded native inventory, exclusive raw-disk
+I/O, flush/release and read-only volume-open wrappers. Raw writes require a live
+claim; flush supplies durability and release rescans GPT. Device alignment and
+target bounds remain native checks. No wrapper retries an uncertain operation.
+
 Trusted init selects a native volume with
 `mount --partition 1 --volume system --read-only data://`, or requests writable
 content grants with `--read-write`. Exactly one access mode is required. Writable
