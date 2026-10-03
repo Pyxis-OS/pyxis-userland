@@ -165,7 +165,7 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
   if (count >= 2 && !strcmp(arguments[count - 1], "host")) {
     return mount_host(shell, arguments, count);
   }
-  bool optional = false, read_only = false, no_info = false;
+  bool optional = false, read_only = false, access_set = false, no_info = false;
   uint64_t partition = 0;
   const char *volume = NULL;
   if (count < 2) {
@@ -174,8 +174,11 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
   for (size_t i = 1; i + 1 < count; ++i) {
     if (!strcmp(arguments[i], "--optional") && !optional) {
       optional = true;
-    } else if (!strcmp(arguments[i], "--read-only") && !read_only) {
+    } else if (!strcmp(arguments[i], "--read-only") && !access_set) {
       read_only = true;
+      access_set = true;
+    } else if (!strcmp(arguments[i], "--read-write") && !access_set) {
+      access_set = true;
     } else if (!strcmp(arguments[i], "--no-info") && !no_info) {
       no_info = true;
     } else if (!strcmp(arguments[i], "--partition") && !partition && i + 2 < count) {
@@ -190,7 +193,7 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
   }
   const char *destination = arguments[count - 1];
   size_t length = strlen(destination);
-  if (!read_only || !partition || !volume || !*volume || strlen(volume) > MOUNT_VOLUME_NAME_MAX || length < 4 ||
+  if (!access_set || !partition || !volume || !*volume || strlen(volume) > MOUNT_VOLUME_NAME_MAX || length < 4 ||
       strcmp(destination + length - 3, "://")) {
     goto usage;
   }
@@ -206,6 +209,9 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
   }
   uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES;
+  if (!read_only) {
+    rights = DIRECTORY_CONTENT_RIGHTS;
+  }
   if (!no_info) {
     struct handle_info authority;
     status = handle_query(shell->native_mount, &authority);
@@ -229,7 +235,8 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
 
 usage:
   return shell_error(shell,
-      "usage: mount [--optional] [--no-info] --partition N --volume NAME --read-only NAME://\n"
+      "usage: mount [--optional] [--no-info] --partition N --volume NAME "
+      "(--read-only | --read-write) NAME://\n"
       "       mount [--optional] [--read-only | --read-write] host\n");
 }
 
@@ -250,12 +257,14 @@ static enum command_result set_title(struct shell *shell, char **arguments, size
   return COMMAND_OK;
 }
 
-static bool is_builtin(const char *name)
+static bool is_builtin(char **arguments, size_t count)
 {
+  const char *name = arguments[0];
   return !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "title") ||
       !strcmp(name, "session") || !strcmp(name, "namespace") ||
-      !strcmp(name, "service");
+      !strcmp(name, "service") ||
+      (!strcmp(name, "sync") && count > 1 && !strcmp(arguments[1], "--disk"));
 }
 
 static enum command_result builtin_command(struct shell *shell, char **arguments, size_t count)
@@ -281,6 +290,15 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
   }
   if (strcmp(arguments[0], "mount") == 0) {
     return mount_volume(shell, arguments, count);
+  }
+  if (strcmp(arguments[0], "sync") == 0) {
+    if (count != 2) {
+      return shell_error(shell, "usage: sync --disk | sync path...\n");
+    }
+    enum call_status status = shell->native_mount == HANDLE_INVALID ? CALL_UNAVAILABLE :
+        mount_sync(shell->native_mount);
+    return status == CALL_OK ? COMMAND_OK :
+        shell_directory_error(shell, "shell: sync", "configured native disk", status);
   }
   if (strcmp(arguments[0], "session") == 0) {
     if (count < 2) {
@@ -361,7 +379,7 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
       if (!stage->count || !stage->arguments[0][0]) {
         return shell_error(shell, "shell: Pipeline stage requires a command name\n");
       }
-      if (is_builtin(stage->arguments[0])) {
+      if (is_builtin(stage->arguments, stage->count)) {
         return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
             stage->arguments[0]);
       }
@@ -375,7 +393,7 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
   if (!arguments[0][0]) {
     return shell_error(shell, "shell: Empty command name\n");
   }
-  bool builtin = is_builtin(arguments[0]);
+  bool builtin = is_builtin(arguments, count);
   if (stage->redirection_count && (builtin || command.background)) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }

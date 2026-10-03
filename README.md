@@ -142,11 +142,13 @@ the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
 
-Trusted init can select a native read-only volume with
-`mount --partition 1 --volume system --read-only data://`. `--optional`
-continues only when `native_mount` is absent; failures from supplied authority
-stop the script. Names are explicit directory bindings, separate from service
-namespace entries. Duplicate or conflicting names fail without replacement.
+Trusted init selects a native volume with
+`mount --partition 1 --volume system --read-only data://`, or requests writable
+content grants with `--read-write`. Exactly one access mode is required. Writable
+roots require WRITE on the supplied `native_mount` authority and a writable
+backend with understood filesystem features. `--optional` continues only when
+`native_mount` is absent; failures from supplied authority stop the script.
+Names are explicit directory bindings, separate from service namespace entries. Duplicate or conflicting names fail without replacement.
 The shell reserves binding storage before opening and rechecks the service
 namespace before publication; it closes an unpublished root on conflict.
 The profile supports sixteen selected roots including app, home and HOST.
@@ -154,6 +156,15 @@ Default scripts require no native disk; HOST keeps its existing command syntax.
 Native mounts request filesystem observation when the supplied mount authority
 holds OBSERVE; `--no-info` explicitly omits it. The option applies only to native
 mounts. A mount authority without OBSERVE can still mount content.
+
+In a trusted shell holding `native_mount`, `sync --disk` synchronizes dirty data
+and metadata in every mounted native pool on that authority's configured disk.
+It requires WRITE and takes no disk selector. Completion means the required
+transactions are committed; background checkpointing can remain. A failure may
+follow durable commits in other pools. The shell performs this operation itself
+and does not delegate mount authority to an external command. Ordinary sessions
+have no mount grant and report unavailable. Existing `sync path...` continues to
+synchronize the named files or directories. Closing a handle does not sync it.
 
 [directory.h](include/directory.h) provides `directory_filesystem_info` through a
 borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies native
