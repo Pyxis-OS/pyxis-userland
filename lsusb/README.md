@@ -51,6 +51,7 @@ relations also make walking a port path finite without an application depth limi
 The snapshot is immutable for the boot. Later removal or failure does not update
 it. Checked USB2 hub descendants are included. A hub is labeled `(hub)`;
 `(incomplete)` marks a partial device observation, including descendants that
-could not be inspected. The snapshot has no device strings or serials, transfer
-operations, rescan, hotplug or device ownership authority. An empty complete
-snapshot can legitimately print no controllers.
+could not be inspected. A hub rejected before capturing its ports appears as an
+incomplete hub without child records. The snapshot has no device strings or
+serials, transfer operations, rescan, hotplug or device ownership authority. An
+empty complete snapshot can legitimately print no controllers.
