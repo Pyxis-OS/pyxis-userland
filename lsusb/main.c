@@ -214,12 +214,32 @@ static bool load_snapshot(handle_t system_info, struct snapshot *snapshot)
       fprintf(stderr, "lsusb: USB device %zu query failed (status %u)\n", i, status);
       return false;
     }
-    if (device->controller_index >= inventory->controller_count ||
+    if (device->reserved || device->controller_index >= inventory->controller_count ||
         device->interface_first > inventory->interface_count ||
         device->interface_count > inventory->interface_count - device->interface_first ||
+        !device->root_port ||
         device->root_port > snapshot->controllers[device->controller_index].root_port_count) {
       fputs("lsusb: invalid USB device association\n", stderr);
       return false;
+    }
+    if (device->parent_index == SYSTEM_INFO_USB_NO_PARENT) {
+      if (device->parent_port) {
+        fputs("lsusb: invalid USB root-device parent port\n", stderr);
+        return false;
+      }
+    } else {
+      if (device->parent_index >= i || !device->parent_port) {
+        fputs("lsusb: invalid USB device parent\n", stderr);
+        return false;
+      }
+      const struct system_info_usb_device *parent =
+          &snapshot->devices[device->parent_index].device;
+      if (!(parent->flags & SYSTEM_INFO_USB_DEVICE_HUB) ||
+          parent->controller_index != device->controller_index ||
+          parent->root_port != device->root_port) {
+        fputs("lsusb: invalid USB hub association\n", stderr);
+        return false;
+      }
     }
   }
   for (size_t i = 0; i < inventory->interface_count; ++i) {
@@ -229,7 +249,7 @@ static bool load_snapshot(handle_t system_info, struct snapshot *snapshot)
       fprintf(stderr, "lsusb: USB interface %zu query failed (status %u)\n", i, status);
       return false;
     }
-    if (interface->device_index >= inventory->device_count) {
+    if (interface->reserved || interface->device_index >= inventory->device_count) {
       fputs("lsusb: invalid USB interface association\n", stderr);
       return false;
     }
@@ -303,10 +323,34 @@ static void print_controller(const struct system_info_usb_controller *controller
   }
 }
 
-static void print_device(const struct device_entry *entry, bool numeric)
+static void print_port_path(const struct snapshot *snapshot, size_t index)
 {
+  const struct system_info_usb_device *device = &snapshot->devices[index].device;
+  printf("%u", device->root_port);
+  size_t depth = 0;
+  for (size_t ancestor = index;
+       snapshot->devices[ancestor].device.parent_index != SYSTEM_INFO_USB_NO_PARENT;
+       ancestor = snapshot->devices[ancestor].device.parent_index) {
+    ++depth;
+  }
+  /* Validated parents have lower indices. Rewalking them prints from the root
+   * without recursion, a depth limit or another allocation. */
+  for (size_t remaining = depth; remaining; --remaining) {
+    size_t ancestor = index;
+    for (size_t step = 1; step < remaining; ++step) {
+      ancestor = snapshot->devices[ancestor].device.parent_index;
+    }
+    printf(".%u", snapshot->devices[ancestor].device.parent_port);
+  }
+}
+
+static void print_device(const struct snapshot *snapshot, size_t index, bool numeric)
+{
+  const struct device_entry *entry = &snapshot->devices[index];
   const struct system_info_usb_device *device = &entry->device;
-  printf("  Port %u speed %s: ", device->root_port, device_speed(device->speed));
+  fputs("  Port ", stdout);
+  print_port_path(snapshot, index);
+  printf(" speed %s: ", device_speed(device->speed));
   if (!(device->flags & SYSTEM_INFO_USB_DEVICE_IDENTIFIED)) {
     fputs("unidentified", stdout);
   } else if (numeric) {
@@ -320,7 +364,7 @@ static void print_device(const struct device_entry *entry, bool numeric)
     printf(" [%04x:%04x]", device->vendor_id, device->product_id);
   }
   if (device->flags & SYSTEM_INFO_USB_DEVICE_HUB) {
-    fputs(" (hub; descendants unavailable)", stdout);
+    fputs(" (hub)", stdout);
   }
   if (device->flags & SYSTEM_INFO_USB_DEVICE_INCOMPLETE) {
     fputs(" (incomplete)", stdout);
@@ -397,7 +441,7 @@ int main(int argc, char **argv)
       if (entry->device.controller_index != i) {
         continue;
       }
-      print_device(entry, numeric);
+      print_device(&snapshot, j, numeric);
       error = write_error();
       for (size_t k = 0; k < entry->device.interface_count && !error; ++k) {
         print_interface(&snapshot.interfaces[entry->device.interface_first + k]);
