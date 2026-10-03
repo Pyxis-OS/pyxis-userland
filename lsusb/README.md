@@ -14,8 +14,11 @@ Build with `make -j16 SDK=/path/to/sdk lsusb`. The normal install includes
 helpers; runtime changes require SDK assembly before application builds.
 
 Each controller shows its PCI address, numeric IDs, state and physical root-port
-count, including unsupported controllers. Connected root devices show physical
-port, speed and numeric vendor/product IDs, with optional database names.
+count, including unsupported controllers. An unavailable root-port count is
+shown as `unknown`; a retained nonzero count is shown even for failed controllers.
+Connected root devices show physical port, speed and numeric vendor/product IDs,
+with optional database names. Controllers follow boot registry order, stable for
+the boot but otherwise unspecified; PCI-address sorting is not guaranteed.
 Unidentified devices say `unidentified` without invented IDs. Every checked
 interface shows configuration value, interface number, alternate setting, numeric
 class/subclass/protocol and endpoint count. These are observed descriptors;

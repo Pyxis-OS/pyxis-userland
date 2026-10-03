@@ -293,9 +293,14 @@ static const char *device_speed(uint8_t speed)
 static void print_controller(const struct system_info_usb_controller *controller)
 {
   const struct system_info_pci_function *pci = &controller->pci;
-  printf("Controller %04x:%02x:%02x.%x [%04x:%04x]: %s, root ports %u\n",
+  printf("Controller %04x:%02x:%02x.%x [%04x:%04x]: %s, root ports ",
       pci->segment, pci->bus, pci->device, pci->function, pci->vendor_id, pci->device_id,
-      controller_state(controller->state), controller->root_port_count);
+      controller_state(controller->state));
+  if (controller->root_port_count) {
+    printf("%u\n", controller->root_port_count);
+  } else {
+    fputs("unknown\n", stdout);
+  }
 }
 
 static void print_device(const struct device_entry *entry, bool numeric)
