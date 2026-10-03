@@ -306,6 +306,7 @@ static const char *device_speed(uint8_t speed)
     case SYSTEM_INFO_USB_SPEED_FULL: return "full";
     case SYSTEM_INFO_USB_SPEED_HIGH: return "high";
     case SYSTEM_INFO_USB_SPEED_SUPER: return "super";
+    case SYSTEM_INFO_USB_SPEED_SUPER_PLUS: return "super-plus";
   }
   return "unknown";
 }
