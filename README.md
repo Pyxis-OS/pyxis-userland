@@ -167,7 +167,7 @@ have no mount grant and report unavailable. Existing `sync path...` continues to
 synchronize the named files or directories. Closing a handle does not sync it.
 
 [directory.h](include/directory.h) provides `directory_filesystem_info` through a
-borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies native
+borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies npfs
 type, read-only and GPT/filesystem degraded flags, opaque pool/volume IDs,
 volume name, retained selected generation and shared-pool allocatable capacity
 in bytes. Capacity excludes the two superblock slots but includes metadata and
