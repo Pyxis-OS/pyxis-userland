@@ -80,6 +80,15 @@ the line editor's empty-line-only behavior.
 For manually invoked performance measurements, see [iobench](iobench/README.md)
 for files and pipes and [ipcbench](ipcbench/README.md) for CALL/SEND.
 
+`session.pxe --configure-network` applies `config/network.lua`. A `net0` table
+requires exactly one selector: `driver = "virtio"` or a locally supplied `mac`
+string containing six colon-separated hex pairs for a nonzero unicast address.
+The packaged configuration selects VirtIO. A unique match binds until reboot;
+there is no fallback to another controller. Missing `net0` preserves settings;
+`net0 = false` clears IPv4 settings while retaining the binding. Remote startup
+looks up the configured candidate without binding it, then waits for the setup
+owner to bind and assign an address.
+
 `session.pxe --configure-network --tcp-server ADDRESS PORT [--tcp-count COUNT]`
 hands off to a TCP echo server instead of the local shell. It needs
 explicit TCP LISTEN authority from native init or a trusted session handoff;

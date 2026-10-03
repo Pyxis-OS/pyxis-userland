@@ -38,6 +38,65 @@ static uint32_t read_address(lua_State *state, const char *field)
   return address;
 }
 
+static int hex_digit(unsigned char value)
+{
+  if (value >= '0' && value <= '9') {
+    return value - '0';
+  }
+  if (value >= 'a' && value <= 'f') {
+    return value - 'a' + 10;
+  }
+  if (value >= 'A' && value <= 'F') {
+    return value - 'A' + 10;
+  }
+  return -1;
+}
+
+static void read_selector(lua_State *state, struct net_selector *selector)
+{
+  config_field(state, 2, "driver");
+  config_field(state, 2, "mac");
+  bool has_driver = !lua_isnil(state, 3), has_mac = !lua_isnil(state, 4);
+  if (has_driver == has_mac) {
+    luaL_error(state, "net0 requires exactly one of driver or mac");
+  }
+  if (has_driver) {
+    if (lua_type(state, 3) != LUA_TSTRING) {
+      luaL_error(state, "net0.driver must be the string 'virtio'");
+    }
+    size_t length;
+    const char *driver = lua_tolstring(state, 3, &length);
+    if (length != sizeof("virtio") - 1 || memcmp(driver, "virtio", length)) {
+      luaL_error(state, "net0.driver must be the string 'virtio'");
+    }
+    selector->kind = NET_SELECT_VIRTIO;
+  } else {
+    if (lua_type(state, 4) != LUA_TSTRING) {
+      luaL_error(state, "net0.mac must be a string of six colon-separated hex pairs");
+    }
+    size_t length;
+    const char *mac = lua_tolstring(state, 4, &length);
+    if (length != 17) {
+      luaL_error(state, "net0.mac must contain six colon-separated hex pairs");
+    }
+    uint8_t nonzero = 0;
+    for (unsigned i = 0; i < 6; ++i) {
+      int high = hex_digit((unsigned char)mac[3 * i]);
+      int low = hex_digit((unsigned char)mac[3 * i + 1]);
+      if (high < 0 || low < 0 || (i != 5 && mac[3 * i + 2] != ':')) {
+        luaL_error(state, "net0.mac must contain six colon-separated hex pairs");
+      }
+      selector->mac[i] = (uint8_t)((high << 4) | low);
+      nonzero |= selector->mac[i];
+    }
+    if (!nonzero || (selector->mac[0] & 1)) {
+      luaL_error(state, "net0.mac must be a nonzero unicast address");
+    }
+    selector->kind = NET_SELECT_MAC;
+  }
+  lua_pop(state, 2);
+}
+
 /* Leaves the root table alone; DNS is independent of net0 being absent/false. */
 static void decode_dns(lua_State *state, struct network_config *config)
 {
@@ -76,9 +135,10 @@ static int decode_network(lua_State *state)
     config->action = NETWORK_CLEAR;
     return 0;
   }
-  const char *settings[] = {"optional", "address", "prefix", "gateway"};
+  const char *settings[] = {"driver", "mac", "optional", "address", "prefix", "gateway"};
   config_keys(state, 2, settings, sizeof(settings) / sizeof(settings[0]));
   config->action = NETWORK_REPLACE;
+  read_selector(state, &config->selector);
 
   config_field(state, 2, "optional");
   if (!lua_isnil(state, 3)) {
@@ -128,13 +188,21 @@ bool network_config_apply(const struct network_config *config)
     status = net_config_clear(authority);
   } else {
     struct net_config_reply snapshot;
-    status = net_config_query(authority, &snapshot);
-    if (status == CALL_OK && !(snapshot.flags & NET_CONFIG_PRESENT)) {
+    status = net_config_bind(authority, &config->selector, &snapshot);
+    if (status == CALL_NOT_FOUND) {
       if (config->optional) {
         return true;
       }
       fputs("session: required net0 is absent\n", stderr);
       return false;
+    }
+    if (status == CALL_BUSY) {
+      fputs("session: net0 selector is ambiguous or a different controller is already bound\n", stderr);
+      return false;
+    }
+    if (status == CALL_UNAVAILABLE) {
+      fputs("session: net0 discovery or identity unavailable; continuing without network setup\n", stderr);
+      return true;
     }
     if (status == CALL_OK && !(snapshot.flags & NET_CONFIG_READY)) {
       fputs("session: net0 transport unavailable; continuing without network setup\n", stderr);
@@ -145,7 +213,7 @@ bool network_config_apply(const struct network_config *config)
     }
   }
   if (status == CALL_BAD_REQUEST) {
-    fputs("session: invalid net0 address, subnet or gateway\n", stderr);
+    fputs("session: invalid net0 selector, address, subnet or gateway\n", stderr);
     return false;
   }
   if (status != CALL_OK) {

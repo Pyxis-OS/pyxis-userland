@@ -1,15 +1,15 @@
 #include <net_config.h>
 #include <syscall.h>
 
-enum call_status net_config_query(handle_t authority, struct net_config_reply *reply)
+static enum call_status snapshot_call(handle_t authority, const void *request,
+    size_t request_size, struct net_config_reply *reply)
 {
   if (!reply) {
     return CALL_BAD_REQUEST;
   }
   *reply = (struct net_config_reply){0};
-  struct message_header request = {PROTOCOL_NET_CONFIG, NET_CONFIG_QUERY};
   struct net_config_reply response;
-  struct syscall_result result = syscall_call(authority, &request, sizeof(request),
+  struct syscall_result result = syscall_call(authority, request, request_size,
       &response, sizeof(response));
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
@@ -21,6 +21,40 @@ enum call_status net_config_query(handle_t authority, struct net_config_reply *r
     *reply = response;
   }
   return result.status;
+}
+
+enum call_status net_config_query(handle_t authority, struct net_config_reply *reply)
+{
+  struct message_header request = {PROTOCOL_NET_CONFIG, NET_CONFIG_QUERY};
+  return snapshot_call(authority, &request, sizeof(request), reply);
+}
+
+static enum call_status select_call(handle_t authority, uint64_t operation,
+    const struct net_selector *selector, struct net_config_reply *reply)
+{
+  if (!selector) {
+    if (reply) {
+      *reply = (struct net_config_reply){0};
+    }
+    return CALL_BAD_REQUEST;
+  }
+  struct net_select_request request = {
+    .header = {PROTOCOL_NET_CONFIG, operation},
+    .selector = *selector,
+  };
+  return snapshot_call(authority, &request, sizeof(request), reply);
+}
+
+enum call_status net_config_bind(handle_t authority, const struct net_selector *selector,
+    struct net_config_reply *reply)
+{
+  return select_call(authority, NET_CONFIG_BIND, selector, reply);
+}
+
+enum call_status net_config_lookup(handle_t authority, const struct net_selector *selector,
+    struct net_config_reply *reply)
+{
+  return select_call(authority, NET_CONFIG_LOOKUP, selector, reply);
 }
 
 enum call_status net_config_replace(handle_t authority, uint32_t address,
