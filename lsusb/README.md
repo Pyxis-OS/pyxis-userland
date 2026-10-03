@@ -16,8 +16,9 @@ helpers; runtime changes require SDK assembly before application builds.
 Each controller shows its PCI address, numeric IDs, state and physical root-port
 count, including unsupported controllers. An unavailable root-port count is
 shown as `unknown`; a retained nonzero count is shown even for failed controllers.
-Connected devices show their physical port path, speed and numeric vendor/product
-IDs, with optional database names. For example, `Port 3.2.1` identifies root port 3,
+Speeds include distinct `super` and `super-plus` link categories without numeric
+rate or lane-count claims. Connected devices show their physical port path, speed
+and numeric vendor/product IDs, with optional database names. For example, `Port 3.2.1` identifies root port 3,
 downstream port 2 of its hub, then downstream port 1 of the next hub. The components
 are full one-based physical port numbers, not compressed controller route values.
 Controllers follow boot registry order, stable for the boot but otherwise
