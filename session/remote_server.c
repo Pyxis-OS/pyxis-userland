@@ -30,20 +30,11 @@ static bool wait_for_address(handle_t authority, handle_t clock,
     const struct network_config *network, uint32_t *address)
 {
   bool announced = false;
+  bool binding_observed = false;
   for (;;) {
     struct net_config_reply snapshot;
-    enum call_status status = net_config_query(authority, &snapshot);
-    if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
-      return false;
-    }
-    if (!(snapshot.flags & NET_CONFIG_BOUND)) {
-      if (network->action != NETWORK_REPLACE) {
-        fputs("session: remote network unavailable; net0 is unbound\n", stderr);
-        return false;
-      }
-      /* Another init owns binding and address setup. Lookup only distinguishes
-       * an absent/unmatchable selector from a candidate awaiting that init. */
+    enum call_status status;
+    if (network->action == NETWORK_REPLACE) {
       status = net_config_lookup(authority, &network->selector, &snapshot);
       if (status == CALL_NOT_FOUND) {
         fputs("session: selected remote network is absent\n", stderr);
@@ -59,6 +50,31 @@ static bool wait_for_address(handle_t authority, handle_t clock,
       }
       if (status != CALL_OK) {
         fprintf(stderr, "session: cannot look up remote network (status %u)\n", status);
+        return false;
+      }
+      if (!(snapshot.flags & NET_CONFIG_BOUND)) {
+        if (binding_observed) {
+          fputs("session: remote network unavailable; a different controller is bound\n", stderr);
+          return false;
+        }
+        struct net_config_reply bound;
+        status = net_config_query(authority, &bound);
+        if (status != CALL_OK) {
+          fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
+          return false;
+        }
+        /* Binding is permanent. Repeat lookup after observing it because the
+         * selected controller may have bound between these two calls. */
+        binding_observed = (bound.flags & NET_CONFIG_BOUND) != 0;
+      }
+    } else {
+      status = net_config_query(authority, &snapshot);
+      if (status != CALL_OK) {
+        fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
+        return false;
+      }
+      if (!(snapshot.flags & NET_CONFIG_BOUND)) {
+        fputs("session: remote network unavailable; net0 is unbound\n", stderr);
         return false;
       }
     }
