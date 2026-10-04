@@ -41,7 +41,7 @@ struct esp_inspection {
 struct esp_path {
   const char *name, *alias;
   uint32_t first, size;
-  bool directory, found, long_name_required;
+  bool directory, found, damaged, long_name_required;
 };
 
 struct esp_long_name {
@@ -322,7 +322,10 @@ static bool find_paths(struct esp_inspection *esp, uint32_t first,
             !!(entry[11] & ESP_DIRECTORY) != path->directory ||
             (path->directory && size) ||
             ((path->directory || size) ? !valid_cluster(esp, start) : start != 0)) {
-          return rebuild(esp, "ESP boot path is ambiguous or damaged");
+          path->found = true;
+          path->damaged = true;
+          rebuild(esp, "ESP boot path is ambiguous or damaged");
+          continue;
         }
         path->first = start;
         path->size = size;
@@ -489,19 +492,20 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
   };
   struct esp_path config = {.name = "limine.conf", .long_name_required = true};
   if (success) {
-    success = find_paths(&esp, esp.root, &boot, 1);
+    success = find_paths(&esp, esp.root, &boot, 1) && !boot.damaged;
   }
   if (success && !boot.found) {
     success = rebuild(&esp, "ESP lacks the installed boot directory");
   }
   if (success) {
-    success = find_paths(&esp, boot.first, children, 2);
+    /* Revision damage cannot hide the configuration's disk binding. */
+    success = find_paths(&esp, boot.first, children, 2) && !children[0].damaged;
   }
   if (success && !children[0].found) {
     success = rebuild(&esp, "ESP lacks the installed Limine directory");
   }
   if (success) {
-    success = find_paths(&esp, children[0].first, &config, 1);
+    success = find_paths(&esp, children[0].first, &config, 1) && !config.damaged;
   }
   if (success && (!config.found || !config.size || config.size > ESP_CONFIG_MAX_BYTES)) {
     success = rebuild(&esp, "ESP boot configuration is absent or exceeds the 64 KiB inspection limit");
@@ -520,7 +524,7 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
       success = configuration_matches(&esp, configuration, config.size);
     }
   }
-  if (success && children[1].found) {
+  if (success && children[1].found && !children[1].damaged) {
     uint8_t bytes[ESP_REVISION_MAX_BYTES];
     if (children[1].size > sizeof(bytes)) {
       success = rebuild(&esp, "ESP revision record exceeds the 64-byte inspection limit");
