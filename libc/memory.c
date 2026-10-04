@@ -62,3 +62,17 @@ void *memchr(const void *memory, int value, size_t count)
   }
   return NULL;
 }
+
+void *memrchr(const void *memory, int value, size_t count)
+{
+  const unsigned char *bytes = memory;
+  unsigned char target = (unsigned char)value;
+
+  while (count) {
+    --count;
+    if (bytes[count] == target) {
+      return (void *)(bytes + count);
+    }
+  }
+  return NULL;
+}
