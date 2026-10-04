@@ -214,7 +214,15 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[echo_index] = (struct launch_grant){shell->echo, ECHO_RIGHT_SEND, 0};
   }
   if (has_udp) {
-    grants[udp_index] = (struct launch_grant){shell->udp, UDP_SERVICE_RIGHT_OPEN, 0};
+    uint64_t rights = UDP_SERVICE_RIGHT_OPEN;
+    if (session) {
+      enum call_status status = handle_rights(shell->udp, &rights, NULL);
+      if (status != CALL_OK) {
+        return status;
+      }
+      rights &= UDP_SERVICE_RIGHT_OPEN | UDP_SERVICE_RIGHT_BROADCAST;
+    }
+    grants[udp_index] = (struct launch_grant){shell->udp, rights, 0};
   }
   if (has_tcp) {
     uint64_t rights = TCP_SERVICE_RIGHT_CONNECT;
