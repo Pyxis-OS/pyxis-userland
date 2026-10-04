@@ -64,7 +64,7 @@ const char *udp_error(enum call_status status)
   case CALL_TIMED_OUT: return "Timed out";
   case CALL_NO_ROUTE: return "No route to destination";
   case CALL_QUEUE_FULL: return "Network queue full";
-  case CALL_BUSY: return "Endpoint already has a call in this direction";
+  case CALL_BUSY: return "Endpoint or port busy";
   case CALL_DENIED: return "Permission denied";
   case CALL_NO_MEMORY: return "Out of network memory";
   case CALL_UNAVAILABLE: return "Networking or bound address unavailable";
