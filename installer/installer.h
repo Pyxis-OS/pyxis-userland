@@ -26,6 +26,12 @@ struct install_layout {
   uint8_t disk_guid[16], esp_guid[16], pool_guid[16];
 };
 
+enum install_esp_state {
+  INSTALL_ESP_VALID,
+  INSTALL_ESP_REBUILD,
+  INSTALL_ESP_REFUSED,
+};
+
 struct install_update {
   bool eligible, degraded;
   const char *reason;
@@ -62,9 +68,13 @@ bool install_scan_consent(const struct install_disk *disk, bool read_the_room,
 void install_consent_destroy(struct install_consent *consent);
 
 /* Update inspection never mounts, replays or writes a pool. GPT/pool checks
- * must be followed by ESP configuration inspection before offering a target. */
+ * must be followed by ESP inspection before offering a target. */
 bool install_scan_update(const struct install_disk *disk, struct install_update *update);
-bool install_esp_inspect(const struct install_disk *disk,
+/* Damaged ESP contents can be rebuilt only after healthy GPT/pool admission.
+ * Failed reads, allocation, unsupported extents and explicit foreign or invalid
+ * disk bindings refuse recovery. Unreadable revision text remains unknown;
+ * nonvalid results also supply a borrowed, static reason. */
+enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     const struct install_layout *layout, char revision[64], const char **reason);
 
 struct npfs_header;
