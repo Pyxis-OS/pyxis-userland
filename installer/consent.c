@@ -676,7 +676,8 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   }
   /* CLAIMED is intentionally allowed: the owner repeats this scan on its own
    * exclusive handle immediately before mutation. Inspection is not a snapshot. */
-  if ((disk->info.block_size != 512 && disk->info.block_size != 4096) ||
+  if (disk->info.block_size < 512 || disk->info.block_size > NPFS_BLOCK_SIZE ||
+      (disk->info.block_size & (disk->info.block_size - 1)) ||
       disk->info.block_count < 3 || disk->info.block_count > UINT64_MAX / disk->info.block_size ||
       disk->bytes != disk->info.block_count * disk->info.block_size) {
     consent->reason = "unsupported disk geometry";
@@ -710,7 +711,7 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   bool ambiguous = primary && backup && !gpt_agree(&maps[0], &maps[1]);
   bool valid_gpt = mbr && (primary || backup) && !ambiguous;
   consent->degraded = valid_gpt && primary != backup;
-  bool all_marked = true;
+  bool all_marked = true, damaged_pool = false, empty_pool = false;
   /* Both valid conflicting maps are inspected. Identical extents are scanned
    * once; overlapping but different extents are independently inspected. */
   for (unsigned copy = 0; copy < 2; copy++) {
@@ -737,11 +738,15 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
         continue;
       }
       bool marked;
+      uint32_t previous_pools = consent->pools, previous_volumes = consent->volumes;
       enum inspection status = inspect_partition(disk, first, last, i + 1, consent, &marked);
       if (status == INSPECT_FATAL) {
         consent->reason = "I/O or allocation failure during consent inspection";
         goto done;
       }
+      damaged_pool |= status == INSPECT_DAMAGED;
+      empty_pool |= status == INSPECT_OK && consent->pools > previous_pools &&
+        consent->volumes == previous_volumes;
       all_marked &= marked && status == INSPECT_OK;
     }
   }
@@ -749,7 +754,20 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
     consent->reason = "readable nonempty npfs pool has no SAFE_TO_WIPE markers";
   } else if (room) {
     consent->eligible = true;
-    consent->reason = "READ THE ROOM permits blank, foreign, or disposable damaged contents";
+    if (damaged_pool) {
+      consent->reason = "npfs pool, damaged: consent unreadable";
+    } else if (!valid_gpt) {
+      consent->reason = ambiguous ? "unrecognized layout: GPT copies disagree" :
+        "unrecognized layout: no validated protective GPT";
+    } else if (!consent->pools) {
+      consent->reason = "foreign GPT disk: no npfs pools";
+    } else if (empty_pool) {
+      consent->reason = "npfs pool, empty: no live volumes";
+    } else if (!all_marked) {
+      consent->reason = "npfs pool, partially marked: some live volumes lack a regular SAFE_TO_WIPE";
+    } else {
+      consent->reason = "npfs pool, marked: every live volume has a regular SAFE_TO_WIPE";
+    }
   } else if (!valid_gpt) {
     consent->reason = ambiguous ? "GPT copies disagree" : "no validated protective GPT";
   } else if (!consent->pools) {
