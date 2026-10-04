@@ -6,7 +6,6 @@
 #include <udp.h>
 
 #define SECOND_NS UINT64_C(1000000000)
-#define ACQUIRE_WAIT_NS (10 * SECOND_NS)
 #define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
 
 enum {
@@ -18,6 +17,7 @@ enum {
   BOOTP_XID = 4,
   BOOTP_SECS = 8,
   BOOTP_FLAGS = 10,
+  BOOTP_CIADDR = 12,
   BOOTP_YIADDR = 16,
   BOOTP_CHADDR = 28,
   BOOTP_SNAME = 44,
@@ -200,53 +200,62 @@ static bool is_unicast(uint32_t address)
 }
 
 static bool decode_lease(const uint8_t *packet, const struct dhcp_reply *reply,
-    struct dhcp_lease *lease)
+    uint64_t acquired_ns, const struct dhcp_lease *current, struct dhcp_lease *lease)
 {
   uint32_t address = read_u32(packet + BOOTP_YIADDR);
   if (!is_unicast(address) || !is_unicast(reply->server.value) ||
-      !reply->mask.present || !reply->duration.present || !reply->duration.value) {
+      (!reply->mask.present && !current) || !reply->duration.present ||
+      !reply->duration.value || (current && address != current->address)) {
     return false;
   }
-  uint32_t mask = reply->mask.value, prefix = 0;
-  while (mask & UINT32_C(0x80000000)) {
+  uint32_t prefix = 0;
+  uint32_t mask = reply->mask.present ? reply->mask.value :
+      UINT32_MAX << (32 - current->prefix);
+  uint32_t remaining_mask = mask;
+  while (remaining_mask & UINT32_C(0x80000000)) {
     ++prefix;
-    mask <<= 1;
+    remaining_mask <<= 1;
   }
-  if (!prefix || mask) {
+  if (!prefix || remaining_mask) {
     return false;
   }
-  mask = reply->mask.value;
   uint32_t host = address & ~mask;
   if (prefix < 31 && (!host || host == ~mask)) {
     return false;
   }
-  uint32_t gateway = reply->gateway.value;
-  if (reply->gateway.present && (!is_unicast(gateway) || gateway == address ||
+  uint32_t gateway = reply->gateway.present ? reply->gateway.value :
+      current ? current->gateway : 0;
+  if ((gateway || reply->gateway.present) && (!is_unicast(gateway) || gateway == address ||
       (gateway & mask) != (address & mask) ||
       (prefix < 31 && (!(gateway & ~mask) || (gateway & ~mask) == ~mask)))) {
     return false;
   }
-  uint32_t dns = reply->dns.value;
-  if (reply->dns.present && (!(dns >> 24) || dns >= IPV4_MULTICAST_BASE)) {
+  uint32_t dns = reply->dns.present ? reply->dns.value : current ? current->dns : 0;
+  if ((dns || reply->dns.present) && (!(dns >> 24) || dns >= IPV4_MULTICAST_BASE)) {
     return false;
-  }
-  uint32_t duration = reply->duration.value;
-  /* Retain integral-second defaults here; this task does not run lease timers. */
-  uint32_t t1 = reply->t1.present ? reply->t1.value : duration / 2;
-  uint32_t t2 = reply->t2.present ? reply->t2.value : (uint64_t)duration * 7 / 8;
-  /* Compare before rounding defaults, including for one- and two-second leases. */
-  uint64_t t1_eighths = reply->t1.present ? (uint64_t)t1 * 8 : (uint64_t)duration * 4;
-  uint64_t t2_eighths = reply->t2.present ? (uint64_t)t2 * 8 : (uint64_t)duration * 7;
-  if (t1_eighths >= t2_eighths || t2_eighths >= (uint64_t)duration * 8) {
-    /* Invalid server timers do not invalidate an otherwise usable lease. */
-    t1 = duration / 2;
-    t2 = (uint64_t)duration * 7 / 8;
   }
   *lease = (struct dhcp_lease){
     .address = address, .prefix = prefix, .gateway = gateway, .dns = dns,
-    .server = reply->server.value, .lease_seconds = duration,
-    .t1_seconds = t1, .t2_seconds = t2,
+    .server = reply->server.value, .acquired_ns = acquired_ns,
+    .renewal_ns = UINT64_MAX, .rebind_ns = UINT64_MAX, .expires_ns = UINT64_MAX,
   };
+  if (reply->duration.value == UINT32_MAX) {
+    return true;
+  }
+  uint64_t duration = (uint64_t)reply->duration.value * SECOND_NS;
+  uint64_t t1 = reply->t1.present ? (uint64_t)reply->t1.value * SECOND_NS : duration / 2;
+  uint64_t t2 = reply->t2.present ? (uint64_t)reply->t2.value * SECOND_NS : duration / 8 * 7;
+  if (!t1 || t1 >= t2 || t2 >= duration) {
+    /* Invalid server timers do not invalidate an otherwise usable lease. */
+    t1 = duration / 2;
+    t2 = duration / 8 * 7;
+  }
+  if (acquired_ns > UINT64_MAX - duration) {
+    return false;
+  }
+  lease->renewal_ns = acquired_ns + t1;
+  lease->rebind_ns = acquired_ns + t2;
+  lease->expires_ns = acquired_ns + duration;
   return true;
 }
 
@@ -259,9 +268,15 @@ static void write_address_option(uint8_t *packet, size_t *offset, uint8_t code,
   *offset += 4;
 }
 
-static void make_packet(uint8_t packet[DHCP_PACKET_LENGTH], bool requesting,
+enum request_state {
+  DISCOVERING,
+  REQUESTING,
+  REFRESHING,
+};
+
+static void make_packet(uint8_t packet[DHCP_PACKET_LENGTH], enum request_state state,
     uint32_t xid, uint64_t elapsed_ns, const uint8_t mac[6],
-    const struct dhcp_lease *offer)
+    const struct dhcp_lease *lease)
 {
   memset(packet, 0, DHCP_PACKET_LENGTH);
   packet[0] = BOOTP_REQUEST;
@@ -274,17 +289,21 @@ static void make_packet(uint8_t packet[DHCP_PACKET_LENGTH], bool requesting,
   }
   packet[BOOTP_SECS] = secs >> 8;
   packet[BOOTP_SECS + 1] = secs;
-  packet[BOOTP_FLAGS] = BOOTP_BROADCAST >> 8;
-  packet[BOOTP_FLAGS + 1] = BOOTP_BROADCAST & 255;
+  if (state == REFRESHING) {
+    write_u32(packet + BOOTP_CIADDR, lease->address);
+  } else {
+    packet[BOOTP_FLAGS] = BOOTP_BROADCAST >> 8;
+    packet[BOOTP_FLAGS + 1] = BOOTP_BROADCAST & 255;
+  }
   memcpy(packet + BOOTP_CHADDR, mac, 6);
   memcpy(packet + BOOTP_OPTIONS, cookie, sizeof(cookie));
   size_t offset = BOOTP_OPTIONS + sizeof(cookie);
   packet[offset++] = OPTION_TYPE;
   packet[offset++] = 1;
-  packet[offset++] = requesting ? DHCP_REQUEST : DHCP_DISCOVER;
-  if (requesting) {
-    write_address_option(packet, &offset, OPTION_ADDRESS, offer->address);
-    write_address_option(packet, &offset, OPTION_SERVER, offer->server);
+  packet[offset++] = state == DISCOVERING ? DHCP_DISCOVER : DHCP_REQUEST;
+  if (state == REQUESTING) {
+    write_address_option(packet, &offset, OPTION_ADDRESS, lease->address);
+    write_address_option(packet, &offset, OPTION_SERVER, lease->server);
   }
   packet[offset++] = OPTION_PARAMETERS;
   packet[offset++] = sizeof(parameters);
@@ -297,114 +316,314 @@ static uint64_t clipped_deadline(uint64_t now, uint64_t duration, uint64_t end)
   return duration < end - now ? now + duration : end;
 }
 
-bool dhcp_acquire(handle_t udp, handle_t clock, handle_t random,
-    const uint8_t mac[6], struct dhcp_lease *lease)
+static bool transient_send_failure(enum call_status status)
 {
-  if (!lease) {
+  return status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL ||
+      status == CALL_NO_MEMORY || status == CALL_TIMED_OUT;
+}
+
+void dhcp_discover(struct dhcp_client *client)
+{
+  client->requesting = false;
+  client->xid_ready = false;
+  client->request_sent = false;
+  client->xid = 0;
+  client->retry_seconds = 4;
+  client->started_ns = 0;
+  client->retry_ns = 0;
+  client->request_ns = 0;
+  client->offer = (struct dhcp_lease){0};
+}
+
+bool dhcp_open(struct dhcp_client *client, handle_t udp, handle_t clock,
+    handle_t random, const uint8_t mac[6])
+{
+  if (!client) {
     return false;
   }
-  *lease = (struct dhcp_lease){0};
-  uint64_t start;
-  if (!mac || clock_now(clock, &start) != CALL_OK || start > UINT64_MAX - ACQUIRE_WAIT_NS) {
+  *client = (struct dhcp_client){.endpoint = HANDLE_INVALID};
+  if (!mac || clock == HANDLE_INVALID || random == HANDLE_INVALID) {
     return false;
   }
-  uint64_t end = start + ACQUIRE_WAIT_NS;
   struct udp_open_reply opened;
   if (udp_open_broadcast(udp, DHCP_CLIENT_PORT, &opened) != CALL_OK) {
     return false;
   }
-  bool success = false, requesting = false, transmit = true, new_transaction = true;
-  struct dhcp_lease offer = {0};
-  uint32_t xid = 0, retry_seconds = 4;
-  uint64_t retry_at = start, request_at = 0;
-  uint8_t packet[UDP_MAX_PAYLOAD];
+  client->endpoint = opened.handle;
+  client->clock = clock;
+  client->random = random;
+  memcpy(client->mac, mac, sizeof(client->mac));
+  dhcp_discover(client);
+  return true;
+}
 
-  /* Send immediately instead of RFC 2131's suggested startup jitter: the
-   * session gives first acquisition only ten seconds before starting programs.
-   * Retransmissions still use randomized exponential backoff. */
+bool dhcp_close(struct dhcp_client *client)
+{
+  if (!client || client->endpoint == HANDLE_INVALID) {
+    return true;
+  }
+  enum call_status shutdown = udp_shutdown(client->endpoint);
+  int closed = handle_close(client->endpoint);
+  client->endpoint = HANDLE_INVALID;
+  return shutdown == CALL_OK && closed == 0;
+}
+
+static enum dhcp_result acknowledge(struct dhcp_client *client, const uint8_t *packet,
+    const struct dhcp_reply *reply, uint64_t request_ns,
+    const struct dhcp_lease *current, struct dhcp_lease *lease, bool *expired)
+{
+  if (expired) {
+    *expired = false;
+  }
+  struct dhcp_lease candidate;
+  uint64_t now;
+  if (!decode_lease(packet, reply, request_ns, current, &candidate)) {
+    return DHCP_TIMEOUT;
+  }
+  if (clock_now(client->clock, &now) != CALL_OK) {
+    return DHCP_FAILED;
+  }
+  if (current && now >= current->expires_ns) {
+    return DHCP_TIMEOUT;
+  }
+  if (now >= candidate.expires_ns) {
+    if (expired) {
+      *expired = true;
+    }
+    return DHCP_TIMEOUT;
+  }
+  *lease = candidate;
+  return DHCP_ACKNOWLEDGED;
+}
+
+/* Receive calls have a thirty-second ABI limit even for long leases. */
+static enum call_status receive(struct dhcp_client *client, uint8_t packet[UDP_MAX_PAYLOAD],
+    uint64_t now, uint64_t end, struct udp_receive_reply *reply)
+{
+  return udp_receive(client->endpoint, packet, UDP_MAX_PAYLOAD,
+      end <= now ? end : clipped_deadline(now, UDP_RECEIVE_MAX_WAIT_NS, end), reply);
+}
+
+enum dhcp_result dhcp_acquire(struct dhcp_client *client, uint64_t deadline_ns,
+    struct dhcp_lease *lease)
+{
+  if (!lease) {
+    return DHCP_FAILED;
+  }
+  *lease = (struct dhcp_lease){0};
+  if (!client || client->endpoint == HANDLE_INVALID) {
+    return DHCP_FAILED;
+  }
+  uint8_t packet[UDP_MAX_PAYLOAD];
+  /* Preserve immediate first discovery within the session's startup budget;
+   * later calls resume the same randomized exponential retry schedule. */
   for (;;) {
     uint64_t now;
-    if (clock_now(clock, &now) != CALL_OK || now >= end) {
-      break;
+    if (clock_now(client->clock, &now) != CALL_OK) {
+      return DHCP_FAILED;
     }
-    if (transmit) {
+    if (now >= deadline_ns) {
+      return DHCP_TIMEOUT;
+    }
+    if (now >= client->retry_ns) {
       uint32_t random_words[2];
-      if (random_read(random, random_words, sizeof(random_words),
-          clipped_deadline(now, RANDOM_MAX_WAIT_NS, end)) != CALL_OK ||
-          clock_now(clock, &now) != CALL_OK || now >= end) {
-        break;
+      enum call_status entropy = random_read(client->random, random_words,
+          sizeof(random_words), clipped_deadline(now, RANDOM_MAX_WAIT_NS, deadline_ns));
+      if (entropy != CALL_OK) {
+        return entropy == CALL_TIMED_OUT ? DHCP_TIMEOUT : DHCP_FAILED;
       }
-      if (new_transaction) {
-        xid = random_words[0];
-        new_transaction = false;
+      if (clock_now(client->clock, &now) != CALL_OK) {
+        return DHCP_FAILED;
       }
-      make_packet(packet, requesting, xid, now - start, mac, &offer);
-      uint64_t delay = (retry_seconds - 1) * SECOND_NS +
+      if (now >= deadline_ns) {
+        return DHCP_TIMEOUT;
+      }
+      if (!client->xid_ready) {
+        client->xid = random_words[0];
+        client->started_ns = now;
+        client->xid_ready = true;
+      }
+      make_packet(packet, client->requesting ? REQUESTING : DISCOVERING,
+          client->xid, now - client->started_ns, client->mac, &client->offer);
+      uint64_t delay = (client->retry_seconds - 1) * SECOND_NS +
           (random_words[1] % 2001) * UINT64_C(1000000);
-      retry_at = clipped_deadline(now, delay, end);
-      enum call_status sent = udp_send(opened.handle, UINT32_MAX, DHCP_SERVER_PORT, packet,
-          DHCP_PACKET_LENGTH, clipped_deadline(now, UDP_SEND_MAX_WAIT_NS, end));
-      /* Initial PHY negotiation can leave carrier down. Keep the same bounded
-       * retry schedule for transient local transmission failures. */
-      if (sent != CALL_OK && sent != CALL_UNAVAILABLE && sent != CALL_QUEUE_FULL &&
-          sent != CALL_NO_MEMORY && sent != CALL_TIMED_OUT) {
-        break;
+      client->retry_ns = clipped_deadline(now, delay, UINT64_MAX);
+      enum call_status sent = udp_send(client->endpoint, UINT32_MAX, DHCP_SERVER_PORT,
+          packet, DHCP_PACKET_LENGTH, clipped_deadline(now, UDP_SEND_MAX_WAIT_NS, deadline_ns));
+      if (sent != CALL_OK && !transient_send_failure(sent)) {
+        return DHCP_FAILED;
       }
-      if (sent == CALL_OK && retry_seconds < 64) {
-        retry_seconds *= 2;
+      if (sent == CALL_OK && client->retry_seconds < 64) {
+        client->retry_seconds *= 2;
       }
-      if (sent == CALL_OK && requesting && !request_at) {
-        request_at = now;
+      if (sent == CALL_OK && client->requesting && !client->request_sent) {
+        client->request_ns = now;
+        client->request_sent = true;
       }
-      transmit = false;
     }
+    if (clock_now(client->clock, &now) != CALL_OK) {
+      return DHCP_FAILED;
+    }
+    if (now >= deadline_ns) {
+      return DHCP_TIMEOUT;
+    }
+    uint64_t until = client->retry_ns < deadline_ns ? client->retry_ns : deadline_ns;
     struct udp_receive_reply received;
-    enum call_status status = udp_receive(opened.handle, packet, sizeof(packet), retry_at, &received);
+    enum call_status status = receive(client, packet, now, until, &received);
     if (status == CALL_TIMED_OUT) {
-      transmit = true;
       continue;
     }
     if (status != CALL_OK) {
-      break;
+      return DHCP_FAILED;
+    }
+    if (clock_now(client->clock, &now) != CALL_OK) {
+      return DHCP_FAILED;
+    }
+    if (now >= deadline_ns) {
+      return DHCP_TIMEOUT;
     }
     struct dhcp_reply reply;
     if (received.port != DHCP_SERVER_PORT || received.length > sizeof(packet) ||
-        !decode_reply(packet, received.length, xid, mac, &reply)) {
+        !decode_reply(packet, received.length, client->xid, client->mac, &reply)) {
       continue;
     }
-    if (!requesting) {
-      if (reply.type == DHCP_OFFER && decode_lease(packet, &reply, &offer)) {
-        requesting = true;
-        transmit = true;
-        retry_seconds = 4;
+    if (!client->requesting) {
+      if (reply.type == DHCP_OFFER && decode_lease(packet, &reply, 0, NULL, &client->offer)) {
+        client->requesting = true;
+        client->retry_ns = now;
+        client->retry_seconds = 4;
       }
       continue;
     }
-    if (reply.server.value != offer.server) {
+    if (!client->request_sent || reply.server.value != client->offer.server) {
       continue;
     }
     if (reply.type == DHCP_NAK) {
-      requesting = false;
-      transmit = true;
-      new_transaction = true;
-      retry_seconds = 4;
-      request_at = 0;
-    } else if (reply.type == DHCP_ACK && request_at &&
-        read_u32(packet + BOOTP_YIADDR) == offer.address) {
-      struct dhcp_lease acknowledged;
-      if (decode_lease(packet, &reply, &acknowledged)) {
-        acknowledged.acquired_ns = request_at;
-        *lease = acknowledged;
-        success = true;
-        break;
+      return DHCP_NAK_RECEIVED;
+    }
+    if (reply.type == DHCP_ACK && read_u32(packet + BOOTP_YIADDR) == client->offer.address) {
+      bool expired;
+      enum dhcp_result result = acknowledge(client, packet, &reply,
+          client->request_ns, NULL, lease, &expired);
+      if (result != DHCP_TIMEOUT) {
+        return result;
+      }
+      if (expired) {
+        dhcp_discover(client);
       }
     }
   }
-  enum call_status shutdown = udp_shutdown(opened.handle);
-  int closed = handle_close(opened.handle);
-  if (shutdown != CALL_OK || closed != 0) {
-    *lease = (struct dhcp_lease){0};
-    return false;
+}
+
+enum dhcp_result dhcp_refresh(struct dhcp_client *client,
+    const struct dhcp_lease *current, struct dhcp_lease *updated)
+{
+  if (!updated) {
+    return DHCP_FAILED;
   }
-  return success;
+  *updated = (struct dhcp_lease){0};
+  if (!client || client->endpoint == HANDLE_INVALID || !current) {
+    return DHCP_FAILED;
+  }
+  if (current->expires_ns == UINT64_MAX) {
+    return DHCP_TIMEOUT;
+  }
+  uint8_t packet[UDP_MAX_PAYLOAD];
+  bool xid_ready = false, request_sent = false, rebinding = false;
+  uint32_t xid = 0;
+  uint64_t request_ns = 0, started_ns = 0, retry_ns = current->renewal_ns;
+  for (;;) {
+    uint64_t now;
+    if (clock_now(client->clock, &now) != CALL_OK) {
+      return DHCP_FAILED;
+    }
+    if (now >= current->expires_ns) {
+      return DHCP_TIMEOUT;
+    }
+    if (!rebinding && now >= current->rebind_ns) {
+      rebinding = true;
+      retry_ns = now;
+    }
+    uint64_t end = rebinding ? current->expires_ns : current->rebind_ns;
+    if (now >= retry_ns) {
+      if (!xid_ready) {
+        enum call_status entropy = random_read(client->random, &xid, sizeof(xid),
+            clipped_deadline(now, RANDOM_MAX_WAIT_NS, end));
+        if (entropy != CALL_OK && entropy != CALL_TIMED_OUT) {
+          return DHCP_FAILED;
+        }
+        if (entropy == CALL_TIMED_OUT) {
+          continue;
+        }
+        if (clock_now(client->clock, &now) != CALL_OK) {
+          return DHCP_FAILED;
+        }
+        if (now >= end) {
+          continue;
+        }
+        xid_ready = true;
+        started_ns = now;
+      }
+      make_packet(packet, REFRESHING, xid, now - started_ns, client->mac, current);
+      uint64_t delay = (end - now) / 2;
+      if (delay < 60 * SECOND_NS) {
+        delay = 60 * SECOND_NS;
+      }
+      retry_ns = clipped_deadline(now, delay, end);
+      enum call_status sent = udp_send(client->endpoint,
+          rebinding ? UINT32_MAX : current->server, DHCP_SERVER_PORT,
+          packet, DHCP_PACKET_LENGTH, clipped_deadline(now, UDP_SEND_MAX_WAIT_NS, end));
+      if (sent != CALL_OK && !transient_send_failure(sent)) {
+        return DHCP_FAILED;
+      }
+      if (sent == CALL_OK && !request_sent) {
+        /* Same xid across retransmission/T2: an older ACK is indistinguishable.
+         * Retain the earliest successful REQUEST origin conservatively. */
+        request_sent = true;
+        request_ns = now;
+      }
+    }
+    if (clock_now(client->clock, &now) != CALL_OK) {
+      return DHCP_FAILED;
+    }
+    if (now >= end) {
+      continue;
+    }
+    uint64_t until = retry_ns < end ? retry_ns : end;
+    struct udp_receive_reply received;
+    enum call_status status = receive(client, packet, now, until, &received);
+    if (status == CALL_TIMED_OUT) {
+      continue;
+    }
+    if (status != CALL_OK) {
+      return DHCP_FAILED;
+    }
+    if (clock_now(client->clock, &now) != CALL_OK) {
+      return DHCP_FAILED;
+    }
+    if (now >= current->expires_ns) {
+      return DHCP_TIMEOUT;
+    }
+    if (!rebinding && now >= current->rebind_ns) {
+      rebinding = true;
+      retry_ns = now;
+    }
+    struct dhcp_reply reply;
+    if (!request_sent || received.port != DHCP_SERVER_PORT ||
+        received.length > sizeof(packet) ||
+        !decode_reply(packet, received.length, xid, client->mac, &reply) ||
+        !is_unicast(reply.server.value) || (!rebinding && reply.server.value != current->server)) {
+      continue;
+    }
+    if (reply.type == DHCP_NAK) {
+      return DHCP_NAK_RECEIVED;
+    }
+    if (reply.type == DHCP_ACK) {
+      enum dhcp_result result = acknowledge(client, packet, &reply,
+          request_ns, current, updated, NULL);
+      if (result != DHCP_TIMEOUT) {
+        return result;
+      }
+    }
+  }
 }
