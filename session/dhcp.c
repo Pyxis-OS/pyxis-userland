@@ -343,8 +343,12 @@ bool dhcp_acquire(handle_t udp, handle_t clock, handle_t random,
       uint64_t delay = (retry_seconds - 1) * SECOND_NS +
           (random_words[1] % 2001) * UINT64_C(1000000);
       retry_at = clipped_deadline(now, delay, end);
-      if (udp_send(opened.handle, UINT32_MAX, DHCP_SERVER_PORT, packet,
-          DHCP_PACKET_LENGTH, clipped_deadline(now, UDP_SEND_MAX_WAIT_NS, end)) != CALL_OK) {
+      enum call_status sent = udp_send(opened.handle, UINT32_MAX, DHCP_SERVER_PORT, packet,
+          DHCP_PACKET_LENGTH, clipped_deadline(now, UDP_SEND_MAX_WAIT_NS, end));
+      /* Initial PHY negotiation can leave carrier down. Keep the same bounded
+       * retry schedule for transient local transmission failures. */
+      if (sent != CALL_OK && sent != CALL_UNAVAILABLE && sent != CALL_QUEUE_FULL &&
+          sent != CALL_NO_MEMORY && sent != CALL_TIMED_OUT) {
         break;
       }
       if (retry_seconds < 64) {
