@@ -6,6 +6,7 @@
 #include <abi/syscall.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 struct descriptor_mode {
   bool readable, writable, append, create, truncate;
@@ -36,6 +37,10 @@ int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *wr
 int descriptor_seek(int descriptor, long offset, int origin);
 /* Files only; keeps the position and discards read-ahead before RESIZE. */
 int descriptor_resize(int descriptor, uint64_t size);
+/* Files only; native SYNC, which needs WRITE. */
+int descriptor_sync(int descriptor);
+/* Type and size of the descriptor's object, as fstat reports them. */
+int descriptor_stat(int descriptor, struct stat *result);
 /* The logical position, excluding bytes read ahead. */
 long descriptor_tell(int descriptor);
 /* Input fflush: drop file read-ahead so later reads refetch; keep pipe bytes. */
@@ -44,5 +49,7 @@ void descriptor_discard_input(int descriptor);
 /* Return one owned file handle. Allocates path workspace; never truncates. */
 enum call_status file_open_path(const char *path, uint64_t rights,
                                bool create, handle_t *handle);
+/* Return one owned directory handle with exactly rights, resolved like a file. */
+enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle);
 
 #endif

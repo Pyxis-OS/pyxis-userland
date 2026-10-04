@@ -450,6 +450,48 @@ int descriptor_resize(int descriptor, uint64_t size)
   return 0;
 }
 
+int descriptor_sync(int descriptor)
+{
+  struct descriptor_entry *entry = lookup(descriptor);
+  if (!entry) {
+    return -1;
+  }
+  if (entry->kind != DESCRIPTOR_FILE) {
+    return fail(EINVAL);
+  }
+  enum call_status status = file_sync(entry->handle);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  return 0;
+}
+
+int descriptor_stat(int descriptor, struct stat *result)
+{
+  struct descriptor_entry *entry = lookup(descriptor);
+  if (!entry) {
+    return -1;
+  }
+  if (entry->kind == DESCRIPTOR_CONSOLE) {
+    *result = (struct stat){.st_mode = S_IFCHR};
+    return 0;
+  }
+  if (entry->kind == DESCRIPTOR_PIPE) {
+    *result = (struct stat){.st_mode = S_IFIFO};
+    return 0;
+  }
+  uint64_t size;
+  enum call_status status = file_size(entry->handle, &size);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  if (size > LONG_MAX) {
+    return fail(EOVERFLOW);
+  }
+  *result = (struct stat){.st_mode = S_IFREG, .st_size = (off_t)size};
+  return 0;
+}
+
 long descriptor_tell(int descriptor)
 {
   struct descriptor_entry *entry = lookup(descriptor);
