@@ -50,6 +50,10 @@ struct network_runtime {
 bool network_config_read(struct network_config *config);
 void network_config_free(struct network_config *config);
 bool network_config_apply(const struct network_config *config, struct network_runtime *runtime);
+/* After observing BOUND without READY, inspect preparation of that binding.
+ * Prepared means wait for stable configuration; unprepared means permanent
+ * failure. Temporary inventory unavailability also keeps the caller waiting. */
+bool network_config_binding_pending(handle_t authority, bool *pending);
 /* A configuration-owning remote handoff must keep discovery moving while it
  * waits for its first address; other remote sessions use the existing query wait. */
 bool network_config_wait_address(const struct network_config *config, struct network_runtime *runtime);

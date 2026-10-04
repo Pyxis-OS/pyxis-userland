@@ -82,11 +82,20 @@ static bool wait_for_address(handle_t authority, handle_t clock,
       }
     }
     if (snapshot.flags & NET_CONFIG_BOUND) {
-      if (!(snapshot.flags & NET_CONFIG_PRESENT) || !(snapshot.flags & NET_CONFIG_READY)) {
+      if (!(snapshot.flags & NET_CONFIG_PRESENT)) {
         fputs("session: remote network unavailable\n", stderr);
         return false;
       }
-      if (snapshot.flags & NET_CONFIG_ASSIGNED) {
+      if (!(snapshot.flags & NET_CONFIG_READY)) {
+        bool pending;
+        if (!network_config_binding_pending(authority, &pending)) {
+          return false;
+        }
+        if (!pending) {
+          fputs("session: remote network unavailable\n", stderr);
+          return false;
+        }
+      } else if (snapshot.flags & NET_CONFIG_ASSIGNED) {
         *address = snapshot.address;
         return true;
       }

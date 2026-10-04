@@ -385,41 +385,54 @@ static bool prefer_controller(const struct network_config *config,
 
 enum link_selection { LINK_WAIT, LINK_BOUND, LINK_FAILED };
 
+bool network_config_binding_pending(handle_t authority, bool *pending)
+{
+  *pending = false;
+  uint32_t after_id = 0;
+  for (;;) {
+    struct net_controller_reply controller;
+    enum call_status status = net_config_next_controller(authority, after_id, &controller);
+    if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
+      *pending = true;
+      return true;
+    }
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot inspect bound network controller (status %u)\n", status);
+      return false;
+    }
+    if (controller.flags & NET_CONTROLLER_BOUND) {
+      /* Stable configuration may still be sampled after activation. Permanent
+       * transport failure clears preparation while retaining the binding. */
+      *pending = (controller.flags & NET_CONTROLLER_PREPARED) != 0;
+      return true;
+    }
+    if (!controller.controller_id) {
+      if (!(controller.flags & NET_CONTROLLER_INVENTORY_COMPLETE)) {
+        *pending = true;
+        return true;
+      }
+      fputs("session: bound network controller missing from inventory\n", stderr);
+      return false;
+    }
+    if (controller.controller_id <= after_id) {
+      fputs("session: invalid network controller inventory order\n", stderr);
+      return false;
+    }
+    after_id = controller.controller_id;
+  }
+}
+
 static enum link_selection bound_readiness(struct network_runtime *runtime,
     const struct net_config_reply *snapshot)
 {
   if (snapshot->flags & NET_CONFIG_READY) {
     return LINK_BOUND;
   }
-  uint32_t after_id = 0;
-  for (;;) {
-    struct net_controller_reply controller;
-    enum call_status status = net_config_next_controller(runtime->authority, after_id, &controller);
-    if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
-      return LINK_WAIT;
-    }
-    if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot inspect bound network controller (status %u)\n", status);
-      return LINK_FAILED;
-    }
-    if (controller.flags & NET_CONTROLLER_BOUND) {
-      /* Stable configuration may still be sampled after activation. Permanent
-       * transport failure clears preparation while retaining the binding. */
-      return controller.flags & NET_CONTROLLER_PREPARED ? LINK_WAIT : LINK_BOUND;
-    }
-    if (!controller.controller_id) {
-      if (!(controller.flags & NET_CONTROLLER_INVENTORY_COMPLETE)) {
-        return LINK_WAIT;
-      }
-      fputs("session: bound network controller missing from inventory\n", stderr);
-      return LINK_FAILED;
-    }
-    if (controller.controller_id <= after_id) {
-      fputs("session: invalid network controller inventory order\n", stderr);
-      return LINK_FAILED;
-    }
-    after_id = controller.controller_id;
+  bool pending;
+  if (!network_config_binding_pending(runtime->authority, &pending)) {
+    return LINK_FAILED;
   }
+  return pending ? LINK_WAIT : LINK_BOUND;
 }
 
 static enum link_selection select_link(const struct network_config *config,
