@@ -26,6 +26,13 @@ struct install_layout {
   uint8_t disk_guid[16], esp_guid[16], pool_guid[16];
 };
 
+struct install_update {
+  bool eligible, degraded;
+  const char *reason;
+  struct install_layout layout;
+  char revision[64];
+};
+
 struct install_consent {
   bool eligible, final_pool, degraded;
   uint32_t pools, volumes;
@@ -54,6 +61,12 @@ bool install_scan_consent(const struct install_disk *disk, bool read_the_room,
     struct install_consent *consent);
 void install_consent_destroy(struct install_consent *consent);
 
+/* Update inspection never mounts, replays or writes a pool. GPT/pool checks
+ * must be followed by ESP configuration inspection before offering a target. */
+bool install_scan_update(const struct install_disk *disk, struct install_update *update);
+bool install_esp_inspect(const struct install_disk *disk,
+    const struct install_layout *layout, char revision[64], const char **reason);
+
 struct npfs_header;
 /* The decoded, prevalidated header supplies the new pool identity and layout.
  * Creates only system's root and its empty regular SAFE_TO_WIPE marker. */
@@ -67,7 +80,8 @@ struct install_esp;
 struct install_esp *install_esp_plan(const struct install_disk *disk,
     const struct install_layout *layout, const struct install_source *efi,
     const struct install_source *kernel, const struct install_source *archive,
-    const char *configuration, size_t configuration_bytes, uint32_t serial);
+    const char *configuration, size_t configuration_bytes,
+    const char *revision, size_t revision_bytes, uint32_t serial);
 bool install_esp_write(const struct install_esp *esp);
 /* Reopens the recorded boot paths through on-disk FAT/directory metadata and
  * compares their contents to the borrowed inputs, rather than planned offsets. */

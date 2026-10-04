@@ -8,6 +8,7 @@
 #include <pyxis_fs/npfs.h>
 #include <random.h>
 #include <startup.h>
+#include <system_info.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@
 struct target {
   struct disk_info info;
   struct install_consent consent;
+  struct install_update update;
 };
 
 static bool read_line(struct terminal *terminal, const char *prompt, const char *initial,
@@ -26,7 +28,7 @@ static bool read_line(struct terminal *terminal, const char *prompt, const char 
 {
   struct term_line_result result = term_read_line_initial(terminal, prompt, initial, line, capacity);
   if (result.status != TERM_LINE_OK) {
-    puts("Installation cancelled.");
+    puts("Cancelled. Nothing was written.");
     return false;
   }
   if (result.limit_reached) {
@@ -50,6 +52,22 @@ static bool decimal(const char *text, uint64_t *value)
   }
   *value = result;
   return true;
+}
+
+static bool choose_action(struct terminal *terminal, bool *updating)
+{
+  puts("1. Install\n2. Update");
+  char line[16];
+  for (;;) {
+    if (!read_line(terminal, "Choice: ", "", line, sizeof(line))) {
+      return false;
+    }
+    if (!strcmp(line, "1") || !strcmp(line, "2")) {
+      *updating = line[0] == '2';
+      return true;
+    }
+    puts("Enter 1 or 2.");
+  }
 }
 
 static bool choose_mode(struct terminal *terminal, bool *read_the_room)
@@ -115,7 +133,7 @@ static void destroy_targets(struct target *targets, size_t count)
   free(targets);
 }
 
-static bool inventory(handle_t disks, bool read_the_room, struct target **output,
+static bool inventory(handle_t disks, bool read_the_room, bool updating, struct target **output,
     size_t *count)
 {
   *output = NULL;
@@ -137,48 +155,72 @@ static bool inventory(handle_t disks, bool read_the_room, struct target **output
     *output = grown;
     struct target *target = &grown[(*count)++];
     *target = (struct target){.info = info};
+    const char **reason_out = updating ? &target->update.reason : &target->consent.reason;
     const char *reason = unavailable_reason(&info);
     if (reason) {
-      target->consent.reason = reason;
+      *reason_out = reason;
       continue;
     }
     struct install_disk disk = {.info = info, .bytes = info.block_count * info.block_size};
     struct install_layout layout = {0};
     struct npfs_header header;
     const uint8_t placeholder_id[16] = {1};
-    if (!install_layout_plan(&disk, &layout) || !pool_header(&layout, 1, placeholder_id, &header)) {
-      target->consent.reason = "too small for a 512 MiB ESP and writable pool";
+    if (!updating && (!install_layout_plan(&disk, &layout) ||
+        !pool_header(&layout, 1, placeholder_id, &header))) {
+      *reason_out = "too small for a 512 MiB ESP and writable pool";
       continue;
     }
     status = disks_open(disks, info.id, DISK_ACCESS_READ_ONLY, &disk.handle);
     if (status != CALL_OK) {
-      target->consent.reason = "raw inspection unavailable";
+      *reason_out = "raw inspection unavailable";
       continue;
     }
-    bool inspected = install_scan_consent(&disk, read_the_room, &target->consent);
+    bool inspected;
+    if (updating) {
+      inspected = install_scan_update(&disk, &target->update);
+      if (inspected && target->update.eligible) {
+        target->update.eligible = install_esp_inspect(&disk, &target->update.layout,
+            target->update.revision, &target->update.reason);
+        if (target->update.eligible) {
+          target->update.reason = "recognized Pyxis installation";
+        }
+      }
+    } else {
+      inspected = install_scan_consent(&disk, read_the_room, &target->consent);
+    }
     bool closed = handle_close(disk.handle) == 0;
     if (!inspected || !closed) {
-      target->consent.eligible = false;
-      target->consent.reason = "inspection failed; consent cannot be established";
+      if (updating) {
+        target->update.eligible = false;
+      } else {
+        target->consent.eligible = false;
+      }
+      *reason_out = "inspection failed; eligibility cannot be established";
     }
   }
 }
 
 static struct target *choose_target(struct terminal *terminal, struct target *targets,
-    size_t count)
+    size_t count, bool updating)
 {
   size_t eligible = 0, single = 0;
   for (size_t i = 0; i < count; ++i) {
     struct target *target = &targets[i];
+    bool offered = updating ? target->update.eligible : target->consent.eligible;
+    bool degraded = updating ? target->update.degraded : target->consent.degraded;
+    const char *reason = updating ? target->update.reason : target->consent.reason;
     char guid[37];
     install_guid_text(target->info.gpt_guid, guid);
     printf("%zu. Disk %llu: %llu MiB, GUID %s; %s: %s%s\n", i + 1,
         (unsigned long long)target->info.id,
         (unsigned long long)(target->info.block_count * target->info.block_size / INSTALL_MIB),
         npfs_id_valid(target->info.gpt_guid) ? guid : "unavailable",
-        target->consent.eligible ? "eligible" : "ineligible", target->consent.reason,
-        target->consent.degraded ? " (degraded metadata)" : "");
-    if (target->consent.eligible) {
+        offered ? "eligible" : "ineligible", reason,
+        degraded ? " (degraded metadata)" : "");
+    if (updating && offered) {
+      printf("   Installed kernel revision: %s\n", target->update.revision);
+    }
+    if (offered) {
       ++eligible;
       single = i;
     }
@@ -197,7 +239,7 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
       return NULL;
     }
     if (decimal(line, &number) && number > 0 && number <= count &&
-        targets[number - 1].consent.eligible) {
+        (updating ? targets[number - 1].update.eligible : targets[number - 1].consent.eligible)) {
       return &targets[number - 1];
     }
     puts("Enter the number of an eligible disk.");
@@ -400,20 +442,37 @@ int main(int argc, char **argv)
     fputs("installer: missing install-mode authority\n", stderr);
     goto done;
   }
-  bool read_the_room;
-  if (!choose_mode(&terminal, &read_the_room)) {
+  bool updating, read_the_room = false;
+  if (!choose_action(&terminal, &updating) ||
+      (!updating && !choose_mode(&terminal, &read_the_room))) {
     goto done;
   }
+  struct system_info_identity identity;
+  if (system_info_get_identity(startup_resource("system_info"), &identity) != CALL_OK) {
+    fputs("installer: kernel identity unavailable; nothing was written\n", stderr);
+    goto done;
+  }
+  const char *revision = identity.build_revision[0] ? identity.build_revision : "unknown";
+  char revision_record[sizeof(identity.build_revision) + 1];
+  snprintf(revision_record, sizeof(revision_record), "%s\n", revision);
+  printf("Live kernel revision: %s\n", revision);
   if (!source_open("app://share/installer/BOOTX64.EFI", &efi) ||
       !source_open("app://share/installer/limine.conf.template", &template) ||
       file_size(kernel.handle, &kernel.bytes) != CALL_OK || !kernel.bytes ||
       file_size(archive.handle, &archive.bytes) != CALL_OK || !archive.bytes ||
-      !inventory(disks, read_the_room, &targets, &count)) {
+      !inventory(disks, read_the_room, updating, &targets, &count)) {
     fputs("installer: sources or disk inventory unavailable; nothing was written\n", stderr);
     goto done;
   }
-  struct target *selected = choose_target(&terminal, targets, count);
+  struct target *selected = choose_target(&terminal, targets, count, updating);
   if (!selected) {
+    goto done;
+  }
+  if (updating) {
+    printf("Selected disk %llu: installed %s; live %s.\n",
+        (unsigned long long)selected->info.id, selected->update.revision, revision);
+    puts("Update inspection complete. Nothing was written.");
+    result = EXIT_SUCCESS;
     goto done;
   }
   disk.info = selected->info;
@@ -441,7 +500,8 @@ int main(int argc, char **argv)
     goto done;
   }
   esp = install_esp_plan(&disk, &layout, &efi, &kernel, &archive,
-      configuration, configuration_bytes, npfs_get_u32(layout.esp_guid));
+      configuration, configuration_bytes, revision_record, strlen(revision_record),
+      npfs_get_u32(layout.esp_guid));
   if (!esp) {
     fputs("installer: boot sources do not fit the fresh ESP\n", stderr);
     goto done;

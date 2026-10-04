@@ -40,7 +40,7 @@ struct esp_inspection {
 struct esp_path {
   const char *name, *alias;
   uint32_t first, size;
-  bool directory, found;
+  bool directory, found, long_name_required;
 };
 
 struct esp_long_name {
@@ -299,7 +299,7 @@ static bool find_paths(struct esp_inspection *esp, uint32_t first,
       }
       for (size_t i = 0; i < count; ++i) {
         struct esp_path *path = &paths[i];
-        if (!same_alias(entry, path->alias) &&
+        if ((path->long_name_required || !same_alias(entry, path->alias)) &&
             !(name.active && name.readable && same_name(name.name, path->name))) {
           continue;
         }
@@ -386,7 +386,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
       continue;
     }
     cursor += 8;
-    bool installed = false, bound = false;
+    bool installed = false, primary_seen = false, bound = false;
     while (cursor < end) {
       while (cursor < end && horizontal_space(bytes[cursor])) {
         ++cursor;
@@ -399,8 +399,17 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         ++cursor;
       }
       size_t length = cursor - start;
-      installed |= same_token(bytes + start, length, "init.primary=app://init-installed");
+      if (length >= 13 && !memcmp(bytes + start, "init.primary=", 13)) {
+        if (primary_seen) {
+          return refuse(esp, "ESP boot configuration repeats init.primary");
+        }
+        primary_seen = true;
+        installed = same_token(bytes + start, length, "init.primary=app://init-installed");
+      }
       if (length >= 11 && !memcmp(bytes + start, "mount.disk=", 11)) {
+        if (bound) {
+          return refuse(esp, "ESP boot configuration repeats mount.disk");
+        }
         if (length != 11 + 36) {
           return refuse(esp, "ESP boot configuration has an invalid disk binding");
         }
@@ -452,7 +461,7 @@ bool install_esp_inspect(const struct install_disk *disk,
     {.name = "limine", .alias = "LIMINE     ", .directory = true},
     {.name = "revision", .alias = "REVISION   "},
   };
-  struct esp_path config = {.name = "limine.conf", .alias = "LIMINE~1CON"};
+  struct esp_path config = {.name = "limine.conf", .long_name_required = true};
   if (success) {
     success = find_paths(&esp, esp.root, &boot, 1);
   }

@@ -1012,9 +1012,8 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
     update->reason = "npfs journal committed: boot the installed system once to recover it, then update";
     goto done;
   }
-  uint64_t journal_bytes = pool->header.journal_blocks * NPFS_BLOCK_SIZE;
-  if (journal_bytes < INSTALL_MIB || journal_bytes > UINT64_C(1024) * INSTALL_MIB) {
-    update->reason = "npfs journal outside installer-supported range";
+  if (npfs_journal_capacity(pool->header.journal_blocks) < MOUNT_NPFS_MIN_JOURNAL_IMAGES) {
+    update->reason = "npfs journal is too small for the live kernel's writable mount";
     goto done;
   }
   update->reason = "npfs allocation bitmap is damaged";
