@@ -25,6 +25,7 @@
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
+#include <network_environment.h>
 #include <limits.h>
 #include <startup.h>
 #include <stdio.h>
@@ -77,6 +78,7 @@ static int launch_session(const struct session_config *config, const struct netw
   struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
+  struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
   if (!grants || (depth && !directories) || !environment) {
     fputs("session: cannot allocate launch metadata\n", stderr);
@@ -149,21 +151,24 @@ static int launch_session(const struct session_config *config, const struct netw
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", grant_count};
     grants[grant_count++] = (struct launch_grant){tcp, rights, 0};
   }
+  handle_t net_config = startup_resource("net_config");
+  if (net_config != HANDLE_INVALID) {
+    uint64_t rights;
+    status = handle_rights(net_config, &rights, NULL);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query network rights (status %u)\n", status);
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", grant_count};
+    grants[grant_count++] = (struct launch_grant){net_config,
+        rights & NET_CONFIG_RIGHT_READ, 0};
+  }
   if (start_remote_services) {
     handle_t terminal_service = startup_resource("terminal");
-    handle_t net_config = startup_resource("net_config");
     if (terminal_service == HANDLE_INVALID || net_config == HANDLE_INVALID) {
       fputs("session: missing remote service bootstrap authority\n", stderr);
       goto done;
     }
-    uint64_t rights;
-    status = handle_rights(net_config, &rights, NULL);
-    if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot query remote network rights (status %u)\n", status);
-      goto done;
-    }
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", grant_count};
-    grants[grant_count++] = (struct launch_grant){net_config, rights & NET_CONFIG_RIGHTS, 0};
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"terminal", grant_count};
     grants[grant_count++] = (struct launch_grant){terminal_service,
         TERMINAL_SERVICE_RIGHT_CREATE, 0};
@@ -315,6 +320,14 @@ static int launch_session(const struct session_config *config, const struct netw
   if (configure_network && !network_config_apply(network)) {
     goto done;
   }
+  status = network_environment_read(&refreshed_environment, net_config,
+      environment, environment_count, network->dns_server);
+  if (status != CALL_OK) {
+    fprintf(stderr, "session: cannot read network environment (status %u)\n", status);
+    goto done;
+  }
+  request.environment = (uintptr_t)refreshed_environment.variables;
+  request.environment_count = refreshed_environment.count;
   status = term_set_tab_width(&terminal, config->tab_width);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot set tab width (status %u)\n", status);
@@ -332,6 +345,7 @@ static int launch_session(const struct session_config *config, const struct netw
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  network_environment_free(&refreshed_environment);
   free(environment);
   free(directories);
   free(grants);
