@@ -359,11 +359,6 @@ static size_t preference_rank(const struct network_config *config,
   return config->preference_count;
 }
 
-static unsigned driver_rank(uint32_t driver)
-{
-  return driver == NET_DRIVER_RTL8111 ? 0 : driver == NET_DRIVER_VIRTIO ? 1 : 2;
-}
-
 static bool prefer_controller(const struct network_config *config,
     const struct net_controller_reply *candidate, const struct net_controller_reply *current)
 {
@@ -374,11 +369,6 @@ static bool prefer_controller(const struct network_config *config,
   size_t current_rank = preference_rank(config, current);
   if (candidate_rank != current_rank) {
     return candidate_rank < current_rank;
-  }
-  unsigned candidate_driver = driver_rank(candidate->driver);
-  unsigned current_driver = driver_rank(current->driver);
-  if (candidate_driver != current_driver) {
-    return candidate_driver < current_driver;
   }
   return candidate->controller_id < current->controller_id;
 }
