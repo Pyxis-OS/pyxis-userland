@@ -491,21 +491,28 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     {.name = "revision", .alias = "REVISION   "},
   };
   struct esp_path config = {.name = "limine.conf", .long_name_required = true};
+  /* A path found before later directory damage can still expose a foreign
+   * binding. Incomplete validation keeps its REBUILD diagnostic. */
   if (success) {
-    success = find_paths(&esp, esp.root, &boot, 1) && !boot.damaged;
+    bool complete = find_paths(&esp, esp.root, &boot, 1);
+    success = esp.state != INSTALL_ESP_REFUSED && !boot.damaged &&
+        (complete || (esp.state == INSTALL_ESP_REBUILD && boot.found));
   }
   if (success && !boot.found) {
     success = rebuild(&esp, "ESP lacks the installed boot directory");
   }
   if (success) {
-    /* Revision damage cannot hide the configuration's disk binding. */
-    success = find_paths(&esp, boot.first, children, 2) && !children[0].damaged;
+    bool complete = find_paths(&esp, boot.first, children, 2);
+    success = esp.state != INSTALL_ESP_REFUSED && !children[0].damaged &&
+        (complete || (esp.state == INSTALL_ESP_REBUILD && children[0].found));
   }
   if (success && !children[0].found) {
     success = rebuild(&esp, "ESP lacks the installed Limine directory");
   }
   if (success) {
-    success = find_paths(&esp, children[0].first, &config, 1) && !config.damaged;
+    bool complete = find_paths(&esp, children[0].first, &config, 1);
+    success = esp.state != INSTALL_ESP_REFUSED && !config.damaged &&
+        (complete || (esp.state == INSTALL_ESP_REBUILD && config.found));
   }
   if (success && (!config.found || !config.size || config.size > ESP_CONFIG_MAX_BYTES)) {
     success = rebuild(&esp, "ESP boot configuration is absent or exceeds the 64 KiB inspection limit");
