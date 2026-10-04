@@ -25,6 +25,11 @@ struct startup_stream startup_stream(enum startup_stream_index index);
 handle_t startup_resource(const char *name);
 handle_t startup_root(const char *scheme);
 
+/* Borrow the complete named-resource binding array. Handles retain the same
+ * ownership and aliasing rules as individual startup_resource lookups. */
+const struct startup_binding *startup_resources(void);
+size_t startup_resource_count(void);
+
 /* Userspace launch profile bound, including app/home/HOST. */
 #define STARTUP_ROOT_LIMIT 16
 /* Borrow the explicit directory binding selection; never enumerates resources. */

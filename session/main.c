@@ -34,7 +34,8 @@
 #include <term.h>
 
 static int launch_session(const struct session_config *config, const struct network_config *network,
-    bool configure_network, bool start_services, bool start_remote_services)
+    struct network_runtime *runtime, bool configure_network,
+    bool start_services, bool start_remote_services)
 {
   struct terminal terminal = {startup_resource("input"), startup_resource("output")};
   handle_t launcher = startup_resource("launcher");
@@ -322,7 +323,7 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
 
-  if (configure_network && !network_config_apply(network)) {
+  if (configure_network && !network_config_apply(network, runtime)) {
     goto done;
   }
   if (!configure_network && script) {
@@ -353,7 +354,7 @@ static int launch_session(const struct session_config *config, const struct netw
     goto done;
   }
   /* The child owns its copied grants and strings. Never read terminal input
-   * or wait after handing off; closing this observer leaves the child alive. */
+   * or wait for the child after handing off; closing this observer leaves it alive. */
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
@@ -362,6 +363,81 @@ done:
   free(directories);
   free(grants);
   if (handle_close(image) != 0) {
+    result = EXIT_FAILURE;
+  }
+  return result;
+}
+
+static bool release_bootstrap_grants(const struct network_runtime *runtime)
+{
+  size_t named_count = startup_resource_count();
+  size_t roots = startup_root_count();
+  size_t depth = startup_working_directory_count();
+  if (named_count == SIZE_MAX || roots > SIZE_MAX - named_count - 1 ||
+      depth > SIZE_MAX - named_count - roots - 1 ||
+      named_count + roots + depth + 1 > SIZE_MAX / sizeof(handle_t)) {
+    fputs("session: too many bootstrap grants to release\n", stderr);
+    return false;
+  }
+  size_t count = named_count + roots + depth + 1;
+  handle_t *handles = malloc(count * sizeof(*handles));
+  if (!handles) {
+    fputs("session: cannot allocate bootstrap grant cleanup\n", stderr);
+    return false;
+  }
+  for (size_t i = 0; i < named_count; ++i) {
+    handles[i] = startup_resources()[i].handle;
+  }
+  for (size_t i = 0; i < roots; ++i) {
+    handles[named_count + i] = startup_roots()[i].handle;
+  }
+  for (size_t i = 0; i < depth; ++i) {
+    handles[named_count + roots + i] = startup_working_directory(i);
+  }
+  handles[count - 1] = startup_namespace();
+  const handle_t retained[] = {
+    runtime->dhcp.endpoint, runtime->dhcp.clock, runtime->dhcp.random,
+    runtime->authority, startup_resource("memory"), startup_resource("output"),
+    startup_stream(STARTUP_STDOUT).handle, startup_stream(STARTUP_STDERR).handle,
+  };
+  bool success = true;
+  for (size_t i = 0; i < count; ++i) {
+    handle_t handle = handles[i];
+    bool keep = handle == HANDLE_INVALID;
+    for (size_t j = 0; j < sizeof(retained) / sizeof(retained[0]); ++j) {
+      keep |= handle == retained[j];
+    }
+    for (size_t j = 0; j < i; ++j) {
+      keep |= handle == handles[j];
+    }
+    if (!keep && handle_close(handle) != 0) {
+      success = false;
+    }
+  }
+  free(handles);
+  /* Libc owns the dedicated stream handles. No path operation or bootstrap
+   * resource lookup follows this handoff; their snapshots now contain stale handles. */
+  if (startup_stream(STARTUP_STDIN).protocol != STARTUP_STREAM_NONE && fclose(stdin) != 0) {
+    success = false;
+  }
+  if (!success) {
+    fputs("session: cannot release bootstrap grants\n", stderr);
+  }
+  return success;
+}
+
+static int finish_network(const struct network_config *config,
+    struct network_runtime *runtime, int result)
+{
+  if (runtime->dhcp.endpoint == HANDLE_INVALID) {
+    return result;
+  }
+  if (result == EXIT_SUCCESS && release_bootstrap_grants(runtime)) {
+    result = network_config_maintain(config, runtime);
+  } else {
+    result = EXIT_FAILURE;
+  }
+  if (!network_config_stop(config, runtime)) {
     result = EXIT_FAILURE;
   }
   return result;
@@ -412,11 +488,15 @@ int main(int argc, char **argv)
   }
   if (tcp_server) {
     struct network_config network;
-    if (!network_config_read(&network) ||
-        (configure_network && !network_config_apply(&network))) {
+    struct network_runtime runtime = {0};
+    if (!network_config_read(&network)) {
       return EXIT_FAILURE;
     }
-    return launch_tcp_server(address, (uint16_t)port, count);
+    int result = EXIT_FAILURE;
+    if (!configure_network || network_config_apply(&network, &runtime)) {
+      result = launch_tcp_server(address, (uint16_t)port, count);
+    }
+    return finish_network(&network, &runtime, result);
   }
   struct session_config config;
   if (!session_config_read(&config)) {
@@ -427,19 +507,18 @@ int main(int argc, char **argv)
     free(config.timezone);
     return EXIT_FAILURE;
   }
-  int result;
+  struct network_runtime runtime = {0};
+  int result = EXIT_FAILURE;
   if (remote_server) {
-    if (configure_network && !network_config_apply(&network)) {
-      free(config.timezone);
-      return EXIT_FAILURE;
+    if (!configure_network || network_config_apply(&network, &runtime)) {
+      result = launch_remote_server(&config, &network, (uint16_t)port);
     }
-    result = launch_remote_server(&config, &network, (uint16_t)port);
   } else {
-    result = launch_session(&config, &network, configure_network,
+    result = launch_session(&config, &network, &runtime, configure_network,
         start_services, start_remote_services);
   }
   free(config.timezone);
-  return result;
+  return finish_network(&network, &runtime, result);
 
 usage:
   fputs("Usage: session.pxe [--configure-network] [--start-services | --start-remote-services]\n"
