@@ -337,9 +337,6 @@ bool dhcp_acquire(handle_t udp, handle_t clock, handle_t random,
         new_transaction = false;
       }
       make_packet(packet, requesting, xid, now - start, mac, &offer);
-      if (requesting && !request_at) {
-        request_at = now;
-      }
       uint64_t delay = (retry_seconds - 1) * SECOND_NS +
           (random_words[1] % 2001) * UINT64_C(1000000);
       retry_at = clipped_deadline(now, delay, end);
@@ -351,8 +348,11 @@ bool dhcp_acquire(handle_t udp, handle_t clock, handle_t random,
           sent != CALL_NO_MEMORY && sent != CALL_TIMED_OUT) {
         break;
       }
-      if (retry_seconds < 64) {
+      if (sent == CALL_OK && retry_seconds < 64) {
         retry_seconds *= 2;
+      }
+      if (sent == CALL_OK && requesting && !request_at) {
+        request_at = now;
       }
       transmit = false;
     }
@@ -387,7 +387,8 @@ bool dhcp_acquire(handle_t udp, handle_t clock, handle_t random,
       new_transaction = true;
       retry_seconds = 4;
       request_at = 0;
-    } else if (reply.type == DHCP_ACK && read_u32(packet + BOOTP_YIADDR) == offer.address) {
+    } else if (reply.type == DHCP_ACK && request_at &&
+        read_u32(packet + BOOTP_YIADDR) == offer.address) {
       struct dhcp_lease acknowledged;
       if (decode_lease(packet, &reply, &acknowledged)) {
         acknowledged.acquired_ns = request_at;
