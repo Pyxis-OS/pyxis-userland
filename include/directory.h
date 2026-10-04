@@ -55,8 +55,8 @@ enum call_status directory_enumerate(handle_t directory, const struct directory_
 /* Borrowed FILESYSTEM_INFO grant on a native directory. All fields are available
  * on success; failure preserves *info. The 320-byte record describes retained
  * selection, not a new consistency scan. IDs are opaque bytes; generation is
- * the selected filesystem generation. pool_allocatable_bytes excludes the two
- * superblocks but includes shared metadata/reserves, so equal pool IDs identify
+ * the mounted pool's selected journal sequence. pool_allocatable_bytes excludes
+ * the two header blocks but includes shared metadata/reserves, so equal pool IDs identify
  * shared capacity, not separate writable allowances. Opening verifies geometry
  * and root envelopes, not global accounting. Used/free bytes, charged bytes,
  * guarantees, quotas and percentages are unavailable, never implied zero.
