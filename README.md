@@ -287,6 +287,10 @@ arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
 the TTY. It needs display, keyboard and clock grants. Libc supports floating-point
 formatting and a small math subset; it does not provide a full libm.
 
+`mousetest` shows mouse buttons, wheel direction and position, with a drawing
+pad for the left button; Escape returns to the TTY. It needs display, keyboard,
+pointer and clock grants.
+
 `httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
 Configured boot sessions use `--start-services` to publish independent `http`
 and `https` instances after selecting `DNS_SERVER`. HTTPS loads
