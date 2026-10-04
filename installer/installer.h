@@ -51,6 +51,13 @@ bool install_scan_consent(const struct install_disk *disk, bool read_the_room,
     struct install_consent *consent);
 void install_consent_destroy(struct install_consent *consent);
 
+struct npfs_header;
+/* The decoded, prevalidated header supplies the new pool identity and layout.
+ * Creates only system's root and its empty regular SAFE_TO_WIPE marker. */
+bool install_pool_format(const struct install_disk *disk,
+    const struct install_layout *layout, const struct npfs_header *header,
+    const uint8_t volume_id[16], int64_t created_ns, bool created_valid);
+
 /* The FAT module writes only a new, fixed boot tree; it is not a FAT service.
  * Planning is read-only and rejects sources that cannot fit before mutation. */
 struct install_esp;
