@@ -133,7 +133,8 @@ bool install_pool_format(const struct install_disk *disk,
 {
   if (!disk || !layout || !header || !volume_id || disk->handle == HANDLE_INVALID ||
       disk->info.preparation != DISK_READY ||
-      (disk->info.block_size != 512 && disk->info.block_size != NPFS_BLOCK_SIZE) ||
+      disk->info.block_size < 512 || disk->info.block_size > NPFS_BLOCK_SIZE ||
+      (disk->info.block_size & (disk->info.block_size - 1)) ||
       !(disk->info.flags & DISK_FLAG_WRITABLE) ||
       !(disk->info.flags & DISK_FLAG_FLUSH_SUPPORTED) ||
       (disk->info.flags & DISK_FLAG_WRITE_FAILED) ||

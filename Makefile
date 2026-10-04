@@ -11,7 +11,7 @@ MBEDTLS_PREFIX ?= build/ports-dev/mbedtls
 MBEDTLS_PREFIX := $(abspath $(MBEDTLS_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := remote-terminal httpfs allocbench iobench ipcbench session init-install shell client server counter textfs cat head lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
+INSTALL_PROGRAMS := remote-terminal httpfs allocbench iobench ipcbench session init-install installer shell client server counter textfs cat head lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -42,6 +42,8 @@ COUNTER_OBJECT := $(BUILD)/counter/namespace.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o)
+NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o
@@ -57,7 +59,7 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: remote-terminal all install libhttp libtls httpfs allocbench iobench ipcbench session init-install hello client server counter textfs cat head lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
+.PHONY: remote-terminal all install libhttp libtls httpfs allocbench iobench ipcbench session init-install installer hello client server counter textfs cat head lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -77,6 +79,7 @@ install: all
 	  install -m 644 init/services.sh "$$staging/init-services"; \
 	  install -m 644 init/remote.sh "$$staging/init-remote"; \
 	  install -m 644 init/remote-services.sh "$$staging/init-remote-services"; \
+	  install -m 644 init/installed.sh "$$staging/init-installed"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
@@ -101,6 +104,7 @@ $(BUILD)/remote-terminal.elf: $(REMOTE_OBJECT)
 
 session: $(BUILD)/session.pxe
 init-install: $(BUILD)/init-install.pxe
+installer: $(BUILD)/installer.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
 server: $(BUILD)/server.pxe
@@ -176,6 +180,9 @@ $(BUILD)/counter.elf: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.elf: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
+$(BUILD)/installer.elf: $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(LDLIBS)
+
 $(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf $(BUILD)/sync.elf: $(UTILITY_OBJECT)
 
 $(BUILD)/share/hello.txt: hello/message.txt
@@ -218,3 +225,4 @@ clean:
 .SECONDARY:
 
 -include $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
+-include $(INSTALLER_OBJECTS:.o=.d)

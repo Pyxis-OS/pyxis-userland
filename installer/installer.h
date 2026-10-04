@@ -44,6 +44,9 @@ bool install_zero(const struct install_disk *disk, uint64_t offset, uint64_t len
 bool install_source_read(const struct install_source *source, uint64_t offset,
     void *bytes, size_t length);
 uint32_t install_crc32(const void *bytes, size_t length);
+bool install_layout_plan(const struct install_disk *disk, struct install_layout *layout);
+bool install_gpt_write(const struct install_disk *disk, const struct install_layout *layout);
+void install_guid_text(const uint8_t guid[16], char text[37]);
 
 /* Inspection performs no writes and retains no mounted pools. All committed
  * journal validation finishes before the metadata overlay is exposed. */
