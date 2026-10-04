@@ -364,6 +364,30 @@ enum call_status path_remove(const struct path_context *context, const char *pat
   return status;
 }
 
+enum call_status path_create_directory(const struct path_context *context, const char *path,
+    struct path_workspace *workspace)
+{
+  if (!path || !*path) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t count = 0;
+  handle_t unused;
+  enum call_status status = walk(context, path, WALK_PARENT, 0,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE, false, workspace, &count, &unused, NULL);
+  if (status == CALL_OK) {
+    handle_t directory;
+    status = directory_create(workspace->directories[count - 1], workspace->component,
+        DIRECTORY_KIND_DIRECTORY, DIRECTORY_RIGHT_LOOKUP, &directory);
+    if (status == CALL_OK) {
+      handle_close(directory);
+    }
+  }
+  if (count) {
+    close_chain(workspace->directories, count);
+  }
+  return status;
+}
+
 /* Leave the leaf name in component and transfer the last chain handle out.
  * Ancestors are closed; no directory entry or child handle is looked up. */
 static enum call_status rename_parent(const struct path_context *context, const char *path,

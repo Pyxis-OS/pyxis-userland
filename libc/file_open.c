@@ -5,6 +5,7 @@
 #include <startup.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "descriptor.h"
 #include "errors.h"
 
@@ -72,6 +73,44 @@ int remove(const char *path)
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };
   enum call_status status = path_remove(&context, path, DIRECTORY_KIND_ANY, &workspace);
+  free(component);
+  free(directories);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  return 0;
+}
+
+int mkdir(const char *path, mode_t mode)
+{
+  (void)mode;
+  if (!path || !*path) {
+    errno = EINVAL;
+    return -1;
+  }
+  size_t length = strlen(path);
+  size_t depth = startup_working_directory_count();
+  if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
+      depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+
+  size_t slots = depth + length + 1;
+  handle_t *directories = malloc(slots * sizeof(*directories));
+  char *component = malloc(length + 1);
+  if (!directories || !component) {
+    free(component);
+    free(directories);
+    errno = ENOMEM;
+    return -1;
+  }
+  struct path_workspace workspace = {directories, slots, component, length + 1};
+  struct path_context context = {
+    .directories = (handle_t *)startup_working_directories(), .count = depth,
+  };
+  enum call_status status = path_create_directory(&context, path, &workspace);
   free(component);
   free(directories);
   if (status != CALL_OK) {
