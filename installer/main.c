@@ -257,7 +257,9 @@ static char *boot_configuration(const struct install_source *source, const uint8
     } else if (length && line[0] == '/') {
       skip = false;
     }
-    if (!skip) {
+    bool default_entry = length >= strlen("default_entry:") &&
+      !memcmp(line, "default_entry:", strlen("default_entry:"));
+    if (!skip && !default_entry) {
       const char *replacement = NULL;
       if (length == strlen("# PYXIS_BOOT_MENU_TIMEOUT") &&
           !memcmp(line, "# PYXIS_BOOT_MENU_TIMEOUT", length)) {
@@ -520,7 +522,9 @@ done:
     }
   }
   if (attempted_write && result != EXIT_SUCCESS) {
-    fputs("Installation failed; the disk may be partially rebuilt.\n", stderr);
+    fputs("Installation failed; the disk may be partially rebuilt.\n"
+        "Boot the live image again, then run the installer and choose Read the room to reinstall this disk.\n",
+        stderr);
   }
   install_esp_destroy(esp);
   free(configuration);

@@ -14,6 +14,10 @@ both modes. Mounted or retained pools, other raw claims and nonoperational or
 read-only devices are excluded. Unsupported GPT features/capacity, I/O and
 allocation failures fail closed.
 
+A zeroed first sector with no GPT header in either location is listed as blank.
+This describes its partition metadata, not a scan or erasure of its contents;
+blank disks remain eligible only under Read the room.
+
 Consent reads use the codecs and a write-free committed-journal overlay. The
 entire log is validated before overlay reads; each reread image must match its
 validated checksum. Inspection follows root/marker paths, not every file or
@@ -31,14 +35,16 @@ FAT boot-file storage are initialized; this is not secure erasure.
 The ESP contains Limine at `EFI/BOOT/BOOTX64.EFI` and the original kernel,
 whole archive and generated configuration under `boot`. Installed configuration
 fills the packaged template with timeout zero and a disk-GUID-scoped normal
-command line, and omits the installer entry. Fixed `init-installed` mounts
+command line, and omits the installer entry and any global `default_entry`.
+Fixed `init-installed` mounts
 partition 2's system volume read-write as `system://`; home stays in RAM.
 
 Success requires disk flush, explicit raw release/GPT rescan, FAT path lookup
 and byte-for-byte source comparisons, then ordinary read-only pool reopening
 and marker verification. Failed mutations are not retried or rolled back;
 failure may leave a partially rebuilt disk. The verifier retains the pool until
-reboot. Reinstall requires booting the live image again. Delete the installed
+reboot. After a partial failure, boot the live image again and choose Read the
+room to reinstall; the same consent vetoes still apply. Delete the installed
 marker to mark the pool final.
 
 Build with `make installer SDK=/path/to/sdk`. The SDK must export the pinned
