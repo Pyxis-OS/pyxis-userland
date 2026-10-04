@@ -21,6 +21,7 @@ struct target {
   struct disk_info info;
   struct install_consent consent;
   struct install_update update;
+  bool boot_rebuild;
 };
 
 static bool read_line(struct terminal *terminal, const char *prompt, const char *initial,
@@ -133,6 +134,35 @@ static void destroy_targets(struct target *targets, size_t count)
   free(targets);
 }
 
+static bool inspect_update(const struct install_disk *disk, struct install_update *update,
+    bool *boot_rebuild)
+{
+  *boot_rebuild = false;
+  if (!install_scan_update(disk, update)) {
+    return false;
+  }
+  if (!update->eligible) {
+    return true;
+  }
+  enum install_esp_state state = install_esp_inspect(disk, &update->layout,
+      update->revision, &update->reason);
+  update->eligible = state != INSTALL_ESP_REFUSED;
+  *boot_rebuild = state == INSTALL_ESP_REBUILD;
+  if (state == INSTALL_ESP_VALID) {
+    update->reason = "recognized Pyxis installation";
+  }
+  return true;
+}
+
+static bool same_layout(const struct install_layout *left, const struct install_layout *right)
+{
+  return left->esp_start == right->esp_start && left->esp_bytes == right->esp_bytes &&
+      left->pool_start == right->pool_start && left->pool_bytes == right->pool_bytes &&
+      !memcmp(left->disk_guid, right->disk_guid, 16) &&
+      !memcmp(left->esp_guid, right->esp_guid, 16) &&
+      !memcmp(left->pool_guid, right->pool_guid, 16);
+}
+
 static bool inventory(handle_t disks, bool read_the_room, bool updating, struct target **output,
     size_t *count)
 {
@@ -177,14 +207,7 @@ static bool inventory(handle_t disks, bool read_the_room, bool updating, struct 
     }
     bool inspected;
     if (updating) {
-      inspected = install_scan_update(&disk, &target->update);
-      if (inspected && target->update.eligible) {
-        target->update.eligible = install_esp_inspect(&disk, &target->update.layout,
-            target->update.revision, &target->update.reason);
-        if (target->update.eligible) {
-          target->update.reason = "recognized Pyxis installation";
-        }
-      }
+      inspected = inspect_update(&disk, &target->update, &target->boot_rebuild);
     } else {
       inspected = install_scan_consent(&disk, read_the_room, &target->consent);
     }
@@ -219,6 +242,9 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
         degraded ? " (degraded metadata)" : "");
     if (updating && offered) {
       printf("   Installed kernel revision: %s\n", target->update.revision);
+      if (target->boot_rebuild) {
+        puts("   Boot files damaged or missing; Update will rebuild them.");
+      }
     }
     if (offered) {
       ++eligible;
@@ -414,6 +440,15 @@ static bool marker_verify(const struct install_disk *disk)
   return ok;
 }
 
+static bool system_verify(const struct install_disk *disk)
+{
+  handle_t root = HANDLE_INVALID;
+  if (disk_open_volume(disk->handle, 2, "system", DIRECTORY_RIGHT_LOOKUP, &root) != CALL_OK) {
+    return false;
+  }
+  return handle_close(root) == 0;
+}
+
 int main(int argc, char **argv)
 {
   (void)argv;
@@ -434,7 +469,7 @@ int main(int argc, char **argv)
   size_t count = 0;
   char *configuration = NULL;
   struct install_esp *esp = NULL;
-  bool claimed = false, attempted_write = false;
+  bool claimed = false, attempted_write = false, updating = false;
   int result = EXIT_FAILURE;
   if (disks == HANDLE_INVALID || app == HANDLE_INVALID || clock == HANDLE_INVALID ||
       random == HANDLE_INVALID || kernel.handle == HANDLE_INVALID || archive.handle == HANDLE_INVALID ||
@@ -442,7 +477,7 @@ int main(int argc, char **argv)
     fputs("installer: missing install-mode authority\n", stderr);
     goto done;
   }
-  bool updating, read_the_room = false;
+  bool read_the_room = false;
   if (!choose_action(&terminal, &updating) ||
       (!updating && !choose_mode(&terminal, &read_the_room))) {
     goto done;
@@ -468,30 +503,30 @@ int main(int argc, char **argv)
   if (!selected) {
     goto done;
   }
-  if (updating) {
-    printf("Selected disk %llu: installed %s; live %s.\n",
-        (unsigned long long)selected->info.id, selected->update.revision, revision);
-    puts("Update inspection complete. Nothing was written.");
-    result = EXIT_SUCCESS;
-    goto done;
-  }
   disk.info = selected->info;
   disk.bytes = disk.info.block_count * disk.info.block_size;
   struct install_layout layout = {0};
   uint8_t pool_id[16], volume_id[16];
   struct npfs_header header;
-  if (!install_layout_plan(&disk, &layout) || !new_ids(clock, random, &layout, pool_id, volume_id)) {
-    goto done;
-  }
-  char guid[37];
-  install_guid_text(disk.info.gpt_guid, guid);
-  printf("Disk %llu: %llu MiB, GUID %s\n", (unsigned long long)disk.info.id,
-      (unsigned long long)(disk.bytes / INSTALL_MIB),
-      npfs_id_valid(disk.info.gpt_guid) ? guid : "unavailable");
-  puts("The entire disk will be rebuilt. Volumes to destroy:");
-  puts(selected->consent.volume_labels ? selected->consent.volume_labels : "  none readable");
-  if (!choose_journal(&terminal, &layout, pool_id, &header)) {
-    goto done;
+  if (updating) {
+    layout = selected->update.layout;
+    printf("Disk %llu: installed %s; live %s.\n",
+        (unsigned long long)disk.info.id, selected->update.revision, revision);
+    puts("Update will replace this disk's EFI boot files. Its GPT and system pool will be preserved.");
+  } else {
+    if (!install_layout_plan(&disk, &layout) || !new_ids(clock, random, &layout, pool_id, volume_id)) {
+      goto done;
+    }
+    char guid[37];
+    install_guid_text(disk.info.gpt_guid, guid);
+    printf("Disk %llu: %llu MiB, GUID %s\n", (unsigned long long)disk.info.id,
+        (unsigned long long)(disk.bytes / INSTALL_MIB),
+        npfs_id_valid(disk.info.gpt_guid) ? guid : "unavailable");
+    puts("The entire disk will be rebuilt. Volumes to destroy:");
+    puts(selected->consent.volume_labels ? selected->consent.volume_labels : "  none readable");
+    if (!choose_journal(&terminal, &layout, pool_id, &header)) {
+      goto done;
+    }
   }
   size_t configuration_bytes;
   configuration = boot_configuration(&template, layout.disk_guid, &configuration_bytes);
@@ -506,12 +541,14 @@ int main(int argc, char **argv)
     fputs("installer: boot sources do not fit the fresh ESP\n", stderr);
     goto done;
   }
-  printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; system volume.\n",
-      (unsigned long long)(layout.pool_bytes / INSTALL_MIB),
-      (unsigned long long)(header.journal_blocks * NPFS_BLOCK_SIZE / INSTALL_MIB));
+  if (!updating) {
+    printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; system volume.\n",
+        (unsigned long long)(layout.pool_bytes / INSTALL_MIB),
+        (unsigned long long)(header.journal_blocks * NPFS_BLOCK_SIZE / INSTALL_MIB));
+  }
   char confirmation[16];
-  if (!read_line(&terminal, "Type wipe to continue: ", "", confirmation, sizeof(confirmation)) ||
-      strcmp(confirmation, "wipe")) {
+  if (!read_line(&terminal, updating ? "Type update to continue: " : "Type wipe to continue: ",
+      "", confirmation, sizeof(confirmation)) || strcmp(confirmation, updating ? "update" : "wipe")) {
     puts("Nothing was written.");
     goto done;
   }
@@ -521,32 +558,49 @@ int main(int argc, char **argv)
     goto done;
   }
   claimed = true;
-  struct install_consent current = {0};
-  bool consent_ok = install_scan_consent(&disk, read_the_room, &current) && current.eligible &&
-      current.pools == selected->consent.pools && current.volumes == selected->consent.volumes &&
-      !strcmp(current.reason, selected->consent.reason) &&
-      !strcmp(current.volume_labels ? current.volume_labels : "",
-        selected->consent.volume_labels ? selected->consent.volume_labels : "");
-  install_consent_destroy(&current);
-  if (!consent_ok) {
-    fputs("installer: consent changed or cannot be revalidated; nothing was written\n", stderr);
-    goto done;
+  if (updating) {
+    struct install_update current;
+    bool boot_rebuild;
+    if (disk_get_info(disk.handle, &disk.info) != CALL_OK ||
+        !inspect_update(&disk, &current, &boot_rebuild) || !current.eligible ||
+        !same_layout(&layout, &current.layout)) {
+      fputs("installer: update target changed or cannot be revalidated; nothing was written\n", stderr);
+      goto done;
+    }
+  } else {
+    struct install_consent current = {0};
+    bool consent_ok = install_scan_consent(&disk, read_the_room, &current) && current.eligible &&
+        current.pools == selected->consent.pools && current.volumes == selected->consent.volumes &&
+        !strcmp(current.reason, selected->consent.reason) &&
+        !strcmp(current.volume_labels ? current.volume_labels : "",
+          selected->consent.volume_labels ? selected->consent.volume_labels : "");
+    install_consent_destroy(&current);
+    if (!consent_ok) {
+      fputs("installer: consent changed or cannot be revalidated; nothing was written\n", stderr);
+      goto done;
+    }
   }
-  struct clock_wall_reading wall;
-  bool created_valid = clock_wall_now(clock, &wall) == CALL_OK;
-  int64_t created_ns = created_valid ? npfs_timestamp(wall.seconds, wall.nanoseconds) : 0;
+  bool created_valid = false;
+  int64_t created_ns = 0;
+  if (!updating) {
+    struct clock_wall_reading wall;
+    created_valid = clock_wall_now(clock, &wall) == CALL_OK;
+    created_ns = created_valid ? npfs_timestamp(wall.seconds, wall.nanoseconds) : 0;
+  }
   puts("Writing EFI boot files...");
   attempted_write = true;
   if (!install_esp_write(esp)) {
     goto done;
   }
-  puts("Formatting system pool...");
-  if (!install_pool_format(&disk, &layout, &header, volume_id, created_ns, created_valid)) {
-    goto done;
-  }
-  puts("Writing GPT...");
-  if (!install_gpt_write(&disk, &layout)) {
-    goto done;
+  if (!updating) {
+    puts("Formatting system pool...");
+    if (!install_pool_format(&disk, &layout, &header, volume_id, created_ns, created_valid)) {
+      goto done;
+    }
+    puts("Writing GPT...");
+    if (!install_gpt_write(&disk, &layout)) {
+      goto done;
+    }
   }
   status = disk_flush(disk.handle);
   if (status != CALL_OK) {
@@ -562,16 +616,20 @@ int main(int argc, char **argv)
   struct disk_info verified;
   if (disk_get_info(disk.handle, &verified) != CALL_OK || verified.gpt_status != DISK_GPT_HEALTHY ||
       memcmp(verified.gpt_guid, layout.disk_guid, 16)) {
-    fputs("installer: new GPT read-back failed\n", stderr);
+    fputs("installer: GPT read-back failed\n", stderr);
     goto done;
   }
   puts("Checking EFI files and reopening system read-only...");
-  if (!install_esp_verify(esp) || !marker_verify(&disk)) {
+  if (!install_esp_verify(esp) || (updating ? !system_verify(&disk) : !marker_verify(&disk))) {
     fputs("installer: read-back check failed\n", stderr);
     goto done;
   }
-  puts("installed\nBoot from this disk after removing the install medium.\n"
-      "Deleting system://SAFE_TO_WIPE marks this installation as final.");
+  if (updating) {
+    puts("updated\nBoot from this disk after removing the live medium.");
+  } else {
+    puts("installed\nBoot from this disk after removing the install medium.\n"
+        "Deleting system://SAFE_TO_WIPE marks this installation as final.");
+  }
   result = EXIT_SUCCESS;
 
 done:
@@ -582,9 +640,14 @@ done:
     }
   }
   if (attempted_write && result != EXIT_SUCCESS) {
-    fputs("Installation failed; the disk may be partially rebuilt.\n"
-        "Boot the live image again, then run the installer and choose Read the room to reinstall this disk.\n",
-        stderr);
+    if (updating) {
+      fputs("Update failed; the EFI boot files may be partially rebuilt.\n"
+          "Boot the live image again, then choose Update to rebuild this disk's boot files.\n", stderr);
+    } else {
+      fputs("Installation failed; the disk may be partially rebuilt.\n"
+          "Boot the live image again, then run the installer and choose Read the room to reinstall this disk.\n",
+          stderr);
+    }
   }
   install_esp_destroy(esp);
   free(configuration);
