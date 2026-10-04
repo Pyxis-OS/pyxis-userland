@@ -7,20 +7,29 @@ private memory, console, clock, randomness and read-only SYSTEM_INFO. It receive
 network, writable home or namespace authority.
 
 The first screen offers Install and Update. Install retains the Proceed / Read
-the room consent flow described below. Update currently inspects and selects a
-candidate, then exits with an explicit no-write message; ESP rewriting belongs
-to the next milestone task.
+the room consent flow described below. Update requires healthy matching GPT
+copies with exactly the installer's two partitions, writable-mount-compatible
+npfs opening metadata, an empty selected journal and a live `system` volume.
+One damaged pool header/control copy is accepted when the kernel accepts its
+valid peer. A committed journal is refused without replay. No marker is needed.
 
-Update requires healthy matching GPT copies with exactly the installer's two
-partitions, writable-mount-compatible npfs metadata, an empty selected journal
-and a live `system` volume. One damaged pool header/control copy is accepted
-when the kernel accepts its valid peer. A committed journal is refused without
-replay. No marker is required. Read-only FAT32 traversal checks the installed
-`boot/limine/limine.conf` command line against the disk GUID and installed init.
-The live kernel revision comes from SYSTEM_INFO; `boot/revision` supplies the
-installed revision, with missing, empty or nonprintable text displayed as `unknown`.
-Structural or I/O failures refuse the candidate. Inspection never mounts a pool
-or claims raw write access.
+Read-only FAT32 traversal supplies the installed boot configuration and revision
+when available. Damaged or missing boot files remain eligible for rebuilding,
+anchored by the healthy GPT and compatible pool; unreadable revision text shows
+`unknown`. Actual I/O/allocation failures and readable configurations bound to
+another disk refuse the candidate. The live revision comes from SYSTEM_INFO.
+This checks opening compatibility and available boot identity, not whole-pool
+integrity or complete bootability.
+
+After the exact word `update`, inspection repeats under exclusive raw access and
+checks that partition bounds and GUIDs still match. The shared fresh ESP writer
+replaces EFI, kernel, archive, configuration and revision, flushes, then releases
+raw access for GPT rescan. FAT traversal and byte comparison verify all authored
+boot files, followed by a read-only `system` root reopen. Only then is `updated`
+reported. GPT and pool are never written, replayed or migrated by Update. An
+interrupted update is recovered by booting live media again and choosing Update;
+there is no fallback entry, rollback or retry of failed mutations. Read-only
+verification retains the pool until reboot.
 
 The normal path requires a validated GPT and a nonempty npfs pool in every
 recognized pool partition, with a regular root `SAFE_TO_WIPE` in every live
