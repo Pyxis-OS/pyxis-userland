@@ -374,7 +374,21 @@ enum call_status path_create_directory(const struct path_context *context, const
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0,
       DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE, false, workspace, &count, &unused, NULL);
-  if (status == CALL_OK) {
+  if (status == CALL_BAD_REQUEST) {
+    /* A root or a final . or .. has no parent entry to create, but names an
+     * existing directory when it resolves; malformed paths still fail. The
+     * partial chain is closed first because resolve reuses the workspace. */
+    if (count) {
+      close_chain(workspace->directories, count);
+      count = 0;
+    }
+    handle_t existing;
+    if (resolve(context, path, DIRECTORY_KIND_DIRECTORY, DIRECTORY_RIGHT_LOOKUP,
+        workspace, &existing, NULL) == CALL_OK) {
+      handle_close(existing);
+      status = CALL_ALREADY_EXISTS;
+    }
+  } else if (status == CALL_OK) {
     handle_t directory;
     status = directory_create(workspace->directories[count - 1], workspace->component,
         DIRECTORY_KIND_DIRECTORY, DIRECTORY_RIGHT_LOOKUP, &directory);

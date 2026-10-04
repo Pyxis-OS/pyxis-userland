@@ -86,8 +86,8 @@ enum call_status path_remove(const struct path_context *context, const char *pat
     uint64_t kind, struct path_workspace *workspace);
 
 /* Resolve the parent and create its final component as a directory. A trailing /
- * is accepted. Roots and final . or .. are rejected, an existing name of either
- * kind returns ALREADY_EXISTS and missing parents are not created. Requires
+ * is accepted. An existing name of either kind, including a root or a final .
+ * or .. that resolves, returns ALREADY_EXISTS; missing parents are not created. Requires
  * CREATE on the parent. No allocation; scratch storage is caller-owned and all
  * temporary handles, including the new directory's, are closed. */
 enum call_status path_create_directory(const struct path_context *context, const char *path,
