@@ -185,7 +185,7 @@ static void make_boot(const struct install_esp *esp, uint8_t *sector)
   sector[64] = 0x80;
   sector[66] = 0x29;
   put32(sector + 67, esp->serial);
-  memcpy(sector + 71, "PYXIS ESP  ", 11);
+  memcpy(sector + 71, "NO NAME    ", 11);
   memcpy(sector + 82, "FAT32   ", 8);
   /* UEFI loads the EFI file; this is not an executable legacy boot loader. */
   put16(sector + 510, ESP_BOOT_SIGNATURE);

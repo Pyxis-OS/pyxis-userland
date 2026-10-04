@@ -339,6 +339,11 @@ static enum inspection open_pool(struct pool_view *pool, bool *degraded)
     npfs_header_decode(pool->scratch[0], &headers[0]),
     npfs_header_decode(pool->scratch[1], &headers[1]),
   };
+  for (unsigned i = 0; i < 2; ++i) {
+    if (decoded[i] == NPFS_OK && headers[i].pool_blocks != pool->blocks) {
+      decoded[i] = NPFS_CORRUPT;
+    }
+  }
   if (decoded[0] == NPFS_UNSUPPORTED || decoded[1] == NPFS_UNSUPPORTED ||
       (decoded[0] != NPFS_OK && decoded[1] != NPFS_OK) ||
       (decoded[0] == NPFS_OK && decoded[1] == NPFS_OK && memcmp(pool->scratch[0], pool->scratch[1], NPFS_BLOCK_SIZE))) {
@@ -346,7 +351,7 @@ static enum inspection open_pool(struct pool_view *pool, bool *degraded)
   }
   *degraded |= decoded[0] != NPFS_OK || decoded[1] != NPFS_OK;
   pool->header = headers[decoded[0] == NPFS_OK ? 0 : 1];
-  if (pool->header.pool_blocks != pool->blocks || npfs_features_check(&pool->header, false) != NPFS_OK) {
+  if (npfs_features_check(&pool->header, false) != NPFS_OK) {
     return INSPECT_DAMAGED;
   }
   struct npfs_control controls[2];

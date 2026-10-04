@@ -178,7 +178,7 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
         (unsigned long long)(target->info.block_count * target->info.block_size / INSTALL_MIB),
         npfs_id_valid(target->info.gpt_guid) ? guid : "unavailable",
         target->consent.eligible ? "eligible" : "ineligible", target->consent.reason,
-        target->consent.degraded ? " (degraded GPT)" : "");
+        target->consent.degraded ? " (degraded metadata)" : "");
     if (target->consent.eligible) {
       ++eligible;
       single = i;
