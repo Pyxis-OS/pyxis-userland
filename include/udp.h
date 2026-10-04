@@ -16,6 +16,11 @@ enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
  * udp_open. This does not connect the endpoint or restrict subsequent peers. */
 enum call_status udp_open_route(handle_t service, uint32_t destination, uint16_t port,
     struct udp_open_reply *reply);
+/* Requires UDP_SERVICE_RIGHT_BROADCAST. Binds wildcard net0 across address
+ * changes; sends use the current net0 source, including zero before assignment.
+ * Same handle ownership and failure output rules as udp_open. */
+enum call_status udp_open_broadcast(handle_t service, uint16_t port,
+    struct udp_open_reply *reply);
 enum call_status udp_inspect(handle_t endpoint, struct udp_endpoint_info *reply);
 /* Idempotently stops the shared endpoint and releases its binding. Closing a
  * copied handle alone does not stop it. Inspect remains available afterward. */

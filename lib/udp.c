@@ -38,6 +38,12 @@ enum call_status udp_open_route(handle_t service, uint32_t destination, uint16_t
   return open_endpoint(service, UDP_OPEN_ROUTE, destination, port, reply);
 }
 
+enum call_status udp_open_broadcast(handle_t service, uint16_t port,
+    struct udp_open_reply *reply)
+{
+  return open_endpoint(service, UDP_OPEN_BROADCAST, 0, port, reply);
+}
+
 enum call_status udp_inspect(handle_t endpoint, struct udp_endpoint_info *reply)
 {
   if (!reply) {
