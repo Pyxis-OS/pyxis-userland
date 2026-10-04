@@ -1,10 +1,7 @@
 return {
-  dns = { server = "1.1.1.1" },
   net0 = {
     driver = "virtio",
     optional = true,
-    address = "10.0.2.15",
-    prefix = 24,
-    gateway = "10.0.2.2",
+    dhcp = true,
   },
 }

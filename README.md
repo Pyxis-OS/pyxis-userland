@@ -93,16 +93,14 @@ there is no fallback to another controller. Missing `net0` preserves settings;
 looks up the configured candidate without binding it, then waits for the setup
 owner to bind and assign an address.
 
-`session.pxe --configure-network --udp-broadcast PORT [--udp-count COUNT]`
-creates a wildcard net0 endpoint and hands only that endpoint to
-`udp-echo --endpoint`. Its replies use limited broadcast, preserving received
-bytes and peer port. The child receives INSPECT/SEND/RECEIVE, memory, clock and
-output streams; it receives no UDP creation or net0 configuration authority.
-Trusted init passes the separate BROADCAST creation right only through session
-handoff. Ordinary local/remote shells and applications receive OPEN alone.
-The optional `--udp-unassigned` flag clears IPv4 after opening the endpoint,
-retaining the net0 binding, to qualify pre-assignment broadcasts. It requires
-configuration authority and is valid only with `--udp-broadcast`.
+`net0 = { driver = "virtio", dhcp = true }` requests a lease instead of static
+address/prefix/gateway fields; the packaged profile uses this form. Acquisition
+waits at most about ten seconds, then starts the local session offline on failure.
+Task 2 keeps a successful lease until reboot; reboot before lease expiry until
+maintenance is implemented. Explicit profile `dns.server` wins, then first lease
+DNS, then `1.1.1.1`. Launchers read the chosen DNS for each new program; existing
+programs retain their startup environment. Ordinary shells receive only
+NET_CONFIG READ and UDP OPEN, with no configuration/broadcast write authority.
 
 `session.pxe --configure-network --tcp-server ADDRESS PORT [--tcp-count COUNT]`
 hands off to a TCP echo server instead of the local shell. It needs

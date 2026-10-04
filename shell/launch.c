@@ -28,6 +28,7 @@
 #include <file.h>
 #include <launcher.h>
 #include <namespace.h>
+#include <network_environment.h>
 #include <pipe.h>
 #include <process.h>
 #include <startup.h>
@@ -122,7 +123,7 @@ static enum command_result launch_error(struct shell *shell, const struct shell_
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
     const struct startup_stream streams[STARTUP_STREAM_COUNT], handle_t publication,
-    bool read_only)
+    bool read_only, const struct network_environment *environment)
 {
   bool session = mode == SHELL_SESSION;
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
@@ -260,7 +261,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[terminal_index] = (struct launch_grant){shell->terminal_service, TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   if (has_net_config) {
-    grants[net_config_index] = (struct launch_grant){shell->net_config, NET_CONFIG_RIGHTS, 0};
+    uint64_t rights;
+    enum call_status status = handle_rights(shell->net_config, &rights, NULL);
+    if (status != CALL_OK) {
+      return status;
+    }
+    grants[net_config_index] = (struct launch_grant){shell->net_config,
+        rights & NET_CONFIG_RIGHTS, 0};
   }
   if (has_pipe) {
     grants[pipe_index] = (struct launch_grant){shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
@@ -402,8 +409,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     .working_directories = (uintptr_t)directories,
     .working_directory_count = depth,
     .working_path = (uintptr_t)shell->working_path,
-    .environment = (uintptr_t)startup_environment_variables(),
-    .environment_count = startup_environment_count(),
+    .environment = (uintptr_t)environment->variables,
+    .environment_count = environment->count,
     .argv = (uintptr_t)stage->arguments,
     .argc = stage->count,
     .namespace_grant = has_namespace ? namespace_index + 1 : 0,
@@ -538,6 +545,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   uint64_t failed_index = LAUNCH_NO_STAGE;
   bool cleanup_failure = false;
   struct endpoint_create_reply publication = {0};
+  struct network_environment environment = {0};
 
   if (mode == SHELL_SERVICE) {
     status = endpoint_create(shell->service, &publication);
@@ -608,6 +616,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
 
+  operation = "shell: network environment";
+  path = stages[0].arguments[0];
+  status = network_environment_read(&environment, shell->net_config,
+      startup_environment_variables(), startup_environment_count(), NULL);
+  if (status != CALL_OK) {
+    goto failed;
+  }
+
   /* A redirected pipe side is absent from every grant, so its peer sees
    * EOF or a broken reader once the remaining owned endpoint closes. */
   for (size_t i = 0; i < stage_count; ++i) {
@@ -617,7 +633,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE && i == 0 &&
         streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
-        streams[i], publication.caller, read_only);
+        streams[i], publication.caller, read_only, &environment);
     if (status != CALL_OK) {
       goto failed;
     }
@@ -667,6 +683,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   /* Release all source endpoints before waiting. Holding one writer here
    * could prevent EOF, and holding one reader could prevent EPIPE. */
   bool closed_sources = release_sources(prepared, stage_count, pipes);
+  network_environment_free(&environment);
   free(requests);
   free_preparation(prepared, stage_count);
   if (!closed_sources) {
@@ -845,6 +862,7 @@ failed:
   closed_sources = release_sources(prepared, stage_count, pipes);
   close_handle(&publication.caller);
   close_handle(&publication.receiver);
+  network_environment_free(&environment);
   free(requests);
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, stage_count, failed_stage,

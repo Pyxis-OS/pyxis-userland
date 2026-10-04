@@ -1,4 +1,5 @@
 #include "network.h"
+#include "dhcp.h"
 #include "../libconfig/config.h"
 #include <lauxlib.h>
 #include <net_config.h>
@@ -114,6 +115,8 @@ static void decode_dns(lua_State *state, struct network_config *config)
       }
       snprintf(config->dns_server, sizeof(config->dns_server), "%u.%u.%u.%u",
           address >> 24, (address >> 16) & 255, (address >> 8) & 255, address & 255);
+      config->dns_address = address;
+      config->dns_explicit = true;
     }
     lua_pop(state, 1);
   }
@@ -135,7 +138,7 @@ static int decode_network(lua_State *state)
     config->action = NETWORK_CLEAR;
     return 0;
   }
-  const char *settings[] = {"driver", "mac", "optional", "address", "prefix", "gateway"};
+  const char *settings[] = {"driver", "mac", "optional", "dhcp", "address", "prefix", "gateway"};
   config_keys(state, 2, settings, sizeof(settings) / sizeof(settings[0]));
   config->action = NETWORK_REPLACE;
   read_selector(state, &config->selector);
@@ -148,6 +151,26 @@ static int decode_network(lua_State *state)
     config->optional = lua_toboolean(state, 3);
   }
   lua_pop(state, 1);
+
+  config_field(state, 2, "dhcp");
+  if (!lua_isnil(state, 3)) {
+    if (lua_type(state, 3) != LUA_TBOOLEAN) {
+      return luaL_error(state, "net0.dhcp must be a boolean");
+    }
+    config->dhcp = lua_toboolean(state, 3);
+  }
+  lua_pop(state, 1);
+  if (config->dhcp) {
+    const char *static_fields[] = {"address", "prefix", "gateway"};
+    for (size_t i = 0; i < sizeof(static_fields) / sizeof(static_fields[0]); ++i) {
+      config_field(state, 2, static_fields[i]);
+      if (!lua_isnil(state, 3)) {
+        return luaL_error(state, "net0.dhcp excludes address, prefix and gateway");
+      }
+      lua_pop(state, 1);
+    }
+    return 0;
+  }
 
   config_field(state, 2, "address");
   config->address = read_address(state, "net0.address");
@@ -169,21 +192,17 @@ static int decode_network(lua_State *state)
 
 bool network_config_read(struct network_config *config)
 {
-  *config = (struct network_config){.dns_server = "1.1.1.1"};
+  *config = (struct network_config){.dns_server = "1.1.1.1", .dns_address = UINT32_C(0x01010101)};
   return config_read(NETWORK_CONFIG_PATH, decode_network, config) != CONFIG_ERROR;
 }
 
-bool network_config_apply(const struct network_config *config)
+static bool apply_ipv4(const struct network_config *config, handle_t authority,
+    bool *published_dns)
 {
+  enum call_status status;
   if (config->action == NETWORK_KEEP) {
     return true;
   }
-  handle_t authority = startup_resource("net_config");
-  if (authority == HANDLE_INVALID) {
-    fputs("session: no network configuration authority; keeping current settings\n", stderr);
-    return true;
-  }
-  enum call_status status;
   if (config->action == NETWORK_CLEAR) {
     status = net_config_clear(authority);
   } else {
@@ -209,7 +228,31 @@ bool network_config_apply(const struct network_config *config)
       return true;
     }
     if (status == CALL_OK) {
-      status = net_config_replace(authority, config->address, config->prefix, config->gateway);
+      if (config->dhcp) {
+        status = net_config_clear(authority);
+        if (status == CALL_OK) {
+          struct dhcp_lease lease;
+          if (!dhcp_acquire(startup_resource("udp"), startup_resource("clock"),
+              startup_resource("random"), snapshot.mac, &lease)) {
+            fputs("session: DHCP acquisition failed; continuing offline\n", stderr);
+            return true;
+          }
+          uint32_t dns = !config->dns_explicit && lease.dns ? lease.dns : config->dns_address;
+          status = net_config_replace(authority, lease.address, lease.prefix, lease.gateway, dns);
+          if (status == CALL_BAD_REQUEST) {
+            fputs("session: DHCP lease rejected; continuing offline\n", stderr);
+            return true;
+          }
+          if (status == CALL_OK) {
+            printf("net0: DHCP %u.%u.%u.%u/%u%s\n", lease.address >> 24,
+                (lease.address >> 16) & 255, (lease.address >> 8) & 255,
+                lease.address & 255, lease.prefix, lease.gateway ? " with default gateway" : "");
+          }
+        }
+      } else {
+        status = net_config_replace(authority, config->address, config->prefix,
+            config->gateway, config->dns_address);
+      }
     }
   }
   if (status == CALL_BAD_REQUEST) {
@@ -220,11 +263,33 @@ bool network_config_apply(const struct network_config *config)
     fprintf(stderr, "session: network setup failed (status %u); continuing session\n", status);
     return true;
   }
-  if (config->action == NETWORK_REPLACE) {
+  *published_dns = config->action == NETWORK_REPLACE;
+  if (config->action == NETWORK_REPLACE && !config->dhcp) {
     uint32_t address = config->address;
     printf("net0: %u.%u.%u.%u/%u%s\n", address >> 24, (address >> 16) & 255,
         (address >> 8) & 255, address & 255, config->prefix,
         config->gateway ? " with default gateway" : "");
+  }
+  return true;
+}
+
+bool network_config_apply(const struct network_config *config)
+{
+  handle_t authority = startup_resource("net_config");
+  if (authority == HANDLE_INVALID) {
+    fputs("session: no network configuration authority; keeping current settings\n", stderr);
+    return true;
+  }
+  bool published_dns = false;
+  if (!apply_ipv4(config, authority, &published_dns)) {
+    return false;
+  }
+  if (!published_dns) {
+    enum call_status status = net_config_set_dns(authority, config->dns_address);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: selecting DNS failed (status %u); keeping current settings\n", status);
+      return status != CALL_BAD_REQUEST;
+    }
   }
   return true;
 }

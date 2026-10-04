@@ -16,6 +16,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <net_config.h>
+#include <network_environment.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,7 +138,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, LISTENER, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 9, RESOURCE_CAPACITY = 13 };
+  enum { OPTIONAL_COUNT = 10, RESOURCE_CAPACITY = 14 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -157,6 +158,7 @@ int launch_remote_server(const struct session_config *config,
   uint64_t working_directory = SIZE_MAX;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
   struct startup_variable *environment = NULL;
+  struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
   for (size_t i = 0; i < root_count; ++i) {
     const char *name = (const char *)selected_roots[i].name;
@@ -185,6 +187,8 @@ int launch_remote_server(const struct session_config *config,
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", grant_count};
     grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
   }
+  resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", grant_count};
+  grants[grant_count++] = (struct launch_grant){authority, NET_CONFIG_RIGHT_READ, 0};
   resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", grant_count};
   grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
   handle_t random = startup_resource("random");
@@ -283,6 +287,14 @@ int launch_remote_server(const struct session_config *config,
   if (!wait_for_address(authority, clock, network, &address)) {
     goto done;
   }
+  status = network_environment_read(&refreshed_environment, authority,
+      environment, environment_count, network->dns_server);
+  if (status != CALL_OK) {
+    fprintf(stderr, "session: cannot read remote network environment (status %u)\n", status);
+    goto done;
+  }
+  request.environment = (uintptr_t)refreshed_environment.variables;
+  request.environment_count = refreshed_environment.count;
   struct tcp_listen_reply reply;
   status = tcp_listen(tcp, address, port, &reply);
   if (status != CALL_OK) {
@@ -303,6 +315,7 @@ int launch_remote_server(const struct session_config *config,
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  network_environment_free(&refreshed_environment);
   free(environment);
   if (listener != HANDLE_INVALID && handle_close(listener) != 0) {
     result = EXIT_FAILURE;

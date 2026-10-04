@@ -4,6 +4,7 @@
 #include <abi/echo.h>
 #include <abi/file.h>
 #include <abi/memory.h>
+#include <abi/net_config.h>
 #include <abi/namespace.h>
 #include <abi/endpoint.h>
 #include <abi/pipe.h>
@@ -16,6 +17,7 @@
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
+#include <network_environment.h>
 #include <startup.h>
 #include <string.h>
 
@@ -36,6 +38,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   }
   shell->attachment = terminal.attachment;
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
+  struct network_environment environment = {0};
   struct execution_group_create_reply group;
   status = launcher_create_group(startup_resource("launcher"), &group);
   if (status != CALL_OK) {
@@ -64,7 +67,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 10, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 11, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
@@ -109,6 +112,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
+    {"net_config", NET_CONFIG_RIGHT_READ},
   };
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
     handle_t source = startup_resource(allowed[i].name);
@@ -131,8 +135,6 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)&directory, .working_directory_count = 1,
     .working_path = (uintptr_t)"home://",
-    .environment = (uintptr_t)startup_environment_variables(),
-    .environment_count = startup_environment_count(),
     .argv = (uintptr_t)arguments, .argc = no_echo ? 2 : 1,
     .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
   };
@@ -147,9 +149,17 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     grants[grant_count++] = (struct launch_grant){namespace, NAMESPACE_RIGHT_LOOKUP, transport};
   }
   request.grant_count = grant_count;
+  status = network_environment_read(&environment, startup_resource("net_config"),
+      startup_environment_variables(), startup_environment_count(), NULL);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  request.environment = (uintptr_t)environment.variables;
+  request.environment_count = environment.count;
   status = launcher_launch(bound, &request, &shell->process);
 
 done:
+  network_environment_free(&environment);
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }

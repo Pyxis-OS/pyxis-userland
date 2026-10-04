@@ -8,23 +8,20 @@
 #define ECHO_IDLE_NS UINT64_C(30000000000)
 #define ECHO_SEND_NS UINT64_C(3000000000)
 #define ECHO_MAX_COUNT 65535
-#define LIMITED_BROADCAST UINT32_MAX
 
 int main(int argc, char **argv)
 {
-  bool inherited = argc >= 2 && !strcmp(argv[1], "--endpoint");
-  int first_option = inherited ? 2 : 3;
   uint32_t local = 0;
   unsigned port = 0, count = 0;
-  if (argc != first_option && argc != first_option + 2) {
+  if (argc != 3 && argc != 5) {
     goto usage;
   }
-  if (!inherited && (!udp_parse_address(argv[1], &local) ||
-      !udp_parse_number(argv[2], UINT16_MAX, &port) || !port)) {
+  if (!udp_parse_address(argv[1], &local) ||
+      !udp_parse_number(argv[2], UINT16_MAX, &port) || !port) {
     goto usage;
   }
-  if (argc == first_option + 2 && (strcmp(argv[first_option], "--count") ||
-      !udp_parse_number(argv[first_option + 1], ECHO_MAX_COUNT, &count) || !count)) {
+  if (argc == 5 && (strcmp(argv[3], "--count") ||
+      !udp_parse_number(argv[4], ECHO_MAX_COUNT, &count) || !count)) {
     goto usage;
   }
   handle_t clock = startup_resource("clock");
@@ -33,19 +30,8 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   struct udp_open_reply endpoint = {.handle = HANDLE_INVALID};
-  enum call_status status;
-  if (inherited) {
-    endpoint.handle = startup_resource("udp_endpoint");
-    status = udp_inspect(endpoint.handle, &endpoint.local);
-    if (status == CALL_OK && (endpoint.local.address ||
-        endpoint.local.state != UDP_STATE_BOUND)) {
-      status = CALL_BAD_REQUEST;
-    }
-    port = endpoint.local.port;
-  } else {
-    handle_t service = startup_resource("udp");
-    status = udp_open(service, local, port, &endpoint);
-  }
+  handle_t service = startup_resource("udp");
+  enum call_status status = udp_open(service, local, port, &endpoint);
   if (status != CALL_OK) {
     fprintf(stderr, "udp-echo: open: %s (status %u)\n", udp_error(status), (unsigned)status);
     if (endpoint.handle != HANDLE_INVALID) {
@@ -54,7 +40,7 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   int result = EXIT_SUCCESS;
-  const char *address = inherited ? "net0 wildcard" : argv[1];
+  const char *address = argv[1];
   if (printf("udp-echo: listening on %s:%u; exits after 30 idle seconds\n", address, port) < 0 ||
       fflush(stdout) == EOF) {
     result = EXIT_FAILURE;
@@ -85,10 +71,7 @@ int main(int argc, char **argv)
     }
     status = udp_deadline(clock, ECHO_SEND_NS, &deadline);
     if (status == CALL_OK) {
-      /* The trusted wildcard mode echoes by limited broadcast, including
-       * before assignment. Ordinary echo remains a unicast reply. */
-      uint32_t destination = inherited ? LIMITED_BROADCAST : reply.address;
-      status = udp_send(endpoint.handle, destination, reply.port, bytes, reply.length, deadline);
+      status = udp_send(endpoint.handle, reply.address, reply.port, bytes, reply.length, deadline);
     }
     if (status != CALL_OK) {
       break;
@@ -113,7 +96,6 @@ close:
   return result;
 
 usage:
-  fputs("Usage: udp-echo LOCAL_IP PORT [--count N]\n"
-      "       udp-echo --endpoint [--count N] (trusted broadcast handoff)\n", stderr);
+  fputs("Usage: udp-echo LOCAL_IP PORT [--count N]\n", stderr);
   return EXIT_FAILURE;
 }
