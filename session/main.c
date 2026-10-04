@@ -510,7 +510,8 @@ int main(int argc, char **argv)
   struct network_runtime runtime = {0};
   int result = EXIT_FAILURE;
   if (remote_server) {
-    if (!configure_network || network_config_apply(&network, &runtime)) {
+    if (!configure_network || (network_config_apply(&network, &runtime) &&
+        network_config_wait_address(&network, &runtime))) {
       result = launch_remote_server(&config, &network, (uint16_t)port);
     }
   } else {

@@ -1,10 +1,12 @@
 #include "network.h"
 #include "dhcp.h"
 #include "../libconfig/config.h"
+#include <clock.h>
 #include <lauxlib.h>
 #include <net_config.h>
 #include <startup.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
@@ -196,9 +198,79 @@ bool network_config_read(struct network_config *config)
   return config_read(NETWORK_CONFIG_PATH, decode_network, config) != CONFIG_ERROR;
 }
 
-static bool apply_ipv4(const struct network_config *config, handle_t authority,
+#define INITIAL_ACQUIRE_NS UINT64_C(10000000000)
+#define DISCOVERY_WAIT_NS UINT64_C(30000000000)
+#define REJECTED_LEASE_WAIT_NS UINT64_C(4000000000)
+
+static uint32_t lease_dns(const struct network_config *config, const struct dhcp_lease *lease)
+{
+  return !config->dns_explicit && lease->dns ? lease->dns : config->dns_address;
+}
+
+static enum call_status apply_lease(const struct network_config *config,
+    struct network_runtime *runtime, const struct dhcp_lease *lease)
+{
+  uint64_t now;
+  if (clock_now(runtime->dhcp.clock, &now) != CALL_OK) {
+    return CALL_UNAVAILABLE;
+  }
+  if (now >= lease->expires_ns) {
+    return CALL_BAD_REQUEST;
+  }
+  const struct dhcp_lease *current = &runtime->lease;
+  enum call_status status = CALL_OK;
+  if (current->address != lease->address || current->prefix != lease->prefix ||
+      current->gateway != lease->gateway) {
+    status = net_config_replace(runtime->authority, lease->address, lease->prefix,
+        lease->gateway, lease_dns(config, lease));
+  } else if (lease_dns(config, current) != lease_dns(config, lease)) {
+    status = net_config_set_dns(runtime->authority, lease_dns(config, lease));
+  }
+  if (status == CALL_OK) {
+    runtime->lease = *lease;
+  }
+  return status;
+}
+
+static void report_lease(const struct dhcp_lease *lease)
+{
+  printf("net0: DHCP %u.%u.%u.%u/%u%s\n", lease->address >> 24,
+      (lease->address >> 16) & 255, (lease->address >> 8) & 255,
+      lease->address & 255, lease->prefix,
+      lease->gateway ? " with default gateway" : "");
+}
+
+static bool clear_lease(const struct network_config *config, struct network_runtime *runtime)
+{
+  enum call_status cleared = net_config_clear(runtime->authority);
+  if (cleared == CALL_OK) {
+    runtime->lease = (struct dhcp_lease){0};
+  }
+  enum call_status dns = net_config_set_dns(runtime->authority, config->dns_address);
+  if (cleared != CALL_OK || dns != CALL_OK) {
+    fprintf(stderr, "session: clearing DHCP settings failed (IPv4 %u, DNS %u)\n", cleared, dns);
+    return false;
+  }
+  return true;
+}
+
+bool network_config_stop(const struct network_config *config, struct network_runtime *runtime)
+{
+  if (runtime->dhcp.endpoint == HANDLE_INVALID) {
+    return true;
+  }
+  bool cleared = clear_lease(config, runtime);
+  bool closed = dhcp_close(&runtime->dhcp);
+  if (!cleared || !closed) {
+    fputs("session: DHCP cleanup failed; reboot required\n", stderr);
+  }
+  return cleared && closed;
+}
+
+static bool apply_ipv4(const struct network_config *config, struct network_runtime *runtime,
     bool *published_dns)
 {
+  handle_t authority = runtime->authority;
   enum call_status status;
   if (config->action == NETWORK_KEEP) {
     return true;
@@ -229,30 +301,50 @@ static bool apply_ipv4(const struct network_config *config, handle_t authority,
     }
     if (status == CALL_OK) {
       if (config->dhcp) {
+        if (!dhcp_open(&runtime->dhcp, startup_resource("udp"), startup_resource("clock"),
+            startup_resource("random"), snapshot.mac)) {
+          fputs("session: cannot reserve DHCP port 68; keeping current settings\n", stderr);
+          return false;
+        }
+        /* Reserve the wildcard endpoint before changing shared settings. */
         status = net_config_clear(authority);
-        if (status == CALL_OK) {
-          struct dhcp_lease lease;
-          if (!dhcp_acquire(startup_resource("udp"), startup_resource("clock"),
-              startup_resource("random"), snapshot.mac, &lease)) {
-            fputs("session: DHCP acquisition failed; continuing offline\n", stderr);
-            return true;
-          }
-          uint32_t dns = !config->dns_explicit && lease.dns ? lease.dns : config->dns_address;
-          status = net_config_replace(authority, lease.address, lease.prefix, lease.gateway, dns);
-          if (status == CALL_BAD_REQUEST) {
-            fputs("session: DHCP lease rejected; continuing offline\n", stderr);
-            return true;
-          }
+        if (status != CALL_OK) {
+          fprintf(stderr, "session: preparing DHCP failed (status %u)\n", status);
+          return false;
+        }
+        uint64_t now;
+        if (clock_now(runtime->dhcp.clock, &now) != CALL_OK ||
+            now > UINT64_MAX - INITIAL_ACQUIRE_NS) {
+          network_config_stop(config, runtime);
+          return true;
+        }
+        struct dhcp_lease lease;
+        enum dhcp_result result = dhcp_acquire(&runtime->dhcp, now + INITIAL_ACQUIRE_NS, &lease);
+        if (result == DHCP_ACKNOWLEDGED) {
+          status = apply_lease(config, runtime, &lease);
           if (status == CALL_OK) {
-            printf("net0: DHCP %u.%u.%u.%u/%u%s\n", lease.address >> 24,
-                (lease.address >> 16) & 255, (lease.address >> 8) & 255,
-                lease.address & 255, lease.prefix, lease.gateway ? " with default gateway" : "");
+            *published_dns = true;
+            report_lease(&lease);
+            return true;
+          }
+          if (status != CALL_BAD_REQUEST) {
+            network_config_stop(config, runtime);
+            return true;
+          }
+          fputs("session: DHCP lease rejected; continuing offline\n", stderr);
+          dhcp_discover(&runtime->dhcp);
+        } else {
+          fputs("session: DHCP acquisition incomplete; continuing offline\n", stderr);
+          if (result == DHCP_FAILED) {
+            network_config_stop(config, runtime);
+          } else if (result == DHCP_NAK_RECEIVED) {
+            dhcp_discover(&runtime->dhcp);
           }
         }
-      } else {
-        status = net_config_replace(authority, config->address, config->prefix,
-            config->gateway, config->dns_address);
+        return true;
       }
+      status = net_config_replace(authority, config->address, config->prefix,
+          config->gateway, config->dns_address);
     }
   }
   if (status == CALL_BAD_REQUEST) {
@@ -264,7 +356,7 @@ static bool apply_ipv4(const struct network_config *config, handle_t authority,
     return true;
   }
   *published_dns = config->action == NETWORK_REPLACE;
-  if (config->action == NETWORK_REPLACE && !config->dhcp) {
+  if (config->action == NETWORK_REPLACE) {
     uint32_t address = config->address;
     printf("net0: %u.%u.%u.%u/%u%s\n", address >> 24, (address >> 16) & 255,
         (address >> 8) & 255, address & 255, config->prefix,
@@ -273,23 +365,141 @@ static bool apply_ipv4(const struct network_config *config, handle_t authority,
   return true;
 }
 
-bool network_config_apply(const struct network_config *config)
+bool network_config_apply(const struct network_config *config, struct network_runtime *runtime)
 {
-  handle_t authority = startup_resource("net_config");
-  if (authority == HANDLE_INVALID) {
+  *runtime = (struct network_runtime){.authority = startup_resource("net_config")};
+  if (runtime->authority == HANDLE_INVALID) {
     fputs("session: no network configuration authority; keeping current settings\n", stderr);
     return true;
   }
   bool published_dns = false;
-  if (!apply_ipv4(config, authority, &published_dns)) {
+  if (!apply_ipv4(config, runtime, &published_dns)) {
     return false;
   }
   if (!published_dns) {
-    enum call_status status = net_config_set_dns(authority, config->dns_address);
+    enum call_status status = net_config_set_dns(runtime->authority, config->dns_address);
     if (status != CALL_OK) {
       fprintf(stderr, "session: selecting DNS failed (status %u); keeping current settings\n", status);
       return status != CALL_BAD_REQUEST;
     }
   }
   return true;
+}
+
+static bool continue_discovery(const struct network_config *config,
+    struct network_runtime *runtime)
+{
+  uint64_t now;
+  if (clock_now(runtime->dhcp.clock, &now) != CALL_OK ||
+      now > UINT64_MAX - DISCOVERY_WAIT_NS) {
+    return false;
+  }
+  struct dhcp_lease lease;
+  enum dhcp_result result = dhcp_acquire(&runtime->dhcp, now + DISCOVERY_WAIT_NS, &lease);
+  if (result == DHCP_FAILED) {
+    return false;
+  }
+  if (result == DHCP_TIMEOUT) {
+    return true;
+  }
+  if (result == DHCP_NAK_RECEIVED) {
+    if (!clear_lease(config, runtime)) {
+      return false;
+    }
+    dhcp_discover(&runtime->dhcp);
+    return true;
+  }
+  enum call_status status = apply_lease(config, runtime, &lease);
+  if (status == CALL_OK) {
+    report_lease(&lease);
+    return true;
+  }
+  if (status != CALL_BAD_REQUEST) {
+    return false;
+  }
+  fputs("session: DHCP lease rejected; continuing discovery\n", stderr);
+  dhcp_discover(&runtime->dhcp);
+  return clock_sleep_for(runtime->dhcp.clock, REJECTED_LEASE_WAIT_NS) == CALL_OK;
+}
+
+bool network_config_wait_address(const struct network_config *config,
+    struct network_runtime *runtime)
+{
+  while (runtime->dhcp.endpoint != HANDLE_INVALID && !runtime->lease.address) {
+    if (!continue_discovery(config, runtime)) {
+      network_config_stop(config, runtime);
+      return false;
+    }
+  }
+  return true;
+}
+
+int network_config_maintain(const struct network_config *config, struct network_runtime *runtime)
+{
+  if (runtime->dhcp.endpoint == HANDLE_INVALID) {
+    return EXIT_SUCCESS;
+  }
+  for (;;) {
+    uint64_t now;
+    if (clock_now(runtime->dhcp.clock, &now) != CALL_OK) {
+      break;
+    }
+    if (runtime->lease.address && now >= runtime->lease.expires_ns) {
+      fputs("net0: DHCP lease expired; rediscovering\n", stderr);
+      if (!clear_lease(config, runtime)) {
+        break;
+      }
+      dhcp_discover(&runtime->dhcp);
+    }
+    if (runtime->lease.address && now < runtime->lease.renewal_ns) {
+      if (clock_sleep_until(runtime->dhcp.clock, runtime->lease.renewal_ns) != CALL_OK) {
+        break;
+      }
+      continue;
+    }
+    if (!runtime->lease.address) {
+      if (!continue_discovery(config, runtime)) {
+        break;
+      }
+      continue;
+    }
+    struct dhcp_lease lease;
+    enum dhcp_result result = dhcp_refresh(&runtime->dhcp, &runtime->lease, &lease);
+    if (result == DHCP_FAILED) {
+      break;
+    }
+    if (result == DHCP_TIMEOUT) {
+      continue;
+    }
+    if (result == DHCP_NAK_RECEIVED) {
+      fputs("net0: DHCP lease invalidated; rediscovering\n", stderr);
+      if (!clear_lease(config, runtime)) {
+        break;
+      }
+      dhcp_discover(&runtime->dhcp);
+      continue;
+    }
+    enum call_status status = apply_lease(config, runtime, &lease);
+    if (status == CALL_OK) {
+      continue;
+    }
+    if (status != CALL_BAD_REQUEST) {
+      break;
+    }
+    fputs("session: DHCP lease rejected; retaining current settings\n", stderr);
+    if (clock_now(runtime->dhcp.clock, &now) != CALL_OK ||
+        now > UINT64_MAX - REJECTED_LEASE_WAIT_NS) {
+      break;
+    }
+    uint64_t retry_at = now + REJECTED_LEASE_WAIT_NS;
+    if (retry_at > runtime->lease.expires_ns) {
+      retry_at = runtime->lease.expires_ns;
+    }
+    if (clock_sleep_until(runtime->dhcp.clock, retry_at) != CALL_OK) {
+      break;
+    }
+  }
+  fputs("session: DHCP maintenance failed; stopping network setup\n", stderr);
+  network_config_stop(config, runtime);
+  return EXIT_FAILURE;
 }
