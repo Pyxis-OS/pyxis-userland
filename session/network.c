@@ -431,6 +431,10 @@ bool network_config_wait_address(const struct network_config *config,
       return false;
     }
   }
+  if (config->dhcp && !runtime->lease.address) {
+    fputs("session: DHCP stopped before remote network assignment\n", stderr);
+    return false;
+  }
   return true;
 }
 
@@ -445,11 +449,11 @@ int network_config_maintain(const struct network_config *config, struct network_
       break;
     }
     if (runtime->lease.address && now >= runtime->lease.expires_ns) {
-      fputs("net0: DHCP lease expired; rediscovering\n", stderr);
       if (!clear_lease(config, runtime)) {
         break;
       }
       dhcp_discover(&runtime->dhcp);
+      fputs("net0: DHCP lease expired; rediscovering\n", stderr);
     }
     if (runtime->lease.address && now < runtime->lease.renewal_ns) {
       if (clock_sleep_until(runtime->dhcp.clock, runtime->lease.renewal_ns) != CALL_OK) {
@@ -472,11 +476,11 @@ int network_config_maintain(const struct network_config *config, struct network_
       continue;
     }
     if (result == DHCP_NAK_RECEIVED) {
-      fputs("net0: DHCP lease invalidated; rediscovering\n", stderr);
       if (!clear_lease(config, runtime)) {
         break;
       }
       dhcp_discover(&runtime->dhcp);
+      fputs("net0: DHCP lease invalidated; rediscovering\n", stderr);
       continue;
     }
     enum call_status status = apply_lease(config, runtime, &lease);
@@ -499,7 +503,7 @@ int network_config_maintain(const struct network_config *config, struct network_
       break;
     }
   }
-  fputs("session: DHCP maintenance failed; stopping network setup\n", stderr);
   network_config_stop(config, runtime);
+  fputs("session: DHCP maintenance failed; stopping network setup\n", stderr);
   return EXIT_FAILURE;
 }
