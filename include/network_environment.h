@@ -20,5 +20,8 @@ enum call_status network_environment_read(struct network_environment *environmen
     handle_t authority, const struct startup_variable *source, size_t count,
     const char *fallback);
 void network_environment_free(struct network_environment *environment);
+/* Initial provider startup waits at most ten seconds for the setup owner's
+ * first DNS choice; timeout permits the existing fallback environment. */
+enum call_status network_environment_wait(handle_t authority, handle_t clock);
 
 #endif

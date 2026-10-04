@@ -14,7 +14,8 @@ enum call_status net_config_bind(handle_t authority, const struct net_selector *
 enum call_status net_config_lookup(handle_t authority, const struct net_selector *selector,
     struct net_config_reply *reply);
 enum call_status net_config_replace(handle_t authority, uint32_t address,
-    uint32_t prefix, uint32_t gateway);
+    uint32_t prefix, uint32_t gateway, uint32_t dns_server);
 enum call_status net_config_clear(handle_t authority);
+enum call_status net_config_set_dns(handle_t authority, uint32_t dns_server);
 
 #endif

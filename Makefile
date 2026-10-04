@@ -45,7 +45,7 @@ IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/i
 INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
-                   $(BUILD)/session/tcp_server.o $(BUILD)/session/udp_server.o $(BUILD)/session/remote_server.o
+                   $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
 HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o

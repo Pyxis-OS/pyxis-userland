@@ -58,11 +58,23 @@ enum call_status net_config_lookup(handle_t authority, const struct net_selector
 }
 
 enum call_status net_config_replace(handle_t authority, uint32_t address,
-    uint32_t prefix, uint32_t gateway)
+    uint32_t prefix, uint32_t gateway, uint32_t dns_server)
 {
   struct net_config_request request = {
     .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_REPLACE},
-    .address = address, .prefix = prefix, .gateway = gateway,
+    .address = address, .prefix = prefix, .gateway = gateway, .dns_server = dns_server,
+  };
+  struct syscall_result result = syscall_call(authority, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  return result.reply_size ? CALL_BAD_REQUEST : result.status;
+}
+
+enum call_status net_config_set_dns(handle_t authority, uint32_t dns_server)
+{
+  struct net_dns_request request = {
+    .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_SET_DNS}, .dns_server = dns_server,
   };
   struct syscall_result result = syscall_call(authority, &request, sizeof(request), NULL, 0);
   if (result.status >= CALL_STATUS_COUNT) {

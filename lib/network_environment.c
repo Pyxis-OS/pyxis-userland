@@ -1,9 +1,42 @@
 #include <network_environment.h>
 #include <net_config.h>
+#include <clock.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define DNS_SETUP_WAIT_NS UINT64_C(10000000000)
+#define DNS_SETUP_POLL_NS UINT64_C(100000000)
+
+enum call_status network_environment_wait(handle_t authority, handle_t clock)
+{
+  if (authority == HANDLE_INVALID) {
+    return CALL_OK;
+  }
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK || now > UINT64_MAX - DNS_SETUP_WAIT_NS) {
+    return status == CALL_OK ? CALL_LIMIT : status;
+  }
+  uint64_t end = now + DNS_SETUP_WAIT_NS;
+  for (;;) {
+    struct net_config_reply snapshot;
+    status = net_config_query(authority, &snapshot);
+    if (status != CALL_OK || snapshot.dns_server) {
+      return status;
+    }
+    status = clock_now(clock, &now);
+    if (status != CALL_OK || now >= end) {
+      return status == CALL_OK ? CALL_TIMED_OUT : status;
+    }
+    uint64_t delay = DNS_SETUP_POLL_NS;
+    status = clock_sleep_until(clock, delay < end - now ? now + delay : end);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
+}
 
 enum call_status network_environment_read(struct network_environment *environment,
     handle_t authority, const struct startup_variable *source, size_t count,
