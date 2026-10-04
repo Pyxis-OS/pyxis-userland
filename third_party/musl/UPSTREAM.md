@@ -66,6 +66,23 @@ infinities and quiet NaNs are preserved; fractional finite inputs may raise
 inexact. It uses the existing libm helpers and rounding-aware compilation flags,
 leaves errno unchanged and lives in libc without a separate `-lm`.
 
+The Quake port's prerequisites add these unmodified files from the same pin:
+
+- `src/math/ceil.c` and `src/math/x86_64/sqrt.c` (SSE2 `sqrtsd`)
+- `src/math/sin.c`, `src/math/cos.c`, `src/math/tan.c`
+- `src/math/__sin.c`, `src/math/__cos.c`, `src/math/__tan.c`
+- `src/math/__rem_pio2.c`, `src/math/__rem_pio2_large.c`
+
+`src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
+`__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
+`EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and
+the `__rem_pio2*`, `__sin`, `__cos` and `__tan` declarations without `hidden`.
+Trigonometric arguments of any magnitude use musl's exact reduction modulo pi/2.
+`atan2.c` keeps upstream's sign-bit expression under `-Wno-parentheses`, and
+`__rem_pio2_large.c` builds with `-Wno-maybe-uninitialized`: its callers pass
+precisions that always fill the reported array. Errors leave errno unchanged;
+everything lives in libc without a separate `-lm`.
+
 `src/internal/floatscan.c` comes from the same pin, with local adaptations:
 
 - Replace FILE/shgetc plumbing with the direct string cursor in the local

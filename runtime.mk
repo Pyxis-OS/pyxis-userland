@@ -49,6 +49,18 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/fabsl.c \
                 third_party/musl/src/math/copysignl.c \
                 third_party/musl/src/math/x86_64/fmodl.c \
+                third_party/musl/src/math/ceil.c \
+                third_party/musl/src/math/x86_64/sqrt.c \
+                third_party/musl/src/math/sin.c \
+                third_party/musl/src/math/cos.c \
+                third_party/musl/src/math/tan.c \
+                third_party/musl/src/math/__sin.c \
+                third_party/musl/src/math/__cos.c \
+                third_party/musl/src/math/__tan.c \
+                third_party/musl/src/math/__rem_pio2.c \
+                third_party/musl/src/math/__rem_pio2_large.c \
+                third_party/musl/src/math/atan.c \
+                third_party/musl/src/math/atan2.c \
                 third_party/musl/src/internal/floatscan.c
 MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
@@ -101,6 +113,10 @@ $(BUILD)/third_party/musl/src/stdio/format_float.o: private CFLAGS += -Wno-sign-
 
 # Retain upstream's unsigned character tests and ring-index expressions.
 $(BUILD)/third_party/musl/src/internal/floatscan.o: private CFLAGS += -Wno-sign-compare -Wno-parentheses
+
+# Retain upstream's sign-bit expression; prec 0-2 from callers always fills fq.
+$(BUILD)/third_party/musl/src/math/atan2.o: private CFLAGS += -Wno-parentheses
+$(BUILD)/third_party/musl/src/math/__rem_pio2_large.o: private CFLAGS += -Wno-maybe-uninitialized
 
 $(BUILD)/%.o: %.c runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)

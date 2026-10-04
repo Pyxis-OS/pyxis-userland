@@ -119,6 +119,32 @@ static inline void fp_force_evall(long double x)
 #define asuint64(f) ((union{double _f; uint64_t _i;}){f})._i
 #define asdouble(i) ((union{uint64_t _i; double _f;}){i})._f
 
+#define EXTRACT_WORDS(hi,lo,d)                    \
+do {                                              \
+  uint64_t __u = asuint64(d);                     \
+  (hi) = __u >> 32;                               \
+  (lo) = (uint32_t)__u;                           \
+} while (0)
+
+#define GET_HIGH_WORD(hi,d)                       \
+do {                                              \
+  (hi) = asuint64(d) >> 32;                       \
+} while (0)
+
+#define INSERT_WORDS(d,hi,lo)                     \
+do {                                              \
+  (d) = asdouble(((uint64_t)(hi)<<32) | (uint32_t)(lo)); \
+} while (0)
+
+#define SET_LOW_WORD(d,lo)                        \
+  INSERT_WORDS(d, asuint64(d)>>32, lo)
+
+int    __rem_pio2_large(double*,double*,int,int,int);
+int    __rem_pio2(double,double*);
+double __sin(double,double,int);
+double __cos(double,double);
+double __tan(double,double,int);
+
 double __math_xflow(uint32_t, double);
 double __math_uflow(uint32_t);
 double __math_oflow(uint32_t);
