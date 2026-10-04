@@ -702,6 +702,7 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
     goto done;
   }
   bool mbr = protective_mbr(block, disk);
+  bool empty_mbr = zero_bytes(block, (size_t)disk->info.block_size);
   for (unsigned i = 0; i < 2; i++) {
     maps[i].state = read_gpt(disk, i, block, &maps[i]);
     if (maps[i].state == GPT_FATAL) {
@@ -713,6 +714,7 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
     }
   }
   bool primary = maps[0].state == GPT_VALID, backup = maps[1].state == GPT_VALID;
+  bool blank = empty_mbr && maps[0].state == GPT_ABSENT && maps[1].state == GPT_ABSENT;
   bool ambiguous = primary && backup && !gpt_agree(&maps[0], &maps[1]);
   bool valid_gpt = mbr && (primary || backup) && !ambiguous;
   consent->degraded = valid_gpt && primary != backup;
@@ -761,6 +763,8 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
     consent->eligible = true;
     if (damaged_pool) {
       consent->reason = "npfs pool, damaged: consent unreadable";
+    } else if (blank) {
+      consent->reason = "blank disk: no partition table";
     } else if (!valid_gpt) {
       consent->reason = ambiguous ? "unrecognized layout: GPT copies disagree" :
         "unrecognized layout: no validated protective GPT";
@@ -774,7 +778,8 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
       consent->reason = "npfs pool, marked: every live volume has a regular SAFE_TO_WIPE";
     }
   } else if (!valid_gpt) {
-    consent->reason = ambiguous ? "GPT copies disagree" : "no validated protective GPT";
+    consent->reason = blank ? "blank disk: use Read the room" :
+      (ambiguous ? "GPT copies disagree" : "no validated protective GPT");
   } else if (!consent->pools) {
     consent->reason = "no npfs pools found";
   } else if (!all_marked) {
