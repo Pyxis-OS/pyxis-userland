@@ -14,6 +14,7 @@
 #include <abi/file.h>
 #include <abi/pipe.h>
 #include <abi/keyboard.h>
+#include <abi/pointer.h>
 #include <abi/space.h>
 #include <abi/profile.h>
 #include <abi/memory.h>
@@ -60,7 +61,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 15, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 16, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -198,6 +199,11 @@ static int launch_session(const struct session_config *config, const struct netw
   if (keyboard != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"keyboard", grant_count};
     grants[grant_count++] = (struct launch_grant){keyboard, KEYBOARD_RIGHT_INPUT, 0};
+  }
+  handle_t pointer = startup_resource("pointer");
+  if (pointer != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pointer", grant_count};
+    grants[grant_count++] = (struct launch_grant){pointer, POINTER_RIGHT_INPUT, 0};
   }
 
   handle_t space = startup_resource("space");

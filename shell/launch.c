@@ -16,6 +16,7 @@
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
+#include <abi/pointer.h>
 #include <abi/space.h>
 #include <abi/profile.h>
 #include <abi/terminal.h>
@@ -42,7 +43,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[20];
+  struct launch_binding resources[21];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -128,6 +129,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
   bool has_keyboard = named_input && shell->keyboard != HANDLE_INVALID;
+  bool has_pointer = named_input && shell->pointer != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
@@ -148,7 +150,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 20 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 21 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -159,7 +161,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t tcp_index = udp_index + (has_udp ? 1 : 0);
   size_t random_index = tcp_index + (has_tcp ? 1 : 0);
   size_t keyboard_index = random_index + (has_random ? 1 : 0);
-  size_t launcher_index = keyboard_index + (has_keyboard ? 1 : 0);
+  size_t pointer_index = keyboard_index + (has_keyboard ? 1 : 0);
+  size_t launcher_index = pointer_index + (has_pointer ? 1 : 0);
   size_t net_config_index = launcher_index + (session ? 1 : 0);
   size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
   size_t service_index = pipe_index + (has_pipe ? 1 : 0);
@@ -241,6 +244,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_keyboard) {
     grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT, 0};
+  }
+  if (has_pointer) {
+    grants[pointer_index] = (struct launch_grant){shell->pointer, POINTER_RIGHT_INPUT, 0};
   }
   if (session) {
     uint64_t rights;
@@ -329,6 +335,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_keyboard) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"keyboard", keyboard_index};
+  }
+  if (has_pointer) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pointer", pointer_index};
   }
   if (session) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"launcher", launcher_index};

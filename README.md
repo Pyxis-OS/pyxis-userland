@@ -206,15 +206,15 @@ synchronize the named files or directories. Closing a handle does not sync it.
 [directory.h](include/directory.h) provides `directory_filesystem_info` through a
 borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies npfs
 type, read-only and GPT/filesystem degraded flags, opaque pool/volume IDs,
-volume name, retained selected generation and shared-pool allocatable capacity
-in bytes. Capacity excludes the two superblock slots but includes metadata and
-reserves; equal pool IDs identify shared capacity that must not be summed per
-binding or volume. Opening validates geometry and root envelopes, not global
-allocation accounting. All record fields are available on success; used/free
-bytes, charged bytes, guarantees, quotas and percentages are unavailable and
-never implied zero. Queries preserve caller output on failure, perform no
-whole-image check and acquire no additional authority. Other directory backends
-return BAD_OPERATION.
+volume name, the mounted pool's selected journal sequence as `generation`, and
+shared-pool allocatable capacity in bytes. Capacity excludes the two header blocks
+but includes metadata and reserves; equal pool IDs identify shared capacity that
+must not be summed per binding or volume. Opening validates geometry and root
+envelopes, not global allocation accounting. All record fields are available
+on success; used/free bytes, charged bytes, guarantees, quotas and percentages
+are unavailable and never implied zero. Queries preserve caller output on
+failure, perform no whole-image check and acquire no additional authority.
+Other directory backends return BAD_OPERATION.
 
 Shell, session and remote handoffs forward the selected root list with queried
 rights and transport masks. Providers requested with `--read-only` attenuate
@@ -284,6 +284,10 @@ helpers. `mandelbrot` draws through a mapped display buffer using double
 arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
 the TTY. It needs display, keyboard and clock grants. Libc supports floating-point
 formatting and a small math subset; it does not provide a full libm.
+
+`mousetest` shows mouse buttons, wheel direction and position, with a drawing
+pad for the left button; Escape returns to the TTY. It needs display, keyboard,
+pointer and clock grants.
 
 `httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
 Configured boot sessions use `--start-services` to publish independent `http`
