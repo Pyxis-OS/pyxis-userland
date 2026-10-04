@@ -32,6 +32,12 @@ char *strcpy(char *restrict dest, const char *restrict src)
   return start;
 }
 
+char *strcat(char *restrict dest, const char *restrict src)
+{
+  strcpy(dest + strlen(dest), src);
+  return dest;
+}
+
 int strcmp(const char *left, const char *right)
 {
   while (*left && *left == *right) {

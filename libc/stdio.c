@@ -108,6 +108,7 @@ int fflush(FILE *stream)
     return stream_error(stream, EBADF);
   }
   if (stream) {
+    stream->has_pushback = false;
     descriptor_discard_input(stream->descriptor);
   }
   return 0;
@@ -167,9 +168,26 @@ static size_t read_some(void *buffer, size_t capacity, FILE *stream, bool buffer
   return read;
 }
 
+/* Deliver an ungetc byte first; it is FILE state, not descriptor input. */
+static bool take_pushback(unsigned char *byte, FILE *stream)
+{
+  if (!stream->has_pushback) {
+    return false;
+  }
+  *byte = stream->pushback;
+  stream->has_pushback = false;
+  return true;
+}
+
 size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
 {
-  if (!capacity || !stream_ready(stream, false) || stream->eof) {
+  if (!capacity || !stream_ready(stream, false)) {
+    return 0;
+  }
+  if (take_pushback(buffer, stream)) {
+    return 1;
+  }
+  if (stream->eof) {
     return 0;
   }
   return read_some(buffer, capacity, stream, false);
@@ -187,10 +205,12 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
     stream_error(stream, EOVERFLOW);
     return 0;
   }
-  if (stream->eof) {
+  size_t bytes = size * count, total = 0;
+  if (take_pushback(buffer, stream)) {
+    total = 1;
+  } else if (stream->eof) {
     return 0;
   }
-  size_t bytes = size * count, total = 0;
   while (total < bytes) {
     size_t read = read_some((char *)buffer + total, bytes - total, stream, true);
     if (!read) {
@@ -214,6 +234,9 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
     stream_error(stream, EOVERFLOW);
     return 0;
   }
+  /* ISO C requires a positioning call between reading and writing; like
+   * read-ahead, an unread pushback byte is dropped by the write. */
+  stream->has_pushback = false;
   size_t bytes = size * count, total = 0;
   while (total < bytes) {
     size_t written;
@@ -330,6 +353,17 @@ ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict 
   return length;
 }
 
+int ungetc(int character, FILE *stream)
+{
+  if (character == EOF || !stream_ready(stream, false) || stream->has_pushback) {
+    return EOF;
+  }
+  stream->pushback = (unsigned char)character;
+  stream->has_pushback = true;
+  stream->eof = false;
+  return stream->pushback;
+}
+
 int fputc(int character, FILE *stream)
 {
   unsigned char byte = character;
@@ -382,10 +416,19 @@ int fseek(FILE *stream, long offset, int origin)
     errno = EBADF;
     return -1;
   }
+  /* A relative seek counts from the position before any ungetc byte. */
+  if (origin == SEEK_CUR && stream->has_pushback) {
+    if (offset == LONG_MIN) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    --offset;
+  }
   if (descriptor_seek(stream->descriptor, offset, origin) < 0) {
     return -1;
   }
   stream->eof = false;
+  stream->has_pushback = false;
   return 0;
 }
 
@@ -395,7 +438,13 @@ long ftell(FILE *stream)
     errno = EBADF;
     return -1;
   }
-  return descriptor_tell(stream->descriptor);
+  long position = descriptor_tell(stream->descriptor);
+  /* The pushed-back byte is unread again. Before the first byte the position
+   * stays zero; ISO C leaves it indeterminate there. */
+  if (position > 0 && stream->has_pushback) {
+    --position;
+  }
+  return position;
 }
 
 void rewind(FILE *stream)

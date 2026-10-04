@@ -43,6 +43,15 @@ long double frexpl(long double value, int *exponent);
 long double ldexpl(long double value, int exponent);
 long double fmodl(long double value, long double divisor);
 double fabs(double value);
+double ceil(double value);
+/* Correctly rounded, using SSE2 sqrtsd. */
+double sqrt(double value);
+/* Radians. Large arguments use full-precision reduction modulo pi/2. */
+double sin(double value);
+double cos(double value);
+double tan(double value);
+double atan(double value);
+double atan2(double y, double x);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
 

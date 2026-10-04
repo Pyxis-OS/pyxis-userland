@@ -299,6 +299,20 @@ int vsnprintf(char *restrict buffer, size_t capacity, const char *format, va_lis
   return (int)out.length;
 }
 
+int vsprintf(char *restrict buffer, const char *restrict format, va_list args)
+{
+  return vsnprintf(buffer, SIZE_MAX, format, args);
+}
+
+int sprintf(char *restrict buffer, const char *restrict format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  int result = vsnprintf(buffer, SIZE_MAX, format, args);
+  va_end(args);
+  return result;
+}
+
 int snprintf(char *restrict buffer, size_t capacity, const char *restrict format, ...)
 {
   va_list args;

@@ -5,6 +5,7 @@
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
+#define RAND_MAX 32767
 
 /* Single-threaded allocator; allocations are aligned to at least 16 bytes.
  * Zero-size allocations return NULL. realloc(p, 0) frees p and returns NULL.
@@ -42,6 +43,13 @@ int atoi(const char *text);
 float strtof(const char *restrict text, char **restrict end);
 double strtod(const char *restrict text, char **restrict end);
 long double strtold(const char *restrict text, char **restrict end);
+/* strtod without an end pointer. */
+double atof(const char *text);
+
+/* Process-wide pseudo-random sequence for games and simple sampling; not for
+ * security. The sequence starts as if srand(1) was called. */
+int rand(void);
+void srand(unsigned seed);
 
 /* In-place, unstable heapsort with no allocation or recursion. compare returns
  * negative, zero or positive for less than, equal to or greater than. */

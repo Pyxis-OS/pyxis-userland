@@ -85,6 +85,14 @@ enum call_status path_open_file(const struct path_context *context, const char *
 enum call_status path_remove(const struct path_context *context, const char *path,
     uint64_t kind, struct path_workspace *workspace);
 
+/* Resolve the parent and create its final component as a directory. A trailing /
+ * is accepted. An existing name of either kind, including a root or a final .
+ * or .. that resolves, returns ALREADY_EXISTS; missing parents are not created. Requires
+ * CREATE on the parent. No allocation; scratch storage is caller-owned and all
+ * temporary handles, including the new directory's, are closed. */
+enum call_status path_create_directory(const struct path_context *context, const char *path,
+    struct path_workspace *workspace);
+
 /* Resolve two parents, then rename files atomically with the native policy.
  * Both workspaces must be disjoint and stay alive through the call. Roots,
  * final . or .. and trailing / are rejected; the destination is an exact file
