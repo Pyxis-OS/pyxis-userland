@@ -149,7 +149,6 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
       return result;
     }
   }
-  memcpy(buffer, initial, initial_length + 1);
   struct line_editor editor = {
     .term = term, .prompt = prompt, .buffer = buffer,
     .columns = columns, .prompt_length = prompt_length, .quiet = quiet,
@@ -165,6 +164,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
       return result;
     }
   }
+  memcpy(buffer, initial, initial_length + 1);
   result.error = draw_line(&editor, true, false);
 
   while (result.error == CALL_OK) {
