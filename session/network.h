@@ -27,7 +27,9 @@ struct network_runtime {
   struct dhcp_lease lease;
   handle_t authority;
   handle_t udp;
-  bool waiting_link, background;
+  /* Pending controller selection or stable configuration of the bound device. */
+  bool waiting_link;
+  bool background;
   /* Ownership starts after endpoint reservation and successful initial clear. */
   bool owns_dhcp_settings;
 };
@@ -37,6 +39,8 @@ struct network_runtime {
  * Link selection considers only prepared controllers with reported carrier,
  * reuses an existing binding, and keeps waiting when none is eligible. optional
  * controls absent explicit selectors only.
+ * A prepared binding whose configuration is temporarily unstable stays pending;
+ * permanent transport failure stops setup without selecting another controller.
  * dns_server owns canonical dotted decimal, defaulting to 1.1.1.1.
  * Applying selects DNS in userspace and publishes it through NET_CONFIG;
  * Link selection and initial acquisition share one bounded foreground deadline.

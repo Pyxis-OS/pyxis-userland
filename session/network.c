@@ -385,6 +385,43 @@ static bool prefer_controller(const struct network_config *config,
 
 enum link_selection { LINK_WAIT, LINK_BOUND, LINK_FAILED };
 
+static enum link_selection bound_readiness(struct network_runtime *runtime,
+    const struct net_config_reply *snapshot)
+{
+  if (snapshot->flags & NET_CONFIG_READY) {
+    return LINK_BOUND;
+  }
+  uint32_t after_id = 0;
+  for (;;) {
+    struct net_controller_reply controller;
+    enum call_status status = net_config_next_controller(runtime->authority, after_id, &controller);
+    if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
+      return LINK_WAIT;
+    }
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot inspect bound network controller (status %u)\n", status);
+      return LINK_FAILED;
+    }
+    if (controller.flags & NET_CONTROLLER_BOUND) {
+      /* Stable configuration may still be sampled after activation. Permanent
+       * transport failure clears preparation while retaining the binding. */
+      return controller.flags & NET_CONTROLLER_PREPARED ? LINK_WAIT : LINK_BOUND;
+    }
+    if (!controller.controller_id) {
+      if (!(controller.flags & NET_CONTROLLER_INVENTORY_COMPLETE)) {
+        return LINK_WAIT;
+      }
+      fputs("session: bound network controller missing from inventory\n", stderr);
+      return LINK_FAILED;
+    }
+    if (controller.controller_id <= after_id) {
+      fputs("session: invalid network controller inventory order\n", stderr);
+      return LINK_FAILED;
+    }
+    after_id = controller.controller_id;
+  }
+}
+
 static enum link_selection select_link(const struct network_config *config,
     struct network_runtime *runtime, struct net_config_reply *snapshot)
 {
@@ -397,7 +434,11 @@ static enum link_selection select_link(const struct network_config *config,
     return LINK_FAILED;
   }
   if (snapshot->flags & NET_CONFIG_BOUND) {
-    return LINK_BOUND;
+    return bound_readiness(runtime, snapshot);
+  }
+  if (config->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
+    fputs("session: selected net0 binding unavailable\n", stderr);
+    return LINK_FAILED;
   }
   struct net_controller_reply selected = {0};
   uint32_t after_id = 0;
@@ -436,14 +477,14 @@ static enum link_selection select_link(const struct network_config *config,
   };
   status = net_config_bind(runtime->authority, &selector, snapshot);
   if (status == CALL_OK) {
-    return LINK_BOUND;
+    return bound_readiness(runtime, snapshot);
   }
   if (status == CALL_UNAVAILABLE || status == CALL_BUSY || status == CALL_NOT_FOUND) {
     /* A lost carrier does not consume selection. A committed binding, including
      * failed activation, is authoritative and must never trigger fallback. */
     status = net_config_query(runtime->authority, snapshot);
     if (status == CALL_OK) {
-      return snapshot->flags & NET_CONFIG_BOUND ? LINK_BOUND : LINK_WAIT;
+      return snapshot->flags & NET_CONFIG_BOUND ? bound_readiness(runtime, snapshot) : LINK_WAIT;
     }
   }
   if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
@@ -584,7 +625,7 @@ static bool apply_ipv4(const struct network_config *config, struct network_runti
     runtime->waiting_link = true;
     bool applied = wait_link(config, runtime, deadline, published_dns);
     if (applied && runtime->waiting_link) {
-      fputs("session: no linked net0 yet; continuing offline while waiting\n", stderr);
+      fputs("session: net0 setup pending; continuing offline while waiting\n", stderr);
     }
     return applied;
   }
@@ -612,6 +653,24 @@ static bool apply_ipv4(const struct network_config *config, struct network_runti
   if (status != CALL_OK) {
     fprintf(stderr, "session: network setup failed (status %u); continuing session\n", status);
     return true;
+  }
+  enum link_selection readiness = bound_readiness(runtime, &snapshot);
+  if (readiness == LINK_FAILED) {
+    return false;
+  }
+  if (readiness == LINK_WAIT) {
+    uint64_t now;
+    if (clock_now(runtime->dhcp.clock, &now) != CALL_OK ||
+        now > UINT64_MAX - INITIAL_ACQUIRE_NS) {
+      fputs("session: network setup clock unavailable; keeping current settings\n", stderr);
+      return true;
+    }
+    runtime->waiting_link = true;
+    bool applied = wait_link(config, runtime, now + INITIAL_ACQUIRE_NS, published_dns);
+    if (applied && runtime->waiting_link) {
+      fputs("session: net0 setup pending; continuing offline while waiting\n", stderr);
+    }
+    return applied;
   }
   return apply_binding(config, runtime, &snapshot, deadline, published_dns);
 }
