@@ -209,14 +209,14 @@ synchronize the named files or directories. Closing a handle does not sync it.
 borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies npfs
 type, read-only and GPT/filesystem degraded flags, opaque pool/volume IDs,
 volume name, the mounted pool's selected journal sequence as `generation`, and
-shared-pool allocatable capacity in bytes. Capacity excludes the two header blocks but includes metadata and
-reserves; equal pool IDs identify shared capacity that must not be summed per
-binding or volume. Opening validates geometry and root envelopes, not global
-allocation accounting. All record fields are available on success; used/free
-bytes, charged bytes, guarantees, quotas and percentages are unavailable and
-never implied zero. Queries preserve caller output on failure, perform no
-whole-image check and acquire no additional authority. Other directory backends
-return BAD_OPERATION.
+shared-pool allocatable capacity in bytes. Capacity excludes the two header blocks
+but includes metadata and reserves; equal pool IDs identify shared capacity that
+must not be summed per binding or volume. Opening validates geometry and root
+envelopes, not global allocation accounting. All record fields are available
+on success; used/free bytes, charged bytes, guarantees, quotas and percentages
+are unavailable and never implied zero. Queries preserve caller output on
+failure, perform no whole-image check and acquire no additional authority.
+Other directory backends return BAD_OPERATION.
 
 Shell, session and remote handoffs forward the selected root list with queried
 rights and transport masks. Providers requested with `--read-only` attenuate
