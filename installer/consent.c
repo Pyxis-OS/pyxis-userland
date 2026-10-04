@@ -32,6 +32,7 @@ struct pool_view {
   uint64_t offset, blocks;
   struct npfs_header header;
   struct npfs_control control;
+  bool control_degraded;
   struct overlay_entry *overlay;
   uint32_t overlay_count;
   uint8_t scratch[3][NPFS_BLOCK_SIZE];
@@ -324,8 +325,12 @@ static enum inspection pool_read(struct pool_view *pool, uint64_t home, uint32_t
   return status == INSPECT_OK ? validate_image(pool, home, kind, bytes) : status;
 }
 
-static enum inspection open_pool(struct pool_view *pool, bool *degraded)
+static enum inspection select_pool(struct pool_view *pool, bool *degraded,
+    bool writable, const char **reason)
 {
+  if (reason) {
+    *reason = "npfs pool headers are damaged or incompatible";
+  }
   enum inspection status = raw_pool_read(pool, 0, pool->scratch[0]);
   if (status != INSPECT_OK) {
     return status;
@@ -351,8 +356,14 @@ static enum inspection open_pool(struct pool_view *pool, bool *degraded)
   }
   *degraded |= decoded[0] != NPFS_OK || decoded[1] != NPFS_OK;
   pool->header = headers[decoded[0] == NPFS_OK ? 0 : 1];
-  if (npfs_features_check(&pool->header, false) != NPFS_OK) {
+  if (npfs_features_check(&pool->header, writable) != NPFS_OK) {
+    if (reason) {
+      *reason = "npfs pool features are incompatible with the live kernel";
+    }
     return INSPECT_DAMAGED;
+  }
+  if (reason) {
+    *reason = "npfs journal controls are damaged or incompatible";
   }
   struct npfs_control controls[2];
   bool valid[2];
@@ -373,7 +384,14 @@ static enum inspection open_pool(struct pool_view *pool, bool *degraded)
   }
   unsigned selected = valid[1] && (!valid[0] || controls[1].sequence > controls[0].sequence) ? 1 : 0;
   pool->control = controls[selected];
-  return load_overlay(pool);
+  pool->control_degraded = !valid[0] || !valid[1];
+  return INSPECT_OK;
+}
+
+static enum inspection open_pool(struct pool_view *pool, bool *degraded)
+{
+  enum inspection status = select_pool(pool, degraded, false, NULL);
+  return status == INSPECT_OK ? load_overlay(pool) : status;
 }
 
 static enum inspection allocated_pointer(struct pool_view *pool, uint64_t block)
@@ -791,6 +809,248 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   success = true;
 done:
   free(block);
+  free(maps);
+  return success;
+}
+
+static bool update_layout(const struct install_disk *disk, const struct gpt_copy *map,
+    struct install_layout *layout)
+{
+  static const uint8_t types[2][16] = {
+    {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
+     0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b},
+    {0xa3, 0x94, 0x81, 0x1a, 0x07, 0x8a, 0xff, 0x4d,
+     0x83, 0x0e, 0x4c, 0xb4, 0xed, 0x7a, 0xac, 0x00},
+  };
+  if (map->count < 2 || !install_layout_plan(disk, layout)) {
+    return false;
+  }
+  const uint64_t starts[2] = {layout->esp_start, layout->pool_start};
+  const uint64_t sizes[2] = {layout->esp_bytes, layout->pool_bytes};
+  for (uint32_t index = 0; index < map->count; index++) {
+    const uint8_t *entry = map->table + (size_t)index * map->entry_bytes;
+    if (index >= 2) {
+      if (!zero_bytes(entry, 16)) {
+        return false;
+      }
+      continue;
+    }
+    if (memcmp(entry, types[index], 16) ||
+        npfs_get_u64(entry + 32) != starts[index] / disk->info.block_size ||
+        npfs_get_u64(entry + 40) != (starts[index] + sizes[index]) / disk->info.block_size - 1) {
+      return false;
+    }
+    memcpy(index ? layout->pool_guid : layout->esp_guid, entry + 16, 16);
+  }
+  memcpy(layout->disk_guid, map->guid, 16);
+  return true;
+}
+
+static enum inspection update_catalog(struct pool_view *pool, struct npfs_volume *system,
+    bool *found)
+{
+  struct npfs_volume *volumes = calloc(NPFS_VOLUME_COUNT, sizeof(*volumes));
+  if (!volumes) {
+    return INSPECT_FATAL;
+  }
+  *found = false;
+  enum inspection status = INSPECT_OK;
+  for (unsigned page = 0; page < NPFS_VOLUME_TABLE_BLOCKS; page++) {
+    status = pool_read(pool, pool->header.volume_start + page,
+        NPFS_METADATA_VOLUMES, pool->scratch[0]);
+    if (status != INSPECT_OK) {
+      goto done;
+    }
+    for (unsigned slot = 0; slot < NPFS_BLOCK_SIZE / NPFS_VOLUME_SIZE; slot++) {
+      unsigned index = page * (NPFS_BLOCK_SIZE / NPFS_VOLUME_SIZE) + slot;
+      struct npfs_volume *volume = &volumes[index];
+      if (npfs_volume_decode(&pool->header,
+          pool->scratch[0] + slot * NPFS_VOLUME_SIZE, volume) != NPFS_OK) {
+        status = INSPECT_DAMAGED;
+        goto done;
+      }
+      if (volume->state != NPFS_VOLUME_LIVE) {
+        continue;
+      }
+      for (unsigned earlier = 0; earlier < index; earlier++) {
+        const struct npfs_volume *other = &volumes[earlier];
+        if (other->state == NPFS_VOLUME_LIVE &&
+            (!memcmp(volume->id, other->id, NPFS_ID_SIZE) ||
+             (volume->name_length == other->name_length &&
+              !memcmp(volume->name, other->name, volume->name_length)))) {
+          status = INSPECT_DAMAGED;
+          goto done;
+        }
+      }
+      if (volume->name_length == sizeof("system") - 1 &&
+          !memcmp(volume->name, "system", sizeof("system") - 1)) {
+        *system = *volume;
+        *found = true;
+      }
+    }
+  }
+done:
+  free(volumes);
+  return status;
+}
+
+/* Match the inode and cleanup checks performed when the kernel opens a volume.
+ * This does not inspect every file's contents or establish global ownership. */
+static enum inspection update_system(struct pool_view *pool, const struct npfs_volume *volume)
+{
+  uint64_t count = volume->inode_bytes / NPFS_INODE_SIZE;
+  uint64_t cleanup_count = 0;
+  for (uint64_t first = 0; first < count;) {
+    uint64_t leaf;
+    enum inspection status = mapping_read(pool, volume->pointers,
+        first / (NPFS_BLOCK_SIZE / NPFS_INODE_SIZE), &leaf);
+    if (status != INSPECT_OK) {
+      return status;
+    }
+    status = pool_read(pool, leaf, NPFS_METADATA_INODES, pool->scratch[0]);
+    if (status != INSPECT_OK) {
+      return status;
+    }
+    for (unsigned slot = 0; slot < NPFS_BLOCK_SIZE / NPFS_INODE_SIZE && first < count;
+        slot++, first++) {
+      struct npfs_inode inode;
+      if (npfs_inode_decode(&pool->header,
+          pool->scratch[0] + slot * NPFS_INODE_SIZE, &inode) != NPFS_OK ||
+          (!first && inode.kind != NPFS_INODE_FREE) ||
+          (first == 1 && (inode.kind != NPFS_INODE_DIRECTORY || inode.parent != 1 ||
+           (inode.cleanup & NPFS_CLEANUP_DETACHED)))) {
+        return INSPECT_DAMAGED;
+      }
+      if (inode.cleanup) {
+        cleanup_count++;
+      }
+    }
+  }
+  uint64_t next = volume->cleanup_head, walked = 0;
+  while (next) {
+    struct npfs_inode inode;
+    if (++walked >= count) {
+      return INSPECT_DAMAGED;
+    }
+    enum inspection status = read_inode(pool, volume, next, &inode);
+    if (status != INSPECT_OK) {
+      return status;
+    }
+    if (!inode.cleanup) {
+      return INSPECT_DAMAGED;
+    }
+    next = inode.cleanup_next;
+  }
+  return walked == cleanup_count ? INSPECT_OK : INSPECT_DAMAGED;
+}
+
+bool install_scan_update(const struct install_disk *disk, struct install_update *update)
+{
+  memset(update, 0, sizeof(*update));
+  update->reason = "disk is not writable with reliable flush support";
+  uint64_t required = DISK_FLAG_WRITABLE | DISK_FLAG_FLUSH_SUPPORTED;
+  if (disk->info.preparation != DISK_READY || (disk->info.flags & required) != required ||
+      (disk->info.flags & (DISK_FLAG_WRITE_FAILED | DISK_FLAG_MOUNTED))) {
+    return true;
+  }
+  if ((disk->info.block_size != 512 && disk->info.block_size != NPFS_BLOCK_SIZE) ||
+      disk->info.block_count < 3 || disk->info.block_count > UINT64_MAX / disk->info.block_size ||
+      disk->bytes != disk->info.block_count * disk->info.block_size) {
+    update->reason = "unsupported disk geometry";
+    return false;
+  }
+  struct gpt_copy *maps = calloc(2, sizeof(*maps));
+  struct pool_view *pool = calloc(1, sizeof(*pool));
+  uint8_t *block = malloc(NPFS_BLOCK_SIZE);
+  bool success = false;
+  if (!maps || !pool || !block) {
+    update->reason = "out of memory during update inspection";
+    goto done;
+  }
+  update->reason = "I/O failure during update inspection";
+  if (!install_read(disk, 0, block, (size_t)disk->info.block_size)) {
+    goto done;
+  }
+  bool mbr = protective_mbr(block, disk);
+  bool empty_mbr = zero_bytes(block, (size_t)disk->info.block_size);
+  for (unsigned copy = 0; copy < 2; copy++) {
+    maps[copy].state = read_gpt(disk, copy, block, &maps[copy]);
+    if (maps[copy].state == GPT_FATAL) {
+      goto done;
+    }
+    if (maps[copy].state == GPT_UNSUPPORTED) {
+      update->reason = "unsupported GPT format or inspection capacity";
+      goto done;
+    }
+  }
+  success = true;
+  if (empty_mbr && maps[0].state == GPT_ABSENT && maps[1].state == GPT_ABSENT) {
+    update->reason = "blank disk: no installation";
+    goto done;
+  }
+  if (!mbr || maps[0].state != GPT_VALID || maps[1].state != GPT_VALID) {
+    update->reason = "no healthy validated protective GPT";
+    goto done;
+  }
+  if (!gpt_agree(&maps[0], &maps[1])) {
+    update->reason = "GPT copies disagree";
+    goto done;
+  }
+  if (!update_layout(disk, &maps[0], &update->layout)) {
+    update->reason = "foreign GPT disk: layout is not an installer layout";
+    goto done;
+  }
+  pool->disk = disk;
+  pool->offset = update->layout.pool_start;
+  pool->blocks = update->layout.pool_bytes / NPFS_BLOCK_SIZE;
+  enum inspection status = select_pool(pool, &update->degraded, true, &update->reason);
+  if (status != INSPECT_OK) {
+    goto inspection_failed;
+  }
+  update->degraded |= pool->control_degraded;
+  if (pool->control.state != NPFS_JOURNAL_EMPTY) {
+    update->reason = "npfs journal committed: boot the installed system once to recover it, then update";
+    goto done;
+  }
+  if (npfs_journal_capacity(pool->header.journal_blocks) < MOUNT_NPFS_MIN_JOURNAL_IMAGES) {
+    update->reason = "npfs journal is too small for the live kernel's writable mount";
+    goto done;
+  }
+  update->reason = "npfs allocation bitmap is damaged";
+  for (uint64_t page = 0; page < pool->header.bitmap_blocks; page++) {
+    status = pool_read(pool, pool->header.bitmap_start + page,
+        NPFS_METADATA_BITMAP, pool->scratch[0]);
+    if (status != INSPECT_OK) {
+      goto inspection_failed;
+    }
+  }
+  struct npfs_volume system;
+  bool found;
+  update->reason = "npfs volume catalog is damaged or incompatible";
+  status = update_catalog(pool, &system, &found);
+  if (status != INSPECT_OK) {
+    goto inspection_failed;
+  }
+  if (!found) {
+    update->reason = "npfs pool has no live system volume";
+    goto done;
+  }
+  update->reason = "npfs system volume cannot be opened by the live kernel";
+  status = update_system(pool, &system);
+  if (status != INSPECT_OK) {
+    goto inspection_failed;
+  }
+  update->eligible = true;
+  update->reason = "installer layout and system pool recognized";
+  goto done;
+inspection_failed:
+  if (status == INSPECT_FATAL) {
+    update->reason = "I/O or allocation failure during update inspection";
+    success = false;
+  }
+done:
+  free(block);
+  free(pool);
   free(maps);
   return success;
 }

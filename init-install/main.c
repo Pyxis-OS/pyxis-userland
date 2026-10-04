@@ -4,6 +4,7 @@
 #include <abi/file.h>
 #include <abi/memory.h>
 #include <abi/random.h>
+#include <abi/system_info.h>
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
@@ -34,15 +35,16 @@ int main(int argc, char **argv)
 {
   (void)argc;
   (void)argv;
-  enum { DISKS, KERNEL, ARCHIVE, MEMORY, INPUT, OUTPUT, CLOCK, RANDOM, APP,
+  enum { DISKS, KERNEL, ARCHIVE, MEMORY, INPUT, OUTPUT, CLOCK, RANDOM, SYSTEM_INFO, APP,
     LAUNCHER, SOURCE_COUNT, FIRST_STREAM = APP + 1,
     GRANT_COUNT = FIRST_STREAM + STARTUP_STREAM_COUNT };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
-    "input", "output", "clock", "random", "app", "launcher"};
+    "input", "output", "clock", "random", "system_info", "app", "launcher"};
   handle_t sources[SOURCE_COUNT] = {
     startup_resource("disks"), startup_resource("boot_kernel"), startup_resource("boot_archive"),
     startup_resource("memory"), startup_resource("input"), startup_resource("output"),
-    startup_resource("clock"), startup_resource("random"), startup_root("app"),
+    startup_resource("clock"), startup_resource("random"), startup_resource("system_info"),
+    startup_root("app"),
     startup_resource("launcher"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
@@ -73,6 +75,7 @@ int main(int argc, char **argv)
     [OUTPUT] = {sources[OUTPUT], CONSOLE_RIGHT_WRITE, 0},
     [CLOCK] = {sources[CLOCK], CLOCK_RIGHT_READ, 0},
     [RANDOM] = {sources[RANDOM], RANDOM_RIGHT_READ, 0},
+    [SYSTEM_INFO] = {sources[SYSTEM_INFO], SYSTEM_INFO_RIGHT_READ, 0},
     [APP] = {sources[APP], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES, 0},
     [FIRST_STREAM + STARTUP_STDIN] = {sources[INPUT], CONSOLE_RIGHT_READ, 0},
@@ -84,6 +87,7 @@ int main(int argc, char **argv)
     {(uintptr_t)"boot_archive", ARCHIVE}, {(uintptr_t)"memory", MEMORY},
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"random", RANDOM},
+    {(uintptr_t)"system_info", SYSTEM_INFO},
   };
   struct launch_binding roots[] = {{(uintptr_t)"app", APP}};
   const char *arguments[] = {"app://installer.pxe"};
