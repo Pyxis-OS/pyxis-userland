@@ -15,6 +15,7 @@ char *strcpy(char *restrict dest, const char *restrict src);
 /* Copies exactly count bytes, padding with NUL after the source ends.
  * Does not terminate when the source is count bytes or longer. No overlap. */
 char *strncpy(char *restrict dest, const char *restrict src, size_t count);
+char *strcat(char *restrict dest, const char *restrict src);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 char *strchr(const char *text, int character);

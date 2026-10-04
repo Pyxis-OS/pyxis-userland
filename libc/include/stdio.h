@@ -26,7 +26,7 @@ extern FILE *stderr;
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
  * successful fseek or a write drops it, a failed seek keeps it. Standard
  * descriptors adopt exclusive startup handles once. No fdopen/fileno, setvbuf,
- * freopen, pushback, scanning or wide I/O here. */
+ * freopen or wide I/O here. */
 FILE *fopen(const char *restrict path, const char *restrict mode);
 int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
@@ -58,6 +58,11 @@ char *fgets(char *restrict buffer, int capacity, FILE *restrict stream);
  * caller's current allocation. Reads through fgetc, so file and pipe input is
  * fetched in blocks while console input is one native read per byte. */
 ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream);
+/* One byte of pushback per FILE, returned before any further input; a second
+ * ungetc before a read fails. It clears EOF and makes ftell one less (but not
+ * below zero). A successful fseek, input fflush or any write discards it.
+ * Pushback belongs to the FILE, not the descriptor. */
+int ungetc(int character, FILE *stream);
 int fputc(int character, FILE *stream);
 int putc(int character, FILE *stream);
 int putchar(int character);
@@ -69,6 +74,25 @@ void clearerr(FILE *stream);
 int fseek(FILE *stream, long offset, int origin);
 long ftell(FILE *stream);
 void rewind(FILE *stream);
+/* Directives: whitespace (skips any input whitespace), ordinary characters,
+ * %%, and conversions d i u o x X p, a e f g (and capitals), s c [ and n, with
+ * * suppression, a nonzero width and lengths hh h l ll j z t L. Scansets accept
+ * a leading ^, a leading ] and a-z ranges. Wide conversions (%ls, %lc, %l[) are
+ * not supported. Numeric fields stop after 511 characters, as if limited by a
+ * width. Each field is read with one character of lookahead; a field that is
+ * only a prefix of a number, such as "0x" or "1e+", is consumed and fails.
+ * Returns the number of assignments, or EOF if input ended or failed before the
+ * first conversion. Malformed or unsupported conversions stop with EINVAL. */
+int fscanf(FILE *restrict stream, const char *restrict format, ...)
+  __attribute__((format(scanf, 2, 3)));
+int vfscanf(FILE *restrict stream, const char *restrict format, va_list args)
+  __attribute__((format(scanf, 2, 0)));
+int scanf(const char *restrict format, ...) __attribute__((format(scanf, 1, 2)));
+int vscanf(const char *restrict format, va_list args) __attribute__((format(scanf, 1, 0)));
+int sscanf(const char *restrict text, const char *restrict format, ...)
+  __attribute__((format(scanf, 2, 3)));
+int vsscanf(const char *restrict text, const char *restrict format, va_list args)
+  __attribute__((format(scanf, 2, 0)));
 int fprintf(FILE *restrict stream, const char *restrict format, ...)
   __attribute__((format(printf, 2, 3)));
 int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
@@ -92,6 +116,11 @@ int snprintf(char *restrict buffer, size_t capacity, const char *restrict format
   __attribute__((format(printf, 3, 4)));
 int vsnprintf(char *restrict buffer, size_t capacity, const char *restrict format, va_list args)
   __attribute__((format(printf, 3, 0)));
+/* Unbounded forms: buffer must hold the whole result and its NUL. Prefer snprintf. */
+int sprintf(char *restrict buffer, const char *restrict format, ...)
+  __attribute__((format(printf, 2, 3)));
+int vsprintf(char *restrict buffer, const char *restrict format, va_list args)
+  __attribute__((format(printf, 2, 0)));
 
 /* Allocate a NUL-terminated result, including for an empty string. Success
  * transfers ownership to the caller and returns the length excluding NUL.

@@ -26,6 +26,11 @@ double strtod(const char *restrict text, char **restrict end)
   return convert_float(text, end, FLOAT_PRECISION_DOUBLE);
 }
 
+double atof(const char *text)
+{
+  return strtod(text, NULL);
+}
+
 long double strtold(const char *restrict text, char **restrict end)
 {
   return convert_float(text, end, FLOAT_PRECISION_LONG_DOUBLE);
