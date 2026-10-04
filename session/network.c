@@ -239,6 +239,10 @@ static bool apply_ipv4(const struct network_config *config, handle_t authority,
           }
           uint32_t dns = !config->dns_explicit && lease.dns ? lease.dns : config->dns_address;
           status = net_config_replace(authority, lease.address, lease.prefix, lease.gateway, dns);
+          if (status == CALL_BAD_REQUEST) {
+            fputs("session: DHCP lease rejected; continuing offline\n", stderr);
+            return true;
+          }
           if (status == CALL_OK) {
             printf("net0: DHCP %u.%u.%u.%u/%u%s\n", lease.address >> 24,
                 (lease.address >> 16) & 255, (lease.address >> 8) & 255,

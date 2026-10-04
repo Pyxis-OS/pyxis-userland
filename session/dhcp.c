@@ -238,7 +238,9 @@ static bool decode_lease(const uint8_t *packet, const struct dhcp_reply *reply,
   uint64_t t1_eighths = reply->t1.present ? (uint64_t)t1 * 8 : (uint64_t)duration * 4;
   uint64_t t2_eighths = reply->t2.present ? (uint64_t)t2 * 8 : (uint64_t)duration * 7;
   if (t1_eighths >= t2_eighths || t2_eighths >= (uint64_t)duration * 8) {
-    return false;
+    /* Invalid server timers do not invalidate an otherwise usable lease. */
+    t1 = duration / 2;
+    t2 = (uint64_t)duration * 7 / 8;
   }
   *lease = (struct dhcp_lease){
     .address = address, .prefix = prefix, .gateway = gateway, .dns = dns,
