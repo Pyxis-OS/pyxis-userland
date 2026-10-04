@@ -431,6 +431,25 @@ int descriptor_seek(int descriptor, long offset, int origin)
   return 0;
 }
 
+int descriptor_resize(int descriptor, uint64_t size)
+{
+  struct descriptor_entry *entry = lookup(descriptor);
+  if (!entry) {
+    return -1;
+  }
+  if (entry->kind != DESCRIPTOR_FILE) {
+    return fail(EINVAL);
+  }
+  /* Read-ahead may hold bytes the resize removes or zero-fills. Drop it even
+   * if the outcome is uncertain; files can fetch the current bytes again. */
+  discard_ahead(entry);
+  enum call_status status = file_resize(entry->handle, size);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  return 0;
+}
+
 long descriptor_tell(int descriptor)
 {
   struct descriptor_entry *entry = lookup(descriptor);

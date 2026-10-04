@@ -17,5 +17,10 @@ ssize_t read(int descriptor, void *buffer, size_t count);
 ssize_t write(int descriptor, const void *buffer, size_t count);
 /* Invalidates any FILE association even on release failure; never retries. */
 int close(int descriptor);
+/* Set a writable file's size through native RESIZE. Growth reads as zero and
+ * shrinking discards the tail; the descriptor position is unchanged. Negative
+ * lengths and consoles or pipes fail with EINVAL. An uncertain backend outcome
+ * is EIO; the size must then be treated as unknown. */
+int ftruncate(int descriptor, off_t length);
 
 #endif

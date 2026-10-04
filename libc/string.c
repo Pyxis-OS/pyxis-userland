@@ -32,6 +32,15 @@ char *strcpy(char *restrict dest, const char *restrict src)
   return start;
 }
 
+char *stpcpy(char *restrict dest, const char *restrict src)
+{
+  while (*src) {
+    *dest++ = *src++;
+  }
+  *dest = '\0';
+  return dest;
+}
+
 char *strcat(char *restrict dest, const char *restrict src)
 {
   strcpy(dest + strlen(dest), src);
@@ -65,6 +74,14 @@ char *strchr(const char *text, int character)
     }
   } while (*text++);
   return NULL;
+}
+
+char *strchrnul(const char *text, int character)
+{
+  while (*text && *text != (char)character) {
+    ++text;
+  }
+  return (char *)text;
 }
 
 char *strrchr(const char *text, int character)

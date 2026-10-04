@@ -71,3 +71,15 @@ int close(int descriptor)
 {
   return descriptor_close(descriptor);
 }
+
+int ftruncate(int descriptor, off_t length)
+{
+  if (!descriptor_ready(descriptor, true)) {
+    return -1;
+  }
+  if (length < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  return descriptor_resize(descriptor, (uint64_t)length);
+}

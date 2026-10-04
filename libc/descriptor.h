@@ -34,6 +34,8 @@ int descriptor_read(int descriptor, void *buffer, size_t capacity, size_t *read)
 int descriptor_read_buffered(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written);
 int descriptor_seek(int descriptor, long offset, int origin);
+/* Files only; keeps the position and discards read-ahead before RESIZE. */
+int descriptor_resize(int descriptor, uint64_t size);
 /* The logical position, excluding bytes read ahead. */
 long descriptor_tell(int descriptor);
 /* Input fflush: drop file read-ahead so later reads refetch; keep pipe bytes. */
