@@ -106,6 +106,11 @@ struct term_line_result {
  * it. Failing to withdraw passthrough returns ERROR with CALL_BAD_HANDLE. */
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity);
+/* Starts with editable printable ASCII and the cursor at its end. Initial
+ * text is borrowed, NUL-terminated and disjoint from buffer. It must fit the
+ * same buffer/display limit; cancellation and errors discard it. */
+struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
+    const char *initial, char *buffer, size_t capacity);
 /* Same editing, cancellation, EOF and limits as term_read_line, including the
  * prompt geometry, but writes nothing: no prompt, fresh line, redraw, cursor or
  * style control, overflow color, submission newline or ^C. The prompt is

@@ -30,6 +30,10 @@ it excludes objects/debug ELFs and removes stale installed files. Application bu
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang source. TLSF is vendored locally with its license and pin.
 
+The [native installer](installer/README.md) consumes the SDK's pinned npfs
+codecs and explicit install-mode disk/source grants. It is packaged normally;
+`init-installed` mounts its persistent `system://` volume while retaining a RAM home.
+
 `make libhttp` builds `BUILD/libhttp.a`. Consumers link it with picohttpparser,
 libtls and `MBEDTLS_LIBRARIES` before SDK libraries. Each fetch receives an
 explicit HTTP or HTTPS client; HTTPS borrows a ready libtls runtime and verifies
