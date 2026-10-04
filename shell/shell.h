@@ -56,7 +56,7 @@ struct shell {
   bool interrupts;
   struct terminal terminal;
   handle_t profile, space, launcher, memory, display, clock, system_info, echo, udp, tcp, pipe,
-      service, namespace_service, namespace, random, net_config, keyboard, terminal_service,
+      service, namespace_service, namespace, random, net_config, keyboard, pointer, terminal_service,
       app, home, host_mount, native_mount;
   bool owns_namespace;
   struct path_root roots[STARTUP_ROOT_LIMIT];

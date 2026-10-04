@@ -97,6 +97,7 @@ int main(int argc, char **argv)
     .random = startup_resource("random"),
     .net_config = startup_resource("net_config"),
     .keyboard = startup_resource("keyboard"),
+    .pointer = startup_resource("pointer"),
     .space = startup_resource("space"),
     .profile = startup_resource("profile"),
     .app = startup_root("app"),
