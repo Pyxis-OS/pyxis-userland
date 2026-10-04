@@ -88,8 +88,7 @@ static const char *unavailable_reason(const struct disk_info *info)
   if (info->flags & DISK_FLAG_WRITE_FAILED) {
     return "device write failure; reboot required";
   }
-  if (info->block_size < 512 || info->block_size > DISK_IO_MAX_BYTES ||
-      (info->block_size & (info->block_size - 1)) ||
+  if ((info->block_size != 512 && info->block_size != 4096) ||
       info->block_count > UINT64_MAX / info->block_size) {
     return "unsupported geometry";
   }

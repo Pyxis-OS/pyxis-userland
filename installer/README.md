@@ -44,5 +44,5 @@ marker to mark the pool final.
 Build with `make installer SDK=/path/to/sdk`. The SDK must export the pinned
 npfs header and target `libnpfs-format.a`; this program supplies the two memory
 symbols. It uses no host formatter, FAT service or host libc. Logical sector
-sizes 512, 1024, 2048 and 4096 are supported; media must fit the fixed ESP and
+sizes 512 and 4096 are supported, matching kernel GPT rescan; media must fit the fixed ESP and
 pool. No USB/NVMe driver, firmware-variable update or recovery tool is added.
