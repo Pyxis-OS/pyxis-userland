@@ -42,7 +42,7 @@ COUNTER_OBJECT := $(BUILD)/counter/namespace.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o

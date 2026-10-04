@@ -29,13 +29,15 @@
 
 enum esp_node_id {
   ESP_ROOT, ESP_EFI, ESP_EFI_BOOT, ESP_BOOT, ESP_LIMINE,
-  ESP_EFI_FILE, ESP_KERNEL_FILE, ESP_ARCHIVE_FILE, ESP_CONFIG_FILE, ESP_NODE_COUNT,
+  ESP_EFI_FILE, ESP_KERNEL_FILE, ESP_ARCHIVE_FILE, ESP_CONFIG_FILE,
+  ESP_REVISION_FILE, ESP_NODE_COUNT,
 };
 
 struct esp_node {
   const char *name, *alias;
   enum esp_node_id parent;
   const struct install_source *source;
+  const char *contents;
   uint32_t size, first, clusters;
   bool directory;
 };
@@ -43,7 +45,6 @@ struct esp_node {
 struct install_esp {
   const struct install_disk *disk;
   const struct install_layout *layout;
-  const char *configuration;
   uint32_t sector_bytes, sectors, fat_sectors, cluster_count, next_cluster, serial;
   uint64_t fat_offset, fat_bytes, data_offset;
   uint8_t *fat;
@@ -202,7 +203,7 @@ static void make_fsinfo(const struct install_esp *esp, uint8_t *sector)
   put32(sector + 508, ESP_FSINFO_TRAIL);
 }
 
-static bool source_read(const struct install_esp *esp, const struct esp_node *node,
+static bool source_read(const struct esp_node *node,
     uint64_t offset, void *bytes, size_t length)
 {
   if (offset > node->size || length > node->size - offset) {
@@ -211,16 +212,18 @@ static bool source_read(const struct install_esp *esp, const struct esp_node *no
   if (node->source) {
     return install_source_read(node->source, offset, bytes, length);
   }
-  memcpy(bytes, esp->configuration + offset, length);
+  memcpy(bytes, node->contents + offset, length);
   return true;
 }
 
 struct install_esp *install_esp_plan(const struct install_disk *disk,
     const struct install_layout *layout, const struct install_source *efi,
     const struct install_source *kernel, const struct install_source *archive,
-    const char *configuration, size_t configuration_bytes, uint32_t serial)
+    const char *configuration, size_t configuration_bytes,
+    const char *revision, size_t revision_bytes, uint32_t serial)
 {
   if (!disk || !layout || !efi || !kernel || !archive || !configuration ||
+      !revision || !revision_bytes ||
       disk->info.block_size < 512 || disk->info.block_size > ESP_CLUSTER_BYTES ||
       (disk->info.block_size & (disk->info.block_size - 1)) ||
       layout->esp_bytes != INSTALL_ESP_BYTES ||
@@ -228,7 +231,8 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
       layout->esp_bytes > disk->bytes - layout->esp_start ||
       layout->esp_start / disk->info.block_size > UINT32_MAX ||
       efi->bytes > UINT32_MAX || kernel->bytes > UINT32_MAX ||
-      archive->bytes > UINT32_MAX || configuration_bytes > UINT32_MAX) {
+      archive->bytes > UINT32_MAX || configuration_bytes > UINT32_MAX ||
+      revision_bytes > UINT32_MAX) {
     fputs("installer: invalid ESP extent, geometry or source size\n", stderr);
     return NULL;
   }
@@ -238,7 +242,6 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
   }
   esp->disk = disk;
   esp->layout = layout;
-  esp->configuration = configuration;
   esp->serial = serial;
   esp->sector_bytes = disk->info.block_size;
   esp->sectors = layout->esp_bytes / esp->sector_bytes;
@@ -292,7 +295,11 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
   };
   esp->nodes[ESP_CONFIG_FILE] = (struct esp_node){
     .name = "limine.conf", .alias = "LIMINE~1CON", .parent = ESP_LIMINE,
-    .size = configuration_bytes,
+    .contents = configuration, .size = configuration_bytes,
+  };
+  esp->nodes[ESP_REVISION_FILE] = (struct esp_node){
+    .name = "revision", .alias = "REVISION   ", .parent = ESP_BOOT,
+    .contents = revision, .size = revision_bytes,
   };
   esp->next_cluster = 2;
   for (unsigned i = 0; i < ESP_NODE_COUNT; ++i) {
@@ -400,7 +407,7 @@ bool install_esp_write(const struct install_esp *esp)
         length = ESP_CLUSTER_BYTES;
       }
       memset(bytes, 0, sizeof(bytes));
-      if (!source_read(esp, node, consumed, bytes, length)) {
+      if (!source_read(node, consumed, bytes, length)) {
         return false;
       }
       uint64_t offset = esp->data_offset + (uint64_t)(node->first + j - 2) * ESP_CLUSTER_BYTES;
@@ -573,7 +580,7 @@ static bool verify_file(struct esp_reader *reader, unsigned index)
     if (length > ESP_CLUSTER_BYTES) {
       length = ESP_CLUSTER_BYTES;
     }
-    if (!source_read(reader->esp, node, consumed, expected, length) ||
+    if (!source_read(node, consumed, expected, length) ||
         memcmp(actual, expected, length) || !all_zero(actual + length, sizeof(actual) - length)) {
       return false;
     }

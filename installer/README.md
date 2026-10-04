@@ -3,8 +3,24 @@
 `installer.pxe` is launched by native `init-install.pxe` through the live
 image's Install Pyxis entry. It takes no arguments. It requires the explicit
 disk inventory, original kernel/archive FILE grants, read-only app assets,
-private memory, console, clock and randomness. It receives no launcher, mount,
+private memory, console, clock, randomness and read-only SYSTEM_INFO. It receives no launcher, mount,
 network, writable home or namespace authority.
+
+The first screen offers Install and Update. Install retains the Proceed / Read
+the room consent flow described below. Update currently inspects and selects a
+candidate, then exits with an explicit no-write message; ESP rewriting belongs
+to the next milestone task.
+
+Update requires healthy matching GPT copies with exactly the installer's two
+partitions, writable-mount-compatible npfs metadata, an empty selected journal
+and a live `system` volume. One damaged pool header/control copy is accepted
+when the kernel accepts its valid peer. A committed journal is refused without
+replay. No marker is required. Read-only FAT32 traversal checks the installed
+`boot/limine/limine.conf` command line against the disk GUID and installed init.
+The live kernel revision comes from SYSTEM_INFO; `boot/revision` supplies the
+installed revision, with missing, empty or nonprintable text displayed as `unknown`.
+Structural or I/O failures refuse the candidate. Inspection never mounts a pool
+or claims raw write access.
 
 The normal path requires a validated GPT and a nonempty npfs pool in every
 recognized pool partition, with a regular root `SAFE_TO_WIPE` in every live
@@ -33,7 +49,8 @@ to the aligned end before backup GPT metadata. The fresh pool contains only
 `system`, its root and an empty regular marker. Only allocated metadata and
 FAT boot-file storage are initialized; this is not secure erasure.
 The ESP contains Limine at `EFI/BOOT/BOOTX64.EFI` and the original kernel,
-whole archive and generated configuration under `boot`. Installed configuration
+whole archive, generated configuration and `boot/revision` under `boot`.
+The revision record is the kernel build revision followed by a newline. Installed configuration
 fills the packaged template with timeout zero and a disk-GUID-scoped normal
 command line, and omits the installer entry and any global `default_entry`.
 Fixed `init-installed` mounts
@@ -48,7 +65,8 @@ room to reinstall; the same consent vetoes still apply. Delete the installed
 marker to mark the pool final.
 
 Build with `make installer SDK=/path/to/sdk`. The SDK must export the pinned
-npfs header and target `libnpfs-format.a`; this program supplies the two memory
+npfs header, `MOUNT_NPFS_MIN_JOURNAL_IMAGES` in the mount ABI, and target
+`libnpfs-format.a`; this program supplies the two memory
 symbols. It uses no host formatter, FAT service or host libc. Logical sector
 sizes 512 and 4096 are supported, matching kernel GPT rescan; media must fit the fixed ESP and
 pool. No USB/NVMe driver, firmware-variable update or recovery tool is added.
