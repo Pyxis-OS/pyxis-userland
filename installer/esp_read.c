@@ -409,7 +409,8 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
       continue;
     }
     cursor += 8;
-    bool installed = false, primary_seen = false, bound = false;
+    unsigned installed = 0;
+    bool bound = false;
     while (cursor < end) {
       while (cursor < end && horizontal_space(bytes[cursor])) {
         ++cursor;
@@ -422,12 +423,11 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         ++cursor;
       }
       size_t length = cursor - start;
-      if (length >= 13 && !memcmp(bytes + start, "init.primary=", 13)) {
-        if (primary_seen) {
-          rebuild(esp, "ESP boot configuration repeats init.primary");
-        }
-        primary_seen = true;
-        installed = same_token(bytes + start, length, "init.primary=app://init-installed");
+      /* 0.0.1 installations used the CPU-indexed init grammar. Recognizing its
+       * token lets Update rewrite that ESP in the space grammar. */
+      if (same_token(bytes + start, length, "space.pyxis=app://init-installed") ||
+          same_token(bytes + start, length, "init.primary=app://init-installed")) {
+        ++installed;
       }
       if (length >= 11 && !memcmp(bytes + start, "mount.disk=", 11)) {
         if (bound) {
@@ -444,7 +444,10 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         bound = true;
       }
     }
-    normal |= installed && bound;
+    if (installed > 1) {
+      rebuild(esp, "ESP boot configuration repeats the installed space");
+    }
+    normal |= installed == 1 && bound;
   }
   if (!normal) {
     return rebuild(esp, "ESP boot configuration lacks this disk's installed command line");

@@ -317,7 +317,7 @@ static char *boot_configuration(const struct install_source *source, const uint8
   char disk_guid[37], normal[256];
   install_guid_text(guid, disk_guid);
   snprintf(normal, sizeof(normal),
-      "  cmdline: init=app://init-idle init.primary=app://init-installed mount.disk=%s\n", disk_guid);
+      "  cmdline: space.pyxis=app://init-installed mount.disk=%s\n", disk_guid);
   bool skip = false, timeout = false, command = false, install_entry = false;
   size_t used = 0;
   char *line = input;
