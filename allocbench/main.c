@@ -219,10 +219,7 @@ static void print_profile_operation(const char *name, const struct profile_memor
       name, (unsigned long long)stats->requests, (unsigned long long)stats->failures,
       (unsigned long long)stats->requested_bytes, (unsigned long long)stats->completed_bytes);
   if (stats->requests) {
-    print_duration("publication", &stats->publication, stats->requests);
-    print_duration("BSP queue", &stats->queue, stats->requests);
     print_duration("service", &stats->service, stats->requests);
-    print_duration("resume", &stats->resume, stats->requests);
     print_duration("total", &stats->total, stats->requests);
   }
 }
