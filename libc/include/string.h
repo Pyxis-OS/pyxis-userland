@@ -27,6 +27,7 @@ char *strchr(const char *text, int character);
 char *strchrnul(const char *text, int character);
 char *strrchr(const char *text, int character);
 size_t strspn(const char *text, const char *accept);
+size_t strcspn(const char *text, const char *reject);
 char *strpbrk(const char *text, const char *accept);
 /* First occurrence; an empty needle returns text. NULL when not found. */
 char *strstr(const char *text, const char *needle);

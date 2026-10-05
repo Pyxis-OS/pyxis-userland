@@ -83,3 +83,19 @@ int ftruncate(int descriptor, off_t length)
   }
   return descriptor_resize(descriptor, (uint64_t)length);
 }
+
+off_t lseek(int descriptor, off_t offset, int origin)
+{
+  if (descriptor_seek(descriptor, offset, origin) < 0) {
+    return -1;
+  }
+  return descriptor_tell(descriptor);
+}
+
+int fsync(int descriptor)
+{
+  if (!descriptor_ready(descriptor, true)) {
+    return -1;
+  }
+  return descriptor_sync(descriptor);
+}

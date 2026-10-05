@@ -6,11 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "descriptor.h"
 #include "errors.h"
 
-enum call_status file_open_path(const char *path, uint64_t rights,
-                               bool create, handle_t *handle)
+/* Shared by file opens and metadata queries: create applies only to files. */
+static enum call_status open_path(const char *path, uint64_t kind, uint64_t rights,
+                                  bool create, handle_t *handle)
 {
   *handle = HANDLE_INVALID;
   if (!path || !*path) {
@@ -38,14 +40,26 @@ enum call_status file_open_path(const char *path, uint64_t rights,
   struct path_context context = {
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };
-  enum call_status status = path_open_file(&context, path, rights, create,
-      &workspace, handle);
+  enum call_status status = kind == DIRECTORY_KIND_FILE ?
+      path_open_file(&context, path, rights, create, &workspace, handle) :
+      path_resolve(&context, path, kind, rights, &workspace, handle);
   free(component);
   free(directories);
   return status;
 }
 
-int remove(const char *path)
+enum call_status file_open_path(const char *path, uint64_t rights,
+                               bool create, handle_t *handle)
+{
+  return open_path(path, DIRECTORY_KIND_FILE, rights, create, handle);
+}
+
+enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle)
+{
+  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, handle);
+}
+
+static int remove_kind(const char *path, uint64_t kind)
 {
   if (!path || !*path) {
     errno = EINVAL;
@@ -72,7 +86,7 @@ int remove(const char *path)
   struct path_context context = {
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };
-  enum call_status status = path_remove(&context, path, DIRECTORY_KIND_ANY, &workspace);
+  enum call_status status = path_remove(&context, path, kind, &workspace);
   free(component);
   free(directories);
   if (status != CALL_OK) {
@@ -80,6 +94,16 @@ int remove(const char *path)
     return -1;
   }
   return 0;
+}
+
+int remove(const char *path)
+{
+  return remove_kind(path, DIRECTORY_KIND_ANY);
+}
+
+int unlink(const char *path)
+{
+  return remove_kind(path, DIRECTORY_KIND_FILE);
 }
 
 int mkdir(const char *path, mode_t mode)
