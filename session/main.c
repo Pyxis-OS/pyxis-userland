@@ -368,7 +368,7 @@ done:
   return result;
 }
 
-static bool release_bootstrap_grants(const struct network_runtime *runtime)
+static bool release_bootstrap_grants(struct network_runtime *runtime)
 {
   size_t named_count = startup_resource_count();
   size_t roots = startup_root_count();
@@ -397,7 +397,8 @@ static bool release_bootstrap_grants(const struct network_runtime *runtime)
   handles[count - 1] = startup_namespace();
   const handle_t retained[] = {
     runtime->dhcp.endpoint, runtime->dhcp.clock, runtime->dhcp.random,
-    runtime->authority, startup_resource("memory"), startup_resource("output"),
+    runtime->authority, runtime->waiting_link ? runtime->udp : HANDLE_INVALID,
+    startup_resource("memory"), startup_resource("output"),
     startup_stream(STARTUP_STDOUT).handle, startup_stream(STARTUP_STDERR).handle,
   };
   bool success = true;
@@ -420,6 +421,10 @@ static bool release_bootstrap_grants(const struct network_runtime *runtime)
   if (startup_stream(STARTUP_STDIN).protocol != STARTUP_STREAM_NONE && fclose(stdin) != 0) {
     success = false;
   }
+  if (!runtime->waiting_link) {
+    runtime->udp = HANDLE_INVALID;
+  }
+  runtime->background = true;
   if (!success) {
     fputs("session: cannot release bootstrap grants\n", stderr);
   }
@@ -429,15 +434,15 @@ static bool release_bootstrap_grants(const struct network_runtime *runtime)
 static int finish_network(const struct network_config *config,
     struct network_runtime *runtime, int result)
 {
-  if (runtime->dhcp.endpoint == HANDLE_INVALID) {
-    return result;
+  if (result == EXIT_SUCCESS &&
+      (runtime->waiting_link || runtime->dhcp.endpoint != HANDLE_INVALID)) {
+    if (release_bootstrap_grants(runtime)) {
+      result = network_config_maintain(config, runtime);
+    } else {
+      result = EXIT_FAILURE;
+    }
   }
-  if (result == EXIT_SUCCESS && release_bootstrap_grants(runtime)) {
-    result = network_config_maintain(config, runtime);
-  } else {
-    result = EXIT_FAILURE;
-  }
-  if (!network_config_stop(config, runtime)) {
+  if (result != EXIT_SUCCESS && !network_config_stop(config, runtime)) {
     result = EXIT_FAILURE;
   }
   return result;
@@ -496,7 +501,9 @@ int main(int argc, char **argv)
     if (!configure_network || network_config_apply(&network, &runtime)) {
       result = launch_tcp_server(address, (uint16_t)port, count);
     }
-    return finish_network(&network, &runtime, result);
+    result = finish_network(&network, &runtime, result);
+    network_config_free(&network);
+    return result;
   }
   struct session_config config;
   if (!session_config_read(&config)) {
@@ -519,7 +526,9 @@ int main(int argc, char **argv)
         start_services, start_remote_services);
   }
   free(config.timezone);
-  return finish_network(&network, &runtime, result);
+  result = finish_network(&network, &runtime, result);
+  network_config_free(&network);
+  return result;
 
 usage:
   fputs("Usage: session.pxe [--configure-network] [--start-services | --start-remote-services]\n"
