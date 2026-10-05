@@ -257,11 +257,88 @@ static enum command_result set_title(struct shell *shell, char **arguments, size
   return COMMAND_OK;
 }
 
+/* Shell parsing bound only; the kernel rejects indices beyond the boot. */
+#define AFFINITY_CPU_LIMIT 8192
+
+static bool parse_cpu_index(const char **cursor, size_t *value)
+{
+  const char *text = *cursor;
+  if (*text < '0' || *text > '9') {
+    return false;
+  }
+  size_t index = 0;
+  while (*text >= '0' && *text <= '9') {
+    index = index * 10 + (size_t)(*text++ - '0');
+    if (index >= AFFINITY_CPU_LIMIT) {
+      return false;
+    }
+  }
+  *cursor = text;
+  *value = index;
+  return true;
+}
+
+/* LIST is comma-separated boot CPU indices and inclusive A-B ranges. */
+static bool parse_cpu_list(const char *list, uint64_t *cpus, size_t *cpu_count)
+{
+  const char *cursor = list;
+  *cpu_count = 0;
+  for (;;) {
+    size_t first, last;
+    if (!parse_cpu_index(&cursor, &first)) {
+      return false;
+    }
+    last = first;
+    if (*cursor == '-') {
+      ++cursor;
+      if (!parse_cpu_index(&cursor, &last) || last < first) {
+        return false;
+      }
+    }
+    for (size_t cpu = first; cpu <= last; ++cpu) {
+      cpus[cpu / 64] |= UINT64_C(1) << (cpu % 64);
+    }
+    if (last + 1 > *cpu_count) {
+      *cpu_count = last + 1;
+    }
+    if (!*cursor) {
+      return true;
+    }
+    if (*cursor++ != ',') {
+      return false;
+    }
+  }
+}
+
+static enum command_result set_affinity(struct shell *shell, char **arguments, size_t count)
+{
+  uint64_t cpus[AFFINITY_CPU_LIMIT / 64] = {0};
+  size_t cpu_count;
+  if (count != 2 || !parse_cpu_list(arguments[1], cpus, &cpu_count)) {
+    return shell_error(shell, "usage: affinity LIST (for example 2-3 or 1,3)\n");
+  }
+  enum call_status status = space_set_affinity(shell->space, cpus, cpu_count);
+  switch (status) {
+  case CALL_OK:
+    return COMMAND_OK;
+  case CALL_ENDPOINT_CLOSED:
+    return shell_error(shell, "shell: affinity: this space has already launched a program\n");
+  case CALL_DENIED:
+    return shell_error(shell, "shell: affinity: no authority, or a CPU outside the space's ceiling\n");
+  case CALL_UNAVAILABLE:
+    return shell_error(shell, "shell: affinity: CPU 0 runs no userspace on a multicore boot\n");
+  case CALL_BAD_REQUEST:
+    return shell_error(shell, "shell: affinity: empty set or a CPU this boot does not have\n");
+  default:
+    return shell_error(shell, "shell: affinity failed (status %u)\n", status);
+  }
+}
+
 static bool is_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
   return !strcmp(name, "exit") || !strcmp(name, "cd") ||
-      !strcmp(name, "mount") || !strcmp(name, "title") ||
+      !strcmp(name, "mount") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") || !strcmp(name, "namespace") ||
       !strcmp(name, "service") ||
       (!strcmp(name, "sync") && count > 1 && !strcmp(arguments[1], "--disk"));
@@ -287,6 +364,9 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
   }
   if (strcmp(arguments[0], "title") == 0) {
     return set_title(shell, arguments, count);
+  }
+  if (strcmp(arguments[0], "affinity") == 0) {
+    return set_affinity(shell, arguments, count);
   }
   if (strcmp(arguments[0], "mount") == 0) {
     return mount_volume(shell, arguments, count);
