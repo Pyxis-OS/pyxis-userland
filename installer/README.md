@@ -23,8 +23,11 @@ integrity or complete bootability.
 
 After the exact word `update`, inspection repeats under exclusive raw access and
 checks that partition bounds and GUIDs still match. The shared fresh ESP writer
-replaces EFI, kernel, archive, configuration and revision, flushes, then releases
-raw access for GPT rescan. FAT traversal and byte comparison verify all authored
+first clears and flushes the reserved area, including both FAT boot sectors.
+It replaces EFI, kernel, archive, configuration and revision while boot geometry
+remains invalid, flushes the complete replacement tree, then writes both boot
+sectors. The final flush precedes raw release for GPT rescan. This keeps a
+partly replaced tree rebuildable instead of recognizing stale identity files. FAT traversal and byte comparison verify all authored
 boot files, followed by a read-only `system` root reopen. Only then is `updated`
 reported. GPT and pool are never written, replayed or migrated by Update. An
 interrupted update is recovered by booting live media again and choosing Update;

@@ -356,18 +356,25 @@ static void make_directory(const struct install_esp *esp, unsigned index, uint8_
   }
 }
 
+static bool esp_flush(const struct install_esp *esp)
+{
+  enum call_status status = disk_flush(esp->disk->handle);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: ESP sync failed (status %u); stopping\n", status);
+    return false;
+  }
+  return true;
+}
+
 bool install_esp_write(const struct install_esp *esp)
 {
   if (!esp) {
     return false;
   }
   uint8_t bytes[ESP_CLUSTER_BYTES];
-  if (!install_zero(esp->disk, esp->layout->esp_start, esp->fat_offset)) {
-    return false;
-  }
-  make_boot(esp, bytes);
-  if (!esp_write(esp, 0, bytes, esp->sector_bytes) ||
-      !esp_write(esp, (uint64_t)ESP_BACKUP_SECTOR * esp->sector_bytes, bytes, esp->sector_bytes)) {
+  /* Persist invalid boot geometry before any old FAT, directory or file bytes
+   * can be replaced. Stale configuration/revision must not validate a mixed tree. */
+  if (!install_zero(esp->disk, esp->layout->esp_start, esp->fat_offset) || !esp_flush(esp)) {
     return false;
   }
   make_fsinfo(esp, bytes);
@@ -417,7 +424,14 @@ bool install_esp_write(const struct install_esp *esp)
       consumed += length;
     }
   }
-  return true;
+  /* Publish boot geometry only after the complete replacement tree is durable.
+   * The caller's final sync also covers both boot sectors. */
+  if (!esp_flush(esp)) {
+    return false;
+  }
+  make_boot(esp, bytes);
+  return esp_write(esp, 0, bytes, esp->sector_bytes) &&
+      esp_write(esp, (uint64_t)ESP_BACKUP_SECTOR * esp->sector_bytes, bytes, esp->sector_bytes);
 }
 
 static bool take_cluster(struct esp_reader *reader, uint32_t cluster)
