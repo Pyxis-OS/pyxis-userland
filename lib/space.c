@@ -30,3 +30,23 @@ enum call_status space_set_title(handle_t space, const char *title)
   }
   return result.status;
 }
+
+enum call_status space_set_affinity(handle_t space, const uint64_t *cpus, uint64_t cpu_count)
+{
+  if (!cpus || !cpu_count) {
+    return CALL_BAD_REQUEST;
+  }
+  struct space_affinity_request request = {
+    .header = {PROTOCOL_SPACE, SPACE_SET_AFFINITY},
+    .cpus = (uintptr_t)cpus,
+    .cpu_count = cpu_count,
+  };
+  struct syscall_result result = syscall_call(space, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size) {
+    return CALL_BAD_REQUEST;
+  }
+  return result.status;
+}
