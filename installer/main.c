@@ -234,12 +234,17 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
     const char *reason = updating ? target->update.reason : target->consent.reason;
     char guid[37];
     install_guid_text(target->info.gpt_guid, guid);
-    printf("%zu. Disk %llu: %llu MiB, GUID %s; %s: %s%s\n", i + 1,
+    printf("%zu. Disk %llu: %llu MiB, GUID %s; %s: ", i + 1,
         (unsigned long long)target->info.id,
         (unsigned long long)(target->info.block_count * target->info.block_size / INSTALL_MIB),
         npfs_id_valid(target->info.gpt_guid) ? guid : "unavailable",
-        offered ? "eligible" : "ineligible", reason,
-        degraded ? " (degraded metadata)" : "");
+        offered ? "eligible" : "ineligible");
+    if (updating && offered && target->boot_rebuild) {
+      printf("Pyxis installation (boot files damaged: %s)", reason);
+    } else {
+      fputs(reason, stdout);
+    }
+    printf("%s\n", degraded ? " (degraded metadata)" : "");
     if (updating && offered) {
       printf("   Installed kernel revision: %s\n", target->update.revision);
       if (target->boot_rebuild) {
