@@ -30,6 +30,7 @@ struct esp_inspection {
   const struct install_disk *disk;
   const struct install_layout *layout;
   const char **reason;
+  enum install_esp_state state;
   uint64_t fat_offset, fat_bytes, data_offset, fat_page;
   uint32_t clusters, root;
   uint8_t fat[ESP_CLUSTER_BYTES];
@@ -40,7 +41,7 @@ struct esp_inspection {
 struct esp_path {
   const char *name, *alias;
   uint32_t first, size;
-  bool directory, found, long_name_required;
+  bool directory, found, damaged, long_name_required;
 };
 
 struct esp_long_name {
@@ -60,8 +61,18 @@ static uint32_t get32(const uint8_t *bytes)
       ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
 }
 
+static bool rebuild(struct esp_inspection *esp, const char *reason)
+{
+  if (esp->state == INSTALL_ESP_VALID) {
+    esp->state = INSTALL_ESP_REBUILD;
+    *esp->reason = reason;
+  }
+  return false;
+}
+
 static bool refuse(struct esp_inspection *esp, const char *reason)
 {
+  esp->state = INSTALL_ESP_REFUSED;
   *esp->reason = reason;
   return false;
 }
@@ -70,7 +81,7 @@ static bool read_bytes(struct esp_inspection *esp, uint64_t offset,
     void *bytes, size_t length)
 {
   if (offset > esp->layout->esp_bytes || length > esp->layout->esp_bytes - offset) {
-    return refuse(esp, "ESP metadata addresses data outside its partition");
+    return rebuild(esp, "ESP metadata addresses data outside its partition");
   }
   if (!install_read(esp->disk, esp->layout->esp_start + offset, bytes, length)) {
     return refuse(esp, "ESP read failed");
@@ -86,7 +97,7 @@ static bool valid_cluster(const struct esp_inspection *esp, uint32_t cluster)
 static bool take_cluster(struct esp_inspection *esp, uint32_t cluster)
 {
   if (!valid_cluster(esp, cluster) || (esp->seen[cluster / 8] & (1u << (cluster % 8)))) {
-    return refuse(esp, "ESP boot paths contain an invalid, shared or cyclic FAT chain");
+    return rebuild(esp, "ESP boot paths contain an invalid, shared or cyclic FAT chain");
   }
   esp->seen[cluster / 8] |= 1u << (cluster % 8);
   return true;
@@ -96,7 +107,7 @@ static bool fat_entry(struct esp_inspection *esp, uint32_t cluster, uint32_t *va
 {
   uint64_t offset = (uint64_t)cluster * 4;
   if (offset > esp->fat_bytes || 4 > esp->fat_bytes - offset) {
-    return refuse(esp, "ESP FAT entry lies outside its FAT");
+    return rebuild(esp, "ESP FAT entry lies outside its FAT");
   }
   uint64_t page = offset / ESP_CLUSTER_BYTES * ESP_CLUSTER_BYTES;
   if (!esp->have_fat_page || esp->fat_page != page) {
@@ -108,7 +119,7 @@ static bool fat_entry(struct esp_inspection *esp, uint32_t cluster, uint32_t *va
       return false;
     }
     if (memcmp(esp->fat, mirror, length)) {
-      return refuse(esp, "ESP FAT copies disagree");
+      return rebuild(esp, "ESP FAT copies disagree");
     }
     esp->fat_page = page;
     esp->have_fat_page = true;
@@ -153,27 +164,29 @@ static bool read_metadata(struct esp_inspection *esp)
       (uint64_t)sectors * sector_bytes != esp->layout->esp_bytes || !fat_sectors ||
       esp->data_offset >= esp->layout->esp_bytes || !fsinfo || !backup_sector ||
       fsinfo == backup_sector || (uint64_t)fsinfo + backup_sector >= reserved) {
-    return refuse(esp, "ESP has unsupported or damaged FAT32 geometry");
+    return rebuild(esp, "ESP has unsupported or damaged FAT32 geometry");
   }
   esp->clusters = (esp->layout->esp_bytes - esp->data_offset) / ESP_CLUSTER_BYTES;
   esp->root = get32(boot + 44);
   if (esp->clusters < ESP_MIN_CLUSTERS ||
       (uint64_t)(esp->clusters + 2) * 4 > esp->fat_bytes || !valid_cluster(esp, esp->root)) {
-    return refuse(esp, "ESP has invalid FAT32 cluster bounds");
+    return rebuild(esp, "ESP has invalid FAT32 cluster bounds");
   }
+  /* Valid primary bounds allow binding inspection despite damaged backup or
+   * allocation metadata. Neither can hide a readable foreign configuration. */
   if (!read_bytes(esp, (uint64_t)backup_sector * sector_bytes, backup, sector_bytes)) {
     return false;
   }
   /* Boot code, OEM strings and serials do not establish installation identity. */
   if (get16(backup + 510) != ESP_BOOT_SIGNATURE || memcmp(boot + 11, backup + 11, 41)) {
-    return refuse(esp, "ESP backup boot geometry disagrees");
+    rebuild(esp, "ESP backup boot geometry disagrees");
   }
   if (!read_bytes(esp, (uint64_t)fsinfo * sector_bytes, boot, sector_bytes) ||
       !read_bytes(esp, (uint64_t)(backup_sector + fsinfo) * sector_bytes, backup, sector_bytes)) {
     return false;
   }
   if (!fsinfo_valid(boot, esp->clusters) || !fsinfo_valid(backup, esp->clusters)) {
-    return refuse(esp, "ESP has damaged FAT32 allocation metadata");
+    rebuild(esp, "ESP has damaged FAT32 allocation metadata");
   }
   uint32_t media, reserved_entry;
   if (!fat_entry(esp, 0, &media) || !fat_entry(esp, 1, &reserved_entry)) {
@@ -181,7 +194,7 @@ static bool read_metadata(struct esp_inspection *esp)
   }
   if (media != (ESP_FAT_MASK & (UINT32_C(0xffffff00) | ESP_MEDIA)) ||
       reserved_entry < ESP_FAT_EOC_MIN) {
-    return refuse(esp, "ESP has damaged reserved FAT entries");
+    rebuild(esp, "ESP has damaged reserved FAT entries");
   }
   esp->seen = calloc(1, ((size_t)esp->clusters + 2 + 7) / 8);
   return esp->seen != NULL || refuse(esp, "ESP inspection allocation failed");
@@ -229,18 +242,18 @@ static bool read_long_name(struct esp_inspection *esp, const uint8_t *entry,
   };
   unsigned ordinal = entry[0] & ~ESP_LONG_LAST;
   if (entry[12] || get16(entry + 26) || !ordinal || ordinal > ESP_LONG_MAX_ENTRIES) {
-    return refuse(esp, "ESP boot directory has malformed long names");
+    return rebuild(esp, "ESP boot directory has malformed long names");
   }
   if (entry[0] & ESP_LONG_LAST) {
     if (name->active) {
-      return refuse(esp, "ESP boot directory has overlapping long names");
+      return rebuild(esp, "ESP boot directory has overlapping long names");
     }
     *name = (struct esp_long_name){
       .remaining = ordinal, .checksum = entry[13], .active = true, .readable = ordinal == 1,
     };
   }
   if (!name->active || ordinal != name->remaining || entry[13] != name->checksum) {
-    return refuse(esp, "ESP boot directory has disordered long names");
+    return rebuild(esp, "ESP boot directory has disordered long names");
   }
   if (name->readable) {
     bool ended = false;
@@ -250,7 +263,7 @@ static bool read_long_name(struct esp_inspection *esp, const uint8_t *entry,
         ended = true;
       } else if (ended) {
         if (unit != UINT16_MAX) {
-          return refuse(esp, "ESP boot directory has malformed long names");
+          return rebuild(esp, "ESP boot directory has malformed long names");
         }
       } else if (unit < 32 || unit > 126) {
         name->readable = false;
@@ -279,7 +292,7 @@ static bool find_paths(struct esp_inspection *esp, uint32_t first,
       const uint8_t *entry = bytes + offset;
       if (!entry[0]) {
         if (name.active) {
-          return refuse(esp, "ESP boot directory has an unterminated long name");
+          return rebuild(esp, "ESP boot directory has an unterminated long name");
         }
         ended = true;
         break;
@@ -295,7 +308,7 @@ static bool find_paths(struct esp_inspection *esp, uint32_t first,
         continue;
       }
       if (name.active && (name.remaining || alias_checksum(entry) != name.checksum)) {
-        return refuse(esp, "ESP boot directory has a mismatched long name");
+        return rebuild(esp, "ESP boot directory has a mismatched long name");
       }
       for (size_t i = 0; i < count; ++i) {
         struct esp_path *path = &paths[i];
@@ -309,7 +322,10 @@ static bool find_paths(struct esp_inspection *esp, uint32_t first,
             !!(entry[11] & ESP_DIRECTORY) != path->directory ||
             (path->directory && size) ||
             ((path->directory || size) ? !valid_cluster(esp, start) : start != 0)) {
-          return refuse(esp, "ESP boot path is ambiguous or damaged");
+          path->found = true;
+          path->damaged = true;
+          rebuild(esp, "ESP boot path is ambiguous or damaged");
+          continue;
         }
         path->first = start;
         path->size = size;
@@ -326,11 +342,15 @@ static bool find_paths(struct esp_inspection *esp, uint32_t first,
     }
     cluster = next;
   }
-  return !name.active || refuse(esp, "ESP boot directory has an unterminated long name");
+  return !name.active || rebuild(esp, "ESP boot directory has an unterminated long name");
 }
 
-static bool read_file(struct esp_inspection *esp, const struct esp_path *path, void *output)
+static bool read_file(struct esp_inspection *esp, const struct esp_path *path,
+    void *output, bool *complete)
 {
+  if (complete) {
+    *complete = false;
+  }
   uint8_t bytes[ESP_CLUSTER_BYTES];
   uint8_t *destination = output;
   uint32_t cluster = path->first, remaining = path->size;
@@ -342,12 +362,15 @@ static bool read_file(struct esp_inspection *esp, const struct esp_path *path, v
     memcpy(destination, bytes, length);
     destination += length;
     remaining -= length;
+    if (complete && !remaining) {
+      *complete = true;
+    }
     uint32_t next;
     if (!fat_entry(esp, cluster, &next)) {
       return false;
     }
     if (remaining ? next >= ESP_FAT_EOC_MIN : next < ESP_FAT_EOC_MIN) {
-      return refuse(esp, "ESP boot file size disagrees with its FAT chain");
+      return rebuild(esp, "ESP boot file size disagrees with its FAT chain");
     }
     cluster = next;
   }
@@ -374,7 +397,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
     while (end < size && bytes[end] != '\n') {
       unsigned byte = (uint8_t)bytes[end++];
       if ((byte < 32 && byte != '\t' && byte != '\r') || byte > 126) {
-        return refuse(esp, "ESP boot configuration is not readable ASCII text");
+        rebuild(esp, "ESP boot configuration is not readable ASCII text");
       }
     }
     size_t cursor = offset;
@@ -401,7 +424,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
       size_t length = cursor - start;
       if (length >= 13 && !memcmp(bytes + start, "init.primary=", 13)) {
         if (primary_seen) {
-          return refuse(esp, "ESP boot configuration repeats init.primary");
+          rebuild(esp, "ESP boot configuration repeats init.primary");
         }
         primary_seen = true;
         installed = same_token(bytes + start, length, "init.primary=app://init-installed");
@@ -423,7 +446,10 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
     }
     normal |= installed && bound;
   }
-  return normal || refuse(esp, "ESP boot configuration lacks this disk's installed command line");
+  if (!normal) {
+    return rebuild(esp, "ESP boot configuration lacks this disk's installed command line");
+  }
+  return esp->state == INSTALL_ESP_VALID;
 }
 
 static void revision_text(const uint8_t *bytes, size_t size, char revision[64])
@@ -443,17 +469,20 @@ static void revision_text(const uint8_t *bytes, size_t size, char revision[64])
   revision[size] = '\0';
 }
 
-bool install_esp_inspect(const struct install_disk *disk,
+enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     const struct install_layout *layout, char revision[64], const char **reason)
 {
   strcpy(revision, "unknown");
   *reason = NULL;
-  struct esp_inspection esp = {.disk = disk, .layout = layout, .reason = reason};
+  struct esp_inspection esp = {
+    .disk = disk, .layout = layout, .reason = reason, .state = INSTALL_ESP_VALID,
+  };
   if ((disk->info.block_size != 512 && disk->info.block_size != 4096) ||
       layout->esp_bytes != INSTALL_ESP_BYTES || layout->esp_start % disk->info.block_size ||
       layout->esp_start > disk->bytes || layout->esp_bytes > disk->bytes - layout->esp_start ||
       layout->esp_start / disk->info.block_size > UINT32_MAX) {
-    return refuse(&esp, "ESP extent or logical-sector geometry is unsupported");
+    refuse(&esp, "ESP extent or logical-sector geometry is unsupported");
+    return esp.state;
   }
   bool success = read_metadata(&esp);
   struct esp_path boot = {.name = "boot", .alias = "BOOT       ", .directory = true};
@@ -462,23 +491,31 @@ bool install_esp_inspect(const struct install_disk *disk,
     {.name = "revision", .alias = "REVISION   "},
   };
   struct esp_path config = {.name = "limine.conf", .long_name_required = true};
+  /* A path found before later directory damage can still expose a foreign
+   * binding. Incomplete validation keeps its REBUILD diagnostic. */
   if (success) {
-    success = find_paths(&esp, esp.root, &boot, 1);
+    bool complete = find_paths(&esp, esp.root, &boot, 1);
+    success = esp.state != INSTALL_ESP_REFUSED && !boot.damaged &&
+        (complete || (esp.state == INSTALL_ESP_REBUILD && boot.found));
   }
   if (success && !boot.found) {
-    success = refuse(&esp, "ESP lacks the installed boot directory");
+    success = rebuild(&esp, "ESP lacks the installed boot directory");
   }
   if (success) {
-    success = find_paths(&esp, boot.first, children, 2);
+    bool complete = find_paths(&esp, boot.first, children, 2);
+    success = esp.state != INSTALL_ESP_REFUSED && !children[0].damaged &&
+        (complete || (esp.state == INSTALL_ESP_REBUILD && children[0].found));
   }
   if (success && !children[0].found) {
-    success = refuse(&esp, "ESP lacks the installed Limine directory");
+    success = rebuild(&esp, "ESP lacks the installed Limine directory");
   }
   if (success) {
-    success = find_paths(&esp, children[0].first, &config, 1);
+    bool complete = find_paths(&esp, children[0].first, &config, 1);
+    success = esp.state != INSTALL_ESP_REFUSED && !config.damaged &&
+        (complete || (esp.state == INSTALL_ESP_REBUILD && config.found));
   }
   if (success && (!config.found || !config.size || config.size > ESP_CONFIG_MAX_BYTES)) {
-    success = refuse(&esp, "ESP boot configuration is absent or exceeds the 64 KiB inspection limit");
+    success = rebuild(&esp, "ESP boot configuration is absent or exceeds the 64 KiB inspection limit");
   }
   char *configuration = NULL;
   if (success) {
@@ -486,15 +523,20 @@ bool install_esp_inspect(const struct install_disk *disk,
     success = configuration != NULL || refuse(&esp, "ESP inspection allocation failed");
   }
   if (success) {
-    success = read_file(&esp, &config, configuration) &&
-        configuration_matches(&esp, configuration, config.size);
+    bool complete;
+    success = read_file(&esp, &config, configuration, &complete);
+    /* Complete successful data reads can still expose a foreign binding when
+     * the terminal FAT entry is damaged. Failed raw reads never qualify. */
+    if (complete && esp.state != INSTALL_ESP_REFUSED) {
+      success = configuration_matches(&esp, configuration, config.size);
+    }
   }
-  if (success && children[1].found) {
+  if (success && children[1].found && !children[1].damaged) {
     uint8_t bytes[ESP_REVISION_MAX_BYTES];
     if (children[1].size > sizeof(bytes)) {
-      success = refuse(&esp, "ESP revision record exceeds the 64-byte inspection limit");
+      success = rebuild(&esp, "ESP revision record exceeds the 64-byte inspection limit");
     } else {
-      success = read_file(&esp, &children[1], bytes);
+      success = read_file(&esp, &children[1], bytes, NULL);
       if (success) {
         revision_text(bytes, children[1].size, revision);
       }
@@ -502,5 +544,5 @@ bool install_esp_inspect(const struct install_disk *disk,
   }
   free(configuration);
   free(esp.seen);
-  return success;
+  return esp.state;
 }
