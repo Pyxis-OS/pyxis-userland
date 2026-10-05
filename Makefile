@@ -75,7 +75,6 @@ install: all
 	  done; \
 	  install -m 644 init/development.sh "$$staging/init"; \
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
-	  install -m 644 init/idle.sh "$$staging/init-idle"; \
 	  install -m 644 init/services.sh "$$staging/init-services"; \
 	  install -m 644 init/remote.sh "$$staging/init-remote"; \
 	  install -m 644 init/remote-services.sh "$$staging/init-remote-services"; \
