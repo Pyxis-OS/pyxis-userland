@@ -236,28 +236,11 @@ int launch_remote_server(const struct session_config *config,
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST), 0};
   }
 
-  size_t inherited = startup_environment_count();
-  if (inherited > SIZE_MAX / sizeof(*environment) - 2) {
-    fputs("session: remote environment too large\n", stderr);
-    goto done;
-  }
-  environment = malloc((inherited + 2) * sizeof(*environment));
-  if (!environment) {
-    fputs("session: cannot allocate remote environment\n", stderr);
-    goto done;
-  }
   size_t environment_count = 0;
-  const struct startup_variable *source = startup_environment_variables();
-  for (size_t i = 0; i < inherited; ++i) {
-    const char *name = (const char *)source[i].name;
-    if (strcmp(name, "TZ") && strcmp(name, "DNS_SERVER")) {
-      environment[environment_count++] = source[i];
-    }
+  environment = session_environment(config, network->dns_server, &environment_count);
+  if (!environment) {
+    goto done;
   }
-  environment[environment_count++] = (struct startup_variable){
-      (uintptr_t)"TZ", (uintptr_t)config->timezone};
-  environment[environment_count++] = (struct startup_variable){
-      (uintptr_t)"DNS_SERVER", (uintptr_t)network->dns_server};
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
   const char *arguments[] = {"app://remote-terminal.pxe", tab_width};
