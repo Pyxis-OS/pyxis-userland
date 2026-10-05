@@ -66,22 +66,25 @@ static int launch_session(const struct session_config *config, const struct netw
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
-  size_t inherited = startup_environment_count();
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
       STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT;
   if (root_count > STARTUP_ROOT_LIMIT ||
-      depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
-      inherited > SIZE_MAX / sizeof(struct startup_variable) - 2) {
+      depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants) {
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
   struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
-  struct startup_variable *environment = malloc((inherited + 2) * sizeof(*environment));
+  size_t environment_count = 0;
+  struct startup_variable *environment =
+      session_environment(config, network->dns_server, &environment_count);
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
-  if (!grants || (depth && !directories) || !environment) {
+  if (!environment) {
+    goto done;
+  }
+  if (!grants || (depth && !directories)) {
     fputs("session: cannot allocate launch metadata\n", stderr);
     goto done;
   }
@@ -252,20 +255,6 @@ static int launch_session(const struct session_config *config, const struct netw
     }
   }
 
-  size_t environment_count = 0;
-  const struct startup_variable *source = startup_environment_variables();
-  for (size_t i = 0; i < inherited; ++i) {
-    const char *name = (const char *)source[i].name;
-    if (strcmp(name, "TZ") && strcmp(name, "DNS_SERVER")) {
-      environment[environment_count++] = source[i];
-    }
-  }
-  environment[environment_count++] = (struct startup_variable){
-    (uintptr_t)"TZ", (uintptr_t)config->timezone,
-  };
-  environment[environment_count++] = (struct startup_variable){
-    (uintptr_t)"DNS_SERVER", (uintptr_t)network->dns_server,
-  };
   const char *arguments[] = {image_uri};
   struct launch_request request = {
     .image = image,
@@ -511,7 +500,7 @@ int main(int argc, char **argv)
   }
   struct network_config network;
   if (!network_config_read(&network)) {
-    free(config.timezone);
+    session_config_free(&config);
     return EXIT_FAILURE;
   }
   struct network_runtime runtime = {0};
@@ -525,7 +514,7 @@ int main(int argc, char **argv)
     result = launch_session(&config, &network, &runtime, configure_network,
         start_services, start_remote_services);
   }
-  free(config.timezone);
+  session_config_free(&config);
   result = finish_network(&network, &runtime, result);
   network_config_free(&network);
   return result;

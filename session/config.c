@@ -5,14 +5,96 @@
 #include <string.h>
 #include <lua.h>
 #include <lauxlib.h>
+#include <startup.h>
 #include "../libconfig/config.h"
+
+static bool reserved_variable(const char *name)
+{
+  return !strcmp(name, "TZ") || !strcmp(name, "DNS_SERVER");
+}
+
+static bool valid_variable_name(const char *name, size_t length)
+{
+  if (!length || (name[0] >= '0' && name[0] <= '9')) {
+    return false;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    char c = name[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '_')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void read_environment(lua_State *state, struct session_config *config)
+{
+  config_field(state, 1, "environment");
+  if (lua_isnil(state, 2)) {
+    lua_pop(state, 1);
+    return;
+  }
+  if (lua_type(state, 2) != LUA_TTABLE) {
+    luaL_error(state, "environment must be a table of variables");
+  }
+  size_t count = 0;
+  lua_pushnil(state);
+  while (lua_next(state, 2)) {
+    size_t length;
+    if (lua_type(state, -2) != LUA_TSTRING) {
+      luaL_error(state, "environment keys must be variable names");
+    }
+    const char *name = lua_tolstring(state, -2, &length);
+    if (!valid_variable_name(name, length)) {
+      luaL_error(state, "invalid environment variable name '%s'", name);
+    }
+    if (reserved_variable(name)) {
+      luaL_error(state, "environment.%s is reserved for the timezone and network settings", name);
+    }
+    if (lua_type(state, -1) != LUA_TSTRING) {
+      luaL_error(state, "environment.%s must be a string", name);
+    }
+    const char *value = lua_tolstring(state, -1, &length);
+    if (strlen(value) != length) {
+      luaL_error(state, "environment.%s contains a NUL byte", name);
+    }
+    if (count == SIZE_MAX / sizeof(*config->environment)) {
+      luaL_error(state, "environment is too large");
+    }
+    ++count;
+    lua_pop(state, 1);
+  }
+  if (!count) {
+    lua_pop(state, 1);
+    return;
+  }
+
+  config->environment = calloc(count, sizeof(*config->environment));
+  if (!config->environment) {
+    luaL_error(state, "cannot allocate environment");
+  }
+  /* Entries were validated above; only allocation can fail from here. */
+  lua_pushnil(state);
+  while (lua_next(state, 2)) {
+    struct session_variable *variable = &config->environment[config->environment_count++];
+    variable->name = strdup(lua_tostring(state, -2));
+    variable->value = strdup(lua_tostring(state, -1));
+    if (!variable->name || !variable->value) {
+      luaL_error(state, "cannot allocate environment");
+    }
+    lua_pop(state, 1);
+  }
+  lua_pop(state, 1);
+}
 
 static int decode_config(lua_State *state)
 {
   struct session_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"timezone", "terminal"};
+  const char *keys[] = {"timezone", "terminal", "environment"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
+  read_environment(state, config);
 
   config_field(state, 1, "terminal");
   if (!lua_isnil(state, 2)) {
@@ -106,19 +188,78 @@ bool session_config_read(struct session_config *config)
   if (result == CONFIG_MISSING) {
     config->timezone = strdup("UTC");
   } else if (result == CONFIG_ERROR) {
-    free(config->timezone);
-    config->timezone = NULL;
+    session_config_free(config);
     return false;
   }
   if (!config->timezone) {
     fputs("session: cannot allocate timezone setting\n", stderr);
+    session_config_free(config);
     return false;
   }
   if (!check_timezone(config->timezone)) {
     fprintf(stderr, "session: unavailable or invalid timezone '%s'\n", config->timezone);
-    free(config->timezone);
-    config->timezone = NULL;
+    session_config_free(config);
     return false;
   }
   return true;
+}
+
+void session_config_free(struct session_config *config)
+{
+  for (size_t i = 0; i < config->environment_count; ++i) {
+    free(config->environment[i].name);
+    free(config->environment[i].value);
+  }
+  free(config->environment);
+  free(config->timezone);
+  *config = (struct session_config){0};
+}
+
+static bool configured_variable(const struct session_config *config, const char *name)
+{
+  for (size_t i = 0; i < config->environment_count; ++i) {
+    if (!strcmp(config->environment[i].name, name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+struct startup_variable *session_environment(const struct session_config *config,
+    const char *dns_server, size_t *count)
+{
+  size_t inherited = startup_environment_count();
+  size_t limit = SIZE_MAX / sizeof(struct startup_variable);
+  if (inherited > limit - 2 || config->environment_count > limit - 2 - inherited) {
+    fputs("session: environment too large\n", stderr);
+    return NULL;
+  }
+  struct startup_variable *environment =
+      malloc((inherited + config->environment_count + 2) * sizeof(*environment));
+  if (!environment) {
+    fputs("session: cannot allocate environment\n", stderr);
+    return NULL;
+  }
+
+  size_t used = 0;
+  const struct startup_variable *source = startup_environment_variables();
+  for (size_t i = 0; i < inherited; ++i) {
+    const char *name = (const char *)source[i].name;
+    if (!reserved_variable(name) && !configured_variable(config, name)) {
+      environment[used++] = source[i];
+    }
+  }
+  for (size_t i = 0; i < config->environment_count; ++i) {
+    environment[used++] = (struct startup_variable){
+      (uintptr_t)config->environment[i].name, (uintptr_t)config->environment[i].value,
+    };
+  }
+  environment[used++] = (struct startup_variable){
+    (uintptr_t)"TZ", (uintptr_t)config->timezone,
+  };
+  environment[used++] = (struct startup_variable){
+    (uintptr_t)"DNS_SERVER", (uintptr_t)dns_server,
+  };
+  *count = used;
+  return environment;
 }
