@@ -325,8 +325,6 @@ static enum command_result set_affinity(struct shell *shell, char **arguments, s
     return shell_error(shell, "shell: affinity: this space has already launched a program\n");
   case CALL_DENIED:
     return shell_error(shell, "shell: affinity: no authority, or a CPU outside the space's ceiling\n");
-  case CALL_UNAVAILABLE:
-    return shell_error(shell, "shell: affinity: CPU 0 runs no userspace on a multicore boot\n");
   case CALL_BAD_REQUEST:
     return shell_error(shell, "shell: affinity: empty set or a CPU this boot does not have\n");
   default:
