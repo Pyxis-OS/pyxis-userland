@@ -423,10 +423,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         ++cursor;
       }
       size_t length = cursor - start;
-      /* 0.0.1 installations used the CPU-indexed init grammar. Recognizing its
-       * token lets Update rewrite that ESP in the space grammar. */
-      if (same_token(bytes + start, length, "space.pyxis=app://init-installed") ||
-          same_token(bytes + start, length, "init.primary=app://init-installed")) {
+      if (same_token(bytes + start, length, "space.pyxis=app://init-installed")) {
         ++installed;
       }
       if (length >= 11 && !memcmp(bytes + start, "mount.disk=", 11)) {
