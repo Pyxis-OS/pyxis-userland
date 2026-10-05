@@ -1,6 +1,6 @@
 return {
   net0 = {
-    driver = "virtio",
+    select = "link",
     optional = true,
     dhcp = true,
   },

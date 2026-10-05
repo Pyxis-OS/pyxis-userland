@@ -35,7 +35,9 @@ static bool wait_for_address(handle_t authority, handle_t clock,
   for (;;) {
     struct net_config_reply snapshot;
     enum call_status status;
-    if (network->action == NETWORK_REPLACE) {
+    bool link_selection = network->action == NETWORK_REPLACE &&
+        network->selector.kind == NET_SELECT_LINKED_CONTROLLER;
+    if (network->action == NETWORK_REPLACE && !link_selection) {
       status = net_config_lookup(authority, &network->selector, &snapshot);
       if (status == CALL_NOT_FOUND) {
         fputs("session: selected remote network is absent\n", stderr);
@@ -74,17 +76,26 @@ static bool wait_for_address(handle_t authority, handle_t clock,
         fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
         return false;
       }
-      if (!(snapshot.flags & NET_CONFIG_BOUND)) {
+      if (!(snapshot.flags & NET_CONFIG_BOUND) && !link_selection) {
         fputs("session: remote network unavailable; net0 is unbound\n", stderr);
         return false;
       }
     }
     if (snapshot.flags & NET_CONFIG_BOUND) {
-      if (!(snapshot.flags & NET_CONFIG_PRESENT) || !(snapshot.flags & NET_CONFIG_READY)) {
+      if (!(snapshot.flags & NET_CONFIG_PRESENT)) {
         fputs("session: remote network unavailable\n", stderr);
         return false;
       }
-      if (snapshot.flags & NET_CONFIG_ASSIGNED) {
+      if (!(snapshot.flags & NET_CONFIG_READY)) {
+        bool pending;
+        if (!network_config_binding_pending(authority, &pending)) {
+          return false;
+        }
+        if (!pending) {
+          fputs("session: remote network unavailable\n", stderr);
+          return false;
+        }
+      } else if (snapshot.flags & NET_CONFIG_ASSIGNED) {
         *address = snapshot.address;
         return true;
       }
