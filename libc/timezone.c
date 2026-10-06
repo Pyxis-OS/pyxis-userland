@@ -17,6 +17,7 @@ enum tzif_count_offset {
 struct tz_footer {
   bool present, daylight, unspecified;
   long standard_offset, daylight_offset;
+  const char *standard_name, *daylight_name;
   struct tz_rule start, end;
 };
 
@@ -111,7 +112,8 @@ static bool ascii_letter(char c)
   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
-static bool read_name(const char **cursor, bool *unspecified)
+static bool read_name(const char **cursor, bool *unspecified,
+    const char **name, size_t *name_size)
 {
   bool quoted = consume(cursor, '<');
   const char *start = *cursor;
@@ -120,6 +122,8 @@ static bool read_name(const char **cursor, bool *unspecified)
     ++*cursor;
   }
   size_t length = (size_t)(*cursor - start);
+  *name = start;
+  *name_size = length;
   *unspecified = length == 3 && !memcmp(start, "-00", 3);
   return length >= 3 && (!quoted || consume(cursor, '>'));
 }
@@ -151,35 +155,46 @@ static bool read_rule(const char **cursor, char version, struct tz_rule *rule)
   return true;
 }
 
-static bool read_footer(const char *text, char version, struct tz_footer *future)
+static bool read_footer(char *text, char version, struct tz_footer *future)
 {
   if (!*text) {
     return true;
   }
   future->present = true;
+  const char *cursor = text;
+  size_t standard_size, daylight_size = 0;
   int offset;
-  if (!read_name(&text, &future->unspecified) || !read_offset(&text, 24, &offset)) {
+  if (!read_name(&cursor, &future->unspecified, &future->standard_name,
+      &standard_size) || !read_offset(&cursor, 24, &offset)) {
     return false;
   }
   /* POSIX footer offsets have the opposite sign from TZif and tm_gmtoff. */
   future->standard_offset = -offset;
-  if (!*text) {
+  if (!*cursor) {
+    text[future->standard_name - text + standard_size] = 0;
     return true;
   }
   bool unspecified;
-  if (!read_name(&text, &unspecified) || unspecified) {
+  if (!read_name(&cursor, &unspecified, &future->daylight_name,
+      &daylight_size) || unspecified) {
     return false;
   }
   future->daylight = true;
   future->daylight_offset = future->standard_offset + 3600;
-  if (*text != ',') {
-    if (!read_offset(&text, 24, &offset)) {
+  if (*cursor != ',') {
+    if (!read_offset(&cursor, 24, &offset)) {
       return false;
     }
     future->daylight_offset = -offset;
   }
-  return consume(&text, ',') && read_rule(&text, version, &future->start) &&
-      consume(&text, ',') && read_rule(&text, version, &future->end) && !*text;
+  if (!consume(&cursor, ',') || !read_rule(&cursor, version, &future->start) ||
+      !consume(&cursor, ',') || !read_rule(&cursor, version, &future->end) || *cursor) {
+    return false;
+  }
+  /* Parsing is complete before separators become designation terminators. */
+  text[future->standard_name - text + standard_size] = 0;
+  text[future->daylight_name - text + daylight_size] = 0;
+  return true;
 }
 
 static bool read_block(const unsigned char **cursor, size_t *remaining,
@@ -282,7 +297,7 @@ static bool read_tzif(struct timezone_data *zone, size_t size)
   }
   /* The validated final newline becomes the parser's bounded terminator. */
   zone->bytes[size - 1] = 0;
-  return read_footer((const char *)cursor + 1, version, &zone->future);
+  return read_footer((char *)cursor + 1, version, &zone->future);
 }
 
 static bool valid_zone_name(const char *name)
@@ -414,12 +429,14 @@ static int future_offset(const struct tz_footer *future, int64_t seconds,
   return 0;
 }
 
-int timezone_offset(int64_t seconds, long *offset, int *daylight)
+int timezone_offset(int64_t seconds, long *offset, int *daylight,
+    const char **designation)
 {
   const char *name = getenv("TZ");
   if (!name || !*name) {
     *offset = 0;
     *daylight = 0;
+    *designation = "UTC";
     return 0;
   }
   if ((!cached_zone.name || strcmp(name, cached_zone.name)) && load_zone(name)) {
@@ -429,7 +446,12 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight)
   size_t count = zone->transition_count;
   if (!count || seconds >= read_time(zone->transitions + (count - 1) * 8)) {
     if (zone->future.present) {
-      return future_offset(&zone->future, seconds, offset, daylight);
+      if (future_offset(&zone->future, seconds, offset, daylight)) {
+        return -1;
+      }
+      *designation = *daylight ? zone->future.daylight_name :
+          zone->future.standard_name;
+      return 0;
     }
     if (count) {
       errno = ENOTSUP;
@@ -456,5 +478,6 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight)
   }
   *offset = (int32_t)read_u32(type);
   *daylight = type[4];
+  *designation = (const char *)zone->names + type[5];
   return 0;
 }

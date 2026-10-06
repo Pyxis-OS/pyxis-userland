@@ -15,6 +15,9 @@ struct tz_rule {
 /* Calendar year is years since 1900, within int range plus neighboring years. */
 int __tz_year_for_secs(long long seconds, long long *year);
 long long __tz_rule_to_secs(const struct tz_rule *rule, long long year);
-int timezone_offset(int64_t seconds, long *offset, int *daylight);
+/* Designation borrows the cache until a successful selection reload or exit;
+ * default UTC borrows permanent storage. Outputs are usable only on success. */
+int timezone_offset(int64_t seconds, long *offset, int *daylight,
+    const char **designation);
 
 #endif

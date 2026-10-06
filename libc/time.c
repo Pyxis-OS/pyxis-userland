@@ -32,6 +32,16 @@ time_t time(time_t *result)
   return seconds;
 }
 
+double difftime(time_t end, time_t beginning)
+{
+  bool negative = end < beginning;
+  /* Unsigned subtraction represents even the full INT64_MIN..INT64_MAX span,
+   * and preserves small differences before conversion to double. */
+  uint64_t difference = negative ? (uint64_t)beginning - (uint64_t)end :
+      (uint64_t)end - (uint64_t)beginning;
+  return negative ? -(double)difference : (double)difference;
+}
+
 struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result)
 {
   if (!timer || !result) {
@@ -43,6 +53,7 @@ struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result)
     errno = EOVERFLOW;
     return NULL;
   }
+  converted.tm_zone = "UTC";
   *result = converted;
   return result;
 }
@@ -62,7 +73,8 @@ struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
   int saved_errno = errno;
   long offset;
   int daylight;
-  if (timezone_offset(*timer, &offset, &daylight)) {
+  const char *designation;
+  if (timezone_offset(*timer, &offset, &daylight, &designation)) {
     return NULL;
   }
   int64_t local;
@@ -74,6 +86,7 @@ struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
   }
   converted.tm_isdst = daylight;
   converted.tm_gmtoff = offset;
+  converted.tm_zone = designation;
   *result = converted;
   errno = saved_errno;
   return result;
