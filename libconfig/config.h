@@ -14,6 +14,11 @@ enum config_result { CONFIG_OK, CONFIG_MISSING, CONFIG_ERROR };
  * Errors are reported to stderr; a missing file is silent and distinct. */
 enum config_result config_read(const char *path, lua_CFunction decode, void *output);
 
+/* As config_read, for SIZE caller bytes already read through a capability.
+ * NAME labels errors only; the bytes are borrowed until return. */
+enum config_result config_read_bytes(const char *name, const char *bytes, size_t size,
+    lua_CFunction decode, void *output);
+
 /* Raw table access and allowed-key checks; each consumer supplies its keys. */
 void config_field(lua_State *state, int index, const char *key);
 void config_keys(lua_State *state, int index, const char *const *keys, size_t count);

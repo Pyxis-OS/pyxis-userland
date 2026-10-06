@@ -4,6 +4,7 @@
 #include <launcher.h>
 #include <path.h>
 #include <pxe/shebang.h>
+#include <space.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -192,6 +193,29 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
       &prepared, &scratch);
   if (status == CALL_OK) {
     status = launcher_launch(launcher, &prepared, child);
+  }
+  release_script(&scratch);
+  return status;
+}
+
+enum call_status program_create_space(handle_t factory, const struct space_definition *space,
+    const uint64_t *cpus, uint64_t cpu_count, const struct launch_request *request,
+    const struct path_context *interpreter_context, handle_t *child)
+{
+  if (!child) {
+    return CALL_BAD_REQUEST;
+  }
+  *child = HANDLE_INVALID;
+  if (!request) {
+    return CALL_BAD_REQUEST;
+  }
+
+  struct script_scratch scratch = {0};
+  struct launch_request prepared;
+  enum call_status status = prepare_program(request, interpreter_context,
+      &prepared, &scratch);
+  if (status == CALL_OK) {
+    status = space_create_started(factory, space, cpus, cpu_count, &prepared, child);
   }
   release_script(&scratch);
   return status;
