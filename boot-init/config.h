@@ -48,6 +48,7 @@ struct boot_space {
   size_t root_count;
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
+  bool launch;
 };
 
 /* One parsed file. Owns every string and array. */

@@ -43,7 +43,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[21];
+  struct launch_binding resources[22];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -126,6 +126,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     bool read_only, const struct network_environment *environment)
 {
   bool session = mode == SHELL_SESSION;
+  bool pass_child_launcher = session && shell->child_launcher != HANDLE_INVALID;
+  bool has_launcher = session ||
+      (mode == SHELL_FOREGROUND && shell->child_launcher != HANDLE_INVALID);
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
   bool device_input = named_input &&
@@ -152,7 +155,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 21 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 22 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -165,7 +168,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t keyboard_index = random_index + (has_random ? 1 : 0);
   size_t pointer_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = pointer_index + (has_pointer ? 1 : 0);
-  size_t net_config_index = launcher_index + (session ? 1 : 0);
+  size_t child_launcher_index = launcher_index + (has_launcher ? 1 : 0);
+  size_t net_config_index = child_launcher_index + (pass_child_launcher ? 1 : 0);
   size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
   size_t service_index = pipe_index + (has_pipe ? 1 : 0);
   size_t space_index = service_index + (has_service ? 1 : 0);
@@ -258,6 +262,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     grants[launcher_index] = (struct launch_grant){shell->launcher,
         rights & (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP), 0};
+  } else if (has_launcher) {
+    grants[launcher_index] = (struct launch_grant){shell->child_launcher,
+        LAUNCHER_RIGHT_LAUNCH, 0};
+  }
+  if (pass_child_launcher) {
+    grants[child_launcher_index] = (struct launch_grant){shell->child_launcher,
+        LAUNCHER_RIGHT_LAUNCH, 0};
   }
   if (has_terminal) {
     grants[terminal_index] = (struct launch_grant){shell->terminal_service, TERMINAL_SERVICE_RIGHT_CREATE, 0};
@@ -341,8 +352,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_pointer) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pointer", pointer_index};
   }
-  if (session) {
+  if (has_launcher) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"launcher", launcher_index};
+  }
+  if (pass_child_launcher) {
+    resources[resource_count++] =
+        (struct launch_binding){(uintptr_t)"child_launcher", child_launcher_index};
   }
   if (has_net_config) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", net_config_index};

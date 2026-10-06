@@ -67,7 +67,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 11, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 12, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
@@ -84,6 +84,25 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
+  handle_t child_launcher = startup_resource("child_launcher");
+  if (child_launcher != HANDLE_INVALID) {
+    struct handle_info info;
+    status = handle_query(child_launcher, &info);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    if (info.protocol != PROTOCOL_LAUNCHER) {
+      status = CALL_WRONG_TYPE;
+      goto done;
+    }
+    if (!(info.rights & LAUNCHER_RIGHT_LAUNCH)) {
+      status = CALL_DENIED;
+      goto done;
+    }
+    /* Session members can receive only launchers bound to this group. */
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t directory = SIZE_MAX;

@@ -87,6 +87,7 @@ int main(int argc, char **argv)
     .remote_prompt = remote_prompt,
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
+    .child_launcher = startup_resource("child_launcher"),
     .terminal_service = startup_resource("terminal"),
     .memory = startup_resource("memory"),
     .display = startup_resource("display"),

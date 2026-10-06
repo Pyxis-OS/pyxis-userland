@@ -313,9 +313,9 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT];
+  struct launch_binding resources[SERVICE_COUNT + 1];
   struct launch_binding *roots;
-  size_t grant_count, root_count;
+  size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
   char working_path[BOOT_NAME_MAX + sizeof("://")];
 };
@@ -340,7 +340,7 @@ static void select_start(const struct boot_space *space, struct space_launch *la
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 1, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -357,6 +357,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   launch->grants[GRANT_BIN] = (struct launch_grant){authority->bin, BOOT_ROOT_RIGHTS, 0};
   launch->roots[2] = (struct launch_binding){(uintptr_t)"bin", GRANT_BIN};
   launch->grant_count = GRANT_FIRST_VOLUME;
+  launch->resource_count = SERVICE_COUNT;
   launch->root_count = 3;
   for (size_t i = 0; i < space->root_count; ++i) {
     const struct boot_root *root = &space->roots[i];
@@ -379,6 +380,14 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
     launch->roots[launch->root_count++] =
         (struct launch_binding){(uintptr_t)root->volume, launch->grant_count++};
+  }
+  if (space->launch) {
+    /* Ordinary child launch is independent of init's administrative grant. */
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"child_launcher", launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
+    };
   }
   select_start(space, launch);
   return NULL;
@@ -426,7 +435,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     struct launch_request request = {
       .image = image,
       .grants = (uintptr_t)launch.grants, .grant_count = launch.grant_count,
-      .resources = (uintptr_t)launch.resources, .resource_count = SERVICE_COUNT,
+      .resources = (uintptr_t)launch.resources, .resource_count = launch.resource_count,
       .roots = (uintptr_t)launch.roots, .root_count = launch.root_count,
       .working_directories = (uintptr_t)&launch.working_directory,
       .working_directory_count = 1,

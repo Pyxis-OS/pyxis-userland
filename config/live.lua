@@ -8,7 +8,7 @@ return {
   },
   spaces = {
     { name = "development", title = "Development", init = "boot://init",
-      network = true,
+      network = true, launch = true,
       roots = { host = { access = "read-write", optional = true }, home = "read-write" } },
     { name = "readonly", title = "Read-only", init = "boot://init-readonly",
       roots = { host = { access = "read-only", optional = true }, home = "read-only" } },
