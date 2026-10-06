@@ -101,7 +101,7 @@ static enum call_status draw_line(struct line_editor *editor, bool editing, bool
 }
 
 static struct term_line_result read_line(struct terminal *term, const char *prompt,
-    const char *initial, char *buffer, size_t capacity, bool quiet)
+    const char *initial, char *buffer, size_t capacity, bool quiet, bool marked)
 {
   struct term_line_result result = {.status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST};
   if (!buffer || !capacity) {
@@ -166,6 +166,9 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   }
   memcpy(buffer, initial, initial_length + 1);
   result.error = draw_line(&editor, true, false);
+  if (result.error == CALL_OK && marked) {
+    result.error = term_print(term, "\x1b]133;B\a");
+  }
 
   while (result.error == CALL_OK) {
     unsigned key;
@@ -261,15 +264,15 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 /* Ctrl+C belongs to the editor only while a line is being read; code the
  * application runs between lines stays interruptible. */
 static struct term_line_result read_line_passthrough(struct terminal *term,
-    const char *prompt, const char *initial, char *buffer, size_t capacity, bool quiet)
+    const char *prompt, const char *initial, char *buffer, size_t capacity, bool quiet, bool marked)
 {
   /* Invalid arguments keep read_line's handled BAD_REQUEST result. */
   if (!term || !prompt || !buffer || !capacity) {
-    return read_line(term, prompt, initial, buffer, capacity, quiet);
+    return read_line(term, prompt, initial, buffer, capacity, quiet, marked);
   }
   handle_t passthrough;
   bool held = term_passthrough(term, &passthrough) == CALL_OK;
-  struct term_line_result result = read_line(term, prompt, initial, buffer, capacity, quiet);
+  struct term_line_result result = read_line(term, prompt, initial, buffer, capacity, quiet, marked);
   if (held && handle_close(passthrough) != 0) {
     /* A retained grant would keep Ctrl+C from interrupting this program. */
     result = (struct term_line_result){.status = TERM_LINE_ERROR, .error = CALL_BAD_HANDLE};
@@ -283,17 +286,23 @@ static struct term_line_result read_line_passthrough(struct terminal *term,
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", buffer, capacity, false);
+  return read_line_passthrough(term, prompt, "", buffer, capacity, false, false);
 }
 
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", buffer, capacity, true);
+  return read_line_passthrough(term, prompt, "", buffer, capacity, true, false);
 }
 
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, initial, buffer, capacity, false);
+  return read_line_passthrough(term, prompt, initial, buffer, capacity, false, false);
+}
+
+struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
+    char *buffer, size_t capacity)
+{
+  return read_line_passthrough(term, prompt, "", buffer, capacity, false, true);
 }

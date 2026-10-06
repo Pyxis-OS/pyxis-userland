@@ -56,6 +56,11 @@ ownership and result mappings are described in [libhttp/http.h](libhttp/http.h).
 The library loads no trust or startup resources. `httpfs --https` owns its ready
 TLS runtime and loads the packaged public roots before publication.
 
+The remote server selects `shell --remote-prompt` for its normal root shell.
+Its opt-in `term_read_line_marked` editor writes OSC 133;B after drawing each
+empty prompt, before reading input. Quiet shells and ordinary callers keep their
+existing output behavior; shell children do not inherit this option.
+
 The Pyxis parent repository pins this repository as its `userspace` submodule
 and orchestrates header export, runtime build, SDK assembly, application build
 and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
