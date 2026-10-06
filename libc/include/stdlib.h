@@ -25,6 +25,15 @@ void *realloc(void *pointer, size_t size);
 /* Borrowed immutable startup value; do not modify or free the result. */
 char *getenv(const char *name);
 
+/* Replace the final six Xs with random filename characters and exclusively
+ * create an empty read/write file; the returned descriptor owns its handle.
+ * Resolve paths like fopen, using existing directory authority and native
+ * creation policy (no Unix permission modes). Native random and clock required.
+ * At most 128 candidate attempts; no existing name is opened or truncated.
+ * Failure returns -1 with errno and unspecified template contents; uncertain
+ * native creation may leave a file. Success preserves errno. */
+int mkstemp(char *template);
+
 /* The absolute value must be representable as int (INT_MIN is excluded). */
 int abs(int value);
 

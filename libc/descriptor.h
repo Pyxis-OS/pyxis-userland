@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 
 struct descriptor_mode {
-  bool readable, writable, append, create, truncate;
+  bool readable, writable, append, create, truncate, exclusive;
 };
 
 /* Entries own their native handle and cursor. A FILE association owns neither;
@@ -17,6 +17,11 @@ struct descriptor_mode {
 void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
+/* Reserve before exclusive creation, remove the name through the held parent,
+ * then publish the FILE association. Parent has CREATE/REMOVE and file rights. */
+int descriptor_tmpfile(FILE *stream, handle_t parent);
+/* Borrow the actual associated handle; never changes input, position or flags. */
+int descriptor_stream(FILE *stream, struct startup_stream *binding);
 bool descriptor_ready(int descriptor, bool writing);
 int descriptor_close(int descriptor);
 void descriptor_finish(void);
@@ -49,6 +54,11 @@ void descriptor_discard_input(int descriptor);
 /* Return one owned file handle. Allocates path workspace; never truncates. */
 enum call_status file_open_path(const char *path, uint64_t rights,
                                bool create, handle_t *handle);
+enum call_status file_create_path(const char *path, uint64_t rights, handle_t *handle);
+/* Six random filename bytes, no terminator. Native random and clock required. */
+#define TEMPORARY_NAME_LENGTH 6
+#define TEMPORARY_CREATE_ATTEMPTS 128
+enum call_status file_temporary_name(char *suffix);
 /* Return one owned directory handle with exactly rights, resolved like a file. */
 enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle);
 

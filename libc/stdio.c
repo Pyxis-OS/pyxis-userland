@@ -1,9 +1,13 @@
+#include <abi/directory.h>
 #include <errno.h>
+#include <handle.h>
 #include <limits.h>
 #include <stdint.h>
+#include <pyxis/stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "descriptor.h"
+#include "errors.h"
 #include "runtime.h"
 #include "stream.h"
 
@@ -97,6 +101,66 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
   }
   register_stream(stream);
   return stream;
+}
+
+FILE *tmpfile(void)
+{
+  int saved_errno = errno;
+  FILE *stream = malloc(sizeof(*stream));
+  if (!stream) {
+    return NULL;
+  }
+  *stream = (FILE){.descriptor = -1, .allocated = true};
+  handle_t parent;
+  uint64_t rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
+      DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
+  /* Resolve an owned parent with removal authority before any creation. */
+  enum call_status status = directory_open_path("tmp://", rights, &parent);
+  if (status != CALL_OK) {
+    free(stream);
+    errno = libc_call_errno(status);
+    return NULL;
+  }
+  int descriptor = descriptor_tmpfile(stream, parent);
+  int error = errno;
+  handle_close(parent);
+  if (descriptor < 0) {
+    free(stream);
+    errno = error;
+    return NULL;
+  }
+  register_stream(stream);
+  errno = saved_errno;
+  return stream;
+}
+
+int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding)
+{
+  if (!binding) {
+    errno = EINVAL;
+    return -1;
+  }
+  *binding = (struct startup_stream){
+    .protocol = STARTUP_STREAM_NONE, .handle = HANDLE_INVALID,
+  };
+  if (!stream) {
+    errno = EINVAL;
+    return -1;
+  }
+  bool standard = stream == &standard_input || stream == &standard_output ||
+      stream == &standard_error;
+  if (standard && stream->descriptor < 0) {
+    return 0;
+  }
+  FILE *current = streams;
+  while (current && current != stream) {
+    current = current->next;
+  }
+  if (!current || current->closed) {
+    errno = EBADF;
+    return -1;
+  }
+  return descriptor_stream(current, binding);
 }
 
 int fflush(FILE *stream)
