@@ -99,6 +99,8 @@ struct authority {
   handle_t boot, tmp;
   /* The running revision's program directory, or the archive itself. */
   handle_t bin;
+  /* A private RAM directory; each ram volume is one of its subdirectories. */
+  handle_t ram;
   handle_t native_mount, host_mount;
   uint64_t cpu_count;
 };
@@ -120,6 +122,7 @@ static bool take_authority(struct authority *authority)
   authority->factory = startup_resource("space_factory");
   authority->boot = startup_root("boot");
   authority->tmp = startup_root("tmp");
+  authority->ram = startup_resource("ram");
   authority->native_mount = startup_resource("native_mount");
   authority->host_mount = startup_resource("host_mount");
   bool complete = authority->factory != HANDLE_INVALID &&
@@ -148,9 +151,27 @@ static uint64_t observe_rights(handle_t mount)
       DIRECTORY_RIGHT_FILESYSTEM_INFO : 0;
 }
 
+/* RAM volumes are named subdirectories of boot init's RAM directory, so
+ * spaces granted one cannot reach the others. */
+static enum call_status open_ram_volume(handle_t ram, const char *name, handle_t *root)
+{
+  if (ram == HANDLE_INVALID) {
+    return CALL_UNAVAILABLE;
+  }
+  enum call_status status = directory_create(ram, name, DIRECTORY_KIND_DIRECTORY,
+      TMP_ROOT_RIGHTS, root);
+  if (status == CALL_ALREADY_EXISTS) {
+    status = directory_lookup(ram, name, DIRECTORY_KIND_DIRECTORY, TMP_ROOT_RIGHTS, root);
+  }
+  return status;
+}
+
 static enum call_status mount_volume(const struct authority *authority,
     const struct boot_volume *volume, bool read_write, handle_t *root)
 {
+  if (volume->kind == BOOT_VOLUME_RAM) {
+    return open_ram_volume(authority->ram, volume->name, root);
+  }
   if (volume->kind == BOOT_VOLUME_VIRTIO_FS) {
     if (authority->host_mount == HANDLE_INVALID) {
       return CALL_UNAVAILABLE;
@@ -296,7 +317,25 @@ struct space_launch {
   struct launch_binding *roots;
   size_t grant_count, root_count;
   uint64_t working_directory;
+  char working_path[BOOT_NAME_MAX + sizeof("://")];
 };
+
+/* Starts SPACE in the root its start names, or home. When that root is absent,
+ * as for an optional root or a space without home, it starts in tmp. */
+static void select_start(const struct boot_space *space, struct space_launch *launch)
+{
+  const char *start = space->start ? space->start : BOOT_HOME_ROOT;
+  for (size_t i = 0; i < launch->root_count; ++i) {
+    if (!strcmp((const char *)(uintptr_t)launch->roots[i].name, start)) {
+      launch->working_directory = launch->roots[i].grant;
+      snprintf(launch->working_path, sizeof(launch->working_path), "%s://", start);
+      return;
+    }
+  }
+  printf("boot-init: space %s has no %s://; it starts in tmp://\n", space->name, start);
+  launch->working_directory = GRANT_TMP;
+  snprintf(launch->working_path, sizeof(launch->working_path), "tmp://");
+}
 
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
@@ -319,7 +358,6 @@ static const char *build_launch(const struct authority *authority, struct mounts
   launch->roots[2] = (struct launch_binding){(uintptr_t)"bin", GRANT_BIN};
   launch->grant_count = GRANT_FIRST_VOLUME;
   launch->root_count = 3;
-  launch->working_directory = GRANT_TMP;
   for (size_t i = 0; i < space->root_count; ++i) {
     const struct boot_root *root = &space->roots[i];
     struct mounted_volume *mounted = find_mount(mounts, root->volume);
@@ -342,6 +380,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->roots[launch->root_count++] =
         (struct launch_binding){(uintptr_t)root->volume, launch->grant_count++};
   }
+  select_start(space, launch);
   return NULL;
 }
 
@@ -391,7 +430,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
       .roots = (uintptr_t)launch.roots, .root_count = launch.root_count,
       .working_directories = (uintptr_t)&launch.working_directory,
       .working_directory_count = 1,
-      .working_path = (uintptr_t)"tmp://",
+      .working_path = (uintptr_t)launch.working_path,
       .environment = (uintptr_t)environment, .environment_count = 1,
       .argv = (uintptr_t)arguments, .argc = 1,
     };
@@ -459,7 +498,7 @@ static void bind_bin(struct authority *authority, const struct boot_plan *plan, 
 static void start_rescue(const struct authority *authority, struct mounts *mounts)
 {
   static const struct boot_space rescue = {
-    .name = "rescue", .title = "Rescue", .init = RESCUE_INIT,
+    .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp",
   };
   puts("boot-init: no configured space started; starting the rescue space");
   start_space(authority, mounts, &rescue);

@@ -16,10 +16,13 @@
 #define BOOT_CPU_INDEX_MAX 4095
 /* The volume the pool override lives on; an override cannot redefine it. */
 #define BOOT_SYSTEM_VOLUME "system"
+/* Spaces start in this root unless they name another with start. */
+#define BOOT_HOME_ROOT "home"
 
 enum boot_volume_kind {
   BOOT_VOLUME_NPFS,
   BOOT_VOLUME_VIRTIO_FS,
+  BOOT_VOLUME_RAM,
 };
 
 struct boot_volume {
@@ -43,6 +46,7 @@ struct boot_space {
   size_t cpu_count;
   struct boot_root *roots;
   size_t root_count;
+  char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
 };
 
@@ -79,11 +83,13 @@ void boot_config_free(struct boot_config *config);
 /* Builds the plan for DEFAULTS and an optional OVERRIDE. An override entry
  * replaces a default of the same name whole; new names follow the defaults.
  * Then checks what spans entries: the override cannot redefine the system
- * volume, roots must name defined volumes and at most one space may own the
- * network. False reports the reason on stderr and leaves PLAN empty. */
+ * volume, roots must name defined volumes, start must name one of its space's
+ * roots and at most one space may own the network. False reports the reason on stderr and leaves PLAN empty. */
 bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
     struct boot_plan *plan);
 void boot_plan_free(struct boot_plan *plan);
 const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const char *name);
+/* True for the boot, tmp and bin roots and the space's configured roots. */
+bool boot_space_has_root(const struct boot_space *space, const char *name);
 
 #endif

@@ -33,7 +33,7 @@ static bool printable(const char *text, size_t length)
 /* Every root a space receives from boot init, besides configured volumes. */
 static bool reserved_volume(const char *name)
 {
-  return !strcmp(name, "boot") || !strcmp(name, "tmp");
+  return !strcmp(name, "boot") || !strcmp(name, "tmp") || !strcmp(name, "bin");
 }
 
 /* Boot init's fallback space and Caelum's own space use these names. */
@@ -108,18 +108,20 @@ static void read_volume(lua_State *state, struct boot_volume *volume)
   config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
   config_field(state, -1, "kind");
   char *kind = take_string(state, -1, 1, 16, "volume kind");
-  bool npfs = !strcmp(kind, "npfs"), virtio_fs = !strcmp(kind, "virtio-fs");
+  bool npfs = !strcmp(kind, "npfs"), virtio_fs = !strcmp(kind, "virtio-fs"),
+      ram = !strcmp(kind, "ram");
   free(kind);
   lua_pop(state, 1);
-  if (!npfs && !virtio_fs) {
-    luaL_error(state, "volume %s: kind must be \"npfs\" or \"virtio-fs\"", volume->name);
+  if (!npfs && !virtio_fs && !ram) {
+    luaL_error(state, "volume %s: kind must be \"npfs\", \"virtio-fs\" or \"ram\"",
+        volume->name);
   }
-  volume->kind = npfs ? BOOT_VOLUME_NPFS : BOOT_VOLUME_VIRTIO_FS;
+  volume->kind = npfs ? BOOT_VOLUME_NPFS : virtio_fs ? BOOT_VOLUME_VIRTIO_FS : BOOT_VOLUME_RAM;
   config_field(state, -1, "partition");
   config_field(state, -2, "volume");
-  if (virtio_fs) {
+  if (!npfs) {
     if (!lua_isnil(state, -2) || !lua_isnil(state, -1)) {
-      luaL_error(state, "volume %s: a virtio-fs export has no partition or volume",
+      luaL_error(state, "volume %s: only npfs volumes have a partition or volume",
           volume->name);
     }
   } else {
@@ -154,7 +156,7 @@ static void read_volumes(lua_State *state, struct boot_config *config)
         lua_tolstring(state, -2, &length) : NULL;
     if (!name || !valid_name(name, length) || reserved_volume(name)) {
       luaL_error(state, "volume names must be 1 to %d of a-z, 0-9 and '-', "
-          "other than boot and tmp", BOOT_NAME_MAX);
+          "other than boot, tmp and bin", BOOT_NAME_MAX);
     }
     if (lua_type(state, -1) != LUA_TTABLE) {
       luaL_error(state, "volume %s must be a table", name);
@@ -251,7 +253,8 @@ static void read_roots(lua_State *state, struct boot_space *space)
 
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
-  static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "network"};
+  static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
+    "network"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -290,6 +293,14 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
   config_field(state, -1, "roots");
   if (!lua_isnil(state, -1)) {
     read_roots(state, space);
+  }
+  lua_pop(state, 1);
+  config_field(state, -1, "start");
+  if (!lua_isnil(state, -1)) {
+    space->start = take_string(state, -1, 1, BOOT_NAME_MAX, "start");
+    if (!valid_name(space->start, strlen(space->start))) {
+      luaL_error(state, "space %s: start must name a root", space->name);
+    }
   }
   lua_pop(state, 1);
   config_field(state, -1, "network");
@@ -362,6 +373,7 @@ void boot_config_free(struct boot_config *config)
       free(space->roots[j].volume);
     }
     free(space->roots);
+    free(space->start);
     free(space->cpus);
     free(space->init);
     free(space->title);
@@ -392,6 +404,19 @@ static const struct boot_space *plan_space(const struct boot_plan *plan, const c
     }
   }
   return NULL;
+}
+
+bool boot_space_has_root(const struct boot_space *space, const char *name)
+{
+  if (reserved_volume(name)) {
+    return true;
+  }
+  for (size_t i = 0; i < space->root_count; ++i) {
+    if (!strcmp(space->roots[i].volume, name)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void boot_plan_free(struct boot_plan *plan)
@@ -459,6 +484,9 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       if (!boot_plan_volume(plan, space->roots[j].volume)) {
         return plan_fail(plan, "a root names undefined volume %s", space->roots[j].volume);
       }
+    }
+    if (space->start && !boot_space_has_root(space, space->start)) {
+      return plan_fail(plan, "space %s starts in a root it does not have", space->name);
     }
     if (space->network && owner) {
       return plan_fail(plan, "more than one space sets network = true, including %s",
