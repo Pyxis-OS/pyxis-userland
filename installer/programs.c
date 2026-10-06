@@ -317,10 +317,15 @@ static enum call_status open_bin(const struct install_disk *disk, handle_t *root
   enum call_status status = disk_create_volume(disk->handle, INSTALL_POOL_PARTITION,
       INSTALL_BIN_VOLUME);
   if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
+    fprintf(stderr, "installer: cannot create the bin volume (status %u)\n", status);
     return status;
   }
-  return disk_open_volume(disk->handle, INSTALL_POOL_PARTITION, INSTALL_BIN_VOLUME,
+  status = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION, INSTALL_BIN_VOLUME,
       BIN_RIGHTS, root);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: cannot open the bin volume (status %u)\n", status);
+  }
+  return status;
 }
 
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
