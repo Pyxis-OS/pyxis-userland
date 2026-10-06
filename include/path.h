@@ -76,6 +76,13 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
 enum call_status path_open_file(const struct path_context *context, const char *path,
     uint64_t rights, bool create, struct path_workspace *workspace, handle_t *handle);
 
+/* Exclusive empty-file creation through the resolved parent's CREATE right.
+ * An existing name returns ALREADY_EXISTS, never opens or truncates it.
+ * Provider routes cannot create files; trailing / and final . or .. fail.
+ * No allocation; owned output and scratch lifetime follow path_resolve(). */
+enum call_status path_create_file(const struct path_context *context, const char *path,
+    uint64_t rights, struct path_workspace *workspace, handle_t *handle);
+
 /* Resolve the parent and remove its final component in one directory operation.
  * kind is FILE, DIRECTORY or ANY. A trailing / requires DIRECTORY; a FILE
  * request with trailing / fails. Roots and final . or .. cannot be removed.

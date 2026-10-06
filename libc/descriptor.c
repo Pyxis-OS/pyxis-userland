@@ -2,6 +2,7 @@
 #include <abi/file.h>
 #include <abi/pipe.h>
 #include <console.h>
+#include <directory.h>
 #include <errno.h>
 #include <file.h>
 #include <limits.h>
@@ -129,7 +130,8 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
   uint64_t position = 0;
   uint64_t rights = (mode->readable ? FILE_RIGHT_READ : 0) |
                     (mode->writable ? FILE_RIGHT_WRITE : 0);
-  enum call_status status = file_open_path(path, rights, mode->create, &handle);
+  enum call_status status = mode->exclusive ? file_create_path(path, rights, &handle) :
+      file_open_path(path, rights, mode->create, &handle);
   if (status == CALL_OK && mode->append && !mode->readable) {
     status = file_size(handle, &position);
   }
@@ -155,6 +157,64 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
     stream->descriptor = descriptor;
   }
   return descriptor;
+}
+
+int descriptor_tmpfile(FILE *stream, handle_t parent)
+{
+  int descriptor = reserve();
+  if (descriptor < 0) {
+    return -1;
+  }
+  char name[] = "tmp_XXXXXX";
+  handle_t handle = HANDLE_INVALID;
+  enum call_status status = CALL_ALREADY_EXISTS;
+  for (int attempt = 0; attempt < TEMPORARY_CREATE_ATTEMPTS; ++attempt) {
+    status = file_temporary_name(name + sizeof(name) - 1 - TEMPORARY_NAME_LENGTH);
+    if (status != CALL_OK) {
+      break;
+    }
+    status = directory_create(parent, name, DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ | FILE_RIGHT_WRITE, &handle);
+    if (status != CALL_ALREADY_EXISTS) {
+      break;
+    }
+  }
+  if (status == CALL_OK) {
+    /* No allocation or path re-resolution after mutation: the original parent
+     * is held throughout creation/removal, and the open file survives removal. */
+    status = directory_remove(parent, name, DIRECTORY_KIND_FILE);
+  }
+  if (status != CALL_OK) {
+    int error = libc_call_errno(status);
+    if (handle != HANDLE_INVALID) {
+      release_handle(handle);
+    }
+    entries[descriptor] = (struct descriptor_entry){0};
+    return fail(error);
+  }
+  entries[descriptor] = (struct descriptor_entry){
+    .state = DESCRIPTOR_OPEN, .kind = DESCRIPTOR_FILE, .handle = handle,
+    .readable = true, .writable = true, .stream = stream,
+  };
+  stream->descriptor = descriptor;
+  return descriptor;
+}
+
+int descriptor_stream(FILE *stream, struct startup_stream *binding)
+{
+  struct descriptor_entry *entry = lookup(stream->descriptor);
+  if (!entry) {
+    return -1;
+  }
+  if (entry->stream != stream) {
+    return fail(EBADF);
+  }
+  *binding = (struct startup_stream){
+    .protocol = entry->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
+        entry->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE : PROTOCOL_CONSOLE,
+    .handle = entry->handle,
+  };
+  return 0;
 }
 
 bool descriptor_ready(int descriptor, bool writing)

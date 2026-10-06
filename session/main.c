@@ -62,7 +62,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 16, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 17, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -116,6 +116,11 @@ static int launch_session(const struct session_config *config, const struct netw
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
+  handle_t child_launcher = startup_resource("child_launcher");
+  if (child_launcher != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
   handle_t display = startup_resource("display");
   if (display != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", grant_count};

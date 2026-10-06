@@ -149,7 +149,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, LISTENER, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 10, RESOURCE_CAPACITY = 14 };
+  enum { OPTIONAL_COUNT = 11, RESOURCE_CAPACITY = 15 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -188,6 +188,11 @@ int launch_remote_server(const struct session_config *config,
     goto done;
   }
 
+  handle_t child_launcher = startup_resource("child_launcher");
+  if (child_launcher != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
   handle_t system_info = startup_resource("system_info");
   if (system_info != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};

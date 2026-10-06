@@ -28,6 +28,11 @@ extern FILE *stderr;
  * descriptors adopt exclusive startup handles once. No fdopen/fileno, setvbuf,
  * freopen or wide I/O here. */
 FILE *fopen(const char *restrict path, const char *restrict mode);
+/* Open an exclusive read/write file under tmp:// and remove its name before
+ * return. Requires native random/clock and tmp CREATE/REMOVE/file READ/WRITE.
+ * Removal authority is checked before creation. Failure returns NULL with errno;
+ * failed or uncertain native creation/removal may leave a named file. */
+FILE *tmpfile(void);
 int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
  * streams keep their object; roots and final . or .. are not removable. */

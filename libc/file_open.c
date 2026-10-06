@@ -1,7 +1,9 @@
 #include <abi/file.h>
+#include <clock.h>
 #include <errno.h>
 #include <handle.h>
 #include <path.h>
+#include <random.h>
 #include <startup.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,9 +12,11 @@
 #include "descriptor.h"
 #include "errors.h"
 
+#define TEMPORARY_ALPHABET_MASK 63
+
 /* Shared by file opens and metadata queries: create applies only to files. */
 static enum call_status open_path(const char *path, uint64_t kind, uint64_t rights,
-                                  bool create, handle_t *handle)
+                                  bool create, bool exclusive, handle_t *handle)
 {
   *handle = HANDLE_INVALID;
   if (!path || !*path) {
@@ -40,9 +44,14 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   struct path_context context = {
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };
-  enum call_status status = kind == DIRECTORY_KIND_FILE ?
-      path_open_file(&context, path, rights, create, &workspace, handle) :
-      path_resolve(&context, path, kind, rights, &workspace, handle);
+  enum call_status status;
+  if (exclusive) {
+    status = path_create_file(&context, path, rights, &workspace, handle);
+  } else if (kind == DIRECTORY_KIND_FILE) {
+    status = path_open_file(&context, path, rights, create, &workspace, handle);
+  } else {
+    status = path_resolve(&context, path, kind, rights, &workspace, handle);
+  }
   free(component);
   free(directories);
   return status;
@@ -51,12 +60,80 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
 enum call_status file_open_path(const char *path, uint64_t rights,
                                bool create, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_FILE, rights, create, handle);
+  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, handle);
+}
+
+enum call_status file_create_path(const char *path, uint64_t rights, handle_t *handle)
+{
+  return open_path(path, DIRECTORY_KIND_FILE, rights, true, true, handle);
 }
 
 enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, handle);
+  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, false, handle);
+}
+
+enum call_status file_temporary_name(char *suffix)
+{
+  handle_t clock = startup_resource("clock");
+  handle_t random = startup_resource("random");
+  if (clock == HANDLE_INVALID || random == HANDLE_INVALID) {
+    return CALL_UNAVAILABLE;
+  }
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (now > UINT64_MAX - RANDOM_MAX_WAIT_NS) {
+    return CALL_LIMIT;
+  }
+  unsigned char bytes[TEMPORARY_NAME_LENGTH];
+  status = random_read(random, bytes, sizeof(bytes), now + RANDOM_MAX_WAIT_NS);
+  if (status != CALL_OK) {
+    return status;
+  }
+  static const char alphabet[] =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+  for (size_t i = 0; i < sizeof(bytes); ++i) {
+    suffix[i] = alphabet[bytes[i] & TEMPORARY_ALPHABET_MASK];
+  }
+  return CALL_OK;
+}
+
+int mkstemp(char *template)
+{
+  if (!template) {
+    errno = EINVAL;
+    return -1;
+  }
+  size_t length = strlen(template);
+  if (length < TEMPORARY_NAME_LENGTH ||
+      memcmp(template + length - TEMPORARY_NAME_LENGTH, "XXXXXX", TEMPORARY_NAME_LENGTH)) {
+    errno = EINVAL;
+    return -1;
+  }
+  int saved_errno = errno;
+  const struct descriptor_mode mode = {
+    .readable = true, .writable = true, .create = true, .exclusive = true,
+  };
+  for (int attempt = 0; attempt < TEMPORARY_CREATE_ATTEMPTS; ++attempt) {
+    enum call_status status = file_temporary_name(template + length - TEMPORARY_NAME_LENGTH);
+    if (status != CALL_OK) {
+      errno = libc_call_errno(status);
+      return -1;
+    }
+    int descriptor = descriptor_open(template, &mode, NULL);
+    if (descriptor >= 0) {
+      errno = saved_errno;
+      return descriptor;
+    }
+    if (errno != EEXIST) {
+      return -1;
+    }
+  }
+  errno = EEXIST;
+  return -1;
 }
 
 static int remove_kind(const char *path, uint64_t kind)

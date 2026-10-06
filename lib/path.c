@@ -334,6 +334,40 @@ enum call_status path_open_file(const struct path_context *context, const char *
   return status;
 }
 
+enum call_status path_create_file(const struct path_context *context, const char *path,
+    uint64_t rights, struct path_workspace *workspace, handle_t *handle)
+{
+  if (!handle) {
+    return CALL_BAD_REQUEST;
+  }
+  *handle = HANDLE_INVALID;
+  if (!path || !*path || (rights & ~FILE_RIGHTS)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (path[strlen(path) - 1] == '/') {
+    return CALL_WRONG_TYPE;
+  }
+  uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE;
+  if (rights & FILE_RIGHT_READ) {
+    directory_rights |= DIRECTORY_RIGHT_READ_FILES;
+  }
+  if (rights & FILE_RIGHT_WRITE) {
+    directory_rights |= DIRECTORY_RIGHT_WRITE_FILES;
+  }
+  size_t count = 0;
+  handle_t unused;
+  enum call_status status = walk(context, path, WALK_PARENT, 0, directory_rights,
+      false, workspace, &count, &unused, NULL);
+  if (status == CALL_OK) {
+    status = directory_create(workspace->directories[count - 1], workspace->component,
+        DIRECTORY_KIND_FILE, rights, handle);
+  }
+  if (count) {
+    close_chain(workspace->directories, count);
+  }
+  return status;
+}
+
 enum call_status path_remove(const struct path_context *context, const char *path,
     uint64_t kind, struct path_workspace *workspace)
 {
