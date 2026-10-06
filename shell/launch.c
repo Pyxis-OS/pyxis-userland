@@ -128,8 +128,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool session = mode == SHELL_SESSION;
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
-  bool has_keyboard = named_input && shell->keyboard != HANDLE_INVALID;
-  bool has_pointer = named_input && shell->pointer != HANDLE_INVALID;
+  bool device_input = named_input &&
+      streams[STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
+  bool has_keyboard = device_input && shell->keyboard != HANDLE_INVALID;
+  bool has_pointer = device_input && shell->pointer != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
@@ -630,8 +632,13 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     failed_stage = i;
     operation = "shell: prepare";
     path = stages[i].arguments[0];
-    bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE && i == 0 &&
-        streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
+    bool console_stdin = streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
+    bool pager_input = mode == SHELL_FOREGROUND && i + 1 == stage_count &&
+        streams[i][STARTUP_STDOUT].protocol == PROTOCOL_CONSOLE &&
+        (streams[i][STARTUP_STDIN].protocol == PROTOCOL_PIPE ||
+         streams[i][STARTUP_STDIN].protocol == PROTOCOL_FILE);
+    bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
+        ((i == 0 && console_stdin) || pager_input);
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
         streams[i], publication.caller, read_only, &environment);
     if (status != CALL_OK) {
