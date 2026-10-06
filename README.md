@@ -327,6 +327,13 @@ caller's earlier deadline. Retained snapshots share a 64 MiB storage account and
 63 export slots. Build the provider with
 `PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser`.
 
+Foreground pipelines preserve the first stage's console-input, keyboard and
+pointer grants. A final stage with file/pipe stdin and console stdout also receives
+named terminal input with READ alone, so pagers can read keys separately from
+content. It receives no keyboard, pointer or interrupt-arming right through this
+rule. Both ends reading the console compete for one input queue; use a file or a
+producer that does not read console stdin with an interactive pager.
+
 ## License
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See
