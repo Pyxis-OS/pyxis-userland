@@ -170,35 +170,53 @@ enum call_status shell_change_directory(struct shell *shell, const char *path)
   return status;
 }
 
+static enum call_status open_path(struct shell *shell, const char *path, handle_t *image)
+{
+  enum call_status status = prepare_workspace(shell, strlen(path));
+  if (status == CALL_OK) {
+    status = path_resolve(&shell->directory, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        &shell->workspace, image);
+  }
+  return status;
+}
+
+/* A bare name is ROOT://NAME.pxe, for each root in lookup order. */
+static enum call_status open_program(struct shell *shell, const char *root,
+    const char *command, handle_t *image)
+{
+  static const char separator[] = "://", suffix[] = ".pxe";
+  size_t root_length = strlen(root), length = strlen(command);
+  if (length > SIZE_MAX - root_length - sizeof(separator) - sizeof(suffix)) {
+    return CALL_LIMIT;
+  }
+  char *path = malloc(root_length + sizeof(separator) - 1 + length + sizeof(suffix));
+  if (!path) {
+    return CALL_NO_MEMORY;
+  }
+  memcpy(path, root, root_length);
+  memcpy(path + root_length, separator, sizeof(separator) - 1);
+  memcpy(path + root_length + sizeof(separator) - 1, command, length);
+  memcpy(path + root_length + sizeof(separator) - 1 + length, suffix, sizeof(suffix));
+  enum call_status status = open_path(shell, path, image);
+  free(path);
+  return status;
+}
+
 enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image)
 {
   *image = HANDLE_INVALID;
   if (!*command) {
     return CALL_BAD_REQUEST;
   }
-  char *allocated = NULL;
-  const char *path = command;
-  if (!strchr(command, '/')) {
-    static const char prefix[] = "boot://", suffix[] = ".pxe";
-    size_t length = strlen(command);
-    if (length > SIZE_MAX - sizeof(prefix) - sizeof(suffix)) {
-      return CALL_LIMIT;
-    }
-    allocated = malloc(sizeof(prefix) - 1 + length + sizeof(suffix));
-    if (!allocated) {
-      return CALL_NO_MEMORY;
-    }
-    memcpy(allocated, prefix, sizeof(prefix) - 1);
-    memcpy(allocated + sizeof(prefix) - 1, command, length);
-    memcpy(allocated + sizeof(prefix) - 1 + length, suffix, sizeof(suffix));
-    path = allocated;
+  if (strchr(command, '/')) {
+    return open_path(shell, command, image);
   }
-  enum call_status status = prepare_workspace(shell, strlen(path));
-  if (status == CALL_OK) {
-    status = path_resolve(&shell->directory, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
-        &shell->workspace, image);
+  /* Installed programs in bin:// come first; the archive's rescue set follows.
+   * An unbound bin:// is NOT_FOUND, like a missing program. */
+  enum call_status status = open_program(shell, "bin", command, image);
+  if (status == CALL_NOT_FOUND) {
+    status = open_program(shell, "boot", command, image);
   }
-  free(allocated);
   return status;
 }
 

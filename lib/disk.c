@@ -1,5 +1,6 @@
 #include <abi/directory.h>
 #include <disk.h>
+#include <string.h>
 #include <syscall.h>
 
 static enum call_status reply_status(struct syscall_result result, size_t expected)
@@ -129,10 +130,8 @@ enum call_status disk_open_volume(handle_t disk, uint64_t partition,
     return CALL_BAD_REQUEST;
   }
   *root = HANDLE_INVALID;
-  uint64_t read_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-      DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO;
   if (!partition || partition > UINT32_MAX || !name ||
-      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~read_rights)) {
+      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~DIRECTORY_RIGHTS)) {
     return CALL_BAD_REQUEST;
   }
   size_t length = 0;
@@ -160,4 +159,32 @@ enum call_status disk_open_volume(handle_t disk, uint64_t partition,
   }
   *root = reply.root;
   return CALL_OK;
+}
+
+enum call_status disk_create_volume(handle_t disk, uint64_t partition, const char *name)
+{
+  if (!partition || partition > UINT32_MAX || !name) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t length = strnlen(name, MOUNT_VOLUME_NAME_MAX + 1);
+  if (!length || length > MOUNT_VOLUME_NAME_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_create_volume_request body;
+  } message = {{PROTOCOL_DISK, DISK_CREATE_VOLUME}, {partition, (uintptr_t)name, length}};
+  return reply_status(syscall_call(disk, &message, sizeof(message), NULL, 0), 0);
+}
+
+enum call_status disk_claim(handle_t disk, uint64_t partition)
+{
+  if (partition > UINT32_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_claim_request body;
+  } message = {{PROTOCOL_DISK, DISK_CLAIM}, {partition}};
+  return reply_status(syscall_call(disk, &message, sizeof(message), NULL, 0), 0);
 }

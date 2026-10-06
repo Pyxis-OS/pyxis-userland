@@ -126,11 +126,11 @@ With a positive COUNT it stops admission after that many accepted connections,
 finishes active streams and exits unsuccessfully if any connection failed;
 otherwise it keeps serving. Wait timeouts resume waiting without expiring clients.
 
-From the interactive shell, `session boot://server.pxe` runs the endpoint example.
+From the interactive shell, `session bin://server.pxe` runs the endpoint example.
 The server creates its receiver, launches two clients with caller grants, receives
-both requests and replies in reverse order. `session boot://server.pxe --wide`
+both requests and replies in reverse order. `session bin://server.pxe --wide`
 uses 4 KiB requests and replies with four file grants in each direction;
-`session boot://server.pxe --abandon` closes one receipt so its caller sees
+`session bin://server.pxe --abandon` closes one receipt so its caller sees
 abandonment. `--saturate` retains sixteen receipts while a seventeenth client
 reports queue saturation, then replies in reverse order. `--close` closes the
 receiver after receiving a call and starts another client against a retained
@@ -138,7 +138,7 @@ caller grant; `--exit` lets process teardown close the receiver. The shell
 delegates launch authority through `session`; endpoint creation is also
 delegated to providers launched with `service start` or `service replace`.
 
-`session boot://server.pxe --send` grants a client send-only authority. It sends
+`session bin://server.pxe --send` grants a client send-only authority. It sends
 4 KiB and four file grants, closes its sources and exits before the server
 receives the message. The server finishes the receipt and then reads the
 retained file grants. `--mixed` holds one call receipt while a send-only client
@@ -158,11 +158,11 @@ remains full until the provider finishes the canceled receipt.
 `--cancel-finish` closes an expired receipt before RECEIVE and confirms that
 its pending notice is removed.
 
-`session boot://counter.pxe` runs a provider with two counter exports on one
+`session bin://counter.pxe` runs a provider with two counter exports on one
 receiver. A launched client receives different resource grants, attenuates a
 copy and an IPC attachment, verifies protocol matching, and uses both CALL and
 send-only delivery. The provider authenticates object ID and actual rights,
-then acknowledges natural retirement. `session boot://counter.pxe --withdraw`
+then acknowledges natural retirement. `session bin://counter.pxe --withdraw`
 withdraws an export during a delivered call, finishes its cancellation receipt,
 acknowledges retirement while an old client handle remains open, and reuses the
 same ID for a new export. `--exit` ends the provider with a delivered call; its
@@ -245,14 +245,14 @@ grant. The shell publishes its attached export and replies before the provider
 starts serving. For example:
 
 ```sh
-service start clicks boot://counter.pxe --provide
+service start clicks bin://counter.pxe --provide
 counter --lookup clicks
 counter --add clicks
 counter --restrict clicks
 counter --hold clicks &
-service replace clicks boot://counter.pxe --provide
+service replace clicks bin://counter.pxe --provide
 counter --lookup clicks
-service replace clicks boot://counter.pxe --provide-once
+service replace clicks bin://counter.pxe --provide-once
 counter --lookup clicks
 counter --lookup clicks
 namespace remove clicks
@@ -276,10 +276,10 @@ new ordinary children cannot see `first`, while the old namespace remains
 held by the previous session until its owners exit:
 
 ```sh
-service start first boot://counter.pxe --provide
+service start first bin://counter.pxe --provide
 namespace create
 counter --lookup first
-service start second boot://counter.pxe --provide
+service start second bin://counter.pxe --provide
 counter --lookup second
 ```
 

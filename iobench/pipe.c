@@ -448,7 +448,7 @@ cleanup:
 bool run_pipe(const struct options *options, handle_t clock)
 {
   handle_t image = HANDLE_INVALID;
-  enum call_status status = resolve_file("boot://iobench.pxe", FILE_RIGHT_READ, &image);
+  enum call_status status = resolve_file("bin://iobench.pxe", FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     fprintf(stderr, "iobench pipe: open worker image failed (status %u)\n", status);
     return false;
