@@ -481,12 +481,14 @@ int main(int argc, char **argv)
   struct install_source kernel = {.handle = startup_resource("boot_kernel")};
   struct install_source archive = {.handle = startup_resource("boot_archive")};
   struct install_source efi = {.handle = HANDLE_INVALID}, template = {.handle = HANDLE_INVALID};
+  struct install_source rescue = {.handle = HANDLE_INVALID};
+  struct install_programs programs = {0};
   struct install_disk disk = {.handle = HANDLE_INVALID};
   struct target *targets = NULL;
   size_t count = 0;
   char *configuration = NULL;
   struct install_esp *esp = NULL;
-  bool claimed = false, attempted_write = false, updating = false;
+  bool claimed = false, attempted_write = false, esp_attempted = false, updating = false;
   int result = EXIT_FAILURE;
   if (disks == HANDLE_INVALID || boot == HANDLE_INVALID || clock == HANDLE_INVALID ||
       random == HANDLE_INVALID || kernel.handle == HANDLE_INVALID || archive.handle == HANDLE_INVALID ||
@@ -504,7 +506,8 @@ int main(int argc, char **argv)
     fputs("installer: kernel identity unavailable; nothing was written\n", stderr);
     goto done;
   }
-  const char *revision = identity.build_revision[0] ? identity.build_revision : "unknown";
+  const char *revision = identity.build_revision[0] ? identity.build_revision :
+      INSTALL_UNKNOWN_REVISION;
   char revision_record[sizeof(identity.build_revision) + 1];
   snprintf(revision_record, sizeof(revision_record), "%s\n", revision);
   printf("Live kernel revision: %s\n", revision);
@@ -512,6 +515,8 @@ int main(int argc, char **argv)
       !source_open("boot://share/installer/limine.conf.template", &template) ||
       file_size(kernel.handle, &kernel.bytes) != CALL_OK || !kernel.bytes ||
       file_size(archive.handle, &archive.bytes) != CALL_OK || !archive.bytes ||
+      !install_programs_list(boot, &programs) ||
+      !install_archive_filter(&archive, &programs, &rescue) ||
       !inventory(disks, read_the_room, updating, &targets, &count)) {
     fputs("installer: sources or disk inventory unavailable; nothing was written\n", stderr);
     goto done;
@@ -529,7 +534,8 @@ int main(int argc, char **argv)
     layout = selected->update.layout;
     printf("Disk %llu: installed %s; live %s.\n",
         (unsigned long long)disk.info.id, selected->update.revision, revision);
-    puts("Update will replace this disk's EFI boot files. Its GPT and system pool will be preserved.");
+    printf("Update will write %zu programs to bin://%s, then replace this disk's EFI boot files.\n"
+        "Its GPT and existing volumes will be preserved.\n", programs.count, revision);
   } else {
     if (!install_layout_plan(&disk, &layout) || !new_ids(clock, random, &layout, pool_id, volume_id)) {
       goto done;
@@ -551,7 +557,7 @@ int main(int argc, char **argv)
     fputs("installer: boot template cannot be filled\n", stderr);
     goto done;
   }
-  esp = install_esp_plan(&disk, &layout, &efi, &kernel, &archive,
+  esp = install_esp_plan(&disk, &layout, &efi, &kernel, &rescue,
       configuration, configuration_bytes, revision_record, strlen(revision_record),
       npfs_get_u32(layout.esp_guid));
   if (!esp) {
@@ -559,7 +565,7 @@ int main(int argc, char **argv)
     goto done;
   }
   if (!updating) {
-    printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; system volume.\n",
+    printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; system and bin volumes.\n",
         (unsigned long long)(layout.pool_bytes / INSTALL_MIB),
         (unsigned long long)(header.journal_blocks * NPFS_BLOCK_SIZE / INSTALL_MIB));
   }
@@ -604,11 +610,9 @@ int main(int argc, char **argv)
     created_valid = clock_wall_now(clock, &wall) == CALL_OK;
     created_ns = created_valid ? npfs_timestamp(wall.seconds, wall.nanoseconds) : 0;
   }
-  puts("Writing EFI boot files...");
+  /* Programs first, then the ESP: an interruption before the ESP switch leaves
+   * the old kernel booting the old revision's programs. */
   attempted_write = true;
-  if (!install_esp_write(esp)) {
-    goto done;
-  }
   if (!updating) {
     puts("Formatting system pool...");
     if (!install_pool_format(&disk, &layout, &header, volume_id, created_ns, created_valid)) {
@@ -618,11 +622,11 @@ int main(int argc, char **argv)
     if (!install_gpt_write(&disk, &layout)) {
       goto done;
     }
-  }
-  status = disk_flush(disk.handle);
-  if (status != CALL_OK) {
-    fprintf(stderr, "installer: final sync failed (status %u)\n", status);
-    goto done;
+    status = disk_flush(disk.handle);
+    if (status != CALL_OK) {
+      fprintf(stderr, "installer: pool sync failed (status %u)\n", status);
+      goto done;
+    }
   }
   status = disk_release(disk.handle);
   claimed = false;
@@ -636,10 +640,41 @@ int main(int argc, char **argv)
     fputs("installer: GPT read-back failed\n", stderr);
     goto done;
   }
+  printf("Writing %zu programs to bin://%s...\n", programs.count, revision);
+  if (!install_programs_write(&disk, boot, &programs, revision)) {
+    goto done;
+  }
+  puts("Writing EFI boot files...");
+  status = disk_claim(disk.handle, INSTALL_ESP_PARTITION);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: cannot claim the EFI partition (status %u)\n", status);
+    goto done;
+  }
+  claimed = true;
+  esp_attempted = true;
+  if (!install_esp_write(esp)) {
+    goto done;
+  }
+  status = disk_flush(disk.handle);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: final sync failed (status %u)\n", status);
+    goto done;
+  }
+  status = disk_release(disk.handle);
+  claimed = false;
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: EFI partition release failed (status %u)\n", status);
+    goto done;
+  }
   puts("Checking EFI files and reopening system read-only...");
   if (!install_esp_verify(esp) || (updating ? !system_verify(&disk) : !marker_verify(&disk))) {
     fputs("installer: read-back check failed\n", stderr);
     goto done;
+  }
+  /* The previous revision stays as the one the disk booted until now. */
+  const char *previous = updating ? selected->update.revision : NULL;
+  if (!install_programs_cleanup(&disk, revision, previous)) {
+    fputs("installer: old program directories could not all be removed\n", stderr);
   }
   if (updating) {
     puts("updated\nBoot from this disk after removing the live medium.");
@@ -657,7 +692,10 @@ done:
     }
   }
   if (attempted_write && result != EXIT_SUCCESS) {
-    if (updating) {
+    if (updating && !esp_attempted) {
+      fputs("Update failed before the EFI boot files changed; the disk still boots its\n"
+          "previous revision. Boot the live image again, then choose Update.\n", stderr);
+    } else if (updating) {
       fputs("Update failed; the EFI boot files may be partially rebuilt.\n"
           "Boot the live image again, then choose Update to rebuild this disk's boot files.\n", stderr);
     } else {
@@ -667,6 +705,8 @@ done:
     }
   }
   install_esp_destroy(esp);
+  free(rescue.memory);
+  install_programs_destroy(&programs);
   free(configuration);
   destroy_targets(targets, count);
   if (disk.handle != HANDLE_INVALID) {

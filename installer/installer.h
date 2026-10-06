@@ -13,6 +13,11 @@
 #define INSTALL_BOOT_INIT_OPTION "init=boot://boot-init.pxe"
 #define INSTALL_RESCUE_OPTION "boot.default_config=1"
 #define INSTALL_MENU_TIMEOUT_SECONDS 3
+/* Ordinary programs live in this pool volume, one directory per revision. */
+#define INSTALL_ESP_PARTITION 1
+#define INSTALL_POOL_PARTITION 2
+#define INSTALL_BIN_VOLUME "bin"
+#define INSTALL_UNKNOWN_REVISION "unknown"
 
 struct install_disk {
   handle_t handle;
@@ -20,9 +25,11 @@ struct install_disk {
   uint64_t bytes;
 };
 
+/* A source is a borrowed file handle, or owned memory when memory is set. */
 struct install_source {
   handle_t handle;
   uint64_t bytes;
+  uint8_t *memory;
 };
 
 struct install_layout {
@@ -102,5 +109,25 @@ bool install_esp_write(const struct install_esp *esp);
  * compares their contents to the borrowed inputs, rather than planned offsets. */
 bool install_esp_verify(const struct install_esp *esp);
 void install_esp_destroy(struct install_esp *esp);
+
+/* Executables that leave the boot archive: root-level .pxe entries not named
+ * in boot://share/installer/rescue.list, sorted. */
+struct install_programs {
+  char **names;
+  size_t count;
+};
+bool install_programs_list(handle_t boot, struct install_programs *programs);
+void install_programs_destroy(struct install_programs *programs);
+/* The rescue archive: the newc boot archive without PROGRAMS, as owned memory. */
+bool install_archive_filter(const struct install_source *archive,
+    const struct install_programs *programs, struct install_source *rescue);
+/* Outside any raw claim on the pool: creates the bin volume if missing, writes
+ * every program into bin/REVISION, replacing an earlier partial copy, syncs the
+ * pool and compares the copies with their sources. */
+bool install_programs_write(const struct install_disk *disk, handle_t boot,
+    const struct install_programs *programs, const char *revision);
+/* Removes every revision directory except KEEP and PREVIOUS (which may be NULL). */
+bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
+    const char *previous);
 
 #endif

@@ -106,6 +106,10 @@ bool install_source_read(const struct install_source *source, uint64_t offset,
   if (offset > source->bytes || length > source->bytes - offset) {
     return false;
   }
+  if (source->memory) {
+    memcpy(bytes, source->memory + offset, length);
+    return true;
+  }
   uint8_t *destination = bytes;
   while (length) {
     size_t count = 0;
