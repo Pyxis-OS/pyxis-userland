@@ -4,7 +4,9 @@ Freestanding C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
 `x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
 also needs the Lua development files exported by the ports build; the HTTP
-provider needs the picohttpparser and Mbed TLS development exports. Host Lua 5.4 (`LUA`, default
+provider needs the picohttpparser and Mbed TLS development exports. The
+[xfer](xfer/README.md) terminal file-transfer program also uses the Mbed TLS
+export for mandatory SHA-256 verification. Host Lua 5.4 (`LUA`, default
 `lua`) generates the packaged [iobench fixture](iobench/README.md).
 
 ```sh
