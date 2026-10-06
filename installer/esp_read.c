@@ -482,7 +482,7 @@ static void revision_text(const uint8_t *bytes, size_t size, char revision[64])
 enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     const struct install_layout *layout, char revision[64], const char **reason)
 {
-  strcpy(revision, "unknown");
+  strcpy(revision, INSTALL_UNKNOWN_REVISION);
   *reason = NULL;
   struct esp_inspection esp = {
     .disk = disk, .layout = layout, .reason = reason, .state = INSTALL_ESP_VALID,

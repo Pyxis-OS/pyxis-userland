@@ -671,9 +671,12 @@ int main(int argc, char **argv)
     fputs("installer: read-back check failed\n", stderr);
     goto done;
   }
-  /* The previous revision stays as the one the disk booted until now. */
+  /* Keep the new revision and the one the disk booted until now. When that
+   * one is unknown, as after damaged boot files, nothing is removed. */
   const char *previous = updating ? selected->update.revision : NULL;
-  if (!install_programs_cleanup(&disk, revision, previous)) {
+  if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
+    puts("Older program directories were kept: the previous revision is unknown.");
+  } else if (!install_programs_cleanup(&disk, revision, previous)) {
     fputs("installer: old program directories could not all be removed\n", stderr);
   }
   if (updating) {
