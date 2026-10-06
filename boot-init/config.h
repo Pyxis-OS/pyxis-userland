@@ -49,6 +49,7 @@ struct boot_space {
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
   bool launch;
+  bool power; /* Receives power-off and restart authority. */
 };
 
 /* One parsed file. Owns every string and array. */

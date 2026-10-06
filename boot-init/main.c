@@ -9,6 +9,7 @@
 #include <abi/namespace.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
+#include <abi/power.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/system_info.h>
@@ -102,6 +103,8 @@ struct authority {
   /* A private RAM directory; each ram volume is one of its subdirectories. */
   handle_t ram;
   handle_t native_mount, host_mount;
+  /* Granted only to spaces that set power. */
+  handle_t power;
   uint64_t cpu_count;
 };
 
@@ -125,6 +128,7 @@ static bool take_authority(struct authority *authority)
   authority->ram = startup_resource("ram");
   authority->native_mount = startup_resource("native_mount");
   authority->host_mount = startup_resource("host_mount");
+  authority->power = startup_resource("power");
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID;
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
@@ -313,7 +317,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 1];
+  struct launch_binding resources[SERVICE_COUNT + 2];
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -340,7 +344,7 @@ static void select_start(const struct boot_space *space, struct space_launch *la
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 1, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 2, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -388,6 +392,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
     };
+  }
+  if (space->power && authority->power != HANDLE_INVALID) {
+    launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"power", launch->grant_count++};
   }
   select_start(space, launch);
   return NULL;
@@ -507,7 +516,7 @@ static void bind_bin(struct authority *authority, const struct boot_plan *plan, 
 static void start_rescue(const struct authority *authority, struct mounts *mounts)
 {
   static const struct boot_space rescue = {
-    .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp",
+    .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
   };
   puts("boot-init: no configured space started; starting the rescue space");
   start_space(authority, mounts, &rescue);

@@ -2,6 +2,7 @@
 #include "../common/directory.h"
 #include <mount.h>
 #include <namespace.h>
+#include <power.h>
 #include <handle.h>
 #include <space.h>
 #include <stdarg.h>
@@ -332,13 +333,28 @@ static enum command_result set_affinity(struct shell *shell, char **arguments, s
   }
 }
 
+/* Success never returns: the kernel powers off or restarts. */
+static enum command_result power_command(struct shell *shell, char **arguments, size_t count)
+{
+  const char *name = arguments[0];
+  if (count != 1) {
+    return shell_error(shell, "usage: %s\n", name);
+  }
+  if (shell->power == HANDLE_INVALID) {
+    return shell_error(shell, "%s: this space has no power authority\n", name);
+  }
+  enum call_status status = strcmp(name, "poweroff") == 0 ? power_off(shell->power) :
+      power_restart(shell->power);
+  return shell_error(shell, "%s: failed (status %u); the system stays up\n", name, status);
+}
+
 static bool is_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
   return !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") || !strcmp(name, "namespace") ||
-      !strcmp(name, "service") ||
+      !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
       (!strcmp(name, "sync") && count > 1 && !strcmp(arguments[1], "--disk"));
 }
 
@@ -377,6 +393,9 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
         mount_sync(shell->native_mount);
     return status == CALL_OK ? COMMAND_OK :
         shell_directory_error(shell, "shell: sync", "configured native disk", status);
+  }
+  if (strcmp(arguments[0], "poweroff") == 0 || strcmp(arguments[0], "reboot") == 0) {
+    return power_command(shell, arguments, count);
   }
   if (strcmp(arguments[0], "session") == 0) {
     if (count < 2) {
