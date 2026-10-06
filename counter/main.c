@@ -502,16 +502,16 @@ int main(int argc, char **argv)
   handle_t memory = startup_resource("memory");
   handle_t output = startup_resource("output");
   handle_t clock = startup_resource("clock");
-  handle_t boot = startup_root("boot");
+  handle_t bin = startup_root("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (argc == 2 && !strcmp(argv[1], "--queued-withdraw") &&
       clock == HANDLE_INVALID) ||
-      boot == HANDLE_INVALID) {
+      bin == HANDLE_INVALID) {
     return 1;
   }
   handle_t image = HANDLE_INVALID;
-  if (directory_lookup(boot, "counter.pxe", DIRECTORY_KIND_FILE,
+  if (directory_lookup(bin, "counter.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image) != CALL_OK) {
     return 1;
   }

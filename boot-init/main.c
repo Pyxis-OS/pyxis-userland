@@ -34,6 +34,9 @@
 #define OVERRIDE_NAME "system://" OVERRIDE_PATH
 #define OVERRIDE_MAX_BYTES (64 * 1024)
 #define RESCUE_INIT "boot://shell.pxe"
+/* The bin volume shares the system volume's pool; see the installer. */
+#define BIN_VOLUME "bin"
+#define BIN_UNKNOWN_REVISION "unknown"
 
 #define BOOT_ROOT_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
@@ -82,10 +85,11 @@ static const struct {
   [SERVICE_TERMINAL] = {"terminal", TERMINAL_SERVICE_RIGHT_CREATE, 0},
 };
 
-/* Grant order after the services: the boot and tmp roots, then volumes. */
+/* Grant order after the services: the boot, tmp and bin roots, then volumes. */
 enum {
   GRANT_BOOT = SERVICE_COUNT,
   GRANT_TMP,
+  GRANT_BIN,
   GRANT_FIRST_VOLUME,
 };
 
@@ -93,6 +97,8 @@ struct authority {
   handle_t factory;
   handle_t services[SERVICE_COUNT];
   handle_t boot, tmp;
+  /* The running revision's program directory, or the archive itself. */
+  handle_t bin;
   handle_t native_mount, host_mount;
   uint64_t cpu_count;
 };
@@ -296,7 +302,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
   launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count, sizeof(*launch->grants));
-  launch->roots = calloc(2 + space->root_count, sizeof(*launch->roots));
+  launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
   }
@@ -309,8 +315,10 @@ static const char *build_launch(const struct authority *authority, struct mounts
   launch->grants[GRANT_TMP] = (struct launch_grant){authority->tmp, TMP_ROOT_RIGHTS, 0};
   launch->roots[0] = (struct launch_binding){(uintptr_t)"boot", GRANT_BOOT};
   launch->roots[1] = (struct launch_binding){(uintptr_t)"tmp", GRANT_TMP};
+  launch->grants[GRANT_BIN] = (struct launch_grant){authority->bin, BOOT_ROOT_RIGHTS, 0};
+  launch->roots[2] = (struct launch_binding){(uintptr_t)"bin", GRANT_BIN};
   launch->grant_count = GRANT_FIRST_VOLUME;
-  launch->root_count = 2;
+  launch->root_count = 3;
   launch->working_directory = GRANT_TMP;
   for (size_t i = 0; i < space->root_count; ++i) {
     const struct boot_root *root = &space->roots[i];
@@ -412,6 +420,41 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
   return started;
 }
 
+/* Installed boots bind bin:// to bin/REVISION on the system pool, for the
+ * running kernel's revision. Live boots, and installed boots without that
+ * directory, bind the archive itself, which holds every program. */
+static void bind_bin(struct authority *authority, const struct boot_plan *plan, bool installed)
+{
+  authority->bin = authority->boot;
+  if (!installed) {
+    return;
+  }
+  struct system_info_identity identity;
+  const char *revision = BIN_UNKNOWN_REVISION;
+  if (system_info_get_identity(authority->services[SERVICE_SYSTEM_INFO], &identity) == CALL_OK &&
+      identity.build_revision[0]) {
+    revision = identity.build_revision;
+  }
+  const struct boot_volume *system = boot_plan_volume(plan, BOOT_SYSTEM_VOLUME);
+  handle_t root = HANDLE_INVALID, directory = HANDLE_INVALID;
+  enum call_status status = !system || system->kind != BOOT_VOLUME_NPFS ||
+      authority->native_mount == HANDLE_INVALID ? CALL_UNAVAILABLE :
+      mount_open_volume(authority->native_mount, system->partition, BIN_VOLUME,
+        BOOT_ROOT_RIGHTS, &root);
+  if (status == CALL_OK) {
+    status = directory_lookup(root, revision, DIRECTORY_KIND_DIRECTORY, BOOT_ROOT_RIGHTS,
+        &directory);
+    handle_close(root);
+  }
+  if (status != CALL_OK) {
+    printf("boot-init: no bin://%s on the pool (status %u); programs come from the archive\n",
+        revision, status);
+    return;
+  }
+  printf("boot-init: bin:// is revision %s\n", revision);
+  authority->bin = directory;
+}
+
 static void start_rescue(const struct authority *authority, struct mounts *mounts)
 {
   static const struct boot_space rescue = {
@@ -489,6 +532,7 @@ int main(int argc, char **argv)
     }
   }
 
+  bind_bin(&authority, &plan, installed);
   size_t started = 0;
   if (mount_plan(&authority, &plan, &mounts)) {
     for (size_t i = 0; i < plan.space_count; ++i) {

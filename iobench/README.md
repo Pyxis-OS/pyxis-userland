@@ -330,9 +330,9 @@ exit path, including setup failure; the benchmark never removes the output.
 ## Pipes
 
 ```
-session boot://iobench.pxe pipe
-session boot://iobench.pxe pipe --buffer 64
-session boot://iobench.pxe pipe --buffer 65536 --rounds 5
+session bin://iobench.pxe pipe
+session bin://iobench.pxe pipe --buffer 64
+session bin://iobench.pxe pipe --buffer 65536 --rounds 5
 ```
 
 `session` hands off the current shell, which exits; it does not return a prompt

@@ -233,11 +233,11 @@ int main(int argc, char **argv)
   handle_t memory = startup_resource("memory");
   handle_t output = startup_resource("output");
   handle_t clock = startup_resource("clock");
-  handle_t boot = startup_root("boot");
+  handle_t boot = startup_root("boot"), bin = startup_root("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (deadline_mode && clock == HANDLE_INVALID) ||
-      boot == HANDLE_INVALID) {
+      boot == HANDLE_INVALID || bin == HANDLE_INVALID) {
     return 1;
   }
 
@@ -256,7 +256,7 @@ int main(int argc, char **argv)
   if (!packets) {
     goto done;
   }
-  status = directory_lookup(boot, "client.pxe", DIRECTORY_KIND_FILE,
+  status = directory_lookup(bin, "client.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK || open_content(boot, &content) != CALL_OK) {
     goto done;
