@@ -6,6 +6,12 @@
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 #define RAND_MAX 32767
+#define MB_CUR_MAX 4
+
+/* Stateless UTF-8 conversion of one Unicode scalar. NULL text resets (returns
+ * zero); NUL returns zero and stores L'\0'. Invalid or incomplete input returns
+ * -1 with EILSEQ and leaves output unchanged. output may be NULL. */
+int mbtowc(wchar_t *restrict output, const char *restrict text, size_t size);
 
 /* Single-threaded allocator; allocations are aligned to at least 16 bytes.
  * Zero-size allocations return NULL. realloc(p, 0) frees p and returns NULL.
