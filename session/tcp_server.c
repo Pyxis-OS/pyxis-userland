@@ -16,17 +16,17 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
 {
   handle_t launcher = startup_resource("launcher"), memory = startup_resource("memory");
   handle_t clock = startup_resource("clock"), tcp = startup_resource("tcp");
-  handle_t app = startup_root("app");
+  handle_t boot = startup_root("boot");
   if (launcher == HANDLE_INVALID || memory == HANDLE_INVALID ||
-      clock == HANDLE_INVALID || tcp == HANDLE_INVALID || app == HANDLE_INVALID) {
+      clock == HANDLE_INVALID || tcp == HANDLE_INVALID || boot == HANDLE_INVALID) {
     fputs("session: missing TCP server launch authority\n", stderr);
     return EXIT_FAILURE;
   }
   handle_t image;
-  enum call_status status = directory_lookup(app, "tcp.pxe", DIRECTORY_KIND_FILE,
+  enum call_status status = directory_lookup(boot, "tcp.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot open app://tcp.pxe (status %u)\n", status);
+    fprintf(stderr, "session: cannot open boot://tcp.pxe (status %u)\n", status);
     return EXIT_FAILURE;
   }
 
@@ -39,7 +39,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"clock", CLOCK},
     {(uintptr_t)"tcp_listener", LISTENER},
   };
-  const char *arguments[] = {"app://tcp.pxe", "--serve", count};
+  const char *arguments[] = {"boot://tcp.pxe", "--serve", count};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,

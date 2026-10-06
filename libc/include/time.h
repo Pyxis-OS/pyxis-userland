@@ -44,7 +44,7 @@ struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result);
 struct tm *gmtime(const time_t *timer);
 
 /* TZ absent/empty means UTC without file access. Otherwise TZ is an IANA name
- * under app://share/zoneinfo, using the process's app directory capability.
+ * under boot://share/zoneinfo, using the process's boot directory capability.
  * Named zones are loaded lazily and cached in process-owned heap storage.
  * Return NULL with errno on file/allocation errors, EINVAL for invalid names or
  * malformed/unsupported TZif, ENOTSUP where zone data leaves time unspecified,

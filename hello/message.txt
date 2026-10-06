@@ -1,4 +1,4 @@
-This text came from the boot archive. Hello received an app directory capability,
+This text came from the boot archive. Hello received a boot directory capability,
 listed its entries, and looked up share and then this file with explicit rights.
 It did not need a global filesystem root or a kernel path parser.
 

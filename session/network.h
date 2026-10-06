@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "dhcp.h"
 
-#define NETWORK_CONFIG_PATH "app://config/network.lua"
+#define NETWORK_CONFIG_PATH "boot://config/network.lua"
 
 enum network_action { NETWORK_KEEP, NETWORK_REPLACE, NETWORK_CLEAR };
 struct network_config {

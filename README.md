@@ -117,11 +117,11 @@ With a positive COUNT it stops admission after that many accepted connections,
 finishes active streams and exits unsuccessfully if any connection failed;
 otherwise it keeps serving. Wait timeouts resume waiting without expiring clients.
 
-From the interactive shell, `session app://server.pxe` runs the endpoint example.
+From the interactive shell, `session boot://server.pxe` runs the endpoint example.
 The server creates its receiver, launches two clients with caller grants, receives
-both requests and replies in reverse order. `session app://server.pxe --wide`
+both requests and replies in reverse order. `session boot://server.pxe --wide`
 uses 4 KiB requests and replies with four file grants in each direction;
-`session app://server.pxe --abandon` closes one receipt so its caller sees
+`session boot://server.pxe --abandon` closes one receipt so its caller sees
 abandonment. `--saturate` retains sixteen receipts while a seventeenth client
 reports queue saturation, then replies in reverse order. `--close` closes the
 receiver after receiving a call and starts another client against a retained
@@ -129,7 +129,7 @@ caller grant; `--exit` lets process teardown close the receiver. The shell
 delegates launch authority through `session`; endpoint creation is also
 delegated to providers launched with `service start` or `service replace`.
 
-`session app://server.pxe --send` grants a client send-only authority. It sends
+`session boot://server.pxe --send` grants a client send-only authority. It sends
 4 KiB and four file grants, closes its sources and exits before the server
 receives the message. The server finishes the receipt and then reads the
 retained file grants. `--mixed` holds one call receipt while a send-only client
@@ -149,11 +149,11 @@ remains full until the provider finishes the canceled receipt.
 `--cancel-finish` closes an expired receipt before RECEIVE and confirms that
 its pending notice is removed.
 
-`session app://counter.pxe` runs a provider with two counter exports on one
+`session boot://counter.pxe` runs a provider with two counter exports on one
 receiver. A launched client receives different resource grants, attenuates a
 copy and an IPC attachment, verifies protocol matching, and uses both CALL and
 send-only delivery. The provider authenticates object ID and actual rights,
-then acknowledges natural retirement. `session app://counter.pxe --withdraw`
+then acknowledges natural retirement. `session boot://counter.pxe --withdraw`
 withdraws an export during a delivered call, finishes its cancellation receipt,
 acknowledges retirement while an old client handle remains open, and reuses the
 same ID for a new export. `--exit` ends the provider with a delivered call; its
@@ -164,12 +164,12 @@ the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
 
-`app://init-install.pxe` is the dedicated trusted installer handoff. It requires
+`boot://init-install.pxe` is the dedicated trusted installer handoff. It requires
 the install entry's `disks` inventory service and read-only `boot_kernel` and
-`boot_archive` FILE grants, opens `app://installer.pxe`, and launches only that
+`boot_archive` FILE grants, opens `boot://installer.pxe`, and launches only that
 native program. The child receives these resources, memory, console input/output,
-a readable clock, random bytes and the read-only app root. It receives no launcher,
-home root or generic session handoff. Standard streams use separate grants.
+a readable clock, random bytes and the read-only boot root. It receives no launcher,
+tmp root or generic session handoff. Standard streams use separate grants.
 Missing authority or an unpackaged installer reports failure and stops; this
 entry does not supply an installer stub. Init waits for completion and reports
 its status.
@@ -188,7 +188,7 @@ backend with understood filesystem features. `--optional` continues only when
 Names are explicit directory bindings, separate from service namespace entries. Duplicate or conflicting names fail without replacement.
 The shell reserves binding storage before opening and rechecks the service
 namespace before publication; it closes an unpublished root on conflict.
-The profile supports sixteen selected roots including app, home and HOST.
+The profile supports sixteen selected roots including boot, tmp and HOST.
 Default scripts require no native disk; HOST keeps its existing command syntax.
 Native mounts request filesystem observation when the supplied mount authority
 holds OBSERVE; `--no-info` explicitly omits it. The option applies only to native
@@ -234,14 +234,14 @@ grant. The shell publishes its attached export and replies before the provider
 starts serving. For example:
 
 ```sh
-service start clicks app://counter.pxe --provide
+service start clicks boot://counter.pxe --provide
 counter --lookup clicks
 counter --add clicks
 counter --restrict clicks
 counter --hold clicks &
-service replace clicks app://counter.pxe --provide
+service replace clicks boot://counter.pxe --provide
 counter --lookup clicks
-service replace clicks app://counter.pxe --provide-once
+service replace clicks boot://counter.pxe --provide-once
 counter --lookup clicks
 counter --lookup clicks
 namespace remove clicks
@@ -265,10 +265,10 @@ new ordinary children cannot see `first`, while the old namespace remains
 held by the previous session until its owners exit:
 
 ```sh
-service start first app://counter.pxe --provide
+service start first boot://counter.pxe --provide
 namespace create
 counter --lookup first
-service start second app://counter.pxe --provide
+service start second boot://counter.pxe --provide
 counter --lookup second
 ```
 
@@ -292,12 +292,12 @@ pointer and clock grants.
 `httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
 Configured boot sessions use `--start-services` to publish independent `http`
 and `https` instances after selecting `DNS_SERVER`. HTTPS loads
-`app://share/ca-certificates/cacert.pem` before publication, with bounded entropy
+`boot://share/ca-certificates/cacert.pem` before publication, with bounded entropy
 initialization. Reported HTTPS setup failure leaves HTTP and local startup usable.
 To augment public roots, restart or replace the HTTPS instance:
 
 ```
-service replace --read-only https app://httpfs.pxe --https --ca-bundle home://private-ca.pem
+service replace --read-only https boot://httpfs.pxe --https --ca-bundle home://private-ca.pem
 ```
 
 `--read-only` attenuates the launched provider's native filesystem roots and

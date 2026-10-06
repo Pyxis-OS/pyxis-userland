@@ -1,6 +1,6 @@
-#!app://shell.pxe
+#!boot://shell.pxe
 title --optional "Remote"
 mount --optional --read-write host
 namespace create
-service start text app://textfs.pxe
-session app://session.pxe --start-remote-services
+service start text boot://textfs.pxe
+session boot://session.pxe --start-remote-services

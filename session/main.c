@@ -40,10 +40,10 @@ static int launch_session(const struct session_config *config, const struct netw
   struct terminal terminal = {startup_resource("input"), startup_resource("output")};
   handle_t launcher = startup_resource("launcher");
   handle_t memory = startup_resource("memory");
-  handle_t app = startup_root("app"), home = startup_root("home");
+  handle_t boot = startup_root("boot"), tmp = startup_root("tmp");
   if (terminal.input == HANDLE_INVALID || terminal.output == HANDLE_INVALID ||
       launcher == HANDLE_INVALID || memory == HANDLE_INVALID ||
-      app == HANDLE_INVALID || home == HANDLE_INVALID) {
+      boot == HANDLE_INVALID || tmp == HANDLE_INVALID) {
     fputs("session: missing startup resource or filesystem root\n", stderr);
     return EXIT_FAILURE;
   }
@@ -51,10 +51,10 @@ static int launch_session(const struct session_config *config, const struct netw
   bool script = start_services || start_remote_services;
   const char *image_name = start_remote_services ? "init-remote-services" :
       start_services ? "init-services" : "shell.pxe";
-  const char *image_uri = start_remote_services ? "app://init-remote-services" :
-      start_services ? "app://init-services" : "app://shell.pxe";
+  const char *image_uri = start_remote_services ? "boot://init-remote-services" :
+      start_services ? "boot://init-services" : "boot://shell.pxe";
   handle_t image;
-  enum call_status status = directory_lookup(app, image_name, DIRECTORY_KIND_FILE,
+  enum call_status status = directory_lookup(boot, image_name, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot open %s (status %u)\n", image_uri, status);

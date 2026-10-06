@@ -100,14 +100,14 @@ int main(int argc, char **argv)
     .pointer = startup_resource("pointer"),
     .space = startup_resource("space"),
     .profile = startup_resource("profile"),
-    .app = startup_root("app"),
-    .home = startup_root("home"),
+    .boot = startup_root("boot"),
+    .tmp = startup_root("tmp"),
     .host_mount = startup_resource("host_mount"),
     .native_mount = startup_resource("native_mount"),
   };
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
-      shell.app == HANDLE_INVALID || shell.home == HANDLE_INVALID) {
+      shell.boot == HANDLE_INVALID || shell.tmp == HANDLE_INVALID) {
     shell_error(&shell, "shell: Missing startup resource or filesystem root\n");
     return EXIT_FAILURE;
   }

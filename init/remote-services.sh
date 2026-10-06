@@ -1,4 +1,4 @@
-#!app://shell.pxe
-service start http app://httpfs.pxe
-service start --optional --read-only https app://httpfs.pxe --https
-session app://session.pxe --remote-server 2323
+#!boot://shell.pxe
+service start http boot://httpfs.pxe
+service start --optional --read-only https boot://httpfs.pxe --https
+session boot://session.pxe --remote-server 2323

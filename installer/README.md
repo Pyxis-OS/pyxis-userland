@@ -2,9 +2,9 @@
 
 `installer.pxe` is launched by native `init-install.pxe` through the live
 image's Install Pyxis entry. It takes no arguments. It requires the explicit
-disk inventory, original kernel/archive FILE grants, read-only app assets,
+disk inventory, original kernel/archive FILE grants, read-only boot assets,
 private memory, console, clock, randomness and read-only SYSTEM_INFO. It receives no launcher, mount,
-network, writable home or namespace authority.
+network, writable tmp or namespace authority.
 
 The first screen offers Install and Update. Install retains the Proceed / Read
 the room consent flow described below. Update requires healthy matching GPT

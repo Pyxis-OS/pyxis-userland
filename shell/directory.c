@@ -109,7 +109,7 @@ enum call_status shell_directory_init(struct shell *shell)
   const char *path = startup_working_path();
   size_t depth = startup_working_directory_count();
   if (!depth) {
-    return shell_change_directory(shell, "home://");
+    return shell_change_directory(shell, "tmp://");
   }
   /* Display spelling is separate from authority in the supplied handles. */
   if (!path || !root_prefix(path)) {
@@ -179,17 +179,18 @@ enum call_status shell_open_image(struct shell *shell, const char *command, hand
   char *allocated = NULL;
   const char *path = command;
   if (!strchr(command, '/')) {
+    static const char prefix[] = "boot://", suffix[] = ".pxe";
     size_t length = strlen(command);
-    if (length > SIZE_MAX - sizeof("app://.pxe")) {
+    if (length > SIZE_MAX - sizeof(prefix) - sizeof(suffix)) {
       return CALL_LIMIT;
     }
-    allocated = malloc(length + sizeof("app://.pxe"));
+    allocated = malloc(sizeof(prefix) - 1 + length + sizeof(suffix));
     if (!allocated) {
       return CALL_NO_MEMORY;
     }
-    memcpy(allocated, "app://", 6);
-    memcpy(allocated + 6, command, length);
-    memcpy(allocated + 6 + length, ".pxe", 5);
+    memcpy(allocated, prefix, sizeof(prefix) - 1);
+    memcpy(allocated + sizeof(prefix) - 1, command, length);
+    memcpy(allocated + sizeof(prefix) - 1 + length, suffix, sizeof(suffix));
     path = allocated;
   }
   enum call_status status = prepare_workspace(shell, strlen(path));

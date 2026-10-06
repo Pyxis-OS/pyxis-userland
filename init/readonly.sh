@@ -1,6 +1,6 @@
-#!app://shell.pxe
+#!boot://shell.pxe
 title --optional "Read-only"
 mount --optional --read-only host
 namespace create
-service start text app://textfs.pxe
-session app://session.pxe --start-services
+service start text boot://textfs.pxe
+session boot://session.pxe --start-services

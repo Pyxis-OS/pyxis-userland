@@ -10,8 +10,8 @@ The normal build installs `iobench.pxe` and `share/iobench.bin`, a deterministic
 `(i ^ (i >> 8) ^ (i >> 16) ^ 0xa5) & 255`.
 
 ```text
-iobench read app://share/iobench.bin
-iobench read app://share/iobench.bin --buffer 64 --rounds 5
+iobench read boot://share/iobench.bin
+iobench read boot://share/iobench.bin --buffer 64 --rounds 5
 ```
 
 Copy requires the full 1 MiB fixture. Read accepts `--bytes N`, 1..1048576
@@ -26,7 +26,7 @@ Prepare a disposable RAM copy manually, outside the benchmark. Shell output
 redirection truncates an existing destination, so first choose a new name:
 
 ```text
-cat app://share/iobench.bin > home://iobench.bin
+cat boot://share/iobench.bin > home://iobench.bin
 iobench read home://iobench.bin
 rm home://iobench.bin
 ```
@@ -95,7 +95,7 @@ its I/O and IPC milestone documentation.
 Use the same fixture bytes for native files and HTTP. For example:
 
 ```text
-iobench read app://share/iobench-small.bin --bytes 32768
+iobench read boot://share/iobench-small.bin --bytes 32768
 iobench read http://10.0.2.2:18080/iobench-small.bin --bytes 32768
 iobench read http://10.0.2.2:18080/iobench-small.bin --bytes 32768 --buffer 65536
 iobench read http://10.0.2.2:18080/iobench.bin
@@ -132,7 +132,7 @@ context rather than matched HTTP-download results.
 ```text
 iobench write home://write.bin
 iobench write host://write-prepared.bin --prepared --sync
-iobench copy app://share/iobench.bin home://copy.bin
+iobench copy boot://share/iobench.bin home://copy.bin
 iobench copy host://iobench.bin home://copy-large.bin --buffer 65536
 ```
 
@@ -242,7 +242,7 @@ run. This is independent of the private-memory profile used by `allocbench`.
 
 ```text
 iobench write home://grow-profile.bin --profile
-iobench copy app://share/iobench.bin home://prepared-profile.bin --prepared --profile
+iobench copy boot://share/iobench.bin home://prepared-profile.bin --prepared --profile
 ```
 
 Each measured pass begins collection after preparation, before the transfer start
@@ -330,9 +330,9 @@ exit path, including setup failure; the benchmark never removes the output.
 ## Pipes
 
 ```
-session app://iobench.pxe pipe
-session app://iobench.pxe pipe --buffer 64
-session app://iobench.pxe pipe --buffer 65536 --rounds 5
+session boot://iobench.pxe pipe
+session boot://iobench.pxe pipe --buffer 64
+session boot://iobench.pxe pipe --buffer 65536 --rounds 5
 ```
 
 `session` hands off the current shell, which exits; it does not return a prompt

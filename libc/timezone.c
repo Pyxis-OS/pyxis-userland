@@ -310,7 +310,7 @@ static int load_zone(const char *name)
     errno = EINVAL;
     return -1;
   }
-  static const char prefix[] = "app://share/zoneinfo/";
+  static const char prefix[] = "boot://share/zoneinfo/";
   size_t length = strlen(name);
   if (length > SIZE_MAX - sizeof(prefix)) {
     errno = EOVERFLOW;

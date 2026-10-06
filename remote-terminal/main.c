@@ -465,8 +465,8 @@ int main(int argc, char **argv)
   handle_t listener = startup_resource("tcp_listener"), clock = startup_resource("clock");
   if (listener == HANDLE_INVALID || clock == HANDLE_INVALID ||
       startup_resource("terminal") == HANDLE_INVALID || startup_resource("launcher") == HANDLE_INVALID ||
-      startup_resource("memory") == HANDLE_INVALID || startup_root("app") == HANDLE_INVALID ||
-      startup_root("home") == HANDLE_INVALID) {
+      startup_resource("memory") == HANDLE_INVALID || startup_root("boot") == HANDLE_INVALID ||
+      startup_root("tmp") == HANDLE_INVALID) {
     fputs("remote-terminal: missing startup authority\n", stderr);
     return EXIT_FAILURE;
   }
