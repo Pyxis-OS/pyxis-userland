@@ -421,8 +421,9 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
 }
 
 /* Installed boots bind bin:// to bin/REVISION on the system pool, for the
- * running kernel's revision. Live boots, and installed boots without that
- * directory, bind the archive itself, which holds every program. */
+ * running kernel's revision. Live boots bind the archive itself, which holds
+ * every program. Installed boots without that directory bind it too, but an
+ * installed archive holds only the rescue set. */
 static void bind_bin(struct authority *authority, const struct boot_plan *plan, bool installed)
 {
   authority->bin = authority->boot;
@@ -447,7 +448,7 @@ static void bind_bin(struct authority *authority, const struct boot_plan *plan, 
     handle_close(root);
   }
   if (status != CALL_OK) {
-    printf("boot-init: no bin://%s on the pool (status %u); programs come from the archive\n",
+    printf("boot-init: no bin://%s on the pool (status %u); only the rescue set is available\n",
         revision, status);
     return;
   }
