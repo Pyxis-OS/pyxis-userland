@@ -34,15 +34,17 @@ SDK's shared shebang source. TLSF is vendored locally with its license and pin.
 
 The [native installer](installer/README.md) consumes the SDK's pinned npfs
 codecs and explicit install-mode disk/source grants. It is packaged normally;
-`init-installed` receives the persistent `system://` volume from boot init while
-retaining RAM `tmp://`.
+`init-installed` receives the persistent `system://` and `home://` volumes from
+boot init while retaining RAM `tmp://`.
 
 `boot://boot-init.pxe` is the boot init the kernel starts in Caelum's space. It
 reads `config/live.lua`, or `config/installed.lua` plus the pool override
 `system://config/boot.lua` on installed boots, mounts each configured volume
 once and creates each space with its init through the `space_factory`
 resource, forwarding only the configured roots and, to the one network owner,
-network WRITE authority. If no space starts it creates a `rescue` shell space.
+network WRITE authority. Spaces start in `home://` unless their `start` names
+another root. Live boots make `home://` a RAM volume. If no space starts it
+creates a `rescue` shell space.
 See [boot configuration](https://git.internal/PyxisOS/pyxis-os/src/branch/main/docs/userland/init.md#boot-configuration).
 
 `make libhttp` builds `BUILD/libhttp.a`. Consumers link it with picohttpparser,

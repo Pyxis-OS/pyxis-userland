@@ -565,7 +565,8 @@ int main(int argc, char **argv)
     goto done;
   }
   if (!updating) {
-    printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; system and bin volumes.\n",
+    printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; "
+        "system, bin and home volumes.\n",
         (unsigned long long)(layout.pool_bytes / INSTALL_MIB),
         (unsigned long long)(header.journal_blocks * NPFS_BLOCK_SIZE / INSTALL_MIB));
   }
@@ -638,6 +639,14 @@ int main(int argc, char **argv)
   if (disk_get_info(disk.handle, &verified) != CALL_OK || verified.gpt_status != DISK_GPT_HEALTHY ||
       memcmp(verified.gpt_guid, layout.disk_guid, 16)) {
     fputs("installer: GPT read-back failed\n", stderr);
+    goto done;
+  }
+  /* Update adds home to pools made before it existed and never opens it. */
+  status = disk_create_volume(disk.handle, INSTALL_POOL_PARTITION, INSTALL_HOME_VOLUME);
+  if (status == CALL_OK) {
+    puts("Created the home volume.");
+  } else if (status != CALL_ALREADY_EXISTS) {
+    fprintf(stderr, "installer: cannot create the home volume (status %u)\n", status);
     goto done;
   }
   printf("Writing %zu programs to bin://%s...\n", programs.count, revision);
