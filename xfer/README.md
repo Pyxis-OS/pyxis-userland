@@ -35,8 +35,9 @@ export, without vendored cryptographic code or an additional runtime library.
 Both directions capture the complete file in memory, limited to 16 MiB. Source
 capture finishes before metadata and its digest are sent; a size change while
 capturing fails. Same-size concurrent edits can affect the captured bytes, whose
-digest still describes exactly what is sent. Guest file names are valid UTF-8
-and at most 200 bytes; host paths are valid UTF-8 and at most 1024 bytes. Each
+digest still describes exactly what is sent. Guest file names are valid UTF-8,
+contain no ASCII control bytes or DEL, and are at most 200 bytes; host paths are
+valid UTF-8 and at most 1024 bytes. Each
 uncompressed chunk is at most 2048 bytes; encoded OSC frames are at most 4096
 bytes. Confirmation and each peer reply have a 120-second deadline; cancellation
 drains replies for at most five seconds. Unsupported or vanished peers therefore

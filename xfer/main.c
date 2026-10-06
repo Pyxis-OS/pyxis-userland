@@ -43,6 +43,11 @@ static bool native_fail(struct transfer *transfer, enum call_status status, cons
 
 static bool plain_name(const char *name)
 {
+  for (const unsigned char *byte = (const unsigned char *)name; *byte; byte++) {
+    if (*byte < 32 || *byte == 127) {
+      return false;
+    }
+  }
   return *name && strlen(name) <= XFER_NAME_MAX && strcmp(name, ".") &&
       strcmp(name, "..") && !strchr(name, '/') && !strchr(name, '\\') && utf8_text(name);
 }
