@@ -17,6 +17,7 @@
 #define INSTALL_ESP_PARTITION 1
 #define INSTALL_POOL_PARTITION 2
 #define INSTALL_BIN_VOLUME "bin"
+#define INSTALL_HOME_VOLUME "home"
 #define INSTALL_UNKNOWN_REVISION "unknown"
 
 struct install_disk {

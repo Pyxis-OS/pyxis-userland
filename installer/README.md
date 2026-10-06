@@ -68,7 +68,9 @@ fills the packaged template with a three-second timeout, a disk-GUID-scoped
 normal command line and the rescue entry's, which adds `boot.default_config=1`,
 and omits the installer entry and any global `default_entry`. Update treats
 exactly this two-entry form as valid. Boot init then gives `init-installed`
-partition 2's system volume read-write as `system://`; `tmp://` stays in RAM.
+partition 2's system and home volumes read-write as `system://` and `home://`;
+`tmp://` stays in RAM. Install and Update create the home volume when it is
+missing and never write into it.
 
 Success requires disk flush, explicit raw release/GPT rescan, FAT path lookup
 and byte-for-byte source comparisons, then ordinary read-only pool reopening
