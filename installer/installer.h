@@ -8,6 +8,11 @@
 
 #define INSTALL_MIB UINT64_C(1048576)
 #define INSTALL_ESP_BYTES (UINT64_C(512) * INSTALL_MIB)
+/* The installed boot entries: normal, and rescue, which ignores the pool's
+ * boot configuration. The menu waits so the rescue entry stays reachable. */
+#define INSTALL_BOOT_INIT_OPTION "init=boot://boot-init.pxe"
+#define INSTALL_RESCUE_OPTION "boot.default_config=1"
+#define INSTALL_MENU_TIMEOUT_SECONDS 3
 
 struct install_disk {
   handle_t handle;

@@ -5,8 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Exactly one source: an open FILE, or caller bytes delivered once. */
 struct config_reader {
   FILE *file;
+  const char *memory;
+  size_t memory_size;
   const char *path;
   char bytes[512];
   lua_CFunction decode;
@@ -17,6 +20,13 @@ static const char *read_source(lua_State *state, void *data, size_t *size)
 {
   (void)state;
   struct config_reader *reader = data;
+  if (!reader->file) {
+    const char *bytes = reader->memory;
+    *size = reader->memory_size;
+    reader->memory = NULL;
+    reader->memory_size = 0;
+    return *size ? bytes : NULL;
+  }
   *size = fread(reader->bytes, 1, sizeof(reader->bytes), reader->file);
   return *size ? reader->bytes : NULL;
 }
@@ -68,7 +78,7 @@ static int evaluate_config(lua_State *state)
   }
   const char *name = lua_pushfstring(state, "@%s", reader->path);
   int status = lua_load(state, read_source, reader, name, "t");
-  if (ferror(reader->file)) {
+  if (reader->file && ferror(reader->file)) {
     return luaL_error(state, "cannot read configuration");
   }
   if (status != LUA_OK) {
@@ -86,6 +96,25 @@ static int evaluate_config(lua_State *state)
   return 0;
 }
 
+static bool evaluate(struct config_reader *reader)
+{
+  lua_State *state = luaL_newstate();
+  if (!state) {
+    fprintf(stderr, "config: %s: cannot allocate evaluator\n", reader->path);
+    return false;
+  }
+  lua_pushcfunction(state, evaluate_config);
+  lua_pushlightuserdata(state, reader);
+  int status = lua_pcall(state, 1, 0, 0);
+  if (status != LUA_OK) {
+    const char *error = lua_type(state, -1) == LUA_TSTRING ?
+        lua_tostring(state, -1) : "non-string configuration error";
+    fprintf(stderr, "config: %s: %s\n", reader->path, error);
+  }
+  lua_close(state);
+  return status == LUA_OK;
+}
+
 enum config_result config_read(const char *path, lua_CFunction decode, void *output)
 {
   FILE *file = fopen(path, "rb");
@@ -96,25 +125,20 @@ enum config_result config_read(const char *path, lua_CFunction decode, void *out
     fprintf(stderr, "config: %s: %s\n", path, strerror(errno));
     return CONFIG_ERROR;
   }
-  lua_State *state = luaL_newstate();
-  if (!state) {
-    fclose(file);
-    fprintf(stderr, "config: %s: cannot allocate evaluator\n", path);
-    return CONFIG_ERROR;
-  }
   struct config_reader reader = {.file = file, .path = path, .decode = decode, .output = output};
-  lua_pushcfunction(state, evaluate_config);
-  lua_pushlightuserdata(state, &reader);
-  int status = lua_pcall(state, 1, 0, 0);
-  if (status != LUA_OK) {
-    const char *error = lua_type(state, -1) == LUA_TSTRING ?
-        lua_tostring(state, -1) : "non-string configuration error";
-    fprintf(stderr, "config: %s: %s\n", path, error);
-  }
-  lua_close(state);
+  bool evaluated = evaluate(&reader);
   int closed = fclose(file);
   if (closed) {
     fprintf(stderr, "config: %s: close failed: %s\n", path, strerror(errno));
   }
-  return status == LUA_OK && !closed ? CONFIG_OK : CONFIG_ERROR;
+  return evaluated && !closed ? CONFIG_OK : CONFIG_ERROR;
+}
+
+enum config_result config_read_bytes(const char *name, const char *bytes, size_t size,
+    lua_CFunction decode, void *output)
+{
+  struct config_reader reader = {
+    .memory = bytes, .memory_size = size, .path = name, .decode = decode, .output = output,
+  };
+  return evaluate(&reader) ? CONFIG_OK : CONFIG_ERROR;
 }

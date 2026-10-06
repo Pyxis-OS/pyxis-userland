@@ -7,6 +7,7 @@
 #include <abi/syscall.h>
 
 struct path_context;
+struct space_definition;
 
 /* CREATE_GROUP authority on an unbound launcher returns two owned, distinct
  * handles: a supervision grant with CONTROL|WAIT and a group-bound launcher
@@ -65,6 +66,12 @@ enum call_status launcher_launch_batch(handle_t launcher, const struct launch_re
  * On failure no child is returned; request and source grants are preserved.
  * Reads do not snapshot mutable files; the interpreter receives the same file. */
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
+    const struct path_context *interpreter_context, handle_t *child);
+
+/* As program_launch, but the child becomes the first process of a new space
+ * created through FACTORY; see space_create_started for the space's rules. */
+enum call_status program_create_space(handle_t factory, const struct space_definition *space,
+    const uint64_t *cpus, uint64_t cpu_count, const struct launch_request *request,
     const struct path_context *interpreter_context, handle_t *child);
 
 /* Resolve a single shebang level for every stage before submitting the batch.

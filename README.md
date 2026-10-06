@@ -32,7 +32,16 @@ SDK's shared shebang source. TLSF is vendored locally with its license and pin.
 
 The [native installer](installer/README.md) consumes the SDK's pinned npfs
 codecs and explicit install-mode disk/source grants. It is packaged normally;
-`init-installed` mounts its persistent `system://` volume while retaining a RAM home.
+`init-installed` receives the persistent `system://` volume from boot init while
+retaining RAM `tmp://`.
+
+`boot://boot-init.pxe` is the boot init the kernel starts in Caelum's space. It
+reads `config/live.lua`, or `config/installed.lua` plus the pool override
+`system://config/boot.lua` on installed boots, mounts each configured volume
+once and creates each space with its init through the `space_factory`
+resource, forwarding only the configured roots and, to the one network owner,
+network WRITE authority. If no space starts it creates a `rescue` shell space.
+See [boot configuration](https://git.internal/PyxisOS/pyxis-os/src/branch/main/docs/userland/init.md#boot-configuration).
 
 `make libhttp` builds `BUILD/libhttp.a`. Consumers link it with picohttpparser,
 libtls and `MBEDTLS_LIBRARIES` before SDK libraries. Each fetch receives an
@@ -164,23 +173,25 @@ the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
 
-`boot://init-install.pxe` is the dedicated trusted installer handoff. It requires
-the install entry's `disks` inventory service and read-only `boot_kernel` and
-`boot_archive` FILE grants, opens `boot://installer.pxe`, and launches only that
-native program. The child receives these resources, memory, console input/output,
-a readable clock, random bytes and the read-only boot root. It receives no launcher,
-tmp root or generic session handoff. Standard streams use separate grants.
-Missing authority or an unpackaged installer reports failure and stops; this
-entry does not supply an installer stub. Init waits for completion and reports
-its status.
+`boot://init-install.pxe` is the install entry's boot init. It requires the
+`disks` inventory service, read-only `boot_kernel` and `boot_archive` FILE grants
+and the space factory, opens `boot://installer.pxe`, and creates the `install`
+space with only that native program. The child receives these resources,
+memory, a readable clock, random bytes and the read-only boot root; the kernel
+adds the space's console, input devices, display and title grants. It receives
+no launcher, tmp root or generic session handoff. Missing authority or an
+unpackaged installer reports failure and stops; this entry does not supply an
+installer stub. Init drops the factory, waits for completion and reports its
+status on the Caelum tab.
 
 [disk.h](include/disk.h) provides bounded native inventory, exclusive raw-disk
 I/O, flush/release and read-only volume-open wrappers. Raw writes require a live
 claim; flush supplies durability and release rescans GPT. Device alignment and
 target bounds remain native checks. No wrapper retries an uncertain operation.
 
-Trusted init selects a native volume with
-`mount --partition 1 --volume system --read-only data://`, or requests writable
+Boot init normally mounts volumes from its configuration. A shell holding
+`native_mount` can still select a native volume with
+`mount --partition 1 --volume system --read-only data://`, or request writable
 content grants with `--read-write`. Exactly one access mode is required. Writable
 roots require WRITE on the supplied `native_mount` authority and a writable
 backend with understood filesystem features. `--optional` continues only when

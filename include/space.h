@@ -2,6 +2,7 @@
 #define USERSPACE_SPACE_H
 
 #include <abi/handle.h>
+#include <abi/launcher.h>
 #include <abi/space.h>
 #include <abi/syscall.h>
 
@@ -13,5 +14,27 @@ enum call_status space_set_title(handle_t space, const char *title);
  * CPUS holds ceil(CPU_COUNT / 64) words; bit N of word N / 64 selects boot CPU
  * N. See <abi/space.h> for the ceiling, BSP and failure rules. */
 enum call_status space_set_affinity(handle_t space, const uint64_t *cpus, uint64_t cpu_count);
+
+/* A new space's fixed name and initial title, as <abi/space.h> describes. */
+struct space_definition {
+  const char *name;
+  const char *title;
+};
+
+/* CREATE authority on the space factory. Appends a space that never starts;
+ * its tab shows REASON, 1..SPACE_REASON_MAX printable ASCII bytes. An
+ * untrustworthy response returns CALL_OUTCOME_UNKNOWN: the space may exist. */
+enum call_status space_create_unstarted(handle_t factory, const struct space_definition *space,
+    const char *reason);
+
+/* CREATE authority on the space factory. Appends a space whose ceiling is CPUS
+ * (SET_AFFINITY's encoding) and launches REQUEST's native image as its first
+ * process. Streams must be NONE; the kernel adds the space's console, input
+ * devices, display and space handle. Success returns an owned WAIT handle.
+ * Source grants survive. An untrustworthy response returns
+ * CALL_OUTCOME_UNKNOWN. Use program_create_space for scripts. */
+enum call_status space_create_started(handle_t factory, const struct space_definition *space,
+    const uint64_t *cpus, uint64_t cpu_count, const struct launch_request *request,
+    handle_t *child);
 
 #endif

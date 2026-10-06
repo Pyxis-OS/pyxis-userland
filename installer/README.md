@@ -1,9 +1,10 @@
 # Native installer
 
-`installer.pxe` is launched by native `init-install.pxe` through the live
-image's Install Pyxis entry. It takes no arguments. It requires the explicit
-disk inventory, original kernel/archive FILE grants, read-only boot assets,
-private memory, console, clock, randomness and read-only SYSTEM_INFO. It receives no launcher, mount,
+`installer.pxe` is the first process of the `install` space, which native
+`init-install.pxe` creates through the live image's Install Pyxis entry. It
+takes no arguments. It requires the explicit disk inventory, original
+kernel/archive FILE grants, read-only boot assets, private memory, console,
+clock, randomness and read-only SYSTEM_INFO. It receives no launcher, mount,
 network, writable tmp or namespace authority.
 
 The first screen offers Install and Update. Install retains the Proceed / Read
@@ -63,10 +64,11 @@ FAT boot-file storage are initialized; this is not secure erasure.
 The ESP contains Limine at `EFI/BOOT/BOOTX64.EFI` and the original kernel,
 whole archive, generated configuration and `boot/revision` under `boot`.
 The revision record is the kernel build revision followed by a newline. Installed configuration
-fills the packaged template with timeout zero and a disk-GUID-scoped normal
-command line, and omits the installer entry and any global `default_entry`.
-Fixed `init-installed` mounts
-partition 2's system volume read-write as `system://`; home stays in RAM.
+fills the packaged template with a three-second timeout, a disk-GUID-scoped
+normal command line and the rescue entry's, which adds `boot.default_config=1`,
+and omits the installer entry and any global `default_entry`. Update treats
+exactly this two-entry form as valid. Boot init then gives `init-installed`
+partition 2's system volume read-write as `system://`; `tmp://` stays in RAM.
 
 Success requires disk flush, explicit raw release/GPT rescan, FAT path lookup
 and byte-for-byte source comparisons, then ordinary read-only pool reopening
