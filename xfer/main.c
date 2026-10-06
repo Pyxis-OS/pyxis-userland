@@ -297,6 +297,14 @@ static bool publish_file(struct transfer *transfer, const char *name, bool overw
   }
   status = directory_rename(transfer->parent, transfer->stage_name, transfer->parent,
       name, overwrite ? DIRECTORY_RENAME_REPLACE : DIRECTORY_RENAME_NO_REPLACE);
+  if (status == CALL_ALREADY_EXISTS) {
+    term_print(&transfer->wire.terminal, "xfer: ");
+    term_print(&transfer->wire.terminal, name);
+    term_print(&transfer->wire.terminal, overwrite ? " already exists and cannot be replaced\n" :
+        " already exists; use --overwrite to replace it\n");
+    return transfer_fail(transfer, "EEXIST", overwrite ? "Existing destination cannot be replaced" :
+        "Destination already exists; use --overwrite to replace it");
+  }
   if (status != CALL_OK) {
     return native_fail(transfer, status, "atomic publication (outcome may be uncertain on failure)");
   }
