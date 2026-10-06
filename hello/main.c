@@ -107,14 +107,14 @@ static int read_application_file(handle_t output, handle_t root, char *scratch,
 
   handle_t directory = HANDLE_INVALID;
   int result = -1;
-  if (console_print(output, "app://\n") != 0 || list_directory(output, root) != 0 ||
-      path_resolve(&context, "app://share", DIRECTORY_KIND_DIRECTORY,
+  if (console_print(output, "boot://\n") != 0 || list_directory(output, root) != 0 ||
+      path_resolve(&context, "boot://share", DIRECTORY_KIND_DIRECTORY,
         DIRECTORY_RIGHT_ENUMERATE, &workspace, &directory) != CALL_OK) {
     goto done;
   }
-  if (console_print(output, "app://share/\n") != 0 || list_directory(output, directory) != 0 ||
-      read_path(output, &context, "app://share/hello.txt", &workspace) != 0 ||
-      path_change(&context, "app://share", &workspace) != CALL_OK) {
+  if (console_print(output, "boot://share/\n") != 0 || list_directory(output, directory) != 0 ||
+      read_path(output, &context, "boot://share/hello.txt", &workspace) != 0 ||
+      path_change(&context, "boot://share", &workspace) != CALL_OK) {
     goto done;
   }
   result = read_path(output, &context, "hello.txt", &workspace);
@@ -174,19 +174,19 @@ done:
 }
 
 static int run_utility(handle_t launcher, handle_t output, handle_t memory,
-                       handle_t app, handle_t home, const char **arguments, size_t count,
-                       uint64_t app_rights, uint64_t home_rights)
+                       handle_t boot, handle_t home, const char **arguments, size_t count,
+                       uint64_t boot_rights, uint64_t home_rights)
 {
   handle_t image;
-  if (directory_lookup(app, arguments[0], DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image) != CALL_OK) {
+  if (directory_lookup(boot, arguments[0], DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image) != CALL_OK) {
     return -1;
   }
 
-  enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_APP, UTILITY_HOME, UTILITY_GRANTS };
+  enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_BOOT, UTILITY_HOME, UTILITY_GRANTS };
   struct launch_grant grants[UTILITY_GRANTS + STARTUP_STREAM_COUNT] = {
     {output, CONSOLE_RIGHT_WRITE, 0},
     {memory, MEMORY_RIGHT_MANAGE, 0},
-    {app, app_rights, 0},
+    {boot, boot_rights, 0},
     {home, home_rights, 0},
   };
   struct launch_binding resources[] = {
@@ -194,7 +194,7 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
     {(uintptr_t)"memory", UTILITY_MEMORY},
   };
   struct launch_binding roots[] = {
-    {(uintptr_t)"app", UTILITY_APP},
+    {(uintptr_t)"boot", UTILITY_BOOT},
     {(uintptr_t)"home", UTILITY_HOME},
   };
   uint64_t working_directory = UTILITY_HOME;
@@ -247,24 +247,24 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
 }
 
 static int run_utilities(handle_t launcher, handle_t output, handle_t memory,
-                         handle_t app, handle_t home)
+                         handle_t boot, handle_t home)
 {
   uint64_t read_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
-  const char *cat_arguments[] = {"cat.pxe", "app://share/hello.txt", "home://notes/greeting.txt"};
-  if (run_utility(launcher, output, memory, app, home, cat_arguments, 3,
+  const char *cat_arguments[] = {"cat.pxe", "boot://share/hello.txt", "home://notes/greeting.txt"};
+  if (run_utility(launcher, output, memory, boot, home, cat_arguments, 3,
         read_rights, read_rights) != 0) {
     return -1;
   }
 
   const char *mkdir_arguments[] = {"mkdir.pxe", "home://documents"};
-  if (run_utility(launcher, output, memory, app, home, mkdir_arguments, 2,
+  if (run_utility(launcher, output, memory, boot, home, mkdir_arguments, 2,
         0, DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE) != 0) {
     return -1;
   }
 
   uint64_t list_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE;
-  const char *ls_arguments[] = {"ls.pxe", "app://", "home://", "home://documents"};
-  return run_utility(launcher, output, memory, app, home, ls_arguments, 4,
+  const char *ls_arguments[] = {"ls.pxe", "boot://", "home://", "home://documents"};
+  return run_utility(launcher, output, memory, boot, home, ls_arguments, 4,
       list_rights, list_rights);
 }
 
@@ -329,7 +329,7 @@ int main(int argc, char **argv)
 {
   handle_t input = startup_resource("input");
   handle_t output = startup_resource("output");
-  handle_t root = startup_root("app");
+  handle_t root = startup_root("boot");
   handle_t home = startup_root("home");
   handle_t memory = startup_resource("memory");
   handle_t client = startup_resource("client_process");

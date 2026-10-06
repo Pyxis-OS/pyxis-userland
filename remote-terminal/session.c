@@ -50,12 +50,12 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   if (status != CALL_OK) {
     goto done;
   }
-  handle_t app = startup_root("app"), home = startup_root("home");
-  if (app == HANDLE_INVALID || home == HANDLE_INVALID) {
+  handle_t boot = startup_root("boot"), tmp = startup_root("tmp");
+  if (boot == HANDLE_INVALID || tmp == HANDLE_INVALID) {
     status = CALL_NOT_FOUND;
     goto done;
   }
-  status = directory_lookup(app, "shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
+  status = directory_lookup(boot, "shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     goto done;
   }
@@ -85,7 +85,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
-  /* Reuse the selected home grant for cwd, including any withheld rights. */
+  /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t directory = SIZE_MAX;
   for (size_t i = 0; i < root_count; ++i) {
     roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
@@ -93,7 +93,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     if (status != CALL_OK) {
       goto done;
     }
-    if (!strcmp((const char *)selected_roots[i].name, "home")) {
+    if (!strcmp((const char *)selected_roots[i].name, "tmp")) {
       directory = grant_count;
     }
     ++grant_count;
@@ -127,14 +127,14 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count};
     grants[grant_count++] = (struct launch_grant){source, rights & allowed[i].rights, 0};
   }
-  const char *arguments[] = {"app://shell.pxe", "--no-echo"};
+  const char *arguments[] = {"boot://shell.pxe", "--no-echo"};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
     .resources = (uintptr_t)resources, .resource_count = resource_count,
     .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)&directory, .working_directory_count = 1,
-    .working_path = (uintptr_t)"home://",
+    .working_path = (uintptr_t)"tmp://",
     .argv = (uintptr_t)arguments, .argc = no_echo ? 2 : 1,
     .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
   };

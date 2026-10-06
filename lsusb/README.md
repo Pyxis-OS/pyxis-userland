@@ -30,7 +30,7 @@ class/subclass/protocol and endpoint count. These are observed descriptors;
 output does not imply that a configuration is selected or an interface bound.
 
 `-n` skips the name database. `-i FILE` replaces
-`app://share/hwdata/usb.ids`. The parser streams one pass with at most 1023 bytes
+`boot://share/hwdata/usb.ids`. The parser streams one pass with at most 1023 bytes
 per record and retains labels only for listed device IDs. Vendors and one-tab
 products are used; two-tab interface lines and class/other sections are ignored.
 Malformed, oversized or embedded-NUL records supply no names. First labels win.

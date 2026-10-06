@@ -133,10 +133,10 @@ int launch_remote_server(const struct session_config *config,
   handle_t launcher = startup_resource("launcher"), tcp = startup_resource("tcp");
   handle_t terminal = startup_resource("terminal"), output = startup_resource("output");
   handle_t authority = startup_resource("net_config");
-  handle_t app = startup_root("app"), home = startup_root("home");
+  handle_t boot = startup_root("boot"), tmp = startup_root("tmp");
   if (memory == HANDLE_INVALID || clock == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       tcp == HANDLE_INVALID || terminal == HANDLE_INVALID || output == HANDLE_INVALID ||
-      authority == HANDLE_INVALID || app == HANDLE_INVALID || home == HANDLE_INVALID) {
+      authority == HANDLE_INVALID || boot == HANDLE_INVALID || tmp == HANDLE_INVALID) {
     fputs("session: missing remote server launch authority\n", stderr);
     return EXIT_FAILURE;
   }
@@ -165,7 +165,7 @@ int launch_remote_server(const struct session_config *config,
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
-  /* Reuse the selected home grant for cwd, including any withheld rights. */
+  /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t working_directory = SIZE_MAX;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
   struct startup_variable *environment = NULL;
@@ -174,17 +174,17 @@ int launch_remote_server(const struct session_config *config,
   for (size_t i = 0; i < root_count; ++i) {
     const char *name = (const char *)selected_roots[i].name;
     roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
-    if (!directory_grant(selected_roots[i].handle, !strcmp(name, "app"),
+    if (!directory_grant(selected_roots[i].handle, !strcmp(name, "boot"),
         &grants[grant_count])) {
       goto done;
     }
-    if (!strcmp(name, "home")) {
+    if (!strcmp(name, "tmp")) {
       working_directory = grant_count;
     }
     ++grant_count;
   }
   if (working_directory == SIZE_MAX) {
-    fputs("session: missing selected home root\n", stderr);
+    fputs("session: missing selected tmp root\n", stderr);
     goto done;
   }
 
@@ -243,13 +243,13 @@ int launch_remote_server(const struct session_config *config,
   }
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
-  const char *arguments[] = {"app://remote-terminal.pxe", tab_width};
+  const char *arguments[] = {"boot://remote-terminal.pxe", tab_width};
   struct launch_request request = {
     .grants = (uintptr_t)grants, .grant_count = grant_count,
     .resources = (uintptr_t)resources, .resource_count = resource_count,
     .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)&working_directory, .working_directory_count = 1,
-    .working_path = (uintptr_t)"home://",
+    .working_path = (uintptr_t)"tmp://",
     .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = 2,
     .streams = {
@@ -270,10 +270,10 @@ int launch_remote_server(const struct session_config *config,
         rights & NAMESPACE_RIGHT_LOOKUP, transport};
     request.grant_count = grant_count;
   }
-  status = directory_lookup(app, "remote-terminal.pxe", DIRECTORY_KIND_FILE,
+  status = directory_lookup(boot, "remote-terminal.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot open app://remote-terminal.pxe (status %u)\n", status);
+    fprintf(stderr, "session: cannot open boot://remote-terminal.pxe (status %u)\n", status);
     goto done;
   }
   request.image = image;

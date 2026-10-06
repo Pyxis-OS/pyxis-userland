@@ -157,7 +157,7 @@ static bool check_timezone(const char *name)
     return false;
   }
 
-  const char prefix[] = "app://share/zoneinfo/";
+  const char prefix[] = "boot://share/zoneinfo/";
   size_t length = strlen(name);
   if (length > SIZE_MAX - sizeof(prefix)) {
     return false;

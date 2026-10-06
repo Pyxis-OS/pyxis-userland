@@ -423,7 +423,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         ++cursor;
       }
       size_t length = cursor - start;
-      if (same_token(bytes + start, length, "space.pyxis=app://init-installed")) {
+      if (same_token(bytes + start, length, "space.pyxis=boot://init-installed")) {
         ++installed;
       }
       if (length >= 11 && !memcmp(bytes + start, "mount.disk=", 11)) {

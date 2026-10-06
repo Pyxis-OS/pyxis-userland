@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SESSION_CONFIG_PATH "app://config/session.lua"
+#define SESSION_CONFIG_PATH "boot://config/session.lua"
 
 /* Values are strings for now. Capability-valued variables are a later idea,
  * so this is not the permanent shape of an environment entry. */

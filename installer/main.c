@@ -317,7 +317,7 @@ static char *boot_configuration(const struct install_source *source, const uint8
   char disk_guid[37], normal[256];
   install_guid_text(guid, disk_guid);
   snprintf(normal, sizeof(normal),
-      "  cmdline: space.pyxis=app://init-installed mount.disk=%s\n", disk_guid);
+      "  cmdline: space.pyxis=boot://init-installed mount.disk=%s\n", disk_guid);
   bool skip = false, timeout = false, command = false, install_entry = false;
   size_t used = 0;
   char *line = input;
@@ -464,7 +464,7 @@ int main(int argc, char **argv)
   struct terminal terminal = {
     .input = startup_resource("input"), .output = startup_resource("output"),
   };
-  handle_t disks = startup_resource("disks"), app = startup_root("app");
+  handle_t disks = startup_resource("disks"), boot = startup_root("boot");
   handle_t clock = startup_resource("clock"), random = startup_resource("random");
   struct install_source kernel = {.handle = startup_resource("boot_kernel")};
   struct install_source archive = {.handle = startup_resource("boot_archive")};
@@ -476,7 +476,7 @@ int main(int argc, char **argv)
   struct install_esp *esp = NULL;
   bool claimed = false, attempted_write = false, updating = false;
   int result = EXIT_FAILURE;
-  if (disks == HANDLE_INVALID || app == HANDLE_INVALID || clock == HANDLE_INVALID ||
+  if (disks == HANDLE_INVALID || boot == HANDLE_INVALID || clock == HANDLE_INVALID ||
       random == HANDLE_INVALID || kernel.handle == HANDLE_INVALID || archive.handle == HANDLE_INVALID ||
       terminal.input == HANDLE_INVALID || terminal.output == HANDLE_INVALID) {
     fputs("installer: missing install-mode authority\n", stderr);
@@ -496,8 +496,8 @@ int main(int argc, char **argv)
   char revision_record[sizeof(identity.build_revision) + 1];
   snprintf(revision_record, sizeof(revision_record), "%s\n", revision);
   printf("Live kernel revision: %s\n", revision);
-  if (!source_open("app://share/installer/BOOTX64.EFI", &efi) ||
-      !source_open("app://share/installer/limine.conf.template", &template) ||
+  if (!source_open("boot://share/installer/BOOTX64.EFI", &efi) ||
+      !source_open("boot://share/installer/limine.conf.template", &template) ||
       file_size(kernel.handle, &kernel.bytes) != CALL_OK || !kernel.bytes ||
       file_size(archive.handle, &archive.bytes) != CALL_OK || !archive.bytes ||
       !inventory(disks, read_the_room, updating, &targets, &count)) {

@@ -57,7 +57,7 @@ struct shell {
   struct terminal terminal;
   handle_t profile, space, launcher, memory, display, clock, system_info, echo, udp, tcp, pipe,
       service, namespace_service, namespace, random, net_config, keyboard, pointer, terminal_service,
-      app, home, host_mount, native_mount;
+      boot, tmp, host_mount, native_mount;
   bool owns_namespace;
   struct path_root roots[STARTUP_ROOT_LIMIT];
   bool owns_root[STARTUP_ROOT_LIMIT];

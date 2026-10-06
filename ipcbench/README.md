@@ -3,13 +3,13 @@
 Run from the interactive shell through the session launcher:
 
 ```text
-session app://ipcbench.pxe call
-session app://ipcbench.pxe send
-session app://ipcbench.pxe call --size 0
-session app://ipcbench.pxe call --size 4096
-session app://ipcbench.pxe send --size 0
-session app://ipcbench.pxe send --size 4096
-session app://ipcbench.pxe send --size 64 --messages 8 --rounds 5
+session boot://ipcbench.pxe call
+session boot://ipcbench.pxe send
+session boot://ipcbench.pxe call --size 0
+session boot://ipcbench.pxe call --size 4096
+session boot://ipcbench.pxe send --size 0
+session boot://ipcbench.pxe send --size 4096
+session boot://ipcbench.pxe send --size 64 --messages 8 --rounds 5
 ```
 
 `session` replaces the current shell. Each example needs a fresh boot/session

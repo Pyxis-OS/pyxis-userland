@@ -28,10 +28,10 @@ static bool close_grants(const struct endpoint_packet *packet)
   return closed;
 }
 
-static enum call_status open_content(handle_t app, handle_t *content)
+static enum call_status open_content(handle_t boot, handle_t *content)
 {
   handle_t share;
-  enum call_status status = directory_lookup(app, "share", DIRECTORY_KIND_DIRECTORY,
+  enum call_status status = directory_lookup(boot, "share", DIRECTORY_KIND_DIRECTORY,
       DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &share);
   if (status != CALL_OK) {
     return status;
@@ -233,11 +233,11 @@ int main(int argc, char **argv)
   handle_t memory = startup_resource("memory");
   handle_t output = startup_resource("output");
   handle_t clock = startup_resource("clock");
-  handle_t app = startup_root("app");
+  handle_t boot = startup_root("boot");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (deadline_mode && clock == HANDLE_INVALID) ||
-      app == HANDLE_INVALID) {
+      boot == HANDLE_INVALID) {
     return 1;
   }
 
@@ -256,9 +256,9 @@ int main(int argc, char **argv)
   if (!packets) {
     goto done;
   }
-  status = directory_lookup(app, "client.pxe", DIRECTORY_KIND_FILE,
+  status = directory_lookup(boot, "client.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
-  if (status != CALL_OK || open_content(app, &content) != CALL_OK) {
+  if (status != CALL_OK || open_content(boot, &content) != CALL_OK) {
     goto done;
   }
   for (size_t i = 0; i < count; ++i) {

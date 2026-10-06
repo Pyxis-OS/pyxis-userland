@@ -30,7 +30,7 @@ handle_t startup_root(const char *scheme);
 const struct startup_binding *startup_resources(void);
 size_t startup_resource_count(void);
 
-/* Userspace launch profile bound, including app/home/HOST. */
+/* Userspace launch profile bound, including boot/tmp/HOST. */
 #define STARTUP_ROOT_LIMIT 16
 /* Borrow the explicit directory binding selection; never enumerates resources. */
 const struct startup_binding *startup_roots(void);

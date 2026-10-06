@@ -6,7 +6,7 @@
 #include <string.h>
 #include <system_info.h>
 
-#define DEFAULT_DATABASE "app://share/hwdata/usb.ids"
+#define DEFAULT_DATABASE "boot://share/hwdata/usb.ids"
 #define DATABASE_LINE_CAPACITY 1024
 #define ID_DIGITS 4
 

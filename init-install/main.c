@@ -35,16 +35,16 @@ int main(int argc, char **argv)
 {
   (void)argc;
   (void)argv;
-  enum { DISKS, KERNEL, ARCHIVE, MEMORY, INPUT, OUTPUT, CLOCK, RANDOM, SYSTEM_INFO, APP,
-    LAUNCHER, SOURCE_COUNT, FIRST_STREAM = APP + 1,
+  enum { DISKS, KERNEL, ARCHIVE, MEMORY, INPUT, OUTPUT, CLOCK, RANDOM, SYSTEM_INFO, BOOT_ROOT,
+    LAUNCHER, SOURCE_COUNT, FIRST_STREAM = BOOT_ROOT + 1,
     GRANT_COUNT = FIRST_STREAM + STARTUP_STREAM_COUNT };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
-    "input", "output", "clock", "random", "system_info", "app", "launcher"};
+    "input", "output", "clock", "random", "system_info", "boot", "launcher"};
   handle_t sources[SOURCE_COUNT] = {
     startup_resource("disks"), startup_resource("boot_kernel"), startup_resource("boot_archive"),
     startup_resource("memory"), startup_resource("input"), startup_resource("output"),
     startup_resource("clock"), startup_resource("random"), startup_resource("system_info"),
-    startup_root("app"),
+    startup_root("boot"),
     startup_resource("launcher"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
@@ -55,13 +55,13 @@ int main(int argc, char **argv)
       goto done;
     }
   }
-  enum call_status status = directory_lookup(sources[APP], "installer.pxe",
+  enum call_status status = directory_lookup(sources[BOOT_ROOT], "installer.pxe",
       DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     if (status == CALL_NOT_FOUND) {
-      fputs("init-install: app://installer.pxe is not packaged; installation unavailable\n", stderr);
+      fputs("init-install: boot://installer.pxe is not packaged; installation unavailable\n", stderr);
     } else {
-      fprintf(stderr, "init-install: cannot open app://installer.pxe (status %u)\n", status);
+      fprintf(stderr, "init-install: cannot open boot://installer.pxe (status %u)\n", status);
     }
     goto done;
   }
@@ -76,7 +76,7 @@ int main(int argc, char **argv)
     [CLOCK] = {sources[CLOCK], CLOCK_RIGHT_READ, 0},
     [RANDOM] = {sources[RANDOM], RANDOM_RIGHT_READ, 0},
     [SYSTEM_INFO] = {sources[SYSTEM_INFO], SYSTEM_INFO_RIGHT_READ, 0},
-    [APP] = {sources[APP], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+    [BOOT_ROOT] = {sources[BOOT_ROOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES, 0},
     [FIRST_STREAM + STARTUP_STDIN] = {sources[INPUT], CONSOLE_RIGHT_READ, 0},
     [FIRST_STREAM + STARTUP_STDOUT] = {sources[OUTPUT], CONSOLE_RIGHT_WRITE, 0},
@@ -89,8 +89,8 @@ int main(int argc, char **argv)
     {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"random", RANDOM},
     {(uintptr_t)"system_info", SYSTEM_INFO},
   };
-  struct launch_binding roots[] = {{(uintptr_t)"app", APP}};
-  const char *arguments[] = {"app://installer.pxe"};
+  struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT_ROOT}};
+  const char *arguments[] = {"boot://installer.pxe"};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
@@ -105,7 +105,7 @@ int main(int argc, char **argv)
   };
   status = launcher_launch(sources[LAUNCHER], &request, &child);
   if (status != CALL_OK) {
-    fprintf(stderr, "init-install: cannot launch app://installer.pxe (status %u)\n", status);
+    fprintf(stderr, "init-install: cannot launch boot://installer.pxe (status %u)\n", status);
     goto done;
   }
   struct process_result completion;

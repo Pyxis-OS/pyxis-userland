@@ -6,7 +6,7 @@
 #include <string.h>
 #include <system_info.h>
 
-#define DEFAULT_DATABASE "app://share/hwdata/pci.ids"
+#define DEFAULT_DATABASE "boot://share/hwdata/pci.ids"
 /* pci.ids field widths in hexadecimal digits. */
 #define VENDOR_DIGITS 4
 #define DEVICE_DIGITS 4
