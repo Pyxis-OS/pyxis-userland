@@ -69,7 +69,7 @@ static bool iso_week(const struct tm *calendar, long long *year, int *week)
   }
   int weekday = calendar->tm_wday ? calendar->tm_wday : 7;
   int january_weekday = (calendar->tm_wday - calendar->tm_yday % 7 + 7) % 7;
-  *week = (calendar->tm_yday + 10 - weekday) / 7;
+  *week = (calendar->tm_yday + 11 - weekday) / 7;
   if (*week == 0) {
     --*year;
     january_weekday = (january_weekday + 6 - leap_year(*year)) % 7;
