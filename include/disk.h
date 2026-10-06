@@ -26,15 +26,26 @@ enum call_status disk_read(handle_t disk, uint64_t offset, void *bytes, size_t l
 enum call_status disk_write(handle_t disk, uint64_t offset, const void *bytes, size_t length);
 enum call_status disk_flush(handle_t disk);
 
-/* Flushes, rescans GPT, then ends this object's raw claim on every alias.
- * Failure reports actual progress, not rollback. The owned handle stays open.
+/* Flushes, rescans GPT for a whole-disk claim, then ends this object's raw
+ * claim on every alias. Failure reports actual progress, not rollback. The owned handle stays open.
  * Final close also releases through worker cleanup. */
 enum call_status disk_release(handle_t disk);
 
-/* After release, open a read-only npfs root through this disk's MOUNT right.
- * Requires LOOKUP and accepts read/observation directory rights only. Success
- * returns an owned root independent of disk lifetime; failure clears it. */
+/* Outside any raw claim on PARTITION, open an npfs root through this disk's
+ * MOUNT right. Requires LOOKUP. Mutation rights also need the disk's WRITE
+ * right, which only READ_WRITE opening grants. Success returns an owned root
+ * independent of disk lifetime; failure clears it. */
 enum call_status disk_open_volume(handle_t disk, uint64_t partition,
     const char *name, uint64_t rights, handle_t *root);
+
+/* Needs MOUNT and WRITE. Appends a live volume NAME with an empty root to the
+ * npfs pool in PARTITION, durably. A taken name returns ALREADY_EXISTS. */
+enum call_status disk_create_volume(handle_t disk, uint64_t partition, const char *name);
+
+/* Needs WRITE, on an object whose claim was released. PARTITION zero claims the
+ * whole disk; a GPT entry claims only that partition, which must not be mounted,
+ * while other partitions' pools stay mounted. Writes are confined to the claim,
+ * and releasing a partition claim flushes without a GPT rescan. */
+enum call_status disk_claim(handle_t disk, uint64_t partition);
 
 #endif
