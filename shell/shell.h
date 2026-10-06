@@ -50,7 +50,9 @@ struct shell_command_line {
 struct shell {
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
-  bool quiet_input; /* Root-shell option only; never forwarded to children. */
+  /* Root-shell options only; never forwarded to children. */
+  bool quiet_input;
+  bool remote_prompt;
   /* Input carries Ctrl+C arming and a clock bounds the waits. Only a root
    * shell or session successor is granted it; commands get READ alone. */
   bool interrupts;

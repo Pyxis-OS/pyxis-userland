@@ -118,4 +118,9 @@ struct term_line_result term_read_line_initial(struct terminal *term, const char
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity);
 
+/* Opt-in shell integration: emit OSC 133;B after the initial empty prompt is
+ * drawn and before reading input. Otherwise identical to term_read_line. */
+struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
+    char *buffer, size_t capacity);
+
 #endif

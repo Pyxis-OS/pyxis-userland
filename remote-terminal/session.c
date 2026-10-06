@@ -127,7 +127,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count};
     grants[grant_count++] = (struct launch_grant){source, rights & allowed[i].rights, 0};
   }
-  const char *arguments[] = {"boot://shell.pxe", "--no-echo"};
+  const char *arguments[] = {"boot://shell.pxe", no_echo ? "--no-echo" : "--remote-prompt"};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
@@ -135,7 +135,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)&directory, .working_directory_count = 1,
     .working_path = (uintptr_t)"tmp://",
-    .argv = (uintptr_t)arguments, .argc = no_echo ? 2 : 1,
+    .argv = (uintptr_t)arguments, .argc = 2,
     .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
   };
   handle_t namespace = startup_namespace();

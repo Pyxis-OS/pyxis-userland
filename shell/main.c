@@ -44,6 +44,9 @@ static struct term_line_result read_command(struct shell *shell, char *line)
   if (shell->quiet_input) {
     return term_read_line_quiet(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
   }
+  if (shell->remote_prompt) {
+    return term_read_line_marked(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
+  }
   return term_read_line(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
 }
 
@@ -72,14 +75,16 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   bool quiet_input = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--no-echo");
-  if (script == HANDLE_INVALID && argc > 1 && !quiet_input) {
-    fputs("usage: shell [--no-echo]\n", stderr);
+  bool remote_prompt = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-prompt");
+  if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt) {
+    fputs("usage: shell [--no-echo | --remote-prompt]\n", stderr);
     return EXIT_FAILURE;
   }
   struct shell shell = {
     .script_name = script != HANDLE_INVALID ? argv[1] : NULL,
     .script_line = 1,
     .quiet_input = quiet_input,
+    .remote_prompt = remote_prompt,
     .terminal = {startup_resource("input"), startup_resource("output")},
     .launcher = startup_resource("launcher"),
     .terminal_service = startup_resource("terminal"),
