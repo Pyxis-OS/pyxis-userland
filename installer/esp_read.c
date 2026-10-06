@@ -387,11 +387,14 @@ static bool same_token(const char *token, size_t length, const char *wanted)
   return length == strlen(wanted) && !memcmp(token, wanted, length);
 }
 
+/* Valid only in the installed two-entry form: one command line with exactly
+ * the boot init and this disk's binding, and one that adds the rescue option.
+ * Any other command line is rebuildable; a foreign binding refuses. */
 static bool configuration_matches(struct esp_inspection *esp, const char *bytes, size_t size)
 {
   char guid[37];
   install_guid_text(esp->layout->disk_guid, guid);
-  bool normal = false;
+  unsigned normal = 0, rescue = 0, other = 0;
   for (size_t offset = 0; offset < size;) {
     size_t end = offset;
     while (end < size && bytes[end] != '\n') {
@@ -409,7 +412,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
       continue;
     }
     cursor += 8;
-    unsigned installed = 0;
+    unsigned init = 0, options = 0, rescue_option = 0;
     bool bound = false;
     while (cursor < end) {
       while (cursor < end && horizontal_space(bytes[cursor])) {
@@ -423,8 +426,12 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         ++cursor;
       }
       size_t length = cursor - start;
-      if (same_token(bytes + start, length, "space.pyxis=boot://init-installed")) {
-        ++installed;
+      ++options;
+      if (same_token(bytes + start, length, INSTALL_BOOT_INIT_OPTION)) {
+        ++init;
+      }
+      if (same_token(bytes + start, length, INSTALL_RESCUE_OPTION)) {
+        ++rescue_option;
       }
       if (length >= 11 && !memcmp(bytes + start, "mount.disk=", 11)) {
         if (bound) {
@@ -441,13 +448,16 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         bound = true;
       }
     }
-    if (installed > 1) {
-      rebuild(esp, "ESP boot configuration repeats the installed space");
+    if (init == 1 && bound && !rescue_option && options == 2) {
+      ++normal;
+    } else if (init == 1 && bound && rescue_option == 1 && options == 3) {
+      ++rescue;
+    } else {
+      ++other;
     }
-    normal |= installed == 1 && bound;
   }
-  if (!normal) {
-    return rebuild(esp, "ESP boot configuration lacks this disk's installed command line");
+  if (normal != 1 || rescue != 1 || other) {
+    return rebuild(esp, "ESP boot configuration lacks this disk's normal and rescue entries");
   }
   return esp->state == INSTALL_ESP_VALID;
 }

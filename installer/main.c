@@ -314,11 +314,16 @@ static char *boot_configuration(const struct install_source *source, const uint8
     free(output);
     return NULL;
   }
-  char disk_guid[37], normal[256];
+  char disk_guid[37], normal[256], rescue[256], menu_timeout[32];
   install_guid_text(guid, disk_guid);
   snprintf(normal, sizeof(normal),
-      "  cmdline: space.pyxis=boot://init-installed mount.disk=%s\n", disk_guid);
-  bool skip = false, timeout = false, command = false, install_entry = false;
+      "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s\n", disk_guid);
+  snprintf(rescue, sizeof(rescue),
+      "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s " INSTALL_RESCUE_OPTION "\n",
+      disk_guid);
+  snprintf(menu_timeout, sizeof(menu_timeout), "timeout: %d\n", INSTALL_MENU_TIMEOUT_SECONDS);
+  bool skip = false, timeout = false, command = false, rescue_command = false;
+  bool install_entry = false;
   size_t used = 0;
   char *line = input;
   while (*line) {
@@ -340,7 +345,7 @@ static char *boot_configuration(const struct install_source *source, const uint8
           goto invalid;
         }
         timeout = true;
-        replacement = "timeout: 0\n";
+        replacement = menu_timeout;
       } else if (length == strlen("# PYXIS_NORMAL_COMMAND_LINE") &&
           !memcmp(line, "# PYXIS_NORMAL_COMMAND_LINE", length)) {
         if (command) {
@@ -348,6 +353,13 @@ static char *boot_configuration(const struct install_source *source, const uint8
         }
         command = true;
         replacement = normal;
+      } else if (length == strlen("# PYXIS_RESCUE_COMMAND_LINE") &&
+          !memcmp(line, "# PYXIS_RESCUE_COMMAND_LINE", length)) {
+        if (rescue_command) {
+          goto invalid;
+        }
+        rescue_command = true;
+        replacement = rescue;
       }
       size_t copy = replacement ? strlen(replacement) : length;
       if (copy + 1 > size + 512 - used) {
@@ -364,7 +376,7 @@ static char *boot_configuration(const struct install_source *source, const uint8
     }
     line = end + 1;
   }
-  if (!timeout || !command || !install_entry) {
+  if (!timeout || !command || !rescue_command || !install_entry) {
     goto invalid;
   }
   output[used] = '\0';
