@@ -28,5 +28,6 @@ extern int errno;
 #define EDQUOT 21
 #define EFBIG 22
 #define EMFILE 23
+#define EILSEQ 24
 
 #endif

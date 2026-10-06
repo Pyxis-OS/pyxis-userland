@@ -25,6 +25,10 @@ TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
+                third_party/musl/src/regex/regcomp.c \
+                third_party/musl/src/regex/regexec.c \
+                third_party/musl/src/regex/regerror.c \
+                third_party/musl/src/regex/tre-mem.c \
                 third_party/musl/src/math/frexpl.c \
                 third_party/musl/src/time/__secs_to_tm.c \
                 third_party/musl/src/time/__year_to_secs.c \
@@ -117,6 +121,10 @@ $(BUILD)/third_party/musl/src/internal/floatscan.o: private CFLAGS += -Wno-sign-
 # Retain upstream's sign-bit expression; prec 0-2 from callers always fills fq.
 $(BUILD)/third_party/musl/src/math/atan2.o: private CFLAGS += -Wno-parentheses
 $(BUILD)/third_party/musl/src/math/__rem_pio2_large.o: private CFLAGS += -Wno-maybe-uninitialized
+
+# Retain TRE's upstream signedness comparisons and intentional parser fallthroughs.
+$(BUILD)/third_party/musl/src/regex/regcomp.o $(BUILD)/third_party/musl/src/regex/regexec.o: private CFLAGS += -Wno-sign-compare
+$(BUILD)/third_party/musl/src/regex/regcomp.o: private CFLAGS += -Wno-implicit-fallthrough
 
 $(BUILD)/%.o: %.c runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)

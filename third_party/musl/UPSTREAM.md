@@ -3,7 +3,7 @@ musl 1.2.5, pinned to commit
 https://git.musl-libc.org/cgit/musl/commit/?id=0784374d561435f7c787a555aeab8ede699ed298
 
 `COPYRIGHT` retains the complete upstream MIT license, contributor list and
-third-party notices. The selected files fall under the MIT terms described
+third-party notices. The math/formatting subset falls under the MIT terms described
 there; the pow implementation and coefficient tables also retain their Arm
 copyright and MIT SPDX notices.
 
@@ -151,3 +151,31 @@ transitions across UTC New Year, including southern-hemisphere/all-year DST.
 Musl's host filesystem lookup, mmap, POSIX TZ environment strings, reverse-time
 conversion, global timezone names and silent UTC fallback are not imported.
 TZif handling follows RFC 9636; only leap-free version 2/3/4 data is supported.
+
+The POSIX regex subset adds these files from the same pin:
+
+- `src/regex/regcomp.c` (also implements `regfree`), `src/regex/regexec.c`
+  and `src/regex/tre-mem.c`, copied without algorithm or formatting changes.
+- `src/regex/tre.h`, omitting only the internal `hidden` visibility markers.
+- `src/regex/regerror.c`, omitting the `locale_impl.h` include and locale
+  translation, and marking its unused `preg` argument explicitly.
+
+TRE's 2-clause BSD notices remain in each applicable source file;
+`TRE-COPYRIGHT` retains the notice for SDK/binary distribution, alongside musl's
+complete `COPYRIGHT`. The Pyxis public `regex.h` retains musl's flag/error values
+and LP64 `regoff_t`, but provides only `re_nsub` and the engine pointer in
+`regex_t`, without musl's compatibility padding. The existing runtime archive
+owns all four functions; there is no separate regex library.
+
+The build suppresses `-Wsign-compare` for the compiler/matcher and
+`-Wimplicit-fallthrough` for the parser's intentional fallthroughs, preserving
+upstream code. Regex uses Pyxis's stateless UTF-8 `mbtowc` and ASCII-only wide
+classification/folding, not musl's locale state or Unicode tables.
+
+Owner decision, 2026-10-07: retain the pinned engine's back-reference behavior.
+Back-reference comparison remains bytewise even with `REG_ICASE`, and the
+backtracking path assumes a one-byte lookahead and does not fully restore
+variable-width decoding state. UTF-8 back-reference matching is not reliable.
+Invalid subject UTF-8 returns `REG_NOMATCH` if the matcher encounters it; no
+whole-string validation is added. These limits are documented by Pyxis and are
+not silently repaired in the vendor import.

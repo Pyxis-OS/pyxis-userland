@@ -1,9 +1,11 @@
 #ifndef LIBC_LIMITS_H
 #define LIBC_LIMITS_H
 
-/* Pyxis x86-64 LP64 limits. The current libc has a single-byte character model. */
+/* Pyxis x86-64 LP64 limits, with stateless UTF-8 multibyte conversion. */
 #define CHAR_BIT 8
-#define MB_LEN_MAX 1
+#define MB_LEN_MAX 4
+#define RE_DUP_MAX 255
+#define CHARCLASS_NAME_MAX 14
 
 #define SCHAR_MAX 127
 #define SCHAR_MIN (-SCHAR_MAX - 1)

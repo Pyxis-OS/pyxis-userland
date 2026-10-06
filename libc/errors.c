@@ -47,6 +47,7 @@ char *strerror(int error)
   case EINVAL: return "Invalid argument";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";
+  case EILSEQ: return "Invalid or incomplete multibyte sequence";
   case EBADF: return "Invalid stream or handle";
   case EACCES: return "Permission denied";
   case ENOTSUP: return "Operation not supported";
