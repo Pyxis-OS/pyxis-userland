@@ -195,7 +195,7 @@ static enum call_status read_event(struct term_event_reader *reader,
       }
       return status;
     }
-    if (events[1] & WAIT_ERROR) {
+    if ((events[1] & WAIT_ERROR) && !(events[0] & WAIT_ERROR)) {
       return CALL_UNAVAILABLE;
     }
     if (!readable) {
