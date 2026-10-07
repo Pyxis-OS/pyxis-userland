@@ -32,4 +32,12 @@ enum call_status system_info_get_usb_device(handle_t system_info, uint64_t index
 enum call_status system_info_get_usb_interface(handle_t system_info, uint64_t index,
     struct system_info_usb_interface *interface);
 
+/* Power-source state from the kernel's latest ACPI poll, a few seconds old at
+ * most; sample_ns is zero before the first poll or without ACPI. Battery
+ * records are indexed below battery_count; later indices return NOT_FOUND.
+ * Numeric battery fields may be SYSTEM_INFO_BATTERY_UNKNOWN. */
+enum call_status system_info_get_power(handle_t system_info, struct system_info_power *power);
+enum call_status system_info_get_battery(handle_t system_info, uint64_t index,
+    struct system_info_battery *battery);
+
 #endif

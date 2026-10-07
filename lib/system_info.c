@@ -267,3 +267,68 @@ enum call_status system_info_get_usb_interface(handle_t system_info, uint64_t in
   }
   return result.status;
 }
+
+enum call_status system_info_get_power(handle_t system_info, struct system_info_power *power)
+{
+  if (!power) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header message = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_POWER};
+  struct system_info_power reply;
+  struct syscall_result result = syscall_call(system_info, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (reply.ac > SYSTEM_INFO_AC_ONLINE) {
+      return CALL_BAD_REQUEST;
+    }
+    *power = reply;
+  }
+  return result.status;
+}
+
+static bool battery_unit_valid(uint32_t unit)
+{
+  return unit == SYSTEM_INFO_BATTERY_UNIT_MWH || unit == SYSTEM_INFO_BATTERY_UNIT_MAH ||
+         unit == SYSTEM_INFO_BATTERY_UNKNOWN;
+}
+
+enum call_status system_info_get_battery(handle_t system_info, uint64_t index,
+    struct system_info_battery *battery)
+{
+  if (!battery) {
+    return CALL_BAD_REQUEST;
+  }
+  struct system_info_battery_request request = {
+    .header = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_BATTERY},
+    .index = index,
+  };
+  struct system_info_battery reply;
+  struct syscall_result result = syscall_call(system_info, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    uint32_t known_flags = SYSTEM_INFO_BATTERY_PRESENT | SYSTEM_INFO_BATTERY_DISCHARGING |
+        SYSTEM_INFO_BATTERY_CHARGING | SYSTEM_INFO_BATTERY_CRITICAL;
+    if ((reply.flags & ~known_flags) || reply.reserved || !battery_unit_valid(reply.unit) ||
+        (reply.percent > 100 && reply.percent != SYSTEM_INFO_BATTERY_UNKNOWN) ||
+        !memchr(reply.model, '\0', sizeof(reply.model)) ||
+        !memchr(reply.serial, '\0', sizeof(reply.serial)) ||
+        !memchr(reply.type, '\0', sizeof(reply.type)) ||
+        !memchr(reply.oem, '\0', sizeof(reply.oem))) {
+      return CALL_BAD_REQUEST;
+    }
+    *battery = reply;
+  }
+  return result.status;
+}
