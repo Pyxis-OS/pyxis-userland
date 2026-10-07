@@ -20,6 +20,6 @@ build to a standalone checkout. Existing TLSF source, upstream pin and BSD
 license were retained. Its userland adapter now selects libc support directly;
 Pyxis retains its kernel copy. No new license was assigned to first-party code.
 
-Pyxis continues to own the public ABI/format headers, shebang parser and host
-elf2pxe converter. Userland consumes their exports through the SDK. Application
+Pyxis continues to own the public ABI/format headers and shebang parser.
+Userland consumes their exports through the SDK. Application
 and runtime implementation files were not otherwise rewritten during extraction.
