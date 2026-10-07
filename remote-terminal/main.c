@@ -624,25 +624,25 @@ int main(int argc, char **argv)
       ++active;
       if (client->stream != HANDLE_INVALID) {
         stream_entries[i] = count;
-        interests[count++] = (struct wait_interest){client->stream, stream_interests(client)};
+        interests[count++] = (struct wait_interest){.handle = client->stream, .events = stream_interests(client)};
         if (client->deadline && client->deadline < deadline) {
           deadline = client->deadline;
         }
       }
       uint64_t terminal_events = terminal_interests(client);
       if (client->shell.attachment != HANDLE_INVALID && terminal_events) {
-        interests[count++] = (struct wait_interest){client->shell.attachment, terminal_events};
+        interests[count++] = (struct wait_interest){.handle = client->shell.attachment, .events = terminal_events};
       }
       handle_t lifecycle = client->closing ? client->shell.group : client->shell.process;
       if (lifecycle != HANDLE_INVALID) {
         lifecycle_entries[i] = count;
-        interests[count++] = (struct wait_interest){lifecycle, WAIT_COMPLETE};
+        interests[count++] = (struct wait_interest){.handle = lifecycle, .events = WAIT_COMPLETE};
       }
     }
     size_t listener_entry = SIZE_MAX;
     if (!beacon && active < CLIENT_LIMIT) {
       listener_entry = count;
-      interests[count++] = (struct wait_interest){listener, WAIT_ACCEPTABLE};
+      interests[count++] = (struct wait_interest){.handle = listener, .events = WAIT_ACCEPTABLE};
     }
     if (failed) {
       break;

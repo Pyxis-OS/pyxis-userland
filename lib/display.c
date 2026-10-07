@@ -56,3 +56,28 @@ enum call_status display_size(handle_t display, struct display_size_reply *size)
   }
   return status;
 }
+
+enum call_status display_replace(handle_t display, uint64_t generation,
+    struct display_buffer *buffer)
+{
+  if (!buffer || !generation) {
+    return CALL_BAD_REQUEST;
+  }
+  struct display_replace_request request = {
+    .header = {PROTOCOL_DISPLAY, DISPLAY_REPLACE},
+    .generation = generation,
+  };
+  struct display_buffer reply;
+  struct syscall_result result = syscall_call(display, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    *buffer = reply;
+  }
+  return result.status;
+}

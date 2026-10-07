@@ -201,8 +201,7 @@ int tcp_serve(unsigned count)
       client_entries[i] = SIZE_MAX;
       if (clients[i].stream != HANDLE_INVALID) {
         client_entries[i] = entries;
-        interests[entries++] = (struct wait_interest){clients[i].stream,
-            client_interests(&clients[i])};
+        interests[entries++] = (struct wait_interest){.handle = clients[i].stream, .events = client_interests(&clients[i])};
         ++active;
       }
     }
@@ -212,7 +211,7 @@ int tcp_serve(unsigned count)
     size_t listener_entry = SIZE_MAX;
     if (listener != HANDLE_INVALID && active < CLIENT_LIMIT) {
       listener_entry = entries;
-      interests[entries++] = (struct wait_interest){listener, WAIT_ACCEPTABLE};
+      interests[entries++] = (struct wait_interest){.handle = listener, .events = WAIT_ACCEPTABLE};
     }
     uint64_t deadline;
     if (!next_deadline(clock, &deadline)) {
