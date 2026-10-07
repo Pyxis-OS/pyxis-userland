@@ -107,7 +107,7 @@ remote-terminal: $(BUILD)/remote-terminal.pxe
 
 xfer: $(BUILD)/xfer.pxe
 
-$(BUILD)/remote-terminal.elf: $(REMOTE_OBJECT)
+$(BUILD)/remote-terminal.pxe: $(REMOTE_OBJECT)
 
 session: $(BUILD)/session.pxe
 boot-init: $(BUILD)/boot-init.pxe
@@ -167,10 +167,10 @@ $(TLS_EXPORT_IDENTITY): FORCE
 	  xargs -0 sha256sum -- < "$@.files.tmp" > "$@.tmp"; \
 	  cmp -s "$@.tmp" "$@" || mv -- "$@.tmp" "$@"
 
-$(BUILD)/xfer.elf: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+$(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(XFER_OBJECTS) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
-$(BUILD)/httpfs.elf: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+$(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT): private CPPFLAGS += -I$(LUA_PREFIX)/include
@@ -179,34 +179,34 @@ $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)
 
-$(BUILD)/boot-init.elf: $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+$(BUILD)/boot-init.pxe: $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
-$(BUILD)/session.elf: $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+$(BUILD)/session.pxe: $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
-$(BUILD)/udp-send.elf $(BUILD)/udp-echo.elf: $(UDP_OBJECT)
+$(BUILD)/udp-send.pxe $(BUILD)/udp-echo.pxe: $(UDP_OBJECT)
 
-$(BUILD)/ping.elf $(BUILD)/tcp.elf $(BUILD)/ttcp.elf: $(DNS_LOOKUP_OBJECT)
+$(BUILD)/ping.pxe $(BUILD)/tcp.pxe $(BUILD)/ttcp.pxe: $(DNS_LOOKUP_OBJECT)
 
-$(BUILD)/tcp.elf: $(TCP_SERVE_OBJECT)
+$(BUILD)/tcp.pxe: $(TCP_SERVE_OBJECT)
 
-$(BUILD)/dig.elf $(BUILD)/ping.elf $(BUILD)/tcp.elf $(BUILD)/ttcp.elf: $(DNS_OBJECTS) $(UDP_OBJECT)
+$(BUILD)/dig.pxe $(BUILD)/ping.pxe $(BUILD)/tcp.pxe $(BUILD)/ttcp.pxe: $(DNS_OBJECTS) $(UDP_OBJECT)
 
-$(BUILD)/shell.elf: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
+$(BUILD)/shell.pxe: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/counter.elf: $(COUNTER_OBJECT)
+$(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
-$(BUILD)/iobench.elf: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
+$(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/installer.elf: $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+$(BUILD)/installer.pxe: $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(LDLIBS)
 
-$(BUILD)/cp.elf: $(CP_OBJECT) $(UTILITY_OBJECT)
+$(BUILD)/cp.pxe: $(CP_OBJECT) $(UTILITY_OBJECT)
 
-$(BUILD)/ls.elf: $(LS_OBJECTS)
+$(BUILD)/ls.pxe: $(LS_OBJECTS)
 
-$(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf $(BUILD)/sync.elf: $(UTILITY_OBJECT)
+$(BUILD)/ls.pxe $(BUILD)/mkdir.pxe $(BUILD)/rm.pxe $(BUILD)/rmdir.pxe $(BUILD)/sync.pxe: $(UTILITY_OBJECT)
 
 $(BUILD)/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
@@ -223,15 +223,12 @@ $(BUILD)/share/iobench-small.bin: iobench/fixture.lua Makefile
 	mv $@.tmp $@
 
 # Runtime objects and libraries come from the selected SDK.
-$(BUILD)/%.elf: $(BUILD)/%/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(BUILD)/%.pxe: $(BUILD)/%/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(LDLIBS)
 
 $(BUILD)/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/%.pxe: $(BUILD)/%.elf $(PYXIS_ELF2PXE) Makefile
-	$(PYXIS_ELF2PXE) --format p1f -o $@ $<
 
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE

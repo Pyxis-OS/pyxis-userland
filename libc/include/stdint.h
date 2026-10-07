@@ -20,7 +20,11 @@ typedef uint16_t uint_least16_t;
 typedef uint32_t uint_least32_t;
 typedef uint64_t uint_least64_t;
 
-/* Match the Pyxis GCC ABI: even the 8-bit fast types use 32-bit integers. */
+/*
+ * The Pyxis ABI, first set by its GCC target: even the 8-bit fast types use
+ * 32-bit integers. Clang's __INT_FAST*_TYPE__ predefines instead follow the
+ * least-width types; these typedefs are authoritative.
+ */
 typedef int int_fast8_t;
 typedef int int_fast16_t;
 typedef int int_fast32_t;

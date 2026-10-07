@@ -120,9 +120,6 @@ $(BUILD)/third_party/musl/src/internal/floatscan.o: private CFLAGS += -Wno-sign-
 
 # Retain upstream's sign-bit expression; prec 0-2 from callers always fills fq.
 $(BUILD)/third_party/musl/src/math/atan2.o: private CFLAGS += -Wno-parentheses
-ifeq ($(PYXIS_TOOLCHAIN),gcc)
-$(BUILD)/third_party/musl/src/math/__rem_pio2_large.o: private CFLAGS += -Wno-maybe-uninitialized
-endif
 
 # Retain TRE's upstream signedness comparisons and intentional parser fallthroughs.
 $(BUILD)/third_party/musl/src/regex/regcomp.o $(BUILD)/third_party/musl/src/regex/regexec.o: private CFLAGS += -Wno-sign-compare

@@ -339,7 +339,7 @@ after a switch, so a name bound as both service and filesystem root is rejected.
 already looked up elsewhere.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point runtime
-helpers (libgcc, or compiler-rt builtins with the LLVM toolchain). `mandelbrot` draws through a mapped display buffer using double
+helpers (compiler-rt builtins). `mandelbrot` draws through a mapped display buffer using double
 arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
 the TTY. It needs display, keyboard and clock grants. Libc supports floating-point
 formatting and a small math subset; it does not provide a full libm.
