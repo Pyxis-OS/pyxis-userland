@@ -378,14 +378,27 @@ static int block_is_free(const block_header_t* block)
 	return tlsf_cast(int, block->size & block_header_free_bit);
 }
 
+/*
+** Pyxis: write the size word in full. The flag setters below are followed by
+** whole-word reads of the same size field. Compilers may narrow "size |= bit"
+** to a one-byte store (Clang does), which cannot be forwarded to that wider
+** load and stalls it. A relaxed atomic store is an ordinary full-width store
+** that is never narrowed. It adds no synchronization: callers still serialize
+** all use of an allocator.
+*/
+static void block_store_size(block_header_t* block, size_t size)
+{
+	__atomic_store_n(&block->size, size, __ATOMIC_RELAXED);
+}
+
 static void block_set_free(block_header_t* block)
 {
-	block->size |= block_header_free_bit;
+	block_store_size(block, block->size | block_header_free_bit);
 }
 
 static void block_set_used(block_header_t* block)
 {
-	block->size &= ~block_header_free_bit;
+	block_store_size(block, block->size & ~block_header_free_bit);
 }
 
 static int block_is_prev_free(const block_header_t* block)
@@ -395,12 +408,12 @@ static int block_is_prev_free(const block_header_t* block)
 
 static void block_set_prev_free(block_header_t* block)
 {
-	block->size |= block_header_prev_free_bit;
+	block_store_size(block, block->size | block_header_prev_free_bit);
 }
 
 static void block_set_prev_used(block_header_t* block)
 {
-	block->size &= ~block_header_prev_free_bit;
+	block_store_size(block, block->size & ~block_header_prev_free_bit);
 }
 
 static block_header_t* block_from_ptr(const void* ptr)
