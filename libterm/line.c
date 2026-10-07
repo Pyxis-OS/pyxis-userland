@@ -206,14 +206,18 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
           result.error = CALL_BAD_REQUEST;
           break;
         }
+        if (!quiet) {
+          /* Old raster rows retain their order across resize. Recover the old
+           * line origin before adopting the new width; upward movement clamps
+           * at row zero if part of the old span has disappeared. */
+          result.error = move_between(&editor, editor.displayed_cursor, 0);
+          if (result.error == CALL_OK) {
+            result.error = term_print(term, "\x1b[J");
+          }
+        }
         editor.columns = event.size.columns;
         editor.cells = event.size.columns * event.size.rows;
         editor.displayed_length = editor.displayed_cursor = 0;
-        /* Resize clamps the physical cursor. Its current row becomes the new
-         * anchor; bounded output can scroll, preserving rows above it. */
-        if (!quiet) {
-          result.error = term_print(term, "\r\x1b[J");
-        }
         if (result.error == CALL_OK) {
           result.error = draw_line(&editor, true, false);
         }
