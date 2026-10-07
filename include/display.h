@@ -14,5 +14,8 @@ enum call_status display_present(handle_t display);
 /* Unmaps the acquired buffer; do not access its address after success.
  * Process exit also releases it and restores the space's TTY. */
 enum call_status display_release(handle_t display);
+/* Query current destination pixels and generation without acquiring graphics.
+ * Existing acquired mappings retain their original layout. Cleared on failure. */
+enum call_status display_size(handle_t display, struct display_size_reply *size);
 
 #endif
