@@ -11,6 +11,14 @@ its own process. Allocator logic is unchanged. `_DEBUG` is not enabled, so
 upstream's optional bit-scan self-test is not compiled or run. Assertions are
 independent of `_DEBUG` and `NDEBUG`.
 
+Second local change to `tlsf.c`: the four block flag setters write the size word
+through `block_store_size`, a relaxed `__atomic_store_n` of the whole word. Clang
+narrowed `size |= bit` to a one-byte store, and TLSF's next whole-word read of the
+same field then stalled on store forwarding. Under Clang 23 this made userland
+`allocbench heap` about 30% slower than with GCC. A relaxed atomic store is an
+ordinary full-width store that compilers do not narrow; it adds no
+synchronization. Allocator logic is otherwise unchanged.
+
 The libc wrapper uses `tlsf_memalign(..., 16, ...)`, checked pool sizing and
 conservative request limits below TLSF's maximum bin. No host libc is linked.
 Pyxis maintains a separate kernel copy at the same upstream pin; its adapter
