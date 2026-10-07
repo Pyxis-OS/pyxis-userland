@@ -5,6 +5,7 @@
 #include <abi/endpoint.h>
 #include <abi/file.h>
 #include <abi/launcher.h>
+#include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/namespace.h>
 #include <abi/net_config.h>
@@ -52,6 +53,7 @@ enum service {
   SERVICE_LAUNCHER,
   SERVICE_CLOCK,
   SERVICE_SYSTEM_INFO,
+  SERVICE_LOG,
   SERVICE_ECHO,
   SERVICE_UDP,
   SERVICE_TCP,
@@ -74,6 +76,7 @@ static const struct {
   [SERVICE_LAUNCHER] = {"launcher", LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP, 0},
   [SERVICE_CLOCK] = {"clock", CLOCK_RIGHTS, 0},
   [SERVICE_SYSTEM_INFO] = {"system_info", SYSTEM_INFO_RIGHT_READ, 0},
+  [SERVICE_LOG] = {"log", LOG_RIGHT_READ, 0},
   [SERVICE_ECHO] = {"echo", ECHO_RIGHT_SEND, 0},
   [SERVICE_UDP] = {"udp", UDP_SERVICE_RIGHT_OPEN, UDP_SERVICE_RIGHT_BROADCAST},
   [SERVICE_TCP] = {"tcp", TCP_SERVICE_RIGHTS, 0},

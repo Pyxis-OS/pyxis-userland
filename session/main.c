@@ -18,6 +18,7 @@
 #include <abi/pointer.h>
 #include <abi/space.h>
 #include <abi/profile.h>
+#include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/endpoint.h>
 #include <abi/namespace.h>
@@ -63,7 +64,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 18, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 19, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -136,6 +137,11 @@ static int launch_session(const struct session_config *config, const struct netw
   if (system_info != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
+  }
+  handle_t log = startup_resource("log");
+  if (log != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"log", grant_count};
+    grants[grant_count++] = (struct launch_grant){log, LOG_RIGHT_READ, 0};
   }
   handle_t echo = startup_resource("echo");
   if (echo != HANDLE_INVALID) {

@@ -74,6 +74,16 @@ forward `system_info` to ordinary children when supplied; provider launches and
 restricted launchers may omit it. Applications must treat a missing grant as
 unavailable information. Memory is allocator capacity, labeled **Memory (allocator)**.
 
+[log.h](include/log.h) snapshots and reads retained kernel text through a borrowed
+read-only `log` grant, preserving caller output on failure. Each reader owns its
+cursor; reads never consume another reader's text. `log` prints through its initial
+snapshot end and exits. `log -f` prints retained history, then polls every 100 ms
+using the clock service; Ctrl+C uses the shell's foreground stop behavior. Both
+report overwritten lines on stderr. Boot init forwards the grant to every space;
+sessions and local/remote shells forward it to ordinary children when supplied.
+Provider launches and restricted launchers may omit it. The ring is volatile;
+panic capture remains best effort.
+
 [lsusb](lsusb/README.md) lists the immutable boot USB inventory with controller
 state, physical port paths through hubs, speed, numeric IDs and checked interfaces.
 It uses the same borrowed `system_info` READ grant and optional packaged USB ID names.

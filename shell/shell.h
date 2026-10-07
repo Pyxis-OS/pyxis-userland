@@ -57,7 +57,7 @@ struct shell {
    * shell or session successor is granted it; commands get READ alone. */
   bool interrupts;
   struct terminal terminal;
-  handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info,
+  handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, tcp, pipe, service, namespace_service, namespace, random, net_config,
       keyboard, pointer, terminal_service,
       boot, tmp, host_mount, native_mount, power;

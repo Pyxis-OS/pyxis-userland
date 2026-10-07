@@ -1,6 +1,7 @@
 #include <abi/clock.h>
 #include <abi/disk.h>
 #include <abi/file.h>
+#include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/random.h>
 #include <abi/system_info.h>
@@ -37,14 +38,15 @@ int main(int argc, char **argv)
   (void)argc;
   (void)argv;
   /* The kernel adds the install space's console, input devices and display. */
-  enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, BOOT_ROOT, FACTORY,
+  enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, FACTORY,
     SOURCE_COUNT, GRANT_COUNT = FACTORY };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
-    "clock", "random", "system_info", "boot", "space_factory"};
+    "clock", "random", "system_info", "log", "boot", "space_factory"};
   handle_t sources[SOURCE_COUNT] = {
     startup_resource("disks"), startup_resource("boot_kernel"), startup_resource("boot_archive"),
     startup_resource("memory"), startup_resource("clock"), startup_resource("random"),
-    startup_resource("system_info"), startup_root("boot"), startup_resource("space_factory"),
+    startup_resource("system_info"), startup_resource("log"), startup_root("boot"),
+    startup_resource("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
@@ -85,6 +87,7 @@ int main(int argc, char **argv)
     [CLOCK] = {sources[CLOCK], CLOCK_RIGHT_READ, 0},
     [RANDOM] = {sources[RANDOM], RANDOM_RIGHT_READ, 0},
     [SYSTEM_INFO] = {sources[SYSTEM_INFO], SYSTEM_INFO_RIGHT_READ, 0},
+    [LOG] = {sources[LOG], LOG_RIGHT_READ, 0},
     [BOOT_ROOT] = {sources[BOOT_ROOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES, 0},
   };
@@ -92,7 +95,7 @@ int main(int argc, char **argv)
     {(uintptr_t)"disks", DISKS}, {(uintptr_t)"boot_kernel", KERNEL},
     {(uintptr_t)"boot_archive", ARCHIVE}, {(uintptr_t)"memory", MEMORY},
     {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"random", RANDOM},
-    {(uintptr_t)"system_info", SYSTEM_INFO},
+    {(uintptr_t)"system_info", SYSTEM_INFO}, {(uintptr_t)"log", LOG},
   };
   struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT_ROOT}};
   const char *arguments[] = {"boot://installer.pxe"};

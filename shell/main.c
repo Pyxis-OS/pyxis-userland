@@ -93,6 +93,7 @@ int main(int argc, char **argv)
     .display = startup_resource("display"),
     .clock = startup_resource("clock"),
     .system_info = startup_resource("system_info"),
+    .log = startup_resource("log"),
     .echo = startup_resource("echo"),
     .udp = startup_resource("udp"),
     .tcp = startup_resource("tcp"),

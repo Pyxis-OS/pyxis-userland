@@ -3,6 +3,7 @@
 #include <abi/console.h>
 #include <abi/echo.h>
 #include <abi/file.h>
+#include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/net_config.h>
 #include <abi/namespace.h>
@@ -67,7 +68,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 12, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 13, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
@@ -126,7 +127,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     uint64_t rights;
   } allowed[] = {
     {"memory", MEMORY_RIGHT_MANAGE}, {"clock", CLOCK_RIGHTS},
-    {"system_info", SYSTEM_INFO_RIGHT_READ},
+    {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST},
