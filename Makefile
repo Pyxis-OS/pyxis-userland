@@ -59,6 +59,7 @@ CONFIG_OBJECT := $(BUILD)/libconfig/config.o
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
+LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest clean FORCE
@@ -199,6 +200,8 @@ $(BUILD)/iobench.elf: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 $(BUILD)/installer.elf: $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(NPFS_LIBRARY) $(LDLIBS)
 
+$(BUILD)/ls.elf: $(LS_OBJECTS)
+
 $(BUILD)/ls.elf $(BUILD)/mkdir.elf $(BUILD)/rm.elf $(BUILD)/rmdir.elf $(BUILD)/sync.elf: $(UTILITY_OBJECT)
 
 $(BUILD)/share/hello.txt: hello/message.txt
@@ -241,4 +244,4 @@ clean:
 .SECONDARY:
 
 -include $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
--include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d)
+-include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d)
