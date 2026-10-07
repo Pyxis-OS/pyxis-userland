@@ -2,6 +2,7 @@
 #define USERSPACE_CONSOLE_H
 
 #include <abi/handle.h>
+#include <abi/console.h>
 #include <abi/syscall.h>
 #include <stddef.h>
 
@@ -28,8 +29,9 @@ enum call_status console_read(handle_t input, void *bytes, size_t capacity, size
 enum call_status console_read_timeout(handle_t input, void *bytes, size_t capacity,
                                      uint32_t timeout_ms, size_t *read);
 
-/* Dimensions in character cells; requires either READ or WRITE authority. */
-enum call_status console_size(handle_t console, size_t *columns, size_t *rows);
+/* Atomic character-cell dimensions and generation; READ or WRITE authority.
+ * Cleared on failure. Local geometry can change independently of input. */
+enum call_status console_size(handle_t console, struct console_size_reply *size);
 
 /* WRITE authority. Advance only when not already at column zero; also discard
  * an incomplete output escape sequence. Does not clear text or reset colors. */

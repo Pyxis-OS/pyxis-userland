@@ -90,13 +90,12 @@ enum call_status console_read_timeout(handle_t input, void *bytes, size_t capaci
   return read_console(input, bytes, capacity, timeout_ms, read);
 }
 
-enum call_status console_size(handle_t console, size_t *columns, size_t *rows)
+enum call_status console_size(handle_t console, struct console_size_reply *size)
 {
-  if (!columns || !rows) {
+  if (!size) {
     return CALL_BAD_REQUEST;
   }
-  *columns = 0;
-  *rows = 0;
+  *size = (struct console_size_reply){0};
   struct console_message message = {.header = {PROTOCOL_CONSOLE, CONSOLE_SIZE}};
   struct console_size_reply reply;
   struct syscall_result result = syscall_call(console, &message, sizeof(message),
@@ -105,11 +104,11 @@ enum call_status console_size(handle_t console, size_t *columns, size_t *rows)
     return result.status < CALL_STATUS_COUNT && !result.reply_size ?
            (enum call_status)result.status : CALL_BAD_REQUEST;
   }
-  if (result.reply_size != sizeof(reply) || !reply.columns || !reply.rows) {
+  if (result.reply_size != sizeof(reply) || !reply.columns || !reply.rows ||
+      !reply.generation) {
     return CALL_BAD_REQUEST;
   }
-  *columns = reply.columns;
-  *rows = reply.rows;
+  *size = reply;
   return CALL_OK;
 }
 

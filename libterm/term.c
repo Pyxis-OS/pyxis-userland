@@ -40,7 +40,18 @@ enum call_status term_fresh_line(struct terminal *term)
 
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows)
 {
-  return console_size(term->output, columns, rows);
+  if (!columns || !rows) {
+    return CALL_BAD_REQUEST;
+  }
+  *columns = 0;
+  *rows = 0;
+  struct console_size_reply size;
+  enum call_status status = console_size(term->output, &size);
+  if (status == CALL_OK) {
+    *columns = size.columns;
+    *rows = size.rows;
+  }
+  return status;
 }
 
 enum call_status term_set_tab_width(struct terminal *term, size_t columns)
