@@ -3,9 +3,20 @@
 PYXIS_SDK := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 PYXIS_SYSROOT := $(PYXIS_SDK)/sysroot
 CROSS_COMPILE ?= x86_64-unknown-pyxis-
+# The SDK records the toolchain (gcc or llvm) that built its runtime archives;
+# its consumers use the same one.
+include $(PYXIS_SDK)/share/toolchain.mk
+ifeq ($(PYXIS_TOOLCHAIN),llvm)
+CC := $(CROSS_COMPILE)clang
+AR := $(shell $(CC) -print-prog-name=llvm-ar)
+PYXIS_COMPILER_ID := $(shell $(CC) -dumpmachine) $(shell $(CC) -dumpversion)
+PYXIS_RUNTIME := $(shell $(CC) -print-libgcc-file-name)
+else
 CC := $(CROSS_COMPILE)gcc
 AR := $(CROSS_COMPILE)ar
 PYXIS_COMPILER_ID := $(shell $(CC) -dumpmachine) $(shell $(CC) -dumpfullversion)
+PYXIS_RUNTIME := -lgcc
+endif
 
 # Keep SDK headers on a normal include path so -MMD tracks their changes.
 # Only compiler-provided headers and exported target headers are visible.
@@ -23,5 +34,5 @@ PYXIS_LDFLAGS := --sysroot=$(PYXIS_SYSROOT) -nostdlib -static -no-pie \
 PYXIS_START := $(PYXIS_SYSROOT)/usr/lib/crt0.o
 PYXIS_LIBRARIES := $(PYXIS_SYSROOT)/usr/lib/libc.a \
                    $(PYXIS_SYSROOT)/usr/lib/libterm.a $(PYXIS_SYSROOT)/usr/lib/libpyxis.a
-PYXIS_LDLIBS := -Wl,--start-group $(PYXIS_LIBRARIES) -lgcc -Wl,--end-group
+PYXIS_LDLIBS := -Wl,--start-group $(PYXIS_LIBRARIES) $(PYXIS_RUNTIME) -Wl,--end-group
 PYXIS_ELF2PXE := $(PYXIS_SDK)/bin/elf2pxe
