@@ -45,7 +45,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[24];
+  struct launch_binding resources[25];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -149,6 +149,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_namespace_service = session && shell->namespace_service != HANDLE_INVALID;
   bool has_namespace = !provider && shell->namespace != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
+  bool has_udp_beacons = session && shell->udp_beacons != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
   bool has_clock = shell->clock != HANDLE_INVALID;
   bool has_system_info = !provider && shell->system_info != HANDLE_INVALID;
@@ -160,7 +161,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 24 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 25 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -169,7 +170,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t log_index = system_info_index + (has_system_info ? 1 : 0);
   size_t echo_index = log_index + (has_log ? 1 : 0);
   size_t udp_index = echo_index + (has_echo ? 1 : 0);
-  size_t tcp_index = udp_index + (has_udp ? 1 : 0);
+  size_t udp_beacons_index = udp_index + (has_udp ? 1 : 0);
+  size_t tcp_index = udp_beacons_index + (has_udp_beacons ? 1 : 0);
   size_t random_index = tcp_index + (has_tcp ? 1 : 0);
   size_t keyboard_index = random_index + (has_random ? 1 : 0);
   size_t pointer_index = keyboard_index + (has_keyboard ? 1 : 0);
@@ -243,6 +245,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       rights &= UDP_SERVICE_RIGHT_OPEN | UDP_SERVICE_RIGHT_BROADCAST;
     }
     grants[udp_index] = (struct launch_grant){shell->udp, rights, 0};
+  }
+  if (has_udp_beacons) {
+    grants[udp_beacons_index] = (struct launch_grant){shell->udp_beacons,
+        UDP_SERVICE_RIGHT_BROADCAST, 0};
   }
   if (has_tcp) {
     uint64_t rights = TCP_SERVICE_RIGHT_CONNECT;
@@ -355,6 +361,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_udp) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", udp_index};
+  }
+  if (has_udp_beacons) {
+    resources[resource_count++] =
+        (struct launch_binding){(uintptr_t)"udp_beacons", udp_beacons_index};
   }
   if (has_tcp) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", tcp_index};

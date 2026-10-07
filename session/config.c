@@ -49,6 +49,9 @@ static void read_environment(lua_State *state, struct session_config *config)
     if (!valid_variable_name(name, length)) {
       luaL_error(state, "invalid environment variable name '%s'", name);
     }
+    if (!strcmp(name, "PYXIS_REMOTE_BEACON")) {
+      luaL_error(state, "environment.%s is reserved for the remote.beacon boot option", name);
+    }
     if (reserved_variable(name)) {
       luaL_error(state, "environment.%s is reserved for the timezone and network settings", name);
     }
@@ -245,7 +248,9 @@ struct startup_variable *session_environment(const struct session_config *config
   const struct startup_variable *source = startup_environment_variables();
   for (size_t i = 0; i < inherited; ++i) {
     const char *name = (const char *)source[i].name;
-    if (!reserved_variable(name) && !configured_variable(config, name)) {
+    /* The boot-carried discovery name cannot be shadowed by configuration. */
+    if (!strcmp(name, "PYXIS_REMOTE_BEACON") ||
+        (!reserved_variable(name) && !configured_variable(config, name))) {
       environment[used++] = source[i];
     }
   }

@@ -64,7 +64,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 19, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 20, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -152,6 +152,13 @@ static int launch_session(const struct session_config *config, const struct netw
   if (udp != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", grant_count};
     grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN, 0};
+  }
+  if (start_remote_services) {
+    handle_t udp_beacons = startup_resource("udp_beacons");
+    if (udp_beacons != HANDLE_INVALID) {
+      resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp_beacons", grant_count};
+      grants[grant_count++] = (struct launch_grant){udp_beacons, UDP_SERVICE_RIGHT_BROADCAST, 0};
+    }
   }
   handle_t tcp = startup_resource("tcp");
   if (tcp != HANDLE_INVALID) {

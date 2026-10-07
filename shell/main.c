@@ -96,6 +96,7 @@ int main(int argc, char **argv)
     .log = startup_resource("log"),
     .echo = startup_resource("echo"),
     .udp = startup_resource("udp"),
+    .udp_beacons = startup_resource("udp_beacons"),
     .tcp = startup_resource("tcp"),
     .pipe = startup_resource("pipe"),
     .service = startup_resource("service"),

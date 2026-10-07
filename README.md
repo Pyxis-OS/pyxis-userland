@@ -56,6 +56,17 @@ ownership and result mappings are described in [libhttp/http.h](libhttp/http.h).
 The library loads no trust or startup resources. `httpfs --https` owns its ready
 TLS runtime and loads the packaged public roots before publication.
 
+Kernel option `remote.beacon=NAME` selects reverse mode for the configured
+`remote` space. Boot init forwards `PYXIS_REMOTE_BEACON` and a separate
+BROADCAST-only `udp_beacons` grant through the trusted session bootstrap.
+The boot option selects the name; the environment variable only carries it
+between trusted launches and session configuration cannot create or replace it.
+The daemon listens for matching UDP beacons on port 2324, closes discovery
+before connecting to the sender, and resumes discovery after the old session
+group finishes cleanup. Remote shells receive ordinary UDP OPEN authority
+and neither the discovery grant nor its environment variable. Without the
+option, the existing four-client TCP listener remains available.
+
 The remote server selects `shell --remote-prompt` for its normal root shell.
 Its opt-in `term_read_line_marked` editor writes OSC 133;B after drawing each
 empty prompt, before reading input. Quiet shells and ordinary callers keep their
