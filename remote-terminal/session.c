@@ -174,6 +174,14 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   if (status != CALL_OK) {
     goto done;
   }
+  /* Discovery configuration stays with the trusted bootstrap and daemon. */
+  size_t inherited = 0;
+  for (size_t i = 0; i < environment.count; ++i) {
+    if (strcmp((const char *)environment.variables[i].name, "PYXIS_REMOTE_BEACON")) {
+      environment.variables[inherited++] = environment.variables[i];
+    }
+  }
+  environment.count = inherited;
   request.environment = (uintptr_t)environment.variables;
   request.environment_count = environment.count;
   status = launcher_launch(bound, &request, &shell->process);

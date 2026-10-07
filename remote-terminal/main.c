@@ -4,6 +4,7 @@
 #include <launcher.h>
 #include <process.h>
 #include <remote/terminal.h>
+#include <remote/beacon.h>
 #include <startup.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,12 +12,14 @@
 #include <string.h>
 #include <tcp.h>
 #include <wait.h>
+#include <udp.h>
 
 #define CLIENT_LIMIT 4
 #define SERVICE_ROUNDS 4
 #define HELLO_NS UINT64_C(10000000000)
 #define DRAIN_NS UINT64_C(5000000000)
 #define IDLE_WAIT_NS UINT64_C(10000000000)
+#define RECONNECT_NS UINT64_C(1000000000)
 #define FRAME_SIZE (REMOTE_HEADER_SIZE + REMOTE_PAYLOAD_MAX)
 
 /* Native completion kinds cross the wire by value. */
@@ -449,21 +452,99 @@ static uint64_t terminal_interests(const struct client *client)
   return interests;
 }
 
+/* The endpoint exists only while discovering. Shutdown before connecting drops
+ * every queued beacon, so a later session requires a fresh advertisement. */
+static handle_t discover_remote(handle_t service, handle_t tcp, handle_t clock,
+    const char *name)
+{
+  struct udp_open_reply opened;
+  enum call_status status = udp_open_broadcast(service, REMOTE_BEACON_PORT, &opened);
+  if (status != CALL_OK) {
+    report("open beacon endpoint", status);
+    failed = true;
+    return HANDLE_INVALID;
+  }
+  handle_t endpoint = opened.handle;
+  uint32_t address = 0;
+  uint16_t port = 0;
+  while (!failed) {
+    uint64_t now;
+    status = clock_now(clock, &now);
+    if (status != CALL_OK || now > UINT64_MAX - IDLE_WAIT_NS) {
+      report("beacon clock", status);
+      failed = true;
+      break;
+    }
+    unsigned char packet[UDP_MAX_PAYLOAD];
+    struct udp_receive_reply received;
+    status = udp_receive(endpoint, packet, sizeof(packet), now + IDLE_WAIT_NS, &received);
+    if (status == CALL_TIMED_OUT) {
+      continue;
+    }
+    if (status != CALL_OK) {
+      report("receive beacon", status);
+      failed = true;
+      break;
+    }
+    if (remote_beacon_decode(packet, received.length, name, &port) && received.address &&
+        received.address != UINT32_MAX && (received.address >> 28) != 14) {
+      address = received.address;
+      break;
+    }
+  }
+  status = udp_shutdown(endpoint);
+  if (status != CALL_OK) {
+    report("shutdown beacon endpoint", status);
+    failed = true;
+  }
+  close_handle(&endpoint);
+  if (failed) {
+    return HANDLE_INVALID;
+  }
+  uint64_t now;
+  status = clock_now(clock, &now);
+  if (status != CALL_OK || now > UINT64_MAX - HELLO_NS) {
+    report("connect clock", status);
+    failed = true;
+    return HANDLE_INVALID;
+  }
+  struct tcp_connect_reply connected;
+  status = tcp_connect(tcp, address, port, now + HELLO_NS, &connected);
+  if (status == CALL_OK) {
+    printf("remote-terminal: connected to %u.%u.%u.%u:%u\n", address >> 24,
+        (address >> 16) & 255, (address >> 8) & 255, address & 255, port);
+    return connected.handle;
+  }
+  report("reverse connect", status);
+  status = clock_sleep_for(clock, RECONNECT_NS);
+  if (status != CALL_OK) {
+    report("reconnect delay", status);
+    failed = true;
+  }
+  return HANDLE_INVALID;
+}
+
 int main(int argc, char **argv)
 {
   unsigned tab_width = 8;
-  if (argc == 2) {
+  const char *beacon = NULL;
+  if (argc == 4 && !strcmp(argv[2], "--beacon") && remote_beacon_name_length(argv[3])) {
+    beacon = argv[3];
+  } else if (argc != 1 && argc != 2) {
+    return EXIT_FAILURE;
+  }
+  if (argc >= 2) {
     char *end;
     unsigned long width = strtoul(argv[1], &end, 10);
     if (!*argv[1] || *end || width < 1 || width > 32) {
       return EXIT_FAILURE;
     }
     tab_width = (unsigned)width;
-  } else if (argc != 1) {
-    return EXIT_FAILURE;
   }
   handle_t listener = startup_resource("tcp_listener"), clock = startup_resource("clock");
-  if (listener == HANDLE_INVALID || clock == HANDLE_INVALID ||
+  handle_t udp_beacons = startup_resource("udp_beacons"), tcp = startup_resource("tcp");
+  if ((beacon ? udp_beacons == HANDLE_INVALID || tcp == HANDLE_INVALID :
+      listener == HANDLE_INVALID) || clock == HANDLE_INVALID ||
       startup_resource("terminal") == HANDLE_INVALID || startup_resource("launcher") == HANDLE_INVALID ||
       startup_resource("memory") == HANDLE_INVALID || startup_root("boot") == HANDLE_INVALID ||
       startup_root("tmp") == HANDLE_INVALID) {
@@ -475,9 +556,26 @@ int main(int argc, char **argv)
   if (!clients) {
     return EXIT_FAILURE;
   }
+  unsigned limit = beacon ? 1 : CLIENT_LIMIT;
   unsigned first = 0;
   bool accept_ready = true;
   while (!failed) {
+    if (beacon && !clients[0].occupied) {
+      handle_t stream = discover_remote(udp_beacons, tcp, clock, beacon);
+      if (stream == HANDLE_INVALID) {
+        continue;
+      }
+      uint64_t connected_at;
+      enum call_status status = clock_now(clock, &connected_at);
+      if (status != CALL_OK || connected_at > UINT64_MAX - HELLO_NS) {
+        report("session clock", status);
+        tcp_abort(stream);
+        close_handle(&stream);
+        break;
+      }
+      clients[0] = (struct client){.occupied = true, .stream = stream,
+          .deadline = connected_at + HELLO_NS};
+    }
     uint64_t now;
     enum call_status status = clock_now(clock, &now);
     if (status != CALL_OK || now > UINT64_MAX - IDLE_WAIT_NS) {
@@ -485,14 +583,14 @@ int main(int argc, char **argv)
       break;
     }
     bool progress = false;
-    for (unsigned step = 0; step < CLIENT_LIMIT; ++step) {
-      unsigned index = (first + step) % CLIENT_LIMIT;
+    for (unsigned step = 0; step < limit; ++step) {
+      unsigned index = (first + step) % limit;
       if (clients[index].occupied) {
         progress |= service_client(&clients[index], tab_width, now);
       }
     }
-    first = (first + 1) % CLIENT_LIMIT;
-    if (accept_ready) {
+    first = (first + 1) % limit;
+    if (!beacon && accept_ready) {
       for (unsigned i = 0; i < CLIENT_LIMIT; ++i) {
         if (clients[i].occupied) {
           continue;
@@ -542,12 +640,15 @@ int main(int argc, char **argv)
       }
     }
     size_t listener_entry = SIZE_MAX;
-    if (active < CLIENT_LIMIT) {
+    if (!beacon && active < CLIENT_LIMIT) {
       listener_entry = count;
       interests[count++] = (struct wait_interest){listener, WAIT_ACCEPTABLE};
     }
     if (failed) {
       break;
+    }
+    if (beacon && !active) {
+      continue;
     }
     status = wait_many(interests, count, progress ? 0 : deadline, events);
     if (status == CALL_TIMED_OUT) {

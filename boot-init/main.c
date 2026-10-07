@@ -23,6 +23,7 @@
 #include <launcher.h>
 #include <mount.h>
 #include <path.h>
+#include <remote/beacon.h>
 #include <space.h>
 #include <startup.h>
 #include <stdio.h>
@@ -109,6 +110,7 @@ struct authority {
   /* Granted only to spaces that set power. */
   handle_t power;
   uint64_t cpu_count;
+  const char *remote_beacon;
 };
 
 /* One configured volume, mounted at most once. */
@@ -320,7 +322,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 2];
+  struct launch_binding resources[SERVICE_COUNT + 3];
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -347,7 +349,7 @@ static void select_start(const struct boot_space *space, struct space_launch *la
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 2, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 3, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -401,6 +403,13 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->resources[launch->resource_count++] =
         (struct launch_binding){(uintptr_t)"power", launch->grant_count++};
   }
+  if (authority->remote_beacon && !strcmp(space->name, "remote")) {
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"udp_beacons", launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->services[SERVICE_UDP], UDP_SERVICE_RIGHT_BROADCAST, 0
+    };
+  }
   select_start(space, launch);
   return NULL;
 }
@@ -441,8 +450,10 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     }
   } else {
     const char *arguments[] = {space->init};
+    bool reverse = authority->remote_beacon && !strcmp(space->name, "remote");
     const struct startup_variable environment[] = {
       {(uintptr_t)"OS_NAME", (uintptr_t)"Pyxis OS"},
+      {(uintptr_t)"PYXIS_REMOTE_BEACON", (uintptr_t)authority->remote_beacon},
     };
     struct launch_request request = {
       .image = image,
@@ -452,7 +463,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
       .working_directories = (uintptr_t)&launch.working_directory,
       .working_directory_count = 1,
       .working_path = (uintptr_t)launch.working_path,
-      .environment = (uintptr_t)environment, .environment_count = 1,
+      .environment = (uintptr_t)environment, .environment_count = reverse ? 2 : 1,
       .argv = (uintptr_t)arguments, .argc = 1,
     };
     struct path_root roots[] = {{"boot", authority->boot}};
@@ -528,17 +539,28 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
 int main(int argc, char **argv)
 {
   bool installed = false, default_config = false;
+  const char *remote_beacon = NULL;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--installed")) {
       installed = true;
     } else if (!strcmp(argv[i], "--default-config")) {
       default_config = true;
+    } else if (!strcmp(argv[i], "--remote-beacon")) {
+      if (remote_beacon || i + 1 >= argc) {
+        fputs("boot-init: --remote-beacon requires one name and cannot be repeated\n", stderr);
+        return EXIT_FAILURE;
+      }
+      remote_beacon = argv[++i];
+      if (!remote_beacon_name_length(remote_beacon)) {
+        fputs("boot-init: invalid remote beacon name\n", stderr);
+        return EXIT_FAILURE;
+      }
     } else {
       fprintf(stderr, "boot-init: unknown argument %s\n", argv[i]);
     }
   }
 
-  struct authority authority = {0};
+  struct authority authority = {.remote_beacon = remote_beacon};
   if (!take_authority(&authority)) {
     fputs("boot-init: missing boot authority; no spaces started\n", stderr);
     return EXIT_FAILURE;

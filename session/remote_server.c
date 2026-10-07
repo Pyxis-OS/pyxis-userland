@@ -18,6 +18,7 @@
 #include <launcher.h>
 #include <net_config.h>
 #include <network_environment.h>
+#include <remote/beacon.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,6 +131,12 @@ static bool directory_grant(handle_t source, bool read_only, struct launch_grant
 int launch_remote_server(const struct session_config *config,
     const struct network_config *network, uint16_t port)
 {
+  const char *beacon = getenv("PYXIS_REMOTE_BEACON");
+  handle_t udp_beacons = startup_resource("udp_beacons");
+  if (beacon && (!remote_beacon_name_length(beacon) || udp_beacons == HANDLE_INVALID)) {
+    fputs("session: invalid reverse remote bootstrap\n", stderr);
+    return EXIT_FAILURE;
+  }
   handle_t memory = startup_resource("memory"), clock = startup_resource("clock");
   handle_t launcher = startup_resource("launcher"), tcp = startup_resource("tcp");
   handle_t terminal = startup_resource("terminal"), output = startup_resource("output");
@@ -149,7 +156,7 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
 
-  enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, LISTENER, FIRST_OPTIONAL };
+  enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
   enum { OPTIONAL_COUNT = 12, RESOURCE_CAPACITY = 16 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
@@ -162,7 +169,7 @@ int launch_remote_server(const struct session_config *config,
   struct launch_binding resources[RESOURCE_CAPACITY] = {
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"clock", CLOCK},
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal", TERMINAL},
-    {(uintptr_t)"tcp_listener", LISTENER},
+    {(uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT},
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
@@ -254,7 +261,7 @@ int launch_remote_server(const struct session_config *config,
   }
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
-  const char *arguments[] = {"bin://remote-terminal.pxe", tab_width};
+  const char *arguments[] = {"bin://remote-terminal.pxe", tab_width, "--beacon", beacon};
   struct launch_request request = {
     .grants = (uintptr_t)grants, .grant_count = grant_count,
     .resources = (uintptr_t)resources, .resource_count = resource_count,
@@ -262,7 +269,7 @@ int launch_remote_server(const struct session_config *config,
     .working_directories = (uintptr_t)&working_directory, .working_directory_count = 1,
     .working_path = (uintptr_t)"tmp://",
     .environment = (uintptr_t)environment, .environment_count = environment_count,
-    .argv = (uintptr_t)arguments, .argc = 2,
+    .argv = (uintptr_t)arguments, .argc = beacon ? 4 : 2,
     .streams = {
       [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, STDOUT},
       [STARTUP_STDERR] = {PROTOCOL_CONSOLE, STDERR},
@@ -300,23 +307,31 @@ int launch_remote_server(const struct session_config *config,
   }
   request.environment = (uintptr_t)refreshed_environment.variables;
   request.environment_count = refreshed_environment.count;
-  struct tcp_listen_reply reply;
-  status = tcp_listen(tcp, address, port, &reply);
-  if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot start remote listener (status %u)\n", status);
-    goto done;
+  if (beacon) {
+    grants[NETWORK_ENDPOINT] = (struct launch_grant){udp_beacons, UDP_SERVICE_RIGHT_BROADCAST, 0};
+  } else {
+    struct tcp_listen_reply reply;
+    status = tcp_listen(tcp, address, port, &reply);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot start remote listener (status %u)\n", status);
+      goto done;
+    }
+    listener = reply.handle;
+    grants[NETWORK_ENDPOINT] = (struct launch_grant){listener,
+        TCP_LISTENER_RIGHT_INSPECT | TCP_LISTENER_RIGHT_ACCEPT, 0};
   }
-  listener = reply.handle;
-  grants[LISTENER] = (struct launch_grant){listener,
-      TCP_LISTENER_RIGHT_INSPECT | TCP_LISTENER_RIGHT_ACCEPT, 0};
   handle_t child;
   status = launcher_launch(launcher, &request, &child);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot launch remote server (status %u)\n", status);
     goto done;
   }
-  printf("remote: listening on %u.%u.%u.%u:%u\n", address >> 24,
-      (address >> 16) & 255, (address >> 8) & 255, address & 255, port);
+  if (beacon) {
+    printf("remote: waiting for beacon %s\n", beacon);
+  } else {
+    printf("remote: listening on %u.%u.%u.%u:%u\n", address >> 24,
+        (address >> 16) & 255, (address >> 8) & 255, address & 255, port);
+  }
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
