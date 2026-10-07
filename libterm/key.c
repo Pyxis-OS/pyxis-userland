@@ -147,11 +147,7 @@ static enum call_status read_event(struct term_event_reader *reader,
     if (status != CALL_OK) {
       return status;
     }
-    if (reader->state != TEXT && now >= reader->byte_deadline) {
-      event->key = reader->state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
-      reader->state = TEXT;
-      return CALL_OK;
-    }
+    bool byte_expired = reader->state != TEXT && now >= reader->byte_deadline;
     uint64_t deadline = now > UINT64_MAX - WAIT_MAX_WAIT_NS ? UINT64_MAX :
         now + WAIT_MAX_WAIT_NS;
     if (reader->state != TEXT) {
@@ -171,7 +167,9 @@ static enum call_status read_event(struct term_event_reader *reader,
     status = wait_many(interests, 2, deadline, events);
     if (status == CALL_TIMED_OUT) {
       if (reader->state != TEXT) {
-        continue;
+        event->key = reader->state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
+        reader->state = TEXT;
+        return CALL_OK;
       }
       if (!timed || deadline < initial_deadline) {
         continue;
@@ -181,7 +179,15 @@ static enum call_status read_event(struct term_event_reader *reader,
     if (status != CALL_OK) {
       return status;
     }
-    if (events[1] & WAIT_RESIZED) {
+    bool readable = events[0] & (WAIT_READABLE | WAIT_PEER_FIN | WAIT_ERROR);
+    /* Buffered bytes, EOF and input errors precede an expired byte deadline,
+     * just as they do in console timed reads. Resize never renews that deadline. */
+    if (byte_expired && !readable) {
+      event->key = reader->state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
+      reader->state = TEXT;
+      return CALL_OK;
+    }
+    if (!byte_expired && (events[1] & WAIT_RESIZED)) {
       status = term_geometry(reader->term, &reader->size);
       if (status == CALL_OK) {
         event->kind = TERM_EVENT_RESIZED;
@@ -192,7 +198,7 @@ static enum call_status read_event(struct term_event_reader *reader,
     if (events[1] & WAIT_ERROR) {
       return CALL_UNAVAILABLE;
     }
-    if (!(events[0] & (WAIT_READABLE | WAIT_PEER_FIN | WAIT_ERROR))) {
+    if (!readable) {
       if (timed && !timeout_ms && reader->state == TEXT) {
         return CALL_TIMED_OUT;
       }
