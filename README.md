@@ -72,6 +72,14 @@ Its opt-in `term_read_line_marked` editor writes OSC 133;B after drawing each
 empty prompt, before reading input. Quiet shells and ordinary callers keep their
 existing output behavior; shell children do not inherit this option.
 
+Libterm line editing retains the complete prompt, text and cursor across live
+resize. A line larger than the screen uses a visible window around the cursor;
+the buffer capacity, including its NUL, controls how much text can be edited.
+Adaptive reads need the startup `clock` grant with READ authority, supplied by
+the stock shell profiles. Without that authority ordinary key reads still work
+with the initially queried dimensions. Typed resize events preserve partial
+Escape/CSI sequences and their original per-byte deadline.
+
 The Pyxis parent repository pins this repository as its `userspace` submodule
 and orchestrates header export, runtime build, SDK assembly, application build
 and boot-image assembly. Use its `make sdk`, `make image` and `make run` targets
@@ -335,6 +343,9 @@ helpers (libgcc, or compiler-rt builtins with the LLVM toolchain). `mandelbrot` 
 arithmetic. Hold arrows to pan, `=`/`+` and `-` to zoom, and Escape to return to
 the TTY. It needs display, keyboard and clock grants. Libc supports floating-point
 formatting and a small math subset; it does not provide a full libm.
+Mandelbrot waits for geometry and keyboard readiness together, replaces its
+mapping at a render checkpoint and redraws the retained view with the new aspect.
+A failed replacement retains the old mapping until another resize.
 
 `mousetest` shows mouse buttons, wheel direction and position, with a drawing
 pad for the left button; Escape returns to the TTY. It needs display, keyboard,

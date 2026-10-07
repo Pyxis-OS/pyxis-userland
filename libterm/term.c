@@ -46,12 +46,17 @@ enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows)
   *columns = 0;
   *rows = 0;
   struct console_size_reply size;
-  enum call_status status = console_size(term->output, &size);
+  enum call_status status = term_geometry(term, &size);
   if (status == CALL_OK) {
     *columns = size.columns;
     *rows = size.rows;
   }
   return status;
+}
+
+enum call_status term_geometry(struct terminal *term, struct console_size_reply *size)
+{
+  return term ? console_size(term->output, size) : CALL_BAD_REQUEST;
 }
 
 enum call_status term_set_tab_width(struct terminal *term, size_t columns)

@@ -4,6 +4,7 @@
 #include <startup.h>
 #include <stdio.h>
 #include <string.h>
+#include <wait.h>
 
 #define ITERATION_LIMIT 512
 #define FRAME_INTERVAL_NS (1000000000ull / 30)
@@ -25,6 +26,7 @@ struct controls {
   bool quit;
   bool redraw;
   uint64_t updated_at;
+  uint64_t observed_generation;
 };
 
 static bool moving(const struct controls *controls)
@@ -126,6 +128,47 @@ static enum call_status poll_input(struct controls *controls,
   return CALL_OK;
 }
 
+/* Replacement happens before a row pointer is formed. A successful swap
+ * aborts the old frame so its view and pixel palette are never reused. */
+static enum call_status receive_events(struct display_buffer *buffer,
+    struct controls *controls, handle_t display, handle_t keyboard, handle_t clock,
+    uint64_t deadline, bool *replaced)
+{
+  *replaced = false;
+  struct wait_interest interests[] = {
+    {.handle = display, .events = WAIT_RESIZED,
+     .observed_generation = controls->observed_generation},
+    {.handle = keyboard, .events = WAIT_READABLE},
+  };
+  uint64_t events[2];
+  enum call_status status = wait_many(interests, 2, deadline, events);
+  if (status == CALL_TIMED_OUT) {
+    return CALL_OK;
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (events[0] & WAIT_RESIZED) {
+    struct display_size_reply size;
+    status = display_size(display, &size);
+    if (status != CALL_OK) {
+      return status;
+    }
+    controls->observed_generation = size.generation;
+    /* Allocation failure preserves the old frame. Do not retry this generation
+     * on every render checkpoint; the next resize supplies another attempt. */
+    if (display_replace(display, size.generation, buffer) == CALL_OK) {
+      controls->view.aspect = (double)buffer->height / (double)buffer->width;
+      controls->redraw = true;
+      *replaced = true;
+    }
+  }
+  if ((events[0] | events[1]) & WAIT_ERROR) {
+    return CALL_UNAVAILABLE;
+  }
+  return events[1] & WAIT_READABLE ? poll_input(controls, keyboard, clock) : CALL_OK;
+}
+
 static unsigned escape_iterations(double real, double imaginary)
 {
   double x = 0.0;
@@ -148,9 +191,9 @@ static uint32_t pixel_color(const struct display_buffer *buffer, uint32_t rgb)
          (rgb & 0xff) << buffer->blue_shift;
 }
 
-static enum call_status render(const struct display_buffer *buffer,
+static enum call_status render(struct display_buffer *buffer,
                                struct controls *controls,
-                               handle_t keyboard, handle_t clock)
+                               handle_t display, handle_t keyboard, handle_t clock)
 {
   const uint32_t palette[] = {
     0x487fd4, 0x76a8f2, 0x269d9a, 0x52c4c0, 0x52aa60, 0x80d080,
@@ -171,8 +214,10 @@ static enum call_status render(const struct display_buffer *buffer,
 
   for (size_t row = 0; row < buffer->height; ++row) {
     if (row % 8 == 0) {
-      enum call_status status = poll_input(controls, keyboard, clock);
-      if (status != CALL_OK || controls->quit || !controls->focused) {
+      bool replaced;
+      enum call_status status = receive_events(buffer, controls, display, keyboard,
+          clock, 0, &replaced);
+      if (status != CALL_OK || replaced || controls->quit || !controls->focused) {
         return status;
       }
     }
@@ -191,8 +236,8 @@ static enum call_status render(const struct display_buffer *buffer,
   return CALL_OK;
 }
 
-static enum call_status explore(const struct display_buffer *buffer,
-                                handle_t keyboard, handle_t clock)
+static enum call_status explore(struct display_buffer *buffer,
+    handle_t display, handle_t keyboard, handle_t clock)
 {
   struct controls controls = {
     .view = {
@@ -201,6 +246,7 @@ static enum call_status explore(const struct display_buffer *buffer,
       .aspect = (double)buffer->height / (double)buffer->width,
     },
     .redraw = true,
+    .observed_generation = buffer->generation,
   };
   enum call_status status = clock_now(clock, &controls.updated_at);
   if (status != CALL_OK) {
@@ -209,12 +255,20 @@ static enum call_status explore(const struct display_buffer *buffer,
 
   while (!controls.quit) {
     if (!controls.focused || (!controls.redraw && !moving(&controls))) {
-      status = receive_input(&controls, keyboard, clock, 0);
+      uint64_t now;
+      status = clock_now(clock, &now);
+      if (status != CALL_OK || now > UINT64_MAX - WAIT_MAX_WAIT_NS) {
+        return status != CALL_OK ? status : CALL_LIMIT;
+      }
+      bool replaced;
+      status = receive_events(buffer, &controls, display, keyboard, clock,
+          now + WAIT_MAX_WAIT_NS, &replaced);
       if (status != CALL_OK) {
         return status;
       }
     }
-    status = poll_input(&controls, keyboard, clock);
+    bool replaced;
+    status = receive_events(buffer, &controls, display, keyboard, clock, 0, &replaced);
     if (status != CALL_OK || controls.quit) {
       return status;
     }
@@ -228,7 +282,7 @@ static enum call_status explore(const struct display_buffer *buffer,
 
     uint64_t frame_started = controls.updated_at;
     if (controls.redraw) {
-      status = render(buffer, &controls, keyboard, clock);
+      status = render(buffer, &controls, display, keyboard, clock);
       if (status != CALL_OK || controls.quit) {
         return status;
       }
@@ -237,7 +291,8 @@ static enum call_status explore(const struct display_buffer *buffer,
       if (frame_started > UINT64_MAX - FRAME_INTERVAL_NS) {
         return CALL_LIMIT;
       }
-      status = clock_sleep_until(clock, frame_started + FRAME_INTERVAL_NS);
+      status = receive_events(buffer, &controls, display, keyboard, clock,
+          frame_started + FRAME_INTERVAL_NS, &replaced);
       if (status != CALL_OK) {
         return status;
       }
@@ -271,7 +326,7 @@ int main(void)
      * The presenter may read pixels while we write them; tearing is allowed. */
     status = display_present(display);
     if (status == CALL_OK) {
-      status = explore(&buffer, keyboard, clock);
+      status = explore(&buffer, display, keyboard, clock);
     }
   }
 

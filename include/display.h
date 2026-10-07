@@ -17,5 +17,9 @@ enum call_status display_release(handle_t display);
 /* Query current destination pixels and generation without acquiring graphics.
  * Existing acquired mappings retain their original layout. Cleared on failure. */
 enum call_status display_size(handle_t display, struct display_size_reply *size);
+/* Replace the owned mapping at this geometry generation. Failure leaves buffer
+ * and its mapping intact; success invalidates every pointer into the old mapping. */
+enum call_status display_replace(handle_t display, uint64_t generation,
+    struct display_buffer *buffer);
 
 #endif

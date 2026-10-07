@@ -2,6 +2,7 @@
 #define USERSPACE_TERM_H
 
 #include <abi/handle.h>
+#include <abi/console.h>
 #include <abi/syscall.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -22,6 +23,7 @@ enum call_status term_print(struct terminal *term, const char *text);
 /* Begin a fresh line without adding a blank row when already at column zero. */
 enum call_status term_fresh_line(struct terminal *term);
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows);
+enum call_status term_geometry(struct terminal *term, struct console_size_reply *size);
 /* Set shared TTY tab spacing through output: 1..32 columns, default 8.
  * Affects future tabs only; preserves existing text, cursor and parser state. */
 enum call_status term_set_tab_width(struct terminal *term, size_t columns);
@@ -66,6 +68,32 @@ enum call_status term_read_key(struct terminal *term, unsigned *key);
 enum call_status term_read_key_timeout(struct terminal *term, uint32_t timeout_ms,
                                       unsigned *key);
 
+enum term_event_kind { TERM_EVENT_KEY, TERM_EVENT_RESIZED };
+
+struct term_event {
+  enum term_event_kind kind;
+  unsigned key;
+  struct console_size_reply size; /* Valid only for RESIZED. */
+};
+
+/* One reader exclusively owns key decoding for its borrowed terminal. Resize
+ * events retain partial Escape/CSI state and the original 100 ms byte deadline.
+ * Clock READ authority is explicit; no handles are acquired or closed here. */
+struct term_event_reader {
+  struct terminal *term;
+  handle_t clock;
+  struct console_size_reply size;
+  uint64_t byte_deadline;
+  unsigned state, parameter;
+};
+
+enum call_status term_event_reader_init(struct term_event_reader *reader,
+    struct terminal *term, handle_t clock);
+enum call_status term_read_event(struct term_event_reader *reader, struct term_event *event);
+/* Bounds only the initial-byte wait, just like term_read_key_timeout. */
+enum call_status term_read_event_timeout(struct term_event_reader *reader,
+    uint32_t timeout_ms, struct term_event *event);
+
 enum term_line_status {
   TERM_LINE_OK,
   TERM_LINE_CANCELLED,
@@ -95,9 +123,12 @@ struct term_line_result {
  * no history, tabs or Unicode editing. Standalone Escape is decoded with a
  * timeout and ignored by this line editor.
  *
- * The prompt, line and one cursor cell must fit in the visible terminal.
+ * The buffer's capacity minus NUL is the editing limit. A line larger than the
+ * screen uses a visible window around its cursor; text and prompt are retained.
+ * With a startup clock READ grant, resize wakes and redraws the editor. Without
+ * it, existing key reads remain usable with the initially queried dimensions.
  * Redraws account for delayed wrapping at the right margin.
- * Buffer/display exhaustion rejects insertion, colors its cell red and sets
+ * Buffer exhaustion rejects insertion, colors its cell red and sets
  * limit_reached. Deletion, movement, submission and cancellation remain usable.
  * CANCELLED/EOF/INPUT_LOST/ERROR clear buffer[0] when possible.
  * Reads one byte at a time: no unread bytes are retained for a future caller.
@@ -108,11 +139,11 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
                                       char *buffer, size_t capacity);
 /* Starts with editable printable ASCII and the cursor at its end. Initial
  * text is borrowed, NUL-terminated and disjoint from buffer. It must fit the
- * same buffer/display limit; cancellation and errors discard it. */
+ * same buffer limit; cancellation and errors discard it. */
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity);
-/* Same editing, cancellation, EOF and limits as term_read_line, including the
- * prompt geometry, but writes nothing: no prompt, fresh line, redraw, cursor or
+/* Same editing, cancellation, EOF and buffer limit as term_read_line, but
+ * writes nothing: no prompt, fresh line, redraw, cursor or
  * style control, overflow color, submission newline or ^C. The prompt is
  * validated and measured only. Output state is left as the caller had it. */
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,

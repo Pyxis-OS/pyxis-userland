@@ -1,12 +1,13 @@
 #include <handle.h>
 #include <term.h>
 #include <string.h>
+#include <startup.h>
 
 struct line_editor {
   struct terminal *term;
   const char *prompt;
   char *buffer;
-  size_t columns, prompt_length;
+  size_t columns, cells, prompt_length;
   size_t length, cursor, displayed_length, displayed_cursor;
   bool quiet;
 };
@@ -49,31 +50,41 @@ static enum call_status draw_line(struct line_editor *editor, bool editing, bool
   if (status != CALL_OK) {
     return status;
   }
-  status = term_print(term, editor->prompt);
+  size_t total = editor->prompt_length + editor->length;
+  size_t caret = editor->prompt_length + (editing ? editor->cursor : editor->length);
+  size_t visible = total < editor->cells ? total : editor->cells - 1;
+  size_t start = 0;
+  if (total >= editor->cells) {
+    start = caret > visible / 2 ? caret - visible / 2 : 0;
+    if (start > total - visible) {
+      start = total - visible;
+    }
+  }
+  size_t prompt_count = start < editor->prompt_length ? editor->prompt_length - start : 0;
+  if (prompt_count > visible) {
+    prompt_count = visible;
+  }
+  status = term_write_all(term, editor->prompt + (prompt_count ? start : 0), prompt_count);
+  if (status == CALL_OK && visible > prompt_count) {
+    size_t input_start = start + prompt_count - editor->prompt_length;
+    status = term_write_all(term, editor->buffer + input_start, visible - prompt_count);
+  }
   if (status != CALL_OK) {
     return status;
   }
 
-  status = term_write_all(term, editor->buffer, editor->length);
+  /* The visible span, including its cursor cell, fits even after scrolling.
+   * The retained prompt and input are independent of this temporary window. */
+  size_t span = visible > editor->displayed_length ? visible : editor->displayed_length;
+  status = write_spaces(term, span - visible + 1);
   if (status != CALL_OK) {
     return status;
   }
-
-  /* Clear the old tail, including the previous end cell. Keeping
-   * this span on screen lets row-relative movement survive TTY scrolling. */
-  size_t span = editor->length > editor->displayed_length ? editor->length : editor->displayed_length;
-  size_t trailing = span - editor->length + 1;
-  status = write_spaces(term, trailing);
-  if (status != CALL_OK) {
-    return status;
-  }
-  /* The last byte leaves the cursor at the margin until another is printed.
-   * CR below cancels that pending wrap before relative movement. */
-  size_t end = editor->prompt_length + span + 1;
+  size_t end = span + 1;
   if (end % editor->columns == 0) {
-    --end;
+    --end; /* CR cancels the delayed wrap at the right margin. */
   }
-  size_t target = editor->prompt_length + (editing ? editor->cursor : editor->length);
+  size_t target = caret - start;
   status = move_between(editor, end, target);
   if (status == CALL_OK && full) {
     /* Keep the existing overflow cue at the editing position. */
@@ -94,7 +105,7 @@ static enum call_status draw_line(struct line_editor *editor, bool editing, bool
     status = term_cursor_visible(term, true);
   }
   if (status == CALL_OK) {
-    editor->displayed_length = editor->length;
+    editor->displayed_length = visible;
     editor->displayed_cursor = target;
   }
   return status;
@@ -130,14 +141,11 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   }
 
   size_t cells = columns * rows;
-  if (cells < 1 || prompt_length > cells - 1) {
+  if (prompt_length > SIZE_MAX - capacity) {
     result.error = CALL_LIMIT;
     return result;
   }
-  size_t limit = cells - prompt_length - 1;
-  if (limit > capacity - 1) {
-    limit = capacity - 1;
-  }
+  size_t limit = capacity - 1;
   size_t initial_length = strlen(initial);
   if (initial_length > limit) {
     result.error = CALL_LIMIT;
@@ -151,9 +159,27 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   }
   struct line_editor editor = {
     .term = term, .prompt = prompt, .buffer = buffer,
-    .columns = columns, .prompt_length = prompt_length, .quiet = quiet,
+    .columns = columns, .cells = cells, .prompt_length = prompt_length, .quiet = quiet,
     .length = initial_length, .cursor = initial_length,
   };
+  struct term_event_reader reader;
+  handle_t clock = startup_resource("clock");
+  bool adaptive = false;
+  if (clock != HANDLE_INVALID) {
+    result.error = term_event_reader_init(&reader, term, clock);
+    if (result.error == CALL_OK) {
+      if (reader.size.columns > UINT16_MAX || reader.size.rows > UINT16_MAX) {
+        result.error = CALL_BAD_REQUEST;
+        return result;
+      }
+      adaptive = true;
+      editor.columns = reader.size.columns;
+      editor.cells = reader.size.columns * reader.size.rows;
+    } else if (result.error != CALL_DENIED && result.error != CALL_BAD_HANDLE) {
+      return result;
+    }
+  }
+  result.error = CALL_OK;
   if (!quiet) {
     result.error = term_fresh_line(term);
     if (result.error != CALL_OK) {
@@ -172,7 +198,29 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 
   while (result.error == CALL_OK) {
     unsigned key;
-    result.error = term_read_key(term, &key);
+    struct term_event event;
+    result.error = adaptive ? term_read_event(&reader, &event) : term_read_key(term, &key);
+    if (result.error == CALL_OK && adaptive) {
+      if (event.kind == TERM_EVENT_RESIZED) {
+        if (event.size.columns > UINT16_MAX || event.size.rows > UINT16_MAX) {
+          result.error = CALL_BAD_REQUEST;
+          break;
+        }
+        editor.columns = event.size.columns;
+        editor.cells = event.size.columns * event.size.rows;
+        editor.displayed_length = editor.displayed_cursor = 0;
+        /* Resize clamps the physical cursor. Its current row becomes the new
+         * anchor; bounded output can scroll, preserving rows above it. */
+        if (!quiet) {
+          result.error = term_print(term, "\r\x1b[J");
+        }
+        if (result.error == CALL_OK) {
+          result.error = draw_line(&editor, true, false);
+        }
+        continue;
+      }
+      key = event.key;
+    }
     if (result.error == CALL_INPUT_LOST) {
       result.status = TERM_LINE_INPUT_LOST;
       break;

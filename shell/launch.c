@@ -528,10 +528,10 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
     for (size_t i = 0; i < stage_count; ++i) {
       if (!complete[i]) {
         stage_of[count] = i;
-        interests[count++] = (struct wait_interest){children[i], WAIT_COMPLETE};
+        interests[count++] = (struct wait_interest){.handle = children[i], .events = WAIT_COMPLETE};
       }
     }
-    interests[count] = (struct wait_interest){armed, WAIT_INTERRUPT};
+    interests[count] = (struct wait_interest){.handle = armed, .events = WAIT_INTERRUPT};
     uint64_t now;
     enum call_status status = clock_now(shell->clock, &now);
     if (status != CALL_OK) {
