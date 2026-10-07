@@ -41,7 +41,7 @@ static enum cp_result reserve_temporary(handle_t parent, const char *name,
         destination, temporary);
     return CP_UNCERTAIN;
   }
-  fprintf(stderr, "cp: %s: Cannot reserve a temporary name after %u candidates\n",
+  fprintf(stderr, "cp: %s: Cannot reserve a .cp- temporary name after %u candidates\n",
       destination, TEMPORARY_ATTEMPTS);
   return CP_FAILED;
 }
