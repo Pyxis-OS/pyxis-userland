@@ -9,7 +9,7 @@ return {
   },
   spaces = {
     { name = "pyxis", title = "Pyxis", init = "boot://init-installed",
-      network = true, launch = true,
+      network = true, launch = true, power = true,
       roots = { system = "read-write",
                 home = { access = "read-write", optional = true } } },
   },

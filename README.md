@@ -223,6 +223,16 @@ and does not delegate mount authority to an external command. Ordinary sessions
 have no mount grant and report unavailable. Existing `sync path...` continues to
 synchronize the named files or directories. Closing a handle does not sync it.
 
+`poweroff` and `reboot` are builtins of a shell holding the `power` resource.
+Boot init grants it only to spaces that set `power = true` in their boot
+configuration; the live Development and installed `pyxis` spaces do, as does the
+rescue space. Session forwards it to local successors but not when starting
+remote services, and the shell forwards it only to session successors, so
+neither remote shells nor ordinary programs receive it. The kernel flushes the
+native pools before powering off or restarting; a failure is reported and the
+system stays up. [power.h](include/power.h) provides `power_off` and
+`power_restart`.
+
 [directory.h](include/directory.h) provides `directory_filesystem_info` through a
 borrowed FILESYSTEM_INFO directory grant. Its bounded record supplies npfs
 type, read-only and GPT/filesystem degraded flags, opaque pool/volume IDs,
