@@ -157,6 +157,9 @@ static bool send_file(struct transfer *transfer, const char *path)
   if (!digest_begin()) {
     return transfer_fail(transfer, "EIO", "SHA-256 failed");
   }
+  /* The host sends nothing but one reply per chunk, so reading replies in
+   * blocks consumes no shell input. */
+  wire->buffered = true;
   size_t offset = 0;
   do {
     size_t count = transfer->size - offset;
@@ -203,6 +206,8 @@ static bool send_file(struct transfer *transfer, const char *path)
       break;
     }
   } while (offset < transfer->size);
+  /* No read-ahead after finish: input following the final ACK belongs to shell. */
+  wire->buffered = false;
   if (!wire_send(wire, "finish", "") || !wire_expect(wire, "OK", NULL, 0, false)) {
     return false;
   }
