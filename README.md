@@ -361,6 +361,7 @@ lock; a fresh surface click permits a pending request to try once again.
 `L` while waiting cancels that request. Polling never requests lock again.
 It needs display, keyboard, pointer and clock grants. Resizing replaces its
 mapping and preserves the overlapping drawing; failure retains the old mapping.
+Locked resize preserves relative counts and accepted buttons.
 Its update loop keeps running without input focus, clearing held buttons on
 focus, boundary and state changes and allowing the wheel indicator to expire.
 Keyboard and pointer controls follow their own session's focus.

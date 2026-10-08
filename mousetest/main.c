@@ -254,10 +254,18 @@ static void apply_pointer(const struct screen *screen, struct mouse_state *state
 {
   state->pointer_focused = (event->flags & POINTER_EVENT_FOCUSED) != 0;
   state->dirty = true;
-  state->x = event->x;
-  state->y = event->y;
+  if (event->generation == state->geometry.generation &&
+      event->mapping_identity == state->geometry.mapping_identity) {
+    state->x = event->x;
+    state->y = event->y;
+  }
+  if (event->type == POINTER_GEOMETRY_CHANGED && state->locked &&
+      (event->flags & POINTER_EVENT_LOCKED)) {
+    state->buttons = event->buttons;
+    return;
+  }
   if (event->type != POINTER_INPUT) {
-    /* Focus, boundary and geometry changes end every held control. */
+    /* Revocation/reset ends held controls; locked resize preserves them. */
     state->buttons = 0;
     state->scroll = 0;
     state->dx = 0;
@@ -313,10 +321,12 @@ static enum call_status refresh_geometry(struct screen *screen, struct display_b
     return status;
   }
   state->observed_generation = state->geometry.generation;
-  state->buttons = 0;
-  state->scroll = 0;
-  state->dx = 0;
-  state->dy = 0;
+  if (!state->locked) {
+    state->buttons = 0;
+    state->scroll = 0;
+    state->dx = 0;
+    state->dy = 0;
+  }
   state->dirty = true;
 
   uint64_t width = state->geometry.width;
@@ -451,7 +461,9 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
     }
     struct pointer_event event;
     while ((status = pointer_read(pointer, POINTER_READ_POLL, &event)) == CALL_OK) {
-      if (event.type != POINTER_INPUT) {
+      bool locked_geometry = event.type == POINTER_GEOMETRY_CHANGED &&
+          state.locked && (event.flags & POINTER_EVENT_LOCKED);
+      if (event.type != POINTER_INPUT && !locked_geometry) {
         state.buttons = 0;
         state.scroll = 0;
         state.dx = 0;
@@ -481,8 +493,12 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
           return geometry_status;
         }
       }
-      if (event.generation == state.geometry.generation &&
-          event.mapping_identity == state.geometry.mapping_identity) {
+      bool locked_input = event.type == POINTER_INPUT && state.locked &&
+          (event.flags & POINTER_EVENT_LOCKED);
+      /* Relative counts do not change meaning when the mapping is replaced. */
+      if (locked_input || locked_geometry ||
+          (event.generation == state.geometry.generation &&
+           event.mapping_identity == state.geometry.mapping_identity)) {
         apply_pointer(screen, &state, &event, now);
       }
     }
