@@ -170,8 +170,11 @@ static void command(struct mux *mux, unsigned key)
   }
   switch (key) {
   case 2:
-    mux->pending[0] = 2;
-    mux->pending_size = 1;
+    if (pane->root_done || pane->remove_when_done) {
+      notice(mux, "Pane has exited; Ctrl+B x dismisses it");
+    } else {
+      pane->pending[pane->pending_size++] = 2;
+    }
     break;
   case '%': split(mux, MUX_LEFT_RIGHT); break;
   case '"': split(mux, MUX_TOP_BOTTOM); break;
@@ -224,7 +227,7 @@ static unsigned decoded_escape(const unsigned char *bytes, size_t length)
 }
 
 /* Application input stays byte-exact; only mux commands/history are decoded.
- * A partial injected prefix stays attached to its original focused pane. */
+ * Queued application bytes stay attached to their pane across focus changes. */
 static bool consume_input(struct mux *mux, uint64_t now)
 {
   bool progress = false;
@@ -234,14 +237,24 @@ static bool consume_input(struct mux *mux, uint64_t now)
     mux->escape_size = 0;
     progress = true;
   }
-  while (mux->input_at < mux->input_size && !mux->pending_size && mux->error == CALL_OK && any_panes(mux)) {
-    unsigned char byte = mux->input[mux->input_at++];
-    progress = true;
+  while (mux->input_at < mux->input_size && mux->error == CALL_OK && any_panes(mux)) {
     struct mux_pane *pane = &mux->panes[mux->focused];
+    unsigned char byte = mux->input[mux->input_at];
+    bool application = !mux->confirm && !mux->escape_size && !pane->browsing &&
+        (mux->prefix ? byte == 2 : byte != 2);
+    if (application && !pane->root_done && !pane->remove_when_done &&
+        pane->pending_size == sizeof(pane->pending)) {
+      /* Leave the byte staged until its pane has capacity; controls can still
+       * proceed when they are the next bytes in the outer input stream. */
+      break;
+    }
+    ++mux->input_at;
+    progress = true;
     if (mux->confirm) {
       if (byte == 'y' || byte == 'Y') {
         mux->confirm = false;
         pane->remove_when_done = true;
+        pane->pending_size = 0;
         pane->browsing = false;
         pane->scrollback = 0;
         mux->error = execution_group_terminate(pane->session.group);
@@ -293,10 +306,7 @@ static bool consume_input(struct mux *mux, uint64_t now)
       notice(mux, "Pane has exited; Ctrl+B x dismisses it");
       continue;
     }
-    mux->pending[mux->pending_size++] = byte;
-    while (mux->input_at < mux->input_size && mux->input[mux->input_at] != 2) {
-      mux->pending[mux->pending_size++] = mux->input[mux->input_at++];
-    }
+    pane->pending[pane->pending_size++] = byte;
   }
   if (mux->input_at == mux->input_size) {
     mux->input_at = mux->input_size = 0;
@@ -304,19 +314,19 @@ static bool consume_input(struct mux *mux, uint64_t now)
   return progress;
 }
 
-static bool inject(struct mux *mux)
+static bool inject(struct mux *mux, struct mux_pane *pane)
 {
-  if (!mux->pending_size) {
+  if (!pane->pending_size) {
     return false;
   }
   struct terminal_transfer_reply reply;
-  enum call_status status = terminal_try_inject(mux->panes[mux->focused].session.attachment,
-      mux->pending + mux->pending_at, mux->pending_size - mux->pending_at, &reply);
+  enum call_status status = terminal_try_inject(pane->session.attachment,
+      pane->pending, pane->pending_size, &reply);
   if (status == CALL_WOULD_BLOCK) {
     return false;
   }
   if (status == CALL_ENDPOINT_CLOSED) {
-    mux->pending_at = mux->pending_size = 0;
+    pane->pending_size = 0;
     notice(mux, "Pane input closed");
     return true;
   }
@@ -324,10 +334,8 @@ static bool inject(struct mux *mux)
     mux->error = status;
     return false;
   }
-  mux->pending_at += reply.length;
-  if (mux->pending_at == mux->pending_size) {
-    mux->pending_at = mux->pending_size = 0;
-  }
+  pane->pending_size -= reply.length;
+  memmove(pane->pending, pane->pending + reply.length, pane->pending_size);
   return true;
 }
 
@@ -385,6 +393,7 @@ static void lifecycle(struct mux *mux, struct mux_pane *pane, uint64_t events)
     mux->error = process_wait(pane->session.process, &pane->result);
     if (mux->error == CALL_OK) {
       pane->root_done = true;
+      pane->pending_size = 0;
       mux->error = execution_group_terminate(pane->session.group);
     }
   } else {
@@ -402,8 +411,13 @@ static enum call_status run(struct mux *mux)
     if (mux->error != CALL_OK) {
       break;
     }
-    bool progress = inject(mux);
-    if (!mux->pending_size) {
+    bool progress = false;
+    for (unsigned i = 0; i < MUX_PANES && mux->error == CALL_OK; ++i) {
+      if (mux->panes[i].used) {
+        progress |= inject(mux, &mux->panes[i]);
+      }
+    }
+    if (mux->error == CALL_OK) {
       progress |= consume_input(mux, now);
     }
     for (unsigned i = 0; i < MUX_PANES && mux->error == CALL_OK; ++i) {
@@ -426,7 +440,7 @@ static enum call_status run(struct mux *mux)
     struct wait_interest interests[WAIT_MAX_INTERESTS];
     uint64_t events[WAIT_MAX_INTERESTS];
     size_t output_entries[MUX_PANES], life_entries[MUX_PANES];
-    bool input_capacity = !mux->input_size && !mux->pending_size;
+    bool input_capacity = !mux->input_size;
     interests[0] = (struct wait_interest){.handle = mux->terminal.input,
         .events = WAIT_RESIZED | (input_capacity ? WAIT_READABLE : 0),
         .observed_generation = mux->geometry.generation};
@@ -438,7 +452,7 @@ static enum call_status run(struct mux *mux)
         continue;
       }
       uint64_t output_events = pane->output_eof ? 0 : WAIT_READABLE;
-      if (i == mux->focused && mux->pending_size) {
+      if (pane->pending_size) {
         output_events |= WAIT_WRITABLE;
       }
       if (output_events) {

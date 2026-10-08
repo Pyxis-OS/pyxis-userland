@@ -14,6 +14,8 @@ struct mux_pane {
   struct process_result result;
   size_t scrollback;
   bool browsing;
+  unsigned char pending[256];
+  size_t pending_size;
 };
 
 struct mux {
@@ -29,8 +31,6 @@ struct mux {
   char notice[128];
   unsigned char input[256];
   size_t input_size, input_at;
-  unsigned char pending[256];
-  size_t pending_size, pending_at;
   unsigned char escape[16];
   size_t escape_size;
   uint64_t escape_deadline;
