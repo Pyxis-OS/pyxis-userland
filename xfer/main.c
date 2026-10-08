@@ -12,10 +12,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* Source hashing reads and staged writes go through this one block, so
+ * memory stays the same whatever the file size. */
+#define XFER_BLOCK 65536
+
+static unsigned char block[XFER_BLOCK];
+
 struct transfer {
   struct wire wire;
-  unsigned char *bytes;
-  size_t size;
+  int source;
+  size_t size, staged, pending;
   char digest[65];
   handle_t parent, stage_file;
   char stage_name[XFER_NAME_MAX + 96];
@@ -37,7 +43,10 @@ static bool native_fail(struct transfer *transfer, enum call_status status, cons
   snprintf(diagnostic, sizeof(diagnostic), "xfer: %s: native status %u\n", operation, (unsigned)status);
   term_print(&transfer->wire.terminal, diagnostic);
   const char *code = status == CALL_DENIED || status == CALL_READ_ONLY ? "EPERM" :
-      status == CALL_ALREADY_EXISTS ? "EEXIST" : "EIO";
+      status == CALL_ALREADY_EXISTS ? "EEXIST" :
+      status == CALL_NO_SPACE || status == CALL_QUOTA ? "ENOSPC" :
+      status == CALL_FILE_TOO_LARGE ? "EFBIG" :
+      status == CALL_NO_MEMORY ? "ENOMEM" : "EIO";
   return transfer_fail(transfer, code, "Native filesystem operation failed");
 }
 
@@ -52,71 +61,83 @@ static bool plain_name(const char *name)
       strcmp(name, "..") && !strchr(name, '/') && !strchr(name, '\\') && utf8_text(name);
 }
 
-static bool capture_source(struct transfer *transfer, const char *path, const char **name)
+/* Exact reads: a short read means the source shrank while it was being sent. */
+static bool source_read(struct transfer *transfer, void *bytes, size_t size)
+{
+  unsigned char *output = bytes;
+  while (size) {
+    ssize_t received = read(transfer->source, output, size);
+    if (received <= 0) {
+      return transfer_fail(transfer, "EIO", "Source read failed or the source size changed");
+    }
+    output += received;
+    size -= received;
+  }
+  return true;
+}
+
+static bool source_at_end(struct transfer *transfer)
+{
+  unsigned char extra;
+  return read(transfer->source, &extra, 1) == 0 ||
+      transfer_fail(transfer, "EIO", "Source read failed or the source size changed");
+}
+
+/* First pass: the digest is announced before any data, so the whole source is
+ * read once here and again while sending. */
+static bool hash_source(struct transfer *transfer, const char *path, const char **name)
 {
   *name = strrchr(path, '/');
   *name = *name ? *name + 1 : path;
   if (!plain_name(*name)) {
     return transfer_fail(transfer, "EINVAL", "Source must have a plain UTF-8 file name of at most 200 bytes");
   }
-  int descriptor = open(path, O_RDONLY);
-  if (descriptor < 0) {
+  transfer->source = open(path, O_RDONLY);
+  if (transfer->source < 0) {
     return transfer_fail(transfer, errno == EACCES ? "EPERM" : "EIO", "Cannot open the source file");
   }
   struct stat info;
-  bool success = false;
-  if (fstat(descriptor, &info) != 0 || !S_ISREG(info.st_mode)) {
-    transfer_fail(transfer, "EINVAL", "Source must be a readable regular file");
-    goto done;
-  }
-  if (info.st_size < 0 || (uint64_t)info.st_size > XFER_FILE_MAX) {
-    transfer_fail(transfer, "EFBIG", "Source exceeds the 16 MiB memory limit");
-    goto done;
+  if (fstat(transfer->source, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
+    return transfer_fail(transfer, "EINVAL", "Source must be a readable regular file");
   }
   transfer->size = info.st_size;
-  transfer->bytes = malloc(transfer->size ? transfer->size : 1);
-  if (!transfer->bytes) {
-    transfer_fail(transfer, "ENOMEM", "Cannot allocate the source buffer");
-    goto done;
+  if (!digest_begin()) {
+    return transfer_fail(transfer, "EIO", "SHA-256 failed");
   }
   size_t offset = 0;
   while (offset < transfer->size) {
     size_t count = transfer->size - offset;
-    if (count > 4096) {
-      count = 4096;
+    if (count > sizeof(block)) {
+      count = sizeof(block);
     }
-    ssize_t received = read(descriptor, transfer->bytes + offset, count);
-    if (received <= 0) {
-      transfer_fail(transfer, "EIO", "Source read failed or the source size changed");
-      goto done;
+    if (!source_read(transfer, block, count)) {
+      return false;
     }
-    offset += received;
+    if (!digest_update(block, count)) {
+      return transfer_fail(transfer, "EIO", "SHA-256 failed");
+    }
+    offset += count;
     if (!wire_poll_cancel(&transfer->wire)) {
-      goto done;
+      return false;
     }
   }
-  unsigned char extra;
-  if (read(descriptor, &extra, 1) != 0) {
-    transfer_fail(transfer, "EIO", "Source read failed or the source size changed");
-    goto done;
+  if (!source_at_end(transfer)) {
+    return false;
   }
-  if (!file_digest(transfer->bytes, transfer->size, transfer->digest)) {
-    transfer_fail(transfer, "EIO", "SHA-256 failed");
-    goto done;
+  if (!digest_finish(transfer->digest)) {
+    return transfer_fail(transfer, "EIO", "SHA-256 failed");
   }
-  success = wire_poll_cancel(&transfer->wire);
-done:
-  if (close(descriptor) != 0) {
-    success = transfer_fail(transfer, "EIO", "Source close failed");
+  if (lseek(transfer->source, 0, SEEK_SET) != 0) {
+    return transfer_fail(transfer, "EIO", "Cannot rewind the source file");
   }
-  return success;
+  return wire_poll_cancel(&transfer->wire);
 }
 
 static bool send_file(struct transfer *transfer, const char *path)
 {
   struct wire *wire = &transfer->wire;
   const char *name;
-  if (!capture_source(transfer, path, &name)) {
+  if (!hash_source(transfer, path, &name)) {
     return false;
   }
   char encoded_name[(XFER_NAME_MAX + 2) / 3 * 4 + 1];
@@ -133,6 +154,12 @@ static bool send_file(struct transfer *transfer, const char *path)
   if (!wire_send(wire, "file", fields) || !wire_expect(wire, "STARTED", "f1", 0, false)) {
     return false;
   }
+  if (!digest_begin()) {
+    return transfer_fail(transfer, "EIO", "SHA-256 failed");
+  }
+  /* The host sends nothing but one reply per chunk, so reading replies in
+   * blocks consumes no shell input. */
+  wire->buffered = true;
   size_t offset = 0;
   do {
     size_t count = transfer->size - offset;
@@ -140,8 +167,33 @@ static bool send_file(struct transfer *transfer, const char *path)
       count = XFER_CHUNK_MAX;
     }
     bool last = offset + count == transfer->size;
+    unsigned char bytes[XFER_CHUNK_MAX];
+    if (!source_read(transfer, bytes, count)) {
+      return false;
+    }
+    if (!digest_update(bytes, count)) {
+      return transfer_fail(transfer, "EIO", "SHA-256 failed");
+    }
+    /* The second read must match the announced digest before end_data. */
+    if (last) {
+      char digest[65];
+      if (!source_at_end(transfer)) {
+        return false;
+      }
+      if (!digest_finish(digest)) {
+        return transfer_fail(transfer, "EIO", "SHA-256 failed");
+      }
+      if (!digest_equal(transfer->digest, digest)) {
+        return transfer_fail(transfer, "EIO", "Source changed while it was being sent");
+      }
+      int source = transfer->source;
+      transfer->source = -1;
+      if (close(source) != 0) {
+        return transfer_fail(transfer, "EIO", "Source close failed");
+      }
+    }
     char data[(XFER_CHUNK_MAX + 2) / 3 * 4 + 1];
-    base64_encode(transfer->bytes + offset, count, data, sizeof(data));
+    base64_encode(bytes, count, data, sizeof(data));
     snprintf(fields, sizeof(fields), "fid=f1;d=%s", data);
     if (!wire_send(wire, last ? "end_data" : "data", fields)) {
       return false;
@@ -154,6 +206,8 @@ static bool send_file(struct transfer *transfer, const char *path)
       break;
     }
   } while (offset < transfer->size);
+  /* No read-ahead after finish: input following the final ACK belongs to shell. */
+  wire->buffered = false;
   if (!wire_send(wire, "finish", "") || !wire_expect(wire, "OK", NULL, 0, false)) {
     return false;
   }
@@ -211,16 +265,50 @@ static bool receive_catalog(struct transfer *transfer, char host_name[XFER_PATH_
   if (!utf8_text(host_name)) {
     return transfer_fail(transfer, "EINVAL", "Host path is not valid UTF-8");
   }
-  if (transfer->size > XFER_FILE_MAX) {
-    return transfer_fail(transfer, "EFBIG", "Host file exceeds the 16 MiB memory limit");
-  }
   memcpy(transfer->digest, packet.sha256, sizeof(transfer->digest));
   strcpy(fid, actual_fid);
-  if (!wire_expect(wire, "OK", NULL, 0, false)) {
+  return wire_expect(wire, "OK", NULL, 0, false);
+}
+
+static bool stage_create(struct transfer *transfer)
+{
+  enum call_status status = directory_create(transfer->parent, transfer->stage_name,
+      DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, &transfer->stage_file);
+  if (status != CALL_OK) {
+    return native_fail(transfer, status, "exclusive staging-file creation");
+  }
+  transfer->stage_owned = true;
+  return true;
+}
+
+static bool stage_flush(struct transfer *transfer)
+{
+  size_t offset = 0;
+  while (offset < transfer->pending) {
+    size_t written;
+    enum call_status status = file_write(transfer->stage_file, transfer->staged,
+        block + offset, transfer->pending - offset, &written);
+    if (status != CALL_OK) {
+      return native_fail(transfer, status, "staging-file write");
+    }
+    if (!written) {
+      return transfer_fail(transfer, "EIO", "Staging-file write made no progress");
+    }
+    offset += written;
+    transfer->staged += written;
+  }
+  transfer->pending = 0;
+  return true;
+}
+
+static bool stage_append(struct transfer *transfer, const void *bytes, size_t size)
+{
+  if (size > sizeof(block) - transfer->pending && !stage_flush(transfer)) {
     return false;
   }
-  transfer->bytes = malloc(transfer->size ? transfer->size : 1);
-  return transfer->bytes || transfer_fail(transfer, "ENOMEM", "Cannot allocate the receive buffer");
+  memcpy(block + transfer->pending, bytes, size);
+  transfer->pending += size;
+  return true;
 }
 
 static bool receive_data(struct transfer *transfer, const char *fid)
@@ -232,6 +320,9 @@ static bool receive_data(struct transfer *transfer, const char *fid)
     if (!wire_next(wire, &packet)) {
       return false;
     }
+    if (!strcmp(packet.action, "status")) {
+      return wire_peer_status(wire, &packet);
+    }
     bool last = !strcmp(packet.action, "end_data");
     size_t count;
     unsigned char bytes[XFER_CHUNK_MAX];
@@ -241,14 +332,19 @@ static bool receive_data(struct transfer *transfer, const char *fid)
         count > transfer->size - offset || (!last && !count)) {
       return transfer_fail(transfer, "EINVAL", "Unexpected or invalid transfer data");
     }
-    memcpy(transfer->bytes + offset, bytes, count);
+    if (!digest_update(bytes, count)) {
+      return transfer_fail(transfer, "EIO", "SHA-256 failed");
+    }
+    if (!stage_append(transfer, bytes, count)) {
+      return false;
+    }
     offset += count;
     if (last) {
       if (offset != transfer->size) {
         return transfer_fail(transfer, "EINVAL", "Received file size does not match its metadata");
       }
       char digest[65];
-      if (!file_digest(transfer->bytes, transfer->size, digest)) {
+      if (!digest_finish(digest)) {
         return transfer_fail(transfer, "EIO", "SHA-256 failed");
       }
       if (!digest_equal(transfer->digest, digest)) {
@@ -264,26 +360,10 @@ static bool receive_data(struct transfer *transfer, const char *fid)
 
 static bool publish_file(struct transfer *transfer, const char *name, bool overwrite)
 {
-  enum call_status status = directory_create(transfer->parent, transfer->stage_name,
-      DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, &transfer->stage_file);
-  if (status != CALL_OK) {
-    return native_fail(transfer, status, "exclusive staging-file creation");
+  if (!stage_flush(transfer) || !wire_poll_cancel(&transfer->wire)) {
+    return false;
   }
-  transfer->stage_owned = true;
-  size_t offset = 0;
-  while (offset < transfer->size) {
-    if (!wire_poll_cancel(&transfer->wire)) {
-      return false;
-    }
-    size_t written;
-    status = file_write(transfer->stage_file, offset, transfer->bytes + offset,
-        transfer->size - offset, &written);
-    if (status != CALL_OK) {
-      return native_fail(transfer, status, "staging-file write");
-    }
-    offset += written;
-  }
-  status = file_sync(transfer->stage_file);
+  enum call_status status = file_sync(transfer->stage_file);
   if (status != CALL_OK) {
     return native_fail(transfer, status, "staging-file synchronization");
   }
@@ -338,6 +418,13 @@ static bool receive_file(struct transfer *transfer, const char *host_path, const
   if (!receive_catalog(transfer, host_name, fid)) {
     return false;
   }
+  /* Data starts now: verified frames stream into the private staging name. */
+  if (!stage_create(transfer)) {
+    return false;
+  }
+  if (!digest_begin()) {
+    return transfer_fail(transfer, "EIO", "SHA-256 failed");
+  }
   base64_encode(host_name, strlen(host_name), encoded_name, sizeof(encoded_name));
   snprintf(fields, sizeof(fields), "fid=%s;n=%s", fid, encoded_name);
   if (!wire_send(wire, "file", fields) || !receive_data(transfer, fid) ||
@@ -369,7 +456,9 @@ static void cleanup(struct transfer *transfer)
       term_print(&transfer->wire.terminal, diagnostic);
     }
   }
-  free(transfer->bytes);
+  if (transfer->source >= 0 && close(transfer->source) != 0) {
+    term_print(&transfer->wire.terminal, "xfer: source close failed\n");
+  }
   hash_close();
 }
 
@@ -387,6 +476,7 @@ int main(int argc, char **argv)
       .terminal = {startup_resource("input"), startup_resource("output")},
       .clock = startup_resource("clock"),
     },
+    .source = -1,
     .stage_file = HANDLE_INVALID,
     .error_status = "EIO",
   };

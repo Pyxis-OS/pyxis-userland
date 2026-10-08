@@ -32,10 +32,13 @@ or select NO_REPLACE. Source reads use libc open/fstat/read and reject nonregula
 objects. SHA-256 uses the configured Mbed TLS PSA implementation from the ports
 export, without vendored cryptographic code or an additional runtime library.
 
-Both directions capture the complete file in memory, limited to 16 MiB. Source
-capture finishes before metadata and its digest are sent; a size change while
-capturing fails. Same-size concurrent edits can affect the captured bytes, whose
-digest still describes exactly what is sent. Guest file names are valid UTF-8,
+Both directions stream, so memory stays constant: one 64 KiB block, one frame
+and the SHA-256 state, whatever the file size. There is no fixed size limit; a
+transfer is bounded by its declared 64-bit size, the destination's free space
+and the reply deadlines. Sending reads the source twice. The first pass hashes
+it before the metadata and digest are announced; the second sends it and hashes
+it again, and a different digest or size fails before `end_data`, so a source
+changed during the transfer is never published. Guest file names are valid UTF-8,
 contain no ASCII control bytes or DEL, and are at most 200 bytes; host paths are
 valid UTF-8 and at most 1024 bytes. Each
 uncompressed chunk is at most 2048 bytes; encoded OSC frames are at most 4096
@@ -47,17 +50,22 @@ terminal input during a transfer.
 OSC 5113 uses the serialized kitty keys, with a mandatory `px_sha256=1`
 negotiation and `sha256=HEX` file metadata. Stock kitty peers are refused because
 they do not implement this extension. Compression, deltas, multiple files,
-directories, links and resume are unsupported. Receive-side raw reads are
-buffered while the host waits for per-chunk PROGRESS; final finish/cancellation
-acknowledgements use exact reads to preserve subsequent shell input.
+directories, links and resume are unsupported. Raw reads are buffered while
+data moves in either direction: receiving reads data frames, sending reads the
+per-chunk PROGRESS replies. Final finish/cancellation acknowledgements use exact
+reads to preserve subsequent shell input.
 
-A receiver checks the complete size and SHA-256 before exclusively creating
-`.NAME.xfer-partial-ID` beside the destination. It writes and synchronizes that
-file, atomically renames with NO_REPLACE or explicit replacement, then
-synchronizes the directory. Handled failures and cancellation attempt to remove
+A receiver exclusively creates `.NAME.xfer-partial-ID` beside the destination
+when data starts, and writes each decoded chunk to it through the 64 KiB block
+while hashing it. Only after the declared size and SHA-256 both match does it
+synchronize that file, atomically rename it with NO_REPLACE or explicit
+replacement, and synchronize the directory. Unverified bytes reach the disk only
+under the staging name. A full destination fails the write with `ENOSPC`. Handled failures and cancellation attempt to remove
 only the staging name created by this transfer, and report cleanup failures.
-Abrupt process or session death can leave this recognizable staging file;
-stale staging names are never removed or overwritten automatically. Atomic
+Abrupt process or session death can leave this recognizable staging file,
+holding a partial file of any size; stale staging names are never removed or
+overwritten automatically. `ls` lists such dot names, and one is safe to remove
+by hand once no transfer into that directory is running. Atomic
 rename is the commit point: later cancellation or a failed acknowledgement
 retains the completed destination. Native uncertain mutation outcomes are
 reported and never retried automatically. The directory backend supplies the
