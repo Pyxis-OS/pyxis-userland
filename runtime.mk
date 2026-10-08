@@ -38,6 +38,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/fabs.c \
                 third_party/musl/src/math/floor.c \
                 third_party/musl/src/math/round.c \
+                third_party/musl/src/math/roundf.c \
                 third_party/musl/src/math/fmod.c \
                 third_party/musl/src/math/modf.c \
                 third_party/musl/src/math/pow.c \
@@ -58,6 +59,8 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/ceil.c \
                 third_party/musl/src/math/ceilf.c \
                 third_party/musl/src/math/x86_64/sqrt.c \
+                third_party/musl/src/math/x86_64/sqrtf.c \
+                third_party/musl/src/string/wcslen.c \
                 third_party/musl/src/math/sin.c \
                 third_party/musl/src/math/cos.c \
                 third_party/musl/src/math/tan.c \

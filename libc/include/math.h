@@ -45,6 +45,7 @@ typedef double double_t;
 double floor(double value);
 /* Nearest integer, ties away from zero, independent of the FP rounding mode. */
 double round(double value);
+float roundf(float value);
 double fmod(double value, double divisor);
 /* Store the integral part truncated toward zero and return the signed fraction. */
 double modf(double value, double *integral);
@@ -59,8 +60,9 @@ long double fmodl(long double value, long double divisor);
 double fabs(double value);
 double ceil(double value);
 float ceilf(float value);
-/* Correctly rounded, using SSE2 sqrtsd. */
+/* Correctly rounded, using SSE2 sqrtsd and sqrtss. */
 double sqrt(double value);
+float sqrtf(float value);
 /* Radians. Large arguments use full-precision reduction modulo pi/2. */
 double sin(double value);
 double cos(double value);
