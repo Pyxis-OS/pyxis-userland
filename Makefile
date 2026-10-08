@@ -9,9 +9,15 @@ PICOHTTPPARSER_PREFIX ?= build/ports-dev/picohttpparser
 PICOHTTPPARSER_PREFIX := $(abspath $(PICOHTTPPARSER_PREFIX))
 MBEDTLS_PREFIX ?= build/ports-dev/mbedtls
 MBEDTLS_PREFIX := $(abspath $(MBEDTLS_PREFIX))
+ZLIB_PREFIX ?= build/ports-dev/zlib
+ZLIB_PREFIX := $(abspath $(ZLIB_PREFIX))
+LIBPNG_PREFIX ?= build/ports-dev/libpng
+LIBPNG_PREFIX := $(abspath $(LIBPNG_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench session boot-init init-install installer shell client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest
+ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
+LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
+INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench session boot-init init-install installer shell client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -25,7 +31,7 @@ CPPFLAGS := $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
 LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
-export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
+export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX ZLIB_PREFIX LIBPNG_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
 PROGRAM_OBJECTS := $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/cp/main.o $(BUILD)/echo/main.o $(BUILD)/head/main.o $(BUILD)/log/main.o $(BUILD)/lspci/main.o $(BUILD)/lsusb/main.o \
@@ -62,9 +68,10 @@ DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
 CP_OBJECT := $(BUILD)/cp/copy.o
 LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
+SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest clean FORCE
+.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -146,6 +153,12 @@ udp-echo: $(BUILD)/udp-echo.pxe
 shell: $(BUILD)/shell.pxe
 mandelbrot: $(BUILD)/mandelbrot.pxe
 mousetest: $(BUILD)/mousetest.pxe
+screenshot: $(BUILD)/screenshot.pxe
+
+$(SCREENSHOT_OBJECTS): private CPPFLAGS += -I$(LIBPNG_PREFIX)/include -I$(ZLIB_PREFIX)/include
+$(SCREENSHOT_OBJECTS): $(LIBPNG_PREFIX)/include/png.h $(LIBPNG_PREFIX)/include/pngconf.h $(LIBPNG_PREFIX)/include/pnglibconf.h $(ZLIB_PREFIX)/include/zlib.h $(ZLIB_PREFIX)/include/zconf.h
+$(BUILD)/screenshot.pxe: $(SCREENSHOT_OBJECTS) $(UTILITY_OBJECT) $(LIBPNG_LIBRARY) $(ZLIB_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SCREENSHOT_OBJECTS) $(UTILITY_OBJECT) $(LIBPNG_LIBRARY) $(ZLIB_LIBRARY) $(LDLIBS)
 
 $(HTTP_OBJECTS): private CPPFLAGS += -I$(PICOHTTPPARSER_PREFIX)/include
 $(HTTP_OBJECTS): $(PICOHTTPPARSER_PREFIX)/include/picohttpparser.h
@@ -238,7 +251,7 @@ $(BUILD)/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
-	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
+	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$ZLIB_PREFIX" "$$LIBPNG_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -250,4 +263,4 @@ clean:
 .SECONDARY:
 
 -include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
--include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d)
+-include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d) $(SCREENSHOT_OBJECTS:.o=.d)
