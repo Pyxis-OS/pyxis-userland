@@ -4,6 +4,7 @@ PYXIS_SDK := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 PYXIS_SYSROOT := $(PYXIS_SDK)/sysroot
 CROSS_COMPILE ?= x86_64-unknown-pyxis-
 CC := $(CROSS_COMPILE)clang
+CXX := $(CROSS_COMPILE)clang++
 AR := $(shell $(CC) -print-prog-name=llvm-ar)
 PYXIS_COMPILER_ID := $(shell $(CC) -dumpmachine) $(shell $(CC) -dumpversion)
 PYXIS_RUNTIME := $(shell $(CC) -print-libgcc-file-name)
@@ -29,3 +30,18 @@ PYXIS_START := $(PYXIS_SYSROOT)/usr/lib/crt0.o
 PYXIS_LIBRARIES := $(PYXIS_SYSROOT)/usr/lib/libc.a \
                    $(PYXIS_SYSROOT)/usr/lib/libterm.a $(PYXIS_SYSROOT)/usr/lib/libpyxis.a
 PYXIS_LDLIBS := -Wl,--start-group $(PYXIS_LIBRARIES) $(PYXIS_RUNTIME) -Wl,--end-group
+
+# C++ uses the SDK's libc++, libc++abi and libunwind. libc++'s wrappers, such
+# as <stdlib.h>, include the libc headers they extend, so its directory comes
+# first. No -ffreestanding: libc++ provides its hosted library.
+PYXIS_CXX_CPPFLAGS := --sysroot=$(PYXIS_SYSROOT) -nostdinc \
+                      -I$(PYXIS_SYSROOT)/usr/include/c++/v1 \
+                      -isystem $(shell $(CC) -print-file-name=include) \
+                      -I$(PYXIS_SYSROOT)/usr/include
+PYXIS_CXXFLAGS := -std=gnu++23 -O2 -g3 -fno-stack-protector \
+                 -fno-pic -fno-pie -mno-red-zone -march=x86-64 \
+                 -Wall -Wextra -MMD -MP
+PYXIS_CXX_LIBRARIES := $(PYXIS_SYSROOT)/usr/lib/libc++.a \
+                       $(PYXIS_SYSROOT)/usr/lib/libc++abi.a $(PYXIS_SYSROOT)/usr/lib/libunwind.a
+PYXIS_CXX_LDLIBS := -Wl,--start-group $(PYXIS_CXX_LIBRARIES) $(PYXIS_LIBRARIES) \
+                    $(PYXIS_RUNTIME) -Wl,--end-group
