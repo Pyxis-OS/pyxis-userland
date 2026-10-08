@@ -113,6 +113,7 @@ int main(int argc, char **argv)
     .host_mount = startup_resource("host_mount"),
     .native_mount = startup_resource("native_mount"),
     .power = startup_resource("power"),
+    .screen_capture = startup_resource("screen_capture"),
   };
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||

@@ -13,6 +13,7 @@
 #include <abi/power.h>
 #include <abi/profile.h>
 #include <abi/random.h>
+#include <abi/screen_capture.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
 #include <abi/terminal.h>
@@ -107,6 +108,8 @@ struct authority {
   /* A private RAM directory; each ram volume is one of its subdirectories. */
   handle_t ram;
   handle_t native_mount, host_mount;
+  /* Granted only to spaces that set screenshot. */
+  handle_t screen_capture;
   /* Granted only to spaces that set power. */
   handle_t power;
   uint64_t cpu_count;
@@ -133,6 +136,7 @@ static bool take_authority(struct authority *authority)
   authority->ram = startup_resource("ram");
   authority->native_mount = startup_resource("native_mount");
   authority->host_mount = startup_resource("host_mount");
+  authority->screen_capture = startup_resource("screen_capture");
   authority->power = startup_resource("power");
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID;
@@ -322,7 +326,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 3];
+  struct launch_binding resources[SERVICE_COUNT + 4];
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -349,7 +353,10 @@ static void select_start(const struct boot_space *space, struct space_launch *la
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 3, sizeof(*launch->grants));
+  if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
+    return "screenshot requested but screen_capture is unavailable";
+  }
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 4, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -396,6 +403,13 @@ static const char *build_launch(const struct authority *authority, struct mounts
         (struct launch_binding){(uintptr_t)"child_launcher", launch->grant_count};
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
+    };
+  }
+  if (space->screenshot) {
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"screen_capture", launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->screen_capture, SCREEN_CAPTURE_RIGHT_CAPTURE, 0
     };
   }
   if (space->power && authority->power != HANDLE_INVALID) {

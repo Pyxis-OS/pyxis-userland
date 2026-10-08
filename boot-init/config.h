@@ -49,6 +49,7 @@ struct boot_space {
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
   bool launch;
+  bool screenshot; /* Receives whole-screen capture authority. */
   bool power; /* Receives power-off and restart authority. */
 };
 
