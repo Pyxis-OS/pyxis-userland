@@ -88,6 +88,9 @@ static bool select_at(struct mux *mux, int64_t column, int64_t row, bool extend)
     return false;
   }
   if ((uint64_t)x >= width) {
+    if (!extend) {
+      return false;
+    }
     x = (int64_t)width - 1;
   }
   return mux_emulator_select(&pane->emulator, pane->scrollback, (size_t)y, (size_t)x,
