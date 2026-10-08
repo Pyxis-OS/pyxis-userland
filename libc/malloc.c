@@ -10,6 +10,7 @@
 #include "tlsf_user.h"
 
 #define HEAP_ALIGNMENT 16
+#define HEAP_ALIGNMENT_MAX MEMORY_PAGE_SIZE
 #define HEAP_CONTROL_BYTES (16 * 1024)
 #define HEAP_POOL_BYTES (64 * 1024)
 #define HEAP_POOL_PREFIX_BYTES HEAP_ALIGNMENT
@@ -65,25 +66,43 @@ static bool add_pool(size_t request)
   return true;
 }
 
-void *malloc(size_t size)
+static void *allocate(size_t alignment, size_t size)
 {
-  if (!size) {
-    return NULL;
-  }
   /* TLSF's internal alignment additions are unchecked. Stay below its top bin,
    * as the kernel wrapper does, including for arbitrary overflowing requests. */
   if (!allocator || memory == HANDLE_INVALID || size > tlsf_block_size_max() / 2) {
     errno = ENOMEM;
     return NULL;
   }
-  void *pointer = tlsf_memalign(allocator, HEAP_ALIGNMENT, size);
-  if (!pointer && add_pool(size)) {
-    pointer = tlsf_memalign(allocator, HEAP_ALIGNMENT, size);
+  void *pointer = tlsf_memalign(allocator, alignment, size);
+  /* A new pool also needs room for the leading gap of a stricter alignment. */
+  if (!pointer && add_pool(size + (alignment - HEAP_ALIGNMENT))) {
+    pointer = tlsf_memalign(allocator, alignment, size);
   }
   if (!pointer) {
     errno = ENOMEM;
   }
   return pointer;
+}
+
+void *malloc(size_t size)
+{
+  if (!size) {
+    return NULL;
+  }
+  return allocate(HEAP_ALIGNMENT, size);
+}
+
+void *aligned_alloc(size_t alignment, size_t size)
+{
+  if (!alignment || (alignment & (alignment - 1)) || alignment > HEAP_ALIGNMENT_MAX) {
+    errno = EINVAL;
+    return NULL;
+  }
+  if (!size) {
+    return NULL;
+  }
+  return allocate(alignment < HEAP_ALIGNMENT ? HEAP_ALIGNMENT : alignment, size);
 }
 
 void free(void *pointer)

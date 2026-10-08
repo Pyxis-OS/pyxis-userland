@@ -3,6 +3,10 @@
 
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_CREAT 0x100
@@ -14,5 +18,9 @@
  * fail with ENOTSUP before lookup even if the file exists. Authority always
  * comes from the caller's grants. Public append/read-write opens are absent. */
 int open(const char *path, int flags, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

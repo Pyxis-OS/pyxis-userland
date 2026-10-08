@@ -3,8 +3,9 @@
 
 #include <stdint.h>
 
-/* Fixed-width output formats for the types in stdint.h. Scanning and other
- * integer-type families are not supplied in this slice. */
+/* Output formats for the fixed-width, pointer and greatest-width types in
+ * stdint.h. Scanning, other integer-type families and conversion functions
+ * are not supplied. */
 #define PRId8 "hhd"
 #define PRIi8 "hhi"
 #define PRIo8 "hho"
@@ -32,5 +33,19 @@
 #define PRIu64 "lu"
 #define PRIx64 "lx"
 #define PRIX64 "lX"
+
+#define PRIdPTR "ld"
+#define PRIiPTR "li"
+#define PRIoPTR "lo"
+#define PRIuPTR "lu"
+#define PRIxPTR "lx"
+#define PRIXPTR "lX"
+
+#define PRIdMAX "ld"
+#define PRIiMAX "li"
+#define PRIoMAX "lo"
+#define PRIuMAX "lu"
+#define PRIxMAX "lx"
+#define PRIXMAX "lX"
 
 #endif

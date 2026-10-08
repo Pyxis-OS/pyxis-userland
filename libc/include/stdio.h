@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct pyxis_file FILE;
 
 #define EOF (-1)
@@ -27,7 +31,7 @@ extern FILE *stderr;
  * successful fseek or a write drops it, a failed seek keeps it. Standard
  * descriptors adopt exclusive startup handles once. No fdopen/fileno, setvbuf,
  * freopen or wide I/O here. */
-FILE *fopen(const char *restrict path, const char *restrict mode);
+FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Open an exclusive read/write file under tmp:// and remove its name before
  * return. Requires native random/clock and tmp CREATE/REMOVE/file READ/WRITE.
  * Removal authority is checked before creation. Failure returns NULL with errno;
@@ -41,18 +45,18 @@ int remove(const char *path);
  * directories and cross-filesystem copy fallbacks are not supported. */
 int rename(const char *old_path, const char *new_path);
 int fflush(FILE *stream);
-size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
+size_t fread(void *__restrict buffer, size_t size, size_t count, FILE *__restrict stream);
 /* Return bytes already read ahead, or else wait for initial data/EOF/error
  * from one backend transfer of at most capacity bytes, without filling a short
  * result or reading ahead. Only backend EOF sets the EOF indicator; unavailable
  * input is EBADF and independent terminal input also reports EOF. Existing EOF
  * suppresses reads until cleared. Zero capacity changes no indicators. */
-size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream);
-size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream);
+size_t fread_some(void *__restrict buffer, size_t capacity, FILE *__restrict stream);
+size_t fwrite(const void *__restrict buffer, size_t size, size_t count, FILE *__restrict stream);
 int fgetc(FILE *stream);
 int getc(FILE *stream);
 int getchar(void);
-char *fgets(char *restrict buffer, int capacity, FILE *restrict stream);
+char *fgets(char *__restrict buffer, int capacity, FILE *__restrict stream);
 /* Read through the next newline, or to EOF for a final unterminated line, into
  * *line, growing it with realloc and updating *capacity. A NULL *line starts
  * with zero capacity. Returns the byte count including any newline and
@@ -62,7 +66,7 @@ char *fgets(char *restrict buffer, int capacity, FILE *restrict stream);
  * errno and the error indicator, and leave *line and *capacity describing the
  * caller's current allocation. Reads through fgetc, so file and pipe input is
  * fetched in blocks while console input is one native read per byte. */
-ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream);
+ssize_t getline(char **__restrict line, size_t *__restrict capacity, FILE *__restrict stream);
 /* One byte of pushback per FILE, returned before any further input; a second
  * ungetc before a read fails. It clears EOF and makes ftell one less (but not
  * below zero). A successful fseek, input fflush or any write discards it.
@@ -71,7 +75,7 @@ int ungetc(int character, FILE *stream);
 int fputc(int character, FILE *stream);
 int putc(int character, FILE *stream);
 int putchar(int character);
-int fputs(const char *restrict text, FILE *restrict stream);
+int fputs(const char *__restrict text, FILE *__restrict stream);
 int puts(const char *text);
 int feof(FILE *stream);
 int ferror(FILE *stream);
@@ -88,23 +92,23 @@ void rewind(FILE *stream);
  * only a prefix of a number, such as "0x" or "1e+", is consumed and fails.
  * Returns the number of assignments, or EOF if input ended or failed before the
  * first conversion. Malformed or unsupported conversions stop with EINVAL. */
-int fscanf(FILE *restrict stream, const char *restrict format, ...)
+int fscanf(FILE *__restrict stream, const char *__restrict format, ...)
   __attribute__((format(scanf, 2, 3)));
-int vfscanf(FILE *restrict stream, const char *restrict format, va_list args)
+int vfscanf(FILE *__restrict stream, const char *__restrict format, va_list args)
   __attribute__((format(scanf, 2, 0)));
-int scanf(const char *restrict format, ...) __attribute__((format(scanf, 1, 2)));
-int vscanf(const char *restrict format, va_list args) __attribute__((format(scanf, 1, 0)));
-int sscanf(const char *restrict text, const char *restrict format, ...)
+int scanf(const char *__restrict format, ...) __attribute__((format(scanf, 1, 2)));
+int vscanf(const char *__restrict format, va_list args) __attribute__((format(scanf, 1, 0)));
+int sscanf(const char *__restrict text, const char *__restrict format, ...)
   __attribute__((format(scanf, 2, 3)));
-int vsscanf(const char *restrict text, const char *restrict format, va_list args)
+int vsscanf(const char *__restrict text, const char *__restrict format, va_list args)
   __attribute__((format(scanf, 2, 0)));
-int fprintf(FILE *restrict stream, const char *restrict format, ...)
+int fprintf(FILE *__restrict stream, const char *__restrict format, ...)
   __attribute__((format(printf, 2, 3)));
-int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
+int vfprintf(FILE *__restrict stream, const char *__restrict format, va_list args)
   __attribute__((format(printf, 2, 0)));
-int printf(const char *restrict format, ...)
+int printf(const char *__restrict format, ...)
   __attribute__((format(printf, 1, 2)));
-int vprintf(const char *restrict format, va_list args)
+int vprintf(const char *__restrict format, va_list args)
   __attribute__((format(printf, 1, 0)));
 /* Writes to stderr and preserves errno, even if reporting fails. */
 void perror(const char *prefix);
@@ -117,23 +121,27 @@ void perror(const char *prefix);
  * snprintf/vsnprintf return the full length excluding NUL even when truncated;
  * their destination may be NULL for zero capacity. Stream formatting returns
  * bytes written, or a negative result on formatting/allocation/output failure. */
-int snprintf(char *restrict buffer, size_t capacity, const char *restrict format, ...)
+int snprintf(char *__restrict buffer, size_t capacity, const char *__restrict format, ...)
   __attribute__((format(printf, 3, 4)));
-int vsnprintf(char *restrict buffer, size_t capacity, const char *restrict format, va_list args)
+int vsnprintf(char *__restrict buffer, size_t capacity, const char *__restrict format, va_list args)
   __attribute__((format(printf, 3, 0)));
 /* Unbounded forms: buffer must hold the whole result and its NUL. Prefer snprintf. */
-int sprintf(char *restrict buffer, const char *restrict format, ...)
+int sprintf(char *__restrict buffer, const char *__restrict format, ...)
   __attribute__((format(printf, 2, 3)));
-int vsprintf(char *restrict buffer, const char *restrict format, va_list args)
+int vsprintf(char *__restrict buffer, const char *__restrict format, va_list args)
   __attribute__((format(printf, 2, 0)));
 
 /* Allocate a NUL-terminated result, including for an empty string. Success
  * transfers ownership to the caller and returns the length excluding NUL.
  * Failure returns -1, sets errno and leaves *output NULL. Uses the same formats
  * and INT_MAX count limit as snprintf; vasprintf preserves its argument list. */
-int asprintf(char **restrict output, const char *restrict format, ...)
+int asprintf(char **__restrict output, const char *__restrict format, ...)
   __attribute__((format(printf, 2, 3)));
-int vasprintf(char **restrict output, const char *restrict format, va_list args)
+int vasprintf(char **__restrict output, const char *__restrict format, va_list args)
   __attribute__((format(printf, 2, 0)));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

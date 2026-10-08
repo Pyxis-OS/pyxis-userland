@@ -73,6 +73,9 @@ The Quake port's prerequisites add these unmodified files from the same pin:
 - `src/math/__sin.c`, `src/math/__cos.c`, `src/math/__tan.c`
 - `src/math/__rem_pio2.c`, `src/math/__rem_pio2_large.c`
 
+The C++ runtime prerequisites add `src/math/ceilf.c` unmodified from the same
+pin; libc++'s unordered containers use it to size their buckets.
+
 `src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
 `__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
 `EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and

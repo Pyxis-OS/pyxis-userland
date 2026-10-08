@@ -1,6 +1,10 @@
 #ifndef LIBC_SETJMP_H
 #define LIBC_SETJMP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Private x86-64 LP64 layout: six callee-saved integer registers, RSP and RIP.
  * The buffer is opaque to callers; its layout is defined in libc/setjmp.S. */
 typedef unsigned long jmp_buf[8];
@@ -17,5 +21,9 @@ __attribute__((returns_twice)) int setjmp(jmp_buf environment);
  * locals in the saving function changed since setjmp have indeterminate values.
  * No resource cleanup or FP-environment restoration occurs. Zero becomes one. */
 __attribute__((noreturn)) void longjmp(jmp_buf environment, int value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

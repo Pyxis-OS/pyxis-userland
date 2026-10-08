@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Unix UTC seconds, without distinct leap-second representation. */
 typedef int64_t time_t;
 
@@ -27,12 +31,15 @@ struct tm {
 };
 
 #define TIME_UTC 1
+#define TIME_MONOTONIC 2
 
 /* Borrow the named startup clock with READ authority. time returns -1 on
  * failure (also a valid pre-epoch timestamp); errno is preserved on success.
- * timespec_get supports only TIME_UTC, returns it on success, otherwise zero
- * with errno set and destination unchanged. Fractional units do not imply
- * nanosecond accuracy: the boot seed is approximate and no resync exists. */
+ * timespec_get supports TIME_UTC and TIME_MONOTONIC, returns the base on
+ * success, otherwise zero with errno set and destination unchanged. UTC
+ * fractional units do not imply nanosecond accuracy: the boot seed is
+ * approximate and no resync exists. Monotonic time counts from an epoch set
+ * during boot and need not include time while a VM is paused or suspended. */
 time_t time(time_t *result);
 int timespec_get(struct timespec *result, int base);
 /* Seconds between end and beginning, without overflowing time_t arithmetic. */
@@ -44,15 +51,15 @@ double difftime(time_t end, time_t beginning);
  * Invalid arguments/conversions return zero with EINVAL; output on failure is
  * unspecified. %z has the standard minute precision; %Z uses tm_zone, or an
  * empty string if unknown. Neither conversion consults the current TZ. */
-size_t strftime(char *restrict output, size_t capacity,
-    const char *restrict format, const struct tm *restrict calendar);
+size_t strftime(char *__restrict output, size_t capacity,
+    const char *__restrict format, const struct tm *__restrict calendar);
 
 /* Proleptic Gregorian UTC conversion, including negative timestamps.
  * Fail with EOVERFLOW if tm_year cannot fit in int, EINVAL for NULL inputs.
  * gmtime_r leaves the destination unchanged on failure; gmtime returns borrowed
  * static storage overwritten by later successful gmtime calls. No allocation.
  * mktime and locale selection are not implemented. */
-struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result);
+struct tm *gmtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *gmtime(const time_t *timer);
 
 /* TZ absent/empty means UTC without file access. Otherwise TZ is an IANA name
@@ -66,7 +73,11 @@ struct tm *gmtime(const time_t *timer);
  * tm_zone points into the cached zone and is valid until a successful selection
  * reload or process exit; UTC uses permanent storage. Startup TZ is immutable.
  * The cache and static results assume one thread per process, like errno. */
-struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result);
+struct tm *localtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *localtime(const time_t *timer);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

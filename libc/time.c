@@ -6,8 +6,28 @@
 #include "time_impl.h"
 #include "timezone.h"
 
+#define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
+
+static int monotonic_get(struct timespec *result)
+{
+  uint64_t nanoseconds;
+  enum call_status status = clock_now(startup_resource("clock"), &nanoseconds);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return 0;
+  }
+  *result = (struct timespec){
+    (time_t)(nanoseconds / NANOSECONDS_PER_SECOND),
+    (long)(nanoseconds % NANOSECONDS_PER_SECOND),
+  };
+  return TIME_MONOTONIC;
+}
+
 int timespec_get(struct timespec *result, int base)
 {
+  if (result && base == TIME_MONOTONIC) {
+    return monotonic_get(result);
+  }
   if (!result || base != TIME_UTC) {
     errno = EINVAL;
     return 0;

@@ -1,6 +1,10 @@
 #ifndef LIBC_MATH_H
 #define LIBC_MATH_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* The Pyxis SDK uses SSE2 evaluation for float/double and x87 long double. */
 #if defined(__FLT_EVAL_METHOD__) && __FLT_EVAL_METHOD__ != 0
 #error Unsupported floating-point evaluation model
@@ -22,13 +26,21 @@ typedef double double_t;
 #define HUGE_VAL ((double)INFINITY)
 #define HUGE_VALL ((long double)INFINITY)
 
+/* fpclassify results. libc does not provide the C classification macros yet;
+ * C++ code gets std::fpclassify and the rest from libc++'s <cmath>. */
+#define FP_NAN 0
+#define FP_INFINITE 1
+#define FP_ZERO 2
+#define FP_SUBNORMAL 3
+#define FP_NORMAL 4
+
 #define MATH_ERRNO 1
 #define MATH_ERREXCEPT 2
 #define math_errhandling MATH_ERREXCEPT
 
 /* This subset reports math errors through FP exception flags, not errno.
- * The process starts with FP traps masked. There is no fenv API yet, and
- * signaling NaNs are not supported.
+ * The process starts with FP traps masked; see fenv.h. Signaling NaNs are
+ * not supported.
  * These functions live in libc; callers do not need a separate -lm. */
 double floor(double value);
 /* Nearest integer, ties away from zero, independent of the FP rounding mode. */
@@ -44,6 +56,7 @@ long double ldexpl(long double value, int exponent);
 long double fmodl(long double value, long double divisor);
 double fabs(double value);
 double ceil(double value);
+float ceilf(float value);
 /* Correctly rounded, using SSE2 sqrtsd. */
 double sqrt(double value);
 /* Radians. Large arguments use full-precision reduction modulo pi/2. */
@@ -54,5 +67,9 @@ double atan(double value);
 double atan2(double y, double x);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

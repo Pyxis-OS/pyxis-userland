@@ -15,8 +15,37 @@ SECTIONS {
   .text : { *(.text .text.*) } :text
   . = ALIGN(USER_PAGE_SIZE);
   .rodata : { *(.rodata .rodata.*) } :rodata
+
+  /* C++ exception unwinding. libunwind finds the tables through these bounds;
+   * the index exists when the link passes --eh-frame-hdr. C code is compiled
+   * without unwind tables, so C executables have none. */
+  .eh_frame_hdr : {
+    __eh_frame_hdr_start = .;
+    *(.eh_frame_hdr)
+    __eh_frame_hdr_end = .;
+  } :rodata
+  .eh_frame : {
+    __eh_frame_start = .;
+    KEEP(*(.eh_frame))
+    __eh_frame_end = .;
+  } :rodata
+  .gcc_except_table : { *(.gcc_except_table .gcc_except_table.*) } :rodata
+
   . = ALIGN(USER_PAGE_SIZE);
+  /* libc runs .init_array before main and .fini_array after exit handlers. */
+  .init_array : {
+    __init_array_start = .;
+    KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP(*(.init_array))
+    __init_array_end = .;
+  } :data
+  .fini_array : {
+    __fini_array_start = .;
+    KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP(*(.fini_array))
+    __fini_array_end = .;
+  } :data
   .data : { *(.data .data.*) } :data
   .bss : { *(.bss .bss.*) *(COMMON) } :data
-  /DISCARD/ : { *(.eh_frame*) *(.note .note.*) *(.comment) }
+  /DISCARD/ : { *(.note .note.*) *(.comment) }
 }
