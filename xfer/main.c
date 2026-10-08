@@ -286,6 +286,9 @@ static bool stage_flush(struct transfer *transfer)
     if (status != CALL_OK) {
       return native_fail(transfer, status, "staging-file write");
     }
+    if (!written) {
+      return transfer_fail(transfer, "EIO", "Staging-file write made no progress");
+    }
     offset += written;
     transfer->staged += written;
   }
