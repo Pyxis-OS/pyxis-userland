@@ -51,7 +51,8 @@ struct mouse_state {
   uint32_t buttons;
   int scroll; /* -1 away from the user, +1 toward, 0 idle. */
   uint64_t scroll_until;
-  bool focused;
+  bool keyboard_focused;
+  bool pointer_focused;
   bool quit;
   bool dirty;
 };
@@ -206,11 +207,14 @@ static int64_t clamp(int64_t value, int64_t low, int64_t high)
 static void apply_pointer(const struct screen *screen, struct mouse_state *state,
     const struct pointer_event *event, uint64_t now)
 {
-  state->focused = event->flags & POINTER_EVENT_FOCUSED;
+  state->pointer_focused = (event->flags & POINTER_EVENT_FOCUSED) != 0;
   state->dirty = true;
   if (event->type != POINTER_INPUT) {
     /* Focus changes and resets end every held button. */
     state->buttons = 0;
+    return;
+  }
+  if (!state->pointer_focused) {
     return;
   }
 
@@ -230,8 +234,8 @@ static void apply_pointer(const struct screen *screen, struct mouse_state *state
 
 static void apply_key(struct mouse_state *state, const struct keyboard_event *event)
 {
-  state->focused = event->flags & KEYBOARD_EVENT_FOCUSED;
-  if (event->key == KEY_ESCAPE && event->action == KEY_PRESS) {
+  state->keyboard_focused = (event->flags & KEYBOARD_EVENT_FOCUSED) != 0;
+  if (state->keyboard_focused && event->key == KEY_ESCAPE && event->action == KEY_PRESS) {
     state->quit = true;
   }
 }
@@ -242,23 +246,12 @@ static enum call_status run(const struct screen *screen, handle_t keyboard, hand
   struct mouse_state state = {
     .x = screen->width / 2,
     .y = screen->height / 2,
-    .focused = true,
     .dirty = true,
   };
 
   while (!state.quit) {
     struct keyboard_event key;
     enum call_status status;
-    if (!state.focused) {
-      /* Both sessions report focus; the keyboard's blocking read waits for it. */
-      status = keyboard_read(keyboard, 0, &key);
-      if (status != CALL_OK) {
-        return status;
-      }
-      apply_key(&state, &key);
-      continue;
-    }
-
     while ((status = keyboard_read(keyboard, KEYBOARD_READ_POLL, &key)) == CALL_OK) {
       apply_key(&state, &key);
     }

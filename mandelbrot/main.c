@@ -91,7 +91,6 @@ static enum call_status receive_input(struct controls *controls,
       event.action == KEY_STATE_RESET) {
     memset(controls->held, 0, sizeof(controls->held));
     controls->focused = (event.flags & KEYBOARD_EVENT_FOCUSED) != 0;
-    controls->redraw = true;
     return clock_now(clock, &controls->updated_at);
   }
 
@@ -217,7 +216,7 @@ static enum call_status render(struct display_buffer *buffer,
       bool replaced;
       enum call_status status = receive_events(buffer, controls, display, keyboard,
           clock, 0, &replaced);
-      if (status != CALL_OK || replaced || controls->quit || !controls->focused) {
+      if (status != CALL_OK || replaced || controls->quit) {
         return status;
       }
     }
@@ -254,7 +253,7 @@ static enum call_status explore(struct display_buffer *buffer,
   }
 
   while (!controls.quit) {
-    if (!controls.focused || (!controls.redraw && !moving(&controls))) {
+    if (!controls.redraw && !moving(&controls)) {
       uint64_t now;
       status = clock_now(clock, &now);
       if (status != CALL_OK || now > UINT64_MAX - WAIT_MAX_WAIT_NS) {
@@ -276,10 +275,6 @@ static enum call_status explore(struct display_buffer *buffer,
     if (status != CALL_OK) {
       return status;
     }
-    if (!controls.focused) {
-      continue;
-    }
-
     uint64_t frame_started = controls.updated_at;
     if (controls.redraw) {
       status = render(buffer, &controls, display, keyboard, clock);
