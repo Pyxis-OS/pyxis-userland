@@ -10,6 +10,7 @@
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
+#include <abi/audio.h>
 #include <abi/system_info.h>
 #include <abi/terminal.h>
 #include <abi/udp.h>
@@ -158,7 +159,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 13, RESOURCE_CAPACITY = 17 };
+  enum { OPTIONAL_COUNT = 14, RESOURCE_CAPACITY = 18 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -206,6 +207,11 @@ int launch_remote_server(const struct session_config *config,
   if (system_info != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
+  }
+  handle_t audio = startup_resource("audio");
+  if (audio != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"audio", grant_count};
+    grants[grant_count++] = (struct launch_grant){audio, AUDIO_RIGHT_PLAYBACK, 0};
   }
   handle_t screen_capture = startup_resource("screen_capture");
   if (screen_capture != HANDLE_INVALID) {
