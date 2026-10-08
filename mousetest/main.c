@@ -3,6 +3,7 @@
 #include <keyboard.h>
 #include <pointer.h>
 #include <startup.h>
+#include <wait.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -514,9 +515,28 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
       redraw(screen, &state);
       state.dirty = false;
     }
-    status = clock_sleep_for(clock, POLL_INTERVAL_NS);
-    if (status != CALL_OK) {
+    struct wait_interest interests[] = {
+      {pointer, WAIT_READABLE, 0},
+      {keyboard, WAIT_READABLE, 0},
+      {display, WAIT_RESIZED, state.observed_generation},
+    };
+    uint64_t ready[3];
+    uint64_t deadline = now > UINT64_MAX - POLL_INTERVAL_NS ?
+        UINT64_MAX : now + POLL_INTERVAL_NS;
+    status = wait_many(interests, 3, deadline, ready);
+    if (status != CALL_OK && status != CALL_TIMED_OUT) {
       return status;
+    }
+    if (status == CALL_OK) {
+      if ((ready[0] | ready[1] | ready[2]) & WAIT_ERROR) {
+        return CALL_UNAVAILABLE;
+      }
+      if (ready[2] & WAIT_RESIZED) {
+        status = refresh_geometry(screen, buffer, &state, display, pointer);
+        if (status != CALL_OK) {
+          return status;
+        }
+      }
     }
   }
   return CALL_OK;

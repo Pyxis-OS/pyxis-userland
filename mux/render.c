@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define SELECTION_FOREGROUND 0
+#define SELECTION_BACKGROUND 6
+
 struct output_buffer {
   struct terminal *terminal;
   unsigned char bytes[8192];
@@ -128,6 +131,14 @@ enum call_status mux_render(struct mux *mux)
           width = rect->width;
         }
         memcpy(mux->frame + (rect->y + y) * columns + rect->x, cells, width * sizeof(*cells));
+        for (size_t x = 0; x < width; ++x) {
+          if (mux_emulator_selected(&pane->emulator, pane->scrollback, y - 1, x)) {
+            struct mux_cell *selected = &mux->frame[(rect->y + y) * columns + rect->x + x];
+            selected->foreground = SELECTION_FOREGROUND;
+            selected->background = SELECTION_BACKGROUND;
+            selected->reverse = false;
+          }
+        }
       }
     }
     if (rect->x + rect->width < columns) {

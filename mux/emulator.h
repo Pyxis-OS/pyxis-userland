@@ -15,6 +15,17 @@ struct mux_cell {
   bool reverse;
 };
 
+struct mux_selection_point {
+  uint64_t row;
+  size_t column;
+};
+
+struct mux_selection {
+  bool active;
+  size_t columns;
+  struct mux_selection_point anchor, end;
+};
+
 enum mux_escape_state {
   MUX_TEXT,
   MUX_ESCAPE,
@@ -31,6 +42,7 @@ struct mux_emulator {
   bool cursor_visible;
   size_t history_count;
   uint64_t scrolled_rows; /* Saturates at UINT64_MAX. */
+  struct mux_selection selection;
 
   /* Owned storage. History retains each row's original width without reflow.
    * The maximum width seen supplies a stride, so output never allocates. */
@@ -66,5 +78,12 @@ void mux_emulator_set_tab_width(struct mux_emulator *emulator, unsigned columns)
  * its original width can differ from the current screen width. */
 const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t visible_row, size_t *width);
+/* Selection names retained rows, never borrowed cell pointers. Glyph changes
+ * and eviction invalidate it; colors and unrelated output do not. */
+bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset,
+    size_t row, size_t column, size_t visible_columns, bool extend);
+bool mux_emulator_selected(const struct mux_emulator *emulator,
+    size_t scrollback_offset, size_t row, size_t column);
+void mux_emulator_clear_selection(struct mux_emulator *emulator);
 
 #endif

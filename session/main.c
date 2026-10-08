@@ -25,6 +25,7 @@
 #include <abi/namespace.h>
 #include <abi/net_config.h>
 #include <abi/terminal.h>
+#include <abi/terminal_pointer.h>
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
@@ -70,7 +71,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 22, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 23, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -220,6 +221,15 @@ static int launch_session(const struct session_config *config, const struct netw
         (uintptr_t)(multiplex ? "terminal" : "mux_terminal"), grant_count};
     grants[grant_count++] = (struct launch_grant){mux_terminal,
         rights & TERMINAL_SERVICE_RIGHT_CREATE, transport};
+    handle_t terminal_pointer = startup_resource("terminal_pointer");
+    if (terminal_pointer == HANDLE_INVALID) {
+      fputs("session: missing multiplexer pointer authority\n", stderr);
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"terminal_pointer", grant_count};
+    grants[grant_count++] = (struct launch_grant){terminal_pointer,
+        TERMINAL_POINTER_RIGHT_CONTROL, 0};
   }
   handle_t pipe = startup_resource("pipe");
   if (pipe != HANDLE_INVALID) {

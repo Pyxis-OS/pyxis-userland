@@ -32,6 +32,10 @@ static size_t pane_rows(struct mux_rect rect)
 
 static enum call_status place(struct mux *mux)
 {
+  enum call_status status = mux_pointer_change_view(mux);
+  if (status != CALL_OK) {
+    return status;
+  }
   struct mux_rect view = mux_viewport(mux);
   size_t columns = view.width, rows = view.height;
   size_t area_rows = rows > 1 ? rows - 1 : 0;
@@ -51,7 +55,7 @@ static enum call_status place(struct mux *mux)
       return CALL_NO_MEMORY;
     }
     if (!pane->root_done) {
-      enum call_status status = terminal_resize(pane->session.attachment, width, height);
+      status = terminal_resize(pane->session.attachment, width, height);
       if (status != CALL_OK) {
         return status;
       }
@@ -149,7 +153,11 @@ static void focus(struct mux *mux, enum mux_axis axis, bool forward)
     }
   }
   mux->focused = (unsigned)selected;
-  mux->error = place(mux);
+  if (mux->collapsed) {
+    mux->error = place(mux);
+  } else {
+    mux->dirty = true;
+  }
 }
 
 static void command(struct mux *mux, unsigned key)
@@ -157,6 +165,15 @@ static void command(struct mux *mux, unsigned key)
   struct mux_pane *pane = &mux->panes[mux->focused];
   mux->dirty = true;
   if (pane->browsing) {
+    if (key != 27 && key != 'q' && key != TERM_KEY_PAGE_UP && key != TERM_KEY_UP &&
+        key != TERM_KEY_PAGE_DOWN && key != TERM_KEY_DOWN && key != TERM_KEY_HOME &&
+        key != TERM_KEY_END) {
+      return;
+    }
+    mux->error = mux_pointer_change_view(mux);
+    if (mux->error != CALL_OK) {
+      return;
+    }
     size_t page = pane->emulator.rows > 1 ? pane->emulator.rows - 1 : 1;
     if (key == 27 || key == 'q') {
       pane->browsing = false;
@@ -194,7 +211,13 @@ static void command(struct mux *mux, unsigned key)
   case TERM_KEY_RIGHT: focus(mux, MUX_LEFT_RIGHT, true); break;
   case TERM_KEY_UP: focus(mux, MUX_TOP_BOTTOM, false); break;
   case TERM_KEY_DOWN: focus(mux, MUX_TOP_BOTTOM, true); break;
-  case '[': pane->browsing = true; pane->scrollback = 0; break;
+  case '[':
+    mux->error = mux_pointer_change_view(mux);
+    if (mux->error == CALL_OK) {
+      pane->browsing = true;
+      pane->scrollback = 0;
+    }
+    break;
   case 'x':
     if (pane->root_done && pane->group_done && pane->output_eof) {
       dismiss(mux, mux->focused);
@@ -373,6 +396,7 @@ static bool drain(struct mux *mux, struct mux_pane *pane)
     struct terminal_record record;
     memcpy(&record, bytes, sizeof(record));
     uint64_t before = pane->emulator.scrolled_rows;
+    uint64_t first_row = before - pane->scrollback;
     const void *payload = bytes + sizeof(record);
     if (record.type == TERMINAL_RECORD_DATA) {
       mux_emulator_feed(&pane->emulator, payload, record.length);
@@ -387,6 +411,30 @@ static bool drain(struct mux *mux, struct mux_pane *pane)
       uint64_t moved = pane->emulator.scrolled_rows - before;
       size_t room = pane->emulator.history_count - pane->scrollback;
       pane->scrollback += moved < room ? (size_t)moved : room;
+    }
+    unsigned slot = (unsigned)(pane - mux->panes);
+    const struct mux_rect *rect = &mux->rectangles[slot];
+    struct mux_selection *selection = &pane->emulator.selection;
+    uint64_t visible_first = pane->emulator.scrolled_rows - pane->scrollback;
+    size_t visible_rows = rect->height > 1 ? rect->height - 1 : 0;
+    if (selection->active && (!visible_rows ||
+        selection->anchor.row < visible_first || selection->end.row < visible_first ||
+        selection->anchor.row - visible_first >= visible_rows ||
+        selection->end.row - visible_first >= visible_rows)) {
+      mux_emulator_clear_selection(&pane->emulator);
+    }
+    if (visible_rows && rect->width && visible_first != first_row) {
+      /* Retained selected rows may survive output, but queued coordinates name
+       * the previous visible rows. End the drag before advancing this view. */
+      if (mux->dragging) {
+        mux_emulator_clear_selection(&mux->panes[mux->selection_pane].emulator);
+      }
+      mux->dragging = false;
+      mux->pointer_buttons = 0;
+      mux->error = mux_pointer_advance_view(mux);
+      if (mux->error != CALL_OK) {
+        break;
+      }
     }
     mux->dirty = true;
   }
@@ -454,6 +502,11 @@ static enum call_status run(struct mux *mux)
         .events = WAIT_RESIZED | (input_capacity ? WAIT_READABLE : 0),
         .observed_generation = mux->geometry.generation};
     size_t count = 1;
+    size_t pointer_entry = SIZE_MAX;
+    if (mux->pointer_owned) {
+      pointer_entry = count;
+      interests[count++] = (struct wait_interest){mux->pointer, WAIT_READABLE, 0};
+    }
     for (unsigned i = 0; i < MUX_PANES; ++i) {
       struct mux_pane *pane = &mux->panes[i];
       output_entries[i] = life_entries[i] = SIZE_MAX;
@@ -491,6 +544,14 @@ static enum call_status run(struct mux *mux)
         mux->error = place(mux);
       }
     }
+    if (pointer_entry != SIZE_MAX && mux->error == CALL_OK) {
+      if (events[pointer_entry] & WAIT_ERROR) {
+        return CALL_ENDPOINT_CLOSED;
+      }
+      if (events[pointer_entry] & WAIT_READABLE) {
+        mux_pointer_drain(mux);
+      }
+    }
     if (input_capacity && (events[0] & (WAIT_READABLE | WAIT_ERROR))) {
       status = term_read_timeout(&mux->terminal, mux->input, sizeof(mux->input), 0, &mux->input_size);
       if (status == CALL_INPUT_LOST) {
@@ -520,6 +581,7 @@ int main(int argc, char **argv)
   struct mux mux = {
     .terminal = {startup_resource("input"), startup_resource("output")},
     .clock = startup_resource("clock"), .tab_width = 8,
+    .pointer = startup_resource("terminal_pointer"),
   };
   if (argc == 3 && !strcmp(argv[1], "--tab-width")) {
     char *end;
@@ -544,6 +606,25 @@ int main(int argc, char **argv)
     fprintf(stderr, "mux: cannot query outer geometry (status %u)\n", status);
     return 1;
   }
+  if (mux.pointer != HANDLE_INVALID) {
+    status = terminal_pointer_acquire(mux.pointer);
+    if (status == CALL_OK) {
+      mux.pointer_owned = true;
+      status = terminal_pointer_get_geometry(mux.pointer, &mux.pointer_geometry);
+      if (status == CALL_OK && (!mux.pointer_geometry.cell_width ||
+          !mux.pointer_geometry.cell_height || mux.pointer_geometry.cell_width > INT64_MAX ||
+          mux.pointer_geometry.cell_height > INT64_MAX)) {
+        status = CALL_BAD_REQUEST;
+      }
+    }
+    if (status != CALL_OK) {
+      if (mux.pointer_owned) {
+        terminal_pointer_release(mux.pointer);
+      }
+      fprintf(stderr, "mux: cannot acquire terminal pointer (status %u)\n", (unsigned)status);
+      return 1;
+    }
+  }
   mux_layout_init(&mux.layout, 0);
   status = place(&mux);
   struct mux_rect initial = mux.rectangles[0];
@@ -554,6 +635,9 @@ int main(int argc, char **argv)
     initial.height = 1;
   }
   if (status != CALL_OK || !start_pane(&mux, 0, initial)) {
+    if (mux.pointer_owned) {
+      terminal_pointer_release(mux.pointer);
+    }
     fprintf(stderr, "mux: %s\n", mux.notice);
     return 1;
   }
@@ -571,6 +655,12 @@ int main(int argc, char **argv)
   }
   free(mux.frame);
   free(mux.previous);
+  if (mux.pointer_owned) {
+    enum call_status released = terminal_pointer_release(mux.pointer);
+    if (status == CALL_OK) {
+      status = released;
+    }
+  }
   term_reset_style(&mux.terminal);
   term_cursor_visible(&mux.terminal, true);
   term_fresh_line(&mux.terminal);

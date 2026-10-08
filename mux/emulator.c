@@ -28,6 +28,44 @@ static void fill_cells(struct mux_cell *cells, size_t count, struct mux_cell cel
   }
 }
 
+void mux_emulator_clear_selection(struct mux_emulator *emulator)
+{
+  emulator->selection = (struct mux_selection){0};
+}
+
+static bool point_before(struct mux_selection_point a, struct mux_selection_point b)
+{
+  return a.row < b.row || (a.row == b.row && a.column < b.column);
+}
+
+static bool selected_point(const struct mux_emulator *emulator,
+    struct mux_selection_point point)
+{
+  if (!emulator->selection.active || point.column >= emulator->selection.columns) {
+    return false;
+  }
+  struct mux_selection_point first = emulator->selection.anchor;
+  struct mux_selection_point last = emulator->selection.end;
+  if (point_before(last, first)) {
+    struct mux_selection_point swap = first;
+    first = last;
+    last = swap;
+  }
+  return !point_before(point, first) && !point_before(last, point);
+}
+
+static void write_cell(struct mux_emulator *emulator, size_t index, struct mux_cell cell)
+{
+  struct mux_selection_point point = {
+    .row = emulator->scrolled_rows + index / emulator->columns,
+    .column = index % emulator->columns,
+  };
+  if (emulator->cells[index].character != cell.character && selected_point(emulator, point)) {
+    mux_emulator_clear_selection(emulator);
+  }
+  emulator->cells[index] = cell;
+}
+
 bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t rows)
 {
   if (!valid_geometry(columns, rows)) {
@@ -119,6 +157,7 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
   }
   emulator->cursor_row -= first_row;
   emulator->wrap_pending = false;
+  mux_emulator_clear_selection(emulator);
   return true;
 }
 
@@ -140,6 +179,45 @@ const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
   }
   *width = emulator->columns;
   return emulator->cells + (row - emulator->history_count) * emulator->columns;
+}
+
+bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset,
+    size_t row, size_t column, size_t visible_columns, bool extend)
+{
+  size_t width;
+  if (!mux_emulator_row(emulator, scrollback_offset, row, &width) || column >= width ||
+      column >= visible_columns ||
+      emulator->scrolled_rows > UINT64_MAX - emulator->rows) {
+    return false;
+  }
+  if (scrollback_offset > emulator->history_count) {
+    scrollback_offset = emulator->history_count;
+  }
+  struct mux_selection_point point = {
+    .row = emulator->scrolled_rows - scrollback_offset + row,
+    .column = column,
+  };
+  if (!extend) {
+    emulator->selection.anchor = point;
+    emulator->selection.columns = visible_columns;
+    emulator->selection.active = true;
+  } else if (!emulator->selection.active) {
+    return false;
+  }
+  emulator->selection.end = point;
+  return true;
+}
+
+bool mux_emulator_selected(const struct mux_emulator *emulator,
+    size_t scrollback_offset, size_t row, size_t column)
+{
+  if (scrollback_offset > emulator->history_count) {
+    scrollback_offset = emulator->history_count;
+  }
+  return selected_point(emulator, (struct mux_selection_point){
+    .row = emulator->scrolled_rows - scrollback_offset + row,
+    .column = column,
+  });
 }
 
 static void newline(struct mux_emulator *emulator)
@@ -164,6 +242,12 @@ static void newline(struct mux_emulator *emulator)
   emulator->history_widths[slot] = emulator->columns;
   if (emulator->scrolled_rows < UINT64_MAX) {
     ++emulator->scrolled_rows;
+  }
+  uint64_t oldest = emulator->scrolled_rows - emulator->history_count;
+  if (emulator->scrolled_rows > UINT64_MAX - emulator->rows ||
+      (emulator->selection.active &&
+       (emulator->selection.anchor.row < oldest || emulator->selection.end.row < oldest))) {
+    mux_emulator_clear_selection(emulator);
   }
   memmove(emulator->cells, emulator->cells + emulator->columns,
       (emulator->rows - 1) * emulator->columns * sizeof(*emulator->cells));
@@ -190,8 +274,10 @@ void mux_emulator_set_tab_width(struct mux_emulator *emulator, unsigned columns)
 
 static void erase_cells(struct mux_emulator *emulator, size_t first, size_t end)
 {
-  fill_cells(emulator->cells + first, end - first,
-      blank_cell(emulator, emulator->reverse));
+  struct mux_cell blank = blank_cell(emulator, emulator->reverse);
+  for (size_t i = first; i < end; ++i) {
+    write_cell(emulator, i, blank);
+  }
 }
 
 static void select_style(struct mux_emulator *emulator, unsigned parameter)
@@ -356,13 +442,13 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
   if (emulator->wrap_pending) {
     newline(emulator);
   }
-  emulator->cells[emulator->cursor_row * emulator->columns + emulator->cursor_column] =
+  write_cell(emulator, emulator->cursor_row * emulator->columns + emulator->cursor_column,
       (struct mux_cell) {
         .character = byte,
         .foreground = emulator->foreground,
         .background = emulator->background,
         .reverse = emulator->reverse,
-      };
+      });
   if (emulator->cursor_column == emulator->columns - 1) {
     emulator->wrap_pending = true;
   } else {
