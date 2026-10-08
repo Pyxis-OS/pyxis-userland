@@ -20,7 +20,7 @@ LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/screen_capture.o \
                $(BUILD)/lib/launcher.o $(BUILD)/lib/program.o $(BUILD)/lib/network_environment.o \
                $(BUILD)/lib/system_info.o $(BUILD)/lib/log.o \
-               $(BUILD)/lib/shebang.o $(BUILD)/lib/wait.o
+               $(BUILD)/lib/shebang.o $(BUILD)/lib/key_layout.o $(BUILD)/lib/wait.o
 LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
@@ -99,6 +99,10 @@ $(LIBC): $(LIBC_OBJECTS) runtime.mk
 	$(AR) rcs $@ $(LIBC_OBJECTS)
 
 $(BUILD)/lib/shebang.o: $(SDK)/share/pyxis/shebang.c $(SDK)/sysroot/usr/include/pxe/shebang.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/lib/key_layout.o: $(SDK)/share/pyxis/key_layout.c $(SDK)/sysroot/usr/include/pxe/key_layout.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
