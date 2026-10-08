@@ -1,6 +1,10 @@
 #ifndef LIBC_DIRENT_H
 #define LIBC_DIRENT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* d_type values. Native "other" and "unknown" entries report DT_UNKNOWN. */
 #define DT_UNKNOWN 0
 #define DT_DIR 4
@@ -23,5 +27,9 @@ DIR *opendir(const char *path);
  * change also returns NULL, with EAGAIN; the listing so far may be incomplete. */
 struct dirent *readdir(DIR *directory);
 int closedir(DIR *directory);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

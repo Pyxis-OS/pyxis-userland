@@ -4,6 +4,10 @@
 #include <abi/startup.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Borrow the current FILE owner's protocol/handle without changing indicators,
  * position, pushback or read-ahead. Zero includes NONE/invalid for absent or
  * closed standard streams. Null arguments fail with EINVAL; invalid FILEs or
@@ -15,5 +19,9 @@
  * file cursor, read-ahead or pushback. File-backed children start at offset zero;
  * pipe children cannot receive bytes already fetched into this process. */
 int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

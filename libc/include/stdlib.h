@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 #define RAND_MAX 32767
@@ -11,7 +15,7 @@
 /* Stateless UTF-8 conversion of one Unicode scalar. NULL text resets (returns
  * zero); NUL returns zero and stores L'\0'. Invalid or incomplete input returns
  * -1 with EILSEQ and leaves output unchanged. output may be NULL. */
-int mbtowc(wchar_t *restrict output, const char *restrict text, size_t size);
+int mbtowc(wchar_t *__restrict output, const char *__restrict text, size_t size);
 
 /* Single-threaded allocator; allocations are aligned to at least 16 bytes.
  * Zero-size allocations return NULL. realloc(p, 0) frees p and returns NULL.
@@ -32,7 +36,7 @@ char *getenv(const char *name);
  * At most 128 candidate attempts; no existing name is opened or truncated.
  * Failure returns -1 with errno and unspecified template contents; uncertain
  * native creation may leave a file. Success preserves errno. */
-int mkstemp(char *template);
+int mkstemp(char *name_template);
 
 /* The absolute value must be representable as int (INT_MIN is excluded). */
 int abs(int value);
@@ -42,10 +46,10 @@ int abs(int value);
  * saturates with ERANGE but still consumes all valid digits. Invalid bases
  * return zero with EINVAL and *end at text. Otherwise errno is unchanged.
  * end may be NULL. Unsigned conversions apply a minus sign modulo their range. */
-long strtol(const char *restrict text, char **restrict end, int base);
-unsigned long strtoul(const char *restrict text, char **restrict end, int base);
-long long strtoll(const char *restrict text, char **restrict end, int base);
-unsigned long long strtoull(const char *restrict text, char **restrict end, int base);
+long strtol(const char *__restrict text, char **__restrict end, int base);
+unsigned long strtoul(const char *__restrict text, char **__restrict end, int base);
+long long strtoll(const char *__restrict text, char **__restrict end, int base);
+unsigned long long strtoull(const char *__restrict text, char **__restrict end, int base);
 /* Decimal conversion without end/range diagnostics; use strtol for those.
  * As in C, an out-of-int-range input has no guaranteed result. */
 int atoi(const char *text);
@@ -55,9 +59,9 @@ int atoi(const char *text);
  * Overflow, nonzero subnormals (including exact ones), and nonzero input rounded
  * to zero set ERANGE. Other conversions preserve errno. end may be NULL.
  * NaN payload text is consumed but does not select a payload or sign. */
-float strtof(const char *restrict text, char **restrict end);
-double strtod(const char *restrict text, char **restrict end);
-long double strtold(const char *restrict text, char **restrict end);
+float strtof(const char *__restrict text, char **__restrict end);
+double strtod(const char *__restrict text, char **__restrict end);
+long double strtold(const char *__restrict text, char **__restrict end);
 /* strtod without an end pointer. */
 double atof(const char *text);
 
@@ -76,5 +80,9 @@ __attribute__((noreturn)) void exit(int status);
 __attribute__((noreturn)) void _Exit(int status);
 /* No signal delivery: terminate with EXIT_FAILURE, without libc cleanup. */
 __attribute__((noreturn)) void abort(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

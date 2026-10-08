@@ -1,6 +1,10 @@
 #ifndef LIBC_CTYPE_H
 #define LIBC_CTYPE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Accepts any int; true exactly for ASCII values 0 through 127. */
 int isascii(int character);
 
@@ -24,5 +28,9 @@ int isprint(int character);
 /* ASCII case conversion; EOF and non-ASCII bytes are unchanged. */
 int toupper(int character);
 int tolower(int character);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

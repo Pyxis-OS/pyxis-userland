@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef long regoff_t;
 
 typedef struct {
@@ -43,14 +47,18 @@ typedef struct {
 /* A successful compilation owns heap storage until regfree; do not copy it.
  * Strings are UTF-8, match offsets count bytes, classes/folding are ASCII only.
  * The pinned TRE engine retains its UTF-8 and case-folding backreference limits. */
-int regcomp(regex_t *restrict pattern, const char *restrict text, int flags);
-int regexec(const regex_t *restrict pattern, const char *restrict text,
-  size_t count, regmatch_t *restrict matches, int flags);
+int regcomp(regex_t *__restrict pattern, const char *__restrict text, int flags);
+int regexec(const regex_t *__restrict pattern, const char *__restrict text,
+  size_t count, regmatch_t *__restrict matches, int flags);
 void regfree(regex_t *pattern);
 
 /* Returns required bytes including NUL; a nonzero buffer size always terminates.
  * A zero size permits a NULL buffer. The pattern may be NULL. */
-size_t regerror(int error, const regex_t *restrict pattern,
-  char *restrict buffer, size_t size);
+size_t regerror(int error, const regex_t *__restrict pattern,
+  char *__restrict buffer, size_t size);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

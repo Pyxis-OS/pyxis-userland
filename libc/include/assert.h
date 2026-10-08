@@ -1,8 +1,16 @@
 #ifndef LIBC_ASSERT_H
 #define LIBC_ASSERT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 __attribute__((noreturn)) void __assert_fail(const char *expression,
   const char *file, int line, const char *function);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

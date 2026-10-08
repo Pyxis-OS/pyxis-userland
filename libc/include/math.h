@@ -1,6 +1,10 @@
 #ifndef LIBC_MATH_H
 #define LIBC_MATH_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* The Pyxis SDK uses SSE2 evaluation for float/double and x87 long double. */
 #if defined(__FLT_EVAL_METHOD__) && __FLT_EVAL_METHOD__ != 0
 #error Unsupported floating-point evaluation model
@@ -54,5 +58,9 @@ double atan(double value);
 double atan2(double y, double x);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

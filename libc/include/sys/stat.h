@@ -3,6 +3,10 @@
 
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* File-type bits of st_mode. Native objects have no permission bits. */
 #define S_IFMT 0170000
 #define S_IFIFO 0010000
@@ -29,7 +33,7 @@ struct stat {
  * symlink, so a symlink entry fails with the lookup's error (ENOTSUP on a host
  * directory). A provider URI is opened as a file, which for HTTP(S) performs
  * the request. Sizes above the off_t range fail with EOVERFLOW. */
-int stat(const char *restrict path, struct stat *restrict result);
+int stat(const char *__restrict path, struct stat *__restrict result);
 /* Files report S_IFREG and their size, consoles S_IFCHR and pipes S_IFIFO
  * (both size zero). */
 int fstat(int descriptor, struct stat *result);
@@ -39,5 +43,9 @@ int fstat(int descriptor, struct stat *result);
  * effect; native directories carry no permission bits. Missing parents are not
  * created. Returns 0, or -1 with errno (EEXIST if the name exists). */
 int mkdir(const char *path, mode_t mode);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

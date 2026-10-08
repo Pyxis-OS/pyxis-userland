@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Unix UTC seconds, without distinct leap-second representation. */
 typedef int64_t time_t;
 
@@ -44,15 +48,15 @@ double difftime(time_t end, time_t beginning);
  * Invalid arguments/conversions return zero with EINVAL; output on failure is
  * unspecified. %z has the standard minute precision; %Z uses tm_zone, or an
  * empty string if unknown. Neither conversion consults the current TZ. */
-size_t strftime(char *restrict output, size_t capacity,
-    const char *restrict format, const struct tm *restrict calendar);
+size_t strftime(char *__restrict output, size_t capacity,
+    const char *__restrict format, const struct tm *__restrict calendar);
 
 /* Proleptic Gregorian UTC conversion, including negative timestamps.
  * Fail with EOVERFLOW if tm_year cannot fit in int, EINVAL for NULL inputs.
  * gmtime_r leaves the destination unchanged on failure; gmtime returns borrowed
  * static storage overwritten by later successful gmtime calls. No allocation.
  * mktime and locale selection are not implemented. */
-struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result);
+struct tm *gmtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *gmtime(const time_t *timer);
 
 /* TZ absent/empty means UTC without file access. Otherwise TZ is an IANA name
@@ -66,7 +70,11 @@ struct tm *gmtime(const time_t *timer);
  * tm_zone points into the cached zone and is valid until a successful selection
  * reload or process exit; UTC uses permanent storage. Startup TZ is immutable.
  * The cache and static results assume one thread per process, like errno. */
-struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result);
+struct tm *localtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *localtime(const time_t *timer);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

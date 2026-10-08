@@ -3,6 +3,10 @@
 
 #include <wchar.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef unsigned long wctype_t;
 
 /* Every non-ASCII value, including WEOF, is outside all classes. */
@@ -26,6 +30,10 @@ wint_t towupper(wint_t character);
 /* The twelve standard ASCII class names yield immutable descriptors.
  * Unknown names return zero. iswctype also returns zero for descriptor zero. */
 wctype_t wctype(const char *name);
-int iswctype(wint_t character, wctype_t class);
+int iswctype(wint_t character, wctype_t property);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

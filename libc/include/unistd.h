@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
@@ -36,5 +40,9 @@ int fsync(int descriptor);
 /* Remove a file, resolving path like fopen. Requires REMOVE on the parent.
  * Directories fail with EINVAL; open handles to the file stay valid. */
 int unlink(const char *path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

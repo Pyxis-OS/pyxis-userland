@@ -3,7 +3,11 @@
 
 #include <stddef.h>
 
-void *memcpy(void *restrict dest, const void *restrict src, size_t count);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void *memcpy(void *__restrict dest, const void *__restrict src, size_t count);
 void *memmove(void *dest, const void *src, size_t count);
 void *memset(void *dest, int value, size_t count);
 int memcmp(const void *left, const void *right, size_t count);
@@ -13,13 +17,13 @@ void *memrchr(const void *memory, int value, size_t count);
 size_t strlen(const char *text);
 size_t strnlen(const char *text, size_t limit);
 /* Copy through NUL; dest has enough space and does not overlap src. */
-char *strcpy(char *restrict dest, const char *restrict src);
+char *strcpy(char *__restrict dest, const char *__restrict src);
 /* As strcpy, but returns the address of the copied NUL in dest. */
-char *stpcpy(char *restrict dest, const char *restrict src);
+char *stpcpy(char *__restrict dest, const char *__restrict src);
 /* Copies exactly count bytes, padding with NUL after the source ends.
  * Does not terminate when the source is count bytes or longer. No overlap. */
-char *strncpy(char *restrict dest, const char *restrict src, size_t count);
-char *strcat(char *restrict dest, const char *restrict src);
+char *strncpy(char *__restrict dest, const char *__restrict src, size_t count);
+char *strcat(char *__restrict dest, const char *__restrict src);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 char *strchr(const char *text, int character);
@@ -38,5 +42,9 @@ char *strndup(const char *text, size_t limit);
 
 /* Static message storage; callers must not modify it. */
 char *strerror(int error);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

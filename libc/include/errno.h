@@ -1,6 +1,10 @@
 #ifndef LIBC_ERRNO_H
 #define LIBC_ERRNO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* One thread per process today; this must become thread-local with threads. */
 extern int errno;
 
@@ -29,5 +33,9 @@ extern int errno;
 #define EFBIG 22
 #define EMFILE 23
 #define EILSEQ 24
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
