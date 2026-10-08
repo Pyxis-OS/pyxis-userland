@@ -29,7 +29,7 @@ extern FILE *stderr;
  * Read-ahead is private and never accompanies a delegated stream: do not read a
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
  * successful fseek or a write drops it, a failed seek keeps it. Standard
- * descriptors adopt exclusive startup handles once. No fdopen/fileno, setvbuf,
+ * descriptors adopt exclusive startup handles once. No fdopen, setvbuf,
  * freopen or wide I/O here. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Open an exclusive read/write file under tmp:// and remove its name before
@@ -82,7 +82,16 @@ int ferror(FILE *stream);
 void clearerr(FILE *stream);
 int fseek(FILE *stream, long offset, int origin);
 long ftell(FILE *stream);
+/* off_t is long here, so these behave exactly like fseek and ftell. */
+int fseeko(FILE *stream, off_t offset, int origin);
+off_t ftello(FILE *stream);
 void rewind(FILE *stream);
+/* The descriptor the stream currently uses, or -1 with EBADF for a closed
+ * stream or one whose descriptor was closed. The stream keeps ownership:
+ * close it with fclose, not close. Pushback and read-ahead belong to the
+ * stream and its descriptor, so reading or seeking through the descriptor
+ * directly bypasses ungetc and fread's state; fstat is unaffected. */
+int fileno(FILE *stream);
 /* Directives: whitespace (skips any input whitespace), ordinary characters,
  * %%, and conversions d i u o x X p, a e f g (and capitals), s c [ and n, with
  * * suppression, a nonzero width and lengths hh h l ll j z t L. Scansets accept

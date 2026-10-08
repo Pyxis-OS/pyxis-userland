@@ -516,3 +516,24 @@ void rewind(FILE *stream)
   fseek(stream, 0, SEEK_SET);
   clearerr(stream);
 }
+
+static_assert(sizeof(off_t) == sizeof(long), "fseeko and ftello forward to fseek and ftell");
+
+int fseeko(FILE *stream, off_t offset, int origin)
+{
+  return fseek(stream, offset, origin);
+}
+
+off_t ftello(FILE *stream)
+{
+  return ftell(stream);
+}
+
+int fileno(FILE *stream)
+{
+  if (!stream || stream->closed || stream->descriptor < 0) {
+    errno = EBADF;
+    return -1;
+  }
+  return stream->descriptor;
+}

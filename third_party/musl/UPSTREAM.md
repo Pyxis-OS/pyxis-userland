@@ -77,6 +77,14 @@ The Quake port's prerequisites add these unmodified files from the same pin:
 The C++ runtime prerequisites add `src/math/ceilf.c` unmodified from the same
 pin; libc++'s unordered containers use it to size their buckets.
 
+The SDL2 port's prerequisites add these unmodified files from the same pin:
+
+- `src/math/roundf.c`, rounding halfway cases away from zero like `round`;
+- `src/math/x86_64/sqrtf.c`, using SSE `sqrtss`;
+- `src/string/wcslen.c`, the only wide-string function so far.
+
+Like the rest of the subset, they live in libc and leave errno unchanged.
+
 `src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
 `__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
 `EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and

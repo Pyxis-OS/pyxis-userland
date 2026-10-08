@@ -12,4 +12,15 @@ typedef struct {
   unsigned int reserved;
 } mbstate_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Count wide characters before the terminating null. */
+size_t wcslen(const wchar_t *string);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif
