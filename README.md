@@ -349,11 +349,15 @@ A failed replacement retains the old mapping until another resize.
 Rendering continues without input focus; focus loss clears held controls.
 Once the view is complete it idles until input or a resize needs another draw.
 
-`mousetest` shows mouse buttons, wheel direction and position, with a drawing
-pad for the left button; Escape returns to the TTY. It needs display, keyboard,
-pointer and clock grants. Its update loop keeps running without input focus,
-clearing held buttons and allowing the wheel indicator to expire. Keyboard and
-pointer controls follow their own session's focus.
+`mousetest` shows mouse buttons, wheel direction and the kernel's surface-local
+position, with a drawing pad for the left button and a custom system cursor.
+`H` toggles cursor visibility, `D` restores the default image, `C` restores the
+custom image and `W` warps to the surface center. Escape returns to the TTY.
+It needs display, keyboard, pointer and clock grants. Resizing replaces its
+mapping and preserves the overlapping drawing; failure retains the old mapping.
+Its update loop keeps running without input focus, clearing held buttons on
+focus, boundary and state changes and allowing the wheel indicator to expire.
+Keyboard and pointer controls follow their own session's focus.
 
 `httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
 Configured boot sessions use `--start-services` to publish independent `http`
