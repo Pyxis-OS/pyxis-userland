@@ -1,4 +1,4 @@
-# Native ttcp transmitter
+# Native ttcp
 
 `ttcp -t [-p PORT] [-n BUFFERS] [-l BYTES] HOST` sends a finite printable-ASCII
 pattern through Pyxis stream capabilities. Defaults are port 5001, 2048 buffers
@@ -16,10 +16,27 @@ expiry. A failed run reports only locally accepted bytes and exits unsuccessfull
 The host receiver's byte count establishes application receipt. Guest MiB/s
 includes closure time and is not a pure link-throughput measurement.
 
-This is a first-party transmitter, not the historical socket-based program.
-There is no guest receive mode, UDP mode, stdin source, socket tuning or CPU-use
-accounting. An ordinary classic `ttcp -r` receiver sinks the bytes and closes
-on EOF; its count can be compared with the guest's configured total.
+## Receiving
+
+`ttcp -r [-p PORT] HOST` connects to a peer that serves data, reads until the
+peer's EOF and discards everything. It reports the bytes received and MiB/s,
+timed from the established connection to EOF. Unlike classic `ttcp -r`, it
+connects rather than listens: ordinary sessions hold connect-only TCP
+authority. A host can serve a file with:
+
+```sh
+socat -u OPEN:FILE TCP4-LISTEN:5002,reuseaddr
+```
+
+The sender decides the size, so `-n` and `-l` are rejected with `-r`. Each read
+moves at most 4 KiB and has a fresh ten-second deadline. After EOF it shuts
+down its writing side and closes. A failed run reports the bytes received so
+far, aborts the connection and exits unsuccessfully. Content is not checked.
+
+This is a first-party program, not the historical socket-based one. There is
+no listening mode, UDP mode, stdin source, socket tuning or CPU-use accounting.
+An ordinary classic `ttcp -r` receiver can sink what `ttcp -t` sends; its count
+can be compared with the guest's configured total.
 
 ## Reference and provenance
 
