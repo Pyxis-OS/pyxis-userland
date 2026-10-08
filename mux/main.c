@@ -426,6 +426,9 @@ static bool drain(struct mux *mux, struct mux_pane *pane)
     if (visible_rows && rect->width && visible_first != first_row) {
       /* Retained selected rows may survive output, but queued coordinates name
        * the previous visible rows. End the drag before advancing this view. */
+      if (mux->dragging) {
+        mux_emulator_clear_selection(&mux->panes[mux->selection_pane].emulator);
+      }
       mux->dragging = false;
       mux->pointer_buttons = 0;
       mux->error = mux_pointer_advance_view(mux);
