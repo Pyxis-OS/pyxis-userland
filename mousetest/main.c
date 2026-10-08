@@ -34,6 +34,16 @@ static const uint8_t glyph_r[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12
 static const uint8_t glyph_x[GLYPH_HEIGHT] = {0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11};
 static const uint8_t glyph_y[GLYPH_HEIGHT] = {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04};
 static const uint8_t glyph_minus[GLYPH_HEIGHT] = {0, 0, 0, 0x1f, 0, 0, 0};
+static const uint8_t glyph_a[GLYPH_HEIGHT] = {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11};
+static const uint8_t glyph_c[GLYPH_HEIGHT] = {0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e};
+static const uint8_t glyph_d[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e};
+static const uint8_t glyph_e[GLYPH_HEIGHT] = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f};
+static const uint8_t glyph_f[GLYPH_HEIGHT] = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10};
+static const uint8_t glyph_i[GLYPH_HEIGHT] = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f};
+static const uint8_t glyph_k[GLYPH_HEIGHT] = {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
+static const uint8_t glyph_o[GLYPH_HEIGHT] = {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e};
+static const uint8_t glyph_t[GLYPH_HEIGHT] = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
+static const uint8_t glyph_w[GLYPH_HEIGHT] = {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a};
 
 struct colors {
   uint32_t panel, idle, left, middle, right, text, ink, paper;
@@ -50,11 +60,14 @@ struct screen {
 
 struct mouse_state {
   int64_t x, y;
+  int32_t dx, dy;
   uint32_t buttons;
   int scroll; /* -1 away from the user, +1 toward, 0 idle. */
   uint64_t scroll_until;
   bool keyboard_focused;
   bool pointer_focused;
+  bool locked;
+  bool lock_desired;
   bool cursor_visible;
   bool quit;
   bool dirty;
@@ -93,9 +106,19 @@ static const uint8_t *glyph(char character)
     return glyph_digits[character - '0'];
   }
   switch (character) {
+  case 'A': return glyph_a;
+  case 'C': return glyph_c;
+  case 'D': return glyph_d;
+  case 'E': return glyph_e;
+  case 'F': return glyph_f;
+  case 'I': return glyph_i;
+  case 'K': return glyph_k;
   case 'L': return glyph_l;
   case 'M': return glyph_m;
+  case 'O': return glyph_o;
   case 'R': return glyph_r;
+  case 'T': return glyph_t;
+  case 'W': return glyph_w;
   case 'X': return glyph_x;
   case 'Y': return glyph_y;
   case '-': return glyph_minus;
@@ -173,6 +196,15 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
   y += (GLYPH_HEIGHT + 3) * scale;
   snprintf(line, sizeof(line), "Y %lld", (long long)state->y);
   draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  draw_text(screen, margin, y, scale,
+      state->locked ? "LOCK" : state->lock_desired ? "WAIT" : "FREE", colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "DX %ld", (long)state->dx);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "DY %ld", (long)state->dy);
+  draw_text(screen, margin, y, scale, line, colors->text);
 }
 
 static void draw_pad(const struct screen *screen)
@@ -228,22 +260,49 @@ static void apply_pointer(const struct screen *screen, struct mouse_state *state
     /* Focus, boundary and geometry changes end every held control. */
     state->buttons = 0;
     state->scroll = 0;
+    state->dx = 0;
+    state->dy = 0;
     return;
   }
-  if (!state->pointer_focused) {
+  if (!state->pointer_focused ||
+      ((event->flags & POINTER_EVENT_LOCKED) != 0) != state->locked) {
     return;
   }
 
   state->buttons = event->buttons;
+  state->dx = state->locked ? event->dx : 0;
+  state->dy = state->locked ? event->dy : 0;
   if (event->wheel) {
     state->scroll = event->wheel < 0 ? -1 : 1;
     state->scroll_until = now + SCROLL_SHOWN_NS;
   }
-  if ((state->buttons & POINTER_BUTTON_LEFT) && state->x >= screen->panel_width &&
+  if (!state->locked && (state->buttons & POINTER_BUTTON_LEFT) &&
+      state->x >= screen->panel_width &&
       state->x < screen->width && state->y >= 0 && state->y < screen->height) {
     int64_t pad_width = screen->width - screen->panel_width;
     screen->ink[state->y * pad_width + state->x - screen->panel_width] = 1;
   }
+}
+
+static enum call_status refresh_lock_state(struct mouse_state *state, handle_t pointer)
+{
+  uint64_t flags;
+  enum call_status status = pointer_state(pointer, &flags);
+  if (status != CALL_OK) {
+    return status;
+  }
+  bool focused = (flags & POINTER_EVENT_FOCUSED) != 0;
+  bool locked = (flags & POINTER_EVENT_LOCKED) != 0;
+  if (state->pointer_focused != focused || state->locked != locked) {
+    state->buttons = 0;
+    state->scroll = 0;
+    state->dx = 0;
+    state->dy = 0;
+    state->dirty = true;
+  }
+  state->pointer_focused = focused;
+  state->locked = locked;
+  return CALL_OK;
 }
 
 static enum call_status refresh_geometry(struct screen *screen, struct display_buffer *buffer,
@@ -256,6 +315,8 @@ static enum call_status refresh_geometry(struct screen *screen, struct display_b
   state->observed_generation = state->geometry.generation;
   state->buttons = 0;
   state->scroll = 0;
+  state->dx = 0;
+  state->dy = 0;
   state->dirty = true;
 
   uint64_t width = state->geometry.width;
@@ -328,6 +389,14 @@ static enum call_status apply_key(struct mouse_state *state, handle_t pointer,
     return pointer_default_image(pointer);
   case KEY_C:
     return custom_cursor(pointer);
+  case KEY_L:
+    state->dirty = true;
+    if (state->lock_desired || state->locked) {
+      state->lock_desired = false;
+      return pointer_unlock(pointer);
+    }
+    state->lock_desired = true;
+    return pointer_lock(pointer);
   case KEY_W: {
     struct pointer_geometry geometry;
     enum call_status status = pointer_geometry(pointer, &geometry);
@@ -370,6 +439,10 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
     if (status != CALL_TIMED_OUT) {
       return status;
     }
+    status = refresh_lock_state(&state, pointer);
+    if (status != CALL_OK) {
+      return status;
+    }
 
     uint64_t now;
     status = clock_now(clock, &now);
@@ -381,8 +454,22 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
       if (event.type != POINTER_INPUT) {
         state.buttons = 0;
         state.scroll = 0;
+        state.dx = 0;
+        state.dy = 0;
         state.dirty = true;
         state.pointer_focused = (event.flags & POINTER_EVENT_FOCUSED) != 0;
+      }
+      if (event.type == POINTER_ACTIVATED && state.lock_desired) {
+        enum call_status lock_status = pointer_lock(pointer);
+        if (lock_status != CALL_OK) {
+          fprintf(stderr, "mousetest: lock refused (status %u)\n", (unsigned)lock_status);
+        }
+      }
+      if (event.type != POINTER_INPUT) {
+        enum call_status state_status = refresh_lock_state(&state, pointer);
+        if (state_status != CALL_OK) {
+          return state_status;
+        }
       }
       if (event.type == POINTER_GEOMETRY_CHANGED ||
           state.observed_generation != state.geometry.generation ||

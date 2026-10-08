@@ -117,3 +117,38 @@ enum call_status pointer_warp(handle_t pointer, int64_t x, int64_t y,
   };
   return pointer_request(pointer, &request, sizeof(request));
 }
+
+enum call_status pointer_lock(handle_t pointer)
+{
+  return pointer_command(pointer, POINTER_LOCK);
+}
+
+enum call_status pointer_unlock(handle_t pointer)
+{
+  return pointer_command(pointer, POINTER_UNLOCK);
+}
+
+enum call_status pointer_state(handle_t pointer, uint64_t *flags)
+{
+  if (!flags) {
+    return CALL_BAD_REQUEST;
+  }
+  *flags = 0;
+  struct message_header message = {PROTOCOL_POINTER, POINTER_STATE};
+  uint64_t reply;
+  struct syscall_result result = syscall_call(pointer, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (reply & ~(uint64_t)(POINTER_EVENT_FOCUSED | POINTER_EVENT_LOCKED)) {
+      return CALL_BAD_REQUEST;
+    }
+    *flags = reply;
+  }
+  return result.status;
+}

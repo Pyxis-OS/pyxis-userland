@@ -27,5 +27,11 @@ enum call_status pointer_set_visible(handle_t pointer, bool visible);
  * still match, and the target must lie inside mapping and destination. */
 enum call_status pointer_warp(handle_t pointer, int64_t x, int64_t y,
     uint64_t generation, uint64_t mapping_identity);
+/* Lock may be refused or revoked. Super+Esc and focus/device loss require a
+ * fresh surface activation before another request; do not retry by polling. */
+enum call_status pointer_lock(handle_t pointer);
+enum call_status pointer_unlock(handle_t pointer);
+/* Current FOCUSED/LOCKED flags; clears flags on failure. */
+enum call_status pointer_state(handle_t pointer, uint64_t *flags);
 
 #endif

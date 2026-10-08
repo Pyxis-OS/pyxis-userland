@@ -353,6 +353,12 @@ Once the view is complete it idles until input or a resize needs another draw.
 position, with a drawing pad for the left button and a custom system cursor.
 `H` toggles cursor visibility, `D` restores the default image, `C` restores the
 custom image and `W` warps to the surface center. Escape returns to the TTY.
+`L` requests pointer lock or cancels it. The panel shows `FREE` when unlocked,
+`LOCK` while locked, and `WAIT` when a request remains pending after refusal or
+revocation. `DX`/`DY` show the latest relative device counts while locked; the
+ordinary position stays at the kernel's parked coordinates. Super+Esc revokes
+lock; a fresh surface click permits a pending request to try once again.
+`L` while waiting cancels that request. Polling never requests lock again.
 It needs display, keyboard, pointer and clock grants. Resizing replaces its
 mapping and preserves the overlapping drawing; failure retains the old mapping.
 Its update loop keeps running without input focus, clearing held buttons on
