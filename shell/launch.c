@@ -46,7 +46,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[26];
+  struct launch_binding resources[27];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -133,6 +133,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_launcher = session ||
       (mode == SHELL_FOREGROUND && shell->child_launcher != HANDLE_INVALID);
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
+  handle_t mux_terminal = session ? startup_resource("mux_terminal") : HANDLE_INVALID;
+  bool has_mux_terminal = mux_terminal != HANDLE_INVALID;
   /* Only a session successor inherits power; the shell's own programs never do. */
   bool has_power = session && shell->power != HANDLE_INVALID;
   bool has_screen_capture = shell->screen_capture != HANDLE_INVALID;
@@ -163,7 +165,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 26 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 27 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -189,7 +191,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t publication_index = namespace_index + (has_namespace ? 1 : 0);
   size_t namespace_service_index = publication_index + (provider ? 1 : 0);
   size_t terminal_index = namespace_service_index + (has_namespace_service ? 1 : 0);
-  size_t power_index = terminal_index + (has_terminal ? 1 : 0);
+  size_t mux_terminal_index = terminal_index + (has_terminal ? 1 : 0);
+  size_t power_index = mux_terminal_index + (has_mux_terminal ? 1 : 0);
   size_t screen_capture_index = power_index + (has_power ? 1 : 0);
   size_t grant_count = screen_capture_index + (has_screen_capture ? 1 : 0);
   prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
@@ -291,6 +294,15 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_terminal) {
     grants[terminal_index] = (struct launch_grant){shell->terminal_service, TERMINAL_SERVICE_RIGHT_CREATE, 0};
+  }
+  if (has_mux_terminal) {
+    uint64_t rights, transport;
+    enum call_status status = handle_rights(mux_terminal, &rights, &transport);
+    if (status != CALL_OK) {
+      return status;
+    }
+    grants[mux_terminal_index] = (struct launch_grant){mux_terminal,
+        rights & TERMINAL_SERVICE_RIGHT_CREATE, transport};
   }
   if (has_power) {
     grants[power_index] = (struct launch_grant){shell->power, POWER_RIGHTS, 0};
@@ -417,6 +429,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_terminal) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"terminal", terminal_index};
+  }
+  if (has_mux_terminal) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"mux_terminal", mux_terminal_index};
   }
   if (has_power) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", power_index};
