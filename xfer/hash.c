@@ -9,6 +9,7 @@
 
 static handle_t entropy_clock, entropy_random;
 static uint64_t entropy_deadline;
+static psa_hash_operation_t operation = PSA_HASH_OPERATION_INIT;
 
 /* The configured PSA initialization seeds its RNG even for a hash-only user.
  * Borrow only the named native entropy and monotonic-clock grants. */
@@ -54,26 +55,37 @@ bool hash_init(handle_t clock, handle_t random)
 
 void hash_close(void)
 {
+  psa_hash_abort(&operation);
   mbedtls_psa_crypto_free();
 }
 
-bool file_digest(const void *bytes, size_t size, char digest[65])
+bool digest_begin(void)
 {
-  psa_hash_operation_t operation = PSA_HASH_OPERATION_INIT;
-  unsigned char hash[32];
-  size_t length = 0;
-  psa_status_t status = psa_hash_setup(&operation, PSA_ALG_SHA_256);
+  psa_hash_abort(&operation);
+  return psa_hash_setup(&operation, PSA_ALG_SHA_256) == PSA_SUCCESS;
+}
+
+bool digest_update(const void *bytes, size_t size)
+{
   const unsigned char *input = bytes;
-  /* Bound PSA's temporary input copy independently of the file buffer. */
-  while (status == PSA_SUCCESS && size) {
+  /* Bound PSA's temporary input copy independently of the caller's buffer. */
+  while (size) {
     size_t count = size > 4096 ? 4096 : size;
-    status = psa_hash_update(&operation, input, count);
+    if (psa_hash_update(&operation, input, count) != PSA_SUCCESS) {
+      psa_hash_abort(&operation);
+      return false;
+    }
     input += count;
     size -= count;
   }
-  if (status == PSA_SUCCESS) {
-    status = psa_hash_finish(&operation, hash, sizeof(hash), &length);
-  }
+  return true;
+}
+
+bool digest_finish(char digest[65])
+{
+  unsigned char hash[32];
+  size_t length = 0;
+  psa_status_t status = psa_hash_finish(&operation, hash, sizeof(hash), &length);
   psa_hash_abort(&operation);
   if (status != PSA_SUCCESS || length != sizeof(hash)) {
     return false;
@@ -85,6 +97,11 @@ bool file_digest(const void *bytes, size_t size, char digest[65])
   }
   digest[64] = 0;
   return true;
+}
+
+void digest_abort(void)
+{
+  psa_hash_abort(&operation);
 }
 
 static unsigned hex_lower(unsigned byte)
