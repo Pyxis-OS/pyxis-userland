@@ -35,7 +35,10 @@ enum call_status audio_acquire(handle_t audio, struct audio_acquire_reply *reply
 
 enum call_status audio_write(handle_t audio, const void *bytes, size_t size)
 {
-  if ((!bytes && size) || size > AUDIO_WRITE_MAX || size % AUDIO_FRAME_BYTES) {
+  if (size > AUDIO_WRITE_MAX) {
+    return CALL_LIMIT;
+  }
+  if ((!bytes && size) || size % AUDIO_FRAME_BYTES) {
     return CALL_BAD_REQUEST;
   }
   struct audio_write_request request = {

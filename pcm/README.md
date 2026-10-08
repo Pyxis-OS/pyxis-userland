@@ -27,10 +27,11 @@ session; a pause longer than the queued audio can cause starvation. `--repeat`
 releases and reacquires the session for each run. `--gap-ms` waits between those
 sessions. Pauses, gaps and tail waits are at most 60000 ms.
 
-Writes copy at most 4096 bytes atomically. A full queue accepts nothing; the
-producer waits for `WAIT_WRITABLE` and retries the same bytes. Diagnostics report
-session generation, queue capacity/free frames, starvation/discontinuity counters
-and backend state, plus cumulative writes, queue-full responses, waits and elapsed
+Writes copy at most 4096 bytes atomically. A full queue reports `WOULD_BLOCK` and
+accepts nothing; the producer waits for `WAIT_WRITABLE` and retries the same
+bytes. Diagnostics report session generation, queue capacity/free frames,
+starvation/discontinuity counters and backend state, plus cumulative writes,
+queue-full responses, waits and elapsed
 submission time per run. These counters describe production, not an audible play
 cursor or output latency.
 

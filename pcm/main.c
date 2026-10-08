@@ -142,7 +142,7 @@ static enum call_status write_frames(struct producer *producer,
   struct wait_interest interest = {producer->audio, WAIT_WRITABLE, 0};
   for (;;) {
     enum call_status status = audio_write(producer->audio, bytes, size);
-    if (status != CALL_QUEUE_FULL) {
+    if (status != CALL_WOULD_BLOCK) {
       if (status == CALL_OK) {
         ++producer->writes;
       }
