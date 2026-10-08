@@ -32,13 +32,8 @@ static size_t pane_rows(struct mux_rect rect)
 
 static enum call_status place(struct mux *mux)
 {
-  size_t columns = mux->geometry.columns, rows = mux->geometry.rows;
-  if (columns > TERMINAL_COLUMNS_MAX) {
-    columns = TERMINAL_COLUMNS_MAX;
-  }
-  if (rows > TERMINAL_ROWS_MAX + 2) {
-    rows = TERMINAL_ROWS_MAX + 2;
-  }
+  struct mux_rect view = mux_viewport(mux);
+  size_t columns = view.width, rows = view.height;
   size_t area_rows = rows > 1 ? rows - 1 : 0;
   mux->collapsed = !mux_layout_place(&mux->layout, columns, area_rows, mux->rectangles);
   if (mux->collapsed) {
@@ -98,8 +93,9 @@ static void split(struct mux *mux, enum mux_axis axis)
   }
   struct mux_layout next = mux->layout;
   struct mux_rect rectangles[MUX_PANES];
+  struct mux_rect view = mux_viewport(mux);
   if (!mux_layout_split(&next, mux->focused, (int)slot, axis) ||
-      !mux_layout_place(&next, mux->frame_columns, mux->frame_rows - 1, rectangles)) {
+      !mux_layout_place(&next, view.width, view.height ? view.height - 1 : 0, rectangles)) {
     notice(mux, "Not enough room for 12 columns and 4 content rows per pane");
     return;
   }

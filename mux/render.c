@@ -77,13 +77,11 @@ static void label(struct mux *mux, size_t row, size_t column, size_t width,
 
 enum call_status mux_render(struct mux *mux)
 {
-  size_t columns = mux->geometry.columns;
-  size_t rows = mux->geometry.rows;
-  if (columns > TERMINAL_COLUMNS_MAX) {
-    columns = TERMINAL_COLUMNS_MAX;
-  }
-  if (rows > TERMINAL_ROWS_MAX + 2) {
-    rows = TERMINAL_ROWS_MAX + 2;
+  struct mux_rect view = mux_viewport(mux);
+  size_t columns = view.width, rows = view.height;
+  if (!columns || !rows) {
+    mux->frame_valid = false;
+    return CALL_OK;
   }
   if (columns != mux->frame_columns || rows != mux->frame_rows) {
     struct mux_cell *frame = calloc(columns * rows, sizeof(*frame));

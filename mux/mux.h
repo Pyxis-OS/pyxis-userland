@@ -41,4 +41,16 @@ struct mux {
 
 enum call_status mux_render(struct mux *mux);
 
+static inline struct mux_rect mux_viewport(const struct mux *mux)
+{
+  size_t columns = mux->geometry.columns, rows = mux->geometry.rows;
+  if (columns > TERMINAL_COLUMNS_MAX) {
+    columns = TERMINAL_COLUMNS_MAX;
+  }
+  if (rows > TERMINAL_ROWS_MAX + 2) {
+    rows = TERMINAL_ROWS_MAX + 2;
+  }
+  return (struct mux_rect){.width = columns, .height = rows};
+}
+
 #endif
