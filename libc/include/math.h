@@ -31,8 +31,8 @@ typedef double double_t;
 #define math_errhandling MATH_ERREXCEPT
 
 /* This subset reports math errors through FP exception flags, not errno.
- * The process starts with FP traps masked. There is no fenv API yet, and
- * signaling NaNs are not supported.
+ * The process starts with FP traps masked; see fenv.h. Signaling NaNs are
+ * not supported.
  * These functions live in libc; callers do not need a separate -lm. */
 double floor(double value);
 /* Nearest integer, ties away from zero, independent of the FP rounding mode. */
