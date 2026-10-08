@@ -1,5 +1,5 @@
-#ifndef USERSPACE_SCREENSHOT_PNG_H
-#define USERSPACE_SCREENSHOT_PNG_H
+#ifndef USERSPACE_SCREENSHOT_ENCODE_H
+#define USERSPACE_SCREENSHOT_ENCODE_H
 
 #include <screen_capture.h>
 #include <stdbool.h>

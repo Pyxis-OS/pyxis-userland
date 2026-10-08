@@ -1,4 +1,4 @@
-#include "png.h"
+#include "encode.h"
 #include "../common/directory.h"
 #include <file.h>
 #include <inttypes.h>
