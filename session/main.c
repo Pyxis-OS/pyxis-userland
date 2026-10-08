@@ -11,6 +11,7 @@
 #include <abi/random.h>
 #include <abi/console.h>
 #include <abi/display.h>
+#include <abi/screen_capture.h>
 #include <abi/file.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
@@ -64,7 +65,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 20, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 21, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -127,6 +128,13 @@ static int launch_session(const struct session_config *config, const struct netw
   if (display != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", grant_count};
     grants[grant_count++] = (struct launch_grant){display, DISPLAY_RIGHT_DRAW, 0};
+  }
+  handle_t screen_capture = startup_resource("screen_capture");
+  if (screen_capture != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"screen_capture", grant_count};
+    grants[grant_count++] = (struct launch_grant){screen_capture,
+        SCREEN_CAPTURE_RIGHT_CAPTURE, 0};
   }
   handle_t clock = startup_resource("clock");
   if (clock != HANDLE_INVALID) {

@@ -60,7 +60,7 @@ struct shell {
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, namespace_service, namespace, random, net_config,
       keyboard, pointer, terminal_service,
-      boot, tmp, host_mount, native_mount, power;
+      boot, tmp, host_mount, native_mount, power, screen_capture;
   bool owns_namespace;
   struct path_root roots[STARTUP_ROOT_LIMIT];
   bool owns_root[STARTUP_ROOT_LIMIT];

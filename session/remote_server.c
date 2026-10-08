@@ -9,6 +9,7 @@
 #include <abi/pipe.h>
 #include <abi/profile.h>
 #include <abi/random.h>
+#include <abi/screen_capture.h>
 #include <abi/system_info.h>
 #include <abi/terminal.h>
 #include <abi/udp.h>
@@ -157,7 +158,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 12, RESOURCE_CAPACITY = 16 };
+  enum { OPTIONAL_COUNT = 13, RESOURCE_CAPACITY = 17 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -205,6 +206,13 @@ int launch_remote_server(const struct session_config *config,
   if (system_info != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
+  }
+  handle_t screen_capture = startup_resource("screen_capture");
+  if (screen_capture != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"screen_capture", grant_count};
+    grants[grant_count++] = (struct launch_grant){screen_capture,
+        SCREEN_CAPTURE_RIGHT_CAPTURE, 0};
   }
   handle_t log = startup_resource("log");
   if (log != HANDLE_INVALID) {
