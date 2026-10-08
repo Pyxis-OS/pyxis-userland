@@ -11,7 +11,7 @@ MBEDTLS_PREFIX ?= build/ports-dev/mbedtls
 MBEDTLS_PREFIX := $(abspath $(MBEDTLS_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
-INSTALL_PROGRAMS := remote-terminal xfer httpfs allocbench iobench ipcbench session boot-init init-install installer shell client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest
+INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench session boot-init init-install installer shell client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -39,6 +39,7 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
+MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
@@ -63,7 +64,7 @@ CP_OBJECT := $(BUILD)/cp/copy.o
 LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest clean FORCE
+.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -102,6 +103,10 @@ ipcbench: $(BUILD)/ipcbench.pxe
 httpfs: $(BUILD)/httpfs.pxe
 libhttp: $(HTTP_LIBRARY)
 libtls: $(TLS_LIBRARY)
+
+mux: $(BUILD)/mux.pxe
+
+$(BUILD)/mux.pxe: $(MUX_OBJECTS)
 
 remote-terminal: $(BUILD)/remote-terminal.pxe
 
@@ -244,5 +249,5 @@ clean:
 
 .SECONDARY:
 
--include $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
+-include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
 -include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d)

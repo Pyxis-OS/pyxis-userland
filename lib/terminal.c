@@ -42,6 +42,15 @@ enum call_status terminal_create(handle_t service, size_t columns, size_t rows,
   return CALL_OK;
 }
 
+enum call_status terminal_resize(handle_t attachment, size_t columns, size_t rows)
+{
+  struct terminal_resize_request request = {
+    .header = {PROTOCOL_TERMINAL_ATTACHMENT, TERMINAL_RESIZE},
+    .columns = columns, .rows = rows,
+  };
+  return response_status(syscall_call(attachment, &request, sizeof(request), NULL, 0), 0);
+}
+
 enum call_status terminal_try_inject(handle_t attachment, const void *data, size_t length,
     struct terminal_transfer_reply *reply)
 {

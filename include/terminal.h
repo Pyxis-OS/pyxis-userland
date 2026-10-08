@@ -7,10 +7,16 @@
 /* Borrow CREATE authority. All four returned handles are caller-owned;
  * application input/output implement CONSOLE with READ/WRITE respectively.
  * Attachment and event authority are separate. Events keep output open until
- * their final EMIT-authorized grant closes. Dimensions are immutable character cells.
+ * their final EMIT-authorized grant closes. Dimensions are character cells.
  * Helpers preserve native statuses and leave outputs unchanged on failure. */
 enum call_status terminal_create(handle_t service, size_t columns, size_t rows,
     struct terminal_create_reply *reply);
+
+/* RESIZE on attachment; nonzero dimensions within the terminal ABI bounds.
+ * Changed dimensions advance the SIZE generation and wake RESIZED observers.
+ * Unchanged dimensions are a no-op. Hangup is ENDPOINT_CLOSED; exhausted
+ * generation is LIMIT. Neither queues nor application grants are replaced. */
+enum call_status terminal_resize(handle_t attachment, size_t columns, size_t rows);
 
 /* One queue attempt, without waiting or retaining a pending operation.
  * Injection accepts at most TERMINAL_TRANSFER_MAX bytes and can return short;
