@@ -12,7 +12,8 @@
 #define PANEL_PERCENT 30
 #define GLYPH_WIDTH 5
 #define GLYPH_HEIGHT 7
-#define MARKER_RADIUS 6
+#define CURSOR_WIDTH 16
+#define CURSOR_HEIGHT 20
 
 /* 5x7 glyphs, one byte per row, bit 4 on the left. Only what the panel shows. */
 static const uint8_t glyph_digits[10][GLYPH_HEIGHT] = {
@@ -32,9 +33,20 @@ static const uint8_t glyph_m[GLYPH_HEIGHT] = {0x11, 0x1b, 0x15, 0x15, 0x11, 0x11
 static const uint8_t glyph_r[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11};
 static const uint8_t glyph_x[GLYPH_HEIGHT] = {0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11};
 static const uint8_t glyph_y[GLYPH_HEIGHT] = {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04};
+static const uint8_t glyph_minus[GLYPH_HEIGHT] = {0, 0, 0, 0x1f, 0, 0, 0};
+static const uint8_t glyph_a[GLYPH_HEIGHT] = {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11};
+static const uint8_t glyph_c[GLYPH_HEIGHT] = {0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e};
+static const uint8_t glyph_d[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e};
+static const uint8_t glyph_e[GLYPH_HEIGHT] = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f};
+static const uint8_t glyph_f[GLYPH_HEIGHT] = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10};
+static const uint8_t glyph_i[GLYPH_HEIGHT] = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f};
+static const uint8_t glyph_k[GLYPH_HEIGHT] = {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
+static const uint8_t glyph_o[GLYPH_HEIGHT] = {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e};
+static const uint8_t glyph_t[GLYPH_HEIGHT] = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
+static const uint8_t glyph_w[GLYPH_HEIGHT] = {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a};
 
 struct colors {
-  uint32_t panel, idle, left, middle, right, text, ink, paper, marker;
+  uint32_t panel, idle, left, middle, right, text, ink, paper;
 };
 
 struct screen {
@@ -42,19 +54,25 @@ struct screen {
   uint8_t *pixels;
   int64_t width, height;
   int64_t panel_width;
-  uint8_t *ink; /* Drawing pad pixels, one byte each; kept apart from the marker. */
+  uint8_t *ink; /* Drawing pad pixels, one byte each. */
   struct colors colors;
 };
 
 struct mouse_state {
   int64_t x, y;
+  int32_t dx, dy;
   uint32_t buttons;
   int scroll; /* -1 away from the user, +1 toward, 0 idle. */
   uint64_t scroll_until;
   bool keyboard_focused;
   bool pointer_focused;
+  bool locked;
+  bool lock_desired;
+  bool cursor_visible;
   bool quit;
   bool dirty;
+  uint64_t observed_generation;
+  struct pointer_geometry geometry;
 };
 
 static uint32_t rgb(const struct display_buffer *buffer, uint8_t red, uint8_t green, uint8_t blue)
@@ -88,11 +106,22 @@ static const uint8_t *glyph(char character)
     return glyph_digits[character - '0'];
   }
   switch (character) {
+  case 'A': return glyph_a;
+  case 'C': return glyph_c;
+  case 'D': return glyph_d;
+  case 'E': return glyph_e;
+  case 'F': return glyph_f;
+  case 'I': return glyph_i;
+  case 'K': return glyph_k;
   case 'L': return glyph_l;
   case 'M': return glyph_m;
+  case 'O': return glyph_o;
   case 'R': return glyph_r;
+  case 'T': return glyph_t;
+  case 'W': return glyph_w;
   case 'X': return glyph_x;
   case 'Y': return glyph_y;
+  case '-': return glyph_minus;
   default: return NULL;
   }
 }
@@ -167,6 +196,15 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
   y += (GLYPH_HEIGHT + 3) * scale;
   snprintf(line, sizeof(line), "Y %lld", (long long)state->y);
   draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  draw_text(screen, margin, y, scale,
+      state->locked ? "LOCK" : state->lock_desired ? "WAIT" : "FREE", colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "DX %ld", (long)state->dx);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "DY %ld", (long)state->dy);
+  draw_text(screen, margin, y, scale, line, colors->text);
 }
 
 static void draw_pad(const struct screen *screen)
@@ -182,26 +220,33 @@ static void draw_pad(const struct screen *screen)
   }
 }
 
-static void draw_marker(const struct screen *screen, const struct mouse_state *state)
-{
-  for (int64_t offset = -MARKER_RADIUS; offset <= MARKER_RADIUS; ++offset) {
-    if (offset) {
-      put_pixel(screen, state->x + offset, state->y, screen->colors.marker);
-      put_pixel(screen, state->x, state->y + offset, screen->colors.marker);
-    }
-  }
-}
-
 static void redraw(const struct screen *screen, const struct mouse_state *state)
 {
   draw_panel(screen, state);
   draw_pad(screen);
-  draw_marker(screen, state);
 }
 
-static int64_t clamp(int64_t value, int64_t low, int64_t high)
+static enum call_status custom_cursor(handle_t pointer)
 {
-  return value < low ? low : value > high ? high : value;
+  static const uint16_t rows[CURSOR_HEIGHT] = {
+    0x8000, 0xc000, 0xe000, 0xf000, 0xf800, 0xfc00, 0xfe00, 0xff00,
+    0xff80, 0xffc0, 0xffe0, 0xfff0, 0xfff8, 0xff80, 0xcc00, 0x0c00,
+    0x0600, 0x0600, 0x0300, 0x0300,
+  };
+  uint32_t pixels[CURSOR_WIDTH * CURSOR_HEIGHT] = {0};
+  for (uint32_t y = 0; y < CURSOR_HEIGHT; ++y) {
+    for (uint32_t x = 0; x < CURSOR_WIDTH; ++x) {
+      uint16_t bit = UINT16_C(0x8000) >> x;
+      if (rows[y] & bit) {
+        bool interior = x && y && y + 1 < CURSOR_HEIGHT &&
+            (rows[y] & (bit << 1)) && (rows[y] & (bit >> 1)) &&
+            (rows[y - 1] & bit) && (rows[y + 1] & bit);
+        pixels[y * CURSOR_WIDTH + x] = interior ? UINT32_C(0xff8fe6ff) :
+            UINT32_C(0xff182028);
+      }
+    }
+  }
+  return pointer_set_image(pointer, pixels, CURSOR_WIDTH, CURSOR_HEIGHT, 1, 1);
 }
 
 static void apply_pointer(const struct screen *screen, struct mouse_state *state,
@@ -209,53 +254,203 @@ static void apply_pointer(const struct screen *screen, struct mouse_state *state
 {
   state->pointer_focused = (event->flags & POINTER_EVENT_FOCUSED) != 0;
   state->dirty = true;
-  if (event->type != POINTER_INPUT) {
-    /* Focus changes and resets end every held button. */
-    state->buttons = 0;
+  if (event->generation == state->geometry.generation &&
+      event->mapping_identity == state->geometry.mapping_identity) {
+    state->x = event->x;
+    state->y = event->y;
+  }
+  if (event->type == POINTER_GEOMETRY_CHANGED && state->locked &&
+      (event->flags & POINTER_EVENT_LOCKED)) {
+    state->buttons = event->buttons;
     return;
   }
-  if (!state->pointer_focused) {
+  if (event->type != POINTER_INPUT) {
+    /* Revocation/reset ends held controls; locked resize preserves them. */
+    state->buttons = 0;
+    state->scroll = 0;
+    state->dx = 0;
+    state->dy = 0;
+    return;
+  }
+  if (!state->pointer_focused ||
+      ((event->flags & POINTER_EVENT_LOCKED) != 0) != state->locked) {
     return;
   }
 
-  /* One pixel per device count, without acceleration. */
-  state->x = clamp(state->x + event->dx, 0, screen->width - 1);
-  state->y = clamp(state->y + event->dy, 0, screen->height - 1);
   state->buttons = event->buttons;
+  state->dx = state->locked ? event->dx : 0;
+  state->dy = state->locked ? event->dy : 0;
   if (event->wheel) {
     state->scroll = event->wheel < 0 ? -1 : 1;
     state->scroll_until = now + SCROLL_SHOWN_NS;
   }
-  if ((state->buttons & POINTER_BUTTON_LEFT) && state->x >= screen->panel_width) {
+  if (!state->locked && (state->buttons & POINTER_BUTTON_LEFT) &&
+      state->x >= screen->panel_width &&
+      state->x < screen->width && state->y >= 0 && state->y < screen->height) {
     int64_t pad_width = screen->width - screen->panel_width;
     screen->ink[state->y * pad_width + state->x - screen->panel_width] = 1;
   }
 }
 
-static void apply_key(struct mouse_state *state, const struct keyboard_event *event)
+static enum call_status refresh_lock_state(struct mouse_state *state, handle_t pointer)
+{
+  uint64_t flags;
+  enum call_status status = pointer_state(pointer, &flags);
+  if (status != CALL_OK) {
+    return status;
+  }
+  bool focused = (flags & POINTER_EVENT_FOCUSED) != 0;
+  bool locked = (flags & POINTER_EVENT_LOCKED) != 0;
+  if (state->pointer_focused != focused || state->locked != locked) {
+    state->buttons = 0;
+    state->scroll = 0;
+    state->dx = 0;
+    state->dy = 0;
+    state->dirty = true;
+  }
+  state->pointer_focused = focused;
+  state->locked = locked;
+  return CALL_OK;
+}
+
+static enum call_status refresh_geometry(struct screen *screen, struct display_buffer *buffer,
+    struct mouse_state *state, handle_t display, handle_t pointer)
+{
+  enum call_status status = pointer_geometry(pointer, &state->geometry);
+  if (status != CALL_OK || state->geometry.generation == state->observed_generation) {
+    return status;
+  }
+  state->observed_generation = state->geometry.generation;
+  if (!state->locked) {
+    state->buttons = 0;
+    state->scroll = 0;
+    state->dx = 0;
+    state->dy = 0;
+  }
+  state->dirty = true;
+
+  uint64_t width = state->geometry.width;
+  uint64_t height = state->geometry.height;
+  if (!width || !height || width > INT64_MAX / PANEL_PERCENT || height > INT64_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  uint64_t panel_width = width * PANEL_PERCENT / 100;
+  if (width - panel_width > SIZE_MAX / height) {
+    return CALL_BAD_REQUEST;
+  }
+  uint8_t *ink = calloc((size_t)(width - panel_width) * (size_t)height, 1);
+  if (!ink) {
+    return CALL_OK;
+  }
+  struct display_buffer replacement;
+  status = display_replace(display, state->geometry.generation, &replacement);
+  if (status != CALL_OK) {
+    /* Keep the old drawing and mapping; another geometry change can retry. */
+    free(ink);
+    return CALL_OK;
+  }
+
+  uint64_t old_pad_width = screen->width - screen->panel_width;
+  uint64_t new_pad_width = width - panel_width;
+  uint64_t copy_width = old_pad_width < new_pad_width ? old_pad_width : new_pad_width;
+  uint64_t copy_height = (uint64_t)screen->height < height ? screen->height : height;
+  for (uint64_t y = 0; y < copy_height; ++y) {
+    memcpy(ink + y * new_pad_width, screen->ink + y * old_pad_width, copy_width);
+  }
+  free(screen->ink);
+  *buffer = replacement;
+  screen->pixels = (uint8_t *)(uintptr_t)buffer->address;
+  screen->width = (int64_t)width;
+  screen->height = (int64_t)height;
+  screen->panel_width = (int64_t)panel_width;
+  screen->ink = ink;
+  screen->colors = (struct colors){
+    .panel = rgb(buffer, 0x30, 0x30, 0x30),
+    .idle = rgb(buffer, 0x58, 0x58, 0x58),
+    .left = rgb(buffer, 0x2e, 0xa0, 0x43),
+    .middle = rgb(buffer, 0xd2, 0x99, 0x22),
+    .right = rgb(buffer, 0x38, 0x7a, 0xd6),
+    .text = rgb(buffer, 0xf0, 0xf0, 0xf0),
+    .ink = rgb(buffer, 0x00, 0x00, 0x00),
+    .paper = rgb(buffer, 0xff, 0xff, 0xff),
+  };
+  return pointer_geometry(pointer, &state->geometry);
+}
+
+static enum call_status apply_key(struct mouse_state *state, handle_t pointer,
+    const struct keyboard_event *event)
 {
   state->keyboard_focused = (event->flags & KEYBOARD_EVENT_FOCUSED) != 0;
-  if (state->keyboard_focused && event->key == KEY_ESCAPE && event->action == KEY_PRESS) {
+  if (!state->keyboard_focused || event->action != KEY_PRESS) {
+    return CALL_OK;
+  }
+  switch (event->key) {
+  case KEY_ESCAPE:
     state->quit = true;
+    return CALL_OK;
+  case KEY_H: {
+    enum call_status status = pointer_set_visible(pointer, !state->cursor_visible);
+    if (status == CALL_OK) {
+      state->cursor_visible = !state->cursor_visible;
+    }
+    return status;
+  }
+  case KEY_D:
+    return pointer_default_image(pointer);
+  case KEY_C:
+    return custom_cursor(pointer);
+  case KEY_L:
+    state->dirty = true;
+    if (state->lock_desired || state->locked) {
+      state->lock_desired = false;
+      return pointer_unlock(pointer);
+    }
+    state->lock_desired = true;
+    return pointer_lock(pointer);
+  case KEY_W: {
+    struct pointer_geometry geometry;
+    enum call_status status = pointer_geometry(pointer, &geometry);
+    if (status != CALL_OK) {
+      return status;
+    }
+    uint64_t width = geometry.width < geometry.mapping_width ?
+        geometry.width : geometry.mapping_width;
+    uint64_t height = geometry.height < geometry.mapping_height ?
+        geometry.height : geometry.mapping_height;
+    return pointer_warp(pointer, (int64_t)(width / 2), (int64_t)(height / 2),
+        geometry.generation, geometry.mapping_identity);
+  }
+  default:
+    return CALL_OK;
   }
 }
 
-static enum call_status run(const struct screen *screen, handle_t keyboard, handle_t pointer,
-    handle_t clock)
+static enum call_status run(struct screen *screen, struct display_buffer *buffer,
+    handle_t display, handle_t keyboard, handle_t pointer, handle_t clock)
 {
   struct mouse_state state = {
-    .x = screen->width / 2,
-    .y = screen->height / 2,
+    .cursor_visible = true,
     .dirty = true,
+    .observed_generation = buffer->generation,
   };
+  enum call_status status = refresh_geometry(screen, buffer, &state, display, pointer);
+  if (status != CALL_OK) {
+    return status;
+  }
 
   while (!state.quit) {
     struct keyboard_event key;
-    enum call_status status;
     while ((status = keyboard_read(keyboard, KEYBOARD_READ_POLL, &key)) == CALL_OK) {
-      apply_key(&state, &key);
+      enum call_status command = apply_key(&state, pointer, &key);
+      if (command != CALL_OK) {
+        fprintf(stderr, "mousetest: cursor command failed (status %u)\n", (unsigned)command);
+      }
     }
     if (status != CALL_TIMED_OUT) {
+      return status;
+    }
+    status = refresh_lock_state(&state, pointer);
+    if (status != CALL_OK) {
       return status;
     }
 
@@ -266,7 +461,46 @@ static enum call_status run(const struct screen *screen, handle_t keyboard, hand
     }
     struct pointer_event event;
     while ((status = pointer_read(pointer, POINTER_READ_POLL, &event)) == CALL_OK) {
-      apply_pointer(screen, &state, &event, now);
+      bool locked_geometry = event.type == POINTER_GEOMETRY_CHANGED &&
+          state.locked && (event.flags & POINTER_EVENT_LOCKED);
+      if (event.type != POINTER_INPUT && !locked_geometry) {
+        state.buttons = 0;
+        state.scroll = 0;
+        state.dx = 0;
+        state.dy = 0;
+        state.dirty = true;
+        state.pointer_focused = (event.flags & POINTER_EVENT_FOCUSED) != 0;
+      }
+      if (event.type == POINTER_ACTIVATED && state.lock_desired) {
+        enum call_status lock_status = pointer_lock(pointer);
+        if (lock_status != CALL_OK) {
+          fprintf(stderr, "mousetest: lock refused (status %u)\n", (unsigned)lock_status);
+        }
+      }
+      if (event.type != POINTER_INPUT) {
+        enum call_status state_status = refresh_lock_state(&state, pointer);
+        if (state_status != CALL_OK) {
+          return state_status;
+        }
+      }
+      if (event.type == POINTER_GEOMETRY_CHANGED ||
+          state.observed_generation != state.geometry.generation ||
+          event.generation != state.geometry.generation ||
+          event.mapping_identity != state.geometry.mapping_identity) {
+        enum call_status geometry_status = refresh_geometry(screen, buffer, &state,
+            display, pointer);
+        if (geometry_status != CALL_OK) {
+          return geometry_status;
+        }
+      }
+      bool locked_input = event.type == POINTER_INPUT && state.locked &&
+          (event.flags & POINTER_EVENT_LOCKED);
+      /* Relative counts do not change meaning when the mapping is replaced. */
+      if (locked_input || locked_geometry ||
+          (event.generation == state.geometry.generation &&
+           event.mapping_identity == state.geometry.mapping_identity)) {
+        apply_pointer(screen, &state, &event, now);
+      }
     }
     if (status != CALL_TIMED_OUT) {
       return status;
@@ -307,6 +541,14 @@ int main(void)
     return 1;
   }
 
+  if (!buffer.width || !buffer.height || buffer.width > INT64_MAX / PANEL_PERCENT ||
+      buffer.height > INT64_MAX ||
+      buffer.width - buffer.width * PANEL_PERCENT / 100 > SIZE_MAX / buffer.height) {
+    display_release(display);
+    fputs("mousetest: invalid display dimensions\n", stderr);
+    return 1;
+  }
+
   struct screen screen = {
     .buffer = &buffer,
     .pixels = (uint8_t *)(uintptr_t)buffer.address,
@@ -322,7 +564,6 @@ int main(void)
       .text = rgb(&buffer, 0xf0, 0xf0, 0xf0),
       .ink = rgb(&buffer, 0x00, 0x00, 0x00),
       .paper = rgb(&buffer, 0xff, 0xff, 0xff),
-      .marker = rgb(&buffer, 0xe0, 0x30, 0x30),
     },
   };
   size_t pad_pixels = (size_t)(screen.width - screen.panel_width) * (size_t)screen.height;
@@ -340,9 +581,12 @@ int main(void)
   } else if (pointer_status != CALL_OK) {
     status = pointer_status;
   } else {
-    status = display_present(display);
+    status = custom_cursor(pointer);
     if (status == CALL_OK) {
-      status = run(&screen, keyboard, pointer, clock);
+      status = display_present(display);
+    }
+    if (status == CALL_OK) {
+      status = run(&screen, &buffer, display, keyboard, pointer, clock);
     }
   }
 

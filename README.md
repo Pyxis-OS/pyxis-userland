@@ -349,11 +349,22 @@ A failed replacement retains the old mapping until another resize.
 Rendering continues without input focus; focus loss clears held controls.
 Once the view is complete it idles until input or a resize needs another draw.
 
-`mousetest` shows mouse buttons, wheel direction and position, with a drawing
-pad for the left button; Escape returns to the TTY. It needs display, keyboard,
-pointer and clock grants. Its update loop keeps running without input focus,
-clearing held buttons and allowing the wheel indicator to expire. Keyboard and
-pointer controls follow their own session's focus.
+`mousetest` shows mouse buttons, wheel direction and the kernel's surface-local
+position, with a drawing pad for the left button and a custom system cursor.
+`H` toggles cursor visibility, `D` restores the default image, `C` restores the
+custom image and `W` warps to the surface center. Escape returns to the TTY.
+`L` requests pointer lock or cancels it. The panel shows `FREE` when unlocked,
+`LOCK` while locked, and `WAIT` when a request remains pending after refusal or
+revocation. `DX`/`DY` show the latest relative device counts while locked; the
+ordinary position stays at the kernel's parked coordinates. Super+Esc revokes
+lock; a fresh surface click permits a pending request to try once again.
+`L` while waiting cancels that request. Polling never requests lock again.
+It needs display, keyboard, pointer and clock grants. Resizing replaces its
+mapping and preserves the overlapping drawing; failure retains the old mapping.
+Locked resize preserves relative counts and accepted buttons.
+Its update loop keeps running without input focus, clearing held buttons on
+focus, boundary and state changes and allowing the wheel indicator to expire.
+Keyboard and pointer controls follow their own session's focus.
 
 `httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
 Configured boot sessions use `--start-services` to publish independent `http`
