@@ -57,9 +57,12 @@ static int launch_session(const struct session_config *config, const struct netw
   const char *image_name = start_remote_services ? "init-remote-services" :
       start_services ? "init-services" : multiplex ? "mux.pxe" : "shell.pxe";
   const char *image_uri = start_remote_services ? "boot://init-remote-services" :
-      start_services ? "boot://init-services" : multiplex ? "boot://mux.pxe" : "boot://shell.pxe";
+      start_services ? "boot://init-services" : multiplex ? "bin://mux.pxe" : "boot://shell.pxe";
   handle_t image;
-  enum call_status status = directory_lookup(boot, image_name, DIRECTORY_KIND_FILE,
+  /* Installed archives retain only recovery programs; mux belongs to the
+   * running revision's bin directory, which aliases boot on live images. */
+  handle_t image_directory = multiplex ? startup_root("bin") : boot;
+  enum call_status status = directory_lookup(image_directory, image_name, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot open %s (status %u)\n", image_uri, status);
