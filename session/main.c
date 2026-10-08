@@ -52,10 +52,12 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   bool script = start_services || start_remote_services;
+  handle_t mux_terminal = startup_resource("mux_terminal");
+  bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
-      start_services ? "init-services" : "shell.pxe";
+      start_services ? "init-services" : multiplex ? "mux.pxe" : "shell.pxe";
   const char *image_uri = start_remote_services ? "boot://init-remote-services" :
-      start_services ? "boot://init-services" : "boot://shell.pxe";
+      start_services ? "boot://init-services" : multiplex ? "boot://mux.pxe" : "boot://shell.pxe";
   handle_t image;
   enum call_status status = directory_lookup(boot, image_name, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
@@ -65,7 +67,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 21, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 22, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -104,11 +106,11 @@ static int launch_session(const struct session_config *config, const struct netw
   grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
-  if (start_remote_services) {
+  if (start_remote_services || multiplex || (start_services && mux_terminal != HANDLE_INVALID)) {
     uint64_t rights;
     status = handle_rights(launcher, &rights, NULL);
     if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot query remote launcher rights (status %u)\n", status);
+      fprintf(stderr, "session: cannot query launcher rights (status %u)\n", status);
       goto done;
     }
     grants[LAUNCHER].rights = rights &
@@ -204,6 +206,18 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[grant_count++] = (struct launch_grant){terminal_service,
         TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
+  if (mux_terminal != HANDLE_INVALID && !start_remote_services) {
+    uint64_t rights, transport;
+    status = handle_rights(mux_terminal, &rights, &transport);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot query multiplexer authority (status %u)\n", status);
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)(multiplex ? "terminal" : "mux_terminal"), grant_count};
+    grants[grant_count++] = (struct launch_grant){mux_terminal,
+        rights & TERMINAL_SERVICE_RIGHT_CREATE, transport};
+  }
   handle_t pipe = startup_resource("pipe");
   if (pipe != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", grant_count};
@@ -290,7 +304,9 @@ static int launch_session(const struct session_config *config, const struct netw
     }
   }
 
-  const char *arguments[] = {image_uri};
+  char tab_width[3];
+  snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
+  const char *arguments[] = {image_uri, "--tab-width", tab_width};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = grant_count,
@@ -299,7 +315,7 @@ static int launch_session(const struct session_config *config, const struct netw
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
     .working_path = (uintptr_t)working_path,
     .environment = (uintptr_t)environment, .environment_count = environment_count,
-    .argv = (uintptr_t)arguments, .argc = 1,
+    .argv = (uintptr_t)arguments, .argc = multiplex ? 3 : 1,
   };
   handle_t namespace_handle = startup_namespace();
   if (namespace_handle != HANDLE_INVALID) {

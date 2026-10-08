@@ -326,7 +326,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 4];
+  struct launch_binding resources[SERVICE_COUNT + 5];
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -356,7 +356,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 4, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 5, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -403,6 +403,14 @@ static const char *build_launch(const struct authority *authority, struct mounts
         (struct launch_binding){(uintptr_t)"child_launcher", launch->grant_count};
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
+    };
+  }
+  if (space->multiplexer) {
+    /* The distinct name records opt-in, separate from trusted init authority. */
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"mux_terminal", launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0
     };
   }
   if (space->screenshot) {
