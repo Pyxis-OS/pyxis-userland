@@ -75,7 +75,13 @@ void srand(unsigned seed);
 void qsort(void *base, size_t count, size_t size,
   int (*compare)(const void *, const void *));
 
-/* exit closes stdio streams; _Exit skips libc cleanup. No exit handlers yet. */
+/* Register a handler for exit or a return from main. Handlers run once each,
+ * in reverse order of registration, including handlers registered while exit
+ * runs them. The first 32 registrations always succeed; later ones use the heap
+ * and return nonzero if it is exhausted. Single-threaded, like errno. */
+int atexit(void (*handler)(void));
+/* exit runs exit handlers, then .fini_array, then closes stdio streams.
+ * _Exit and abort skip libc cleanup. */
 __attribute__((noreturn)) void exit(int status);
 __attribute__((noreturn)) void _Exit(int status);
 /* No signal delivery: terminate with EXIT_FAILURE, without libc cleanup. */
