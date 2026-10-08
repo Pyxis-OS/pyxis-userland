@@ -5,7 +5,11 @@
 #include "layout.h"
 #include "session.h"
 #include <abi/process.h>
+#include <abi/wait.h>
 #include <term.h>
+
+_Static_assert(MUX_PANES * 2 + 1 <= WAIT_MAX_INTERESTS,
+    "pane output/lifecycle and outer input must fit one native wait");
 
 struct mux_pane {
   bool used, root_done, group_done, output_eof, remove_when_done;

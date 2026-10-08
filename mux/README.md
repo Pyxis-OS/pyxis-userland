@@ -1,7 +1,7 @@
 # Native terminal multiplexer
 
 Build with `make mux SDK=/path/to/sdk` using the current Pyxis SDK. The SDK
-must include attachment-authorized terminal resize and the seventeen-interest
+must include attachment-authorized terminal resize and the general 32-interest
 readiness bound. No compiler-container rebuild is required.
 
 Trusted session startup selects `mux.pxe` only for a local space whose boot
