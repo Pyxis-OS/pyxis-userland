@@ -25,6 +25,10 @@ void *malloc(size_t size);
 void free(void *pointer);
 void *calloc(size_t count, size_t size);
 void *realloc(void *pointer, size_t size);
+/* alignment must be a power of two no larger than 4096; smaller values give
+ * the usual 16 bytes. An unsupported alignment returns NULL with EINVAL. The
+ * result is released with free; realloc keeps only 16-byte alignment. */
+void *aligned_alloc(size_t alignment, size_t size);
 
 /* Borrowed immutable startup value; do not modify or free the result. */
 char *getenv(const char *name);
