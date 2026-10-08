@@ -6,7 +6,6 @@
 
 #define XFER_FRAME_MAX 4096
 #define XFER_CHUNK_MAX 2048
-#define XFER_FILE_MAX (16 * 1024 * 1024)
 #define XFER_NAME_MAX 200
 #define XFER_PATH_MAX 1024
 #define XFER_IDLE_NS UINT64_C(120000000000)
@@ -34,6 +33,8 @@ bool wire_status(struct wire *wire, const char *status, const char *fid, size_t 
 bool wire_next(struct wire *wire, struct packet *packet);
 bool wire_expect(struct wire *wire, const char *status, const char *fid,
     size_t size, bool extension);
+/* Report an unexpected peer status, such as a sender failing mid-file. */
+bool wire_peer_status(struct wire *wire, const struct packet *packet);
 void wire_cancel(struct wire *wire);
 bool wire_poll_cancel(struct wire *wire);
 bool base64_encode(const void *input, size_t size, char *output, size_t capacity);

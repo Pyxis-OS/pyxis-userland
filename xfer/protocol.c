@@ -396,6 +396,29 @@ static bool status_text(const struct packet *packet, char *text, size_t capacity
   return true;
 }
 
+static bool peer_failed(struct wire *wire, char *text)
+{
+  /* Status text is untrusted: display printable bytes only, outside OSC. */
+  for (char *cursor = text; *cursor; cursor++) {
+    if ((unsigned char)*cursor < 32 || (unsigned char)*cursor > 126) {
+      *cursor = '?';
+    }
+  }
+  char diagnostic[256];
+  snprintf(diagnostic, sizeof(diagnostic), "xfer: peer: %s\n", text);
+  term_print(&wire->terminal, diagnostic);
+  return wire_fail(wire, "Transfer peer refused or failed the request");
+}
+
+bool wire_peer_status(struct wire *wire, const struct packet *packet)
+{
+  char text[192];
+  if (!status_text(packet, text, sizeof(text))) {
+    return wire_fail(wire, "Expected a transfer status reply");
+  }
+  return peer_failed(wire, text);
+}
+
 bool wire_expect(struct wire *wire, const char *status, const char *fid,
     size_t size, bool extension)
 {
@@ -408,16 +431,7 @@ bool wire_expect(struct wire *wire, const char *status, const char *fid,
     return wire_fail(wire, "Expected a transfer status reply");
   }
   if (strcmp(text, status)) {
-    /* Status text is untrusted: display printable bytes only, outside OSC. */
-    for (char *cursor = text; *cursor; cursor++) {
-      if ((unsigned char)*cursor < 32 || (unsigned char)*cursor > 126) {
-        *cursor = '?';
-      }
-    }
-    char diagnostic[256];
-    snprintf(diagnostic, sizeof(diagnostic), "xfer: peer: %s\n", text);
-    term_print(&wire->terminal, diagnostic);
-    return wire_fail(wire, "Transfer peer refused or failed the request");
+    return peer_failed(wire, text);
   }
   if ((fid && (!packet.fid || strcmp(packet.fid, fid))) || (!fid && packet.fid)) {
     return wire_fail(wire, "Unexpected file identifier in status reply");
