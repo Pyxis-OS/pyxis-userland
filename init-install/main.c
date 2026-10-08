@@ -106,7 +106,7 @@ int main(int argc, char **argv)
     .roots = (uintptr_t)roots, .root_count = sizeof(roots) / sizeof(roots[0]),
     .argv = (uintptr_t)arguments, .argc = 1,
   };
-  struct space_definition space = {"install", "Install"};
+  struct space_definition space = {.name = "install", .title = "Install"};
   status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,
       &request, &child);
   if (status != CALL_OK) {

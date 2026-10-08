@@ -15,10 +15,12 @@ enum call_status space_set_title(handle_t space, const char *title);
  * N. See <abi/space.h> for the ceiling, BSP and failure rules. */
 enum call_status space_set_affinity(handle_t space, const uint64_t *cpus, uint64_t cpu_count);
 
-/* A new space's fixed name and initial title, as <abi/space.h> describes. */
+/* A new space's fixed name, initial title and creation flags. Trusted local
+ * mux startup uses SPACE_CREATE_TERMINAL_CONTROL; ordinary creation uses zero. */
 struct space_definition {
   const char *name;
   const char *title;
+  uint64_t flags;
 };
 
 /* CREATE authority on the space factory. Appends a space that never starts;

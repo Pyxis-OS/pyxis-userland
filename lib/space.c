@@ -59,6 +59,7 @@ static struct space_create_request create_request(const struct space_definition 
     .name_length = strlen(space->name),
     .title = (uintptr_t)space->title,
     .title_length = strlen(space->title),
+    .flags = space->flags,
   };
 }
 
