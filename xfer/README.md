@@ -50,9 +50,10 @@ terminal input during a transfer.
 OSC 5113 uses the serialized kitty keys, with a mandatory `px_sha256=1`
 negotiation and `sha256=HEX` file metadata. Stock kitty peers are refused because
 they do not implement this extension. Compression, deltas, multiple files,
-directories, links and resume are unsupported. Receive-side raw reads are
-buffered while the host waits for per-chunk PROGRESS; final finish/cancellation
-acknowledgements use exact reads to preserve subsequent shell input.
+directories, links and resume are unsupported. Raw reads are buffered while
+data moves in either direction: receiving reads data frames, sending reads the
+per-chunk PROGRESS replies. Final finish/cancellation acknowledgements use exact
+reads to preserve subsequent shell input.
 
 A receiver exclusively creates `.NAME.xfer-partial-ID` beside the destination
 when data starts, and writes each decoded chunk to it through the 64 KiB block
