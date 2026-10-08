@@ -30,7 +30,7 @@ libraries; compile Mbed TLS consumers with `MBEDTLS_CPPFLAGS` from its
 `share/mbedtls.mk`. `install` recreates a payload tree of selected programs, init and assets;
 it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
-SDK's shared shebang source. TLSF is vendored locally with its license and pin.
+SDK's shared shebang and US key layout sources. TLSF is vendored locally with its license and pin.
 
 The [native installer](installer/README.md) consumes the SDK's pinned npfs
 codecs and explicit install-mode disk/source grants. It is packaged normally;
