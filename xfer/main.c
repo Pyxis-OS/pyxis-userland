@@ -312,6 +312,9 @@ static bool receive_data(struct transfer *transfer, const char *fid)
     if (!wire_next(wire, &packet)) {
       return false;
     }
+    if (!strcmp(packet.action, "status")) {
+      return wire_peer_status(wire, &packet);
+    }
     bool last = !strcmp(packet.action, "end_data");
     size_t count;
     unsigned char bytes[XFER_CHUNK_MAX];

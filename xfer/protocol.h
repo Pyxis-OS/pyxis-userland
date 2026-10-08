@@ -33,6 +33,8 @@ bool wire_status(struct wire *wire, const char *status, const char *fid, size_t 
 bool wire_next(struct wire *wire, struct packet *packet);
 bool wire_expect(struct wire *wire, const char *status, const char *fid,
     size_t size, bool extension);
+/* Report an unexpected peer status, such as a sender failing mid-file. */
+bool wire_peer_status(struct wire *wire, const struct packet *packet);
 void wire_cancel(struct wire *wire);
 bool wire_poll_cancel(struct wire *wire);
 bool base64_encode(const void *input, size_t size, char *output, size_t capacity);
