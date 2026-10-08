@@ -184,7 +184,9 @@ enum call_status mux_render(struct mux *mux)
   append(&output, "\033[0m", 4);
   const struct mux_rect *rect = &mux->rectangles[mux->focused];
   if (rect->height > 1 && focused->emulator.cursor_visible && !focused->browsing &&
-      !mux->confirm && !mux->prefix && !focused->root_done) {
+      !mux->confirm && !mux->prefix && !focused->root_done &&
+      focused->emulator.cursor_row < rect->height - 1 &&
+      focused->emulator.cursor_column < rect->width) {
     position(&output, rect->y + 1 + focused->emulator.cursor_row,
         rect->x + focused->emulator.cursor_column);
     append(&output, "\033[?25h", 6);

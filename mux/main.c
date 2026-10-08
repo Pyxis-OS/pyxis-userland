@@ -19,6 +19,17 @@ static void notice(struct mux *mux, const char *text)
   mux->dirty = true;
 }
 
+static size_t pane_columns(struct mux_rect rect)
+{
+  return rect.width < MUX_MIN_COLUMNS ? MUX_MIN_COLUMNS : rect.width;
+}
+
+static size_t pane_rows(struct mux_rect rect)
+{
+  size_t rows = rect.height > 1 ? rect.height - 1 : 0;
+  return rows < MUX_MIN_ROWS ? MUX_MIN_ROWS : rows;
+}
+
 static enum call_status place(struct mux *mux)
 {
   size_t columns = mux->geometry.columns, rows = mux->geometry.rows;
@@ -40,12 +51,12 @@ static enum call_status place(struct mux *mux)
     if (!pane->used || !rect->width || !rect->height) {
       continue;
     }
-    size_t height = rect->height > 1 ? rect->height - 1 : 1;
-    if (!mux_emulator_resize(&pane->emulator, rect->width, height)) {
+    size_t width = pane_columns(*rect), height = pane_rows(*rect);
+    if (!mux_emulator_resize(&pane->emulator, width, height)) {
       return CALL_NO_MEMORY;
     }
     if (!pane->root_done) {
-      enum call_status status = terminal_resize(pane->session.attachment, rect->width, height);
+      enum call_status status = terminal_resize(pane->session.attachment, width, height);
       if (status != CALL_OK) {
         return status;
       }
@@ -58,13 +69,13 @@ static enum call_status place(struct mux *mux)
 static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect)
 {
   struct mux_pane *pane = &mux->panes[slot];
-  size_t height = rect.height > 1 ? rect.height - 1 : 1;
-  if (!mux_emulator_init(&pane->emulator, rect.width, height)) {
+  size_t width = pane_columns(rect), height = pane_rows(rect);
+  if (!mux_emulator_init(&pane->emulator, width, height)) {
     notice(mux, "Cannot allocate pane storage");
     return false;
   }
   mux_emulator_set_tab_width(&pane->emulator, mux->tab_width);
-  enum call_status status = mux_session_start(rect.width, height, mux->tab_width, &pane->session);
+  enum call_status status = mux_session_start(width, height, mux->tab_width, &pane->session);
   if (status != CALL_OK) {
     mux_emulator_destroy(&pane->emulator);
     snprintf(mux->notice, sizeof(mux->notice), "Cannot start pane (status %u)", status);
