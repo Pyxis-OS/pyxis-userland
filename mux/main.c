@@ -280,7 +280,8 @@ static bool consume_input(struct mux *mux, uint64_t now)
         continue;
       }
       mux->escape[mux->escape_size++] = byte;
-      mux->escape_deadline = now + MUX_ESCAPE_NS;
+      mux->escape_deadline = now > UINT64_MAX - MUX_ESCAPE_NS ?
+          UINT64_MAX : now + MUX_ESCAPE_NS;
       if (mux->escape_size == 2 && (byte == '[' || byte == 'O')) {
         continue;
       }
@@ -296,7 +297,8 @@ static bool consume_input(struct mux *mux, uint64_t now)
       if (byte == 27) {
         mux->escape[0] = byte;
         mux->escape_size = 1;
-        mux->escape_deadline = now + MUX_ESCAPE_NS;
+        mux->escape_deadline = now > UINT64_MAX - MUX_ESCAPE_NS ?
+          UINT64_MAX : now + MUX_ESCAPE_NS;
       } else {
         mux->prefix = false;
         command(mux, byte);
