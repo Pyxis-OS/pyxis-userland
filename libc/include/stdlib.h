@@ -12,6 +12,21 @@ extern "C" {
 #define RAND_MAX 32767
 #define MB_CUR_MAX 4
 
+typedef struct {
+  int quot;
+  int rem;
+} div_t;
+
+typedef struct {
+  long quot;
+  long rem;
+} ldiv_t;
+
+typedef struct {
+  long long quot;
+  long long rem;
+} lldiv_t;
+
 /* Stateless UTF-8 conversion of one Unicode scalar. NULL text resets (returns
  * zero); NUL returns zero and stores L'\0'. Invalid or incomplete input returns
  * -1 with EILSEQ and leaves output unchanged. output may be NULL. */
@@ -42,8 +57,15 @@ char *getenv(const char *name);
  * native creation may leave a file. Success preserves errno. */
 int mkstemp(char *name_template);
 
-/* The absolute value must be representable as int (INT_MIN is excluded). */
+/* The absolute value must be representable (the type's minimum is excluded). */
 int abs(int value);
+long labs(long value);
+long long llabs(long long value);
+/* Truncating division; the divisor must be nonzero and the quotient
+ * representable. */
+div_t div(int numerator, int denominator);
+ldiv_t ldiv(long numerator, long denominator);
+lldiv_t lldiv(long long numerator, long long denominator);
 
 /* ASCII whitespace/sign and bases 2..36; base 0 detects decimal, octal, 0x or
  * C23 0b prefixes. No digits returns zero and leaves *end at text. Overflow

@@ -54,6 +54,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/copysignl.c \
                 third_party/musl/src/math/x86_64/fmodl.c \
                 third_party/musl/src/math/ceil.c \
+                third_party/musl/src/math/ceilf.c \
                 third_party/musl/src/math/x86_64/sqrt.c \
                 third_party/musl/src/math/sin.c \
                 third_party/musl/src/math/cos.c \

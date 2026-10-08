@@ -26,6 +26,14 @@ typedef double double_t;
 #define HUGE_VAL ((double)INFINITY)
 #define HUGE_VALL ((long double)INFINITY)
 
+/* fpclassify results. libc does not provide the C classification macros yet;
+ * C++ code gets std::fpclassify and the rest from libc++'s <cmath>. */
+#define FP_NAN 0
+#define FP_INFINITE 1
+#define FP_ZERO 2
+#define FP_SUBNORMAL 3
+#define FP_NORMAL 4
+
 #define MATH_ERRNO 1
 #define MATH_ERREXCEPT 2
 #define math_errhandling MATH_ERREXCEPT
@@ -48,6 +56,7 @@ long double ldexpl(long double value, int exponent);
 long double fmodl(long double value, long double divisor);
 double fabs(double value);
 double ceil(double value);
+float ceilf(float value);
 /* Correctly rounded, using SSE2 sqrtsd. */
 double sqrt(double value);
 /* Radians. Large arguments use full-precision reduction modulo pi/2. */

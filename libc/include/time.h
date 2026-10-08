@@ -31,12 +31,15 @@ struct tm {
 };
 
 #define TIME_UTC 1
+#define TIME_MONOTONIC 2
 
 /* Borrow the named startup clock with READ authority. time returns -1 on
  * failure (also a valid pre-epoch timestamp); errno is preserved on success.
- * timespec_get supports only TIME_UTC, returns it on success, otherwise zero
- * with errno set and destination unchanged. Fractional units do not imply
- * nanosecond accuracy: the boot seed is approximate and no resync exists. */
+ * timespec_get supports TIME_UTC and TIME_MONOTONIC, returns the base on
+ * success, otherwise zero with errno set and destination unchanged. UTC
+ * fractional units do not imply nanosecond accuracy: the boot seed is
+ * approximate and no resync exists. Monotonic time counts from an epoch set
+ * during boot and need not include time while a VM is paused or suspended. */
 time_t time(time_t *result);
 int timespec_get(struct timespec *result, int base);
 /* Seconds between end and beginning, without overflowing time_t arithmetic. */
