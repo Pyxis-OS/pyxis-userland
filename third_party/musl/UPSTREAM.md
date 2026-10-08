@@ -16,6 +16,7 @@ The following files are copied without changes, including upstream formatting:
 - `src/math/fabsl.c`
 - `src/math/copysignl.c`
 - `src/math/x86_64/fmodl.c`
+- `src/math/modf.c` (libpng's conventional floating-point sCAL prerequisite)
 
 Local adaptation: `src/internal/libm.h` retains musl's little-endian 80-bit
 `ldshape` union, with Pyxis includes and compile-time layout checks, plus the

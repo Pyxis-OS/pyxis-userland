@@ -46,6 +46,8 @@ double floor(double value);
 /* Nearest integer, ties away from zero, independent of the FP rounding mode. */
 double round(double value);
 double fmod(double value, double divisor);
+/* Store the integral part truncated toward zero and return the signed fraction. */
+double modf(double value, double *integral);
 double pow(double base, double exponent);
 double frexp(double value, int *exponent);
 double ldexp(double value, int exponent);
