@@ -68,6 +68,11 @@ void path_context_close(struct path_context *context);
 enum call_status path_resolve(const struct path_context *context, const char *path,
     uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
 
+/* Same owned-handle lookup, but provider routes return BAD_OPERATION without
+ * issuing OPEN. Binding discovery, ambiguity and traversal errors are unchanged. */
+enum call_status path_resolve_native(const struct path_context *context, const char *path,
+    uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
+
 /* Shared file open/create route for libc and shell redirects. Provider opens
  * never fall back to directory creation, including after provider NOT_FOUND.
  * Native creation occurs only after an absent file lookup, with CREATE on the

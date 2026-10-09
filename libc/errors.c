@@ -63,6 +63,7 @@ char *strerror(int error)
   case ESPIPE: return "Stream is not seekable";
   case ETIMEDOUT: return "Operation timed out";
   case ENOTEMPTY: return "Directory not empty";
+  case ENOTDIR: return "Not a directory";
   default: return "Unknown error";
   }
 }

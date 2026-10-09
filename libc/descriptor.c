@@ -88,7 +88,7 @@ static int reserve(void)
   return (int)index;
 }
 
-static int release_handle(handle_t handle)
+int descriptor_release_handle(handle_t handle)
 {
   struct syscall_result result = syscall_close(handle);
   if (result.status >= CALL_STATUS_COUNT || result.reply_size) {
@@ -143,7 +143,7 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
   if (status != CALL_OK) {
     int error = libc_call_errno(status);
     if (handle != HANDLE_INVALID) {
-      release_handle(handle);
+      descriptor_release_handle(handle);
     }
     entries[descriptor] = (struct descriptor_entry){0};
     return fail(error);
@@ -187,7 +187,7 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
   if (status != CALL_OK) {
     int error = libc_call_errno(status);
     if (handle != HANDLE_INVALID) {
-      release_handle(handle);
+      descriptor_release_handle(handle);
     }
     entries[descriptor] = (struct descriptor_entry){0};
     return fail(error);
@@ -245,7 +245,7 @@ int descriptor_close(int descriptor)
   *entry = (struct descriptor_entry){0};
   /* Never retry an uncertain release or reconnect a FILE after slot reuse.
    * Any residual native entry is reclaimed by kernel process teardown. */
-  return release_handle(handle);
+  return descriptor_release_handle(handle);
 }
 
 void descriptor_finish(void)
