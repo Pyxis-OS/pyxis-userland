@@ -64,7 +64,8 @@ static int hit_pane(const struct mux *mux, int64_t column, int64_t row, bool con
   return -1;
 }
 
-static bool select_at(struct mux *mux, int64_t column, int64_t row, bool extend)
+static bool select_at(struct mux *mux, int64_t column, int64_t row, bool extend,
+    bool activate)
 {
   struct mux_pane *pane = &mux->panes[mux->selection_pane];
   const struct mux_rect *rect = &mux->rectangles[mux->selection_pane];
@@ -94,7 +95,7 @@ static bool select_at(struct mux *mux, int64_t column, int64_t row, bool extend)
     x = (int64_t)width - 1;
   }
   return mux_emulator_select(&pane->emulator, pane->scrollback, (size_t)y, (size_t)x,
-      rect->width, extend);
+      rect->width, extend, activate);
 }
 
 static void pointer_input(struct mux *mux, const struct pointer_event *event)
@@ -125,15 +126,25 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
       !(mux->pointer_buttons & POINTER_BUTTON_LEFT);
   mux->pointer_buttons = event->buttons;
   if (mux->dragging) {
-    if (!select_at(mux, column, row, true)) {
-      mux->dragging = false;
+    struct mux_emulator *emulator = &mux->panes[mux->selection_pane].emulator;
+    bool held = (event->buttons & POINTER_BUTTON_LEFT) != 0;
+    bool moved = event->x < 0 || event->y < 0 ||
+        column != mux->drag_column || row != mux->drag_row;
+    if (held || emulator->selection.active) {
+      if (!select_at(mux, column, row, true, held && moved)) {
+        mux->dragging = false;
+      }
+    } else {
+      mux_emulator_clear_selection(emulator);
     }
-    if (!(event->buttons & POINTER_BUTTON_LEFT)) {
+    if (!held) {
       mux->dragging = false;
     }
     mux->dirty = true;
-  } else if (pressed && event->x >= 0 && event->y >= 0) {
-    int pane = hit_pane(mux, column, row, false);
+  } else if (pressed) {
+    mux_pointer_clear_selection(mux);
+    mux->pointer_buttons = event->buttons;
+    int pane = event->x >= 0 && event->y >= 0 ? hit_pane(mux, column, row, false) : -1;
     if (pane >= 0) {
       if (mux->focused != (unsigned)pane) {
         mux->prefix = mux->confirm = false;
@@ -142,10 +153,10 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
       mux->focused = (unsigned)pane;
       mux->dirty = true;
       if (hit_pane(mux, column, row, true) >= 0) {
-        mux_pointer_clear_selection(mux);
-        mux->pointer_buttons = event->buttons;
         mux->selection_pane = (unsigned)pane;
-        mux->dragging = select_at(mux, column, row, false);
+        mux->drag_column = column;
+        mux->drag_row = row;
+        mux->dragging = select_at(mux, column, row, false, false);
       }
     }
   }

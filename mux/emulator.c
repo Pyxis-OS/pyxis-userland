@@ -38,10 +38,10 @@ static bool point_before(struct mux_selection_point a, struct mux_selection_poin
   return a.row < b.row || (a.row == b.row && a.column < b.column);
 }
 
-static bool selected_point(const struct mux_emulator *emulator,
+static bool selection_contains(const struct mux_emulator *emulator,
     struct mux_selection_point point)
 {
-  if (!emulator->selection.active || point.column >= emulator->selection.columns) {
+  if (point.column >= emulator->selection.columns) {
     return false;
   }
   struct mux_selection_point first = emulator->selection.anchor;
@@ -60,7 +60,9 @@ static void write_cell(struct mux_emulator *emulator, size_t index, struct mux_c
     .row = emulator->scrolled_rows + index / emulator->columns,
     .column = index % emulator->columns,
   };
-  if (emulator->cells[index].character != cell.character && selected_point(emulator, point)) {
+  if (emulator->cells[index].character != cell.character &&
+      (emulator->selection.active || emulator->selection.pending) &&
+      selection_contains(emulator, point)) {
     mux_emulator_clear_selection(emulator);
   }
   emulator->cells[index] = cell;
@@ -182,7 +184,7 @@ const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
 }
 
 bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset,
-    size_t row, size_t column, size_t visible_columns, bool extend)
+    size_t row, size_t column, size_t visible_columns, bool extend, bool activate)
 {
   size_t width;
   if (!mux_emulator_row(emulator, scrollback_offset, row, &width) || column >= width ||
@@ -200,9 +202,14 @@ bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset
   if (!extend) {
     emulator->selection.anchor = point;
     emulator->selection.columns = visible_columns;
-    emulator->selection.active = true;
-  } else if (!emulator->selection.active) {
+    emulator->selection.active = false;
+    emulator->selection.pending = true;
+  } else if (!emulator->selection.active && !emulator->selection.pending) {
     return false;
+  }
+  if (extend && activate) {
+    emulator->selection.active = true;
+    emulator->selection.pending = false;
   }
   emulator->selection.end = point;
   return true;
@@ -214,7 +221,7 @@ bool mux_emulator_selected(const struct mux_emulator *emulator,
   if (scrollback_offset > emulator->history_count) {
     scrollback_offset = emulator->history_count;
   }
-  return selected_point(emulator, (struct mux_selection_point){
+  return emulator->selection.active && selection_contains(emulator, (struct mux_selection_point){
     .row = emulator->scrolled_rows - scrollback_offset + row,
     .column = column,
   });
@@ -245,7 +252,7 @@ static void newline(struct mux_emulator *emulator)
   }
   uint64_t oldest = emulator->scrolled_rows - emulator->history_count;
   if (emulator->scrolled_rows > UINT64_MAX - emulator->rows ||
-      (emulator->selection.active &&
+      ((emulator->selection.active || emulator->selection.pending) &&
        (emulator->selection.anchor.row < oldest || emulator->selection.end.row < oldest))) {
     mux_emulator_clear_selection(emulator);
   }

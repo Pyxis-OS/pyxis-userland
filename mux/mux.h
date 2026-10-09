@@ -29,6 +29,7 @@ struct mux {
   handle_t pointer;
   bool pointer_owned, dragging;
   unsigned selection_pane;
+  int64_t drag_column, drag_row;
   uint32_t pointer_buttons;
   struct terminal_pointer_geometry pointer_geometry;
   struct console_size_reply geometry;
