@@ -47,13 +47,18 @@ drains replies for at most five seconds. Unsupported or vanished peers therefore
 fail without an indefinite wait. No other program should consume the named
 terminal input during a transfer.
 
-OSC 5113 uses the serialized kitty keys, with a mandatory `px_sha256=1`
-negotiation and `sha256=HEX` file metadata. Stock kitty peers are refused because
-they do not implement this extension. Compression, deltas, multiple files,
-directories, links and resume are unsupported. Raw reads are buffered while
-data moves in either direction: receiving reads data frames, sending reads the
-per-chunk PROGRESS replies. Final finish/cancellation acknowledgements use exact
-reads to preserve subsequent shell input.
+OSC 5113 uses the serialized kitty keys, with a mandatory `px_xfer=2`
+negotiation and `sha256=HEX` file metadata. Stock kitty peers, and
+`pyxis-remote` builds from another protocol revision, are refused. Compression,
+deltas, multiple files, directories, links and resume are unsupported.
+
+Data is windowed. A sender may have at most 64 KiB of file data unacknowledged,
+and a receiver replies with a cumulative PROGRESS offset once 16 KiB has arrived
+since its previous reply. Raw reads are buffered while data moves in either
+direction: receiving reads data frames, sending reads the replies. Final
+finish/cancellation acknowledgements use exact reads to preserve subsequent
+shell input. Cancellation and failures use the same in-order handshake as
+before, so at most one window of data in flight is discarded.
 
 A receiver exclusively creates `.NAME.xfer-partial-ID` beside the destination
 when data starts, and writes each decoded chunk to it through the 64 KiB block

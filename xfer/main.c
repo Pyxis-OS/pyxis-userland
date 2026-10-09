@@ -143,30 +143,36 @@ static bool send_file(struct transfer *transfer, const char *path)
   char encoded_name[(XFER_NAME_MAX + 2) / 3 * 4 + 1];
   char fields[XFER_FRAME_MAX];
   base64_encode(name, strlen(name), encoded_name, sizeof(encoded_name));
-  snprintf(fields, sizeof(fields), "n=%s;sz=%zu;sha256=%s;px_sha256=1;ft=regular;tt=simple;zip=none",
+  snprintf(fields, sizeof(fields), "n=%s;sz=%zu;sha256=%s;px_xfer=2;ft=regular;tt=simple;zip=none",
       encoded_name, transfer->size, transfer->digest);
   wire->active = true;
-  if (!wire_send(wire, "send", fields) || !wire_expect(wire, "OK", NULL, 0, true)) {
+  if (!wire_send(wire, "send", fields) || !wire_expect(wire, "OK", NULL, true)) {
     return false;
   }
   snprintf(fields, sizeof(fields), "fid=f1;n=%s;sz=%zu;sha256=%s;ft=regular;tt=simple;zip=none",
       encoded_name, transfer->size, transfer->digest);
-  if (!wire_send(wire, "file", fields) || !wire_expect(wire, "STARTED", "f1", 0, false)) {
+  if (!wire_send(wire, "file", fields) || !wire_expect(wire, "STARTED", "f1", false)) {
     return false;
   }
   if (!digest_begin()) {
     return transfer_fail(transfer, "EIO", "SHA-256 failed");
   }
-  /* The host sends nothing but one reply per chunk, so reading replies in
+  /* The host sends nothing but replies until the final OK, so reading them in
    * blocks consumes no shell input. */
   wire->buffered = true;
-  size_t offset = 0;
+  size_t offset = 0, acknowledged = 0;
+  bool finished = false;
   do {
     size_t count = transfer->size - offset;
     if (count > XFER_CHUNK_MAX) {
       count = XFER_CHUNK_MAX;
     }
     bool last = offset + count == transfer->size;
+    while (offset - acknowledged + count > XFER_WINDOW) {
+      if (!wire_data_reply(wire, "f1", &acknowledged, offset, false, &finished)) {
+        return false;
+      }
+    }
     unsigned char bytes[XFER_CHUNK_MAX];
     if (!source_read(transfer, bytes, count)) {
       return false;
@@ -199,16 +205,19 @@ static bool send_file(struct transfer *transfer, const char *path)
       return false;
     }
     offset += count;
-    if (!wire_expect(wire, last ? "OK" : "PROGRESS", "f1", offset, false)) {
-      return false;
-    }
     if (last) {
       break;
     }
   } while (offset < transfer->size);
+  /* Replies still in flight precede the host's OK after verification. */
+  while (!finished) {
+    if (!wire_data_reply(wire, "f1", &acknowledged, offset, true, &finished)) {
+      return false;
+    }
+  }
   /* No read-ahead after finish: input following the final ACK belongs to shell. */
   wire->buffered = false;
-  if (!wire_send(wire, "finish", "") || !wire_expect(wire, "OK", NULL, 0, false)) {
+  if (!wire_send(wire, "finish", "") || !wire_expect(wire, "OK", NULL, false)) {
     return false;
   }
   wire->active = false;
@@ -242,7 +251,7 @@ static bool receive_catalog(struct transfer *transfer, char host_name[XFER_PATH_
 {
   struct packet packet;
   struct wire *wire = &transfer->wire;
-  if (!wire_expect(wire, "OK", NULL, 0, true) || !wire_next(wire, &packet)) {
+  if (!wire_expect(wire, "OK", NULL, true) || !wire_next(wire, &packet)) {
     return false;
   }
   char actual_fid[64];
@@ -267,7 +276,7 @@ static bool receive_catalog(struct transfer *transfer, char host_name[XFER_PATH_
   }
   memcpy(transfer->digest, packet.sha256, sizeof(transfer->digest));
   strcpy(fid, actual_fid);
-  return wire_expect(wire, "OK", NULL, 0, false);
+  return wire_expect(wire, "OK", NULL, false);
 }
 
 static bool stage_create(struct transfer *transfer)
@@ -314,7 +323,7 @@ static bool stage_append(struct transfer *transfer, const void *bytes, size_t si
 static bool receive_data(struct transfer *transfer, const char *fid)
 {
   struct wire *wire = &transfer->wire;
-  size_t offset = 0;
+  size_t offset = 0, acknowledged = 0;
   for (;;) {
     struct packet packet;
     if (!wire_next(wire, &packet)) {
@@ -352,8 +361,11 @@ static bool receive_data(struct transfer *transfer, const char *fid)
       }
       return wire_poll_cancel(wire);
     }
-    if (!wire_status(wire, "PROGRESS", fid, offset)) {
-      return false;
+    if (offset - acknowledged >= XFER_REPLY_INTERVAL) {
+      if (!wire_status(wire, "PROGRESS", fid, offset)) {
+        return false;
+      }
+      acknowledged = offset;
     }
   }
 }
@@ -407,7 +419,7 @@ static bool receive_file(struct transfer *transfer, const char *host_path, const
   base64_encode(host_path, strlen(host_path), encoded_name, sizeof(encoded_name));
   wire->active = true;
   wire->buffered = true;
-  if (!wire_send(wire, "receive", "sz=1;px_sha256=1;tt=simple;zip=none")) {
+  if (!wire_send(wire, "receive", "sz=1;px_xfer=2;tt=simple;zip=none")) {
     return false;
   }
   snprintf(fields, sizeof(fields), "fid=q1;n=%s", encoded_name);
@@ -433,7 +445,7 @@ static bool receive_file(struct transfer *transfer, const char *host_path, const
   }
   /* No read-ahead after finish: input following the final ACK belongs to shell. */
   wire->buffered = false;
-  if (!wire_send(wire, "finish", "") || !wire_expect(wire, "OK", NULL, 0, false)) {
+  if (!wire_send(wire, "finish", "") || !wire_expect(wire, "OK", NULL, false)) {
     return false;
   }
   wire->active = false;
