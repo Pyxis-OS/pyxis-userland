@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <abi/syscall.h>
 
 #define MUX_HISTORY_ROWS 1024
 #define MUX_CSI_PARAMETERS 4
@@ -86,5 +87,9 @@ bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset
 bool mux_emulator_selected(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t row, size_t column);
 void mux_emulator_clear_selection(struct mux_emulator *emulator);
+/* Freeze printable selected glyphs into owned text. Trim trailing spaces per
+ * physical row and join rows with LF. Caller frees the returned allocation. */
+enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator,
+    size_t limit, char **text, size_t *length);
 
 #endif

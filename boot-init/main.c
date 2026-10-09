@@ -444,7 +444,9 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
 {
   struct space_definition definition = {
     .name = space->name, .title = space->title,
-    .flags = space->multiplexer ? SPACE_CREATE_TERMINAL_CONTROL : 0,
+    /* Trusted mux startup delegates each layer independently of UI control. */
+    .flags = space->multiplexer ? SPACE_CREATE_TERMINAL_CONTROL |
+        SPACE_CREATE_CLIPBOARD_LOCAL | SPACE_CREATE_CLIPBOARD_SHARED : 0,
   };
   char text[SPACE_REASON_MAX + 1];
   uint64_t *cpus = calloc(cpu_words(authority->cpu_count), sizeof(*cpus));

@@ -5,6 +5,7 @@
 #include <abi/console.h>
 #include <abi/syscall.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 /* Unbuffered capability output. Preserves native call statuses. *written is
  * zero on failure and the actual transfer count on success; a nonempty write
@@ -51,5 +52,16 @@ enum call_status console_arm_interrupt(handle_t input, handle_t *armed);
 /* READ authority. On success *passthrough is a new handle; while any such
  * handle exists, Ctrl+C on this input is ordinary data. Close it to withdraw. */
 enum call_status console_passthrough(handle_t input, handle_t *passthrough);
+
+/* Exclusive process-owned stock-reader opt-in. Grant copies never carry the
+ * epoch; output must name the same terminal with WRITE authority. */
+enum call_status console_paste_register(handle_t input, handle_t output, uint64_t *epoch);
+/* Atomically declare the decoder boundary and read one ordinary byte or an
+ * owned paste record. INPUT never reads ahead; DATA may be short. */
+enum call_status console_paste_read(handle_t input, uint64_t epoch, void *bytes,
+    size_t capacity, uint64_t timeout_ms, bool boundary,
+    struct console_paste_read_reply *record);
+enum call_status console_paste_ack(handle_t input, uint64_t epoch, uint64_t transaction_id);
+enum call_status console_paste_release(handle_t input, uint64_t epoch);
 
 #endif

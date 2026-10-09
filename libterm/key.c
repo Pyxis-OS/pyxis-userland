@@ -1,4 +1,5 @@
-#include <term.h>
+#include "input.h"
+#include <console.h>
 #include <clock.h>
 #include <wait.h>
 
@@ -62,39 +63,85 @@ static bool decode_byte(struct term_event_reader *reader, unsigned char byte, un
   return true;
 }
 
+static enum call_status read_input(struct term_event_reader *reader,
+    struct term_event *event, uint64_t timeout_ms, unsigned char *byte, size_t *count,
+    bool *framing)
+{
+  *framing = false;
+  if (!reader->receiver_epoch) {
+    return timeout_ms == CONSOLE_WAIT_FOREVER ?
+        term_read(reader->term, byte, 1, count) :
+        term_read_timeout(reader->term, byte, 1, timeout_ms, count);
+  }
+  struct console_paste_read_reply record;
+  enum call_status status = console_paste_read(reader->term->input, reader->receiver_epoch,
+      event->bytes, sizeof(event->bytes), timeout_ms, reader->state == TEXT, &record);
+  if (status != CALL_OK) {
+    return status;
+  }
+  *count = record.length;
+  if (record.kind == CONSOLE_PASTE_INPUT) {
+    *byte = record.length ? event->bytes[0] : 0;
+    return CALL_OK;
+  }
+  *framing = true;
+  event->transaction_id = record.transaction_id;
+  event->paste_status = record.status;
+  event->length = record.length;
+  switch (record.kind) {
+  case CONSOLE_PASTE_BEGIN: event->kind = TERM_EVENT_PASTE_BEGIN; break;
+  case CONSOLE_PASTE_DATA: event->kind = TERM_EVENT_PASTE_DATA; break;
+  case CONSOLE_PASTE_END: event->kind = TERM_EVENT_PASTE_END; break;
+  case CONSOLE_PASTE_CANCEL: event->kind = TERM_EVENT_PASTE_CANCEL; break;
+  }
+  return CALL_OK;
+}
+
+static enum call_status read_decoded_key(struct term_event_reader *reader,
+    struct term_event *event, bool timed, uint32_t timeout_ms)
+{
+  *event = (struct term_event){.kind = TERM_EVENT_KEY, .key = TERM_KEY_UNKNOWN};
+  for (;;) {
+    unsigned char byte;
+    size_t count;
+    bool framing;
+    uint64_t timeout = reader->state == TEXT ?
+        (timed ? timeout_ms : CONSOLE_WAIT_FOREVER) : ESCAPE_TIMEOUT_MS;
+    enum call_status status = read_input(reader, event, timeout, &byte, &count, &framing);
+    if (status == CALL_TIMED_OUT) {
+      if (reader->state == TEXT) {
+        return CALL_TIMED_OUT;
+      }
+      event->key = reader->state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
+      reader->state = TEXT;
+      return CALL_OK;
+    }
+    if (status != CALL_OK || framing) {
+      return status;
+    }
+    if (!count) {
+      reader->state = TEXT;
+      event->key = TERM_KEY_EOF;
+      return CALL_OK;
+    }
+    if (decode_byte(reader, byte, &event->key)) {
+      reader->state = TEXT;
+      return CALL_OK;
+    }
+  }
+}
+
 static enum call_status read_key(struct terminal *term, unsigned *key,
     bool timed, uint32_t timeout_ms)
 {
   if (!term || !key) {
     return CALL_BAD_REQUEST;
   }
-  *key = TERM_KEY_UNKNOWN;
-  struct term_event_reader reader = {0};
-  for (;;) {
-    unsigned char byte;
-    size_t count;
-    enum call_status status = reader.state == TEXT ?
-        (timed ? term_read_timeout(term, &byte, 1, timeout_ms, &count) :
-                 term_read(term, &byte, 1, &count)) :
-        term_read_timeout(term, &byte, 1, ESCAPE_TIMEOUT_MS, &count);
-    if (status == CALL_TIMED_OUT) {
-      if (reader.state == TEXT) {
-        return CALL_TIMED_OUT;
-      }
-      *key = reader.state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
-      return CALL_OK;
-    }
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (!count) {
-      *key = TERM_KEY_EOF;
-      return CALL_OK;
-    }
-    if (decode_byte(&reader, byte, key)) {
-      return CALL_OK;
-    }
-  }
+  struct term_event_reader reader = {.term = term};
+  struct term_event event;
+  enum call_status status = read_decoded_key(&reader, &event, timed, timeout_ms);
+  *key = event.key;
+  return status;
 }
 
 enum call_status term_read_key(struct terminal *term, unsigned *key)
@@ -158,13 +205,32 @@ static enum call_status read_event(struct term_event_reader *reader,
         deadline = now + WAIT_MAX_WAIT_NS;
       }
     }
+    unsigned char byte;
+    size_t count = 0;
+    bool framing = false;
+    /* Publish the decoder boundary before sleeping for native readiness.
+     * Returning INPUT closes it atomically, before this decoder sees the byte. */
+    enum call_status input_status = reader->receiver_epoch ?
+        read_input(reader, event, 0, &byte, &count, &framing) : CALL_TIMED_OUT;
+    if (input_status != CALL_OK && input_status != CALL_TIMED_OUT) {
+      return input_status;
+    }
+    if (framing) {
+      return CALL_OK;
+    }
     struct wait_interest interests[] = {
       {.handle = reader->term->input, .events = WAIT_READABLE},
       {.handle = reader->term->output, .events = WAIT_RESIZED,
        .observed_generation = reader->size.generation},
     };
     uint64_t events[2];
-    status = wait_many(interests, 2, deadline, events);
+    if (input_status == CALL_OK) {
+      events[0] = WAIT_READABLE;
+      events[1] = 0;
+      status = CALL_OK;
+    } else {
+      status = wait_many(interests, 2, deadline, events);
+    }
     if (status == CALL_TIMED_OUT) {
       if (reader->state != TEXT) {
         event->key = reader->state == ESCAPE ? 27 : TERM_KEY_UNKNOWN;
@@ -204,9 +270,11 @@ static enum call_status read_event(struct term_event_reader *reader,
       }
       continue;
     }
-    unsigned char byte;
-    size_t count;
-    status = term_read_timeout(reader->term, &byte, 1, 0, &count);
+    status = input_status == CALL_OK ? CALL_OK :
+        read_input(reader, event, 0, &byte, &count, &framing);
+    if (status == CALL_OK && framing) {
+      return CALL_OK;
+    }
     if (status == CALL_TIMED_OUT) {
       continue; /* Another reader may have consumed the observed byte. */
     }
@@ -242,4 +310,11 @@ enum call_status term_read_event_timeout(struct term_event_reader *reader,
     uint32_t timeout_ms, struct term_event *event)
 {
   return read_event(reader, event, true, timeout_ms);
+}
+
+enum call_status term_read_editor_event(struct term_event_reader *reader,
+    struct term_event *event)
+{
+  return reader->clock == HANDLE_INVALID ? read_decoded_key(reader, event, false, 0) :
+      term_read_event(reader, event);
 }
