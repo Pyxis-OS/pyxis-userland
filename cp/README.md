@@ -47,10 +47,12 @@ created exclusively, so an existing target of any kind fails that operand before
 anything changes. Files are staged and renamed as above into directories created
 first; empty directories are copied. File operands still replace.
 
-Before copying data, cp creates a `.cp-tree-` plus 16 hex digit marker in the new
-root and walks the source tree. Finding the marker means the destination lies inside
-the source, since no object identity exists to compare; cp removes the marker and the
-new root and fails. The walk also enforces the limits (32 levels below the root,
+Before copying data, cp creates a `.cp-tree-` marker with 16 random hex digits in the
+new root and walks the source tree. The name comes from the clock and random grants
+that libc `mkstemp` uses (a tree copy fails without them) and is retried on
+ALREADY_EXISTS, so no other run's leftover marker can match it. Finding it means the
+destination lies inside the source, since no object identity exists to compare; cp
+removes the marker and the new root and fails. The walk also enforces the limits (32 levels below the root,
 65,536 entries, 255-byte names) and rejects symbolic links, special and unknown
 entries, so those failures normally occur before any file is copied. The copy pass
 checks them again, because enumeration is live. An enumeration CHANGED outcome fails

@@ -1,8 +1,11 @@
 #include "cp.h"
 #include "../common/directory.h"
+#include <clock.h>
 #include <file.h>
 #include <handle.h>
 #include <inttypes.h>
+#include <random.h>
+#include <startup.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -12,7 +15,10 @@
 #define TREE_MAX_DEPTH 32
 #define TREE_MAX_ENTRIES 65536
 #define TREE_NAME_BYTES CP_NAME_BYTES
-#define SENTINEL_BYTES 26
+#define SENTINEL_PREFIX ".cp-tree-"
+#define SENTINEL_RANDOM_BYTES 8
+#define SENTINEL_ATTEMPTS 64
+#define SENTINEL_BYTES (sizeof(SENTINEL_PREFIX) + 2 * SENTINEL_RANDOM_BYTES)
 #define PATH_BYTES CP_PATH_BYTES
 
 /* One open directory pair. Level 0 is the root, whose handles the caller
@@ -27,7 +33,7 @@ struct level {
 struct tree {
   const char *source;
   const char *destination;
-  const char *sentinel;
+  char sentinel[SENTINEL_BYTES];
   bool copy;
   uint64_t entries;
   uint64_t files;
@@ -35,7 +41,6 @@ struct tree {
 };
 
 static struct level levels[TREE_MAX_DEPTH + 1];
-static uint64_t next_sentinel;
 static char source_path[PATH_BYTES];
 static char destination_path[PATH_BYTES];
 
@@ -155,7 +160,7 @@ static enum cp_result walk(struct tree *tree, handle_t source_root, handle_t des
     }
     if (!tree->copy && !strcmp(entry, tree->sentinel)) {
       fail_text(tree, depth, entry,
-          "Destination is inside the source, or this is a leftover cp sentinel");
+          "Destination is inside the source");
       result = CP_FAILED;
       break;
     }
@@ -213,6 +218,35 @@ static enum cp_result walk(struct tree *tree, handle_t source_root, handle_t des
   return result;
 }
 
+/* A fresh unpredictable marker name from the native random grant, the source
+ * libc's mkstemp uses. A leftover marker from another run cannot match it. */
+static enum call_status generate_sentinel(char *name)
+{
+  handle_t clock = startup_resource("clock");
+  handle_t random = startup_resource("random");
+  if (clock == HANDLE_INVALID || random == HANDLE_INVALID) {
+    return CALL_UNAVAILABLE;
+  }
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (now > UINT64_MAX - RANDOM_MAX_WAIT_NS) {
+    return CALL_LIMIT;
+  }
+  unsigned char bytes[SENTINEL_RANDOM_BYTES];
+  status = random_read(random, bytes, sizeof(bytes), now + RANDOM_MAX_WAIT_NS);
+  if (status != CALL_OK) {
+    return status;
+  }
+  snprintf(name, SENTINEL_BYTES, SENTINEL_PREFIX);
+  for (size_t i = 0; i < sizeof(bytes); ++i) {
+    snprintf(name + sizeof(SENTINEL_PREFIX) - 1 + 2 * i, 3, "%02x", bytes[i]);
+  }
+  return CALL_OK;
+}
+
 /* Undo the new root after a failed check: nothing has been copied into it. */
 static enum cp_result discard_root(const struct tree *tree, handle_t parent, handle_t root,
     const char *name, bool sentinel_present)
@@ -244,13 +278,18 @@ static enum cp_result discard_root(const struct tree *tree, handle_t parent, han
 enum cp_result cp_copy_tree(handle_t source_root, const char *source, handle_t parent,
     const char *name, const char *destination)
 {
-  char sentinel[SENTINEL_BYTES];
-  snprintf(sentinel, sizeof(sentinel), ".cp-tree-%016" PRIx64, next_sentinel++);
-  struct tree tree = {.source = source, .destination = destination, .sentinel = sentinel};
+  struct tree tree = {.source = source, .destination = destination};
+  enum call_status status = generate_sentinel(tree.sentinel);
+  if (status != CALL_OK) {
+    handle_close(source_root);
+    report_directory_error("cp", destination, status);
+    fprintf(stderr, "cp: %s: A tree copy needs the clock and random grants\n", destination);
+    return CP_FAILED;
+  }
 
   /* The root is created exclusively: an existing name of any kind is refused. */
   handle_t root;
-  enum call_status status = directory_create(parent, name, DIRECTORY_KIND_DIRECTORY,
+  status = directory_create(parent, name, DIRECTORY_KIND_DIRECTORY,
       CP_DIRECTORY_RIGHTS, &root);
   if (status != CALL_OK) {
     handle_close(source_root);
@@ -265,7 +304,14 @@ enum cp_result cp_copy_tree(handle_t source_root, const char *source, handle_t p
   /* No object identity exists, so prove a destination inside the source by
    * putting a unique name in the new root and looking for it in the source. */
   handle_t marker;
-  status = directory_create(root, sentinel, DIRECTORY_KIND_FILE, 0, &marker);
+  status = directory_create(root, tree.sentinel, DIRECTORY_KIND_FILE, 0, &marker);
+  for (unsigned attempt = 1; status == CALL_ALREADY_EXISTS && attempt < SENTINEL_ATTEMPTS;
+       ++attempt) {
+    status = generate_sentinel(tree.sentinel);
+    if (status == CALL_OK) {
+      status = directory_create(root, tree.sentinel, DIRECTORY_KIND_FILE, 0, &marker);
+    }
+  }
   if (status != CALL_OK) {
     handle_close(source_root);
     report_directory_error("cp", destination, status);
@@ -279,11 +325,11 @@ enum cp_result cp_copy_tree(handle_t source_root, const char *source, handle_t p
     enum cp_result discarded = discard_root(&tree, parent, root, name, true);
     return result == CP_UNCERTAIN || discarded == CP_UNCERTAIN ? CP_UNCERTAIN : CP_FAILED;
   }
-  status = directory_remove(root, sentinel, DIRECTORY_KIND_FILE);
+  status = directory_remove(root, tree.sentinel, DIRECTORY_KIND_FILE);
   if (status != CALL_OK) {
     handle_close(source_root);
     report_directory_error("cp", destination, status);
-    fprintf(stderr, "cp: %s: Could not remove %s; it remains\n", destination, sentinel);
+    fprintf(stderr, "cp: %s: Could not remove %s; it remains\n", destination, tree.sentinel);
     handle_close(root);
     return CP_UNCERTAIN;
   }
