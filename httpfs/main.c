@@ -31,7 +31,7 @@ struct provider {
   handle_t receiver;
   struct http_client client;
   struct http_storage storage;
-  bool published;
+  bool published, custom_trust;
   struct file_export files[FILE_SLOTS];
 };
 
@@ -78,8 +78,86 @@ static enum call_status reply(struct endpoint_packet *packet, uint64_t result,
 static enum call_status open_error(struct endpoint_packet *packet,
     enum call_status status, unsigned http_status)
 {
-  struct provider_open_reply response = {.provider_status = http_status};
+  struct provider_open_reply response = {
+    .provider_status = http_status, .outcome = PROVIDER_OUTCOME_ERROR,
+  };
   return reply(packet, status, &response, sizeof(response), NULL);
+}
+
+static bool zero_context(const struct provider_open_request *request)
+{
+  struct provider_http_origin origin = {0};
+  struct provider_http_budget budget = {0};
+  return !memcmp(&request->origin, &origin, sizeof(origin)) &&
+      !memcmp(&request->remaining, &budget, sizeof(budget));
+}
+
+static enum call_status open_context(struct provider *provider,
+    struct provider_open_request *request, const char *text)
+{
+  if ((request->flags & ~PROVIDER_OPEN_FLAGS) ||
+      ((request->flags & PROVIDER_OPEN_ORIGIN_CROSSED) &&
+      !(request->flags & PROVIDER_OPEN_HTTP))) {
+    return CALL_BAD_REQUEST;
+  }
+  struct http_uri uri;
+  enum call_status status = http_url_parse(text, &uri);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (uri.scheme != provider->client.scheme) {
+    return CALL_BAD_OPERATION;
+  }
+  if (!(request->flags & PROVIDER_OPEN_HTTP)) {
+    if (!zero_context(request)) {
+      return CALL_BAD_REQUEST;
+    }
+    request->flags = PROVIDER_OPEN_HTTP;
+    request->origin.scheme = uri.scheme;
+    request->origin.port = uri.port;
+    memcpy(request->origin.host, uri.host, strlen(uri.host) + 1);
+    request->remaining = (struct provider_http_budget){
+      .body_bytes = HTTP_BODY_MAX, .header_bytes = HTTP_HEADERS_MAX,
+      .fields = HTTP_FIELDS_MAX, .informational = HTTP_INFORMATIONAL_MAX,
+    };
+  } else {
+    size_t length = strnlen(request->origin.host, sizeof(request->origin.host));
+    if (!length || length == sizeof(request->origin.host) ||
+        request->origin.scheme > PROVIDER_HTTPS ||
+        !request->origin.port || request->origin.port > UINT16_MAX ||
+        request->remaining.body_bytes > HTTP_BODY_MAX ||
+        request->remaining.header_bytes > HTTP_HEADERS_MAX ||
+        request->remaining.fields > HTTP_FIELDS_MAX ||
+        request->remaining.informational > HTTP_INFORMATIONAL_MAX) {
+      return CALL_BAD_REQUEST;
+    }
+    for (size_t i = length + 1; i < sizeof(request->origin.host); ++i) {
+      if (request->origin.host[i]) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    char origin_text[HTTP_URI_MAX + 1];
+    int size = snprintf(origin_text, sizeof(origin_text), "%s://%s:%llu/",
+        request->origin.scheme == PROVIDER_HTTPS ? "https" : "http",
+        request->origin.host, (unsigned long long)request->origin.port);
+    struct http_uri origin;
+    if (size < 0 || (size_t)size >= sizeof(origin_text) ||
+        http_url_parse(origin_text, &origin) != CALL_OK ||
+        origin.scheme != request->origin.scheme ||
+        origin.port != request->origin.port ||
+        strcmp(origin.host, request->origin.host)) {
+      return CALL_BAD_REQUEST;
+    }
+  }
+  /* Augmented trust is confined to the complete initial origin. This gate
+   * runs before DNS, TCP connection or TLS state can observe a target. */
+  if (provider->custom_trust &&
+      ((request->flags & PROVIDER_OPEN_ORIGIN_CROSSED) ||
+      request->origin.scheme != uri.scheme || request->origin.port != uri.port ||
+      strcmp(request->origin.host, uri.host))) {
+    return CALL_DENIED;
+  }
+  return CALL_OK;
 }
 
 static enum call_status open_file(struct provider *provider,
@@ -114,19 +192,17 @@ static enum call_status open_file(struct provider *provider,
   if (memchr(uri_bytes, 0, request.uri_size)) {
     return open_error(packet, CALL_BAD_REQUEST, 0);
   }
-  size_t slot = 0;
-  while (slot < FILE_SLOTS && provider->files[slot].live) {
-    ++slot;
-  }
-  if (slot == FILE_SLOTS) {
-    return open_error(packet, CALL_QUEUE_FULL, 0);
-  }
   char uri[HTTP_URI_MAX + 1];
   memcpy(uri, uri_bytes, request.uri_size);
   uri[request.uri_size] = 0;
+  enum call_status status = open_context(provider, &request, uri);
+  if (status != CALL_OK) {
+    return open_error(packet, status, 0);
+  }
   struct http_result result;
-  http_fetch(&provider->client, &provider->storage, uri, packet->deadline_ns, &result);
-  enum call_status status = http_result_status(&result);
+  http_fetch(&provider->client, &provider->storage, uri, packet->deadline_ns,
+      &request, &result);
+  status = http_result_status(&result);
   if (result.error == HTTP_TLS_ERROR) {
     fprintf(stderr, "httpfs: TLS fetch failed (%s, native %u, library %d, verify 0x%x)\n",
         tls_error_name(result.tls_failure.error), result.tls_failure.native_status,
@@ -139,6 +215,24 @@ static enum call_status open_file(struct provider *provider,
   }
   if (status != CALL_OK) {
     return open_error(packet, status, result.status);
+  }
+  if (result.outcome == PROVIDER_OUTCOME_REDIRECT) {
+    struct provider_open_reply header = {
+      .provider_status = result.status, .outcome = PROVIDER_OUTCOME_REDIRECT,
+      .location_size = strlen(result.location), .consumed = result.consumed,
+    };
+    uint8_t response[sizeof(header) + HTTP_URI_MAX];
+    memcpy(response, &header, sizeof(header));
+    memcpy(response + sizeof(header), result.location, header.location_size);
+    return reply(packet, CALL_OK, response, sizeof(header) + header.location_size, NULL);
+  }
+  size_t slot = 0;
+  while (slot < FILE_SLOTS && provider->files[slot].live) {
+    ++slot;
+  }
+  if (slot == FILE_SLOTS) {
+    http_body_release(&result.body);
+    return open_error(packet, CALL_QUEUE_FULL, result.status);
   }
   handle_t client = HANDLE_INVALID;
   status = endpoint_export(provider->service, provider->receiver,
@@ -158,6 +252,8 @@ static enum call_status open_file(struct provider *provider,
     .representation = PROVIDER_REPRESENTATION_BYTES,
     .media_type_size = strlen(result.media_type),
     .provider_status = result.status,
+    .outcome = PROVIDER_OUTCOME_BYTES,
+    .consumed = result.consumed,
   };
   uint8_t response[sizeof(header) + HTTP_MEDIA_TYPE_MAX];
   memcpy(response, &header, sizeof(header));
@@ -324,6 +420,7 @@ int main(int argc, char **argv)
       !strcmp(argv[2], "--ca-bundle") && argv[3][0]) {
     provider.client.scheme = HTTP_SCHEME_HTTPS;
     custom_bundle = argv[3];
+    provider.custom_trust = true;
   } else if (argc != 1) {
     fputs("usage: httpfs [--https [--ca-bundle URI]]\n", stderr);
     status = CALL_BAD_REQUEST;
