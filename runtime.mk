@@ -76,6 +76,13 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/log_data.c \
                 third_party/musl/src/math/log10.c \
                 third_party/musl/src/math/__math_divzero.c \
+                third_party/musl/src/math/powf.c \
+                third_party/musl/src/math/powf_data.c \
+                third_party/musl/src/math/exp2f_data.c \
+                third_party/musl/src/math/__math_xflowf.c \
+                third_party/musl/src/math/__math_uflowf.c \
+                third_party/musl/src/math/__math_oflowf.c \
+                third_party/musl/src/math/__math_invalidf.c \
                 third_party/musl/src/internal/floatscan.c
 MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \

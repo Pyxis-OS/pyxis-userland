@@ -54,6 +54,12 @@ _Static_assert(offsetof(union ldshape, i.se) == 8,
    -ffloat-store an assignment is required, in old compilers argument
    passing and return statement may not drop excess precision).  */
 
+static inline float eval_as_float(float x)
+{
+	float y = x;
+	return y;
+}
+
 static inline double eval_as_double(double x)
 {
 	double y = x;
@@ -63,6 +69,15 @@ static inline double eval_as_double(double x)
 /* fp_barrier returns its input, but limits code transformations
    as if it had a side-effect (e.g. observable io) and returned
    an arbitrary value.  */
+
+#ifndef fp_barrierf
+#define fp_barrierf fp_barrierf
+static inline float fp_barrierf(float x)
+{
+	volatile float y = x;
+	return y;
+}
+#endif
 
 #ifndef fp_barrier
 #define fp_barrier fp_barrier
@@ -116,6 +131,8 @@ static inline void fp_force_evall(long double x)
 	}                                         \
 } while(0)
 
+#define asuint(f) ((union{float _f; uint32_t _i;}){f})._i
+#define asfloat(i) ((union{uint32_t _i; float _f;}){i})._f
 #define asuint64(f) ((union{double _f; uint64_t _i;}){f})._i
 #define asdouble(i) ((union{uint64_t _i; double _f;}){i})._f
 
@@ -150,5 +167,9 @@ double __math_uflow(uint32_t);
 double __math_oflow(uint32_t);
 double __math_invalid(double);
 double __math_divzero(uint32_t);
+float __math_xflowf(uint32_t, float);
+float __math_uflowf(uint32_t);
+float __math_oflowf(uint32_t);
+float __math_invalidf(float);
 
 #endif

@@ -50,6 +50,7 @@ double fmod(double value, double divisor);
 /* Store the integral part truncated toward zero and return the signed fraction. */
 double modf(double value, double *integral);
 double pow(double base, double exponent);
+float powf(float base, float exponent);
 double frexp(double value, int *exponent);
 double ldexp(double value, int exponent);
 double scalbn(double value, int exponent);

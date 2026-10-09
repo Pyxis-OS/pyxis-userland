@@ -97,6 +97,20 @@ with it as the standard base-10 form. `src/internal/libm.h` declares
 `__math_divzero` without `hidden`. Zero raises divide-by-zero and negative
 values invalid; errno is unchanged.
 
+The Chocolate Quake port's prerequisites add these files from the same pin:
+
+- `src/math/powf.c`, `src/math/powf_data.c` and `src/math/exp2f_data.c`,
+  unmodified;
+- `src/math/__math_xflowf.c`, `src/math/__math_uflowf.c`,
+  `src/math/__math_oflowf.c` and `src/math/__math_invalidf.c`, unmodified;
+- `src/math/powf_data.h`, omitting the `hidden` marker, and
+  `src/math/exp2f_data.h`, omitting `features.h` and `hidden`.
+
+Chocolate Quake's gamepad stick easing uses `powf`. `src/internal/libm.h` adds
+upstream's `eval_as_float`, `fp_barrierf`, `asuint` and `asfloat` helpers and
+declares the four float error helpers without `hidden`. Overflow, underflow
+and invalid operands raise FP exception flags; errno is unchanged.
+
 `src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
 `__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
 `EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and
