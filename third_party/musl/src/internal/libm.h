@@ -149,5 +149,6 @@ double __math_xflow(uint32_t, double);
 double __math_uflow(uint32_t);
 double __math_oflow(uint32_t);
 double __math_invalid(double);
+double __math_divzero(uint32_t);
 
 #endif

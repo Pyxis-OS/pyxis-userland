@@ -69,6 +69,10 @@ double cos(double value);
 double tan(double value);
 double atan(double value);
 double atan2(double y, double x);
+/* Natural and base-10 logarithms. Zero gives -inf with divide-by-zero, negative
+ * values NaN with invalid. */
+double log(double value);
+double log10(double value);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
 

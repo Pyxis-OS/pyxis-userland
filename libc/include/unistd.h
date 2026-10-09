@@ -66,6 +66,10 @@ int fsync(int descriptor);
 /* Remove a file, resolving path like fopen. Requires REMOVE on the parent.
  * Directories fail with EINVAL; open handles to the file stay valid. */
 int unlink(const char *path);
+/* 1 when the descriptor is a console stream, a startup binding to the space's
+ * terminal. Files and pipes return 0 with ENOTTY; invalid descriptors return 0
+ * with EBADF. */
+int isatty(int descriptor);
 
 #ifdef __cplusplus
 }

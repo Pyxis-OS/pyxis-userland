@@ -58,6 +58,8 @@ int descriptor_resize(int descriptor, uint64_t size);
 int descriptor_sync(int descriptor);
 /* Type and size of the descriptor's object, as fstat reports them. */
 int descriptor_stat(int descriptor, struct stat *result);
+/* 1 for a console stream, the only terminal; files and pipes fail with ENOTTY. */
+int descriptor_terminal(int descriptor);
 /* The logical position, excluding bytes read ahead. */
 long descriptor_tell(int descriptor);
 /* Input fflush: drop file read-ahead so later reads refetch; keep pipe bytes. */

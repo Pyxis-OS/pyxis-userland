@@ -72,6 +72,10 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/__rem_pio2_large.c \
                 third_party/musl/src/math/atan.c \
                 third_party/musl/src/math/atan2.c \
+                third_party/musl/src/math/log.c \
+                third_party/musl/src/math/log_data.c \
+                third_party/musl/src/math/log10.c \
+                third_party/musl/src/math/__math_divzero.c \
                 third_party/musl/src/internal/floatscan.c
 MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \

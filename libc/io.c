@@ -135,3 +135,8 @@ int fsync(int descriptor)
   }
   return descriptor_sync(descriptor);
 }
+
+int isatty(int descriptor)
+{
+  return descriptor_terminal(descriptor);
+}

@@ -627,6 +627,19 @@ int descriptor_stat(int descriptor, struct stat *result)
   return 0;
 }
 
+int descriptor_terminal(int descriptor)
+{
+  struct descriptor_entry *entry = lookup(descriptor);
+  if (!entry) {
+    return 0;
+  }
+  if (entry->kind != DESCRIPTOR_CONSOLE) {
+    errno = ENOTTY;
+    return 0;
+  }
+  return 1;
+}
+
 long descriptor_tell(int descriptor)
 {
   struct descriptor_entry *entry = lookup(descriptor);

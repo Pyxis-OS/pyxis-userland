@@ -34,6 +34,7 @@ extern int errno;
 #define EMFILE 23
 #define EILSEQ 24
 #define ENOTDIR 25
+#define ENOTTY 26
 
 #ifdef __cplusplus
 }

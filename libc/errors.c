@@ -64,6 +64,7 @@ char *strerror(int error)
   case ETIMEDOUT: return "Operation timed out";
   case ENOTEMPTY: return "Directory not empty";
   case ENOTDIR: return "Not a directory";
+  case ENOTTY: return "Not a terminal";
   default: return "Unknown error";
   }
 }

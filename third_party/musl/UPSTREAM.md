@@ -85,6 +85,18 @@ The SDL2 port's prerequisites add these unmodified files from the same pin:
 
 Like the rest of the subset, they live in libc and leave errno unchanged.
 
+The Chocolate Doom port's prerequisites add these files from the same pin:
+
+- `src/math/log.c`, `src/math/log_data.c` and `src/math/log10.c`, unmodified;
+- `src/math/__math_divzero.c`, unmodified, which `log` uses for zero;
+- `src/math/log_data.h`, omitting `features.h` and the `hidden` marker like
+  `exp_data.h` and `pow_data.h`.
+
+Chocolate Doom's textscreen sizes its number fields with `log`. `log10` comes
+with it as the standard base-10 form. `src/internal/libm.h` declares
+`__math_divzero` without `hidden`. Zero raises divide-by-zero and negative
+values invalid; errno is unchanged.
+
 `src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
 `__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
 `EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and
