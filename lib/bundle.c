@@ -121,7 +121,10 @@ static bool valid_path(const char *path)
 static bool bundle_suffix(const char *uri)
 {
   size_t length = strlen(uri);
-  return length > 4 && !strcmp(uri + length - 4, ".pxb");
+  while (length && uri[length - 1] == '/') {
+    --length;
+  }
+  return length > 4 && !memcmp(uri + length - 4, ".pxb", 4);
 }
 
 static bool explicit_uri(const char *uri)
