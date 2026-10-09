@@ -13,8 +13,9 @@ Local mux receives a separate `terminal_pointer` grant through trusted session
 startup. Pane children receive no controller; their existing graphics pointer
 grants remain independent. Remote mux retains keyboard controls.
 
-Left dragging selects visible pane text; content and heading clicks focus a
-pane. Wheel over content moves that pane's history by three rows per detent
+Left dragging selects visible pane text only after crossing into a different
+cell while held. A press clears the old selection; a click or movement within
+the starting cell leaves none. Content and heading clicks focus a pane. Wheel over content moves that pane's history by three rows per detent
 without changing keyboard focus, returning to live input at the newest row.
 Layout, resize and explicit history movement clear selection. Unrelated output
 and color changes preserve it; selected glyph mutation, eviction or movement

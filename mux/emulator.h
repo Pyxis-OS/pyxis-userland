@@ -21,7 +21,7 @@ struct mux_selection_point {
 };
 
 struct mux_selection {
-  bool active;
+  bool active, pending;
   size_t columns;
   struct mux_selection_point anchor, end;
 };
@@ -79,9 +79,10 @@ void mux_emulator_set_tab_width(struct mux_emulator *emulator, unsigned columns)
 const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t visible_row, size_t *width);
 /* Selection names retained rows, never borrowed cell pointers. Glyph changes
- * and eviction invalidate it; colors and unrelated output do not. */
+ * and eviction invalidate it; colors and unrelated output do not. A press
+ * records a pending anchor; only a held move to another cell activates it. */
 bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset,
-    size_t row, size_t column, size_t visible_columns, bool extend);
+    size_t row, size_t column, size_t visible_columns, bool extend, bool activate);
 bool mux_emulator_selected(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t row, size_t column);
 void mux_emulator_clear_selection(struct mux_emulator *emulator);
