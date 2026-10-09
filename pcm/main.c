@@ -109,10 +109,14 @@ static enum call_status print_status(handle_t audio, const char *when)
   enum call_status status = audio_status(audio, &reply);
   if (status == CALL_OK) {
     fprintf(stderr, "pcm: %s generation=%llu free=%llu/%llu starvation=%llu "
-        "discontinuity=%llu state=%llu\n", when,
+        "discontinuity=%llu state=%llu master=%llu%% mute=%llu "
+        "space=%llu%% mute=%llu volume-generation=%llu\n", when,
         (unsigned long long)reply.generation, (unsigned long long)reply.free_frames,
         (unsigned long long)reply.capacity_frames, (unsigned long long)reply.starvations,
-        (unsigned long long)reply.discontinuities, (unsigned long long)reply.state);
+        (unsigned long long)reply.discontinuities, (unsigned long long)reply.state,
+        (unsigned long long)reply.master_percent, (unsigned long long)reply.master_muted,
+        (unsigned long long)reply.space_percent, (unsigned long long)reply.space_muted,
+        (unsigned long long)reply.volume_generation);
   }
   return status;
 }
