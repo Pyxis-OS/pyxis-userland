@@ -119,9 +119,9 @@ struct term_line_result {
  * Printable ASCII only, one byte per cell. Insert, Backspace/Delete, Left/Right,
  * Home/End, Enter and Ctrl+C are supported. Ctrl+D returns EOF only on an empty
  * line; otherwise it is ignored. Actual input EOF always discards a partial line
- * and returns EOF. Up/Down/Page keys are decoded but ignored;
- * no history, tabs or Unicode editing. Standalone Escape is decoded with a
- * timeout and ignored by this line editor.
+ * and returns EOF. Up/Down/Page keys are decoded but ignored without a history;
+ * no tabs or Unicode editing. Standalone Escape is decoded with a timeout and
+ * ignored by this line editor.
  *
  * The buffer's capacity minus NUL is the editing limit. A line larger than the
  * screen uses a visible window around its cursor; text and prompt are retained.
@@ -149,9 +149,36 @@ struct term_line_result term_read_line_initial(struct terminal *term, const char
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity);
 
+#define TERM_HISTORY_ENTRIES 100
+
+/* Submitted lines kept by the caller across line reads, oldest first. Start
+ * zero-initialized; entries are heap copies released by term_history_free. */
+struct term_history {
+  char *entries[TERM_HISTORY_ENTRIES];
+  size_t count;
+};
+
+/* Releases every entry and leaves the history empty and reusable. */
+void term_history_free(struct term_history *history);
+
+/* term_read_line with recall. Up loads the previous entry into the editor and
+ * Down the next; past the newest entry Down restores the line typed before
+ * recall began. Edits to a recalled entry last until another entry is loaded.
+ * A recalled entry longer than the buffer limit is shortened and treated as a
+ * rejected insertion: its cell turns red and limit_reached is set.
+ *
+ * LINE_OK appends the submitted line unless it is empty or all spaces, or the
+ * same as the newest entry. A full history drops its oldest entry. If memory
+ * for the copy or the unfinished line is unavailable, the line is not
+ * recorded or recall is ignored; the read itself is unaffected. NULL history
+ * behaves as term_read_line. */
+struct term_line_result term_read_line_history(struct terminal *term, const char *prompt,
+    struct term_history *history, char *buffer, size_t capacity);
+
 /* Opt-in shell integration: emit OSC 133;B after the initial empty prompt is
- * drawn and before reading input. Otherwise identical to term_read_line. */
+ * drawn and before reading input. Otherwise identical to
+ * term_read_line_history. */
 struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
-    char *buffer, size_t capacity);
+    struct term_history *history, char *buffer, size_t capacity);
 
 #endif
