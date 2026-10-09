@@ -173,13 +173,12 @@ rm home://copy.bin
 Add `--host-profile` to read/write/copy to collect caller-local host READ/WRITE
 statistics through the startup `profile` grant with `PROFILE_RIGHT_HOST`.
 The grant is required only when requested. This collection is independent of
-private-memory and RAM FILE profiling; write/copy may use `--profile` and
-`--host-profile` together. Each flag may appear once; pipe mode accepts neither.
+private-memory profiling. The flag may appear once; pipe mode does not accept it.
 
 ```text
 iobench read host://iobench.bin --host-profile
 iobench write host://grow-host.bin --host-profile
-iobench copy host://iobench.bin home://copy-from-host.bin --host-profile --profile
+iobench copy host://iobench.bin home://copy-from-host.bin --host-profile
 iobench copy host://iobench.bin host://copy-host.bin --prepared --host-profile
 ```
 
@@ -232,40 +231,6 @@ For a 4088-byte copy read, libpyxis can confirm a 4080-byte write plus an 8-byte
 suffix. The benchmark reports the first as a short write, while HOST profiling
 reports two full native writes. HOST publication includes capturing incoming
 write payload bytes; caller-side read result copies follow its total interval.
-
-### RAM buffer replacement profiling
-
-Add `--profile` to write/copy to collect caller-local RAM FILE replacement
-statistics through the startup `profile` grant with `PROFILE_RIGHT_FILE`.
-The grant is required only when requested; missing or denied authority fails the
-run. This is independent of the private-memory profile used by `allocbench`.
-
-```text
-iobench write home://grow-profile.bin --profile
-iobench copy boot://share/iobench.bin home://prepared-profile.bin --prepared --profile
-```
-
-Each measured pass begins collection after preparation, before the transfer start
-clock, and ends after the transfer end clock, before optional sync, verification
-and reporting. Warmup is unprofiled. BEGIN/END are outside transfer timing;
-per-replacement clocks and counter updates are inside it. Report matched runs
-without `--profile` to expose perturbation rather than subtracting a constant.
-
-Reports show replacement attempts, successes/failures, summed requested capacities
-and actual existing-data bytes copied. They include sum/max elapsed nanoseconds
-for preparation-to-publication, queue, BSP service, service-end-to-resumption and
-total, plus allocation/copy/release subintervals within service. Counts include
-failed allocation attempts and the existing exact-capacity fallback. A zero-size
-replacement releases backing; the release interval includes `kfree(NULL)` on the
-first allocation. Saturation is reported rather than wrapped.
-
-This instruments RAM backing replacement only: prepared overwrite normally reports
-zero events, and a host/exported destination can also report zero. It does not
-measure FILE ownership waits, incoming payload copying, host service or remote
-providers. Queue includes publication locking and scheduling; service and resume
-also include scheduling and instrumentation. These are elapsed intervals, not CPU
-time. Subtracting replacement total from transfer gives an unattributed residual,
-not a measurement of payload copy. No addresses or filenames appear in snapshots.
 
 ### Preparation and measurement boundaries
 

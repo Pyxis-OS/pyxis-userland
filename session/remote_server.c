@@ -265,7 +265,7 @@ int launch_remote_server(const struct session_config *config,
     }
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", grant_count};
     grants[grant_count++] = (struct launch_grant){profile,
-        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST), 0};
+        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
 
   size_t environment_count = 0;
