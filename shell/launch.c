@@ -149,8 +149,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_mux_terminal = mux_terminal != HANDLE_INVALID;
   handle_t terminal_pointer = has_mux_terminal ? startup_resource("terminal_pointer") : HANDLE_INVALID;
   bool has_terminal_pointer = terminal_pointer != HANDLE_INVALID;
-  handle_t clipboard_local = has_mux_terminal ? startup_resource("clipboard_local") : HANDLE_INVALID;
-  handle_t clipboard_shared = has_mux_terminal ? startup_resource("clipboard_shared") : HANDLE_INVALID;
+  bool pass_clipboard = session || mode == SHELL_FOREGROUND;
+  handle_t clipboard_local = pass_clipboard ? startup_resource("clipboard_local") : HANDLE_INVALID;
+  handle_t clipboard_shared = pass_clipboard ? startup_resource("clipboard_shared") : HANDLE_INVALID;
   bool has_clipboard_local = clipboard_local != HANDLE_INVALID;
   bool has_clipboard_shared = clipboard_shared != HANDLE_INVALID;
   /* Only a session successor inherits power; the shell's own programs never do. */

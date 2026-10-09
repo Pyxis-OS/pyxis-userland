@@ -1,5 +1,6 @@
 #include "session.h"
 #include <abi/clock.h>
+#include <abi/clipboard.h>
 #include <abi/console.h>
 #include <abi/display.h>
 #include <abi/echo.h>
@@ -57,7 +58,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 20, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 22, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
@@ -143,6 +144,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     /* Graphics remain a shared space layer, never a pane surface. */
     {"display", DISPLAY_RIGHT_DRAW}, {"keyboard", KEYBOARD_RIGHT_INPUT},
     {"pointer", POINTER_RIGHT_INPUT}, {"power", POWER_RIGHTS},
+    /* Store grants permit owned graphics actions, never terminal CONTROL. */
+    {"clipboard_local", CLIPBOARD_RIGHTS}, {"clipboard_shared", CLIPBOARD_RIGHTS},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
     {"namespace_service", NAMESPACE_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHTS}, {"random", RANDOM_RIGHT_READ},

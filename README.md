@@ -45,6 +45,10 @@ resource, forwarding only the configured roots and, to the one network owner,
 network WRITE authority. Spaces start in `home://` unless their `start` names
 another root. Live boots make `home://` a RAM volume. If no space starts it
 creates a `rescue` shell space.
+`clipboard_local` and `clipboard_shared` independently request the named
+clipboard grants. Stock local interactive spaces enable both; remote startup
+enables neither. An omitted setting retains the existing multiplexer default,
+while an explicit false withholds that layer.
 See [boot configuration](https://git.internal/PyxisOS/pyxis-os/src/branch/main/docs/userland/init.md#boot-configuration).
 
 `make libhttp` builds `BUILD/libhttp.a`. Consumers link it with picohttpparser,
@@ -84,8 +88,12 @@ Stock line readers opt into native safe paste while editing: LF/Tab become
 spaces, paste never submits, and cancellation retains the inserted prefix.
 Ctrl+Shift+C/V uses the space-local clipboard; Super+Shift+C/V uses the shared
 one. Mux copies its completed selection and pastes into its focused live pane;
-pending input refuses paste. Trusted mux startup delegates separate clipboard
-grants, which pane children do not inherit. Raw readers do not accept paste.
+pending input refuses paste. Local sessions forward separate clipboard grants
+through shells and mux pane shells to foreground launches. These store grants
+give pane shells no terminal CONTROL; background/service/remote launches receive
+neither. [clipboard.h](include/clipboard.h) also provides graphics publish/read/
+has/refuse helpers, requiring matching physical activation and current display
+and keyboard ownership. Raw readers do not accept paste.
 A mux paste can cancel when its output scrolls visible rows, advancing the view
 identity; the inserted prefix stays editable and is never submitted.
 

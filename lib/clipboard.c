@@ -68,3 +68,70 @@ enum call_status clipboard_refuse(handle_t clipboard, uint64_t action_id,
   };
   return clipboard_call(clipboard, &request, sizeof(request), NULL, 0);
 }
+
+enum call_status clipboard_graphics_publish(handle_t clipboard, uint64_t action_id,
+    const void *bytes, size_t length)
+{
+  struct clipboard_graphics_publish_request request = {
+    .header = {PROTOCOL_CLIPBOARD, CLIPBOARD_GRAPHICS_PUBLISH},
+    .action_id = action_id, .address = (uintptr_t)bytes, .length = length,
+  };
+  return clipboard_call(clipboard, &request, sizeof(request), NULL, 0);
+}
+
+enum call_status clipboard_graphics_read(handle_t clipboard, uint64_t action_id,
+    void *bytes, size_t capacity, size_t *length)
+{
+  if (!length) {
+    return CALL_BAD_REQUEST;
+  }
+  *length = 0;
+  struct clipboard_graphics_request request = {
+    .header = {PROTOCOL_CLIPBOARD, CLIPBOARD_GRAPHICS_READ},
+    .action_id = action_id,
+  };
+  struct syscall_result result = syscall_call(clipboard, &request, sizeof(request),
+      bytes, capacity);
+  if (result.status >= CALL_STATUS_COUNT ||
+      (result.status != CALL_OK && result.reply_size) ||
+      result.reply_size > capacity || result.reply_size > CLIPBOARD_TEXT_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    *length = result.reply_size;
+  }
+  return result.status;
+}
+
+enum call_status clipboard_graphics_has(handle_t clipboard, uint64_t action_id,
+    bool *has_text)
+{
+  if (!has_text) {
+    return CALL_BAD_REQUEST;
+  }
+  *has_text = false;
+  struct clipboard_graphics_request request = {
+    .header = {PROTOCOL_CLIPBOARD, CLIPBOARD_GRAPHICS_HAS},
+    .action_id = action_id,
+  };
+  struct clipboard_graphics_has_reply reply;
+  enum call_status status = clipboard_call(clipboard, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (status == CALL_OK) {
+    if (reply.has_text > 1) {
+      return CALL_BAD_REQUEST;
+    }
+    *has_text = reply.has_text != 0;
+  }
+  return status;
+}
+
+enum call_status clipboard_graphics_refuse(handle_t clipboard, uint64_t action_id,
+    uint64_t operation)
+{
+  struct clipboard_graphics_refuse_request request = {
+    .header = {PROTOCOL_CLIPBOARD, CLIPBOARD_GRAPHICS_REFUSE},
+    .action_id = action_id, .operation = operation,
+  };
+  return clipboard_call(clipboard, &request, sizeof(request), NULL, 0);
+}

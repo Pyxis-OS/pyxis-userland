@@ -254,7 +254,8 @@ static void read_roots(lua_State *state, struct boot_space *space)
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
-    "network", "launch", "multiplexer", "screenshot", "power", "remote_power"};
+    "network", "launch", "multiplexer", "clipboard_local", "clipboard_shared",
+    "screenshot", "power", "remote_power"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -320,6 +321,18 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: multiplexer must be a boolean", space->name);
   }
   space->multiplexer = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "clipboard_local");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: clipboard_local must be a boolean", space->name);
+  }
+  space->clipboard_local = lua_isnil(state, -1) ? space->multiplexer : lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "clipboard_shared");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: clipboard_shared must be a boolean", space->name);
+  }
+  space->clipboard_shared = lua_isnil(state, -1) ? space->multiplexer : lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "screenshot");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {

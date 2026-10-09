@@ -238,9 +238,9 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[grant_count++] = (struct launch_grant){terminal_pointer,
         TERMINAL_POINTER_RIGHT_CONTROL, 0};
   }
-  /* Only trusted local startup retains controller grants. Pane and remote
-   * children receive none; their READ/WRITE grants still allow reader opt-in. */
-  if (mux_terminal != HANDLE_INVALID && !start_remote_services) {
+  /* Local session successors retain each explicit grant independently of mux
+   * startup. Store authority alone grants no terminal or graphics ownership. */
+  if (!start_remote_services) {
     static const char *const clipboard_names[] = {"clipboard_local", "clipboard_shared"};
     for (size_t i = 0; i < sizeof(clipboard_names) / sizeof(clipboard_names[0]); ++i) {
       handle_t clipboard = startup_resource(clipboard_names[i]);

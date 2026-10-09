@@ -50,6 +50,8 @@ struct boot_space {
   bool network;
   bool launch;
   bool multiplexer; /* Local terminal startup may create pane sessions. */
+  bool clipboard_local; /* Explicit space-local graphics/store delegation. */
+  bool clipboard_shared; /* Independent cross-space graphics/store delegation. */
   bool screenshot; /* Receives whole-screen capture authority. */
   bool power; /* Receives power-off and restart authority. */
   bool remote_power; /* Opts remote root shells into power authority. */
