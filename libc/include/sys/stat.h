@@ -34,6 +34,10 @@ struct stat {
  * directory). A provider URI is opened as a file, which for HTTP(S) performs
  * the request. Sizes above the off_t range fail with EOVERFLOW. */
 int stat(const char *__restrict path, struct stat *__restrict result);
+/* Equivalent to stat only under the current no-follow lookup contract: native
+ * filesystems have no symlinks and host symlink lookup fails with ENOTSUP.
+ * Revisit this implementation if symlink metadata or following is introduced. */
+int lstat(const char *__restrict path, struct stat *__restrict result);
 /* Files report S_IFREG and their size, consoles S_IFCHR and pipes S_IFIFO
  * (both size zero). */
 int fstat(int descriptor, struct stat *result);

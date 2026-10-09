@@ -33,6 +33,7 @@ extern int errno;
 #define EFBIG 22
 #define EMFILE 23
 #define EILSEQ 24
+#define ENOTDIR 25
 
 #ifdef __cplusplus
 }

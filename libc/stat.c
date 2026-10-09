@@ -50,6 +50,11 @@ int stat(const char *restrict path, struct stat *restrict result)
   return 0;
 }
 
+int lstat(const char *restrict path, struct stat *restrict result)
+{
+  return stat(path, result);
+}
+
 int fstat(int descriptor, struct stat *result)
 {
   return descriptor_stat(descriptor, result);

@@ -24,6 +24,9 @@ int descriptor_tmpfile(FILE *stream, handle_t parent);
 int descriptor_stream(FILE *stream, struct startup_stream *binding);
 bool descriptor_ready(int descriptor, bool writing);
 int descriptor_close(int descriptor);
+/* One CLOSE attempt for an owned temporary handle; same reply/error validation
+ * as descriptor close. Never retries uncertain release; teardown owns recovery. */
+int descriptor_release_handle(handle_t handle);
 void descriptor_finish(void);
 
 /* No FILE indicators or fill/retry loops. A zero read is EOF; a nonempty zero

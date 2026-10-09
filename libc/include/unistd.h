@@ -16,6 +16,23 @@ extern "C" {
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
+
+/* Native lookup using the caller's grants, with each owned handle immediately
+ * released. F_OK requests no child rights; files R_OK/W_OK require READ/WRITE,
+ * directories require ENUMERATE / CREATE|REMOVE. Combined modes require both.
+ * X_OK and provider routes fail with ENOTSUP; unknown mode bits with EINVAL.
+ * No Unix mode/owner checks or mutation. Success is a time-of-check authority
+ * observation, not a guarantee of later lookup, I/O, or executable launch. */
+int access(const char *path, int mode);
+/* Remove one empty directory through parent REMOVE authority. Wrong type,
+ * nonempty and missing names fail with ENOTDIR, ENOTEMPTY and ENOENT.
+ * Roots and final . or .. are refused; no recursive removal. */
+int rmdir(const char *path);
+
 /* Validate descriptor/access first, then reject counts above SSIZE_MAX with
  * EINVAL. Zero count touches no buffer or backend. Nonempty calls return one
  * transfer, including short progress, independently of FILE indicators. A read
