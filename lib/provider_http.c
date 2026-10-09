@@ -86,6 +86,7 @@ enum call_status provider_http_open(const struct path_context *context,
   if (!workspace || !deadline_ns || rights != FILE_RIGHT_READ) {
     return rights != FILE_RIGHT_READ ? CALL_DENIED : CALL_LIMIT;
   }
+  workspace->hop = (struct provider_result){0};
   enum call_status status = http_url_parse(uri, &workspace->parsed);
   if (status != CALL_OK) {
     return status;

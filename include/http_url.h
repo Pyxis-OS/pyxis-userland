@@ -16,7 +16,7 @@
 #define HTTP_BODY_MAX (16 * 1024 * 1024)
 #define HTTP_FETCH_NS UINT64_C(30000000000)
 
-enum http_scheme { HTTP_SCHEME_HTTP, HTTP_SCHEME_HTTPS };
+enum http_scheme { HTTP_SCHEME_HTTP = PROVIDER_HTTP, HTTP_SCHEME_HTTPS = PROVIDER_HTTPS };
 
 struct http_uri {
   enum http_scheme scheme;
