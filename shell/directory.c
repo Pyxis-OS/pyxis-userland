@@ -2,6 +2,7 @@
 #include <abi/file.h>
 #include <startup.h>
 #include <handle.h>
+#include <provider.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -146,6 +147,7 @@ void shell_directory_close(struct shell *shell)
   free(storage);
   free(shell->workspace.directories);
   free(shell->workspace.component);
+  free(shell->workspace.http);
   free(shell->working_path);
 }
 
@@ -170,9 +172,21 @@ enum call_status shell_change_directory(struct shell *shell, const char *path)
   return status;
 }
 
-static enum call_status open_path(struct shell *shell, const char *path, handle_t *image)
+static enum call_status prepare_open_workspace(struct shell *shell, const char *path)
 {
   enum call_status status = prepare_workspace(shell, strlen(path));
+  if (status == CALL_OK && provider_http_uri(path) && !shell->workspace.http) {
+    shell->workspace.http = malloc(sizeof(*shell->workspace.http));
+    if (!shell->workspace.http) {
+      return CALL_NO_MEMORY;
+    }
+  }
+  return status;
+}
+
+static enum call_status open_path(struct shell *shell, const char *path, handle_t *image)
+{
+  enum call_status status = prepare_open_workspace(shell, path);
   if (status == CALL_OK) {
     status = path_resolve(&shell->directory, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
         &shell->workspace, image);
@@ -225,8 +239,7 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
     bool input, handle_t *file)
 {
   *file = HANDLE_INVALID;
-  size_t length = strlen(path);
-  enum call_status status = prepare_workspace(shell, length);
+  enum call_status status = prepare_open_workspace(shell, path);
   if (status != CALL_OK) {
     return status;
   }

@@ -1,5 +1,6 @@
 #include <abi/file.h>
 #include <handle.h>
+#include <clock.h>
 #include <namespace.h>
 #include <path.h>
 #include <provider.h>
@@ -66,7 +67,7 @@ static enum call_status copy_component(struct path_workspace *workspace,
  * bytes. Startup scheme names exclude ':' and '/', so the prefix is unambiguous. */
 static enum call_status starting_chain(const struct path_context *context,
     const char **path, struct path_workspace *workspace, size_t *count,
-    handle_t *provider)
+    handle_t *provider, bool http)
 {
   const char *start = *path;
   const char *end = start;
@@ -84,6 +85,13 @@ static enum call_status starting_chain(const struct path_context *context,
     if (status != CALL_OK) {
       return status;
     }
+    if (http) {
+      const char *name = end - start == 5 ? "https" : "http";
+      if (strlen(name) >= workspace->component_capacity) {
+        return CALL_LIMIT;
+      }
+      memcpy(workspace->component, name, strlen(name) + 1);
+    }
     root = HANDLE_INVALID;
     if (context && context->roots) {
       for (size_t i = 0; i < context->root_count; ++i) {
@@ -94,6 +102,9 @@ static enum call_status starting_chain(const struct path_context *context,
       }
     } else {
       root = startup_root(workspace->component);
+    }
+    if (http && root != HANDLE_INVALID) {
+      return CALL_BAD_REQUEST;
     }
     handle_t namespace_handle = context && context->namespace != HANDLE_INVALID ?
         context->namespace : startup_namespace();
@@ -159,8 +170,30 @@ static enum call_status walk(const struct path_context *context, const char *pat
     return CALL_BAD_REQUEST;
   }
   const char *uri = path;
+  bool http = target == WALK_FILE && !native_only &&
+      provider_http_uri(uri);
+  uint64_t deadline = 0;
+  enum call_status clock_status = CALL_OK;
+  if (http) {
+    uint64_t now;
+    handle_t clock = workspace->clock ? workspace->clock : startup_resource("clock");
+    clock_status = clock_now(clock, &now);
+    if (clock_status == CALL_OK) {
+      if (now > UINT64_MAX - HTTP_FETCH_NS) {
+        clock_status = CALL_LIMIT;
+      } else {
+        deadline = now + HTTP_FETCH_NS;
+        if (workspace->deadline_ns && workspace->deadline_ns < deadline) {
+          deadline = workspace->deadline_ns;
+        }
+      }
+    }
+  }
+  if (clock_status != CALL_OK) {
+    return clock_status;
+  }
   handle_t provider = HANDLE_INVALID;
-  enum call_status status = starting_chain(context, &path, workspace, count, &provider);
+  enum call_status status = starting_chain(context, &path, workspace, count, &provider, http);
   if (status != CALL_OK) {
     return status;
   }
@@ -170,13 +203,42 @@ static enum call_status walk(const struct path_context *context, const char *pat
     }
     status = native_only ? CALL_BAD_OPERATION : CALL_UNAVAILABLE;
     if (!native_only && target == WALK_FILE) {
-      struct provider_result result;
-      status = provider_open(provider, uri, rights, 0, &result, file);
-      if (status == CALL_OK) {
-        status = result.status;
+      if (http) {
+        status = clock_status == CALL_OK ? provider_http_open(context, provider,
+            uri, rights, workspace->clock ? workspace->clock : startup_resource("clock"),
+            deadline, workspace->http, workspace->response, file) : clock_status;
+      } else {
+        struct provider_result result;
+        status = provider_open(provider, uri, rights, 0, &result, file);
+        if (status == CALL_OK) {
+          status = result.status;
+          if (status == CALL_OK && result.outcome != PROVIDER_OUTCOME_BYTES) {
+            status = CALL_BAD_OPERATION;
+          }
+        }
+        if (status == CALL_OK && workspace->response) {
+          struct pyxis_response_info *info = workspace->response;
+          info->flags = PYXIS_RESPONSE_PROVIDER;
+          info->status = result.provider_status;
+          if (result.metadata.media_type_size) {
+            info->flags |= PYXIS_RESPONSE_MEDIA_TYPE;
+            memcpy(info->media_type, result.metadata.media_type,
+                result.metadata.media_type_size + 1);
+          }
+        }
       }
     }
-    handle_close(provider);
+    enum call_status closed = handle_close(provider);
+    if (status == CALL_OK) {
+      status = closed;
+    }
+    if (status != CALL_OK && file && *file != HANDLE_INVALID) {
+      handle_close(*file);
+      *file = HANDLE_INVALID;
+    }
+    if (status != CALL_OK && workspace->response) {
+      *workspace->response = (struct pyxis_response_info){0};
+    }
     return status;
   }
 
@@ -254,6 +316,9 @@ static enum call_status resolve(const struct path_context *context, const char *
     return CALL_BAD_REQUEST;
   }
   *handle = HANDLE_INVALID;
+  if (workspace && workspace->response) {
+    *workspace->response = (struct pyxis_response_info){0};
+  }
   uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP;
   if (kind == DIRECTORY_KIND_FILE) {
     if (rights & ~FILE_RIGHTS) {

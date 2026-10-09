@@ -242,7 +242,14 @@ enum call_status http_url_parse(const char *text, struct http_uri *uri)
   }
   uri->scheme = authority.scheme;
   uri->port = authority.port;
-  memcpy(uri->host, authority.host.text, authority.host.length);
+  size_t host_length = authority.host.length;
+  if (host_length && authority.host.text[host_length - 1] == '.') {
+    --host_length;
+  }
+  for (size_t i = 0; i < host_length; ++i) {
+    unsigned char byte = authority.host.text[i];
+    uri->host[i] = byte >= 'A' && byte <= 'Z' ? byte + ('a' - 'A') : byte;
+  }
   memcpy(uri->authority, reference.authority.text, reference.authority.length);
   size_t offset = 0;
   if (!reference.path.length) {

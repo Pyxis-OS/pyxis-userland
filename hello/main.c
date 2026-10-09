@@ -98,7 +98,10 @@ static int read_application_file(handle_t output, handle_t root, char *scratch,
 {
   handle_t directories[8];
   handle_t temporary[8];
-  struct path_workspace workspace = {temporary, 8, scratch, scratch_size};
+  struct path_workspace workspace = {
+    .directories = temporary, .directory_capacity = 8,
+    .component = scratch, .component_capacity = scratch_size,
+  };
   struct path_context context;
   if (path_context_init(&context, directories, 8, startup_working_directories(),
         startup_working_directory_count()) != CALL_OK) {
