@@ -580,7 +580,7 @@ static enum call_status plain_collision(handle_t bin, const char *command)
   memcpy(name + size, ".pxe", 5);
   handle_t image = HANDLE_INVALID;
   enum call_status status = directory_lookup(bin, name, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
+      0, &image);
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }
@@ -663,7 +663,7 @@ enum call_status bundle_command_open(const struct path_context *context,
   }
   if (status == CALL_OK) {
     status = resolve(context, "bin://", DIRECTORY_KIND_DIRECTORY,
-        BUNDLE_DIRECTORY_RIGHTS, &bin);
+        DIRECTORY_RIGHT_LOOKUP, &bin);
     if (status == CALL_NOT_FOUND) {
       status = CALL_OK;
     } else if (status == CALL_OK) {
