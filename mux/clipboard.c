@@ -42,6 +42,10 @@ static void report(struct mux *mux, uint64_t operation, enum call_status status,
       text = copy ? "Copy unsupported for this terminal" :
           "Paste unsupported; use a stock line reader";
       break;
+    case CALL_UNAVAILABLE:
+      text = copy ? "Copy unavailable for this terminal" :
+          "Paste unavailable; use an opted-in line reader";
+      break;
     case CALL_TIMED_OUT:
       text = "Clipboard action expired; use a fresh gesture";
       break;
