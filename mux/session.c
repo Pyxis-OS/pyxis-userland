@@ -146,7 +146,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
     {"namespace_service", NAMESPACE_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHTS}, {"random", RANDOM_RIGHT_READ},
-    {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST},
+    {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
     {"net_config", NET_CONFIG_RIGHT_READ},
   };

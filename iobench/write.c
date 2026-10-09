@@ -12,9 +12,8 @@ struct output_result {
   size_t read_bytes, written_bytes, read_calls, write_calls;
   size_t short_reads, short_writes;
   uint64_t elapsed, sync_elapsed;
-  bool timed, sync_timed, early_eof, profiled, host_profiled;
+  bool timed, sync_timed, early_eof, host_profiled;
   struct profile_host_snapshot host_profile;
-  struct profile_file_snapshot profile;
   const char *operation;
 };
 
@@ -174,15 +173,8 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
     fill_fixture(payload, FIXTURE_BYTES, true);
   }
 
-  bool profiled = timed && options->profile;
-  if (profiled && !check_status("profile begin", profile_file_begin(profile))) {
-    return false;
-  }
   bool host_profiled = timed && options->host_profile;
   if (host_profiled && !check_status("host profile begin", profile_host_begin(profile))) {
-    if (profiled) {
-      check_status("profile end", profile_file_end(profile, &result->profile));
-    }
     return false;
   }
   uint64_t start = 0, end = 0, sync_start = 0, sync_end = 0;
@@ -190,9 +182,6 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   if (start_status != CALL_OK) {
     if (host_profiled) {
       check_status("host profile end", profile_host_end(profile, &result->host_profile));
-    }
-    if (profiled) {
-      check_status("profile end", profile_file_end(profile, &result->profile));
     }
     check_status("transfer start clock", start_status);
     return false;
@@ -202,8 +191,6 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   enum call_status host_profile_status = host_profiled ?
       profile_host_end(profile, &result->host_profile) : CALL_OK;
   result->host_profiled = host_profiled && host_profile_status == CALL_OK;
-  enum call_status profile_status = profiled ? profile_file_end(profile, &result->profile) : CALL_OK;
-  result->profiled = profiled && profile_status == CALL_OK;
   enum call_status sync_status = CALL_OK, sync_clock_status = CALL_OK;
   if (status == CALL_OK && end_status == CALL_OK && options->sync) {
     sync_clock_status = timed ? clock_now(clock, &sync_start) : CALL_OK;
@@ -218,9 +205,6 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   /* All diagnostics and verification follow both measured intervals. */
   bool success = check_status(result->operation, status);
   if (!check_status("host profile end", host_profile_status)) {
-    success = false;
-  }
-  if (!check_status("profile end", profile_status)) {
     success = false;
   }
   if (result->early_eof) {
@@ -263,31 +247,6 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   return success;
 }
 
-static void report_duration(const char *name, const struct profile_duration *duration)
-{
-  fprintf(stderr, "  %s: sum=%llu max=%llu ns\n", name,
-      (unsigned long long)duration->total_ns, (unsigned long long)duration->maximum_ns);
-}
-
-static void report_profile(const struct profile_file_snapshot *profile)
-{
-  fprintf(stderr, "  RAM replacements=%llu success=%llu failed=%llu capacity=%llu copied=%llu bytes\n",
-      (unsigned long long)profile->requests, (unsigned long long)profile->successes,
-      (unsigned long long)profile->failures, (unsigned long long)profile->requested_capacity,
-      (unsigned long long)profile->copied_bytes);
-  report_duration("publication", &profile->publication);
-  report_duration("queue", &profile->queue);
-  report_duration("service", &profile->service);
-  report_duration("resume", &profile->resume);
-  report_duration("total", &profile->total);
-  report_duration("allocation", &profile->allocation);
-  report_duration("copy", &profile->copy);
-  report_duration("release", &profile->release);
-  if (profile->flags & PROFILE_SATURATED) {
-    fputs("  profile counters saturated\n", stderr);
-  }
-}
-
 static void report_pass(size_t pass, const struct output_result *result, bool success)
 {
   fprintf(stderr, "%s %zu: %s; requested=%u read=%zu written=%zu bytes; failed_pass=%u\n",
@@ -307,9 +266,6 @@ static void report_pass(size_t pass, const struct output_result *result, bool su
   if (result->host_profiled) {
     report_host_profile(&result->host_profile);
   }
-  if (result->profiled) {
-    report_profile(&result->profile);
-  }
   if (result->sync_timed) {
     fprintf(stderr, "  file_sync=%llu ns (%.3f ms)\n",
         (unsigned long long)result->sync_elapsed, result->sync_elapsed / 1000000.0);
@@ -318,9 +274,8 @@ static void report_pass(size_t pass, const struct output_result *result, bool su
 
 bool run_output(const struct options *options, unsigned char *scratch, handle_t clock)
 {
-  handle_t profile = options->profile || options->host_profile ?
-      startup_resource("profile") : HANDLE_INVALID;
-  if ((options->profile || options->host_profile) && profile == HANDLE_INVALID) {
+  handle_t profile = options->host_profile ? startup_resource("profile") : HANDLE_INVALID;
+  if (options->host_profile && profile == HANDLE_INVALID) {
     fputs("iobench: missing requested profile grant\n", stderr);
     return false;
   }
@@ -334,8 +289,6 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
   fprintf(stderr, "Interface: libpyxis file handles; storage=%s sync=%s\n",
       options->prepared ? "prepared overwrite" : "grow from zero",
       options->sync ? "file (preparation untimed, completion separate)" : "none");
-  fprintf(stderr, "RAM replacement profiling: %s (measured transfers only)\n",
-      options->profile ? "on" : "off");
   fprintf(stderr, "Host FILE profiling: %s (measured transfers only)\n",
       options->host_profile ? "on" : "off");
   if (options->mode == IO_COPY) {

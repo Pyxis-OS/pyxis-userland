@@ -350,7 +350,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       return status;
     }
     grants[profile_index] = (struct launch_grant){shell->profile,
-        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST), 0};
+        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
   if (has_namespace) {
     uint64_t rights, transport;

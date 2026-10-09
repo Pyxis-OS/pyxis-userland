@@ -134,7 +134,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     {"audio", AUDIO_RIGHT_PLAYBACK},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
-    {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST},
+    {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
     {"net_config", NET_CONFIG_RIGHT_READ},
   };

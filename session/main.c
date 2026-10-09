@@ -294,7 +294,7 @@ static int launch_session(const struct session_config *config, const struct netw
     }
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", grant_count};
     grants[grant_count++] = (struct launch_grant){profile,
-        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST), 0};
+        rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
 
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
