@@ -73,7 +73,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 26, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 27, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -284,12 +284,16 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[grant_count++] = (struct launch_grant){pointer, POINTER_RIGHT_INPUT, 0};
   }
 
-  /* Power stays with local sessions; the remote terminal server is
-   * unauthenticated, so its services and shells never receive it. */
+  /* Local power never authorizes remote shells; they need the separate opt-in. */
   handle_t power = startup_resource("power");
   if (power != HANDLE_INVALID && !start_remote_services) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", grant_count};
     grants[grant_count++] = (struct launch_grant){power, POWER_RIGHTS, 0};
+  }
+  handle_t remote_power = startup_resource("remote_power");
+  if (remote_power != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"remote_power", grant_count};
+    grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
 
   handle_t space = startup_resource("space");

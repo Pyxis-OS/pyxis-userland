@@ -52,6 +52,7 @@ struct boot_space {
   bool multiplexer; /* Local terminal startup may create pane sessions. */
   bool screenshot; /* Receives whole-screen capture authority. */
   bool power; /* Receives power-off and restart authority. */
+  bool remote_power; /* Opts remote root shells into power authority. */
 };
 
 /* One parsed file. Owns every string and array. */

@@ -9,6 +9,7 @@
 #include <abi/namespace.h>
 #include <abi/endpoint.h>
 #include <abi/pipe.h>
+#include <abi/power.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -70,7 +71,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 15, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 16, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
@@ -150,6 +151,12 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     }
     resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count};
     grants[grant_count++] = (struct launch_grant){source, rights & allowed[i].rights, 0};
+  }
+  /* Only the explicit remote opt-in becomes power in a remote root shell. */
+  handle_t remote_power = startup_resource("remote_power");
+  if (remote_power != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", grant_count};
+    grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
   const char *arguments[] = {"boot://shell.pxe", no_echo ? "--no-echo" : "--remote-prompt"};
   struct launch_request request = {

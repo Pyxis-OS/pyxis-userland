@@ -7,6 +7,7 @@
 #include <abi/memory.h>
 #include <abi/namespace.h>
 #include <abi/pipe.h>
+#include <abi/power.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -159,7 +160,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 14, RESOURCE_CAPACITY = 18 };
+  enum { OPTIONAL_COUNT = 15, RESOURCE_CAPACITY = 19 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -174,6 +175,11 @@ int launch_remote_server(const struct session_config *config,
     {(uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT},
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
+  handle_t remote_power = startup_resource("remote_power");
+  if (remote_power != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"remote_power", grant_count};
+    grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
+  }
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t working_directory = SIZE_MAX;

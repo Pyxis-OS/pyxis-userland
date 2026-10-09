@@ -265,9 +265,14 @@ synchronize the named files or directories. Closing a handle does not sync it.
 Boot init grants it only to spaces that set `power = true` in their boot
 configuration; the live Development and installed `pyxis` spaces do, as does the
 rescue space. Session forwards it to local successors but not when starting
-remote services, and the shell forwards it only to session successors, so
-neither remote shells nor ordinary programs receive it. The kernel flushes the
-native pools before powering off or restarting; a failure is reported and the
+remote services, and the shell forwards it only to session successors.
+The separate `remote_power = true` boot-space setting grants `remote_power`
+through trusted session handoffs; the remote supervisor binds it as `power`
+only in its root shell. Live/PXE Remote enables this; installed defaults do not.
+The remote terminal is unauthenticated: any LAN peer reaching the live/PXE
+terminal can reboot or power off the machine. The owner accepts this exposure
+for a sole-user home LAN. Ordinary programs and services receive neither grant.
+The kernel flushes native pools before powering off or restarting; a failure is reported and the
 system stays up. [power.h](include/power.h) provides `power_off` and
 `power_restart`.
 

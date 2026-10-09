@@ -155,6 +155,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_clipboard_shared = clipboard_shared != HANDLE_INVALID;
   /* Only a session successor inherits power; the shell's own programs never do. */
   bool has_power = session && shell->power != HANDLE_INVALID;
+  handle_t remote_power = session ? startup_resource("remote_power") : HANDLE_INVALID;
+  bool has_remote_power = remote_power != HANDLE_INVALID;
   bool has_screen_capture = shell->screen_capture != HANDLE_INVALID;
   bool has_audio = shell->audio != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
@@ -218,7 +220,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t mux_terminal_index = terminal_index + (has_terminal ? 1 : 0);
   size_t terminal_pointer_index = mux_terminal_index + (has_mux_terminal ? 1 : 0);
   size_t power_index = terminal_pointer_index + (has_terminal_pointer ? 1 : 0);
-  size_t screen_capture_index = power_index + (has_power ? 1 : 0);
+  size_t remote_power_index = power_index + (has_power ? 1 : 0);
+  size_t screen_capture_index = remote_power_index + (has_remote_power ? 1 : 0);
   size_t audio_index = screen_capture_index + (has_screen_capture ? 1 : 0);
   size_t clipboard_local_index = audio_index + (has_audio ? 1 : 0);
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
@@ -344,6 +347,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_power) {
     grants[power_index] = (struct launch_grant){shell->power, POWER_RIGHTS, 0};
+  }
+  if (has_remote_power) {
+    grants[remote_power_index] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
   if (has_screen_capture) {
     grants[screen_capture_index] = (struct launch_grant){shell->screen_capture,
@@ -488,6 +494,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_power) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", power_index};
+  }
+  if (has_remote_power) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"remote_power", remote_power_index};
   }
   if (has_screen_capture) {
     resources[resource_count++] = (struct launch_binding){

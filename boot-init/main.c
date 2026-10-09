@@ -110,7 +110,7 @@ struct authority {
   handle_t native_mount, host_mount;
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
-  /* Granted only to spaces that set power. */
+  /* Granted only to spaces that set power or remote_power. */
   handle_t power;
   uint64_t cpu_count;
   const char *remote_beacon;
@@ -329,7 +329,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 5];
+  struct launch_binding resources[SERVICE_COUNT + 6];
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -359,7 +359,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 5, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 6, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -427,6 +427,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
     launch->resources[launch->resource_count++] =
         (struct launch_binding){(uintptr_t)"power", launch->grant_count++};
+  }
+  if (space->remote_power && authority->power != HANDLE_INVALID) {
+    launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"remote_power", launch->grant_count++};
   }
   if (authority->remote_beacon && !strcmp(space->name, "remote")) {
     launch->resources[launch->resource_count++] =

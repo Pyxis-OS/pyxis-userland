@@ -13,7 +13,7 @@ return {
     { name = "readonly", title = "Read-only", init = "boot://init-readonly",
       roots = { host = { access = "read-only", optional = true }, home = "read-only" } },
     { name = "remote", title = "Remote", init = "boot://init-remote",
-      screenshot = true,
+      screenshot = true, remote_power = true,
       roots = { host = { access = "read-write", optional = true }, home = "read-write" },
       start = "tmp" },
   },
