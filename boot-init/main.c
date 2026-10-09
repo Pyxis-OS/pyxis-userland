@@ -569,6 +569,7 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
 {
   static const struct boot_space rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
+    .clipboard_local = true, .clipboard_shared = true,
   };
   puts("boot-init: no configured space started; starting the rescue space");
   start_space(authority, mounts, &rescue);
