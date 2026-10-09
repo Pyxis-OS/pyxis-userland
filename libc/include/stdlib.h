@@ -101,6 +101,12 @@ void srand(unsigned seed);
 void qsort(void *base, size_t count, size_t size,
   int (*compare)(const void *, const void *));
 
+/* Binary search of an array already sorted by compare. The key is the first
+ * argument to compare and an element the second. Returns a matching element,
+ * not necessarily the first of several equal ones, or a null pointer. */
+void *bsearch(const void *key, const void *base, size_t count, size_t size,
+  int (*compare)(const void *, const void *));
+
 /* Register a handler for exit or a return from main. Handlers run once each,
  * in reverse order of registration, including handlers registered while exit
  * runs them. The first 32 registrations always succeed; later ones use the heap
