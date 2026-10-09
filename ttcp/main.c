@@ -18,6 +18,7 @@
 
 struct options {
   const char *host;
+  bool transmit;
   unsigned port, buffers, length;
 };
 
@@ -26,7 +27,7 @@ static bool parse_options(int argc, char **argv, struct options *options)
   *options = (struct options){
     .port = DEFAULT_PORT, .buffers = DEFAULT_BUFFERS, .length = DEFAULT_BUFFER_BYTES,
   };
-  bool transmit = false;
+  bool transmit = false, receive = false, sized = false;
   int i = 1;
   while (i < argc && argv[i][0] == '-') {
     const char *option = argv[i++];
@@ -34,9 +35,14 @@ static bool parse_options(int argc, char **argv, struct options *options)
       transmit = true;
       continue;
     }
+    if (!strcmp(option, "-r")) {
+      receive = true;
+      continue;
+    }
     if (option[1] != 'p' && option[1] != 'n' && option[1] != 'l') {
       return false;
     }
+    sized |= option[1] != 'p';
     const char *number = option + 2;
     if (!*number) {
       if (i == argc) {
@@ -55,9 +61,11 @@ static bool parse_options(int argc, char **argv, struct options *options)
     case 'l': options->length = value; break;
     }
   }
-  if (!transmit || i != argc - 1 || !argv[i][0]) {
+  /* Receive sizes are the peer's; -n and -l describe only what -t sends. */
+  if (transmit == receive || (receive && sized) || i != argc - 1 || !argv[i][0]) {
     return false;
   }
+  options->transmit = transmit;
   options->host = argv[i];
   return true;
 }
@@ -124,6 +132,28 @@ static bool transmit(handle_t stream, handle_t clock, const unsigned char *buffe
   return true;
 }
 
+/* Read and discard until peer EOF. Each read has a fresh deadline, so a peer
+ * that stops sending without closing fails after ten seconds. */
+static bool receive(handle_t stream, handle_t clock, uint64_t *received, uint64_t *finished)
+{
+  unsigned char buffer[TCP_READ_MAX_BYTES];
+  for (;;) {
+    uint64_t deadline;
+    if (!next_deadline(clock, &deadline)) {
+      return false;
+    }
+    struct tcp_read_reply reply;
+    enum call_status status = tcp_read(stream, buffer, sizeof(buffer), deadline, &reply);
+    if (status != CALL_OK) {
+      return report_status("read", status);
+    }
+    if (!reply.length) {
+      return read_clock(clock, finished);
+    }
+    *received += reply.length;
+  }
+}
+
 static bool finish_transfer(handle_t stream, handle_t clock, uint64_t *finished)
 {
   uint64_t deadline;
@@ -178,11 +208,73 @@ static bool finish_transfer(handle_t stream, handle_t clock, uint64_t *finished)
   }
 }
 
+static bool print_rate(char mode, uint64_t bytes, uint64_t started, uint64_t finished,
+    const char *scope)
+{
+  double seconds = (double)(finished - started) / 1000000000.0;
+  int written = finished == started ?
+      printf("ttcp-%c: %llu bytes; elapsed below clock resolution, rate unavailable\n",
+          mode, (unsigned long long)bytes) :
+      printf("ttcp-%c: %llu bytes in %.6f seconds = %.3f MiB/s (%s)\n",
+          mode, (unsigned long long)bytes, seconds, (double)bytes / 1048576.0 / seconds, scope);
+  if (written < 0) {
+    perror("ttcp: stdout");
+    return false;
+  }
+  return true;
+}
+
+/* Connect to a peer that serves data, such as a host's
+ * socat -u OPEN:FILE TCP4-LISTEN:PORT; ordinary sessions cannot listen. */
+static int receive_main(const struct options *options, handle_t service, handle_t clock,
+    uint32_t address)
+{
+  bool success = false;
+  handle_t stream = HANDLE_INVALID;
+  uint64_t deadline, started, finished, received = 0;
+  if (printf("ttcp-r: port %u <- %s\n", options->port, options->host) < 0) {
+    perror("ttcp: stdout");
+    return EXIT_FAILURE;
+  }
+  if (!next_deadline(clock, &deadline)) {
+    return EXIT_FAILURE;
+  }
+  struct tcp_connect_reply connection;
+  enum call_status status = tcp_connect(service, address, options->port, deadline, &connection);
+  if (status != CALL_OK) {
+    report_status("connect", status);
+    return EXIT_FAILURE;
+  }
+  stream = connection.handle;
+  if (read_clock(clock, &started) && receive(stream, clock, &received, &finished) &&
+      print_rate('r', received, started, finished, "to peer EOF")) {
+    success = true;
+  }
+  if (success) {
+    status = tcp_shutdown_write(stream);
+    if (status != CALL_OK) {
+      success = report_status("shutdown write", status);
+    }
+  } else {
+    fprintf(stderr, "ttcp: incomplete; %llu bytes received\n", (unsigned long long)received);
+    status = tcp_abort(stream);
+    if (status != CALL_OK) {
+      report_status("abort", status);
+    }
+  }
+  if (handle_close(stream) != 0) {
+    fputs("ttcp: cannot close stream\n", stderr);
+    success = false;
+  }
+  return success && !ferror(stdout) && !ferror(stderr) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
 int main(int argc, char **argv)
 {
   struct options options;
   if (!parse_options(argc, argv, &options)) {
-    fputs("Usage: ttcp -t [-p PORT] [-n BUFFERS] [-l BYTES] HOST\n", stderr);
+    fputs("Usage: ttcp -t [-p PORT] [-n BUFFERS] [-l BYTES] HOST\n"
+          "       ttcp -r [-p PORT] HOST\n", stderr);
     return EXIT_FAILURE;
   }
   /* Both factors are positive 32-bit values; widen before multiplying. */
@@ -196,6 +288,9 @@ int main(int argc, char **argv)
   if (!udp_parse_address(options.host, &address) &&
       !dns_resolve_address("ttcp", options.host, clock, &address)) {
     return EXIT_FAILURE;
+  }
+  if (!options.transmit) {
+    return receive_main(&options, service, clock, address);
   }
   unsigned char *buffer = malloc(options.length);
   if (!buffer) {
@@ -228,14 +323,7 @@ int main(int argc, char **argv)
     goto done;
   }
 
-  double seconds = (double)(finished - started) / 1000000000.0;
-  int written = finished == started ?
-      printf("ttcp-t: %llu bytes; elapsed below clock resolution, rate unavailable\n",
-          (unsigned long long)total) :
-      printf("ttcp-t: %llu bytes in %.6f seconds = %.3f MiB/s (including closure)\n",
-          (unsigned long long)total, seconds, (double)total / 1048576.0 / seconds);
-  if (written < 0) {
-    perror("ttcp: stdout");
+  if (!print_rate('t', total, started, finished, "including closure")) {
     goto done;
   }
   success = true;
