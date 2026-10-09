@@ -161,3 +161,81 @@ enum call_status console_passthrough(handle_t input, handle_t *passthrough)
 {
   return console_handle(input, CONSOLE_PASSTHROUGH, passthrough);
 }
+
+static enum call_status paste_call(handle_t input, const void *request, size_t size,
+    void *reply, size_t reply_size)
+{
+  struct syscall_result result = syscall_call(input, request, size, reply, reply_size);
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? reply_size : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  return result.status;
+}
+
+enum call_status console_paste_register(handle_t input, handle_t output, uint64_t *epoch)
+{
+  if (!epoch) {
+    return CALL_BAD_REQUEST;
+  }
+  *epoch = 0;
+  struct console_paste_register_request request = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_PASTE_REGISTER}, .output = output,
+  };
+  struct console_paste_register_reply reply;
+  enum call_status status = paste_call(input, &request, sizeof(request), &reply, sizeof(reply));
+  if (status == CALL_OK) {
+    if (!reply.epoch) {
+      return CALL_BAD_REQUEST;
+    }
+    *epoch = reply.epoch;
+  }
+  return status;
+}
+
+enum call_status console_paste_read(handle_t input, uint64_t epoch, void *bytes,
+    size_t capacity, uint64_t timeout_ms, bool boundary,
+    struct console_paste_read_reply *record)
+{
+  if (!record) {
+    return CALL_BAD_REQUEST;
+  }
+  *record = (struct console_paste_read_reply){0};
+  struct console_paste_read_request request = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_PASTE_READ},
+    .epoch = epoch, .address = (uintptr_t)bytes, .capacity = capacity,
+    .timeout_ms = timeout_ms, .flags = boundary ? CONSOLE_PASTE_BOUNDARY : 0,
+  };
+  struct console_paste_read_reply reply;
+  enum call_status status = paste_call(input, &request, sizeof(request), &reply, sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.epoch != epoch || reply.status >= CALL_STATUS_COUNT || reply.length > capacity ||
+      reply.kind < CONSOLE_PASTE_INPUT || reply.kind > CONSOLE_PASTE_CANCEL ||
+      (reply.kind == CONSOLE_PASTE_INPUT && (reply.length > 1 || reply.transaction_id)) ||
+      (reply.kind != CONSOLE_PASTE_INPUT && !reply.transaction_id) ||
+      (reply.kind == CONSOLE_PASTE_DATA && !reply.length) ||
+      (reply.kind != CONSOLE_PASTE_INPUT && reply.kind != CONSOLE_PASTE_DATA && reply.length)) {
+    return CALL_BAD_REQUEST;
+  }
+  *record = reply;
+  return CALL_OK;
+}
+
+enum call_status console_paste_ack(handle_t input, uint64_t epoch, uint64_t transaction_id)
+{
+  struct console_paste_ack_request request = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_PASTE_ACK},
+    .epoch = epoch, .transaction_id = transaction_id,
+  };
+  return paste_call(input, &request, sizeof(request), NULL, 0);
+}
+
+enum call_status console_paste_release(handle_t input, uint64_t epoch)
+{
+  struct console_paste_release_request request = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_PASTE_RELEASE}, .epoch = epoch,
+  };
+  return paste_call(input, &request, sizeof(request), NULL, 0);
+}

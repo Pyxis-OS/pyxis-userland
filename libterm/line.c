@@ -1,8 +1,10 @@
 #include <handle.h>
-#include <term.h>
+#include "input.h"
+#include <console.h>
 #include <stdlib.h>
 #include <string.h>
 #include <startup.h>
+#include <stdio.h>
 
 struct line_editor {
   struct terminal *term;
@@ -219,7 +221,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     .columns = columns, .cells = cells, .prompt_length = prompt_length, .quiet = quiet,
     .length = initial_length, .cursor = initial_length,
   };
-  struct term_event_reader reader;
+  struct term_event_reader reader = {.term = term, .clock = HANDLE_INVALID};
   handle_t clock = startup_resource("clock");
   bool adaptive = false;
   if (clock != HANDLE_INVALID) {
@@ -235,6 +237,9 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     } else if (result.error != CALL_DENIED && result.error != CALL_BAD_HANDLE) {
       return result;
     }
+  }
+  if (!adaptive) {
+    reader.clock = HANDLE_INVALID;
   }
   result.error = CALL_OK;
   if (!quiet) {
@@ -258,11 +263,21 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     result.error = term_print(term, "\x1b]133;B\a");
   }
 
+  if (result.error == CALL_OK) {
+    enum call_status status = console_paste_register(term->input, term->output,
+        &reader.receiver_epoch);
+    if (status != CALL_OK && status != CALL_BUSY && status != CALL_DENIED &&
+        status != CALL_WRONG_TYPE) {
+      result.error = status;
+    }
+  }
+  uint64_t paste_transaction = 0;
+  size_t paste_inserted = 0;
   while (result.error == CALL_OK) {
     unsigned key;
     struct term_event event;
-    result.error = adaptive ? term_read_event(&reader, &event) : term_read_key(term, &key);
-    if (result.error == CALL_OK && adaptive) {
+    result.error = term_read_editor_event(&reader, &event);
+    if (result.error == CALL_OK) {
       if (event.kind == TERM_EVENT_RESIZED) {
         if (event.size.columns > UINT16_MAX || event.size.rows > UINT16_MAX) {
           result.error = CALL_BAD_REQUEST;
@@ -284,6 +299,83 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
           result.error = draw_line(&editor, true, false);
         }
         continue;
+      }
+      if (event.kind == TERM_EVENT_PASTE_BEGIN) {
+        if (paste_transaction) {
+          result.error = CALL_BAD_REQUEST;
+          break;
+        }
+        paste_transaction = event.transaction_id;
+        paste_inserted = 0;
+        continue;
+      }
+      if (event.kind == TERM_EVENT_PASTE_DATA) {
+        if (!paste_transaction || paste_transaction != event.transaction_id) {
+          result.error = CALL_BAD_REQUEST;
+          break;
+        }
+        for (size_t i = 0; i < event.length; ++i) {
+          if (event.bytes[i] == '\n' || event.bytes[i] == '\t') {
+            event.bytes[i] = ' ';
+          }
+          if (event.bytes[i] < ' ' || event.bytes[i] > '~') {
+            result.error = CALL_BAD_REQUEST;
+            break;
+          }
+        }
+        if (result.error == CALL_OK) {
+          size_t inserted = event.length;
+          if (inserted > limit - editor.length) {
+            inserted = limit - editor.length;
+            result.limit_reached = true;
+          }
+          memmove(buffer + editor.cursor + inserted, buffer + editor.cursor,
+              editor.length - editor.cursor + 1);
+          memcpy(buffer + editor.cursor, event.bytes, inserted);
+          editor.cursor += inserted;
+          editor.length += inserted;
+          paste_inserted += inserted;
+          result.pasted += inserted;
+          result.error = draw_line(&editor, true, inserted < event.length);
+        }
+        continue;
+      }
+      if (event.kind == TERM_EVENT_PASTE_END || event.kind == TERM_EVENT_PASTE_CANCEL) {
+        if ((paste_transaction && paste_transaction != event.transaction_id) ||
+            (!paste_transaction && event.kind == TERM_EVENT_PASTE_END)) {
+          result.error = CALL_BAD_REQUEST;
+          break;
+        }
+        bool cancelled = event.kind == TERM_EVENT_PASTE_CANCEL;
+        if (!paste_transaction) {
+          paste_inserted = 0;
+        }
+        result.paste_cancelled |= cancelled;
+        result.paste_status = event.paste_status;
+        /* Decoder paste mode ends before ACK permits ordinary input again. */
+        paste_transaction = 0;
+        if (cancelled && !quiet) {
+          result.error = draw_line(&editor, false, false);
+          if (result.error == CALL_OK) {
+            char message[96];
+            snprintf(message, sizeof(message), "\n[paste cancelled after %zu bytes]\n",
+                paste_inserted);
+            result.error = term_print(term, message);
+          }
+          editor.displayed_length = editor.displayed_cursor = 0;
+          if (result.error == CALL_OK) {
+            result.error = draw_line(&editor, true, result.limit_reached);
+          }
+        }
+        if (result.error == CALL_OK) {
+          result.error = console_paste_ack(term->input, reader.receiver_epoch,
+              event.transaction_id);
+        }
+        continue;
+      }
+      if (paste_transaction) {
+        result.error = CALL_BAD_REQUEST;
+        break;
       }
       key = event.key;
     }
@@ -377,6 +469,14 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     result.error = draw_line(&editor, true, full);
   }
 
+  if (reader.receiver_epoch) {
+    enum call_status status = console_paste_release(term->input, reader.receiver_epoch);
+    reader.receiver_epoch = 0;
+    if (status != CALL_OK) {
+      result.status = TERM_LINE_ERROR;
+      result.error = status;
+    }
+  }
   if (result.status != TERM_LINE_ERROR && !quiet) {
     enum call_status status = draw_line(&editor, false, false);
     if (status == CALL_OK) {

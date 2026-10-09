@@ -13,7 +13,7 @@ export SDK CC CPPFLAGS CFLAGS PYXIS_COMPILER_ID
 START_OBJECT := $(BUILD)/libc/start.o
 LIBPYXIS := $(BUILD)/libpyxis.a
 LIB_OBJECTS := $(BUILD)/lib/startup.o \
-               $(BUILD)/lib/console.o $(BUILD)/lib/terminal.o $(BUILD)/lib/handle.o \
+               $(BUILD)/lib/console.o $(BUILD)/lib/clipboard.o $(BUILD)/lib/terminal.o $(BUILD)/lib/handle.o \
                $(BUILD)/lib/file.o $(BUILD)/lib/disk.o $(BUILD)/lib/pipe.o $(BUILD)/lib/endpoint.o $(BUILD)/lib/namespace.o $(BUILD)/lib/provider.o $(BUILD)/lib/provider_http.o $(BUILD)/lib/http_url.o \
                $(BUILD)/lib/directory.o $(BUILD)/lib/path.o $(BUILD)/lib/mount.o \
                $(BUILD)/lib/profile.o $(BUILD)/lib/space.o $(BUILD)/lib/keyboard.o $(BUILD)/lib/pointer.o $(BUILD)/lib/clock.o $(BUILD)/lib/echo.o $(BUILD)/lib/net_config.o $(BUILD)/lib/udp.o $(BUILD)/lib/tcp.o $(BUILD)/lib/random.o $(BUILD)/lib/power.o $(BUILD)/lib/memory.o $(BUILD)/lib/display.o $(BUILD)/lib/process.o \

@@ -68,12 +68,21 @@ enum call_status term_read_key(struct terminal *term, unsigned *key);
 enum call_status term_read_key_timeout(struct terminal *term, uint32_t timeout_ms,
                                       unsigned *key);
 
-enum term_event_kind { TERM_EVENT_KEY, TERM_EVENT_RESIZED };
+enum term_event_kind {
+  TERM_EVENT_KEY, TERM_EVENT_RESIZED,
+  TERM_EVENT_PASTE_BEGIN, TERM_EVENT_PASTE_DATA, TERM_EVENT_PASTE_END,
+  TERM_EVENT_PASTE_CANCEL,
+};
 
 struct term_event {
   enum term_event_kind kind;
   unsigned key;
   struct console_size_reply size; /* Valid only for RESIZED. */
+  /* Paste fields are produced only for an explicitly registered reader. */
+  uint64_t transaction_id;
+  enum call_status paste_status;
+  size_t length;
+  unsigned char bytes[256]; /* Owned DATA, never ordinary input read-ahead. */
 };
 
 /* One reader exclusively owns key decoding for its borrowed terminal. Resize
@@ -85,6 +94,7 @@ struct term_event_reader {
   struct console_size_reply size;
   uint64_t byte_deadline;
   unsigned state, parameter;
+  uint64_t receiver_epoch; /* Only stock editing opts in; zero keeps raw reads. */
 };
 
 enum call_status term_event_reader_init(struct term_event_reader *reader,
@@ -108,6 +118,9 @@ struct term_line_result {
   size_t length;          /* Excludes newline and NUL; zero unless LINE_OK. */
   bool limit_reached;     /* An insertion was rejected; editing still continued. */
   bool recorded;          /* LINE_OK appended the line to the caller's history. */
+  bool paste_cancelled;   /* An admitted paste was cancelled; editing continued. */
+  size_t pasted;          /* Paste bytes inserted, including LF/Tab as spaces. */
+  enum call_status paste_status; /* Most recent admitted paste completion. */
 };
 
 /* Own input/output exclusively for the call. Prompt must be printable ASCII;
@@ -133,6 +146,14 @@ struct term_line_result {
  * limit_reached. Deletion, movement, submission and cancellation remain usable.
  * CANCELLED/EOF/INPUT_LOST/ERROR clear buffer[0] when possible.
  * Reads one byte at a time: no unread bytes are retained for a future caller.
+ * Exclusively registers a process-owned native paste receiver while editing,
+ * when matching input/output authority is available. Busy/denied registration
+ * preserves ordinary editing. Paste inserts ASCII with LF/Tab changed to spaces
+ * and consumes complete native framing even at the line limit; it never submits.
+ * Physical Enter freshness and suppression belong to the kernel. Cancellation
+ * retains the editable prefix, reports its inserted length and sets the result's
+ * paste fields. Quiet readers report through the result only. The receiver epoch
+ * is released before every return, so a child cannot inherit a transaction.
  * Holds passthrough for the call, so Ctrl+C cancels the line rather than
  * interrupting the program; if the request fails, editing continues without
  * it. Failing to withdraw passthrough returns ERROR with CALL_BAD_HANDLE. */
