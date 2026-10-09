@@ -64,6 +64,10 @@ enum call_status audio_status(handle_t audio, struct audio_status_reply *reply)
   struct audio_status_reply response;
   enum call_status status = audio_call(audio, AUDIO_STATUS, &response, sizeof(response));
   if (status == CALL_OK) {
+    if (response.master_percent > 100 || response.space_percent > 100 ||
+        response.master_muted > 1 || response.space_muted > 1) {
+      return CALL_BAD_REQUEST;
+    }
     *reply = response;
   }
   return status;
