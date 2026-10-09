@@ -13,6 +13,7 @@ extern "C" {
 #define O_CREAT 0x100
 #define O_TRUNC 0x200
 #define O_EXCL 0x400
+#define O_APPEND 0x800
 
 /* Select exactly one access mode: O_RDONLY, O_WRONLY or O_RDWR. O_CREAT/O_TRUNC
  * require writable access; O_EXCL requires O_CREAT and creates a new file or
@@ -21,7 +22,9 @@ extern "C" {
  * reading the variadic argument. O_CREAT requires mode_t: only 0666 is accepted
  * as native creation policy, not Unix permissions. Other modes fail with
  * ENOTSUP before lookup even if the file exists. Authority always comes from
- * the caller's grants. Public append is absent. */
+ * the caller's grants. O_APPEND moves each write() to the current end of the
+ * file, as fopen's "a" does: a native SIZE then WRITE, which is not atomic
+ * against other writers. pwrite keeps its explicit offset. */
 int open(const char *path, int flags, ...);
 
 #ifdef __cplusplus

@@ -8,7 +8,7 @@
 int open(const char *path, int flags, ...)
 {
   int access = flags & (O_WRONLY | O_RDWR);
-  if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL)) ||
+  if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL | O_APPEND)) ||
       access == (O_WRONLY | O_RDWR) ||
       (access == O_RDONLY && (flags & (O_CREAT | O_TRUNC))) ||
       ((flags & O_EXCL) && !(flags & O_CREAT))) {
@@ -30,7 +30,7 @@ int open(const char *path, int flags, ...)
   const struct descriptor_mode mode = {
     .readable = access != O_WRONLY, .writable = access != O_RDONLY,
     .create = flags & O_CREAT, .truncate = flags & O_TRUNC,
-    .exclusive = flags & O_EXCL,
+    .exclusive = flags & O_EXCL, .append = flags & O_APPEND,
   };
   return descriptor_open(path, &mode, NULL);
 }
