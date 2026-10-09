@@ -16,6 +16,8 @@ enum call_status audio_acquire(handle_t audio, struct audio_acquire_reply *reply
  * writes return LIMIT; incomplete frames return BAD_REQUEST. Zero bytes still
  * validate authority and session ownership. */
 enum call_status audio_write(handle_t audio, const void *bytes, size_t size);
+/* Read-only worker-confirmed master/space percentages and mute flags, alongside
+ * queue status. Playback authority cannot change user volume controls. */
 enum call_status audio_status(handle_t audio, struct audio_status_reply *reply);
 /* Discards queued input; this is not an audible drain. Already mixed frames
  * may outlive release. Process exit also releases the session. */
