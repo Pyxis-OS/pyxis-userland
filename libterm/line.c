@@ -124,21 +124,22 @@ void term_history_free(struct term_history *history)
   history->count = 0;
 }
 
-static void history_add(struct term_history *history, const char *line, size_t length)
+bool term_history_add(struct term_history *history, const char *line)
 {
+  size_t length = strlen(line);
   size_t spaces = 0;
   while (spaces < length && line[spaces] == ' ') {
     ++spaces;
   }
   if (spaces == length) {
-    return;
+    return false;
   }
   if (history->count && !strcmp(history->entries[history->count - 1], line)) {
-    return;
+    return false;
   }
   char *copy = malloc(length + 1);
   if (!copy) {
-    return;
+    return false;
   }
   memcpy(copy, line, length + 1);
   if (history->count == TERM_HISTORY_ENTRIES) {
@@ -148,6 +149,7 @@ static void history_add(struct term_history *history, const char *line, size_t l
     --history->count;
   }
   history->entries[history->count++] = copy;
+  return true;
 }
 
 /* Replaces the edited text, shortening it to the buffer limit. Returns whether
@@ -393,7 +395,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   if (result.status == TERM_LINE_OK) {
     result.length = editor.length;
     if (history) {
-      history_add(history, buffer, editor.length);
+      result.recorded = term_history_add(history, buffer);
     }
   } else {
     buffer[0] = '\0';

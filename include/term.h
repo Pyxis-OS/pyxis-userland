@@ -107,6 +107,7 @@ struct term_line_result {
   enum call_status error; /* Native failure for ERROR/INPUT_LOST, otherwise OK. */
   size_t length;          /* Excludes newline and NUL; zero unless LINE_OK. */
   bool limit_reached;     /* An insertion was rejected; editing still continued. */
+  bool recorded;          /* LINE_OK appended the line to the caller's history. */
 };
 
 /* Own input/output exclusively for the call. Prompt must be printable ASCII;
@@ -161,17 +162,21 @@ struct term_history {
 /* Releases every entry and leaves the history empty and reusable. */
 void term_history_free(struct term_history *history);
 
+/* Appends a heap copy of line unless it is empty or all spaces, or the same as
+ * the newest entry; a full history drops its oldest entry. Returns whether the
+ * line was appended, false also when memory for the copy is unavailable. */
+bool term_history_add(struct term_history *history, const char *line);
+
 /* term_read_line with recall. Up loads the previous entry into the editor and
  * Down the next; past the newest entry Down restores the line typed before
  * recall began. Edits to a recalled entry last until another entry is loaded.
  * A recalled entry longer than the buffer limit is shortened and treated as a
  * rejected insertion: its cell turns red and limit_reached is set.
  *
- * LINE_OK appends the submitted line unless it is empty or all spaces, or the
- * same as the newest entry. A full history drops its oldest entry. If memory
- * for the copy or the unfinished line is unavailable, the line is not
- * recorded or recall is ignored; the read itself is unaffected. NULL history
- * behaves as term_read_line. */
+ * LINE_OK appends the submitted line with term_history_add and sets recorded
+ * when it did. If memory for the unfinished line is unavailable, recall is
+ * ignored; the read itself is unaffected. NULL history behaves as
+ * term_read_line. */
 struct term_line_result term_read_line_history(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity);
 

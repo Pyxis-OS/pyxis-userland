@@ -43,7 +43,7 @@ PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
-                 $(BUILD)/shell/script.o
+                 $(BUILD)/shell/script.o $(BUILD)/shell/history.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
 MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o $(BUILD)/mux/pointer.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o
