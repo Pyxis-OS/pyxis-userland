@@ -45,9 +45,11 @@ static struct term_line_result read_command(struct shell *shell, char *line)
     return term_read_line_quiet(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
   }
   if (shell->remote_prompt) {
-    return term_read_line_marked(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
+    return term_read_line_marked(&shell->terminal, prompt, &shell->history, line,
+        SHELL_LINE_CAPACITY);
   }
-  return term_read_line(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
+  return term_read_line_history(&shell->terminal, prompt, &shell->history, line,
+      SHELL_LINE_CAPACITY);
 }
 
 static bool report_completion(struct shell *shell, handle_t events,
@@ -222,6 +224,7 @@ done:
     }
   }
   shell_directory_close(&shell);
+  term_history_free(&shell.history);
   free(arguments);
   free(line);
   /* Runtime exit releases the original startup grants, which may alias. */

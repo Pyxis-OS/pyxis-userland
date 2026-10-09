@@ -1,5 +1,6 @@
 #include <handle.h>
 #include <term.h>
+#include <stdlib.h>
 #include <string.h>
 #include <startup.h>
 
@@ -111,8 +112,62 @@ static enum call_status draw_line(struct line_editor *editor, bool editing, bool
   return status;
 }
 
+void term_history_free(struct term_history *history)
+{
+  if (!history) {
+    return;
+  }
+  for (size_t i = 0; i < history->count; ++i) {
+    free(history->entries[i]);
+    history->entries[i] = NULL;
+  }
+  history->count = 0;
+}
+
+static void history_add(struct term_history *history, const char *line, size_t length)
+{
+  size_t spaces = 0;
+  while (spaces < length && line[spaces] == ' ') {
+    ++spaces;
+  }
+  if (spaces == length) {
+    return;
+  }
+  if (history->count && !strcmp(history->entries[history->count - 1], line)) {
+    return;
+  }
+  char *copy = malloc(length + 1);
+  if (!copy) {
+    return;
+  }
+  memcpy(copy, line, length + 1);
+  if (history->count == TERM_HISTORY_ENTRIES) {
+    free(history->entries[0]);
+    memmove(history->entries, history->entries + 1,
+        (TERM_HISTORY_ENTRIES - 1) * sizeof(history->entries[0]));
+    --history->count;
+  }
+  history->entries[history->count++] = copy;
+}
+
+/* Replaces the edited text, shortening it to the buffer limit. Returns whether
+ * it had to be shortened. */
+static bool load_line(struct line_editor *editor, const char *text, size_t limit)
+{
+  size_t length = strlen(text);
+  bool shortened = length > limit;
+  if (shortened) {
+    length = limit;
+  }
+  memcpy(editor->buffer, text, length);
+  editor->buffer[length] = '\0';
+  editor->length = editor->cursor = length;
+  return shortened;
+}
+
 static struct term_line_result read_line(struct terminal *term, const char *prompt,
-    const char *initial, char *buffer, size_t capacity, bool quiet, bool marked)
+    const char *initial, struct term_history *history, char *buffer, size_t capacity,
+    bool quiet, bool marked)
 {
   struct term_line_result result = {.status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST};
   if (!buffer || !capacity) {
@@ -191,6 +246,11 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     }
   }
   memcpy(buffer, initial, initial_length + 1);
+
+  /* position == count is the unfinished line, saved in draft while an entry
+   * is shown. */
+  size_t position = history ? history->count : 0;
+  char *draft = NULL;
   result.error = draw_line(&editor, true, false);
   if (result.error == CALL_OK && marked) {
     result.error = term_print(term, "\x1b]133;B\a");
@@ -259,6 +319,31 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     case TERM_KEY_END:
       editor.cursor = editor.length;
       break;
+    case TERM_KEY_UP:
+    case TERM_KEY_DOWN:
+      if (!history || (key == TERM_KEY_UP ? !position : position == history->count)) {
+        continue;
+      }
+      if (position == history->count) {
+        if (!draft) {
+          draft = malloc(capacity);
+          if (!draft) {
+            continue;
+          }
+        }
+        memcpy(draft, buffer, editor.length + 1);
+      }
+      if (key == TERM_KEY_UP) {
+        --position;
+      } else {
+        ++position;
+      }
+      full = load_line(&editor, position == history->count ? draft : history->entries[position],
+          limit);
+      if (full) {
+        result.limit_reached = true;
+      }
+      break;
     case '\b':
     case 0x7f:
       if (!editor.cursor) {
@@ -307,24 +392,30 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   }
   if (result.status == TERM_LINE_OK) {
     result.length = editor.length;
+    if (history) {
+      history_add(history, buffer, editor.length);
+    }
   } else {
     buffer[0] = '\0';
   }
+  free(draft);
   return result;
 }
 
 /* Ctrl+C belongs to the editor only while a line is being read; code the
  * application runs between lines stays interruptible. */
 static struct term_line_result read_line_passthrough(struct terminal *term,
-    const char *prompt, const char *initial, char *buffer, size_t capacity, bool quiet, bool marked)
+    const char *prompt, const char *initial, struct term_history *history, char *buffer,
+    size_t capacity, bool quiet, bool marked)
 {
   /* Invalid arguments keep read_line's handled BAD_REQUEST result. */
   if (!term || !prompt || !buffer || !capacity) {
-    return read_line(term, prompt, initial, buffer, capacity, quiet, marked);
+    return read_line(term, prompt, initial, history, buffer, capacity, quiet, marked);
   }
   handle_t passthrough;
   bool held = term_passthrough(term, &passthrough) == CALL_OK;
-  struct term_line_result result = read_line(term, prompt, initial, buffer, capacity, quiet, marked);
+  struct term_line_result result = read_line(term, prompt, initial, history, buffer, capacity,
+      quiet, marked);
   if (held && handle_close(passthrough) != 0) {
     /* A retained grant would keep Ctrl+C from interrupting this program. */
     result = (struct term_line_result){.status = TERM_LINE_ERROR, .error = CALL_BAD_HANDLE};
@@ -338,23 +429,29 @@ static struct term_line_result read_line_passthrough(struct terminal *term,
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, "", NULL, buffer, capacity, false, false);
+}
+
+struct term_line_result term_read_line_history(struct terminal *term, const char *prompt,
+    struct term_history *history, char *buffer, size_t capacity)
+{
+  return read_line_passthrough(term, prompt, "", history, buffer, capacity, false, false);
 }
 
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", buffer, capacity, true, false);
+  return read_line_passthrough(term, prompt, "", NULL, buffer, capacity, true, false);
 }
 
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, initial, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, initial, NULL, buffer, capacity, false, false);
 }
 
 struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
-    char *buffer, size_t capacity)
+    struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", buffer, capacity, false, true);
+  return read_line_passthrough(term, prompt, "", history, buffer, capacity, false, true);
 }
