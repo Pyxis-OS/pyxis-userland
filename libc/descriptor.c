@@ -459,6 +459,67 @@ int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *wr
   return 0;
 }
 
+int descriptor_pread(int descriptor, void *buffer, size_t size, uint64_t offset,
+    size_t *read)
+{
+  *read = 0;
+  if (!descriptor_ready(descriptor, false)) {
+    return -1;
+  }
+  struct descriptor_entry *entry = &entries[descriptor];
+  if (entry->kind != DESCRIPTOR_FILE) {
+    return fail(ESPIPE);
+  }
+  if (!size) {
+    return 0;
+  }
+  if (size > UINT64_MAX - offset) {
+    return fail(EOVERFLOW);
+  }
+  handle_t handle = entry->handle;
+  enum call_status status = file_read(handle, offset, buffer, size, read);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  if (*read > size) {
+    *read = 0;
+    return fail(EIO);
+  }
+  return 0;
+}
+
+int descriptor_pwrite(int descriptor, const void *buffer, size_t size, uint64_t offset,
+    size_t *written)
+{
+  *written = 0;
+  if (!descriptor_ready(descriptor, true)) {
+    return -1;
+  }
+  struct descriptor_entry *entry = &entries[descriptor];
+  if (entry->kind != DESCRIPTOR_FILE) {
+    return fail(ESPIPE);
+  }
+  if (!size) {
+    return 0;
+  }
+  if (size > UINT64_MAX - offset) {
+    return fail(EOVERFLOW);
+  }
+  /* A failed native mutation can still have changed the file. Drop speculative
+   * bytes before dispatch, leaving the logical position available for refetch. */
+  discard_ahead(entry);
+  handle_t handle = entry->handle;
+  enum call_status status = file_write(handle, offset, buffer, size, written);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  if (!*written || *written > size) {
+    *written = 0;
+    return fail(EIO);
+  }
+  return 0;
+}
+
 int descriptor_seek(int descriptor, long offset, int origin)
 {
   struct descriptor_entry *entry = lookup(descriptor);

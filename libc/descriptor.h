@@ -39,6 +39,13 @@ void descriptor_finish(void);
 int descriptor_read(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_read_buffered(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written);
+/* File-only explicit offsets, without changing the private position. Read
+ * bypasses read-ahead; nonempty write discards it before dispatch. Both snapshot
+ * the held handle and never access an entry pointer after a blocking call. */
+int descriptor_pread(int descriptor, void *buffer, size_t size, uint64_t offset,
+    size_t *read);
+int descriptor_pwrite(int descriptor, const void *buffer, size_t size, uint64_t offset,
+    size_t *written);
 int descriptor_seek(int descriptor, long offset, int origin);
 /* Files only; keeps the position and discards read-ahead before RESIZE. */
 int descriptor_resize(int descriptor, uint64_t size);
