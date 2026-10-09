@@ -52,6 +52,7 @@ struct colors {
 
 struct screen {
   const struct display_buffer *buffer;
+  uint64_t slot; /* Held display slot that pixels points into. */
   uint8_t *pixels;
   int64_t width, height;
   int64_t panel_width;
@@ -360,7 +361,8 @@ static enum call_status refresh_geometry(struct screen *screen, struct display_b
   }
   free(screen->ink);
   *buffer = replacement;
-  screen->pixels = (uint8_t *)(uintptr_t)buffer->address;
+  screen->slot = 0;
+  screen->pixels = (uint8_t *)display_slot_address(buffer, 0);
   screen->width = (int64_t)width;
   screen->height = (int64_t)height;
   screen->panel_width = (int64_t)panel_width;
@@ -512,7 +514,15 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
     }
 
     if (state.dirty) {
+      /* Each redraw covers every pixel, so any held slot can take it. */
       redraw(screen, &state);
+      struct display_submit_reply submitted;
+      status = display_submit(display, screen->slot, &submitted);
+      if (status != CALL_OK) {
+        return status;
+      }
+      screen->slot = submitted.next;
+      screen->pixels = (uint8_t *)display_slot_address(buffer, screen->slot);
       state.dirty = false;
     }
     struct wait_interest interests[] = {
@@ -571,7 +581,7 @@ int main(void)
 
   struct screen screen = {
     .buffer = &buffer,
-    .pixels = (uint8_t *)(uintptr_t)buffer.address,
+    .pixels = (uint8_t *)display_slot_address(&buffer, 0),
     .width = (int64_t)buffer.width,
     .height = (int64_t)buffer.height,
     .panel_width = (int64_t)buffer.width * PANEL_PERCENT / 100,
@@ -601,10 +611,8 @@ int main(void)
   } else if (pointer_status != CALL_OK) {
     status = pointer_status;
   } else {
+    /* The first submitted frame makes the graphics visible. */
     status = custom_cursor(pointer);
-    if (status == CALL_OK) {
-      status = display_present(display);
-    }
     if (status == CALL_OK) {
       status = run(&screen, &buffer, display, keyboard, pointer, clock);
     }
