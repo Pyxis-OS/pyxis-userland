@@ -12,8 +12,9 @@ struct provider_open_payload {
 _Static_assert(offsetof(struct provider_open_payload, uri) ==
     sizeof(struct provider_open_request), "provider URI follows the request");
 
-enum call_status provider_open(handle_t provider, const char *uri, uint64_t rights,
-    uint64_t deadline_ns, struct provider_result *result, handle_t *file)
+enum call_status provider_open_context(handle_t provider, const char *uri,
+    uint64_t rights, uint64_t deadline_ns, const struct provider_open_request *context,
+    struct provider_result *result, handle_t *file)
 {
   if (file) {
     *file = HANDLE_INVALID;
@@ -53,7 +54,12 @@ enum call_status provider_open(handle_t provider, const char *uri, uint64_t righ
       (info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
     return CALL_DENIED;
   }
-  struct provider_open_payload request = {.body = {rights, uri_size}};
+  struct provider_open_payload request = {0};
+  if (context) {
+    request.body = *context;
+  }
+  request.body.rights = rights;
+  request.body.uri_size = uri_size;
   memcpy(request.uri, uri, uri_size);
   struct endpoint_packet packet = {0};
   status = endpoint_invoke(provider, PROTOCOL_PROVIDER, PROVIDER_OPEN,
@@ -68,12 +74,41 @@ enum call_status provider_open(handle_t provider, const char *uri, uint64_t righ
     status = CALL_BAD_REQUEST;
   } else {
     memcpy(&reply, packet.data, sizeof(reply));
+    bool http = (request.body.flags & PROVIDER_OPEN_HTTP) != 0;
+    const struct provider_http_budget *limit = &request.body.remaining;
     if (packet.result != CALL_OK) {
-      if (packet.size != sizeof(reply) || packet.grant_count != 0 ||
-          reply.protocol != 0 || reply.representation != 0 || reply.media_type_size != 0) {
+      if (packet.size != sizeof(reply) || packet.grant_count ||
+          reply.protocol || reply.representation || reply.media_type_size ||
+          reply.outcome != PROVIDER_OUTCOME_ERROR || reply.location_size ||
+          reply.consumed.body_bytes || reply.consumed.header_bytes ||
+          reply.consumed.fields || reply.consumed.informational) {
         status = CALL_BAD_REQUEST;
       }
-    } else if (packet.grant_count != 1) {
+    } else if (http && (reply.consumed.body_bytes > limit->body_bytes ||
+        reply.consumed.header_bytes > limit->header_bytes ||
+        reply.consumed.fields > limit->fields ||
+        reply.consumed.informational > limit->informational)) {
+      status = CALL_BAD_REQUEST;
+    } else if (reply.outcome == PROVIDER_OUTCOME_REDIRECT) {
+      bool redirect = reply.provider_status == 301 || reply.provider_status == 302 ||
+          reply.provider_status == 303 || reply.provider_status == 307 ||
+          reply.provider_status == 308;
+      if (!redirect || packet.grant_count || reply.protocol || reply.representation ||
+          reply.media_type_size || !reply.location_size ||
+          reply.location_size > HTTP_URI_MAX ||
+          packet.size != sizeof(reply) + reply.location_size) {
+        status = CALL_BAD_REQUEST;
+      } else {
+        for (size_t i = 0; i < reply.location_size; ++i) {
+          unsigned char byte = packet.data[sizeof(reply) + i];
+          if (byte < 0x21 || byte > 0x7e) {
+            status = CALL_BAD_REQUEST;
+            break;
+          }
+        }
+      }
+    } else if (reply.outcome != PROVIDER_OUTCOME_BYTES || packet.grant_count != 1 ||
+        reply.location_size) {
       status = CALL_BAD_REQUEST;
     } else {
       struct endpoint_grant *grant = &packet.grants[0];
@@ -100,7 +135,12 @@ enum call_status provider_open(handle_t provider, const char *uri, uint64_t righ
   if (status == CALL_OK) {
     result->status = packet.result;
     result->provider_status = reply.provider_status;
-    if (result->status == CALL_OK) {
+    result->outcome = reply.outcome;
+    result->consumed = reply.consumed;
+    if (result->status == CALL_OK && reply.outcome == PROVIDER_OUTCOME_REDIRECT) {
+      memcpy(result->location, packet.data + sizeof(reply), reply.location_size);
+      result->location[reply.location_size] = 0;
+    } else if (result->status == CALL_OK) {
       *file = packet.grants[0].handle;
       packet.grants[0].handle = HANDLE_INVALID;
       result->metadata.protocol = reply.protocol;
@@ -116,4 +156,10 @@ enum call_status provider_open(handle_t provider, const char *uri, uint64_t righ
     }
   }
   return status;
+}
+
+enum call_status provider_open(handle_t provider, const char *uri, uint64_t rights,
+    uint64_t deadline_ns, struct provider_result *result, handle_t *file)
+{
+  return provider_open_context(provider, uri, rights, deadline_ns, NULL, result, file);
 }

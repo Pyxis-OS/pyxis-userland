@@ -2,18 +2,14 @@
 #define USERSPACE_HTTP_H
 
 #include <abi/handle.h>
+#include <abi/provider.h>
 #include <abi/syscall.h>
+#include <http_url.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "../libtls/tls.h"
 
-#define HTTP_URI_MAX 2048
-#define HTTP_HEADERS_MAX 32768
-#define HTTP_FIELDS_MAX 256
-#define HTTP_INFORMATIONAL_MAX 8
-#define HTTP_BODY_MAX (16 * 1024 * 1024)
 #define HTTP_STORAGE_MAX (64 * 1024 * 1024)
-#define HTTP_FETCH_NS UINT64_C(30000000000)
 #define HTTP_MEDIA_TYPE_MAX 127
 
 /* Borrowed explicit authorities and a numeric DNS server, all host-order.
@@ -21,11 +17,6 @@
 struct http_authority {
   handle_t tcp, udp, random, clock;
   uint32_t dns_server;
-};
-
-enum http_scheme {
-  HTTP_SCHEME_HTTP,
-  HTTP_SCHEME_HTTPS,
 };
 
 /* The expected scheme is explicit; mismatching URIs never reach the network.
@@ -53,6 +44,7 @@ struct http_body {
 enum http_error {
   HTTP_OK,
   HTTP_INVALID_URI,
+  HTTP_INVALID_LOCATION,
   HTTP_UNSUPPORTED,
   HTTP_BAD_RESPONSE,
   HTTP_REJECTED_STATUS,
@@ -66,16 +58,22 @@ enum http_error {
 
 struct http_result {
   enum http_error error;
+  uint64_t outcome; /* PROVIDER_OUTCOME_BYTES or REDIRECT only on success. */
+  struct provider_http_budget consumed;
   enum call_status network_status;
   unsigned status; /* Final HTTP status, or zero if none was received. */
   unsigned dns_rcode;
   struct tls_result tls_failure;
   struct tls_result tls_cleanup; /* Diagnostic only after complete framing. */
   char media_type[HTTP_MEDIA_TYPE_MAX + 1];
+  char location[HTTP_URI_MAX + 1]; /* Validated URI reference, never a body. */
   struct http_body body; /* Owned only on success; no partial body on failure. */
 };
 
-/* One GET, no replay. deadline_ns is an optional absolute monotonic cap; zero
+/* One GET, no replay. HTTP context borrows the remaining chain budgets; NULL
+ * selects the ordinary limits. Redirects stop after validated headers, retain
+ * no body, and charge discarded body read-ahead before checked stream closure.
+ * deadline_ns is an optional absolute monotonic cap; zero
  * selects the 30-second overall budget. This initializes result; release any
  * previous successful body before reusing it. No printing or startup lookup.
  * Numeric HTTPS hosts are unsupported. Framed responses complete without peer
@@ -83,7 +81,8 @@ struct http_result {
  * the first fetch failure and status. A native handle-close failure invalidates
  * success; local TLS notification failure is retained as a diagnostic only. */
 void http_fetch(const struct http_client *client, struct http_storage *storage,
-    const char *uri, uint64_t deadline_ns, struct http_result *result);
+    const char *uri, uint64_t deadline_ns,
+    const struct provider_open_request *request, struct http_result *result);
 void http_body_release(struct http_body *body);
 const char *http_error_name(enum http_error error);
 enum call_status http_result_status(const struct http_result *result);

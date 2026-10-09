@@ -255,7 +255,10 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
   struct path_context context = {.roots = &root, .root_count = 1};
   handle_t directories[8];
   char component[256];
-  struct path_workspace workspace = {directories, 8, component, sizeof(component)};
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = 8,
+    .component = component, .component_capacity = sizeof(component),
+  };
   handle_t file;
   enum call_status status = path_resolve(&context, OVERRIDE_NAME, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &workspace, &file);
@@ -457,7 +460,10 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     struct path_context context = {.roots = roots, .root_count = 1};
     handle_t directories[8];
     char component[BOOT_INIT_MAX + 1];
-    struct path_workspace workspace = {directories, 8, component, sizeof(component)};
+    struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = 8,
+    .component = component, .component_capacity = sizeof(component),
+  };
     enum call_status status = path_resolve(&context, space->init, DIRECTORY_KIND_FILE,
         FILE_RIGHT_READ, &workspace, &image);
     if (status != CALL_OK) {

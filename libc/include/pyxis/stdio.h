@@ -3,6 +3,7 @@
 
 #include <abi/startup.h>
 #include <stdio.h>
+#include <pyxis/response.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +20,11 @@ extern "C" {
  * file cursor, read-ahead or pushback. File-backed children start at offset zero;
  * pipe children cannot receive bytes already fetched into this process. */
 int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding);
+
+/* Copy response metadata without changing indicators or position. Valid local
+ * and inherited streams report absent metadata. EINVAL for NULL, EBADF for a
+ * closed/invalid stream. Failure clears the output; success preserves errno. */
+int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info);
 
 #ifdef __cplusplus
 }

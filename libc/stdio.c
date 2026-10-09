@@ -3,6 +3,7 @@
 #include <handle.h>
 #include <limits.h>
 #include <stdint.h>
+#include <startup.h>
 #include <pyxis/stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -536,4 +537,35 @@ int fileno(FILE *stream)
     return -1;
   }
   return stream->descriptor;
+}
+
+int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info)
+{
+  if (!info) {
+    errno = EINVAL;
+    return -1;
+  }
+  *info = (struct pyxis_response_info){0};
+  if (!stream) {
+    errno = EINVAL;
+    return -1;
+  }
+  FILE *current = streams;
+  while (current && current != stream) {
+    current = current->next;
+  }
+  if (!current || current->closed) {
+    errno = EBADF;
+    return -1;
+  }
+  if (stream->descriptor < 0) {
+    enum startup_stream_index index = stream == &standard_input ? STARTUP_STDIN :
+        stream == &standard_output ? STARTUP_STDOUT : STARTUP_STDERR;
+    bool standard = stream == &standard_input || stream == &standard_output ||
+        stream == &standard_error;
+    if (standard && startup_stream(index).protocol == STARTUP_STREAM_NONE) {
+      return 0;
+    }
+  }
+  return descriptor_response(stream->descriptor, info);
 }

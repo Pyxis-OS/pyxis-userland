@@ -1,6 +1,8 @@
 #ifndef LIBC_DESCRIPTOR_H
 #define LIBC_DESCRIPTOR_H
 
+#include <pyxis/response.h>
+
 #include <abi/handle.h>
 #include <abi/startup.h>
 #include <abi/syscall.h>
@@ -60,6 +62,11 @@ int descriptor_stat(int descriptor, struct stat *result);
 long descriptor_tell(int descriptor);
 /* Input fflush: drop file read-ahead so later reads refetch; keep pipe bytes. */
 void descriptor_discard_input(int descriptor);
+
+int descriptor_response(int descriptor, struct pyxis_response_info *info);
+
+enum call_status file_open_path_response(const char *path, uint64_t rights,
+    bool create, struct pyxis_response_info *info, handle_t *handle);
 
 /* Return one owned file handle. Allocates path workspace; never truncates. */
 enum call_status file_open_path(const char *path, uint64_t rights,

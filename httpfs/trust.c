@@ -77,7 +77,10 @@ enum call_status httpfs_trust_load(struct tls_runtime *runtime, const char *uri,
     tls_deallocate(directories);
     return tls_status(result);
   }
-  struct path_workspace workspace = {directories, slots, component, length + 1};
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = slots,
+    .component = component, .component_capacity = length + 1,
+  };
   struct path_context context = {
     .directories = (handle_t *)cwd, .count = depth,
     .roots = roots, .root_count = root_count,

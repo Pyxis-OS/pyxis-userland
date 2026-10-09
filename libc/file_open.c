@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <handle.h>
 #include <path.h>
+#include <provider.h>
 #include <random.h>
 #include <startup.h>
 #include <stdlib.h>
@@ -17,8 +18,11 @@
 /* Shared by file opens and metadata queries: create applies only to files. */
 static enum call_status open_path(const char *path, uint64_t kind, uint64_t rights,
                                   bool create, bool exclusive, bool native_only,
-                                  handle_t *handle)
+                                  struct pyxis_response_info *info, handle_t *handle)
 {
+  if (info) {
+    *info = (struct pyxis_response_info){0};
+  }
   *handle = HANDLE_INVALID;
   if (!path || !*path) {
     return CALL_BAD_REQUEST;
@@ -39,7 +43,20 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
     free(directories);
     return CALL_NO_MEMORY;
   }
-  struct path_workspace workspace = {directories, slots, component, length + 1};
+  struct provider_http_workspace *http = NULL;
+  if (!native_only && kind == DIRECTORY_KIND_FILE && provider_http_uri(path)) {
+    http = malloc(sizeof(*http));
+    if (!http) {
+      free(component);
+      free(directories);
+      return CALL_NO_MEMORY;
+    }
+  }
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = slots,
+    .component = component, .component_capacity = length + 1,
+    .http = http, .response = info, .clock = startup_resource("clock"),
+  };
   /* Path resolution borrows the initial chain; its temporary copies retain
    * authority through each call. It never changes or closes the startup chain. */
   struct path_context context = {
@@ -55,25 +72,32 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   } else {
     status = path_resolve(&context, path, kind, rights, &workspace, handle);
   }
+  free(http);
   free(component);
   free(directories);
   return status;
 }
 
+enum call_status file_open_path_response(const char *path, uint64_t rights,
+    bool create, struct pyxis_response_info *info, handle_t *handle)
+{
+  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, false, info, handle);
+}
+
 enum call_status file_open_path(const char *path, uint64_t rights,
                                bool create, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, false, handle);
+  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, false, NULL, handle);
 }
 
 enum call_status file_create_path(const char *path, uint64_t rights, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_FILE, rights, true, true, false, handle);
+  return open_path(path, DIRECTORY_KIND_FILE, rights, true, true, false, NULL, handle);
 }
 
 enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, false, false, handle);
+  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, false, false, NULL, handle);
 }
 
 int access(const char *path, int mode)
@@ -94,7 +118,7 @@ int access(const char *path, int mode)
   /* Identify without child rights first: directory enumeration/mutation grants
    * are independent of the READ_FILES/WRITE_FILES needed for a file lookup. */
   enum call_status status = open_path(path, DIRECTORY_KIND_FILE, 0,
-      false, false, true, &handle);
+      false, false, true, NULL, &handle);
   if (status == CALL_OK) {
     if (descriptor_release_handle(handle) < 0) {
       return -1;
@@ -103,10 +127,10 @@ int access(const char *path, int mode)
       return 0;
     }
     status = open_path(path, DIRECTORY_KIND_FILE, file_rights,
-        false, false, true, &handle);
+        false, false, true, NULL, &handle);
   } else if (status == CALL_WRONG_TYPE) {
     status = open_path(path, DIRECTORY_KIND_DIRECTORY, directory_rights,
-        false, false, true, &handle);
+        false, false, true, NULL, &handle);
   }
   if (status != CALL_OK) {
     errno = status == CALL_WRONG_TYPE ? ENOTDIR : libc_call_errno(status);
@@ -201,7 +225,10 @@ static int remove_kind(const char *path, uint64_t kind)
     errno = ENOMEM;
     return -1;
   }
-  struct path_workspace workspace = {directories, slots, component, length + 1};
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = slots,
+    .component = component, .component_capacity = length + 1,
+  };
   struct path_context context = {
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };
@@ -255,7 +282,10 @@ int mkdir(const char *path, mode_t mode)
     errno = ENOMEM;
     return -1;
   }
-  struct path_workspace workspace = {directories, slots, component, length + 1};
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = slots,
+    .component = component, .component_capacity = length + 1,
+  };
   struct path_context context = {
     .directories = (handle_t *)startup_working_directories(), .count = depth,
   };

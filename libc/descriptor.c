@@ -32,6 +32,7 @@ struct descriptor_entry {
   bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
   unsigned char *ahead; /* Owned, BUFSIZ bytes, allocated on first fill. */
   size_t ahead_start, ahead_count;
+  struct pyxis_response_info *response; /* Owned metadata for this open. */
   FILE *stream; /* Non-owning; only one FILE can associate with an entry. */
 };
 
@@ -130,8 +131,18 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
   uint64_t position = 0;
   uint64_t rights = (mode->readable ? FILE_RIGHT_READ : 0) |
                     (mode->writable ? FILE_RIGHT_WRITE : 0);
+  struct pyxis_response_info info = {0};
+  struct pyxis_response_info *response = NULL;
   enum call_status status = mode->exclusive ? file_create_path(path, rights, &handle) :
-      file_open_path(path, rights, mode->create, &handle);
+      file_open_path_response(path, rights, mode->create, &info, &handle);
+  if (status == CALL_OK && info.flags) {
+    response = malloc(sizeof(*response));
+    if (!response) {
+      status = CALL_NO_MEMORY;
+    } else {
+      *response = info;
+    }
+  }
   if (status == CALL_OK && mode->append && !mode->readable) {
     status = file_size(handle, &position);
   }
@@ -145,11 +156,13 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
     if (handle != HANDLE_INVALID) {
       descriptor_release_handle(handle);
     }
+    free(response);
     entries[descriptor] = (struct descriptor_entry){0};
     return fail(error);
   }
   entries[descriptor] = (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .kind = DESCRIPTOR_FILE, .handle = handle,
+    .response = response,
     .position = position, .readable = mode->readable, .writable = mode->writable,
     .append = mode->append, .stream = stream,
   };
@@ -242,6 +255,7 @@ int descriptor_close(int descriptor)
   }
   /* Unread read-ahead is discarded with the descriptor, as on process exit. */
   free(entry->ahead);
+  free(entry->response);
   *entry = (struct descriptor_entry){0};
   /* Never retry an uncertain release or reconnect a FILE after slot reuse.
    * Any residual native entry is reclaimed by kernel process teardown. */
@@ -626,4 +640,16 @@ long descriptor_tell(int descriptor)
     return fail(EOVERFLOW);
   }
   return (long)entry->position;
+}
+
+int descriptor_response(int descriptor, struct pyxis_response_info *info)
+{
+  struct descriptor_entry *entry = lookup(descriptor);
+  if (!entry) {
+    return -1;
+  }
+  if (entry->response) {
+    *info = *entry->response;
+  }
+  return 0;
 }

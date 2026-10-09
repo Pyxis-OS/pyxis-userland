@@ -116,7 +116,10 @@ static enum call_status open_file(struct provider *provider,
   }
   struct provider_open_request request;
   memcpy(&request, packet->data, sizeof(request));
-  if (request.rights == 0 || (request.rights & ~FILE_RIGHTS) ||
+  if (request.flags || request.origin.scheme || request.origin.port ||
+      request.origin.host[0] || request.remaining.body_bytes ||
+      request.remaining.header_bytes || request.remaining.fields ||
+      request.remaining.informational || request.rights == 0 || (request.rights & ~FILE_RIGHTS) ||
       request.uri_size == 0 || request.uri_size > PROVIDER_URI_MAX_BYTES ||
       packet->size - sizeof(request) != request.uri_size) {
     return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
@@ -163,6 +166,7 @@ static enum call_status open_file(struct provider *provider,
   provider->files[slot] = (struct file_export){bytes, size, true};
   static const char media_type[] = "text/plain; charset=utf-8";
   struct provider_open_reply header = {
+    .outcome = PROVIDER_OUTCOME_BYTES,
     .protocol = PROTOCOL_FILE,
     .representation = PROVIDER_REPRESENTATION_BYTES,
     .media_type_size = sizeof(media_type) - 1,
