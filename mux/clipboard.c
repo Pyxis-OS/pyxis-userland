@@ -3,13 +3,54 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void report(struct mux *mux, const char *operation, enum call_status status)
+static void report(struct mux *mux, uint64_t operation, enum call_status status,
+    const char *detail)
 {
-  if (status == CALL_OK) {
-    snprintf(mux->notice, sizeof(mux->notice), "%s", operation);
-  } else {
-    snprintf(mux->notice, sizeof(mux->notice), "Clipboard refused (status %u)", status);
+  bool copy = operation == CLIPBOARD_PUBLISH;
+  const char *text = detail;
+  if (!text) {
+    switch (status) {
+    case CALL_OK:
+      text = copy ? "Copied selection" : "Paste admitted";
+      break;
+    case CALL_BUSY:
+    case CALL_WOULD_BLOCK:
+      text = copy ? "Copy busy; settle the view, then press Copy again" :
+          "Paste busy; settle input/view, then press Paste again";
+      break;
+    case CALL_NOT_FOUND:
+      text = copy ? "Copy needs a completed selection; select text first" :
+          "Clipboard is empty; copy text before Paste";
+      break;
+    case CALL_DENIED:
+      text = "Clipboard access denied; this layer/action is not authorized";
+      break;
+    case CALL_LIMIT:
+    case CALL_NO_SPACE:
+    case CALL_QUOTA:
+      text = "Clipboard limit reached; try smaller text or a fresh gesture";
+      break;
+    case CALL_NO_MEMORY:
+      text = "Clipboard memory unavailable; try a fresh gesture later";
+      break;
+    case CALL_ENDPOINT_CLOSED:
+      text = copy ? "Copy endpoint closed; return to a live terminal" :
+          "Paste endpoint closed; return to a live prompt";
+      break;
+    case CALL_WRONG_TYPE:
+    case CALL_BAD_OPERATION:
+      text = copy ? "Copy unsupported for this terminal" :
+          "Paste unsupported; use a stock line reader";
+      break;
+    case CALL_TIMED_OUT:
+      text = "Clipboard action expired; use a fresh gesture";
+      break;
+    default:
+      text = "Clipboard request refused; use a fresh gesture";
+      break;
+    }
   }
+  snprintf(mux->notice, sizeof(mux->notice), "%s", text);
   mux->dirty = true;
 }
 
@@ -25,14 +66,14 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
     if (refused != CALL_OK) {
       status = refused;
     }
-    report(mux, "", status);
+    report(mux, event->clipboard_operation, status, NULL);
     return;
   }
   if (event->generation != mux->pointer_geometry.surface.generation ||
       event->mapping_identity != mux->pointer_geometry.surface.mapping_identity) {
     clipboard_refuse(clipboard, event->action_id, event->generation,
         event->mapping_identity, event->clipboard_operation);
-    report(mux, "", CALL_BUSY);
+    report(mux, event->clipboard_operation, CALL_BUSY, NULL);
     return;
   }
   if (event->clipboard_operation == CLIPBOARD_PUBLISH) {
@@ -42,6 +83,8 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
     status = !mux->dragging && pane->used ?
         mux_emulator_copy_selection(&pane->emulator, CLIPBOARD_TEXT_MAX, &text, &length) :
         CALL_NOT_FOUND;
+    const char *detail = status == CALL_BAD_REQUEST ?
+        "Copy refused: selection contains non-ASCII text" : NULL;
     if (status == CALL_OK) {
       status = clipboard_publish(clipboard, event->action_id, event->generation,
           event->mapping_identity, text, length);
@@ -50,10 +93,11 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
           event->generation, event->mapping_identity, event->clipboard_operation);
       if (refused != CALL_OK) {
         status = refused;
+        detail = NULL;
       }
     }
     free(text);
-    report(mux, "Copied selection", status);
+    report(mux, event->clipboard_operation, status, detail);
     return;
   }
   if (event->clipboard_operation == CLIPBOARD_PASTE) {
@@ -75,6 +119,6 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
         status = refused;
       }
     }
-    report(mux, "Paste admitted", status);
+    report(mux, event->clipboard_operation, status, NULL);
   }
 }

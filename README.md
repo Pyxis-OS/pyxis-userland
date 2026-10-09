@@ -86,6 +86,8 @@ Ctrl+Shift+C/V uses the space-local clipboard; Super+Shift+C/V uses the shared
 one. Mux copies its completed selection and pastes into its focused live pane;
 pending input refuses paste. Trusted mux startup delegates separate clipboard
 grants, which pane children do not inherit. Raw readers do not accept paste.
+A mux paste can cancel when its output scrolls visible rows, advancing the view
+identity; the inserted prefix stays editable and is never submitted.
 
 The Pyxis parent repository pins this repository as its `userspace` submodule
 and orchestrates header export, runtime build, SDK assembly, application build
