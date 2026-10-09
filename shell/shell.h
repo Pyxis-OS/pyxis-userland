@@ -57,6 +57,8 @@ struct shell {
    * shell or session successor is granted it; commands get READ alone. */
   bool interrupts;
   struct terminal terminal;
+  /* Interactive lines for Up/Down recall; the quiet editor keeps none. */
+  struct term_history history;
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, namespace_service, namespace, random, net_config,
       keyboard, pointer, terminal_service,
