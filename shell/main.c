@@ -161,6 +161,9 @@ int main(int argc, char **argv)
     result = shell_script(&shell, script, line, arguments);
     goto done;
   }
+  if (!quiet_input) {
+    shell_history_load(&shell);
+  }
 
   for (;;) {
     struct term_line_result read = read_command(&shell, line);
@@ -180,6 +183,10 @@ int main(int argc, char **argv)
     if (read.status == TERM_LINE_ERROR) {
       report_directory_error("shell", "terminal", read.error);
       break;
+    }
+    /* Before parsing, which rewrites the line in place. */
+    if (read.recorded) {
+      shell_history_save(&shell, line);
     }
     if (read.limit_reached) {
       if (fputs("shell: Line limit reached; command not executed\n", stderr) == EOF) {

@@ -59,6 +59,9 @@ struct shell {
   struct terminal terminal;
   /* Interactive lines for Up/Down recall; the quiet editor keeps none. */
   struct term_history history;
+  /* Borrowed home:// root holding .history; saving stops after one failure. */
+  handle_t history_home;
+  bool history_saving;
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, namespace_service, namespace, random, net_config,
       keyboard, pointer, terminal_service,
@@ -86,6 +89,11 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
+/* Interactive shells with history only. Load fills memory with the newest
+ * saved entries; save merges one recorded line into home://.history unless it
+ * starts with a space. Neither reports a missing or read-only home. */
+void shell_history_load(struct shell *shell);
+void shell_history_save(struct shell *shell, const char *line);
 enum command_result shell_command(struct shell *shell, char *line, char **arguments,
     struct shell_outcome *outcome);
 /* Outcome is NULL for the session builtin, which reports its own result. */
