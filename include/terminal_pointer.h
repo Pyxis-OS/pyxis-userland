@@ -22,5 +22,9 @@ enum call_status terminal_pointer_set_image(handle_t pointer, const void *pixels
 enum call_status terminal_pointer_set_visible(handle_t pointer, bool visible);
 enum call_status terminal_pointer_default_image(handle_t pointer);
 enum call_status terminal_pointer_state(handle_t pointer, uint64_t *flags);
+/* UI control may refuse its native action when startup withheld the chosen
+ * clipboard layer. This consumes the attempt without any store authority. */
+enum call_status terminal_pointer_clipboard_refuse(handle_t pointer, uint64_t action_id,
+    uint64_t generation, uint64_t mapping_identity, uint64_t operation);
 
 #endif

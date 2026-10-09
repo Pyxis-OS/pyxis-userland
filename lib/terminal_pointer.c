@@ -128,3 +128,14 @@ enum call_status terminal_pointer_state(handle_t pointer, uint64_t *flags)
   }
   return status;
 }
+
+enum call_status terminal_pointer_clipboard_refuse(handle_t pointer, uint64_t action_id,
+    uint64_t generation, uint64_t mapping_identity, uint64_t operation)
+{
+  struct terminal_pointer_clipboard_refuse_request request = {
+    .header = {PROTOCOL_TERMINAL_POINTER, TERMINAL_POINTER_CLIPBOARD_REFUSE},
+    .action_id = action_id, .generation = generation, .mapping_identity = mapping_identity,
+    .operation = operation,
+  };
+  return pointer_call(pointer, &request, sizeof(request), NULL, 0);
+}

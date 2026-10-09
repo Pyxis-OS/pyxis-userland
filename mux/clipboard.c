@@ -19,6 +19,12 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
       event->clipboard_layer == CLIPBOARD_LAYER_SHARED ? mux->clipboard_shared : HANDLE_INVALID;
   enum call_status status = CALL_DENIED;
   if (clipboard == HANDLE_INVALID) {
+    enum call_status refused = terminal_pointer_clipboard_refuse(mux->pointer,
+        event->action_id, event->generation, event->mapping_identity,
+        event->clipboard_operation);
+    if (refused != CALL_OK) {
+      status = refused;
+    }
     report(mux, "", status);
     return;
   }
