@@ -371,12 +371,36 @@ static void read_spaces(lua_State *state, struct boot_config *config)
   lua_pop(state, 1);
 }
 
-static int decode(lua_State *state)
+static int decode_override(lua_State *state)
 {
   struct boot_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
   static const char *const keys[] = {"volumes", "spaces"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
+  read_volumes(state, config);
+  read_spaces(state, config);
+  return 0;
+}
+
+static int decode_archive(lua_State *state)
+{
+  struct boot_config *config = lua_touserdata(state, 2);
+  lua_settop(state, 1);
+  static const char *const keys[] = {"hostname", "volumes", "spaces"};
+  config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
+  config_field(state, 1, "hostname");
+  const char *name = MACHINE_HOSTNAME_DEFAULT;
+  size_t length = sizeof(MACHINE_HOSTNAME_DEFAULT) - 1;
+  if (!lua_isnil(state, -1)) {
+    name = lua_type(state, -1) == LUA_TSTRING ? lua_tolstring(state, -1, &length) : NULL;
+  }
+  if (!machine_hostname_valid(name, length)) {
+    luaL_error(state, "hostname must be 1 to %d ASCII letters, digits or internal hyphens",
+        MACHINE_HOSTNAME_MAX);
+  }
+  memcpy(config->hostname, name, length);
+  config->hostname[length] = '\0';
+  lua_pop(state, 1);
   read_volumes(state, config);
   read_spaces(state, config);
   return 0;
@@ -394,14 +418,14 @@ static enum boot_config_result result_of(enum config_result result, struct boot_
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config)
 {
   *config = (struct boot_config){0};
-  return result_of(config_read(path, decode, config), config);
+  return result_of(config_read(path, decode_archive, config), config);
 }
 
 enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config)
 {
   *config = (struct boot_config){0};
-  return result_of(config_read_bytes(name, bytes, size, decode, config), config);
+  return result_of(config_read_bytes(name, bytes, size, decode_override, config), config);
 }
 
 void boot_config_free(struct boot_config *config)

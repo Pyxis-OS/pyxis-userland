@@ -2,6 +2,7 @@
 -- Tab order follows this list, after Caelum's log space. home:// is RAM and
 -- lasts until reboot; spaces start in it unless start names another root.
 return {
+  hostname = "pyxis",
   volumes = {
     host = { kind = "virtio-fs" },
     home = { kind = "ram" },

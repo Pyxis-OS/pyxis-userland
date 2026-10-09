@@ -45,6 +45,12 @@ resource, forwarding only the configured roots and, to the one network owner,
 network WRITE authority. Spaces start in `home://` unless their `start` names
 another root. Live boots make `home://` a RAM volume. If no space starts it
 creates a `rescue` shell space.
+The archive's `hostname` defaults to `pyxis`. Installed boots also read
+`system://config/machine/network/hostname`, including rescue boots; a missing,
+unreadable or invalid key reports the reason and keeps the archive default.
+Names are 1–63 ASCII letters, digits and internal hyphens, preserving case;
+the stored key accepts one trailing LF or none. Boot init sets the kernel's
+name once before creating spaces. `system://config/boot.lua` cannot set it.
 `clipboard_local` and `clipboard_shared` independently request the named
 clipboard grants. Stock local interactive spaces enable both; remote startup
 enables neither. An omitted setting retains the existing multiplexer default,
@@ -104,11 +110,15 @@ for the integrated build. Runtime changes reach applications after SDK assembly.
 See [import provenance](IMPORT.md) for the original history and dependency split.
 
 [system_info.h](include/system_info.h) queries the running kernel's identity,
-guest CPU and global allocator memory through a borrowed READ grant. Failed
+hostname, guest CPU and global allocator memory through a borrowed READ grant. Failed
 queries preserve caller output. Init scripts, sessions and local/remote shells
 forward `system_info` to ordinary children when supplied; provider launches and
 restricted launchers may omit it. Applications must treat a missing grant as
 unavailable information. Memory is allocator capacity, labeled **Memory (allocator)**.
+`hostname` prints the boot-selected name and rejects arguments. Libc
+`gethostname()` uses the same startup grant, requires room for the complete name
+and NUL, and returns `ENAMETOOLONG` without changing the buffer when too small.
+There is no runtime rename; an installed key change applies at the next boot.
 
 [log.h](include/log.h) snapshots and reads retained kernel text through a borrowed
 read-only `log` grant, preserving caller output on failure. Each reader owns its

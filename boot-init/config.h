@@ -3,6 +3,7 @@
 
 #include <abi/mount.h>
 #include <abi/space.h>
+#include <machine_settings.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -59,6 +60,8 @@ struct boot_space {
 
 /* One parsed file. Owns every string and array. */
 struct boot_config {
+  /* Archive-only default; the pool boot override cannot rename the machine. */
+  char hostname[MACHINE_HOSTNAME_MAX + 1];
   struct boot_volume *volumes;
   size_t volume_count;
   struct boot_space *spaces;
@@ -80,8 +83,9 @@ enum boot_config_result {
   BOOT_CONFIG_INVALID,
 };
 
-/* Reads one file through libc, or SIZE bytes read through a capability. Schema
- * errors are reported on stderr. CONFIG is cleared first and must be freed. */
+/* Reads an archive default through libc, including its hostname, or a pool
+ * boot override from SIZE bytes. The override accepts only volumes and spaces.
+ * Schema errors go to stderr. CONFIG is cleared first and must be freed. */
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config);
 enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);

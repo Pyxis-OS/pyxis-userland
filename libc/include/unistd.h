@@ -21,6 +21,10 @@ extern "C" {
 #define W_OK 2
 #define R_OK 4
 
+/* Reads the boot-selected name through the system_info startup grant. The
+ * whole name and NUL must fit, else ENAMETOOLONG; failure preserves NAME. */
+int gethostname(char *name, size_t size);
+
 /* Native lookup using the caller's grants, with each owned handle immediately
  * released. F_OK requests no child rights; files R_OK/W_OK require READ/WRITE,
  * directories require ENUMERATE / CREATE|REMOVE. Combined modes require both.

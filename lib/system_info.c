@@ -8,6 +8,54 @@
 #define PCI_HEADER_TYPE_MASK 0x7f
 #define PCI_NO_VENDOR 0xffff
 
+enum call_status system_info_get_hostname(handle_t system_info,
+    struct system_info_hostname *hostname)
+{
+  if (!hostname) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header message = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_HOSTNAME};
+  struct system_info_hostname reply;
+  struct syscall_result result = syscall_call(system_info, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    const char *end = memchr(reply.name, '\0', sizeof(reply.name));
+    if (!end || end == reply.name) {
+      return CALL_BAD_REQUEST;
+    }
+    for (const char *c = reply.name; c < end; ++c) {
+      if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7e) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    *hostname = reply;
+  }
+  return result.status;
+}
+
+enum call_status system_info_set_hostname_once(handle_t system_info,
+    const struct system_info_hostname *hostname)
+{
+  if (!hostname) {
+    return CALL_BAD_REQUEST;
+  }
+  struct system_info_hostname_set_request request = {
+    .header = {PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_HOSTNAME},
+    .value = *hostname,
+  };
+  struct syscall_result result = syscall_call(system_info, &request, sizeof(request), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  return result.reply_size ? CALL_BAD_REQUEST : result.status;
+}
+
 enum call_status system_info_get_identity(handle_t system_info,
     struct system_info_identity *identity)
 {

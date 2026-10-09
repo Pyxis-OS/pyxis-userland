@@ -13,6 +13,13 @@ enum call_status system_info_get_identity(handle_t system_info,
 enum call_status system_info_get_cpu(handle_t system_info, struct system_info_cpu *cpu);
 enum call_status system_info_get_memory(handle_t system_info, struct system_info_memory *memory);
 
+/* The immutable name selected by boot init. Only boot init's initial grant
+ * holds SET_HOSTNAME_ONCE; every child receives READ alone. */
+enum call_status system_info_get_hostname(handle_t system_info,
+    struct system_info_hostname *hostname);
+enum call_status system_info_set_hostname_once(handle_t system_info,
+    const struct system_info_hostname *hostname);
+
 /* PCI inventory state and the number of retained functions. Unavailable
  * inventories report zero functions. */
 enum call_status system_info_get_pci(handle_t system_info, struct system_info_pci *pci);

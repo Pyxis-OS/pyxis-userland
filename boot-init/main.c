@@ -22,6 +22,7 @@
 #include <file.h>
 #include <handle.h>
 #include <launcher.h>
+#include <machine_settings.h>
 #include <mount.h>
 #include <path.h>
 #include <remote/beacon.h>
@@ -37,6 +38,7 @@
 #define OVERRIDE_PATH "config/boot.lua"
 #define OVERRIDE_NAME "system://" OVERRIDE_PATH
 #define OVERRIDE_MAX_BYTES (64 * 1024)
+#define HOSTNAME_NAME "system://" MACHINE_HOSTNAME_PATH
 #define RESCUE_INIT "boot://shell.pxe"
 /* The bin volume shares the system volume's pool; see the installer. */
 #define BIN_VOLUME "bin"
@@ -297,6 +299,90 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
   }
   free(bytes);
   return result;
+}
+
+/* Probe one byte beyond the longest name plus LF. A full buffer is invalid,
+ * never a truncated name. Short native reads continue until EOF. */
+static enum call_status read_hostname(handle_t system, struct system_info_hostname *hostname)
+{
+  struct path_root root = {"system", system};
+  struct path_context context = {.roots = &root, .root_count = 1};
+  handle_t directories[8];
+  char component[256];
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = 8,
+    .component = component, .component_capacity = sizeof(component),
+  };
+  handle_t file;
+  enum call_status status = path_resolve_native(&context, HOSTNAME_NAME, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ, &workspace, &file);
+  if (status != CALL_OK) {
+    return status;
+  }
+  char bytes[MACHINE_HOSTNAME_MAX + 2];
+  size_t used = 0;
+  while (used < sizeof(bytes)) {
+    size_t count;
+    status = file_read(file, used, bytes + used, sizeof(bytes) - used, &count);
+    if (status != CALL_OK || !count) {
+      break;
+    }
+    used += count;
+  }
+  if (handle_close(file) && status == CALL_OK) {
+    status = CALL_IO;
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (used == sizeof(bytes)) {
+    return CALL_LIMIT;
+  }
+  if (used && bytes[used - 1] == '\n') {
+    --used;
+  }
+  if (!machine_hostname_valid(bytes, used)) {
+    return CALL_BAD_REQUEST;
+  }
+  *hostname = (struct system_info_hostname){0};
+  memcpy(hostname->name, bytes, used);
+  return CALL_OK;
+}
+
+static bool set_hostname(const struct authority *authority, const struct boot_config *defaults,
+    struct mounts *mounts, bool installed)
+{
+  struct system_info_hostname hostname = {MACHINE_HOSTNAME_DEFAULT};
+  if (defaults->hostname[0]) {
+    memcpy(hostname.name, defaults->hostname, sizeof(defaults->hostname));
+  }
+  if (installed) {
+    struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
+    enum call_status status = CALL_UNAVAILABLE;
+    if (system) {
+      status = system->root == HANDLE_INVALID ? system->status :
+          read_hostname(system->root, &hostname);
+    }
+    if (status != CALL_OK) {
+      const char *reason = "key unreadable";
+      if (!system || system->root == HANDLE_INVALID) {
+        reason = "system volume unavailable";
+      } else if (status == CALL_NOT_FOUND) {
+        reason = "key missing";
+      } else if (status == CALL_BAD_REQUEST || status == CALL_LIMIT) {
+        reason = "key invalid";
+      }
+      fprintf(stderr, "boot-init: hostname: %s (status %u); using archive default %s\n",
+          reason, status, hostname.name);
+    }
+  }
+  enum call_status status = system_info_set_hostname_once(
+      authority->services[SERVICE_SYSTEM_INFO], &hostname);
+  if (status != CALL_OK) {
+    fprintf(stderr, "boot-init: cannot set the hostname (status %u); no spaces started\n", status);
+    return false;
+  }
+  return true;
 }
 
 static size_t cpu_words(uint64_t cpu_count)
@@ -608,6 +694,7 @@ int main(int argc, char **argv)
   struct boot_config defaults, override = {0};
   struct boot_plan plan = {0};
   struct mounts mounts = {0};
+  int exit_status = EXIT_SUCCESS;
   const char *path = installed ? INSTALLED_CONFIG : LIVE_CONFIG;
   printf("boot-init: reading %s\n", path);
   enum boot_config_result result = boot_config_read(path, &defaults);
@@ -618,8 +705,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "boot-init: %s is invalid\n", path);
   }
 
-  const struct boot_volume *system = plan.space_count ?
-      boot_plan_volume(&plan, BOOT_SYSTEM_VOLUME) : NULL;
+  const struct boot_volume *system = boot_plan_volume(&plan, BOOT_SYSTEM_VOLUME);
   if (installed && system) {
     /* The override is read before the plan is final, so system is mounted
      * read-write and each space receives only the access its root asks for. */
@@ -631,9 +717,9 @@ int main(int argc, char **argv)
       if (mounted->status != CALL_OK) {
         printf("boot-init: volume %s unavailable (status %u)\n", system->name,
             mounted->status);
-      } else if (default_config) {
+      } else if (plan.space_count && default_config) {
         puts("boot-init: rescue entry: ignoring " OVERRIDE_NAME);
-      } else {
+      } else if (plan.space_count) {
         result = read_override(mounted->root, &override);
         if (result == BOOT_CONFIG_MISSING) {
           puts("boot-init: no " OVERRIDE_NAME "; using the default");
@@ -654,6 +740,10 @@ int main(int argc, char **argv)
     }
   }
 
+  if (!set_hostname(&authority, &defaults, &mounts, installed)) {
+    exit_status = EXIT_FAILURE;
+    goto finish;
+  }
   bind_bin(&authority, &plan, installed);
   size_t started = 0;
   if (mount_plan(&authority, &plan, &mounts)) {
@@ -665,10 +755,11 @@ int main(int argc, char **argv)
     start_rescue(&authority, &mounts);
   }
 
+finish:
   /* Spaces keep their own grants to every mounted root; boot init's go with it. */
   boot_plan_free(&plan);
   boot_config_free(&override);
   boot_config_free(&defaults);
   free(mounts.entries);
-  return EXIT_SUCCESS;
+  return exit_status;
 }

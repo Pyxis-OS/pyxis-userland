@@ -3,6 +3,7 @@
 -- ignores it. Spaces start in home:// unless start names another root. home is
 -- optional so that a damaged home volume still starts pyxis, in tmp://.
 return {
+  hostname = "pyxis",
   volumes = {
     system = { kind = "npfs", partition = 2, volume = "system" },
     home = { kind = "npfs", partition = 2, volume = "home" },

@@ -65,6 +65,7 @@ char *strerror(int error)
   case ENOTEMPTY: return "Directory not empty";
   case ENOTDIR: return "Not a directory";
   case ENOTTY: return "Not a terminal";
+  case ENAMETOOLONG: return "Name too long";
   default: return "Unknown error";
   }
 }

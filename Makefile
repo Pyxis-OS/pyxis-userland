@@ -17,7 +17,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench session boot-init init-install installer shell client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
+INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench session boot-init init-install installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -34,7 +34,7 @@ LDLIBS := $(PYXIS_LDLIBS)
 export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX ZLIB_PREFIX LIBPNG_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
 PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
-                   $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/cp/main.o $(BUILD)/echo/main.o $(BUILD)/head/main.o $(BUILD)/log/main.o $(BUILD)/lspci/main.o $(BUILD)/lsusb/main.o \
+                   $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/cp/main.o $(BUILD)/echo/main.o $(BUILD)/head/main.o $(BUILD)/log/main.o $(BUILD)/hostname/main.o $(BUILD)/lspci/main.o $(BUILD)/lsusb/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
                    $(BUILD)/mv/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/ping/main.o \
@@ -71,7 +71,7 @@ LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat cp echo head log lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
+.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench session boot-init init-install installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -135,6 +135,7 @@ cp: $(BUILD)/cp.pxe
 echo: $(BUILD)/echo.pxe
 head: $(BUILD)/head.pxe
 log: $(BUILD)/log.pxe
+hostname: $(BUILD)/hostname.pxe
 lspci: $(BUILD)/lspci.pxe
 lsusb: $(BUILD)/lsusb.pxe
 ls: $(BUILD)/ls.pxe
