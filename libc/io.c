@@ -71,6 +71,38 @@ ssize_t write(int descriptor, const void *buffer, size_t count)
   return (ssize_t)transferred;
 }
 
+ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset)
+{
+  if (!transfer_ready(descriptor, count, false)) {
+    return -1;
+  }
+  if (offset < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  size_t transferred;
+  if (descriptor_pread(descriptor, buffer, count, (uint64_t)offset, &transferred) < 0) {
+    return -1;
+  }
+  return (ssize_t)transferred;
+}
+
+ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset)
+{
+  if (!transfer_ready(descriptor, count, true)) {
+    return -1;
+  }
+  if (offset < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  size_t transferred;
+  if (descriptor_pwrite(descriptor, buffer, count, (uint64_t)offset, &transferred) < 0) {
+    return -1;
+  }
+  return (ssize_t)transferred;
+}
+
 int close(int descriptor)
 {
   return descriptor_close(descriptor);

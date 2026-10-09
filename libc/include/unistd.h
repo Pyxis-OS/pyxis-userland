@@ -23,6 +23,15 @@ extern "C" {
  * read itself never reads ahead. */
 ssize_t read(int descriptor, void *buffer, size_t count);
 ssize_t write(int descriptor, const void *buffer, size_t count);
+/* Files only; use offset without changing the private descriptor position.
+ * Validate descriptor/access and count as above, then reject negative offsets
+ * with EINVAL and consoles/pipes with ESPIPE, including zero-count requests.
+ * pread bypasses read-ahead without consuming or filling it. A nonempty pwrite
+ * discards file read-ahead before the native write, even on an uncertain outcome;
+ * it uses offset independently of a FILE's append policy. Neither call changes
+ * FILE indicators or pushback. Zero count touches no buffer or backend. */
+ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset);
+ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset);
 /* Invalidates any FILE association even on release failure; never retries. */
 int close(int descriptor);
 /* Set a writable file's size through native RESIZE. Growth reads as zero and
