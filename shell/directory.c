@@ -1,5 +1,6 @@
 #include "shell.h"
 #include <abi/file.h>
+#include <bundle.h>
 #include <startup.h>
 #include <handle.h>
 #include <provider.h>
@@ -216,18 +217,57 @@ static enum call_status open_program(struct shell *shell, const char *root,
   return status;
 }
 
-enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image)
+static enum call_status open_bundle_command(struct shell *shell, const char *command,
+    handle_t *image, struct bundle_program **bundle)
+{
+  const char *catalog = startup_environment("PYXIS_BUNDLE_CATALOG");
+  if (!catalog) {
+    return CALL_NOT_FOUND;
+  }
+  if (!*catalog) {
+    return CALL_BAD_REQUEST;
+  }
+  enum call_status status = bundle_command_open(&shell->directory, catalog, command, bundle);
+  if (status == CALL_OK) {
+    *image = bundle_program_image(*bundle);
+  }
+  return status;
+}
+
+enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,
+    struct bundle_program **bundle)
 {
   *image = HANDLE_INVALID;
+  *bundle = NULL;
   if (!*command) {
     return CALL_BAD_REQUEST;
   }
+  size_t length = strlen(command);
+  while (length && command[length - 1] == '/') {
+    --length;
+  }
+  if (length > 4 && !memcmp(command + length - 4, ".pxb", 4)) {
+    enum call_status status = bundle_open(&shell->directory, command, bundle);
+    if (status == CALL_OK) {
+      *image = bundle_program_image(*bundle);
+    }
+    return status;
+  }
   if (strchr(command, '/')) {
-    return open_path(shell, command, image);
+    enum call_status status = open_path(shell, command, image);
+    if (status == CALL_NOT_FOUND && !strncmp(command, "bin://", 6) &&
+        command[6] && !strchr(command + 6, '/') &&
+        (length < 4 || memcmp(command + length - 4, ".pxe", 4))) {
+      status = open_bundle_command(shell, command + 6, image, bundle);
+    }
+    return status;
   }
   /* Installed programs in bin:// come first; the archive's rescue set follows.
    * An unbound bin:// is NOT_FOUND, like a missing program. */
   enum call_status status = open_program(shell, "bin", command, image);
+  if (status == CALL_NOT_FOUND) {
+    status = open_bundle_command(shell, command, image, bundle);
+  }
   if (status == CALL_NOT_FOUND) {
     status = open_program(shell, "boot", command, image);
   }

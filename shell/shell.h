@@ -29,6 +29,8 @@ struct shell_outcome {
 enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
     SHELL_SERVICE };
 
+struct bundle_program;
+
 struct shell_redirection {
   enum startup_stream_index stream;
   const char *path;
@@ -83,7 +85,9 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
 enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);
-enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image);
+/* IMAGE is owned for plain programs, borrowed from BUNDLE when it is present. */
+enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,
+    struct bundle_program **bundle);
 enum call_status shell_open_redirect(struct shell *shell, const char *path,
     bool input, handle_t *file);
 enum command_result shell_error(struct shell *shell, const char *format, ...);

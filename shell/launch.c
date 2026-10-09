@@ -28,6 +28,7 @@
 #include <abi/clipboard.h>
 #include <abi/wait.h>
 #include <clock.h>
+#include <bundle_launch.h>
 #include <console.h>
 #include <handle.h>
 #include <endpoint.h>
@@ -46,6 +47,8 @@ enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_ROOT };
 
 struct prepared_stage {
   handle_t image;
+  struct bundle_program *bundle;
+  struct bundle_launch *bundle_launch;
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
@@ -71,7 +74,13 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
 {
   bool closed = true;
   for (size_t i = 0; i < stage_count; ++i) {
-    if (!close_handle(&stages[i].image)) {
+    bundle_launch_close(stages[i].bundle_launch);
+    stages[i].bundle_launch = NULL;
+    if (stages[i].bundle) {
+      bundle_program_close(stages[i].bundle);
+      stages[i].bundle = NULL;
+      stages[i].image = HANDLE_INVALID;
+    } else if (!close_handle(&stages[i].image)) {
       closed = false;
     }
     for (size_t stream = 0; stream < STARTUP_STREAM_COUNT; ++stream) {
@@ -169,9 +178,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_system_info = !provider && shell->system_info != HANDLE_INVALID;
   bool has_log = !provider && shell->log != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
-  size_t root_count = shell->directory.root_count;
-  if (root_count > STARTUP_ROOT_LIMIT) {
+  if (shell->directory.root_count > STARTUP_ROOT_LIMIT) {
     return CALL_LIMIT;
+  }
+  size_t root_count = 0;
+  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+    if (strcmp(shell->roots[i].name, "app")) {
+      ++root_count;
+    }
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory.count;
@@ -231,10 +245,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
-  for (size_t i = 0; i < root_count; ++i) {
-    grants[CHILD_ROOT + i] = (struct launch_grant){shell->roots[i].handle, 0, 0};
-    prepared->roots[i] = (struct launch_binding){(uintptr_t)shell->roots[i].name,
-        CHILD_ROOT + i};
+  size_t root_index = 0;
+  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+    /* app belongs to one program; never inherit even an unused grant for it. */
+    if (!strcmp(shell->roots[i].name, "app")) {
+      continue;
+    }
+    grants[CHILD_ROOT + root_index] = (struct launch_grant){shell->roots[i].handle, 0, 0};
+    prepared->roots[root_index] = (struct launch_binding){(uintptr_t)shell->roots[i].name,
+        CHILD_ROOT + root_index};
+    ++root_index;
   }
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = directory_index + i;
@@ -558,6 +578,30 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
+  if (prepared->bundle) {
+    const struct bundle_authority authority[] = {
+      {"input", shell->terminal.input},
+      {"output", shell->terminal.output},
+      {"memory", shell->memory},
+      {"clock", shell->clock},
+      {"display", shell->display},
+      {"audio", shell->audio},
+      {"screen_capture", shell->screen_capture},
+      {"system_info", shell->system_info},
+      {"echo", shell->echo},
+      {"udp", shell->udp},
+      {"tcp", shell->tcp},
+      {"random", shell->random},
+      {"profile", shell->profile},
+      {"launcher", shell->child_launcher},
+    };
+    enum call_status status = bundle_launch_prepare(prepared->bundle, request, authority,
+        sizeof(authority) / sizeof(*authority), &prepared->bundle_launch);
+    if (status != CALL_OK) {
+      return status;
+    }
+    *request = *bundle_launch_request(prepared->bundle_launch);
+  }
   return CALL_OK;
 }
 
@@ -673,7 +717,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   for (size_t i = 0; i < stage_count; ++i) {
     failed_stage = i;
     path = stages[i].arguments[0];
-    status = shell_open_image(shell, path, &prepared[i].image);
+    status = shell_open_image(shell, path, &prepared[i].image, &prepared[i].bundle);
     if (status != CALL_OK) {
       goto failed;
     }
