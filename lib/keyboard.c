@@ -24,6 +24,23 @@ enum call_status keyboard_release(handle_t keyboard)
   return keyboard_command(keyboard, KEYBOARD_RELEASE);
 }
 
+enum call_status keyboard_clipboard_refuse(handle_t keyboard, uint64_t action_id,
+    uint64_t operation)
+{
+  struct keyboard_clipboard_refuse_request message = {
+    .header = {PROTOCOL_KEYBOARD, KEYBOARD_CLIPBOARD_REFUSE},
+    .action_id = action_id, .operation = operation,
+  };
+  struct syscall_result result = syscall_call(keyboard, &message, sizeof(message), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size) {
+    return CALL_BAD_REQUEST;
+  }
+  return result.status;
+}
+
 enum call_status keyboard_read(handle_t keyboard, uint64_t flags,
                               struct keyboard_event *event)
 {

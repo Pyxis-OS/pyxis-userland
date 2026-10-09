@@ -9,6 +9,10 @@
  * independent of handle copies/closes and of display ownership. */
 enum call_status keyboard_acquire(handle_t keyboard);
 enum call_status keyboard_release(handle_t keyboard);
+/* Consume a matching CLIPBOARD_PUBLISH/PASTE graphics action using acquired INPUT
+ * authority. No clipboard grant is required; no store data or metadata is revealed. */
+enum call_status keyboard_clipboard_refuse(handle_t keyboard, uint64_t action_id,
+    uint64_t operation);
 /* flags is zero to block, KEYBOARD_READ_POLL to poll. Empty polling returns
  * TIMED_OUT. Clears event on failure. See abi/keyboard.h for focus/reset rules;
  * callers must discard all held keys on focus changes and input resets. */
