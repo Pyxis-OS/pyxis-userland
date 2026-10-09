@@ -100,6 +100,10 @@ static bool select_at(struct mux *mux, int64_t column, int64_t row, bool extend,
 
 static void pointer_input(struct mux *mux, const struct pointer_event *event)
 {
+  if (event->type == TERMINAL_POINTER_CLIPBOARD_ACTION) {
+    mux_clipboard_action(mux, event);
+    return;
+  }
   if (event->generation != mux->pointer_geometry.surface.generation ||
       event->mapping_identity != mux->pointer_geometry.surface.mapping_identity) {
     mux_pointer_clear_selection(mux);
@@ -147,6 +151,10 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
     int pane = event->x >= 0 && event->y >= 0 ? hit_pane(mux, column, row, false) : -1;
     if (pane >= 0) {
       if (mux->focused != (unsigned)pane) {
+        mux->error = mux_pointer_advance_view(mux);
+        if (mux->error != CALL_OK) {
+          return;
+        }
         mux->prefix = mux->confirm = false;
         mux->escape_size = 0;
       }
