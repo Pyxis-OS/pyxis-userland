@@ -47,6 +47,15 @@ char *strcat(char *restrict dest, const char *restrict src)
   return dest;
 }
 
+char *strncat(char *restrict dest, const char *restrict src, size_t count)
+{
+  char *end = dest + strlen(dest);
+  size_t length = strnlen(src, count);
+  memcpy(end, src, length);
+  end[length] = '\0';
+  return dest;
+}
+
 int strcmp(const char *left, const char *right)
 {
   while (*left && *left == *right) {

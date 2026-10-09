@@ -42,6 +42,49 @@ int timespec_get(struct timespec *result, int base)
   return TIME_UTC;
 }
 
+int clock_gettime(clockid_t clock, struct timespec *result)
+{
+  int base = clock == CLOCK_REALTIME ? TIME_UTC :
+             clock == CLOCK_MONOTONIC ? TIME_MONOTONIC : 0;
+  if (!base || !result) {
+    errno = EINVAL;
+    return -1;
+  }
+  return timespec_get(result, base) ? 0 : -1;
+}
+
+int nanosleep(const struct timespec *duration, struct timespec *remaining)
+{
+  (void)remaining;
+  if (!duration || duration->tv_sec < 0 || duration->tv_nsec < 0 ||
+      duration->tv_nsec >= (long)NANOSECONDS_PER_SECOND) {
+    errno = EINVAL;
+    return -1;
+  }
+  handle_t clock = startup_resource("clock");
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  /* Saturate: a deadline past the clock's range sleeps until its end. */
+  uint64_t seconds = (uint64_t)duration->tv_sec;
+  uint64_t deadline = UINT64_MAX;
+  if (seconds <= (UINT64_MAX - now) / NANOSECONDS_PER_SECOND) {
+    uint64_t span = seconds * NANOSECONDS_PER_SECOND;
+    if ((uint64_t)duration->tv_nsec <= UINT64_MAX - now - span) {
+      deadline = now + span + (uint64_t)duration->tv_nsec;
+    }
+  }
+  status = clock_sleep_until(clock, deadline);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  return 0;
+}
+
 time_t time(time_t *result)
 {
   struct timespec reading;

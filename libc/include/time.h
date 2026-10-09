@@ -45,6 +45,20 @@ int timespec_get(struct timespec *result, int base);
 /* Seconds between end and beginning, without overflowing time_t arithmetic. */
 double difftime(time_t end, time_t beginning);
 
+typedef int clockid_t;
+
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+
+/* POSIX clocks on the startup clock: CLOCK_REALTIME reads it as timespec_get's
+ * TIME_UTC, CLOCK_MONOTONIC as TIME_MONOTONIC. Other clocks fail with EINVAL. */
+int clock_gettime(clockid_t clock, struct timespec *result);
+/* Sleep on the startup clock, which needs SLEEP authority, until the duration
+ * has passed. Pyxis has no signals, so it never returns early with EINTR and
+ * never writes remaining. A tv_nsec outside 0..999999999 or a negative tv_sec
+ * fails with EINVAL; a duration past the clock's range sleeps until its end. */
+int nanosleep(const struct timespec *duration, struct timespec *remaining);
+
 /* English C-locale standard C/POSIX conversions, with E/O alternatives equal
  * to their ordinary forms. No locale selection or extended flags/widths.
  * Return the byte count excluding NUL, or zero for insufficient capacity.

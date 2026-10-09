@@ -24,6 +24,9 @@ char *stpcpy(char *__restrict dest, const char *__restrict src);
  * Does not terminate when the source is count bytes or longer. No overlap. */
 char *strncpy(char *__restrict dest, const char *__restrict src, size_t count);
 char *strcat(char *__restrict dest, const char *__restrict src);
+/* Appends at most count bytes of src, then a NUL, so dest needs room for
+ * strlen(dest) + count + 1 bytes. No overlap. */
+char *strncat(char *__restrict dest, const char *__restrict src, size_t count);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 char *strchr(const char *text, int character);
