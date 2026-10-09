@@ -30,6 +30,11 @@ enum call_status terminal_pointer_release(handle_t pointer)
   return pointer_command(pointer, TERMINAL_POINTER_RELEASE);
 }
 
+enum call_status terminal_pointer_cancel_clipboard(handle_t pointer)
+{
+  return pointer_command(pointer, TERMINAL_POINTER_CANCEL_CLIPBOARD);
+}
+
 enum call_status terminal_pointer_read(handle_t pointer, uint64_t flags,
     struct pointer_event *event)
 {

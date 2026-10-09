@@ -152,8 +152,8 @@ static void focus(struct mux *mux, enum mux_axis axis, bool forward)
       }
     }
   }
-  if (mux->focused != (unsigned)selected) {
-    mux->error = mux_pointer_advance_view(mux);
+  if (mux->focused != (unsigned)selected && mux->pointer_owned) {
+    mux->error = terminal_pointer_cancel_clipboard(mux->pointer);
     if (mux->error != CALL_OK) {
       return;
     }

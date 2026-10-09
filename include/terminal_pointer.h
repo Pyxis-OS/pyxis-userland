@@ -26,5 +26,8 @@ enum call_status terminal_pointer_state(handle_t pointer, uint64_t *flags);
  * clipboard layer. This consumes the attempt without any store authority. */
 enum call_status terminal_pointer_clipboard_refuse(handle_t pointer, uint64_t action_id,
     uint64_t generation, uint64_t mapping_identity, uint64_t operation);
+/* Cancel Paste and unused clipboard intent for a focus change. The acquired
+ * controller retains its pointer queue, accepted buttons and view identity. */
+enum call_status terminal_pointer_cancel_clipboard(handle_t pointer);
 
 #endif

@@ -151,7 +151,7 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
     int pane = event->x >= 0 && event->y >= 0 ? hit_pane(mux, column, row, false) : -1;
     if (pane >= 0) {
       if (mux->focused != (unsigned)pane) {
-        mux->error = mux_pointer_advance_view(mux);
+        mux->error = terminal_pointer_cancel_clipboard(mux->pointer);
         if (mux->error != CALL_OK) {
           return;
         }
