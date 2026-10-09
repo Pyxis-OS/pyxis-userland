@@ -111,6 +111,28 @@ upstream's `eval_as_float`, `fp_barrierf`, `asuint` and `asfloat` helpers and
 declares the four float error helpers without `hidden`. Overflow, underflow
 and invalid operands raise FP exception flags; errno is unchanged.
 
+The EDuke32 port's prerequisites add these files from the same pin:
+
+- `src/math/sinf.c`, `cosf.c`, `tanf.c`, `__sindf.c`, `__cosdf.c`, `__tandf.c`
+  and `__rem_pio2f.c`, unmodified; large arguments use the existing
+  `__rem_pio2_large`;
+- `src/math/acosf.c`, unmodified, and `atanf.c` and `atan2f.c`, which replace
+  only `isnan` with `__builtin_isnan` as `atan2.c` does;
+- `src/math/expf.c`, unmodified, using the existing `exp2f_data`;
+- `src/math/logf.c`, `logf_data.c` and `log10f.c`, unmodified, and
+  `logf_data.h`, omitting `features.h` and the `hidden` marker;
+- `src/math/floorf.c`, `fabsf.c` and `rintf.c`, unmodified, and `fmodf.c`,
+  which replaces only `isnan` with `__builtin_isnan`;
+- `src/math/x86_64/lrint.c`, `lrintf.c` and `llrintf.c`, unmodified, using
+  SSE `cvtsd2si` and `cvtss2si` in the current rounding mode;
+- `src/math/__math_divzerof.c`, unmodified, which `logf` uses for zero.
+
+`src/internal/libm.h` adds upstream's `GET_FLOAT_WORD` and `SET_FLOAT_WORD`
+and declares `__rem_pio2f`, `__sindf`, `__cosdf`, `__tandf` and
+`__math_divzerof` without `hidden`. The public `math.h` also gains POSIX's
+`M_*` constants with musl's values. Errors raise FP exception flags; errno is
+unchanged.
+
 `src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
 `__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
 `EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and

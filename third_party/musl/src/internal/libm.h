@@ -136,6 +136,15 @@ static inline void fp_force_evall(long double x)
 #define asuint64(f) ((union{double _f; uint64_t _i;}){f})._i
 #define asdouble(i) ((union{uint64_t _i; double _f;}){i})._f
 
+#define GET_FLOAT_WORD(w,d)                       \
+do {                                              \
+  (w) = asuint(d);                                \
+} while (0)
+#define SET_FLOAT_WORD(d,w)                       \
+do {                                              \
+  (d) = asfloat(w);                               \
+} while (0)
+
 #define EXTRACT_WORDS(hi,lo,d)                    \
 do {                                              \
   uint64_t __u = asuint64(d);                     \
@@ -161,6 +170,10 @@ int    __rem_pio2(double,double*);
 double __sin(double,double,int);
 double __cos(double,double);
 double __tan(double,double,int);
+int    __rem_pio2f(float,double*);
+float  __sindf(double);
+float  __cosdf(double);
+float  __tandf(double,int);
 
 double __math_xflow(uint32_t, double);
 double __math_uflow(uint32_t);
@@ -171,5 +184,6 @@ float __math_xflowf(uint32_t, float);
 float __math_uflowf(uint32_t);
 float __math_oflowf(uint32_t);
 float __math_invalidf(float);
+float __math_divzerof(uint32_t);
 
 #endif

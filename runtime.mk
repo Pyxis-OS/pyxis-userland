@@ -37,6 +37,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/time/__month_to_secs.c \
                 third_party/musl/src/time/rule_to_secs.c \
                 third_party/musl/src/math/fabs.c \
+                third_party/musl/src/math/fabsf.c \
                 third_party/musl/src/math/floor.c \
                 third_party/musl/src/math/round.c \
                 third_party/musl/src/math/roundf.c \
@@ -83,6 +84,27 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/__math_uflowf.c \
                 third_party/musl/src/math/__math_oflowf.c \
                 third_party/musl/src/math/__math_invalidf.c \
+                third_party/musl/src/math/acosf.c \
+                third_party/musl/src/math/atanf.c \
+                third_party/musl/src/math/atan2f.c \
+                third_party/musl/src/math/cosf.c \
+                third_party/musl/src/math/sinf.c \
+                third_party/musl/src/math/tanf.c \
+                third_party/musl/src/math/__cosdf.c \
+                third_party/musl/src/math/__sindf.c \
+                third_party/musl/src/math/__tandf.c \
+                third_party/musl/src/math/__rem_pio2f.c \
+                third_party/musl/src/math/expf.c \
+                third_party/musl/src/math/floorf.c \
+                third_party/musl/src/math/fmodf.c \
+                third_party/musl/src/math/logf.c \
+                third_party/musl/src/math/logf_data.c \
+                third_party/musl/src/math/log10f.c \
+                third_party/musl/src/math/rintf.c \
+                third_party/musl/src/math/__math_divzerof.c \
+                third_party/musl/src/math/x86_64/lrintf.c \
+                third_party/musl/src/math/x86_64/llrintf.c \
+                third_party/musl/src/math/x86_64/lrint.c \
                 third_party/musl/src/internal/floatscan.c
 MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
