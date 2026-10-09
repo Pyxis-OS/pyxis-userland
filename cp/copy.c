@@ -102,6 +102,13 @@ enum cp_result cp_copy_file(const char *source, handle_t parent, const char *nam
     report_directory_error("cp", source, status);
     return CP_FAILED;
   }
+  return cp_copy_file_handle(input, source, parent, name, destination);
+}
+
+enum cp_result cp_copy_file_handle(handle_t input, const char *source, handle_t parent,
+    const char *name, const char *destination)
+{
+  enum call_status status;
   enum cp_result result = CP_FAILED;
   handle_t output = HANDLE_INVALID;
   bool reserved = false;

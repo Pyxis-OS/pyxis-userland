@@ -1,10 +1,10 @@
 # cp
 
-`cp [--] source-file... destination` copies files through the caller's native
+`cp [-r] [--] source... destination` copies files through the caller's native
 roots and working directory. A directory destination receives each source's
 literal basename; multiple sources require an existing directory. Existing
-destination files are replaced. There are no recursive or metadata options;
-`--` permits option-looking names. Success is quiet. Ordinary source/copy
+destination files are replaced. `-r` also copies directory trees (below); there
+are no metadata options, and `--` permits option-looking names. Success is quiet. Ordinary source/copy
 errors allow later operands to run with an aggregate failure status.
 
 The destination parent is retained with LOOKUP, CREATE, WRITE_FILES and REMOVE
@@ -38,3 +38,29 @@ Interruption can leave a named temporary file. There is no automatic stale-file
 cleanup or crash-durability promise; closing handles is not synchronization.
 Use the normal `sync` command when durability is needed. No mode, owner or
 timestamp metadata is copied.
+
+## Recursive copy
+
+With `-r`, a directory source is copied as a new tree: the root (`destination/<leaf>`
+for an existing directory destination, otherwise the destination name itself) is
+created exclusively, so an existing target of any kind fails that operand before
+anything changes. Files are staged and renamed as above into directories created
+first; empty directories are copied. File operands still replace.
+
+Before copying data, cp creates a `.cp-tree-` marker with 16 random hex digits in the
+new root and walks the source tree. The name comes from the clock and random grants
+that libc `mkstemp` uses (a tree copy fails without them) and is retried on
+ALREADY_EXISTS, so no other run's leftover marker can match it. Finding it means the
+destination lies inside the source, since no object identity exists to compare; cp
+removes the marker and the new root and fails. The walk also enforces the limits (32 levels below the root,
+65,536 entries, 255-byte names) and rejects symbolic links, special and unknown
+entries, so those failures normally occur before any file is copied. The copy pass
+checks them again, because enumeration is live. An enumeration CHANGED outcome fails
+the operand without restarting.
+
+The first failure stops that operand and keeps what was copied; nothing is rolled back
+or removed beyond cp's own confirmed temporary. cp reports the path and a summary of the
+files and directories created. Later operands continue after an ordinary failure.
+Traversal is iterative over a fixed stack (about 10 KiB) and uses no heap per entry.
+Source directories need LOOKUP, ENUMERATE and READ_FILES; the destination needs the
+rights above, which created directories request again.
