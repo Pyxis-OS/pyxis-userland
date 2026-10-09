@@ -27,6 +27,7 @@
 #include <abi/net_config.h>
 #include <abi/terminal.h>
 #include <abi/terminal_pointer.h>
+#include <abi/clipboard.h>
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
@@ -72,7 +73,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 24, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 26, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
@@ -236,6 +237,19 @@ static int launch_session(const struct session_config *config, const struct netw
         (uintptr_t)"terminal_pointer", grant_count};
     grants[grant_count++] = (struct launch_grant){terminal_pointer,
         TERMINAL_POINTER_RIGHT_CONTROL, 0};
+  }
+  /* Only trusted local startup retains controller grants. Pane and remote
+   * children receive none; their READ/WRITE grants still allow reader opt-in. */
+  if (mux_terminal != HANDLE_INVALID && !start_remote_services) {
+    static const char *const clipboard_names[] = {"clipboard_local", "clipboard_shared"};
+    for (size_t i = 0; i < sizeof(clipboard_names) / sizeof(clipboard_names[0]); ++i) {
+      handle_t clipboard = startup_resource(clipboard_names[i]);
+      if (clipboard == HANDLE_INVALID) {
+        continue;
+      }
+      resources[resource_count++] = (struct launch_binding){(uintptr_t)clipboard_names[i], grant_count};
+      grants[grant_count++] = (struct launch_grant){clipboard, CLIPBOARD_RIGHTS, 0};
+    }
   }
   handle_t pipe = startup_resource("pipe");
   if (pipe != HANDLE_INVALID) {

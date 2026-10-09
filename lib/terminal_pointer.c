@@ -30,6 +30,11 @@ enum call_status terminal_pointer_release(handle_t pointer)
   return pointer_command(pointer, TERMINAL_POINTER_RELEASE);
 }
 
+enum call_status terminal_pointer_cancel_clipboard(handle_t pointer)
+{
+  return pointer_command(pointer, TERMINAL_POINTER_CANCEL_CLIPBOARD);
+}
+
 enum call_status terminal_pointer_read(handle_t pointer, uint64_t flags,
     struct pointer_event *event)
 {
@@ -127,4 +132,15 @@ enum call_status terminal_pointer_state(handle_t pointer, uint64_t *flags)
     *flags = reply;
   }
   return status;
+}
+
+enum call_status terminal_pointer_clipboard_refuse(handle_t pointer, uint64_t action_id,
+    uint64_t generation, uint64_t mapping_identity, uint64_t operation)
+{
+  struct terminal_pointer_clipboard_refuse_request request = {
+    .header = {PROTOCOL_TERMINAL_POINTER, TERMINAL_POINTER_CLIPBOARD_REFUSE},
+    .action_id = action_id, .generation = generation, .mapping_identity = mapping_identity,
+    .operation = operation,
+  };
+  return pointer_call(pointer, &request, sizeof(request), NULL, 0);
 }

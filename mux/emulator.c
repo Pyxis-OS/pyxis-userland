@@ -33,6 +33,108 @@ void mux_emulator_clear_selection(struct mux_emulator *emulator)
   emulator->selection = (struct mux_selection){0};
 }
 
+static const struct mux_cell *selected_row(const struct mux_emulator *emulator,
+    uint64_t row, size_t *width)
+{
+  uint64_t oldest = emulator->scrolled_rows - emulator->history_count;
+  if (row < oldest) {
+    return NULL;
+  }
+  if (row < emulator->scrolled_rows) {
+    size_t slot = (emulator->history_start + (size_t)(row - oldest)) % MUX_HISTORY_ROWS;
+    *width = emulator->history_widths[slot];
+    return emulator->history + slot * emulator->history_stride;
+  }
+  uint64_t live = row - emulator->scrolled_rows;
+  if (live >= emulator->rows) {
+    return NULL;
+  }
+  *width = emulator->columns;
+  return emulator->cells + (size_t)live * emulator->columns;
+}
+
+enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator,
+    size_t limit, char **text, size_t *length)
+{
+  *text = NULL;
+  *length = 0;
+  if (!emulator->selection.active || emulator->selection.pending) {
+    return CALL_NOT_FOUND;
+  }
+  struct mux_selection_point first = emulator->selection.anchor;
+  struct mux_selection_point last = emulator->selection.end;
+  if (last.row < first.row || (last.row == first.row && last.column < first.column)) {
+    struct mux_selection_point swap = first;
+    first = last;
+    last = swap;
+  }
+  if (last.row - first.row > limit) {
+    return CALL_LIMIT;
+  }
+  /* The mux loop owns these cells; neither pass yields to feed or resize. */
+  char *owned = NULL;
+  size_t total = 0;
+  for (unsigned pass = 0; pass < 2; ++pass) {
+    size_t at = 0;
+    for (uint64_t row = first.row;; ++row) {
+      size_t width;
+      const struct mux_cell *cells = selected_row(emulator, row, &width);
+      if (!cells) {
+        free(owned);
+        return CALL_UNAVAILABLE;
+      }
+      if (width > emulator->selection.columns) {
+        width = emulator->selection.columns;
+      }
+      size_t begin = row == first.row ? first.column : 0;
+      size_t end = row == last.row && last.column < width ? last.column + 1 : width;
+      if (begin > end || (row == first.row && begin >= width) ||
+          (row == last.row && last.column >= width)) {
+        free(owned);
+        return CALL_UNAVAILABLE;
+      }
+      for (size_t column = begin; column < end; ++column) {
+        if (cells[column].character < ' ' || cells[column].character > '~') {
+          free(owned);
+          return CALL_BAD_REQUEST;
+        }
+      }
+      while (end > begin && cells[end - 1].character == ' ') {
+        --end;
+      }
+      size_t count = end - begin;
+      size_t separator = row != last.row;
+      if (count > limit - at || separator > limit - at - count) {
+        free(owned);
+        return CALL_LIMIT;
+      }
+      if (pass) {
+        for (size_t column = begin; column < end; ++column) {
+          owned[at++] = cells[column].character;
+        }
+        if (separator) {
+          owned[at++] = '\n';
+        }
+      } else {
+        at += count + separator;
+      }
+      if (row == last.row) {
+        break;
+      }
+    }
+    if (!pass) {
+      total = at;
+      owned = malloc(total ? total : 1);
+      if (!owned) {
+        return CALL_NO_MEMORY;
+      }
+    }
+  }
+  *text = owned;
+  *length = total;
+  return CALL_OK;
+}
+
 static bool point_before(struct mux_selection_point a, struct mux_selection_point b)
 {
   return a.row < b.row || (a.row == b.row && a.column < b.column);

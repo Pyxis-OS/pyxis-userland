@@ -27,6 +27,7 @@ struct mux {
   struct terminal terminal;
   handle_t clock;
   handle_t pointer;
+  handle_t clipboard_local, clipboard_shared;
   bool pointer_owned, dragging;
   unsigned selection_pane;
   int64_t drag_column, drag_row;
@@ -55,6 +56,7 @@ void mux_pointer_clear_selection(struct mux *mux);
 enum call_status mux_pointer_advance_view(struct mux *mux);
 enum call_status mux_pointer_change_view(struct mux *mux);
 void mux_pointer_drain(struct mux *mux);
+void mux_clipboard_action(struct mux *mux, const struct pointer_event *event);
 
 static inline struct mux_rect mux_viewport(const struct mux *mux)
 {

@@ -25,6 +25,7 @@
 #include <abi/profile.h>
 #include <abi/terminal.h>
 #include <abi/terminal_pointer.h>
+#include <abi/clipboard.h>
 #include <abi/wait.h>
 #include <clock.h>
 #include <console.h>
@@ -48,7 +49,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[29];
+  struct launch_binding resources[31];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -139,6 +140,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_mux_terminal = mux_terminal != HANDLE_INVALID;
   handle_t terminal_pointer = has_mux_terminal ? startup_resource("terminal_pointer") : HANDLE_INVALID;
   bool has_terminal_pointer = terminal_pointer != HANDLE_INVALID;
+  handle_t clipboard_local = has_mux_terminal ? startup_resource("clipboard_local") : HANDLE_INVALID;
+  handle_t clipboard_shared = has_mux_terminal ? startup_resource("clipboard_shared") : HANDLE_INVALID;
+  bool has_clipboard_local = clipboard_local != HANDLE_INVALID;
+  bool has_clipboard_shared = clipboard_shared != HANDLE_INVALID;
   /* Only a session successor inherits power; the shell's own programs never do. */
   bool has_power = session && shell->power != HANDLE_INVALID;
   bool has_screen_capture = shell->screen_capture != HANDLE_INVALID;
@@ -170,7 +175,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory.count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 29 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 31 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -201,7 +206,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t power_index = terminal_pointer_index + (has_terminal_pointer ? 1 : 0);
   size_t screen_capture_index = power_index + (has_power ? 1 : 0);
   size_t audio_index = screen_capture_index + (has_screen_capture ? 1 : 0);
-  size_t grant_count = audio_index + (has_audio ? 1 : 0);
+  size_t clipboard_local_index = audio_index + (has_audio ? 1 : 0);
+  size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
+  size_t grant_count = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -370,6 +377,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         NAMESPACE_SERVICE_RIGHT_CREATE, 0};
   }
 
+  if (has_clipboard_local) {
+    grants[clipboard_local_index] = (struct launch_grant){clipboard_local, CLIPBOARD_RIGHTS, 0};
+  }
+  if (has_clipboard_shared) {
+    grants[clipboard_shared_index] = (struct launch_grant){clipboard_shared, CLIPBOARD_RIGHTS, 0};
+  }
+
   struct launch_binding *resources = prepared->resources;
   resources[0] = (struct launch_binding){(uintptr_t)"output", CHILD_OUTPUT};
   resources[1] = (struct launch_binding){(uintptr_t)"memory", CHILD_MEMORY};
@@ -461,6 +475,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_audio) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"audio", audio_index};
+  }
+  if (has_clipboard_local) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"clipboard_local", clipboard_local_index};
+  }
+  if (has_clipboard_shared) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"clipboard_shared", clipboard_shared_index};
   }
   struct launch_binding *roots = prepared->roots;
   /* Root names and display paths do not determine delegated authority. */

@@ -152,6 +152,12 @@ static void focus(struct mux *mux, enum mux_axis axis, bool forward)
       }
     }
   }
+  if (mux->focused != (unsigned)selected && mux->pointer_owned) {
+    mux->error = terminal_pointer_cancel_clipboard(mux->pointer);
+    if (mux->error != CALL_OK) {
+      return;
+    }
+  }
   mux->focused = (unsigned)selected;
   if (mux->collapsed) {
     mux->error = place(mux);
@@ -447,6 +453,10 @@ static void lifecycle(struct mux *mux, struct mux_pane *pane, uint64_t events)
     return;
   }
   if (!pane->root_done) {
+    mux->error = mux_pointer_advance_view(mux);
+    if (mux->error != CALL_OK) {
+      return;
+    }
     mux->error = process_wait(pane->session.process, &pane->result);
     if (mux->error == CALL_OK) {
       pane->root_done = true;
@@ -582,6 +592,8 @@ int main(int argc, char **argv)
     .terminal = {startup_resource("input"), startup_resource("output")},
     .clock = startup_resource("clock"), .tab_width = 8,
     .pointer = startup_resource("terminal_pointer"),
+    .clipboard_local = startup_resource("clipboard_local"),
+    .clipboard_shared = startup_resource("clipboard_shared"),
   };
   if (argc == 3 && !strcmp(argv[1], "--tab-width")) {
     char *end;
