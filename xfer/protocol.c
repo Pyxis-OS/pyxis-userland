@@ -236,7 +236,7 @@ static bool parse_packet(struct wire *wire, struct packet *packet)
     else if (!strcmp(field, "tt")) destination = &packet->transfer_type;
     else if (!strcmp(field, "zip")) destination = &packet->compression;
     else if (!strcmp(field, "sha256")) destination = &packet->sha256;
-    else if (!strcmp(field, "px_sha256")) destination = &packet->extension;
+    else if (!strcmp(field, "px_xfer")) destination = &packet->extension;
     if (destination) {
       if (*destination) {
         return wire_fail(wire, "Duplicate transfer field");
@@ -419,32 +419,69 @@ bool wire_peer_status(struct wire *wire, const struct packet *packet)
   return peer_failed(wire, text);
 }
 
-bool wire_expect(struct wire *wire, const char *status, const char *fid,
-    size_t size, bool extension)
+static bool status_reply(struct wire *wire, struct packet *packet, char *text, size_t capacity)
+{
+  if (!wire_next(wire, packet)) {
+    return false;
+  }
+  if (strcmp(packet->action, "status") || !status_text(packet, text, capacity)) {
+    return wire_fail(wire, "Expected a transfer status reply");
+  }
+  return true;
+}
+
+static bool reply_file(struct wire *wire, const struct packet *packet, const char *fid)
+{
+  if ((fid && (!packet->fid || strcmp(packet->fid, fid))) || (!fid && packet->fid)) {
+    return wire_fail(wire, "Unexpected file identifier in status reply");
+  }
+  return true;
+}
+
+bool wire_expect(struct wire *wire, const char *status, const char *fid, bool negotiation)
 {
   struct packet packet;
   char text[192];
-  if (!wire_next(wire, &packet)) {
+  if (!status_reply(wire, &packet, text, sizeof(text))) {
     return false;
-  }
-  if (strcmp(packet.action, "status") || !status_text(&packet, text, sizeof(text))) {
-    return wire_fail(wire, "Expected a transfer status reply");
   }
   if (strcmp(text, status)) {
     return peer_failed(wire, text);
   }
-  if ((fid && (!packet.fid || strcmp(packet.fid, fid))) || (!fid && packet.fid)) {
-    return wire_fail(wire, "Unexpected file identifier in status reply");
+  if (!reply_file(wire, &packet, fid)) {
+    return false;
   }
-  if (extension && (!packet.extension || strcmp(packet.extension, "1"))) {
-    return wire_fail(wire, "Peer lacks the mandatory SHA-256 extension");
+  if (negotiation && (!packet.extension || strcmp(packet.extension, "2"))) {
+    return wire_fail(wire, "Peer lacks transfer protocol px_xfer=2; "
+        "use pyxis-remote built from the same revision as this system");
   }
-  if (!strcmp(status, "PROGRESS")) {
-    size_t progress;
-    if (!decimal_size(packet.size, &progress) || progress != size) {
-      return wire_fail(wire, "Unexpected transfer progress");
-    }
+  return true;
+}
+
+bool wire_data_reply(struct wire *wire, const char *fid, size_t *acknowledged, size_t sent,
+    bool final, bool *finished)
+{
+  struct packet packet;
+  char text[192];
+  *finished = false;
+  if (!status_reply(wire, &packet, text, sizeof(text))) {
+    return false;
   }
+  if (final && !strcmp(text, "OK")) {
+    *finished = true;
+    return reply_file(wire, &packet, fid);
+  }
+  if (strcmp(text, "PROGRESS")) {
+    return peer_failed(wire, text);
+  }
+  size_t progress;
+  if (!reply_file(wire, &packet, fid)) {
+    return false;
+  }
+  if (!decimal_size(packet.size, &progress) || progress <= *acknowledged || progress > sent) {
+    return wire_fail(wire, "Unexpected transfer progress");
+  }
+  *acknowledged = progress;
   return true;
 }
 
