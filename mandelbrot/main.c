@@ -27,6 +27,7 @@ struct controls {
   bool redraw;
   uint64_t updated_at;
   uint64_t observed_generation;
+  uint64_t slot; /* Held display slot the next frame is rendered into. */
 };
 
 static bool moving(const struct controls *controls)
@@ -159,6 +160,7 @@ static enum call_status receive_events(struct display_buffer *buffer,
     if (display_replace(display, size.generation, buffer) == CALL_OK) {
       controls->view.aspect = (double)buffer->height / (double)buffer->width;
       controls->redraw = true;
+      controls->slot = 0;
       *replaced = true;
     }
   }
@@ -221,8 +223,8 @@ static enum call_status render(struct display_buffer *buffer,
       }
     }
 
-    volatile uint32_t *pixels = (volatile uint32_t *)(uintptr_t)
-        (buffer->address + row * buffer->pitch);
+    uint32_t *pixels = (uint32_t *)(display_slot_address(buffer, controls->slot) +
+        row * buffer->pitch);
     double imaginary = imaginary_top + ((double)row + 0.5) * step;
 
     for (size_t column = 0; column < buffer->width; ++column) {
@@ -232,7 +234,14 @@ static enum call_status render(struct display_buffer *buffer,
           colors[iteration % (sizeof(colors) / sizeof(colors[0]))];
     }
   }
-  return CALL_OK;
+  /* Only a complete frame is handed over; the previous one stays on screen
+   * while this one renders. */
+  struct display_submit_reply submitted;
+  enum call_status status = display_submit(display, controls->slot, &submitted);
+  if (status == CALL_OK) {
+    controls->slot = submitted.next;
+  }
+  return status;
 }
 
 static enum call_status explore(struct display_buffer *buffer,
@@ -317,12 +326,8 @@ int main(void)
   status = keyboard_acquire(keyboard);
   bool keyboard_owned = status == CALL_OK;
   if (keyboard_owned) {
-    /* Selecting the single buffer first lets periodic presentation show progress.
-     * The presenter may read pixels while we write them; tearing is allowed. */
-    status = display_present(display);
-    if (status == CALL_OK) {
-      status = explore(&buffer, display, keyboard, clock);
-    }
+    /* The first submitted frame makes the graphics visible. */
+    status = explore(&buffer, display, keyboard, clock);
   }
 
   enum call_status keyboard_released = keyboard_owned ?
