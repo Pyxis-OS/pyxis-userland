@@ -16,6 +16,7 @@
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
+#include <abi/audio.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
 #include <abi/udp.h>
@@ -56,7 +57,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   size_t root_count = startup_root_count();
   size_t depth = startup_working_directory_count();
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 19, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 20, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
@@ -138,6 +139,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"memory", MEMORY_RIGHT_MANAGE}, {"clock", CLOCK_RIGHTS},
     {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
     {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
+    {"audio", AUDIO_RIGHT_PLAYBACK},
     /* Graphics remain a shared space layer, never a pane surface. */
     {"display", DISPLAY_RIGHT_DRAW}, {"keyboard", KEYBOARD_RIGHT_INPUT},
     {"pointer", POINTER_RIGHT_INPUT}, {"power", POWER_RIGHTS},

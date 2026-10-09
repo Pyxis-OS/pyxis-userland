@@ -12,6 +12,7 @@
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
+#include <abi/audio.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
 #include <abi/udp.h>
@@ -69,7 +70,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 14, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 15, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
@@ -130,6 +131,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     {"memory", MEMORY_RIGHT_MANAGE}, {"clock", CLOCK_RIGHTS},
     {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
     {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
+    {"audio", AUDIO_RIGHT_PLAYBACK},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_FILE | PROFILE_RIGHT_HOST},
