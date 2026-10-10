@@ -6,6 +6,9 @@
 #define MB_LEN_MAX 4
 #define RE_DUP_MAX 255
 #define CHARCLASS_NAME_MAX 14
+/* Buffer bound for libc realpath only; ordinary native path lookup has no
+ * fixed path-length bound. Includes the terminating NUL. */
+#define PATH_MAX 4096
 
 #define SCHAR_MAX 127
 #define SCHAR_MIN (-SCHAR_MAX - 1)

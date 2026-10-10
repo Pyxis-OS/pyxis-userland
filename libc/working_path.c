@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "errors.h"
+#include "working_path_internal.h"
 
 static struct pyxis_working_snapshot working;
 static bool initialized;
@@ -23,7 +24,7 @@ static size_t root_prefix(const char *path)
 
 /* Only the description is normalized. The original input still reaches
  * path_change, preserving ordered lookup and parent-navigation boundaries. */
-static enum call_status describe(const char *current, const char *path, char **result)
+enum call_status libc_path_description(const char *current, const char *path, char **result)
 {
   *result = NULL;
   size_t root = root_prefix(path);
@@ -107,7 +108,7 @@ static enum call_status initialize(void)
   const char *path = startup_working_path();
   enum call_status status = CALL_OK;
   if (depth && path && root_prefix(path)) {
-    status = describe(NULL, path, &initial.path);
+    status = libc_path_description(NULL, path, &initial.path);
   }
   if (status == CALL_OK) {
     status = path_context_init(&initial.context, storage, depth,
@@ -195,7 +196,7 @@ enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snap
     goto done;
   }
   if (cwd_override) {
-    status = describe(working.path, cwd_override, &snapshot->path);
+    status = libc_path_description(working.path, cwd_override, &snapshot->path);
   } else if (working.path) {
     snapshot->path = strdup(working.path);
     if (!snapshot->path) {

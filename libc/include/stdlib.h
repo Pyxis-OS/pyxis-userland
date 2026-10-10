@@ -105,6 +105,12 @@ double atof(const char *text);
 int rand(void);
 void srand(unsigned seed);
 
+/* Bounded native proof, not physical alias canonicalization. Input and output
+ * fit PATH_MAX including NUL. resolved must hold PATH_MAX bytes, or NULL asks
+ * for an allocated result freed with free(). Failure leaves resolved unchanged.
+ * Providers and unknown/stale ancestry or unavailable live identity fail. */
+char *realpath(const char *__restrict path, char *__restrict resolved);
+
 /* In-place, unstable heapsort with no allocation or recursion. compare returns
  * negative, zero or positive for less than, equal to or greater than. */
 void qsort(void *base, size_t count, size_t size,
