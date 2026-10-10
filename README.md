@@ -483,7 +483,9 @@ fails with `ENOTSUP`; existing shared input read-ahead remains descriptor owned.
 unconfirmed suffix after failure. A flush failure during `fwrite` reports only
 confirmed bytes from that call; recover retained output with `fflush`, not a
 blind repeat of the write. `fclose` attempts flush and close, preserving the
-first error. `fseek` flushes before moving; `ftell` includes queued output.
+first error. `fseek` flushes before moving; `ftell` includes queued output,
+using the current held file size for pending append writes. Size-query failures
+and positions beyond the `long` range fail without changing the queue or cursor.
 
 Call `fflush` before mixing buffered FILE output with descriptor I/O or delegated
 handles. `dup2` replaces the target descriptor while retaining its FILE

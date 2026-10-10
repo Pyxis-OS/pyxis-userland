@@ -930,7 +930,7 @@ int descriptor_terminal(int descriptor)
   return 1;
 }
 
-long descriptor_tell(int descriptor)
+long descriptor_tell_output(int descriptor, size_t pending)
 {
   struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
@@ -939,10 +939,23 @@ long descriptor_tell(int descriptor)
   if (entry->kind != DESCRIPTOR_FILE) {
     return fail(ESPIPE);
   }
-  if (entry->position > LONG_MAX) {
+  uint64_t position = entry->position;
+  if (pending && entry->append) {
+    handle_t handle = entry->handle;
+    enum call_status status = file_size(handle, &position);
+    if (status != CALL_OK) {
+      return fail(libc_call_errno(status));
+    }
+  }
+  if (position > LONG_MAX || pending > (uint64_t)LONG_MAX - position) {
     return fail(EOVERFLOW);
   }
-  return (long)entry->position;
+  return (long)(position + pending);
+}
+
+long descriptor_tell(int descriptor)
+{
+  return descriptor_tell_output(descriptor, 0);
 }
 
 int descriptor_response(int descriptor, struct pyxis_response_info *info)

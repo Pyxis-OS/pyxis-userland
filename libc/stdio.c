@@ -677,14 +677,7 @@ long ftell(FILE *stream)
     return -1;
   }
   stream->io_started = true;
-  long position = descriptor_tell(stream->descriptor);
-  if (position >= 0 && stream->output_count) {
-    if (stream->output_count > (uint64_t)LONG_MAX - (uint64_t)position) {
-      errno = EOVERFLOW;
-      return -1;
-    }
-    position += (long)stream->output_count;
-  }
+  long position = descriptor_tell_output(stream->descriptor, stream->output_count);
   /* The pushed-back byte is unread again. Before the first byte the position
    * stays zero; ISO C leaves it indeterminate there. */
   if (position > 0 && stream->has_pushback) {

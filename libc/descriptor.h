@@ -73,6 +73,9 @@ enum call_status libc_file_stat(handle_t file, struct stat *result);
 int descriptor_terminal(int descriptor);
 /* The logical position, excluding bytes read ahead. */
 long descriptor_tell(int descriptor);
+/* Include FILE-owned queued output. Pending append output uses held file SIZE,
+ * without moving the cursor; every position/addition fits the stdio long range. */
+long descriptor_tell_output(int descriptor, size_t pending);
 /* Input fflush: drop file read-ahead so later reads refetch; keep pipe bytes. */
 void descriptor_discard_input(int descriptor);
 

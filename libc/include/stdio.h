@@ -69,7 +69,9 @@ int fflush(FILE *stream);
  * Buffering may accept bytes before backend I/O; later fflush/fclose report
  * errors. A flush failure during fwrite counts only confirmed current-call
  * bytes and keeps the unconfirmed suffix for fflush recovery. fseek flushes
- * before moving; ftell includes queued output. */
+ * before moving; ftell includes queued output. Pending append output uses a
+ * held-file size query instead of the read/seek cursor; failure changes neither
+ * queue nor cursor. */
 int setvbuf(FILE *__restrict stream, char *__restrict buffer, int mode, size_t size);
 void setbuf(FILE *__restrict stream, char *__restrict buffer);
 size_t fread(void *__restrict buffer, size_t size, size_t count, FILE *__restrict stream);
