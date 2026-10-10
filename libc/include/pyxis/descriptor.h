@@ -24,7 +24,7 @@ extern "C" {
 /* Borrow for native queries, waits or delegation, without changing descriptor
  * input or position. Never close or perform data I/O through the borrowed
  * handle: libc owns its lifetime, cursor and read-ahead. The handle expires on
- * descriptor close; buffered_read is a snapshot, not a reservation. Failure
+ * descriptor close or replacement; buffered_read is a snapshot, not a reservation. Failure
  * clears binding. No descriptor entry pointer escapes libc. */
 int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *binding);
 
