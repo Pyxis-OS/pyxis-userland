@@ -83,7 +83,7 @@ to the aligned end before backup GPT metadata. The fresh pool contains only
 `system`, its root and an empty regular marker. Only allocated metadata and
 FAT boot-file storage are initialized; this is not secure erasure.
 The ESP contains Limine at `EFI/BOOT/BOOTX64.EFI` and the original kernel,
-whole archive, generated configuration and `boot/revision` under `boot`.
+filtered rescue archive, generated configuration and `boot/revision` under `boot`.
 The revision record is the kernel build revision followed by a newline. Installed configuration
 fills the packaged template with a three-second timeout, a disk-GUID-scoped
 normal command line and the rescue entry's, which adds `boot.default_config=1`,
