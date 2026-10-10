@@ -2,7 +2,8 @@
 
 Build with `make mux SDK=/path/to/sdk` using the current Pyxis SDK. The SDK
 must include attachment-authorized terminal resize, the general 32-interest
-readiness bound, terminal pointer control and view identities.
+readiness bound, terminal pointer control, view identities and the shared
+terminal style header/source.
 No compiler-container rebuild is required.
 
 Trusted session startup selects `mux.pxe` only for a local space whose boot
@@ -31,4 +32,15 @@ pane. `emulator.c` owns live cells and a bounded history ring; output parsing
 allocates nothing. `layout.c` owns the eight-leaf split tree independently of
 presentation. `pointer.c` owns spatial hit testing and view barriers.
 `main.c` owns input routing, readiness and lifecycle; `render.c`
-composes colored cells through the borrowed outer CONSOLE handles.
+composes styled cells through the borrowed outer CONSOLE handles.
+
+Pane cells and the 1,024-row history retain tagged default, indexed and RGB
+colors, plus bold, italic, underline and reverse. Indexed colors 0–15 remain
+indices until the outer TTY resolves its active palette. SGR supports 1/22,
+3/23, 4/24, 7/27, ordinary/bright palette colors, defaults, `38/48;5;n` and
+semicolon `38/48;2;r;g;b` with 0–255 components. The shared parser applies a
+complete SGR atomically, with at most 16 parameters; malformed extended colors,
+colon forms and oversized sequences preserve the current style. Erased or
+scrolled-in blanks keep current colors with no attributes. Saved cursors,
+alternate screens and resize copies retain styles; selection changes only
+presentation colors and clears reverse, preserving the other attributes.

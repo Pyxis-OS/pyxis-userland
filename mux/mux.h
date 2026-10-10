@@ -46,7 +46,7 @@ struct mux {
   unsigned char escape[16];
   size_t escape_size;
   uint64_t escape_deadline;
-  struct mux_cell *frame, *previous;
+  struct terminal_cell *frame, *previous;
   size_t frame_columns, frame_rows;
   bool frame_valid;
 };

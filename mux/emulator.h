@@ -5,16 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <abi/syscall.h>
+#include <terminal/style.h>
 
 #define MUX_HISTORY_ROWS 1024
-#define MUX_CSI_PARAMETERS 4
-
-struct mux_cell {
-  unsigned char character;
-  signed char foreground;
-  signed char background;
-  bool reverse;
-};
+#define MUX_CSI_PARAMETERS TERMINAL_CSI_PARAMETERS
 
 struct mux_selection_point {
   uint64_t row;
@@ -40,9 +34,7 @@ enum mux_escape_state {
 struct mux_saved_cursor {
   size_t row;
   size_t column;
-  signed char foreground;
-  signed char background;
-  bool reverse;
+  struct terminal_style style;
   bool wrap_pending;
 };
 
@@ -66,27 +58,26 @@ struct mux_emulator {
 
   /* Owned storage. History retains each row's original width without reflow.
    * The maximum width seen supplies a stride, so output never allocates. */
-  struct mux_cell *cells;
-  struct mux_cell *other_cells;
-  struct mux_cell *history;
+  struct terminal_cell *cells;
+  struct terminal_cell *other_cells;
+  struct terminal_cell *history;
   size_t *history_widths;
   size_t history_start;
   size_t history_stride;
 
-  signed char foreground;
-  signed char background;
-  bool reverse;
+  struct terminal_style style;
   bool wrap_pending;
   unsigned tab_width;
   enum mux_escape_state escape_state;
   uint16_t parameters[MUX_CSI_PARAMETERS];
   size_t parameter_index;
+  uint16_t parameter_present;
   bool private_csi;
 };
 
-/* Geometry follows the terminal-session ABI's nonzero bounds. Palette indices
- * are 0..15; -1 denotes the terminal's separate foreground/background default.
- * Init takes uninitialized storage. Failed resize preserves all old state. */
+/* Geometry follows the terminal-session ABI's nonzero bounds. Cells retain
+ * tagged colors and attributes; the outer TTY resolves palette indices. Init
+ * takes uninitialized storage. Failed resize preserves all old state. */
 bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t rows);
 bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t rows);
 void mux_emulator_destroy(struct mux_emulator *emulator);
@@ -100,7 +91,7 @@ size_t mux_emulator_history_rows(const struct mux_emulator *emulator);
 /* Offset zero is the live screen. Larger offsets move back through history,
  * clamped to mux_emulator_history_rows. The borrowed row survives until feed/resize/destroy;
  * its original width can differ from the current screen width. */
-const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
+const struct terminal_cell *mux_emulator_row(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t visible_row, size_t *width);
 /* Selection names retained rows, never borrowed cell pointers. Glyph changes
  * and eviction invalidate it; colors and unrelated output do not. A press

@@ -10,18 +10,17 @@ static bool valid_geometry(size_t columns, size_t rows)
       rows && rows <= TERMINAL_ROWS_MAX;
 }
 
-static struct mux_cell blank_cell(const struct mux_emulator *emulator,
-    bool reverse)
+static struct terminal_cell blank_cell(const struct mux_emulator *emulator)
 {
-  return (struct mux_cell) {
-    .character = ' ',
-    .foreground = emulator->foreground,
-    .background = emulator->background,
-    .reverse = reverse,
+  return (struct terminal_cell) {
+    .glyph = ' ',
+    .foreground = emulator->style.foreground,
+    .background = emulator->style.background,
+    .attributes = 0,
   };
 }
 
-static void fill_cells(struct mux_cell *cells, size_t count, struct mux_cell cell)
+static void fill_cells(struct terminal_cell *cells, size_t count, struct terminal_cell cell)
 {
   for (size_t i = 0; i < count; ++i) {
     cells[i] = cell;
@@ -33,7 +32,7 @@ void mux_emulator_clear_selection(struct mux_emulator *emulator)
   emulator->selection = (struct mux_selection){0};
 }
 
-static const struct mux_cell *selected_row(const struct mux_emulator *emulator,
+static const struct terminal_cell *selected_row(const struct mux_emulator *emulator,
     uint64_t row, size_t *width)
 {
   uint64_t oldest = emulator->scrolled_rows - emulator->history_count;
@@ -78,7 +77,7 @@ enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator
     size_t at = 0;
     for (uint64_t row = first.row;; ++row) {
       size_t width;
-      const struct mux_cell *cells = selected_row(emulator, row, &width);
+      const struct terminal_cell *cells = selected_row(emulator, row, &width);
       if (!cells) {
         free(owned);
         return CALL_UNAVAILABLE;
@@ -94,12 +93,12 @@ enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator
         return CALL_UNAVAILABLE;
       }
       for (size_t column = begin; column < end; ++column) {
-        if (cells[column].character < ' ' || cells[column].character > '~') {
+        if (cells[column].glyph < ' ' || cells[column].glyph > '~') {
           free(owned);
           return CALL_BAD_REQUEST;
         }
       }
-      while (end > begin && cells[end - 1].character == ' ') {
+      while (end > begin && cells[end - 1].glyph == ' ') {
         --end;
       }
       size_t count = end - begin;
@@ -110,7 +109,7 @@ enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator
       }
       if (pass) {
         for (size_t column = begin; column < end; ++column) {
-          owned[at++] = cells[column].character;
+          owned[at++] = cells[column].glyph;
         }
         if (separator) {
           owned[at++] = '\n';
@@ -156,13 +155,13 @@ static bool selection_contains(const struct mux_emulator *emulator,
   return !point_before(point, first) && !point_before(last, point);
 }
 
-static void write_cell(struct mux_emulator *emulator, size_t index, struct mux_cell cell)
+static void write_cell(struct mux_emulator *emulator, size_t index, struct terminal_cell cell)
 {
   struct mux_selection_point point = {
     .row = emulator->scrolled_rows + index / emulator->columns,
     .column = index % emulator->columns,
   };
-  if (emulator->cells[index].character != cell.character &&
+  if (emulator->cells[index].glyph != cell.glyph &&
       (emulator->selection.active || emulator->selection.pending) &&
       selection_contains(emulator, point)) {
     mux_emulator_clear_selection(emulator);
@@ -180,14 +179,13 @@ bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t row
     .columns = columns,
     .rows = rows,
     .cursor_visible = true,
-    .foreground = -1,
-    .background = -1,
+    .style = {.foreground = TERMINAL_COLOR_DEFAULT, .background = TERMINAL_COLOR_DEFAULT},
     .tab_width = 8,
     .history_stride = columns,
     .region_bottom = rows - 1,
     .saved = {
-      {.foreground = -1, .background = -1},
-      {.foreground = -1, .background = -1},
+      {.style = {.foreground = TERMINAL_COLOR_DEFAULT, .background = TERMINAL_COLOR_DEFAULT}},
+      {.style = {.foreground = TERMINAL_COLOR_DEFAULT, .background = TERMINAL_COLOR_DEFAULT}},
     },
   };
   initial.cells = calloc(rows * columns, sizeof(*initial.cells));
@@ -198,8 +196,8 @@ bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t row
     mux_emulator_destroy(&initial);
     return false;
   }
-  fill_cells(initial.cells, rows * columns, blank_cell(&initial, false));
-  fill_cells(initial.other_cells, rows * columns, blank_cell(&initial, false));
+  fill_cells(initial.cells, rows * columns, blank_cell(&initial));
+  fill_cells(initial.other_cells, rows * columns, blank_cell(&initial));
   *emulator = initial;
   return true;
 }
@@ -219,9 +217,9 @@ static size_t kept_first_row(size_t cursor_row, size_t rows)
 }
 
 /* Copy a screen into new cells, keeping the rows from first_row. */
-static void copy_screen(struct mux_cell *cells, size_t columns, size_t rows,
-    const struct mux_cell *old_cells, size_t old_columns, size_t old_rows,
-    size_t first_row, struct mux_cell blank)
+static void copy_screen(struct terminal_cell *cells, size_t columns, size_t rows,
+    const struct terminal_cell *old_cells, size_t old_columns, size_t old_rows,
+    size_t first_row, struct terminal_cell blank)
 {
   fill_cells(cells, rows * columns, blank);
   size_t retained_rows = old_rows - first_row;
@@ -244,14 +242,14 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
     return true;
   }
 
-  struct mux_cell *cells = calloc(rows * columns, sizeof(*cells));
-  struct mux_cell *other_cells = calloc(rows * columns, sizeof(*other_cells));
+  struct terminal_cell *cells = calloc(rows * columns, sizeof(*cells));
+  struct terminal_cell *other_cells = calloc(rows * columns, sizeof(*other_cells));
   if (!cells || !other_cells) {
     free(cells);
     free(other_cells);
     return false;
   }
-  struct mux_cell *history = emulator->history;
+  struct terminal_cell *history = emulator->history;
   if (columns > emulator->history_stride) {
     history = calloc(MUX_HISTORY_ROWS * columns, sizeof(*history));
     if (!history) {
@@ -268,7 +266,7 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
   }
 
   /* The hidden screen keeps the rows around its saved cursor. */
-  struct mux_cell blank = blank_cell(emulator, false);
+  struct terminal_cell blank = blank_cell(emulator);
   struct mux_saved_cursor *hidden = &emulator->saved[!emulator->alternate];
   size_t first_row = kept_first_row(emulator->cursor_row, rows);
   size_t hidden_first_row = kept_first_row(hidden->row, rows);
@@ -315,7 +313,7 @@ size_t mux_emulator_history_rows(const struct mux_emulator *emulator)
   return emulator->alternate ? 0 : emulator->history_count;
 }
 
-const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
+const struct terminal_cell *mux_emulator_row(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t visible_row, size_t *width)
 {
   *width = 0;
@@ -428,9 +426,9 @@ static void scroll_up(struct mux_emulator *emulator, size_t top, size_t bottom, 
   memmove(emulator->cells + top * emulator->columns,
       emulator->cells + (top + count) * emulator->columns,
       (rows - count) * emulator->columns * sizeof(*emulator->cells));
-  /* Native scrolling fills new rows with non-reversed current colors. */
+  /* Native scrolling fills new rows with current colors and no attributes. */
   fill_cells(emulator->cells + (bottom + 1 - count) * emulator->columns,
-      count * emulator->columns, blank_cell(emulator, false));
+      count * emulator->columns, blank_cell(emulator));
 }
 
 /* Scroll rows top..bottom (inclusive) down by count, blanking the top. */
@@ -445,7 +443,7 @@ static void scroll_down(struct mux_emulator *emulator, size_t top, size_t bottom
       emulator->cells + top * emulator->columns,
       (rows - count) * emulator->columns * sizeof(*emulator->cells));
   fill_cells(emulator->cells + top * emulator->columns, count * emulator->columns,
-      blank_cell(emulator, false));
+      blank_cell(emulator));
 }
 
 /* LF: the bottom margin scrolls the region; below it the screen edge stops. */
@@ -476,9 +474,7 @@ static void save_cursor(struct mux_emulator *emulator)
   emulator->saved[emulator->alternate] = (struct mux_saved_cursor){
     .row = emulator->cursor_row,
     .column = emulator->cursor_column,
-    .foreground = emulator->foreground,
-    .background = emulator->background,
-    .reverse = emulator->reverse,
+    .style = emulator->style,
     .wrap_pending = emulator->wrap_pending,
   };
 }
@@ -489,9 +485,7 @@ static void restore_cursor(struct mux_emulator *emulator)
   emulator->cursor_row = saved->row < emulator->rows ? saved->row : emulator->rows - 1;
   emulator->cursor_column = saved->column < emulator->columns ?
       saved->column : emulator->columns - 1;
-  emulator->foreground = saved->foreground;
-  emulator->background = saved->background;
-  emulator->reverse = saved->reverse;
+  emulator->style = saved->style;
   emulator->wrap_pending = saved->wrap_pending &&
       emulator->cursor_column == emulator->columns - 1;
 }
@@ -507,7 +501,7 @@ static void select_screen(struct mux_emulator *emulator, bool alternate)
   if (alternate) {
     save_cursor(emulator);
   }
-  struct mux_cell *cells = emulator->cells;
+  struct terminal_cell *cells = emulator->cells;
   emulator->cells = emulator->other_cells;
   emulator->other_cells = cells;
   emulator->alternate = alternate;
@@ -517,7 +511,7 @@ static void select_screen(struct mux_emulator *emulator, bool alternate)
   emulator->wrap_pending = false;
   if (alternate) {
     fill_cells(emulator->cells, emulator->rows * emulator->columns,
-        blank_cell(emulator, false));
+        blank_cell(emulator));
     emulator->cursor_row = 0;
     emulator->cursor_column = 0;
   } else {
@@ -542,32 +536,9 @@ void mux_emulator_set_tab_width(struct mux_emulator *emulator, unsigned columns)
 
 static void erase_cells(struct mux_emulator *emulator, size_t first, size_t end)
 {
-  struct mux_cell blank = blank_cell(emulator, emulator->reverse);
+  struct terminal_cell blank = blank_cell(emulator);
   for (size_t i = first; i < end; ++i) {
     write_cell(emulator, i, blank);
-  }
-}
-
-static void select_style(struct mux_emulator *emulator, unsigned parameter)
-{
-  if (parameter == 0) {
-    emulator->foreground = -1;
-    emulator->background = -1;
-    emulator->reverse = false;
-  } else if (parameter == 7 || parameter == 27) {
-    emulator->reverse = parameter == 7;
-  } else if (parameter == 39) {
-    emulator->foreground = -1;
-  } else if (parameter == 49) {
-    emulator->background = -1;
-  } else if (parameter >= 30 && parameter <= 37) {
-    emulator->foreground = parameter - 30;
-  } else if (parameter >= 40 && parameter <= 47) {
-    emulator->background = parameter - 40;
-  } else if (parameter >= 90 && parameter <= 97) {
-    emulator->foreground = parameter - 90 + 8;
-  } else if (parameter >= 100 && parameter <= 107) {
-    emulator->background = parameter - 100 + 8;
   }
 }
 
@@ -592,9 +563,8 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
     return;
   }
   if (command == 'm') {
-    for (size_t i = 0; i <= emulator->parameter_index; ++i) {
-      select_style(emulator, emulator->parameters[i]);
-    }
+    terminal_sgr_apply(&emulator->style, emulator->parameters,
+        emulator->parameter_present, emulator->parameter_index + 1);
     return;
   }
   if (command == 'r') {
@@ -702,6 +672,7 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
   if (byte == 0x1b) {
     emulator->escape_state = MUX_ESCAPE;
     emulator->parameter_index = 0;
+    emulator->parameter_present = 0;
     emulator->private_csi = false;
     memset(emulator->parameters, 0, sizeof(emulator->parameters));
     return;
@@ -761,6 +732,7 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
       unsigned value = emulator->parameters[emulator->parameter_index];
       if (byte >= '0' && byte <= '9' && value * 10 + byte - '0' <= UINT16_MAX) {
         emulator->parameters[emulator->parameter_index] = value * 10 + byte - '0';
+        emulator->parameter_present |= (uint16_t)(1u << emulator->parameter_index);
       } else if (byte == ';' && emulator->parameter_index + 1 < MUX_CSI_PARAMETERS) {
         ++emulator->parameter_index;
       } else {
@@ -777,11 +749,11 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
     newline(emulator);
   }
   write_cell(emulator, emulator->cursor_row * emulator->columns + emulator->cursor_column,
-      (struct mux_cell) {
-        .character = byte,
-        .foreground = emulator->foreground,
-        .background = emulator->background,
-        .reverse = emulator->reverse,
+      (struct terminal_cell) {
+        .glyph = byte,
+        .foreground = emulator->style.foreground,
+        .background = emulator->style.background,
+        .attributes = emulator->style.attributes,
       });
   if (emulator->cursor_column == emulator->columns - 1) {
     emulator->wrap_pending = true;
