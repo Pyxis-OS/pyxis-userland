@@ -61,8 +61,10 @@ int descriptor_seek(int descriptor, long offset, int origin);
 int descriptor_resize(int descriptor, uint64_t size);
 /* Files only; native SYNC, which needs WRITE. */
 int descriptor_sync(int descriptor);
-/* Type and size of the descriptor's object, as fstat reports them. */
+/* Type, size and available optional metadata, without changing the cursor. */
 int descriptor_stat(int descriptor, struct stat *result);
+/* Shared held-FILE conversion for stat and descriptor_stat. */
+enum call_status libc_file_stat(handle_t file, struct stat *result);
 /* 1 for a console stream, the only terminal; files and pipes fail with ENOTTY. */
 int descriptor_terminal(int descriptor);
 /* The logical position, excluding bytes read ahead. */

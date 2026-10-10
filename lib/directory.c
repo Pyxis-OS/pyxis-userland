@@ -1,6 +1,7 @@
 #include <directory.h>
 #include <string.h>
 #include <syscall.h>
+#include "file_info.h"
 
 static enum call_status call_status(struct syscall_result result, size_t reply_size)
 {
@@ -112,6 +113,33 @@ enum call_status directory_sync(handle_t directory)
 {
   struct directory_message message = {.header = {PROTOCOL_DIRECTORY, DIRECTORY_SYNC}};
   return mutation_status(syscall_call(directory, &message, sizeof(message), NULL, 0));
+}
+
+enum call_status directory_info(handle_t directory, struct file_info_reply *info)
+{
+  if (!info) {
+    return CALL_BAD_REQUEST;
+  }
+  *info = (struct file_info_reply){0};
+  struct directory_message message = {.header = {PROTOCOL_DIRECTORY, DIRECTORY_INFO}};
+  struct file_info_reply reply;
+  struct syscall_result result = syscall_call(directory, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_BAD_OPERATION) {
+    return CALL_OK;
+  }
+  if (result.status != CALL_OK) {
+    return result.status;
+  }
+  if (!file_info_valid(&reply)) {
+    return CALL_BAD_REQUEST;
+  }
+  *info = reply;
+  return CALL_OK;
 }
 
 enum call_status directory_enumerate(handle_t directory, const struct directory_cursor *cursor,

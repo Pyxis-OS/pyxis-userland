@@ -290,15 +290,23 @@ static enum call_status serve_file(struct file_export *file,
       packet->operation == FILE_SYNC) {
     return reply(packet, CALL_DENIED, NULL, 0, NULL);
   }
-  if (packet->operation != FILE_READ && packet->operation != FILE_SIZE) {
+  if (packet->operation != FILE_READ && packet->operation != FILE_SIZE &&
+      packet->operation != FILE_INFO) {
     return reply(packet, CALL_BAD_OPERATION, NULL, 0, NULL);
   }
   if (!(packet->rights & FILE_RIGHT_READ)) {
     return reply(packet, CALL_DENIED, NULL, 0, NULL);
   }
-  if (packet->operation == FILE_SIZE) {
+  if (packet->operation == FILE_SIZE || packet->operation == FILE_INFO) {
     if (packet->size != 0) {
       return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
+    }
+    if (packet->operation == FILE_INFO) {
+      struct file_info_reply response = {
+        .valid = FILE_INFO_SIZE_VALID | FILE_INFO_DOMAIN_VALID,
+        .size = file->body.size, .domain = FILE_DOMAIN_PRIVATE_BYTES,
+      };
+      return reply(packet, CALL_OK, &response, sizeof(response), NULL);
     }
     struct file_size_reply response = {file->body.size};
     return reply(packet, CALL_OK, &response, sizeof(response), NULL);

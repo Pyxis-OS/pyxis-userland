@@ -16,6 +16,13 @@
  * Delivered transport failures on mutations are equally uncertain. */
 enum call_status file_size(handle_t file, uint64_t *size);
 
+/* Sample the held object's optional metadata with READ or WRITE. Validity bits
+ * are independent; OBJECT implies DOMAIN. Different valid domains prove
+ * distinctness even without object IDs. Hold both references during comparison.
+ * An unsupported INFO falls back to SIZE only; other failures clear *info.
+ * Neither identity nor mtime freezes contents, and mtime is not a change count. */
+enum call_status file_info(handle_t file, struct file_info_reply *info);
+
 /* Reads up to min(capacity, FILE_READ_MAX_BYTES) bytes at an explicit offset
  * in one call. Short reads are allowed; zero with nonzero capacity means EOF.
  * Zero capacity does not touch bytes. Requires READ. No shared seek position

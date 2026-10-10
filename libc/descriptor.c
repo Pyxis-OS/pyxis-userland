@@ -633,15 +633,10 @@ int descriptor_stat(int descriptor, struct stat *result)
     *result = (struct stat){.st_mode = S_IFIFO};
     return 0;
   }
-  uint64_t size;
-  enum call_status status = file_size(entry->handle, &size);
+  enum call_status status = libc_file_stat(entry->handle, result);
   if (status != CALL_OK) {
     return fail(libc_call_errno(status));
   }
-  if (size > LONG_MAX) {
-    return fail(EOVERFLOW);
-  }
-  *result = (struct stat){.st_mode = S_IFREG, .st_size = (off_t)size};
   return 0;
 }
 

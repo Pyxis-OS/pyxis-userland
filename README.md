@@ -432,6 +432,21 @@ content. It receives no keyboard, pointer or interrupt-arming right through this
 rule. Both ends reading the console compete for one input queue; use a file or a
 producer that does not read console stdin with an interactive pager.
 
+Before truncating any redirected output, the shell checks it against every
+stage's file stdin, including inherited file input. An alias or an inconclusive
+identity check refuses the launch; different known domains suffice even when
+object IDs are unavailable, so HTTP/text snapshots can redirect to native files.
+Use `cat < input > output` for this protection: files a program opens from its
+arguments, as in `cat input > output`, are outside the check. Output creation can
+precede rejection, and later resize or launch failures still have no rollback.
+
+Libc `stat`/`lstat`/`fstat` retain type and size while reporting optional native
+identity and modification time. Check `st_valid` with `STAT_DEV_VALID`,
+`STAT_INO_VALID` and `STAT_MTIME_VALID` before reading `st_dev`, `st_ino` or
+`st_mtim`; unavailable fields are not meaningful zero values. Keep open
+descriptors while comparing identity. Provider byte snapshots report their
+private domain without inventing object IDs or timestamps.
+
 ## License
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See

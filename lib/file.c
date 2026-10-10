@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <syscall.h>
+#include "file_info.h"
 
 struct file_read_message {
   struct message_header header;
@@ -49,7 +50,8 @@ static struct syscall_result file_call(handle_t file, const void *message,
     return (struct syscall_result){CALL_WRONG_TYPE, 0};
   }
   uint64_t required = header->operation == FILE_READ ? FILE_RIGHT_READ : FILE_RIGHT_WRITE;
-  if (header->operation == FILE_SIZE ? !(info.rights & FILE_RIGHTS) :
+  bool metadata = header->operation == FILE_SIZE || header->operation == FILE_INFO;
+  if (metadata ? !(info.rights & FILE_RIGHTS) :
       (info.rights & required) != required) {
     return (struct syscall_result){CALL_DENIED, 0};
   }
@@ -113,6 +115,34 @@ enum call_status file_size(handle_t file, uint64_t *size)
     return status;
   }
   *size = reply.size;
+  return CALL_OK;
+}
+
+enum call_status file_info(handle_t file, struct file_info_reply *info)
+{
+  if (!info) {
+    return CALL_BAD_REQUEST;
+  }
+  *info = (struct file_info_reply){0};
+  struct message_header message = {PROTOCOL_FILE, FILE_INFO};
+  struct file_info_reply reply;
+  enum call_status status = reply_status(file_call(file, &message, sizeof(message),
+      &reply, sizeof(reply), false), sizeof(reply), false);
+  if (status == CALL_BAD_OPERATION) {
+    uint64_t size;
+    status = file_size(file, &size);
+    if (status == CALL_OK) {
+      *info = (struct file_info_reply){.valid = FILE_INFO_SIZE_VALID, .size = size};
+    }
+    return status;
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (!file_info_valid(&reply)) {
+    return CALL_BAD_REQUEST;
+  }
+  *info = reply;
   return CALL_OK;
 }
 

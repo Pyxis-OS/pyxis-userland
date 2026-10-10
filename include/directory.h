@@ -41,6 +41,12 @@ enum call_status directory_rename(handle_t source, const char *source_name,
  * automatically. */
 enum call_status directory_sync(handle_t directory);
 
+/* Sample this held directory without additional content rights or traversal.
+ * Unsupported INFO succeeds with all optional fields unavailable. Other errors
+ * clear *info. Identity comparison requires retained references; mtime can
+ * repeat or move backwards and never proves unchanged contents. */
+enum call_status directory_info(handle_t directory, struct file_info_reply *info);
+
 /* Pass a zero cursor initially, then the returned cursor for the same directory.
  * On CALL_OK inspect reply->outcome: ENTRY, END, BUFFER_TOO_SMALL or CHANGED.
  * Only ENTRY writes name (including NUL). BUFFER_TOO_SMALL reports name_size

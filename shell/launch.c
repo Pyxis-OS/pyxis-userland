@@ -690,6 +690,74 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
   return CALL_OK;
 }
 
+static enum call_status check_redirect_inputs(const struct shell_stage *stages,
+    const struct prepared_stage *prepared,
+    const struct startup_stream streams[LAUNCH_BATCH_MAX][STARTUP_STREAM_COUNT],
+    size_t stage_count, size_t *failed_stage, const char **operation, const char **path)
+{
+  bool has_input = false, has_output = false;
+  for (size_t i = 0; i < stage_count; ++i) {
+    has_input |= streams[i][STARTUP_STDIN].protocol == PROTOCOL_FILE;
+    has_output |= prepared[i].redirected[STARTUP_STDOUT] != HANDLE_INVALID ||
+                  prepared[i].redirected[STARTUP_STDERR] != HANDLE_INVALID;
+  }
+  if (!has_input || !has_output) {
+    return CALL_OK;
+  }
+
+  struct file_info_reply inputs[LAUNCH_BATCH_MAX];
+  for (size_t i = 0; i < stage_count; ++i) {
+    if (streams[i][STARTUP_STDIN].protocol != PROTOCOL_FILE) {
+      continue;
+    }
+    *failed_stage = i;
+    *operation = "shell: query stdin";
+    *path = stages[i].arguments[0];
+    enum call_status status = file_info(streams[i][STARTUP_STDIN].handle, &inputs[i]);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
+
+  for (size_t i = 0; i < stage_count; ++i) {
+    for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+      const struct shell_redirection *redirect = &stages[i].redirections[j];
+      if (redirect->stream == STARTUP_STDIN) {
+        continue;
+      }
+      *failed_stage = i;
+      *operation = "shell: query output";
+      *path = redirect->path;
+      struct file_info_reply output;
+      enum call_status status = file_info(prepared[i].redirected[redirect->stream], &output);
+      if (status != CALL_OK) {
+        return status;
+      }
+      for (size_t input = 0; input < stage_count; ++input) {
+        if (streams[input][STARTUP_STDIN].protocol != PROTOCOL_FILE) {
+          continue;
+        }
+        const struct file_info_reply *source = &inputs[input];
+        if ((source->valid & FILE_INFO_DOMAIN_VALID) && (output.valid & FILE_INFO_DOMAIN_VALID)) {
+          if (source->domain != output.domain) {
+            continue;
+          }
+          if ((source->valid & FILE_INFO_OBJECT_VALID) && (output.valid & FILE_INFO_OBJECT_VALID)) {
+            if (source->object != output.object) {
+              continue;
+            }
+            *operation = "shell: output aliases stdin";
+            return CALL_DENIED;
+          }
+        }
+        *operation = "shell: cannot prove output differs from stdin";
+        return CALL_UNAVAILABLE;
+      }
+    }
+  }
+  return CALL_OK;
+}
+
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
     size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace,
     bool optional, bool read_only, struct shell_outcome *outcome)
@@ -782,6 +850,13 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       cleanup_failure = true;
       goto failed;
     }
+  }
+
+  /* Compare held objects after pipe wiring, before the first output resize. */
+  status = check_redirect_inputs(stages, prepared, streams, stage_count,
+      &failed_stage, &operation, &path);
+  if (status != CALL_OK) {
+    goto failed;
   }
 
   operation = "shell: network environment";

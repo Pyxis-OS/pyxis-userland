@@ -1,4 +1,5 @@
 #include <abi/file.h>
+#include <directory.h>
 #include <errno.h>
 #include <file.h>
 #include <handle.h>
@@ -7,7 +8,43 @@
 #include "descriptor.h"
 #include "errors.h"
 
-/* FILE_SIZE accepts READ or WRITE, so a file opened with either can be sized. */
+static enum call_status stat_result(const struct file_info_reply *info, mode_t mode,
+    struct stat *result)
+{
+  if (mode == S_IFREG && info->size > LONG_MAX) {
+    return CALL_LIMIT;
+  }
+  struct stat value = {.st_mode = mode, .st_size = mode == S_IFREG ? (off_t)info->size : 0};
+  if (info->valid & FILE_INFO_DOMAIN_VALID) {
+    value.st_valid |= STAT_DEV_VALID;
+    value.st_dev = info->domain;
+  }
+  if (info->valid & FILE_INFO_OBJECT_VALID) {
+    value.st_valid |= STAT_INO_VALID;
+    value.st_ino = info->object;
+  }
+  if (info->valid & FILE_INFO_MTIME_VALID) {
+    value.st_valid |= STAT_MTIME_VALID;
+    value.st_mtim = (struct timespec){info->modified_seconds, (long)info->modified_nanoseconds};
+  }
+  *result = value;
+  return CALL_OK;
+}
+
+enum call_status libc_file_stat(handle_t file, struct stat *result)
+{
+  struct file_info_reply info;
+  enum call_status status = file_info(file, &info);
+  if (status == CALL_OK && !(info.valid & FILE_INFO_SIZE_VALID)) {
+    status = file_size(file, &info.size);
+    if (status == CALL_OK) {
+      info.valid |= FILE_INFO_SIZE_VALID;
+    }
+  }
+  return status == CALL_OK ? stat_result(&info, S_IFREG, result) : status;
+}
+
+/* INFO accepts READ or WRITE, so either file grant can report metadata. */
 static enum call_status file_metadata(const char *path, struct stat *result)
 {
   handle_t file;
@@ -18,17 +55,9 @@ static enum call_status file_metadata(const char *path, struct stat *result)
   if (status != CALL_OK) {
     return status;
   }
-  uint64_t size;
-  status = file_size(file, &size);
+  status = libc_file_stat(file, result);
   handle_close(file);
-  if (status != CALL_OK) {
-    return status;
-  }
-  if (size > LONG_MAX) {
-    return CALL_LIMIT;
-  }
-  *result = (struct stat){.st_mode = S_IFREG, .st_size = (off_t)size};
-  return CALL_OK;
+  return status;
 }
 
 int stat(const char *restrict path, struct stat *restrict result)
@@ -39,8 +68,12 @@ int stat(const char *restrict path, struct stat *restrict result)
     handle_t directory;
     status = directory_open_path(path, 0, &directory);
     if (status == CALL_OK) {
+      struct file_info_reply info;
+      status = directory_info(directory, &info);
       handle_close(directory);
-      *result = (struct stat){.st_mode = S_IFDIR};
+      if (status == CALL_OK) {
+        status = stat_result(&info, S_IFDIR, result);
+      }
     }
   }
   if (status != CALL_OK) {
