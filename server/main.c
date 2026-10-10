@@ -16,6 +16,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../common/content_service.h"
+#include "../common/endpoint_wait.h"
+
+static struct demo_endpoint_wait receiver_wait;
+
+static enum call_status receive_packet(handle_t receiver, struct endpoint_packet *packet)
+{
+  return demo_endpoint_receive(&receiver_wait, receiver, packet);
+}
 
 static bool close_grants(const struct endpoint_packet *packet)
 {
@@ -192,7 +200,7 @@ static bool receive_sentinel(handle_t caller, handle_t receiver)
     return false;
   }
   struct endpoint_packet packet;
-  if (endpoint_receive(receiver, &packet) != CALL_OK) {
+  if (receive_packet(receiver, &packet) != CALL_OK) {
     return false;
   }
   bool valid = packet.kind == ENDPOINT_MESSAGE_SEND && packet.size == 0 &&
@@ -203,7 +211,7 @@ static bool receive_sentinel(handle_t caller, handle_t receiver)
 static bool receive_cancel(handle_t receiver, const struct endpoint_packet *call)
 {
   struct endpoint_packet notice;
-  if (endpoint_receive(receiver, &notice) != CALL_OK) {
+  if (receive_packet(receiver, &notice) != CALL_OK) {
     return false;
   }
   return notice.kind == ENDPOINT_MESSAGE_CANCEL &&
@@ -215,16 +223,31 @@ static bool receive_cancel(handle_t receiver, const struct endpoint_packet *call
 
 int main(int argc, char **argv)
 {
-  if (argc > 2 || (argc == 2 && strcmp(argv[1], "--wide") &&
-      strcmp(argv[1], "--abandon") && strcmp(argv[1], "--saturate") &&
-      strcmp(argv[1], "--close") && strcmp(argv[1], "--exit") &&
-      strcmp(argv[1], "--send") && strcmp(argv[1], "--mixed") &&
-      strcmp(argv[1], "--expired") && strcmp(argv[1], "--queued-timeout") &&
-      strcmp(argv[1], "--delivered-timeout") && strcmp(argv[1], "--cancel-full") &&
-      strcmp(argv[1], "--cancel-finish") && strcmp(argv[1], "--deadline-reply"))) {
+  const char *mode = "normal";
+  bool mode_set = false;
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--wait") && !receiver_wait.enabled) {
+      receiver_wait.enabled = true;
+    } else if (!mode_set && (!strcmp(argv[i], "--wide") ||
+        !strcmp(argv[i], "--abandon") || !strcmp(argv[i], "--saturate") ||
+        !strcmp(argv[i], "--close") || !strcmp(argv[i], "--exit") ||
+        !strcmp(argv[i], "--send") || !strcmp(argv[i], "--mixed") ||
+        !strcmp(argv[i], "--expired") || !strcmp(argv[i], "--queued-timeout") ||
+        !strcmp(argv[i], "--delivered-timeout") || !strcmp(argv[i], "--cancel-full") ||
+        !strcmp(argv[i], "--cancel-finish") || !strcmp(argv[i], "--deadline-reply"))) {
+      mode = argv[i] + 2;
+      mode_set = true;
+    } else {
+      return 1;
+    }
+  }
+  receiver_wait.input = startup_resource("input");
+  receiver_wait.output = startup_resource("output");
+  receiver_wait.clock = startup_resource("clock");
+  if (receiver_wait.enabled && (receiver_wait.input == HANDLE_INVALID ||
+      receiver_wait.clock == HANDLE_INVALID)) {
     return 1;
   }
-  const char *mode = argc == 1 ? "normal" : argv[1] + 2;
   bool deadline_mode = !strcmp(mode, "expired") || !strcmp(mode, "queued-timeout") ||
       !strcmp(mode, "delivered-timeout") || !strcmp(mode, "cancel-full") ||
       !strcmp(mode, "cancel-finish") || !strcmp(mode, "deadline-reply");
@@ -261,6 +284,9 @@ int main(int argc, char **argv)
   if (status != CALL_OK || open_content(boot, &content) != CALL_OK) {
     goto done;
   }
+  if (!demo_wait_start(&receiver_wait, endpoint.receiver)) {
+    goto done;
+  }
   for (size_t i = 0; i < count; ++i) {
     char label[3];
     int length = snprintf(label, sizeof(label), "%zu", i + 1);
@@ -273,7 +299,7 @@ int main(int argc, char **argv)
       goto done;
     }
     if (!strcmp(mode, "saturate") &&
-        endpoint_receive(endpoint.receiver, &packets[i]) != CALL_OK) {
+        receive_packet(endpoint.receiver, &packets[i]) != CALL_OK) {
       goto done;
     }
   }
@@ -289,7 +315,7 @@ int main(int argc, char **argv)
       ok = wait_client(children[0]) &&
           receive_sentinel(endpoint.caller, endpoint.receiver);
     } else if (!strcmp(mode, "queued-timeout")) {
-      if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK ||
+      if (receive_packet(endpoint.receiver, &packets[0]) != CALL_OK ||
           packets[0].kind != ENDPOINT_MESSAGE_SEND ||
           packets[0].size != sizeof(uint64_t) || packets[0].grant_count != 0) {
         goto done;
@@ -303,7 +329,7 @@ int main(int argc, char **argv)
       ok = wait_client(children[0]) &&
           receive_sentinel(endpoint.caller, endpoint.receiver);
     } else {
-      if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK ||
+      if (receive_packet(endpoint.receiver, &packets[0]) != CALL_OK ||
           packets[0].kind != ENDPOINT_MESSAGE_CALL || packets[0].deadline_ns == 0) {
         goto done;
       }
@@ -351,7 +377,7 @@ int main(int argc, char **argv)
               read_grants(&packets[0]) && close_grants(&packets[0]);
           if (ok && full) {
             for (size_t i = 0; i < ENDPOINT_DELIVERIES_MAX - 1; ++i) {
-              if (endpoint_receive(endpoint.receiver, &packets[i + 1]) != CALL_OK ||
+              if (receive_packet(endpoint.receiver, &packets[i + 1]) != CALL_OK ||
                   !finish_send(&packets[i + 1], output, i + 2)) {
                 ok = false;
                 break;
@@ -370,7 +396,7 @@ int main(int argc, char **argv)
         goto done;
       }
       count = 1;
-      if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK ||
+      if (receive_packet(endpoint.receiver, &packets[0]) != CALL_OK ||
           packets[0].kind != ENDPOINT_MESSAGE_CALL) {
         goto done;
       }
@@ -395,7 +421,7 @@ int main(int argc, char **argv)
     ok = true;
     size_t sends = mixed ? ENDPOINT_DELIVERIES_MAX - 1 : 1;
     for (size_t i = 0; i < sends; ++i) {
-      if (endpoint_receive(endpoint.receiver, &packets[mixed ? i + 1 : 0]) != CALL_OK ||
+      if (receive_packet(endpoint.receiver, &packets[mixed ? i + 1 : 0]) != CALL_OK ||
           !finish_send(&packets[mixed ? i + 1 : 0], output, mixed ? i + 2 : 1)) {
         ok = false;
         break;
@@ -405,7 +431,7 @@ int main(int argc, char **argv)
       ok = false;
     }
   } else if (!strcmp(mode, "close") || !strcmp(mode, "exit")) {
-    if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK) {
+    if (receive_packet(endpoint.receiver, &packets[0]) != CALL_OK) {
       goto done;
     }
     if (!strcmp(mode, "exit")) {
@@ -441,10 +467,10 @@ int main(int argc, char **argv)
       }
     }
   } else {
-    if (endpoint_receive(endpoint.receiver, &packets[0]) != CALL_OK) {
+    if (receive_packet(endpoint.receiver, &packets[0]) != CALL_OK) {
       goto done;
     }
-    if (endpoint_receive(endpoint.receiver, &packets[1]) != CALL_OK) {
+    if (receive_packet(endpoint.receiver, &packets[1]) != CALL_OK) {
       handle_close(packets[0].receipt);
       close_grants(&packets[0]);
       goto done;

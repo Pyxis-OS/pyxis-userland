@@ -9,7 +9,10 @@
  * also report relevant closure/errors under the same operation authority.
  * Deadline zero polls; readiness precedes timeout. Output is untouched on
  * failure. Process and group observers use WAIT_COMPLETE with their WAIT authority and
- * may share a list with TCP, terminal attachment and armed console interests. No registrations
+ * may share a list with TCP, terminal attachment and armed console interests.
+ * Owned endpoint receivers use READABLE with RECEIVE transport authority;
+ * CALL, SEND, CANCEL and RETIRE readiness reserves no delivery. A queued CALL
+ * can expire before the ordinary blocking RECEIVE. No registrations
  * survive return; see abi/wait.h for supported targets and event semantics. */
 enum call_status wait_many(const struct wait_interest *interests, size_t count,
     uint64_t deadline_ns, uint64_t *events);

@@ -223,6 +223,22 @@ remains full until the provider finishes the canceled receipt.
 `--cancel-finish` closes an expired receipt before RECEIVE and confirms that
 its pending notice is removed.
 
+Add `--wait` to a server mode to observe its receiver and console input together:
+
+```sh
+session bin://server.pxe --wait --send
+session bin://server.pxe --wait --delivered-timeout
+```
+
+Type a key at the initial prompt to start clients. Console input reports
+`wait: console input`; receiver readiness is followed by RECEIVE and a message
+kind report. The delivered-timeout mode leaves a ten-second window to type more
+keys while waiting for cancellation. This option needs readable input and clock
+grants. Wait timeouts resume waiting; input EOF or an input error stops the demo.
+Readiness reserves no delivery: a queued CALL can expire before RECEIVE, which
+still blocks until another message or endpoint closure. Modes without `--wait`
+retain their ordinary blocking RECEIVE behavior.
+
 `session bin://counter.pxe` runs a provider with two counter exports on one
 receiver. A launched client receives different resource grants, attenuates a
 copy and an IPC attachment, verifies protocol matching, and uses both CALL and
@@ -237,6 +253,17 @@ its export, then withdraws while the client's following CALL waits in the queue;
 the client reports closure before delivery. `--retire-full` fills all sixteen
 ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
+The standalone counter modes also accept `--wait` with the same interactive
+start and mixed receiver/input wait:
+
+```sh
+session bin://counter.pxe --wait --withdraw
+session bin://counter.pxe --wait --retire-full
+```
+
+Withdrawal reports CALL, CANCEL and RETIRE; the full-queue mode reports RETIRE
+before draining sixteen SENDs. Namespace provider/client modes do not accept
+this option.
 
 `boot://init-install.pxe` is the install entry's boot init. It requires the
 `disks` inventory service, read-only `boot_kernel` and `boot_archive` FILE grants

@@ -15,6 +15,14 @@
 #include <stdio.h>
 #include <string.h>
 #include "../common/counter_service.h"
+#include "../common/endpoint_wait.h"
+
+static struct demo_endpoint_wait receiver_wait;
+
+static enum call_status receive_packet(handle_t receiver, struct endpoint_packet *packet)
+{
+  return demo_endpoint_receive(&receiver_wait, receiver, packet);
+}
 
 static bool close_handle(handle_t *handle)
 {
@@ -208,7 +216,7 @@ static bool receive_retire(handle_t receiver, uint64_t first_id, uint64_t second
   size_t count = second_id ? 2 : 1;
   for (size_t i = 0; i < count; ++i) {
     struct endpoint_packet notice;
-    if (endpoint_receive(receiver, &notice) != CALL_OK ||
+    if (receive_packet(receiver, &notice) != CALL_OK ||
         notice.kind != ENDPOINT_MESSAGE_RETIRE ||
         (notice.object_id != first_id && notice.object_id != second_id) ||
         endpoint_retire_ack(receiver, notice.object_id) != CALL_OK) {
@@ -265,7 +273,7 @@ static bool serve_packet(struct endpoint_packet *packet, uint64_t *first,
 static bool serve_call(handle_t receiver, uint64_t *first, uint64_t *second)
 {
   struct endpoint_packet packet;
-  return endpoint_receive(receiver, &packet) == CALL_OK &&
+  return receive_packet(receiver, &packet) == CALL_OK &&
       serve_packet(&packet, first, second);
 }
 
@@ -290,7 +298,7 @@ static bool serve_basic(handle_t service, handle_t receiver, handle_t launcher,
   uint64_t retired = 0;
   while (ok && (deliveries < 4 || retired != 3)) {
     struct endpoint_packet packet;
-    ok = endpoint_receive(receiver, &packet) == CALL_OK;
+    ok = receive_packet(receiver, &packet) == CALL_OK;
     if (!ok) {
       break;
     }
@@ -325,7 +333,7 @@ static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launche
   }
   struct endpoint_packet packet;
   if (ok) {
-    ok = endpoint_receive(receiver, &packet) == CALL_OK &&
+    ok = receive_packet(receiver, &packet) == CALL_OK &&
         packet.kind == ENDPOINT_MESSAGE_CALL &&
         packet.object_id == COUNTER_SECOND_ID &&
         packet.protocol == COUNTER_PROTOCOL &&
@@ -337,7 +345,7 @@ static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launche
   }
   if (ok) {
     struct endpoint_packet notice;
-    ok = endpoint_receive(receiver, &notice) == CALL_OK &&
+    ok = receive_packet(receiver, &notice) == CALL_OK &&
         notice.kind == ENDPOINT_MESSAGE_CANCEL &&
         notice.receipt == packet.receipt &&
         notice.object_id == COUNTER_SECOND_ID &&
@@ -388,7 +396,7 @@ static bool start_exit_call(handle_t service, handle_t receiver, handle_t launch
       client, "client-withdraw", &child) == CALL_OK;
   if (ok) {
     struct endpoint_packet packet;
-    ok = endpoint_receive(receiver, &packet) == CALL_OK &&
+    ok = receive_packet(receiver, &packet) == CALL_OK &&
         packet.kind == ENDPOINT_MESSAGE_CALL &&
         packet.object_id == COUNTER_SECOND_ID;
   }
@@ -415,7 +423,7 @@ static bool serve_queued_withdraw(handle_t service, handle_t receiver,
   if (ok) {
     uint64_t first_value = 4, second_value = 9;
     struct endpoint_packet marker;
-    ok = endpoint_receive(receiver, &marker) == CALL_OK &&
+    ok = receive_packet(receiver, &marker) == CALL_OK &&
         marker.kind == ENDPOINT_MESSAGE_SEND &&
         marker.object_id == COUNTER_SECOND_ID &&
         marker.operation == COUNTER_ADD &&
@@ -454,7 +462,7 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
   ok = close_handle(&client) && ok;
   if (ok) {
     struct endpoint_packet notice;
-    ok = endpoint_receive(receiver, &notice) == CALL_OK &&
+    ok = receive_packet(receiver, &notice) == CALL_OK &&
         notice.kind == ENDPOINT_MESSAGE_RETIRE &&
         notice.object_id == COUNTER_FIRST_ID &&
         endpoint_send(caller, NULL, 0, NULL, 0) == CALL_QUEUE_FULL &&
@@ -462,7 +470,7 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
   }
   for (size_t i = 0; ok && i < ENDPOINT_DELIVERIES_MAX; ++i) {
     struct endpoint_packet packet;
-    ok = endpoint_receive(receiver, &packet) == CALL_OK &&
+    ok = receive_packet(receiver, &packet) == CALL_OK &&
         packet.kind == ENDPOINT_MESSAGE_SEND && packet.object_id == 0 &&
         packet.protocol == 0 && packet.operation == 0 &&
         packet.rights == 0 && packet.size == 0 && packet.grant_count == 0 &&
@@ -492,9 +500,25 @@ int main(int argc, char **argv)
   if (argc == 2 && !strcmp(argv[1], "client-queued")) {
     return client_queued();
   }
-  if (argc > 2 || (argc == 2 && strcmp(argv[1], "--withdraw") &&
-      strcmp(argv[1], "--queued-withdraw") &&
-      strcmp(argv[1], "--retire-full") && strcmp(argv[1], "--exit"))) {
+  const char *mode = "normal";
+  bool mode_set = false;
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--wait") && !receiver_wait.enabled) {
+      receiver_wait.enabled = true;
+    } else if (!mode_set && (!strcmp(argv[i], "--withdraw") ||
+        !strcmp(argv[i], "--queued-withdraw") ||
+        !strcmp(argv[i], "--retire-full") || !strcmp(argv[i], "--exit"))) {
+      mode = argv[i] + 2;
+      mode_set = true;
+    } else {
+      return 1;
+    }
+  }
+  receiver_wait.input = startup_resource("input");
+  receiver_wait.output = startup_resource("output");
+  receiver_wait.clock = startup_resource("clock");
+  if (receiver_wait.enabled && (receiver_wait.input == HANDLE_INVALID ||
+      receiver_wait.clock == HANDLE_INVALID)) {
     return 1;
   }
   handle_t service = startup_resource("service");
@@ -505,7 +529,7 @@ int main(int argc, char **argv)
   handle_t bin = startup_root("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
-      (argc == 2 && !strcmp(argv[1], "--queued-withdraw") &&
+      (!strcmp(mode, "queued-withdraw") &&
       clock == HANDLE_INVALID) ||
       bin == HANDLE_INVALID) {
     return 1;
@@ -520,7 +544,13 @@ int main(int argc, char **argv)
     close_handle(&image);
     return 1;
   }
-  if (argc == 2 && !strcmp(argv[1], "--exit")) {
+  if (!demo_wait_start(&receiver_wait, endpoint.receiver)) {
+    close_handle(&endpoint.caller);
+    close_handle(&endpoint.receiver);
+    close_handle(&image);
+    return 1;
+  }
+  if (!strcmp(mode, "exit")) {
     bool launched = start_exit_call(service, endpoint.receiver, launcher,
         image, memory, output);
     console_print(output, launched ? "counter provider: exiting with call\n" :
@@ -528,12 +558,12 @@ int main(int argc, char **argv)
     return launched ? 0 : 1;
   }
   bool ok;
-  if (argc == 2 && !strcmp(argv[1], "--withdraw")) {
+  if (!strcmp(mode, "withdraw")) {
     ok = serve_withdraw(service, endpoint.receiver, launcher, image, memory, output);
-  } else if (argc == 2 && !strcmp(argv[1], "--queued-withdraw")) {
+  } else if (!strcmp(mode, "queued-withdraw")) {
     ok = serve_queued_withdraw(service, endpoint.receiver, launcher, image,
         memory, output, clock);
-  } else if (argc == 2 && !strcmp(argv[1], "--retire-full")) {
+  } else if (!strcmp(mode, "retire-full")) {
     ok = serve_retire_full(service, endpoint.receiver, endpoint.caller);
   } else {
     ok = serve_basic(service, endpoint.receiver, launcher, image, memory, output);
