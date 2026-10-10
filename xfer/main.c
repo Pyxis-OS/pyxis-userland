@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <file.h>
 #include <handle.h>
+#include <pyxis/working_path.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -229,13 +230,21 @@ static bool receive_authority(struct transfer *transfer, const char *name)
   if (!plain_name(name)) {
     return transfer_fail(transfer, "EINVAL", "Destination must be one plain UTF-8 name of at most 200 bytes");
   }
-  size_t count = startup_working_directory_count();
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    return native_fail(transfer, status, "retain working directory");
+  }
+  size_t count = context->count;
   if (!count) {
     return transfer_fail(transfer, "EPERM", "No inherited working directory");
   }
-  transfer->parent = startup_working_directory(count - 1);
+  status = handle_copy(context->directories[count - 1], &transfer->parent);
+  if (status != CALL_OK) {
+    return native_fail(transfer, status, "copy working directory");
+  }
   uint64_t rights;
-  enum call_status status = handle_rights(transfer->parent, &rights, NULL);
+  status = handle_rights(transfer->parent, &rights, NULL);
   if (status != CALL_OK) {
     return native_fail(transfer, status, "query working directory");
   }
@@ -472,6 +481,13 @@ static void cleanup(struct transfer *transfer)
     term_print(&transfer->wire.terminal, "xfer: source close failed\n");
   }
   hash_close();
+  if (transfer->parent != HANDLE_INVALID) {
+    handle_t parent = transfer->parent;
+    transfer->parent = HANDLE_INVALID;
+    if (handle_close(parent) != 0) {
+      transfer_fail(transfer, "EIO", "Cannot close destination directory");
+    }
+  }
 }
 
 int main(int argc, char **argv)

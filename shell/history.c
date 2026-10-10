@@ -1,3 +1,4 @@
+#include <pyxis/working_path.h>
 #include "shell.h"
 #include "../common/directory.h"
 #include <abi/directory.h>
@@ -114,7 +115,7 @@ static size_t trim_entries(char *buffer, size_t size, size_t lines)
 
 static handle_t find_home(const struct shell *shell)
 {
-  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+  for (size_t i = 0; i < shell->directory->root_count; ++i) {
     if (!strcmp(shell->roots[i].name, "home")) {
       return shell->roots[i].handle;
     }

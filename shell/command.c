@@ -1,3 +1,4 @@
+#include <pyxis/working_path.h>
 #include "shell.h"
 #include "../common/directory.h"
 #include <mount.h>
@@ -39,7 +40,7 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
 
 static enum call_status root_available(struct shell *shell, const char *binding)
 {
-  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+  for (size_t i = 0; i < shell->directory->root_count; ++i) {
     if (!strcmp(shell->roots[i].name, binding)) {
       return CALL_ALREADY_EXISTS;
     }
@@ -75,7 +76,7 @@ static enum call_status reserve_root(struct shell *shell, const char *name,
       return CALL_BAD_REQUEST;
     }
   }
-  if (length >= STARTUP_MAX_SIZE || shell->directory.root_count == STARTUP_ROOT_LIMIT) {
+  if (length >= STARTUP_MAX_SIZE || shell->directory->root_count == STARTUP_ROOT_LIMIT) {
     return CALL_LIMIT;
   }
   char *binding = malloc(length + 1);
@@ -102,8 +103,15 @@ static enum call_status publish_root(struct shell *shell, char *name, handle_t r
     free(name);
     return status;
   }
-  size_t index = shell->directory.root_count++;
+  size_t index = shell->directory->root_count;
   shell->roots[index] = (struct path_root){name, root};
+  status = pyxis_working_bindings(shell->roots, index + 1, shell->namespace);
+  if (status != CALL_OK) {
+    shell->roots[index] = (struct path_root){0};
+    handle_close(root);
+    free(name);
+    return status;
+  }
   shell->owns_root[index] = true;
   return CALL_OK;
 }
@@ -417,7 +425,11 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
       }
       shell->namespace = namespace_handle;
       shell->owns_namespace = true;
-      shell->directory.namespace = namespace_handle;
+      status = pyxis_working_bindings(shell->roots, shell->directory->root_count,
+          namespace_handle);
+      if (status != CALL_OK) {
+        return shell_error(shell, "namespace: update working bindings failed (status %u)\n", status);
+      }
       return COMMAND_OK;
     }
     if (count == 3 && !strcmp(arguments[1], "remove")) {

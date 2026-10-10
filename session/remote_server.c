@@ -1,3 +1,4 @@
+#include <pyxis/environment.h>
 #include "remote_server.h"
 #include <abi/console.h>
 #include <abi/echo.h>
@@ -185,6 +186,7 @@ int launch_remote_server(const struct session_config *config,
   uint64_t working_directory = SIZE_MAX;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
   struct startup_variable *environment = NULL;
+  struct pyxis_environment_snapshot inherited = {0};
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
   for (size_t i = 0; i < root_count; ++i) {
@@ -275,7 +277,13 @@ int launch_remote_server(const struct session_config *config,
   }
 
   size_t environment_count = 0;
-  environment = session_environment(config, network->dns_server, &environment_count);
+  status = pyxis_environment_snapshot_init(&inherited);
+  if (status != CALL_OK) {
+    fprintf(stderr, "session: cannot snapshot remote environment (status %u)\n", status);
+    goto done;
+  }
+  environment = session_environment(config, network->dns_server, &inherited,
+      &environment_count);
   if (!environment) {
     goto done;
   }
@@ -357,6 +365,7 @@ int launch_remote_server(const struct session_config *config,
 done:
   network_environment_free(&refreshed_environment);
   free(environment);
+  pyxis_environment_snapshot_close(&inherited);
   if (listener != HANDLE_INVALID && handle_close(listener) != 0) {
     result = EXIT_FAILURE;
   }

@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pyxis/environment.h>
+#include "errors.h"
 #include <string.h>
 #include "timezone.h"
 
@@ -432,7 +434,12 @@ static int future_offset(const struct tz_footer *future, int64_t seconds,
 int timezone_offset(int64_t seconds, long *offset, int *daylight,
     const char **designation)
 {
-  const char *name = getenv("TZ");
+  const char *name;
+  enum call_status status = pyxis_environment_get("TZ", &name);
+  if (status != CALL_OK && status != CALL_NOT_FOUND) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
   if (!name || !*name) {
     *offset = 0;
     *daylight = 0;

@@ -13,6 +13,7 @@
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
+#include <pyxis/working_path.h>
 
 static int print_content(handle_t output, handle_t content)
 {
@@ -103,8 +104,10 @@ static int read_application_file(handle_t output, handle_t root, char *scratch,
     .component = scratch, .component_capacity = scratch_size,
   };
   struct path_context context;
-  if (path_context_init(&context, directories, 8, startup_working_directories(),
-        startup_working_directory_count()) != CALL_OK) {
+  const struct path_context *current;
+  if (pyxis_working_context(&current) != CALL_OK ||
+      path_context_init(&context, directories, 8, current->directories,
+        current->count) != CALL_OK) {
     return -1;
   }
 

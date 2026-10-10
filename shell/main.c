@@ -1,3 +1,4 @@
+#include <pyxis/working_path.h>
 #include "shell.h"
 #include <abi/console.h>
 #include "../common/directory.h"
@@ -24,7 +25,10 @@ static struct term_line_result read_command(struct shell *shell, char *line)
     budget = sizeof(prompt) - 1;
   }
   size_t available = budget > 2 ? budget - 2 : 0;
-  const char *path = shell->working_path;
+  const char *path = pyxis_working_path();
+  if (!path) {
+    path = "[cwd unavailable]";
+  }
   size_t length = strlen(path);
   size_t used = 0;
   if (length > available) {
@@ -150,9 +154,11 @@ int main(int argc, char **argv)
     goto done;
   }
 
-  shell.directory.roots = shell.roots;
-  shell.directory.root_count = root_count;
-  shell.directory.namespace = shell.namespace;
+  status = pyxis_working_bindings(shell.roots, root_count, shell.namespace);
+  if (status != CALL_OK) {
+    shell_directory_error(&shell, "shell", "working bindings", status);
+    goto done;
+  }
 
   if (script != HANDLE_INVALID) {
     result = shell_script(&shell, script, line, arguments);
@@ -220,7 +226,7 @@ done:
   if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
     result = EXIT_FAILURE;
   }
-  for (size_t i = 0; i < shell.directory.root_count; ++i) {
+  for (size_t i = 0; shell.directory && i < shell.directory->root_count; ++i) {
     if (shell.owns_root[i]) {
       if (handle_close(shell.roots[i].handle) != 0) {
         result = EXIT_FAILURE;

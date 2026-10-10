@@ -1,3 +1,5 @@
+#include <pyxis/environment.h>
+#include <pyxis/working_path.h>
 #include "config.h"
 #include "network.h"
 #include "remote_server.h"
@@ -76,7 +78,14 @@ static int launch_session(const struct session_config *config, const struct netw
   enum { OPTIONAL_RESOURCE_COUNT = 27, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
-  size_t depth = startup_working_directory_count();
+  const struct path_context *context;
+  status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    handle_close(image);
+    fprintf(stderr, "session: cannot retain working directory (status %u)\n", status);
+    return EXIT_FAILURE;
+  }
+  size_t depth = context->count;
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
       STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT;
   if (root_count > STARTUP_ROOT_LIMIT ||
@@ -88,10 +97,17 @@ static int launch_session(const struct session_config *config, const struct netw
   struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   size_t environment_count = 0;
-  struct startup_variable *environment =
-      session_environment(config, network->dns_server, &environment_count);
+  struct pyxis_environment_snapshot inherited = {0};
+  struct startup_variable *environment = NULL;
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
+  status = pyxis_environment_snapshot_init(&inherited);
+  if (status != CALL_OK) {
+    fprintf(stderr, "session: cannot snapshot environment (status %u)\n", status);
+    goto done;
+  }
+  environment = session_environment(config, network->dns_server, &inherited,
+      &environment_count);
   if (!environment) {
     goto done;
   }
@@ -329,11 +345,11 @@ static int launch_session(const struct session_config *config, const struct netw
 
   /* This full-root handoff also preserves the explicitly selected cwd chain.
    * The display path cannot authorize reopening roots or widening its grants. */
-  const char *working_path = startup_working_path();
+  const char *working_path = pyxis_working_path();
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
     struct launch_grant *grant = &grants[grant_count++];
-    *grant = (struct launch_grant){.source = startup_working_directory(i)};
+    *grant = (struct launch_grant){.source = context->directories[i]};
     status = handle_rights(grant->source, &grant->rights, &grant->transport);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query directory rights (status %u)\n", status);
@@ -437,6 +453,7 @@ static int launch_session(const struct session_config *config, const struct netw
 done:
   network_environment_free(&refreshed_environment);
   free(environment);
+  pyxis_environment_snapshot_close(&inherited);
   free(directories);
   free(grants);
   if (handle_close(image) != 0) {
@@ -447,6 +464,7 @@ done:
 
 static bool release_bootstrap_grants(struct network_runtime *runtime)
 {
+  pyxis_working_clear();
   size_t named_count = startup_resource_count();
   size_t roots = startup_root_count();
   size_t depth = startup_working_directory_count();

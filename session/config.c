@@ -229,9 +229,10 @@ static bool configured_variable(const struct session_config *config, const char 
 }
 
 struct startup_variable *session_environment(const struct session_config *config,
-    const char *dns_server, size_t *count)
+    const char *dns_server, const struct pyxis_environment_snapshot *snapshot,
+    size_t *count)
 {
-  size_t inherited = startup_environment_count();
+  size_t inherited = snapshot->count;
   size_t limit = SIZE_MAX / sizeof(struct startup_variable);
   if (inherited > limit - 2 || config->environment_count > limit - 2 - inherited) {
     fputs("session: environment too large\n", stderr);
@@ -245,7 +246,7 @@ struct startup_variable *session_environment(const struct session_config *config
   }
 
   size_t used = 0;
-  const struct startup_variable *source = startup_environment_variables();
+  const struct startup_variable *source = snapshot->variables;
   for (size_t i = 0; i < inherited; ++i) {
     const char *name = (const char *)source[i].name;
     /* The boot-carried discovery name cannot be shadowed by configuration. */

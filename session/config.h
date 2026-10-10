@@ -2,6 +2,7 @@
 #define SESSION_CONFIG_H
 
 #include <abi/startup.h>
+#include <pyxis/environment.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -28,9 +29,10 @@ void session_config_free(struct session_config *config);
 
 /* The successor's environment: inherited variables, then configured ones,
  * then TZ and DNS_SERVER, each replacing an inherited variable of that name.
- * The caller frees the array; its strings borrow startup data, config and
+ * The caller frees the array; its strings borrow the supplied snapshot, config and
  * dns_server. NULL reports a diagnostic. */
 struct startup_variable *session_environment(const struct session_config *config,
-    const char *dns_server, size_t *count);
+    const char *dns_server, const struct pyxis_environment_snapshot *inherited,
+    size_t *count);
 
 #endif

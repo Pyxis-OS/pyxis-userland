@@ -83,7 +83,7 @@ static bool valid_streams(const struct startup_info *info)
         return false;
       }
     }
-    if (stream->handle == info->namespace) {
+    if (stream->handle == info->namespace_handle) {
       return false;
     }
   }
@@ -225,7 +225,7 @@ size_t startup_root_count(void)
 
 handle_t startup_namespace(void)
 {
-  return startup->namespace;
+  return startup->namespace_handle;
 }
 
 const char *startup_environment(const char *name)

@@ -1,3 +1,5 @@
+#include <pyxis/environment.h>
+#include <pyxis/working_path.h>
 #include "shell.h"
 #include "../common/provider_setup.h"
 #include <abi/directory.h>
@@ -181,17 +183,17 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_system_info = !provider && shell->system_info != HANDLE_INVALID;
   bool has_log = !provider && shell->log != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
-  if (shell->directory.root_count > STARTUP_ROOT_LIMIT) {
+  if (shell->directory->root_count > STARTUP_ROOT_LIMIT) {
     return CALL_LIMIT;
   }
   size_t root_count = 0;
-  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+  for (size_t i = 0; i < shell->directory->root_count; ++i) {
     if (strcmp(shell->roots[i].name, "app")) {
       ++root_count;
     }
   }
   size_t directory_index = CHILD_ROOT + root_count;
-  size_t depth = shell->directory.count;
+  size_t depth = shell->directory->count;
   if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 31 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -250,7 +252,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
   size_t root_index = 0;
-  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+  for (size_t i = 0; i < shell->directory->root_count; ++i) {
     /* app belongs to one program; never inherit even an unused grant for it. */
     if (!strcmp(shell->roots[i].name, "app")) {
       continue;
@@ -262,7 +264,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = directory_index + i;
-    grants[directory_index + i] = (struct launch_grant){shell->directory.directories[i], 0, 0};
+    grants[directory_index + i] = (struct launch_grant){shell->directory->directories[i], 0, 0};
   }
   if (has_display) {
     grants[display_index] = (struct launch_grant){shell->display, DISPLAY_RIGHT_DRAW, 0};
@@ -552,7 +554,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     .root_count = root_count,
     .working_directories = (uintptr_t)directories,
     .working_directory_count = depth,
-    .working_path = (uintptr_t)shell->working_path,
+    .working_path = (uintptr_t)pyxis_working_path(),
     .environment = (uintptr_t)environment->variables,
     .environment_count = environment->count,
     .argv = (uintptr_t)stage->arguments,
@@ -783,6 +785,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   bool cleanup_failure = false;
   struct endpoint_create_reply publication = {0};
   struct network_environment environment = {0};
+  struct pyxis_environment_snapshot inherited = {0};
 
   if (mode == SHELL_SERVICE) {
     status = endpoint_create(shell->service, &publication);
@@ -862,8 +865,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
 
   operation = "shell: network environment";
   path = stages[0].arguments[0];
+  status = pyxis_environment_snapshot_init(&inherited);
+  if (status != CALL_OK) {
+    goto failed;
+  }
   status = network_environment_read(&environment, shell->net_config,
-      startup_environment_variables(), startup_environment_count(), NULL);
+      inherited.variables, inherited.count, NULL);
   if (status != CALL_OK) {
     goto failed;
   }
@@ -913,7 +920,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (mode == SHELL_FOREGROUND) {
     armed = arm_interrupt(shell);
   }
-  struct path_context interpreter_context = {.namespace = shell->namespace};
+  struct path_context interpreter_context = {.namespace_handle = shell->namespace};
   if (stage_count == 1) {
     status = program_launch(shell->launcher, &requests[0], &interpreter_context,
         &children[0]);
@@ -933,6 +940,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
    * could prevent EOF, and holding one reader could prevent EPIPE. */
   bool closed_sources = release_sources(prepared, stage_count, pipes);
   network_environment_free(&environment);
+  pyxis_environment_snapshot_close(&inherited);
   free(requests);
   free_preparation(prepared, stage_count);
   if (!closed_sources) {
@@ -1112,6 +1120,7 @@ failed:
   close_handle(&publication.caller);
   close_handle(&publication.receiver);
   network_environment_free(&environment);
+  pyxis_environment_snapshot_close(&inherited);
   free(requests);
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
@@ -1160,8 +1169,8 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
   if (status != CALL_OK || (rights & NAMESPACE_RIGHTS) != NAMESPACE_RIGHTS) {
     return shell_error(shell, "service: namespace lookup or management denied\n");
   }
-  for (size_t i = 0; i < shell->directory.root_count; ++i) {
-    if (!strcmp(shell->directory.roots[i].name, name)) {
+  for (size_t i = 0; i < shell->directory->root_count; ++i) {
+    if (!strcmp(shell->directory->roots[i].name, name)) {
       return shell_error(shell, "service: %s conflicts with a filesystem root\n", name);
     }
   }

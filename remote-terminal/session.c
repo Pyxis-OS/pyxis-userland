@@ -1,3 +1,4 @@
+#include <pyxis/environment.h>
 #include "session.h"
 #include <abi/clock.h>
 #include <abi/console.h>
@@ -43,6 +44,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   shell->attachment = terminal.attachment;
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
   struct network_environment environment = {0};
+  struct pyxis_environment_snapshot inherited = {0};
   struct execution_group_create_reply group;
   status = launcher_create_group(startup_resource("launcher"), &group);
   if (status != CALL_OK) {
@@ -180,25 +182,30 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     grants[grant_count++] = (struct launch_grant){namespace, NAMESPACE_RIGHT_LOOKUP, transport};
   }
   request.grant_count = grant_count;
+  status = pyxis_environment_snapshot_init(&inherited);
+  if (status != CALL_OK) {
+    goto done;
+  }
   status = network_environment_read(&environment, startup_resource("net_config"),
-      startup_environment_variables(), startup_environment_count(), NULL);
+      inherited.variables, inherited.count, NULL);
   if (status != CALL_OK) {
     goto done;
   }
   /* Discovery configuration stays with the trusted bootstrap and daemon. */
-  size_t inherited = 0;
+  size_t forwarded = 0;
   for (size_t i = 0; i < environment.count; ++i) {
     if (strcmp((const char *)environment.variables[i].name, "PYXIS_REMOTE_BEACON")) {
-      environment.variables[inherited++] = environment.variables[i];
+      environment.variables[forwarded++] = environment.variables[i];
     }
   }
-  environment.count = inherited;
+  environment.count = forwarded;
   request.environment = (uintptr_t)environment.variables;
   request.environment_count = environment.count;
   status = launcher_launch(bound, &request, &shell->process);
 
 done:
   network_environment_free(&environment);
+  pyxis_environment_snapshot_close(&inherited);
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }

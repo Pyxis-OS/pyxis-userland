@@ -4,6 +4,7 @@
 #include <handle.h>
 #include <random.h>
 #include <stdlib.h>
+#include <pyxis/environment.h>
 
 #define DNS_DEFAULT_SERVER "1.1.1.1"
 #define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
@@ -16,7 +17,13 @@
 
 bool dns_select_server(const char *override, uint32_t *server)
 {
-  const char *text = override ? override : getenv("DNS_SERVER");
+  const char *text = override;
+  if (!text) {
+    enum call_status status = pyxis_environment_get("DNS_SERVER", &text);
+    if (status != CALL_OK && status != CALL_NOT_FOUND) {
+      return false;
+    }
+  }
   if (!text) {
     text = DNS_DEFAULT_SERVER;
   }

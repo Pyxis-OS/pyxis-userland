@@ -1,3 +1,5 @@
+#include <pyxis/environment.h>
+#include <pyxis/working_path.h>
 #include "session.h"
 #include <abi/clock.h>
 #include <abi/clipboard.h>
@@ -56,7 +58,12 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
 {
   *session = (struct mux_session){0};
   size_t root_count = startup_root_count();
-  size_t depth = startup_working_directory_count();
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    return status;
+  }
+  size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
   enum { OPTIONAL_RESOURCE_COUNT = 22, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
@@ -73,9 +80,10 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     free(directories);
     return CALL_NO_MEMORY;
   }
+  struct pyxis_environment_snapshot environment = {0};
   struct terminal_create_reply terminal = {0};
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
-  enum call_status status = terminal_create(startup_resource("terminal"), columns, rows,
+  status = terminal_create(startup_resource("terminal"), columns, rows,
       &terminal);
   if (status != CALL_OK) {
     goto done;
@@ -176,10 +184,14 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
-    status = copy_grant(startup_working_directory(i), &grants[grant_count++]);
+    status = copy_grant(context->directories[i], &grants[grant_count++]);
     if (status != CALL_OK) {
       goto done;
     }
+  }
+  status = pyxis_environment_snapshot_init(&environment);
+  if (status != CALL_OK) {
+    goto done;
   }
   const char *arguments[] = {"boot://shell.pxe"};
   struct launch_request request = {
@@ -188,9 +200,9 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     .resources = (uintptr_t)resources, .resource_count = resource_count,
     .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
-    .working_path = (uintptr_t)startup_working_path(),
-    .environment = (uintptr_t)startup_environment_variables(),
-    .environment_count = startup_environment_count(),
+    .working_path = (uintptr_t)pyxis_working_path(),
+    .environment = (uintptr_t)environment.variables,
+    .environment_count = environment.count,
     .argv = (uintptr_t)arguments, .argc = 1,
     .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
   };
@@ -206,6 +218,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   status = launcher_launch(bound, &request, &session->process);
 
 done:
+  pyxis_environment_snapshot_close(&environment);
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }

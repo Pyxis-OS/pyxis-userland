@@ -1,7 +1,7 @@
 #include "directory.h"
 #include <path.h>
 #include <provider.h>
-#include <startup.h>
+#include <pyxis/working_path.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +11,12 @@ static enum call_status resolve_path(const char *path, uint64_t kind, uint64_t r
 {
   *handle = HANDLE_INVALID;
   size_t length = strlen(path);
-  size_t depth = startup_working_directory_count();
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    return status;
+  }
+  size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
     return CALL_LIMIT;
@@ -39,11 +44,8 @@ static enum call_status resolve_path(const char *path, uint64_t kind, uint64_t r
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1, .http = http,
   };
-  /* Resolution only borrows this chain; do not close the startup handles. */
-  struct path_context context = {
-    .directories = (handle_t *)startup_working_directories(), .count = depth,
-  };
-  enum call_status status = path_resolve(&context, path, kind, rights, &workspace, handle);
+  /* Resolution borrows libc's retained chain. */
+  status = path_resolve(context, path, kind, rights, &workspace, handle);
   free(http);
   free(component);
   free(directories);
@@ -63,7 +65,12 @@ enum call_status resolve_file(const char *path, uint64_t rights, handle_t *file)
 enum call_status remove_path(const char *path, uint64_t kind)
 {
   size_t length = strlen(path);
-  size_t depth = startup_working_directory_count();
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    return status;
+  }
+  size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
     return CALL_LIMIT;
@@ -81,10 +88,7 @@ enum call_status remove_path(const char *path, uint64_t kind)
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1,
   };
-  struct path_context context = {
-    .directories = (handle_t *)startup_working_directories(), .count = depth,
-  };
-  enum call_status status = path_remove(&context, path, kind, &workspace);
+  status = path_remove(context, path, kind, &workspace);
   free(component);
   free(directories);
   return status;

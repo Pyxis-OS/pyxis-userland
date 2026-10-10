@@ -71,9 +71,8 @@ struct shell {
   bool owns_namespace;
   struct path_root roots[STARTUP_ROOT_LIMIT];
   bool owns_root[STARTUP_ROOT_LIMIT];
-  struct path_context directory;
+  const struct path_context *directory;
   struct path_workspace workspace;
-  char *working_path; /* Owned display metadata; directory handles authorize lookup. */
 };
 
 /* Compacts in place. Arguments and redirection paths borrow line; capacity

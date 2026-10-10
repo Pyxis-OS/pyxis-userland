@@ -137,14 +137,35 @@ static int environment_ready(const char *name)
   return 0;
 }
 
-char *getenv(const char *name)
+enum call_status pyxis_environment_get(const char *name, const char **value)
 {
-  if (environment_ready(name) < 0) {
-    return NULL;
+  if (!value) {
+    return CALL_BAD_REQUEST;
+  }
+  *value = NULL;
+  if (!name_valid(name)) {
+    return CALL_BAD_REQUEST;
+  }
+  enum call_status status = environment_init();
+  if (status != CALL_OK) {
+    return status;
   }
   size_t index = environment_find(name);
-  return index == environment.count ? NULL :
-    (char *)(uintptr_t)environment.variables[index].value;
+  if (index == environment.count) {
+    return CALL_NOT_FOUND;
+  }
+  *value = (const char *)(uintptr_t)environment.variables[index].value;
+  return CALL_OK;
+}
+
+char *getenv(const char *name)
+{
+  const char *value;
+  enum call_status status = pyxis_environment_get(name, &value);
+  if (status != CALL_OK && status != CALL_NOT_FOUND) {
+    errno = libc_call_errno(status);
+  }
+  return (char *)value;
 }
 
 int setenv(const char *name, const char *value, int overwrite)

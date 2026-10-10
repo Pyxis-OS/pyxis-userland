@@ -106,8 +106,8 @@ static enum call_status starting_chain(const struct path_context *context,
     if (http && root != HANDLE_INVALID) {
       return CALL_BAD_REQUEST;
     }
-    handle_t namespace_handle = context && context->namespace != HANDLE_INVALID ?
-        context->namespace : startup_namespace();
+    handle_t namespace_handle = context && context->namespace_handle != HANDLE_INVALID ?
+        context->namespace_handle : startup_namespace();
     if (namespace_handle != HANDLE_INVALID) {
       handle_t binding = HANDLE_INVALID;
       enum call_status lookup = namespace_lookup(namespace_handle,

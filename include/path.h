@@ -23,7 +23,7 @@ struct path_context {
   size_t root_count;
   /* Optional borrowed namespace override with LOOKUP. Zero selects
    * startup_namespace(). Shells can update this after creating a namespace. */
-  handle_t namespace;
+  handle_t namespace_handle;
 };
 
 /* Scratch storage must be disjoint from the context, inputs and outputs.
@@ -44,6 +44,10 @@ struct path_workspace {
   handle_t clock;
   uint64_t deadline_ns;
 };
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Initialize a fresh/closed context by copying a borrowed directory chain.
  * Use startup_working_directories()/count() for the initial chain, or one
@@ -128,5 +132,9 @@ enum call_status path_rename(const struct path_context *context, const char *sou
  * and scratch storage. No process-global cwd, allocation or kernel path parser. */
 enum call_status path_change(struct path_context *context, const char *path,
                               struct path_workspace *workspace);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

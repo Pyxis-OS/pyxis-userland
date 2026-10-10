@@ -50,8 +50,8 @@ static enum call_status binding(const struct path_context *context,
   if (root != HANDLE_INVALID) {
     return CALL_BAD_REQUEST;
   }
-  handle_t namespace = context && context->namespace != HANDLE_INVALID ?
-      context->namespace : startup_namespace();
+  handle_t namespace = context && context->namespace_handle != HANDLE_INVALID ?
+      context->namespace_handle : startup_namespace();
   if (namespace == HANDLE_INVALID) {
     return CALL_NOT_FOUND;
   }
