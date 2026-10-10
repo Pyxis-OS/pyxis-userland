@@ -12,7 +12,14 @@ struct line_editor {
   char *buffer;
   size_t columns, cells, prompt_length;
   size_t length, cursor, displayed_length, displayed_cursor;
-  bool quiet;
+  size_t match_start, match_length;
+  bool quiet, search_failed;
+};
+
+struct history_search {
+  char *original, *query, *prompt;
+  size_t original_cursor, original_position, length, position;
+  bool active, failed, selected;
 };
 
 static enum call_status move_between(struct line_editor *editor, size_t from, size_t to)
@@ -37,6 +44,29 @@ static enum call_status write_spaces(struct terminal *term, size_t count)
     count -= chunk;
   }
   return CALL_OK;
+}
+
+static enum call_status draw_input(struct line_editor *editor, size_t start, size_t count)
+{
+  size_t end = start + count;
+  size_t match_end = editor->match_start + editor->match_length;
+  if (!editor->match_length || start >= match_end || end <= editor->match_start) {
+    return term_write_all(editor->term, editor->buffer + start, count);
+  }
+  size_t first = start > editor->match_start ? start : editor->match_start;
+  size_t last = end < match_end ? end : match_end;
+  enum call_status status = term_write_all(editor->term, editor->buffer + start, first - start);
+  if (status == CALL_OK) {
+    status = term_print(editor->term, "\x1b[7m");
+  }
+  if (status == CALL_OK) {
+    status = term_write_all(editor->term, editor->buffer + first, last - first);
+  }
+  if (status == CALL_OK) {
+    status = term_reset_style(editor->term);
+  }
+  return status == CALL_OK ?
+      term_write_all(editor->term, editor->buffer + last, end - last) : status;
 }
 
 static enum call_status draw_line(struct line_editor *editor, bool editing, bool full)
@@ -67,10 +97,19 @@ static enum call_status draw_line(struct line_editor *editor, bool editing, bool
   if (prompt_count > visible) {
     prompt_count = visible;
   }
+  if (editor->search_failed) {
+    status = term_colors(term, 9, -1);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
   status = term_write_all(term, editor->prompt + (prompt_count ? start : 0), prompt_count);
   if (status == CALL_OK && visible > prompt_count) {
     size_t input_start = start + prompt_count - editor->prompt_length;
-    status = term_write_all(term, editor->buffer + input_start, visible - prompt_count);
+    status = draw_input(editor, input_start, visible - prompt_count);
+  }
+  if (status == CALL_OK && editor->search_failed) {
+    status = term_reset_style(term);
   }
   if (status != CALL_OK) {
     return status;
@@ -167,6 +206,89 @@ static bool load_line(struct line_editor *editor, const char *text, size_t limit
   editor->buffer[length] = '\0';
   editor->length = editor->cursor = length;
   return shortened;
+}
+
+static bool begin_search(struct history_search *search, struct line_editor *editor,
+    size_t capacity, size_t position, size_t count)
+{
+  static const char prefix[] = "(failed reverse-i-search)`";
+  if (capacity > SIZE_MAX - sizeof(prefix) - 3) {
+    return false;
+  }
+  if (!search->original) {
+    search->original = malloc(capacity);
+    search->query = malloc(capacity);
+    search->prompt = malloc(capacity + sizeof(prefix) + 3);
+    if (!search->original || !search->query || !search->prompt) {
+      free(search->original);
+      free(search->query);
+      free(search->prompt);
+      *search = (struct history_search){0};
+      return false;
+    }
+  }
+  memcpy(search->original, editor->buffer, editor->length + 1);
+  search->original_cursor = editor->cursor;
+  search->original_position = position;
+  search->query[0] = '\0';
+  search->length = 0;
+  search->position = count;
+  search->active = true;
+  search->failed = false;
+  search->selected = false;
+  editor->search_failed = false;
+  return true;
+}
+
+static bool find_history(struct history_search *search, struct line_editor *editor,
+    const struct term_history *history, size_t before, size_t limit)
+{
+  for (size_t i = before; i; --i) {
+    const char *entry = history->entries[i - 1];
+    const char *match = strstr(entry, search->query);
+    if (!match || strlen(entry) > limit) {
+      continue;
+    }
+    load_line(editor, entry, limit);
+    editor->match_start = (size_t)(match - entry);
+    editor->match_length = search->length;
+    editor->cursor = editor->match_start + editor->match_length;
+    search->position = i - 1;
+    search->failed = false;
+    search->selected = true;
+    editor->search_failed = false;
+    return true;
+  }
+  search->failed = true;
+  editor->search_failed = true;
+  editor->match_length = 0;
+  return false;
+}
+
+static void search_prompt(struct history_search *search, struct line_editor *editor,
+    size_t capacity)
+{
+  snprintf(search->prompt, capacity + sizeof("(failed reverse-i-search)`") + 3,
+      "(%sreverse-i-search)`%s': ", search->failed ? "failed " : "", search->query);
+  editor->prompt = search->prompt;
+  editor->prompt_length = strlen(search->prompt);
+}
+
+static void end_search(struct history_search *search, struct line_editor *editor,
+    const char *prompt, size_t *position, size_t limit, bool cancel)
+{
+  if (cancel) {
+    load_line(editor, search->original, limit);
+    editor->cursor = search->original_cursor;
+    *position = search->original_position;
+  } else {
+    *position = search->selected ? search->position : search->original_position;
+  }
+  search->active = false;
+  editor->prompt = prompt;
+  editor->prompt_length = strlen(prompt);
+  editor->match_length = 0;
+  editor->search_failed = false;
 }
 
 /* Replaces buffer[start..cursor) with text when the result fits the limit. */
@@ -385,6 +507,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
    * is shown. */
   size_t position = history ? history->count : 0;
   char *draft = NULL;
+  struct history_search search = {0};
   result.error = draw_line(&editor, true, false);
   if (result.error == CALL_OK && marked) {
     result.error = term_print(term, "\x1b]133;B\a");
@@ -431,6 +554,10 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
         if (paste_transaction) {
           result.error = CALL_BAD_REQUEST;
           break;
+        }
+        if (search.active) {
+          end_search(&search, &editor, prompt, &position, limit, false);
+          result.error = draw_line(&editor, true, false);
         }
         paste_transaction = event.transaction_id;
         paste_inserted = 0;
@@ -513,6 +640,45 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     if (result.error != CALL_OK) {
       break;
     }
+    if (search.active) {
+      if (key == 7 || key == 3) {
+        end_search(&search, &editor, prompt, &position, limit, true);
+        result.error = draw_line(&editor, true, false);
+        continue;
+      }
+      if (key == 18 || key == '\b' || key == 0x7f || (key >= ' ' && key <= '~')) {
+        bool full = false;
+        if (key == 18) {
+          find_history(&search, &editor, history, search.position, limit);
+        } else if (key == '\b' || key == 0x7f) {
+          if (search.length) {
+            search.query[--search.length] = '\0';
+            find_history(&search, &editor, history, history->count, limit);
+          }
+        } else if (search.length == limit) {
+          full = true;
+        } else {
+          search.query[search.length++] = key;
+          search.query[search.length] = '\0';
+          find_history(&search, &editor, history, history->count, limit);
+        }
+        search_prompt(&search, &editor, capacity);
+        result.error = draw_line(&editor, true, full);
+        continue;
+      }
+      if (key == 27 || key == TERM_KEY_LEFT || key == TERM_KEY_RIGHT ||
+          key == TERM_KEY_HOME || key == TERM_KEY_END || key == 1 || key == 5 ||
+          key == TERM_KEY_UP || key == TERM_KEY_DOWN || key == TERM_KEY_DELETE ||
+          key == '\t' || key == 4 || key == '\n' || key == '\r') {
+        end_search(&search, &editor, prompt, &position, limit, false);
+        if (key == 27) {
+          result.error = draw_line(&editor, true, false);
+          continue;
+        }
+      } else if (key != TERM_KEY_EOF) {
+        continue;
+      }
+    }
     if (key == '\n' || key == '\r' || key == 3) {
       result.status = key == 3 ? TERM_LINE_CANCELLED : TERM_LINE_OK;
       break;
@@ -524,6 +690,24 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 
     bool full = false;
     switch (key) {
+    case 18:
+      if (!history || quiet) {
+        continue;
+      }
+      if (position == history->count) {
+        if (!draft) {
+          draft = malloc(capacity);
+          if (!draft) {
+            continue;
+          }
+        }
+        memcpy(draft, buffer, editor.length + 1);
+      }
+      if (!begin_search(&search, &editor, capacity, position, history->count)) {
+        continue;
+      }
+      search_prompt(&search, &editor, capacity);
+      break;
     case TERM_KEY_LEFT:
       if (editor.cursor) {
         --editor.cursor;
@@ -534,9 +718,11 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
         ++editor.cursor;
       }
       break;
+    case 1:
     case TERM_KEY_HOME:
       editor.cursor = 0;
       break;
+    case 5:
     case TERM_KEY_END:
       editor.cursor = editor.length;
       break;
@@ -610,6 +796,9 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
       result.error = status;
     }
   }
+  if (search.active) {
+    end_search(&search, &editor, prompt, &position, limit, false);
+  }
   if (result.status != TERM_LINE_ERROR && !quiet) {
     enum call_status status = draw_line(&editor, false, false);
     if (status == CALL_OK) {
@@ -634,6 +823,9 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     buffer[0] = '\0';
   }
   free(draft);
+  free(search.original);
+  free(search.query);
+  free(search.prompt);
   return result;
 }
 

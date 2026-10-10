@@ -197,6 +197,10 @@ bool term_history_add(struct term_history *history, const char *line);
  * recall began. Edits to a recalled entry last until another entry is loaded.
  * A recalled entry longer than the buffer limit is shortened and treated as a
  * rejected insertion: its cell turns red and limit_reached is set.
+ * Ctrl+R searches printable ASCII substrings, newest first; repeat steps older.
+ * Enter submits the shown line; Escape or navigation accepts it for editing.
+ * Ctrl+G/Ctrl+C cancels search and restores the original line and cursor.
+ * Search skips entries that cannot fit, rather than submitting truncated text.
  *
  * LINE_OK appends the submitted line with term_history_add and sets recorded
  * when it did. If memory for the unfinished line is unavailable, recall is
