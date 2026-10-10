@@ -474,6 +474,13 @@ identity and modification time. Check `st_valid` with `STAT_DEV_VALID`,
 descriptors while comparing identity. Provider byte snapshots report their
 private domain without inventing object IDs or timestamps.
 
+[pyxis/descriptor.h](libc/include/pyxis/descriptor.h) bridges libc descriptors
+to borrowed native bindings and atomic handle adoption. Libc retains ownership
+of handles, file positions and read-ahead. Its try I/O supports native pipes and
+consoles; files use the standard descriptor APIs. Foreground bundles can request
+`pipe` with `create` rights in their manifest. An unrequested grant is omitted;
+an unavailable required grant prevents launch.
+
 ## License
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See

@@ -6,6 +6,7 @@
 #include <abi/echo.h>
 #include <abi/launcher.h>
 #include <abi/memory.h>
+#include <abi/pipe.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -69,6 +70,7 @@ static const struct grant_right grant_rights[] = {
   {"echo", "send", PROTOCOL_ECHO, ECHO_RIGHT_SEND},
   {"tcp", "connect", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_CONNECT},
   {"tcp", "listen", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_LISTEN},
+  {"pipe", "create", PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE},
   {"udp", "open", PROTOCOL_UDP_SERVICE, UDP_SERVICE_RIGHT_OPEN},
   {"display", "draw", PROTOCOL_DISPLAY, DISPLAY_RIGHT_DRAW},
   {"audio", "create", PROTOCOL_AUDIO, AUDIO_RIGHT_PLAYBACK},

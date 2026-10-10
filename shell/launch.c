@@ -601,6 +601,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"echo", shell->echo},
       {"udp", shell->udp},
       {"tcp", shell->tcp},
+      {"pipe", mode == SHELL_FOREGROUND ? shell->pipe : HANDLE_INVALID},
       {"random", shell->random},
       {"profile", shell->profile},
       {"launcher", shell->child_launcher},
