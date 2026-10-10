@@ -73,6 +73,7 @@ char *strerror(int error)
   case EDQUOT: return "Storage quota exceeded";
   case EFBIG: return "File too large";
   case EINVAL: return "Invalid argument";
+  case EINTR: return "Interrupted operation";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";
   case EILSEQ: return "Invalid or unrepresentable character";

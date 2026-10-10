@@ -37,6 +37,8 @@ extern int errno;
 #define ENOTTY 26
 #define ENAMETOOLONG 27
 #define E2BIG 28
+/* Compatibility vocabulary; current native calls do not report signal interruption. */
+#define EINTR 29
 
 #ifdef __cplusplus
 }
