@@ -1,5 +1,6 @@
 #include <pyxis/environment.h>
 #include "session.h"
+#include "../common/session_wait.h"
 #include <abi/clock.h>
 #include <abi/console.h>
 #include <abi/echo.h>
@@ -199,6 +200,10 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     }
   }
   environment.count = forwarded;
+  status = session_wait_environment(&environment, true);
+  if (status != CALL_OK) {
+    goto done;
+  }
   request.environment = (uintptr_t)environment.variables;
   request.environment_count = environment.count;
   status = launcher_launch(bound, &request, &shell->process);

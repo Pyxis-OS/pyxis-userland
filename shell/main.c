@@ -1,7 +1,9 @@
 #include <pyxis/working_path.h>
+#include <pyxis/environment.h>
 #include "shell.h"
 #include <abi/console.h>
 #include "../common/directory.h"
+#include "../common/session_wait.h"
 #include <startup.h>
 #include <handle.h>
 #include <terminal.h>
@@ -126,6 +128,14 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
+  const char *session_wait = NULL;
+  enum call_status policy_status = pyxis_environment_get(SESSION_WAIT_ENV, &session_wait);
+  if (policy_status != CALL_OK && policy_status != CALL_NOT_FOUND) {
+    shell_directory_error(&shell, "shell", "session policy", policy_status);
+    return EXIT_FAILURE;
+  }
+  shell.session_wait = session_wait && !strcmp(session_wait, "1");
+
   uint64_t input_rights = 0;
   shell.interrupts = shell.clock != HANDLE_INVALID &&
       handle_rights(shell.terminal.input, &input_rights, NULL) == CALL_OK &&
@@ -217,7 +227,7 @@ int main(int argc, char **argv)
       break;
     }
     if (command == COMMAND_EXIT) {
-      result = EXIT_SUCCESS;
+      result = shell.exit_status;
       break;
     }
   }

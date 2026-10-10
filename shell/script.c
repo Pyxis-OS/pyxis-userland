@@ -36,7 +36,10 @@ int shell_script(struct shell *shell, handle_t script, char *line, char **argume
       }
       line[length] = '\0';
       enum command_result result = script_command(shell, line, arguments);
-      return result == COMMAND_OK || result == COMMAND_EXIT ? EXIT_SUCCESS : EXIT_FAILURE;
+      if (result == COMMAND_EXIT) {
+        return shell->exit_status;
+      }
+      return result == COMMAND_OK ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (read > UINT64_MAX - offset) {
       shell_error(shell, "shell: Script offset overflow\n");
@@ -52,7 +55,7 @@ int shell_script(struct shell *shell, handle_t script, char *line, char **argume
         line[length] = '\0';
         enum command_result result = script_command(shell, line, arguments);
         if (result != COMMAND_OK) {
-          return result == COMMAND_EXIT ? EXIT_SUCCESS : EXIT_FAILURE;
+          return result == COMMAND_EXIT ? shell->exit_status : EXIT_FAILURE;
         }
         ++shell->script_line;
         length = 0;

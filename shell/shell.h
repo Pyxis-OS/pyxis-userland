@@ -55,6 +55,9 @@ struct shell {
   /* Root-shell options only; never forwarded to children. */
   bool quiet_input;
   bool remote_prompt;
+  /* Keep the supervised remote root alive through session successors. */
+  bool session_wait;
+  int exit_status;
   /* Input carries Ctrl+C arming and a clock bounds the waits. Only a root
    * shell or session successor is granted it; commands get READ alone. */
   bool interrupts;

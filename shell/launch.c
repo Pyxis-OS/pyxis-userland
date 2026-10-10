@@ -2,6 +2,7 @@
 #include <pyxis/working_path.h>
 #include "shell.h"
 #include "../common/provider_setup.h"
+#include "../common/session_wait.h"
 #include <abi/directory.h>
 #include <abi/console.h>
 #include <abi/file.h>
@@ -69,6 +70,27 @@ static bool close_handle(handle_t *handle)
     *handle = HANDLE_INVALID;
   }
   return closed;
+}
+
+static enum command_result wait_session_successor(struct shell *shell,
+    handle_t *child, const char *name)
+{
+  struct process_result completion;
+  enum call_status status = process_wait(*child, &completion);
+  bool closed = close_handle(child);
+  if (status != CALL_OK || !closed) {
+    shell_directory_error(shell, "shell: session wait", name,
+        status != CALL_OK ? status : CALL_BAD_HANDLE);
+    return COMMAND_FATAL;
+  }
+  shell->exit_status = completion.kind == PROCESS_EXITED ?
+      (int)completion.exit_status : EXIT_FAILURE;
+  if (completion.kind != PROCESS_EXITED &&
+      shell_error(shell, "shell: session %s: Process %s\n", name,
+          completion.kind == PROCESS_FAULTED ? "faulted" : "terminated") == COMMAND_FATAL) {
+    return COMMAND_FATAL;
+  }
+  return COMMAND_EXIT;
 }
 
 static bool release_sources(struct prepared_stage *stages, size_t stage_count,
@@ -874,6 +896,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (status != CALL_OK) {
     goto failed;
   }
+  status = session_wait_environment(&environment, mode == SHELL_SESSION && shell->session_wait);
+  if (status != CALL_OK) {
+    goto failed;
+  }
 
   /* A redirected pipe side is absent from every grant, so its peer sees
    * EOF or a broken reader once the remaining owned endpoint closes. */
@@ -1020,6 +1046,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       return optional ? COMMAND_OK : diagnostic;
     }
     return COMMAND_OK;
+  }
+  if (mode == SHELL_SESSION && shell->session_wait) {
+    /* No prompt/input reader or Ctrl+C arming while the successor owns them. */
+    return wait_session_successor(shell, &children[0], stages[0].arguments[0]);
   }
   if (mode == SHELL_SESSION || mode == SHELL_BACKGROUND) {
     bool closed = close_handle(&children[0]);
