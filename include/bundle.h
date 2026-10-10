@@ -21,6 +21,8 @@ struct bundle_grant_request {
  * Failure clears *program and leaves the caller's context unchanged. */
 enum call_status bundle_command_open(const struct path_context *context,
     const char *catalog_uri, const char *command, struct bundle_program **program);
+/* NOT_FOUND means the bundle directory itself is absent. A missing manifest,
+ * app, resource directory or entry after selection is BAD_REQUEST. */
 enum call_status bundle_open(const struct path_context *context,
     const char *bundle_uri, struct bundle_program **program);
 

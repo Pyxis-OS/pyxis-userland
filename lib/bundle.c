@@ -551,6 +551,10 @@ static enum call_status open_bundle(const struct path_context *context, const ch
     }
   }
   if (status != CALL_OK) {
+    /* Once selected, a missing member is a broken bundle, not a lookup miss. */
+    if (status == CALL_NOT_FOUND && program->revision != HANDLE_INVALID) {
+      status = CALL_BAD_REQUEST;
+    }
     bundle_program_close(program);
     return status;
   }

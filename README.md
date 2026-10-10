@@ -32,6 +32,16 @@ it excludes objects/debug ELFs and removes stale installed files. Application bu
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang, US key layout and terminal style sources. TLSF is vendored locally with its license and pin.
 
+Shell and Lua launch lookup share `program_open` from [program.h](include/program.h).
+A bare name selects `bin://NAME.pxe`, then the default entry of `bin://NAME.pxb`,
+then the explicitly configured `PYXIS_BUNDLE_CATALOG`, then the rescue
+`boot://NAME.pxe`. Only absence permits fallback; a broken or denied candidate
+fails. Direct hits do not read the catalog or enumerate bin. Explicit `.pxb`
+paths use the same manifest, read-only app/resource roots, bounded stack and
+actual-grant preparation; plain FILE paths keep ordinary launch behavior.
+Logical `bin://NAME` aliases retain literal FILE lookup before the same bin
+candidates and catalog, without rescue fallback. ZIP launch remains unavailable.
+
 The [native installer](installer/README.md) consumes the SDK's pinned npfs
 codecs and explicit install-mode disk/source grants. It is packaged normally;
 `init-installed` receives the persistent `system://` and `home://` volumes from
