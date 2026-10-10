@@ -480,9 +480,12 @@ storage when passed NULL. `setbuf(stream, NULL)` selects immediate output and
 exact future input reads by that FILE. Full/line buffering on input-only streams
 fails with `ENOTSUP`; existing shared input read-ahead remains descriptor owned.
 `fflush` drains queued output without a durability promise and retains an
-unconfirmed suffix after failure. A flush failure during `fwrite` reports only
-confirmed bytes from that call; recover retained output with `fflush`, not a
-blind repeat of the write. `fclose` attempts flush and close, preserving the
+unconfirmed suffix after failure. Buffered `fwrite` counts bytes accepted into
+FILE ownership, including retained bytes when a flush fails; check `ferror` and
+`fflush` even for a full return count. A failed old queue drains before accepting
+new bytes, including after `clearerr`; a failed drain accepts zero new bytes.
+Unbuffered `fwrite` counts confirmed backend progress. Recover retained output
+with `fflush`. `fclose` attempts flush and close, preserving the
 first error. `fseek` flushes before moving; `ftell` includes queued output,
 using the current held file size for pending append writes. Size-query failures
 and positions beyond the `long` range fail without changing the queue or cursor.

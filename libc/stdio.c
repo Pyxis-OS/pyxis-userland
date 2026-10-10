@@ -205,15 +205,18 @@ static int flush_output(FILE *stream)
 {
   while (stream->output_count) {
     if (!stream_ready(stream, true)) {
+      stream->output_flush_failed = true;
       return EOF;
     }
     size_t written;
     if (descriptor_write(stream->descriptor, stream->output, stream->output_count, &written) < 0) {
+      stream->output_flush_failed = true;
       return stream_error(stream, errno);
     }
     stream->output_count -= written;
     memmove(stream->output, stream->output + written, stream->output_count);
   }
+  stream->output_flush_failed = false;
   return 0;
 }
 
@@ -409,15 +412,6 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
   return total / size;
 }
 
-static int flush_write(FILE *stream, size_t *previous_pending)
-{
-  size_t before = stream->output_count;
-  int result = flush_output(stream);
-  size_t confirmed = before - stream->output_count;
-  *previous_pending -= confirmed < *previous_pending ? confirmed : *previous_pending;
-  return result;
-}
-
 size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
 {
   if (!size || !count) {
@@ -436,13 +430,14 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   stream->io_started = true;
   descriptor_discard_input(stream->descriptor);
   size_t bytes = size * count, total = 0;
-  size_t previous_pending = stream->output_count;
-  bool output_error = false;
+  // A failed old queue keeps ownership even after clearerr; drain it first.
+  if (stream->output_flush_failed && flush_output(stream) < 0) {
+    return 0;
+  }
   while (total < bytes) {
     if (stream->output_mode != _IONBF) {
       if (stream->output_count == stream->output_capacity
-          && flush_write(stream, &previous_pending) < 0) {
-        output_error = true;
+          && flush_output(stream) < 0) {
         break;
       }
       size_t chunk = stream->output_capacity - stream->output_count;
@@ -462,8 +457,7 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
       stream->output_count += chunk;
       total += chunk;
       if ((newline || stream->output_count == stream->output_capacity)
-          && flush_write(stream, &previous_pending) < 0) {
-        output_error = true;
+          && flush_output(stream) < 0) {
         break;
       }
       continue;
@@ -476,11 +470,9 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
     }
     total += written;
   }
-  /* Report whole elements, but retain every confirmed byte in the position,
-   * including a partial final element before a later failure. */
-  if (output_error) {
-    total -= stream->output_count - previous_pending;
-  }
+  /* Buffered bytes are accepted when copied into FILE ownership, including
+   * retained output after a flush failure. Unbuffered bytes count only confirmed
+   * backend progress. As usual, a partial final element may be consumed. */
   return total / size;
 }
 

@@ -67,8 +67,10 @@ int fflush(FILE *stream);
  * borrowed until fclose; NULL allocates size bytes, or BUFSIZ for size zero.
  * Buffered caller storage needs nonzero size. Failure preserves configuration.
  * Buffering may accept bytes before backend I/O; later fflush/fclose report
- * errors. A flush failure during fwrite counts only confirmed current-call
- * bytes and keeps the unconfirmed suffix for fflush recovery. fseek flushes
+ * errors. Buffered fwrite counts bytes accepted into FILE ownership, including
+ * output retained after a flush error; check ferror and fflush even for a full
+ * count. A failed old queue drains before accepting new bytes, including after
+ * clearerr. Unbuffered fwrite counts confirmed backend progress. fseek flushes
  * before moving; ftell includes queued output. Pending append output uses a
  * held-file size query instead of the read/seek cursor; failure changes neither
  * queue nor cursor. */
