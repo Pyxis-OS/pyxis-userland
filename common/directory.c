@@ -90,6 +90,21 @@ enum call_status remove_path(const char *path, uint64_t kind)
   return status;
 }
 
+/* Native volumes reject a name that is not UTF-8, which BAD_REQUEST does not say. */
+static bool valid_utf8(const char *text)
+{
+  size_t length = strlen(text);
+  while (length) {
+    int count = mbtowc(NULL, text, length);
+    if (count <= 0) {
+      return false;
+    }
+    text += count;
+    length -= (size_t)count;
+  }
+  return true;
+}
+
 int report_directory_error(const char *program, const char *path, enum call_status status)
 {
   const char *message;
@@ -97,7 +112,9 @@ int report_directory_error(const char *program, const char *path, enum call_stat
   case CALL_BAD_HANDLE: message = "Invalid handle"; break;
   case CALL_DENIED: message = "Permission denied or path escapes its boundary"; break;
   case CALL_BAD_OPERATION: message = "Operation not supported"; break;
-  case CALL_BAD_REQUEST: message = "Invalid path or request"; break;
+  case CALL_BAD_REQUEST:
+    message = valid_utf8(path) ? "Invalid path or request" : "Invalid character (not valid UTF-8)";
+    break;
   case CALL_UNAVAILABLE: message = "Working directory or resource unavailable"; break;
   case CALL_BUSY: message = "Resource busy"; break;
   case CALL_NO_MEMORY: message = "Out of memory"; break;
