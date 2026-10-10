@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <abi/syscall.h>
 #include <terminal/style.h>
+#include <terminal/text.h>
 
 #define MUX_HISTORY_ROWS 1024
 #define MUX_CSI_PARAMETERS TERMINAL_CSI_PARAMETERS
@@ -68,6 +69,7 @@ struct mux_emulator {
   struct terminal_style style;
   bool wrap_pending;
   unsigned tab_width;
+  struct terminal_utf8 utf8;
   enum mux_escape_state escape_state;
   uint16_t parameters[MUX_CSI_PARAMETERS];
   size_t parameter_index;
@@ -93,7 +95,7 @@ size_t mux_emulator_history_rows(const struct mux_emulator *emulator);
  * its original width can differ from the current screen width. */
 const struct terminal_cell *mux_emulator_row(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t visible_row, size_t *width);
-/* Selection names retained rows, never borrowed cell pointers. Glyph changes
+/* Selection names retained rows, never borrowed cell pointers. Character changes
  * and eviction invalidate it; colors and unrelated output do not. A press
  * records a pending anchor; only a held move to another cell activates it. */
 bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset,
@@ -101,8 +103,9 @@ bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset
 bool mux_emulator_selected(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t row, size_t column);
 void mux_emulator_clear_selection(struct mux_emulator *emulator);
-/* Freeze printable selected glyphs into owned text. Trim trailing spaces per
- * physical row and join rows with LF. Caller frees the returned allocation. */
+/* Freeze selected characters into owned UTF-8 within the byte limit. Trim
+ * trailing ASCII spaces per physical row and join rows with LF. Caller frees
+ * the returned allocation. */
 enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator,
     size_t limit, char **text, size_t *length);
 

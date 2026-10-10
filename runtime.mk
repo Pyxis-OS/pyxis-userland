@@ -21,7 +21,7 @@ LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/launcher.o $(BUILD)/lib/program.o $(BUILD)/lib/program_lookup.o $(BUILD)/lib/bundle.o \
                $(BUILD)/lib/bundle_json.o $(BUILD)/lib/bundle_launch.o $(BUILD)/lib/network_environment.o \
                $(BUILD)/lib/system_info.o $(BUILD)/lib/machine_settings.o $(BUILD)/lib/log.o \
-               $(BUILD)/lib/shebang.o $(BUILD)/lib/key_layout.o $(BUILD)/lib/terminal_style.o $(BUILD)/lib/wait.o
+               $(BUILD)/lib/shebang.o $(BUILD)/lib/key_layout.o $(BUILD)/lib/terminal_style.o $(BUILD)/lib/terminal_text.o $(BUILD)/lib/wait.o
 LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBC := $(BUILD)/libc.a
@@ -153,6 +153,10 @@ $(BUILD)/lib/key_layout.o: $(SDK)/share/pyxis/key_layout.c $(SDK)/sysroot/usr/in
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/lib/terminal_style.o: $(SDK)/share/pyxis/terminal_style.c $(SDK)/sysroot/usr/include/terminal/style.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/lib/terminal_text.o: $(SDK)/share/pyxis/terminal_text.c $(SDK)/sysroot/usr/include/terminal/text.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 

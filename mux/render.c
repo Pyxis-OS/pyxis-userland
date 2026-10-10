@@ -50,7 +50,7 @@ static bool same_style(struct terminal_cell a, struct terminal_cell b)
 
 static bool same_cell(struct terminal_cell a, struct terminal_cell b)
 {
-  return a.glyph == b.glyph && same_style(a, b);
+  return a.character == b.character && same_style(a, b);
 }
 
 static void color_control(char *bytes, size_t capacity, terminal_color color,
@@ -91,10 +91,10 @@ static void label(struct mux *mux, size_t row, size_t column, size_t width,
   if (row >= mux->frame_rows) {
     return;
   }
-  struct terminal_cell cell = {.glyph = ' ', .foreground = focused ? 0 : 15,
+  struct terminal_cell cell = {.character = ' ', .foreground = focused ? 0 : 15,
       .background = focused ? 6 : 8};
   for (size_t i = 0; i < width && column + i < mux->frame_columns; ++i) {
-    cell.glyph = *text ? (unsigned char)*text++ : ' ';
+    cell.character = *text ? (unsigned char)*text++ : ' ';
     mux->frame[row * mux->frame_columns + column + i] = cell;
   }
 }
@@ -123,7 +123,7 @@ enum call_status mux_render(struct mux *mux)
     mux->frame_rows = rows;
     mux->frame_valid = false;
   }
-  struct terminal_cell blank = {.glyph = ' ', .foreground = TERMINAL_COLOR_DEFAULT,
+  struct terminal_cell blank = {.character = ' ', .foreground = TERMINAL_COLOR_DEFAULT,
       .background = TERMINAL_COLOR_DEFAULT};
   for (size_t i = 0; i < columns * rows; ++i) {
     mux->frame[i] = blank;
@@ -165,12 +165,12 @@ enum call_status mux_render(struct mux *mux)
     }
     if (rect->x + rect->width < columns) {
       for (size_t y = rect->y; y < rect->y + rect->height; ++y) {
-        mux->frame[y * columns + rect->x + rect->width].glyph = '|';
+        mux->frame[y * columns + rect->x + rect->width].character = '|';
       }
     }
     if (rect->y + rect->height < rows - 1) {
       for (size_t x = rect->x; x < rect->x + rect->width; ++x) {
-        mux->frame[(rect->y + rect->height) * columns + x].glyph = '-';
+        mux->frame[(rect->y + rect->height) * columns + x].character = '-';
       }
     }
   }
@@ -206,7 +206,9 @@ enum call_status mux_render(struct mux *mux)
       struct terminal_cell cell = mux->frame[index];
       style(&output, cell);
       do {
-        append(&output, &mux->frame[y * columns + x].glyph, 1);
+        char bytes[3];
+        size_t length = terminal_character_encode(mux->frame[y * columns + x].character, bytes);
+        append(&output, bytes, length);
         ++x;
       } while (x < columns && same_style(cell, mux->frame[y * columns + x]) &&
           (!mux->frame_valid || !same_cell(mux->frame[y * columns + x], mux->previous[y * columns + x])));

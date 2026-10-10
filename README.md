@@ -30,7 +30,7 @@ libraries; compile Mbed TLS consumers with `MBEDTLS_CPPFLAGS` from its
 `share/mbedtls.mk`. `install` recreates a payload tree of selected programs, init and assets;
 it excludes objects/debug ELFs and removes stale installed files. Application builds consume the complete SDK. Runtime builds use local
 runtime headers, exported Pyxis ABI/format headers, build settings and the
-SDK's shared shebang, US key layout and terminal style sources. TLSF is vendored locally with its license and pin.
+SDK's shared shebang, US key layout, terminal style and UTF-8 text sources. TLSF is vendored locally with its license and pin.
 
 Shell and Lua launch lookup share `program_open` from [program.h](include/program.h).
 A bare name selects `bin://NAME.pxe`, then the default entry of `bin://NAME.pxb`,

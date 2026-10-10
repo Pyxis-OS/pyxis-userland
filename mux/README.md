@@ -3,7 +3,7 @@
 Build with `make mux SDK=/path/to/sdk` using the current Pyxis SDK. The SDK
 must include attachment-authorized terminal resize, the general 32-interest
 readiness bound, terminal pointer control, view identities and the shared
-terminal style header/source.
+terminal style and UTF-8 text headers/sources.
 No compiler-container rebuild is required.
 
 Trusted session startup selects `mux.pxe` only for a local space whose boot
@@ -19,9 +19,11 @@ cell while held. A press clears the old selection; a click or movement within
 the starting cell leaves none. Content and heading clicks focus a pane. Wheel over content moves that pane's history by three rows per detent
 without changing keyboard focus, returning to live input at the newest row.
 Layout, resize and explicit history movement clear selection. Unrelated output
-and color changes preserve it; selected glyph mutation, eviction or movement
-outside the visible view clears it. Selection is a colored overlay, with no
-clipboard publication or Copy command.
+and color changes preserve it; selected character mutation, eviction or movement
+outside the visible view clears it. Selection is a colored overlay. Copy exports
+its retained characters as UTF-8, trims trailing ASCII spaces per physical row,
+and joins rows with LF within the clipboard byte limit. Paste retains the native
+ASCII policy.
 
 Controls and lifetime behavior are documented in Pyxis
 [`docs/userland/multiplexer.md`](https://git.internal/PyxisOS/pyxis-os/src/branch/main/docs/userland/multiplexer.md).
@@ -44,3 +46,11 @@ colon forms and oversized sequences preserve the current style. Erased or
 scrolled-in blanks keep current colors with no attributes. Saved cursors,
 alternate screens and resize copies retain styles; selection changes only
 presentation colors and clears reverse, preserving the other attributes.
+
+Pane text uses the SDK's streaming UTF-8 decoder and supported single-cell
+characters. Partial sequences survive writes and resize. Malformed bytes each
+produce a replacement character; unsupported scalars produce one replacement.
+Raw C0/DEL controls and fresh-line requests first flush incomplete text into
+replacement cells. Escape, CSI and character-set designation bytes retain their
+existing parser behavior. Rendering re-encodes retained characters as UTF-8 for
+the outer terminal.

@@ -87,8 +87,6 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
     status = !mux->dragging && pane->used ?
         mux_emulator_copy_selection(&pane->emulator, CLIPBOARD_TEXT_MAX, &text, &length) :
         CALL_NOT_FOUND;
-    const char *detail = status == CALL_BAD_REQUEST ?
-        "Copy refused: selection contains non-ASCII text" : NULL;
     if (status == CALL_OK) {
       status = clipboard_publish(clipboard, event->action_id, event->generation,
           event->mapping_identity, text, length);
@@ -97,11 +95,10 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
           event->generation, event->mapping_identity, event->clipboard_operation);
       if (refused != CALL_OK) {
         status = refused;
-        detail = NULL;
       }
     }
     free(text);
-    report(mux, event->clipboard_operation, status, detail);
+    report(mux, event->clipboard_operation, status, NULL);
     return;
   }
   if (event->clipboard_operation == CLIPBOARD_PASTE) {

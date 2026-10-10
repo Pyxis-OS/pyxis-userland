@@ -13,7 +13,7 @@ static bool valid_geometry(size_t columns, size_t rows)
 static struct terminal_cell blank_cell(const struct mux_emulator *emulator)
 {
   return (struct terminal_cell) {
-    .glyph = ' ',
+    .character = ' ',
     .foreground = emulator->style.foreground,
     .background = emulator->style.background,
     .attributes = 0,
@@ -92,30 +92,30 @@ enum call_status mux_emulator_copy_selection(const struct mux_emulator *emulator
         free(owned);
         return CALL_UNAVAILABLE;
       }
-      for (size_t column = begin; column < end; ++column) {
-        if (cells[column].glyph < ' ' || cells[column].glyph > '~') {
-          free(owned);
-          return CALL_BAD_REQUEST;
-        }
-      }
-      while (end > begin && cells[end - 1].glyph == ' ') {
+      while (end > begin && cells[end - 1].character == ' ') {
         --end;
       }
-      size_t count = end - begin;
-      size_t separator = row != last.row;
-      if (count > limit - at || separator > limit - at - count) {
-        free(owned);
-        return CALL_LIMIT;
+      for (size_t column = begin; column < end; ++column) {
+        char bytes[3];
+        size_t count = terminal_character_encode(cells[column].character, bytes);
+        if (count > limit - at) {
+          free(owned);
+          return CALL_LIMIT;
+        }
+        if (pass) {
+          memcpy(owned + at, bytes, count);
+        }
+        at += count;
       }
-      if (pass) {
-        for (size_t column = begin; column < end; ++column) {
-          owned[at++] = cells[column].glyph;
+      if (row != last.row) {
+        if (at == limit) {
+          free(owned);
+          return CALL_LIMIT;
         }
-        if (separator) {
-          owned[at++] = '\n';
+        if (pass) {
+          owned[at] = '\n';
         }
-      } else {
-        at += count + separator;
+        ++at;
       }
       if (row == last.row) {
         break;
@@ -161,7 +161,7 @@ static void write_cell(struct mux_emulator *emulator, size_t index, struct termi
     .row = emulator->scrolled_rows + index / emulator->columns,
     .column = index % emulator->columns,
   };
-  if (emulator->cells[index].glyph != cell.glyph &&
+  if (emulator->cells[index].character != cell.character &&
       (emulator->selection.active || emulator->selection.pending) &&
       selection_contains(emulator, point)) {
     mux_emulator_clear_selection(emulator);
@@ -519,8 +519,36 @@ static void select_screen(struct mux_emulator *emulator, bool alternate)
   }
 }
 
+static void put_character(struct mux_emulator *emulator, uint16_t character)
+{
+  if (emulator->wrap_pending) {
+    newline(emulator);
+  }
+  write_cell(emulator, emulator->cursor_row * emulator->columns + emulator->cursor_column,
+      (struct terminal_cell) {
+        .character = character,
+        .foreground = emulator->style.foreground,
+        .background = emulator->style.background,
+        .attributes = emulator->style.attributes,
+      });
+  if (emulator->cursor_column == emulator->columns - 1) {
+    emulator->wrap_pending = true;
+  } else {
+    ++emulator->cursor_column;
+  }
+}
+
+static void flush_utf8(struct mux_emulator *emulator)
+{
+  size_t count = terminal_utf8_flush(&emulator->utf8);
+  for (size_t i = 0; i < count; ++i) {
+    put_character(emulator, TERMINAL_REPLACEMENT);
+  }
+}
+
 void mux_emulator_fresh_line(struct mux_emulator *emulator)
 {
+  flush_utf8(emulator);
   emulator->escape_state = MUX_TEXT;
   if (emulator->cursor_column || emulator->wrap_pending) {
     newline(emulator);
@@ -669,6 +697,9 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
 
 static void put_byte(struct mux_emulator *emulator, unsigned char byte)
 {
+  if (byte < 0x20 || byte == 0x7f) {
+    flush_utf8(emulator);
+  }
   if (byte == 0x1b) {
     emulator->escape_state = MUX_ESCAPE;
     emulator->parameter_index = 0;
@@ -745,20 +776,10 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
     return;
   }
 
-  if (emulator->wrap_pending) {
-    newline(emulator);
-  }
-  write_cell(emulator, emulator->cursor_row * emulator->columns + emulator->cursor_column,
-      (struct terminal_cell) {
-        .glyph = byte,
-        .foreground = emulator->style.foreground,
-        .background = emulator->style.background,
-        .attributes = emulator->style.attributes,
-      });
-  if (emulator->cursor_column == emulator->columns - 1) {
-    emulator->wrap_pending = true;
-  } else {
-    ++emulator->cursor_column;
+  uint16_t characters[4];
+  size_t count = terminal_utf8_decode(&emulator->utf8, byte, characters);
+  for (size_t i = 0; i < count; ++i) {
+    put_character(emulator, characters[i]);
   }
 }
 

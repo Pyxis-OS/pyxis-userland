@@ -6,14 +6,15 @@
 
 /* Deeper trees are reported, not followed: each level holds its listing. */
 #define TREE_DEPTH_LIMIT 64
-#define INDENT_WIDTH 4
+#define TREE_CONTINUATION "│   "
+#define INDENT_BYTES (sizeof(TREE_CONTINUATION) - 1)
 
 struct tree {
   struct ls_output output;
   size_t levels; /* Levels to show below an operand; SIZE_MAX for all. */
   size_t directories, files;
   bool failed;
-  char prefix[TREE_DEPTH_LIMIT * INDENT_WIDTH + 1];
+  char prefix[TREE_DEPTH_LIMIT * INDENT_BYTES + 1];
 };
 
 static int usage(void)
@@ -54,7 +55,7 @@ static int walk(struct tree *tree, const char *path, size_t depth)
     const struct ls_entry *entry = &listing.entries[i];
     bool last = i + 1 == listing.count;
     bool directory = entry->kind == LS_DIRECTORY;
-    if (fputs(tree->prefix, stdout) == EOF || fputs(last ? "`-- " : "|-- ", stdout) == EOF ||
+    if (fputs(tree->prefix, stdout) == EOF || fputs(last ? "└── " : "├── ", stdout) == EOF ||
         ls_print_name(entry, tree->output.terminal) != 0 || fputc('\n', stdout) == EOF) {
       result = -1;
       break;
@@ -80,7 +81,8 @@ static int walk(struct tree *tree, const char *path, size_t depth)
       continue;
     }
     size_t used = strlen(tree->prefix);
-    memcpy(tree->prefix + used, last ? "    " : "|   ", INDENT_WIDTH + 1);
+    const char *indent = last ? "    " : TREE_CONTINUATION;
+    memcpy(tree->prefix + used, indent, strlen(indent) + 1);
     result = walk(tree, child, depth + 1);
     tree->prefix[used] = '\0';
     free(child);
