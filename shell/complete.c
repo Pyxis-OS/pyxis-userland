@@ -101,69 +101,16 @@ static int compare_names(const void *left, const void *right)
   return strcmp(*(char *const *)left, *(char *const *)right);
 }
 
-/* The word being typed ends at the cursor. It is completable only as the
- * command name of a pipeline stage: not a later argument, a redirection
- * target or anything inside quotes. Returns whether so, and where it starts. */
-static bool command_word(const char *line, size_t cursor, size_t *start)
-{
-  bool in_word = false, in_quote = false, command_position = true, redirect_pending = false;
-  bool word_completable = false;
-  char quote = 0;
-  size_t word_start = cursor;
-  for (size_t i = 0; i < cursor; ++i) {
-    char byte = line[i];
-    if (in_quote) {
-      in_quote = byte != quote;
-      continue;
-    }
-    if (byte == ' ' || byte == '\t') {
-      if (in_word && word_completable) {
-        command_position = false;
-      }
-      in_word = false;
-    } else if (byte == '|') {
-      in_word = false;
-      command_position = true;
-      redirect_pending = false;
-    } else if (byte == '<' || byte == '>' || byte == '&') {
-      in_word = false;
-      redirect_pending = byte != '&';
-    } else {
-      if (!in_word) {
-        in_word = true;
-        word_start = i;
-        word_completable = command_position && !redirect_pending;
-        if (redirect_pending) {
-          redirect_pending = false;
-        }
-      }
-      if (byte == '\'' || byte == '"') {
-        in_quote = true;
-        quote = byte;
-      }
-    }
-  }
-  if (in_quote) {
-    return false;
-  }
-  if (in_word) {
-    *start = word_start;
-    return word_completable;
-  }
-  *start = cursor;
-  return command_position && !redirect_pending;
-}
-
-bool shell_complete(void *context, const char *line, size_t cursor,
+/* The first word of a pipeline stage, typed bare. */
+static bool complete_command(struct shell *shell, const struct completion_word *word,
     struct term_candidates *result)
 {
-  struct shell *shell = context;
-  size_t start;
-  if (!command_word(line, cursor, &start)) {
+  if (!word->plain || word->quote) {
     return false;
   }
-  const char *prefix = line + start;
-  size_t prefix_length = cursor - start;
+  const char *prefix = word->value;
+  size_t prefix_length = strlen(prefix);
+  size_t start = word->start;
   for (size_t i = 0; i < prefix_length; ++i) {
     if (!bare_character((unsigned char)prefix[i])) {
       return false;
@@ -201,4 +148,18 @@ bool shell_complete(void *context, const char *line, size_t cursor,
   }
   *result = (struct term_candidates){.names = names.items, .count = unique, .start = start};
   return true;
+}
+
+bool shell_complete(void *context, const char *line, size_t cursor,
+    struct term_candidates *result)
+{
+  struct shell *shell = context;
+  struct completion_word word;
+  if (!completion_scan(line, cursor, &word)) {
+    return false;
+  }
+  bool found = word.command ? complete_command(shell, &word, result)
+                            : shell_complete_path(shell, &word, result);
+  free(word.value);
+  return found;
 }

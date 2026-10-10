@@ -88,9 +88,23 @@ enum call_status shell_change_directory(struct shell *shell, const char *path);
 /* Owned handle to a directory reached through the shell's own roots. */
 enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,
     handle_t *directory);
-/* Tab completion of a command name: the first word of a pipeline stage.
- * Offers builtins and the programs in bin:// and boot://. */
+/* Tab completion. The word under the cursor is a command name (the first word
+ * of a pipeline stage: builtins and the programs in bin:// and boot://) or a
+ * path (any argument or redirection target: see complete_path.c). */
 bool shell_complete(void *context, const char *line, size_t cursor,
+    struct term_candidates *result);
+/* The word ending at the cursor, read with parse_line's quoting rules. value is
+ * the unquoted text typed so far, heap-owned by the caller. */
+struct completion_word {
+  size_t start;  /* Offset of the word in the line. */
+  bool command;  /* First word of a pipeline stage. */
+  bool plain;    /* No quote or backslash in the word. */
+  char quote;    /* Quote left open at the cursor: 0, ' or ". */
+  char *value;
+};
+/* False where nothing is completed, such as after a background &. */
+bool completion_scan(const char *line, size_t cursor, struct completion_word *word);
+bool shell_complete_path(struct shell *shell, const struct completion_word *word,
     struct term_candidates *result);
 /* IMAGE is owned for plain programs, borrowed from BUNDLE when it is present. */
 enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,
