@@ -169,9 +169,128 @@ static bool load_line(struct line_editor *editor, const char *text, size_t limit
   return shortened;
 }
 
+/* Replaces buffer[start..cursor) with text when the result fits the limit. */
+static bool replace_word(struct line_editor *editor, size_t limit, size_t start,
+    const char *text, size_t length)
+{
+  size_t old = editor->cursor - start;
+  if (editor->length - old + length > limit) {
+    return false;
+  }
+  memmove(editor->buffer + start + length, editor->buffer + editor->cursor,
+      editor->length - editor->cursor + 1);
+  memcpy(editor->buffer + start, text, length);
+  editor->length = editor->length - old + length;
+  editor->cursor = start + length;
+  return true;
+}
+
+static size_t common_prefix(const struct term_candidates *candidates)
+{
+  size_t length = strlen(candidates->names[0]);
+  for (size_t i = 1; i < candidates->count; ++i) {
+    size_t matched = 0;
+    while (matched < length && candidates->names[i][matched] == candidates->names[0][matched]) {
+      ++matched;
+    }
+    length = matched;
+  }
+  return length;
+}
+
+/* Names in rows, left to right, under the finished line; then the line again. */
+static enum call_status list_candidates(struct line_editor *editor,
+    const struct term_candidates *candidates)
+{
+  size_t widest = 0;
+  for (size_t i = 0; i < candidates->count; ++i) {
+    size_t width = strlen(candidates->names[i]);
+    if (width > widest) {
+      widest = width;
+    }
+  }
+  size_t per_row = editor->columns / (widest + 2);
+  if (!per_row) {
+    per_row = 1;
+  }
+  enum call_status status = draw_line(editor, false, false);
+  if (status == CALL_OK) {
+    status = term_print(editor->term, "\n");
+  }
+  for (size_t i = 0; status == CALL_OK && i < candidates->count; ++i) {
+    const char *name = candidates->names[i];
+    size_t width = strlen(name);
+    status = term_write_all(editor->term, name, width);
+    bool end_of_row = (i + 1) % per_row == 0 || i + 1 == candidates->count;
+    if (status == CALL_OK && end_of_row) {
+      status = term_print(editor->term, "\n");
+    } else if (status == CALL_OK) {
+      status = write_spaces(editor->term, widest - width + 2);
+    }
+  }
+  editor->displayed_length = editor->displayed_cursor = 0;
+  return status == CALL_OK ? draw_line(editor, true, false) : status;
+}
+
+/* Tab. Draws only when the line changes or a list is shown. */
+static enum call_status complete_word(struct line_editor *editor,
+    const struct term_completion *completion, size_t limit, bool *limit_reached)
+{
+  struct term_candidates found = {0};
+  char saved = editor->buffer[editor->cursor];
+  editor->buffer[editor->cursor] = '\0';
+  bool found_any = completion->candidates(completion->context, editor->buffer,
+      editor->cursor, &found);
+  editor->buffer[editor->cursor] = saved;
+
+  bool usable = found_any && found.count && found.start <= editor->cursor;
+  for (size_t i = 0; usable && i < found.count; ++i) {
+    const char *name = found.names[i];
+    usable = name && *name;
+    for (size_t j = 0; usable && name[j]; ++j) {
+      usable = name[j] > ' ' && name[j] <= '~';
+    }
+  }
+  enum call_status status = CALL_OK;
+  if (usable) {
+    size_t word = editor->cursor - found.start;
+    char replacement[256]; /* Command names; longer ones are not completed. */
+    size_t length = 0;
+    bool replace = false;
+    if (found.count == 1) {
+      length = strlen(found.names[0]);
+      replace = length < sizeof(replacement) - 1;
+      if (replace) {
+        memcpy(replacement, found.names[0], length);
+        if (editor->buffer[editor->cursor] != ' ') {
+          replacement[length++] = ' ';
+        }
+      }
+    } else {
+      length = common_prefix(&found);
+      replace = length > word && length < sizeof(replacement);
+      if (replace) {
+        memcpy(replacement, found.names[0], length);
+      }
+    }
+    if (replace) {
+      bool fits = replace_word(editor, limit, found.start, replacement, length);
+      *limit_reached |= !fits;
+      status = draw_line(editor, true, !fits);
+    } else if (found.count > 1) {
+      status = list_candidates(editor, &found);
+    }
+  }
+  for (size_t i = 0; i < found.count; ++i) {
+    free(found.names[i]);
+  }
+  free(found.names);
+  return status;
+}
+
 static struct term_line_result read_line(struct terminal *term, const char *prompt,
-    const char *initial, struct term_history *history, char *buffer, size_t capacity,
-    bool quiet, bool marked)
+    const char *initial, struct term_history *history, const struct term_completion *completion,
+    char *buffer, size_t capacity, bool quiet, bool marked)
 {
   struct term_line_result result = {.status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST};
   if (!buffer || !capacity) {
@@ -438,6 +557,12 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
         result.limit_reached = true;
       }
       break;
+    case '\t':
+      if (!completion || quiet) {
+        continue;
+      }
+      result.error = complete_word(&editor, completion, limit, &result.limit_reached);
+      continue;
     case '\b':
     case 0x7f:
       if (!editor.cursor) {
@@ -507,17 +632,18 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 /* Ctrl+C belongs to the editor only while a line is being read; code the
  * application runs between lines stays interruptible. */
 static struct term_line_result read_line_passthrough(struct terminal *term,
-    const char *prompt, const char *initial, struct term_history *history, char *buffer,
-    size_t capacity, bool quiet, bool marked)
+    const char *prompt, const char *initial, struct term_history *history,
+    const struct term_completion *completion, char *buffer, size_t capacity, bool quiet,
+    bool marked)
 {
   /* Invalid arguments keep read_line's handled BAD_REQUEST result. */
   if (!term || !prompt || !buffer || !capacity) {
-    return read_line(term, prompt, initial, history, buffer, capacity, quiet, marked);
+    return read_line(term, prompt, initial, history, completion, buffer, capacity, quiet, marked);
   }
   handle_t passthrough;
   bool held = term_passthrough(term, &passthrough) == CALL_OK;
-  struct term_line_result result = read_line(term, prompt, initial, history, buffer, capacity,
-      quiet, marked);
+  struct term_line_result result = read_line(term, prompt, initial, history, completion, buffer,
+      capacity, quiet, marked);
   if (held && handle_close(passthrough) != 0) {
     /* A retained grant would keep Ctrl+C from interrupting this program. */
     result = (struct term_line_result){.status = TERM_LINE_ERROR, .error = CALL_BAD_HANDLE};
@@ -531,29 +657,37 @@ static struct term_line_result read_line_passthrough(struct terminal *term,
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", NULL, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, false, false);
 }
 
 struct term_line_result term_read_line_history(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", history, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, false);
 }
 
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", NULL, buffer, capacity, true, false);
+  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, true, false);
 }
 
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, initial, NULL, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, initial, NULL, NULL, buffer, capacity, false, false);
 }
 
 struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", history, buffer, capacity, false, true);
+  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, true);
+}
+
+struct term_line_result term_read_line_completing(struct terminal *term, const char *prompt,
+    struct term_history *history, const struct term_completion *completion, bool marked,
+    char *buffer, size_t capacity)
+{
+  return read_line_passthrough(term, prompt, "", history, completion, buffer, capacity, false,
+      marked);
 }

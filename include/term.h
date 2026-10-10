@@ -134,7 +134,8 @@ struct term_line_result {
  * Home/End, Enter and Ctrl+C are supported. Ctrl+D returns EOF only on an empty
  * line; otherwise it is ignored. Actual input EOF always discards a partial line
  * and returns EOF. Up/Down/Page keys are decoded but ignored without a history;
- * no tabs or Unicode editing. Standalone Escape is decoded with a timeout and
+ * no Unicode editing; Tab is ignored unless term_read_line_completing is given a
+ * completion. Standalone Escape is decoded with a timeout and
  * ignored by this line editor.
  *
  * The buffer's capacity minus NUL is the editing limit. A line larger than the
@@ -206,5 +207,36 @@ struct term_line_result term_read_line_history(struct terminal *term, const char
  * term_read_line_history. */
 struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity);
+
+
+/* Tab completion for one word of the line. The editor calls candidates() with
+ * the text left of the cursor (line[0..cursor), NUL-terminated at cursor) and
+ * the caller finds the word to complete. On success it fills names with heap
+ * strings, ascending, unique and printable ASCII without spaces, each a full
+ * replacement for line[start..cursor); the editor frees the strings and the
+ * array. Returning false, or no names, leaves the line unchanged.
+ *
+ * One name replaces the word and adds a space unless one follows. Several
+ * names extend the word to their common prefix when that is longer. Otherwise
+ * they are listed below the line in columns and the prompt and line are drawn
+ * again. A replacement that does not fit the buffer changes nothing and sets
+ * limit_reached. Tab is ignored when no completion is given, as before. */
+struct term_candidates {
+  char **names;
+  size_t count;
+  size_t start;
+};
+
+struct term_completion {
+  bool (*candidates)(void *context, const char *line, size_t cursor,
+      struct term_candidates *result);
+  void *context;
+};
+
+/* term_read_line_history or term_read_line_marked, with Tab completion.
+ * History and completion may each be NULL. */
+struct term_line_result term_read_line_completing(struct terminal *term, const char *prompt,
+    struct term_history *history, const struct term_completion *completion, bool marked,
+    char *buffer, size_t capacity);
 
 #endif
