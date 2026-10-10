@@ -32,7 +32,7 @@ int ls_print_text(const char *text, bool terminal)
   return 0;
 }
 
-static int print_name(const struct ls_entry *entry, bool terminal)
+int ls_print_name(const struct ls_entry *entry, bool terminal)
 {
   if (terminal) {
     const char *color = COLOR_FILE;
@@ -158,7 +158,7 @@ int ls_print_listing(const struct ls_listing *listing, const struct ls_output *o
   for (size_t i = 0; i < listing->count; ++i) {
     const struct ls_entry *entry = &listing->entries[i];
     if ((output->long_listing && print_details(entry, digits) != 0) ||
-        print_name(entry, output->terminal) != 0) {
+        ls_print_name(entry, output->terminal) != 0) {
       result = -1;
       break;
     }

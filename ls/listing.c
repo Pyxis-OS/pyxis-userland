@@ -49,13 +49,13 @@ static int append_entry(struct ls_listing *listing, const char *name,
   return 0;
 }
 
-static int enumerate_entries(handle_t directory, const char *path,
+static int enumerate_entries(handle_t directory, const char *program, const char *path,
     struct ls_listing *listing)
 {
   size_t capacity = 128;
   char *name = malloc(capacity);
   if (!name) {
-    report_directory_error("ls", path, CALL_NO_MEMORY);
+    report_directory_error(program, path, CALL_NO_MEMORY);
     return -1;
   }
   int result = -1;
@@ -64,7 +64,7 @@ static int enumerate_entries(handle_t directory, const char *path,
     struct directory_enumerate_reply entry;
     enum call_status status = directory_enumerate(directory, &cursor, name, capacity, &entry);
     if (status != CALL_OK) {
-      report_directory_error("ls", path, status);
+      report_directory_error(program, path, status);
       break;
     }
     if (entry.outcome == DIRECTORY_END) {
@@ -72,13 +72,13 @@ static int enumerate_entries(handle_t directory, const char *path,
       break;
     }
     if (entry.outcome == DIRECTORY_CHANGED) {
-      fprintf(stderr, "ls: %s: Directory changed during listing\n", path);
+      fprintf(stderr, "%s: %s: Directory changed during listing\n", program, path);
       break;
     }
     if (entry.outcome == DIRECTORY_BUFFER_TOO_SMALL) {
       char *larger = realloc(name, entry.name_size);
       if (!larger) {
-        report_directory_error("ls", path, CALL_NO_MEMORY);
+        report_directory_error(program, path, CALL_NO_MEMORY);
         break;
       }
       name = larger;
@@ -86,7 +86,7 @@ static int enumerate_entries(handle_t directory, const char *path,
       continue; /* A short buffer leaves the cursor unchanged. */
     }
     if (append_entry(listing, name, &entry) != 0) {
-      report_directory_error("ls", path, CALL_NO_MEMORY);
+      report_directory_error(program, path, CALL_NO_MEMORY);
       break;
     }
     cursor = entry.cursor;
@@ -117,7 +117,8 @@ static bool is_script(handle_t file)
   return prefix[0] == '#' && prefix[1] == '!';
 }
 
-static int read_details(handle_t directory, struct ls_listing *listing, bool long_listing)
+static int read_details(handle_t directory, const char *program, struct ls_listing *listing,
+    bool long_listing)
 {
   int result = 0;
   for (size_t i = 0; i < listing->count; ++i) {
@@ -130,7 +131,7 @@ static int read_details(handle_t directory, struct ls_listing *listing, bool lon
         DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &file);
     if (status != CALL_OK) {
       if (long_listing) {
-        report_directory_error("ls", entry->name, status);
+        report_directory_error(program, entry->name, status);
         result = -1;
       }
       continue;
@@ -139,7 +140,7 @@ static int read_details(handle_t directory, struct ls_listing *listing, bool lon
       status = file_size(file, &entry->size);
       entry->size_known = status == CALL_OK;
       if (!entry->size_known) {
-        report_directory_error("ls", entry->name, status);
+        report_directory_error(program, entry->name, status);
         result = -1;
       }
     }
@@ -147,7 +148,7 @@ static int read_details(handle_t directory, struct ls_listing *listing, bool lon
       entry->kind = LS_SCRIPT;
     }
     if (handle_close(file) != 0) {
-      report_directory_error("ls", entry->name, CALL_BAD_HANDLE);
+      report_directory_error(program, entry->name, CALL_BAD_HANDLE);
       result = -1;
     }
   }
@@ -158,6 +159,7 @@ int ls_load_listing(const char *path, const struct ls_output *output,
     struct ls_listing *listing, bool *loaded)
 {
   *loaded = false;
+  const char *program = output->program ? output->program : "ls";
   bool details = output->terminal || output->long_listing;
   uint64_t rights = DIRECTORY_RIGHT_ENUMERATE;
   if (details) {
@@ -171,20 +173,20 @@ int ls_load_listing(const char *path, const struct ls_output *output,
     status = resolve_directory(path, DIRECTORY_RIGHT_ENUMERATE, &directory);
   }
   if (status != CALL_OK) {
-    report_directory_error("ls", path, status);
+    report_directory_error(program, path, status);
     return -1;
   }
 
-  int result = enumerate_entries(directory, path, listing);
+  int result = enumerate_entries(directory, program, path, listing);
   if (result == 0) {
     qsort(listing->entries, listing->count, sizeof(*listing->entries), compare_entries);
     *loaded = true;
     if (details) {
-      result = read_details(directory, listing, output->long_listing);
+      result = read_details(directory, program, listing, output->long_listing);
     } else if (output->long_listing) {
       for (size_t i = 0; i < listing->count; ++i) {
         if (listing->entries[i].kind != LS_DIRECTORY) {
-          report_directory_error("ls", path, CALL_DENIED);
+          report_directory_error(program, path, CALL_DENIED);
           result = -1;
           break;
         }
@@ -192,7 +194,7 @@ int ls_load_listing(const char *path, const struct ls_output *output,
     }
   }
   if (handle_close(directory) != 0) {
-    report_directory_error("ls", path, CALL_BAD_HANDLE);
+    report_directory_error(program, path, CALL_BAD_HANDLE);
     result = -1;
   }
   return result;

@@ -28,6 +28,7 @@ struct ls_listing {
 };
 
 struct ls_output {
+  const char *program; /* Diagnostic prefix; NULL means "ls". */
   bool terminal;
   bool one_per_line;
   bool long_listing;
@@ -40,6 +41,8 @@ int ls_load_listing(const char *path, const struct ls_output *output,
     struct ls_listing *listing, bool *loaded);
 void ls_free_listing(struct ls_listing *listing);
 int ls_print_text(const char *text, bool terminal);
+/* One name in its kind color, with the directory slash; no newline. */
+int ls_print_name(const struct ls_entry *entry, bool terminal);
 int ls_print_listing(const struct ls_listing *listing, const struct ls_output *output);
 
 #endif
