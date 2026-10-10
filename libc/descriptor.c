@@ -374,6 +374,24 @@ int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
   return read_exact(entry, buffer, size, read);
 }
 
+int descriptor_read_complete(int descriptor, void *buffer, size_t size, size_t *read)
+{
+  if (descriptor_read(descriptor, buffer, size, read) < 0) {
+    return -1;
+  }
+  while (*read < size && entries[descriptor].kind == DESCRIPTOR_FILE) {
+    size_t more;
+    if (descriptor_read(descriptor, (char *)buffer + *read, size - *read, &more) < 0) {
+      return 0;
+    }
+    if (!more) {
+      break;
+    }
+    *read += more;
+  }
+  return 0;
+}
+
 int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *read)
 {
   *read = 0;

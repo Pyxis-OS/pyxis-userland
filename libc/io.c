@@ -53,7 +53,7 @@ ssize_t read(int descriptor, void *buffer, size_t count)
     return -1;
   }
   size_t transferred;
-  if (descriptor_read(descriptor, buffer, count, &transferred) < 0) {
+  if (descriptor_read_complete(descriptor, buffer, count, &transferred) < 0) {
     return -1;
   }
   return (ssize_t)transferred;

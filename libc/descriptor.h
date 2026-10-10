@@ -43,6 +43,11 @@ void descriptor_finish(void);
  * handle. Writes discard file read-ahead; seeks do so only after validation. */
 int descriptor_read(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_read_buffered(int descriptor, void *buffer, size_t capacity, size_t *read);
+/* read() semantics: as descriptor_read, but a regular file keeps transferring
+ * until capacity bytes arrive or the file ends, since each native transfer is
+ * under 4 KiB. A failure after progress returns the bytes already read; the
+ * error recurs on the next call. Pipes and consoles keep one short transfer. */
+int descriptor_read_complete(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written);
 /* File-only explicit offsets, without changing the private position. Read
  * bypasses read-ahead; nonempty write discards it before dispatch. Both snapshot

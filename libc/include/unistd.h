@@ -38,10 +38,12 @@ int access(const char *path, int mode);
 int rmdir(const char *path);
 
 /* Validate descriptor/access first, then reject counts above SSIZE_MAX with
- * EINVAL. Zero count touches no buffer or backend. Nonempty calls return one
- * transfer, including short progress, independently of FILE indicators. A read
- * first returns bytes the associated FILE read ahead, without a backend call;
- * read itself never reads ahead. */
+ * EINVAL. Zero count touches no buffer or backend. A regular file returns the
+ * full count unless the file ends first, repeating its native transfers (each
+ * under 4 KiB); an error after some bytes returns those bytes and recurs on the
+ * next call. A pipe or console returns one transfer, including short progress.
+ * Independent of FILE indicators. A read first returns bytes the associated FILE
+ * read ahead, without a backend call; read itself never reads ahead. */
 ssize_t read(int descriptor, void *buffer, size_t count);
 ssize_t write(int descriptor, const void *buffer, size_t count);
 /* Files only; use offset without changing the private descriptor position.
