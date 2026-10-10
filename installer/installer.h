@@ -121,18 +121,22 @@ struct install_program {
 struct install_programs {
   struct install_program *entries;
   size_t count;
+  size_t files;
+  bool files_known;
 };
 bool install_programs_list(handle_t boot, struct install_programs *programs);
 void install_programs_destroy(struct install_programs *programs);
 /* The rescue archive: newc without selected roots or their descendants, as
  * owned memory. Descendant matching respects component boundaries. */
 bool install_archive_filter(const struct install_source *archive,
-    const struct install_programs *programs, struct install_source *rescue);
+    struct install_programs *programs, struct install_source *rescue);
 /* Outside any raw claim on the pool: creates the bin volume if missing, writes
  * complete program trees into bin/REVISION, replacing an earlier partial copy,
  * syncs the pool and verifies names, kinds, structure, sizes and bytes. */
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
-    const struct install_programs *programs, const char *revision);
+    const struct install_programs *programs, const char *revision, handle_t clock);
+/* Ends the installer's active progress row before a diagnostic. No disk I/O. */
+void install_progress_end(void);
 /* Recursively removes revisions except KEEP and PREVIOUS (which may be NULL).
  * The caller skips this best-effort stage when the previous revision is unknown. */
 bool install_programs_cleanup(const struct install_disk *disk, const char *keep,

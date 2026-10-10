@@ -115,6 +115,7 @@ bool install_source_read(const struct install_source *source, uint64_t offset,
     size_t count = 0;
     enum call_status status = file_read(source->handle, offset, destination, length, &count);
     if (status != CALL_OK || count == 0 || count > length) {
+      install_progress_end();
       fprintf(stderr, "installer: source read failed at byte %llu (status %u)\n",
           (unsigned long long)offset, status);
       return false;

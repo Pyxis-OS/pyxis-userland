@@ -25,6 +25,13 @@ another disk refuse the candidate. The live revision comes from SYSTEM_INFO.
 This checks opening compatibility and available boot identity, not whole-pool
 integrity or complete bootability.
 
+During program copying, `bin://` progress reports completed files (including
+bundle descendants) and successfully written MiB. Console output redraws one
+row at most four times per second; other output uses newline records at most
+once per second. A final record closes the stage. Separate phase messages
+announce pool flush, copy verification and EFI replacement/flush/publication.
+Progress is best-effort and is not a durability or success indication.
+
 Root `.pxb` directories move as complete program units to `bin/REVISION`,
 beside root `.pxe` files outside `share/installer/rescue.list`. Copy preserves
 empty directories and uses bounded file buffers. After pool sync, verification

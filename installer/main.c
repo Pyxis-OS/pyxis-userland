@@ -645,6 +645,7 @@ int main(int argc, char **argv)
     if (!install_gpt_write(&disk, &layout)) {
       goto done;
     }
+    puts("Flushing pool and GPT...");
     status = disk_flush(disk.handle);
     if (status != CALL_OK) {
       fprintf(stderr, "installer: pool sync failed (status %u)\n", status);
@@ -672,7 +673,7 @@ int main(int argc, char **argv)
     goto done;
   }
   printf("Writing %zu programs to bin://%s...\n", programs.count, revision);
-  if (!install_programs_write(&disk, boot, &programs, revision)) {
+  if (!install_programs_write(&disk, boot, &programs, revision, clock)) {
     goto done;
   }
   puts("Writing EFI boot files...");
@@ -686,6 +687,7 @@ int main(int argc, char **argv)
   if (!install_esp_write(esp)) {
     goto done;
   }
+  puts("Flushing EFI boot files...");
   status = disk_flush(disk.handle);
   if (status != CALL_OK) {
     fprintf(stderr, "installer: final sync failed (status %u)\n", status);
@@ -707,8 +709,11 @@ int main(int argc, char **argv)
   const char *previous = updating ? selected->update.revision : NULL;
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
     puts("Older program directories were kept: the previous revision is unknown.");
-  } else if (!install_programs_cleanup(&disk, revision, previous)) {
-    fputs("installer: old program directories could not all be removed\n", stderr);
+  } else {
+    puts("Removing older program revisions...");
+    if (!install_programs_cleanup(&disk, revision, previous)) {
+      fputs("installer: old program directories could not all be removed\n", stderr);
+    }
   }
   if (updating) {
     puts("updated\nBoot from this disk after removing the live medium.");

@@ -374,9 +374,11 @@ bool install_esp_write(const struct install_esp *esp)
   uint8_t bytes[ESP_CLUSTER_BYTES];
   /* Persist invalid boot geometry before any old FAT, directory or file bytes
    * can be replaced. Stale configuration/revision must not validate a mixed tree. */
+  puts("Invalidating old EFI boot geometry and flushing...");
   if (!install_zero(esp->disk, esp->layout->esp_start, esp->fat_offset) || !esp_flush(esp)) {
     return false;
   }
+  puts("Writing EFI replacement tree...");
   make_fsinfo(esp, bytes);
   if (!esp_write(esp, (uint64_t)ESP_FSINFO_SECTOR * esp->sector_bytes, bytes, esp->sector_bytes) ||
       !esp_write(esp, (uint64_t)(ESP_BACKUP_SECTOR + ESP_FSINFO_SECTOR) * esp->sector_bytes,
@@ -426,9 +428,11 @@ bool install_esp_write(const struct install_esp *esp)
   }
   /* Publish boot geometry only after the complete replacement tree is durable.
    * The caller's final sync also covers both boot sectors. */
+  puts("Flushing EFI replacement tree...");
   if (!esp_flush(esp)) {
     return false;
   }
+  puts("Publishing EFI boot sectors...");
   make_boot(esp, bytes);
   return esp_write(esp, 0, bytes, esp->sector_bytes) &&
       esp_write(esp, (uint64_t)ESP_BACKUP_SECTOR * esp->sector_bytes, bytes, esp->sector_bytes);
