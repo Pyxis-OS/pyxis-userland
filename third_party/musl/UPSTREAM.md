@@ -208,8 +208,8 @@ at the local calendar limits. Exact New Year belongs to the new rule year.
 Pyxis's `libc/timezone.c` owns checked TZif parsing, capability-path file loading,
 cache lifetime and error propagation. It evaluates adjacent rule years to handle
 transitions across UTC New Year, including southern-hemisphere/all-year DST.
-Musl's host filesystem lookup, mmap, POSIX TZ environment strings, reverse-time
-conversion, global timezone names and silent UTC fallback are not imported.
+Musl's host filesystem lookup, mmap, POSIX TZ environment strings, `mktime`,
+global timezone names and silent UTC fallback are not imported.
 TZif handling follows RFC 9636; only leap-free version 2/3/4 data is supported.
 
 The POSIX regex subset adds these files from the same pin:
@@ -254,3 +254,40 @@ Lua 5.1's math library adds these files from the same pin:
 `src/internal/libm.h` adds upstream's `GET_LOW_WORD` macro and declares
 `__expo2` without `hidden`; the public `math.h` also declares `expm1`. Out-of-domain arguments return NaN with invalid,
 and overflow and underflow raise FP exception flags; errno is unchanged.
+
+Neovim's calendar and encoding prerequisites add these files from the same pin:
+
+- `src/time/__tm_to_secs.c`, unmodified, which normalizes `tm_mon` into the
+  year and adds the other fields as 64-bit seconds;
+- `src/math/trunc.c`, unmodified;
+- `src/locale/iconv_close.c`, unmodified;
+- `src/locale/iconv.c`, reduced to UTF-8, ASCII, ISO-8859-1 and UTF-16LE/BE.
+
+Pyxis's `libc/time.c` owns `mktime`. Instead of musl's single DST adjustment,
+it tries every offset the selected zone can report and accepts the instants
+whose `localtime` offset matches, so gaps and ambiguous folds fail with ENOTSUP
+rather than being guessed.
+
+`iconv.c` keeps upstream's charmap format, fuzzy name matching, descriptor
+encoding, UTF-16 surrogate handling, error paths and formatting, with these
+local changes, each marked `Pyxis:` in the source:
+
+- Only the five encodings above remain, with upstream's aliases for them
+  (`utf8`, `utf16le`, `utf16be`, `ascii`, `usascii`, `iso646`, `iso646us`,
+  `iso88591`, `latin1`). The `char` alias, wide, UCS-2, UTF-32, BOM-detecting
+  UTF-16, multibyte East Asian and legacy codepage converters and their tables
+  are left out, so no `codepages.h`, `legacychars.h` or CJK tables are imported.
+  ISO-8859-1 keeps upstream's codepage entry, which has no table.
+- An empty name fails instead of selecting the locale charset, and no
+  descriptor allocates, because no remaining encoding has state.
+- UTF-8 input uses a local strict decoder instead of switching the locale to
+  run `mbrtowc`. It returns EINVAL only when the input ends inside a prefix of
+  a valid sequence; overlong forms, surrogates, values above U+10FFFF and bytes
+  that cannot continue a sequence are EILSEQ. UTF-8 output uses a local
+  encoder instead of `wctomb`.
+- A valid character the destination cannot represent fails with EILSEQ at that
+  character, instead of being counted and replaced with `*`.
+
+The build suppresses `-Wsign-compare` for upstream's `(size_t)-1` lookup
+comparisons. Errors are reported through errno: `E2BIG` is added for a full
+output buffer.

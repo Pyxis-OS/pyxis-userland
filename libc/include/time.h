@@ -72,23 +72,35 @@ size_t strftime(char *__restrict output, size_t capacity,
  * Fail with EOVERFLOW if tm_year cannot fit in int, EINVAL for NULL inputs.
  * gmtime_r leaves the destination unchanged on failure; gmtime returns borrowed
  * static storage overwritten by later successful gmtime calls. No allocation.
- * mktime and locale selection are not implemented. */
+ * Locale selection is not implemented. */
 struct tm *gmtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *gmtime(const time_t *timer);
 
 /* TZ absent/empty means UTC without file access. Otherwise TZ is an IANA name
  * under boot://share/zoneinfo, using the process's boot directory capability.
- * Named zones are loaded lazily and cached in process-owned heap storage.
+ * TZ is read from the current environment on each call; a changed name loads
+ * that zone lazily into process-owned heap storage, replacing the cache.
  * Return NULL with errno on file/allocation errors, EINVAL for invalid names or
  * malformed/unsupported TZif, ENOTSUP where zone data leaves time unspecified,
  * and EOVERFLOW when the calendar cannot be represented. No UTC fallback.
  * Success preserves errno; localtime_r leaves result unchanged on failure.
  * localtime returns static storage overwritten by its next successful call.
  * tm_zone points into the cached zone and is valid until a successful selection
- * reload or process exit; UTC uses permanent storage. Startup TZ is immutable.
+ * reload or process exit; UTC uses permanent storage.
  * The cache and static results assume one thread per process, like errno. */
 struct tm *localtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *localtime(const time_t *timer);
+
+/* Inverse of localtime in the zone TZ selects, with the same zone errors.
+ * tm_mon, tm_mday, tm_hour, tm_min and tm_sec may lie outside their ranges and
+ * are normalized; tm_wday, tm_yday, tm_gmtoff and tm_zone are ignored. When
+ * the wall time occurs once, tm_isdst is ignored. When it occurs more than
+ * once (a fold), a nonnegative tm_isdst selects the only candidate whose
+ * daylight flag matches; otherwise, and for a wall time skipped by a gap, fail
+ * with ENOTSUP. Success stores the normalized localtime result in *calendar and
+ * preserves errno; failure returns -1, which is also a valid time, leaving
+ * *calendar unchanged. EOVERFLOW when the result cannot be represented. */
+time_t mktime(struct tm *calendar);
 
 #ifdef __cplusplus
 }

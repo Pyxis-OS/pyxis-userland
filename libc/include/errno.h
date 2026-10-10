@@ -36,6 +36,7 @@ extern int errno;
 #define ENOTDIR 25
 #define ENOTTY 26
 #define ENAMETOOLONG 27
+#define E2BIG 28
 
 #ifdef __cplusplus
 }

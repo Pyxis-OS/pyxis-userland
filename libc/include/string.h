@@ -29,6 +29,8 @@ char *strcat(char *__restrict dest, const char *__restrict src);
 char *strncat(char *__restrict dest, const char *__restrict src, size_t count);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
+/* The C locale is the only locale, so collation is strcmp's byte order. */
+int strcoll(const char *left, const char *right);
 char *strchr(const char *text, int character);
 /* As strchr, but returns the terminating NUL instead of NULL when absent. */
 char *strchrnul(const char *text, int character);
@@ -36,6 +38,11 @@ char *strrchr(const char *text, int character);
 size_t strspn(const char *text, const char *accept);
 size_t strcspn(const char *text, const char *reject);
 char *strpbrk(const char *text, const char *accept);
+/* Split text at runs of separator bytes, writing NULs into it. Pass the
+ * string first and NULL afterwards; *state holds the position between calls.
+ * Returns NULL when no token remains. */
+char *strtok_r(char *__restrict text, const char *__restrict separators,
+    char **__restrict state);
 /* First occurrence; an empty needle returns text. NULL when not found. */
 char *strstr(const char *text, const char *needle);
 /* Same search with ASCII case folding; bytes outside ASCII are unchanged. */

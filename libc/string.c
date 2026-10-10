@@ -65,6 +65,11 @@ int strcmp(const char *left, const char *right)
   return (unsigned char)*left - (unsigned char)*right;
 }
 
+int strcoll(const char *left, const char *right)
+{
+  return strcmp(left, right);
+}
+
 int strncmp(const char *left, const char *right, size_t limit)
 {
   for (size_t i = 0; i < limit; ++i) {
@@ -130,6 +135,26 @@ char *strpbrk(const char *text, const char *accept)
     }
   }
   return NULL;
+}
+
+char *strtok_r(char *restrict text, const char *restrict separators,
+    char **restrict state)
+{
+  if (!text) {
+    text = *state;
+    if (!text) {
+      return NULL;
+    }
+  }
+  text += strspn(text, separators);
+  if (!*text) {
+    *state = NULL;
+    return NULL;
+  }
+  char *end = text + strcspn(text, separators);
+  *state = *end ? end + 1 : NULL;
+  *end = '\0';
+  return text;
 }
 
 char *strstr(const char *text, const char *needle)

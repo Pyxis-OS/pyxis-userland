@@ -88,6 +88,7 @@ unsigned long long strtoull(const char *__restrict text, char **__restrict end, 
 /* Decimal conversion without end/range diagnostics; use strtol for those.
  * As in C, an out-of-int-range input has no guaranteed result. */
 int atoi(const char *text);
+long atol(const char *text);
 
 /* ASCII decimal/hexadecimal, infinity and NaN; '.' is the decimal separator.
  * If no conversion occurs, return zero with *end at text and errno unchanged.

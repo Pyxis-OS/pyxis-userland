@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -124,4 +125,15 @@ unsigned long strtoul(const char *restrict text, char **restrict end, int base)
 int atoi(const char *text)
 {
   return (int)strtol(text, NULL, 10);
+}
+
+long atol(const char *text)
+{
+  return strtol(text, NULL, 10);
+}
+
+intmax_t strtoimax(const char *restrict text, char **restrict end, int base)
+{
+  static_assert(sizeof(intmax_t) == sizeof(long));
+  return strtol(text, end, base);
 }

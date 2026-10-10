@@ -27,8 +27,11 @@ struct timezone_data {
   char *name;
   unsigned char *bytes;
   const unsigned char *transitions, *indices, *types, *names;
-  uint32_t transition_count;
+  uint32_t transition_count, type_count;
   struct tz_footer future;
+  /* Distinct UTC offsets of every type and the footer, for mktime. */
+  long *offsets;
+  size_t offset_count;
 };
 
 /* One userspace thread per process. Publish only a fully validated replacement;
@@ -272,6 +275,7 @@ static bool read_block(const unsigned char **cursor, size_t *remaining,
     zone->types = types;
     zone->names = names;
     zone->transition_count = time_count;
+    zone->type_count = type_count;
   }
   return true;
 }
@@ -319,6 +323,42 @@ static bool valid_zone_name(const char *name)
     }
   }
   return component;
+}
+
+static void free_zone(struct timezone_data *zone)
+{
+  free(zone->name);
+  free(zone->bytes);
+  free(zone->offsets);
+}
+
+static void add_offset(struct timezone_data *zone, long offset)
+{
+  for (size_t i = 0; i < zone->offset_count; ++i) {
+    if (zone->offsets[i] == offset) {
+      return;
+    }
+  }
+  zone->offsets[zone->offset_count++] = offset;
+}
+
+static bool collect_offsets(struct timezone_data *zone)
+{
+  /* At most every type plus the footer's standard and daylight offsets. */
+  zone->offsets = malloc((zone->type_count + 2) * sizeof(*zone->offsets));
+  if (!zone->offsets) {
+    return false;
+  }
+  for (uint32_t i = 0; i < zone->type_count; ++i) {
+    add_offset(zone, (int32_t)read_u32(zone->types + i * TZIF_TYPE_SIZE));
+  }
+  if (zone->future.present) {
+    add_offset(zone, zone->future.standard_offset);
+    if (zone->future.daylight) {
+      add_offset(zone, zone->future.daylight_offset);
+    }
+  }
+  return true;
 }
 
 static int load_zone(const char *name)
@@ -372,24 +412,21 @@ static int load_zone(const char *name)
     goto fail;
   }
   zone.name = strdup(name);
-  if (!zone.name) {
+  if (!zone.name || !collect_offsets(&zone)) {
     goto fail;
   }
   if (fclose(file)) {
-    free(zone.name);
-    free(zone.bytes);
+    free_zone(&zone);
     return -1;
   }
-  free(cached_zone.name);
-  free(cached_zone.bytes);
+  free_zone(&cached_zone);
   cached_zone = zone;
   return 0;
 
 fail:
   int error = errno;
   fclose(file);
-  free(zone.name);
-  free(zone.bytes);
+  free_zone(&zone);
   errno = error;
   return -1;
 }
@@ -431,8 +468,9 @@ static int future_offset(const struct tz_footer *future, int64_t seconds,
   return 0;
 }
 
-int timezone_offset(int64_t seconds, long *offset, int *daylight,
-    const char **designation)
+/* Select the zone named by the current TZ, loading it if the name changed.
+ * *zone is NULL for UTC. */
+static int select_zone(const struct timezone_data **zone)
 {
   const char *name;
   enum call_status status = pyxis_environment_get("TZ", &name);
@@ -441,15 +479,41 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight,
     return -1;
   }
   if (!name || !*name) {
-    *offset = 0;
-    *daylight = 0;
-    *designation = "UTC";
+    *zone = NULL;
     return 0;
   }
   if ((!cached_zone.name || strcmp(name, cached_zone.name)) && load_zone(name)) {
     return -1;
   }
-  const struct timezone_data *zone = &cached_zone;
+  *zone = &cached_zone;
+  return 0;
+}
+
+int timezone_offsets(const long **offsets, size_t *count)
+{
+  static const long utc_offset = 0;
+  const struct timezone_data *zone;
+  if (select_zone(&zone)) {
+    return -1;
+  }
+  *offsets = zone ? zone->offsets : &utc_offset;
+  *count = zone ? zone->offset_count : 1;
+  return 0;
+}
+
+int timezone_offset(int64_t seconds, long *offset, int *daylight,
+    const char **designation)
+{
+  const struct timezone_data *zone;
+  if (select_zone(&zone)) {
+    return -1;
+  }
+  if (!zone) {
+    *offset = 0;
+    *daylight = 0;
+    *designation = "UTC";
+    return 0;
+  }
   size_t count = zone->transition_count;
   if (!count || seconds >= read_time(zone->transitions + (count - 1) * 8)) {
     if (zone->future.present) {

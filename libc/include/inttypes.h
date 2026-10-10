@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 /* Output formats for the fixed-width, pointer and greatest-width types in
- * stdint.h. Scanning, other integer-type families and conversion functions
- * are not supplied. */
+ * stdint.h. Scanning formats and other integer-type families are not
+ * supplied; strtoimax is the only conversion function. */
 #define PRId8 "hhd"
 #define PRIi8 "hhi"
 #define PRIo8 "hho"
@@ -47,5 +47,16 @@
 #define PRIuMAX "lu"
 #define PRIxMAX "lx"
 #define PRIXMAX "lX"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* strtol for intmax_t, with the same bases, saturation and errno. */
+intmax_t strtoimax(const char *__restrict text, char **__restrict end, int base);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

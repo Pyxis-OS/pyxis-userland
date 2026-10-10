@@ -75,7 +75,7 @@ char *strerror(int error)
   case EINVAL: return "Invalid argument";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";
-  case EILSEQ: return "Invalid character (not valid UTF-8)";
+  case EILSEQ: return "Invalid or unrepresentable character";
   case EBADF: return "Invalid stream or handle";
   case EACCES: return "Permission denied";
   case ENOTSUP: return "Operation not supported";
@@ -94,6 +94,7 @@ char *strerror(int error)
   case ENOTDIR: return "Not a directory";
   case ENOTTY: return "Not a terminal";
   case ENAMETOOLONG: return "Name too long";
+  case E2BIG: return "Output buffer too small";
   default: return "Unknown error";
   }
 }

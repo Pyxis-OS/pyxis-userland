@@ -35,11 +35,15 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/time/__secs_to_tm.c \
                 third_party/musl/src/time/__year_to_secs.c \
                 third_party/musl/src/time/__month_to_secs.c \
+                third_party/musl/src/time/__tm_to_secs.c \
+                third_party/musl/src/locale/iconv.c \
+                third_party/musl/src/locale/iconv_close.c \
                 third_party/musl/src/time/rule_to_secs.c \
                 third_party/musl/src/math/fabs.c \
                 third_party/musl/src/math/fabsf.c \
                 third_party/musl/src/math/floor.c \
                 third_party/musl/src/math/round.c \
+                third_party/musl/src/math/trunc.c \
                 third_party/musl/src/math/roundf.c \
                 third_party/musl/src/math/fmod.c \
                 third_party/musl/src/math/modf.c \
@@ -169,6 +173,9 @@ $(BUILD)/third_party/musl/src/stdio/format_float.o: private CFLAGS += -Wno-sign-
 
 # Retain upstream's unsigned character tests and ring-index expressions.
 $(BUILD)/third_party/musl/src/internal/floatscan.o: private CFLAGS += -Wno-sign-compare -Wno-parentheses
+
+# Retain upstream's (size_t)-1 lookup results.
+$(BUILD)/third_party/musl/src/locale/iconv.o: private CFLAGS += -Wno-sign-compare
 
 # Retain upstream's sign-bit expression; prec 0-2 from callers always fills fq.
 $(BUILD)/third_party/musl/src/math/atan2.o: private CFLAGS += -Wno-parentheses

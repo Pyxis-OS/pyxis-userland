@@ -160,3 +160,64 @@ struct tm *localtime(const time_t *timer)
   static struct tm result;
   return localtime_r(timer, &result);
 }
+
+time_t mktime(struct tm *calendar)
+{
+  if (!calendar) {
+    errno = EINVAL;
+    return -1;
+  }
+  int saved_errno = errno;
+  const long *offsets;
+  size_t offset_count;
+  if (timezone_offsets(&offsets, &offset_count)) {
+    return -1;
+  }
+
+  /* A UTC instant T shows this wall time if the zone's offset at T is exactly
+   * WALL - T. Every offset the zone can report gives one candidate: none
+   * matches inside a gap, several match in a fold. */
+  int64_t wall = __tm_to_secs(calendar);
+  size_t matches = 0, selected = 0;
+  int64_t match_time = 0, selected_time = 0;
+  for (size_t i = 0; i < offset_count; ++i) {
+    int64_t candidate;
+    long offset;
+    int daylight;
+    const char *designation;
+    if (__builtin_sub_overflow(wall, offsets[i], &candidate)) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    if (timezone_offset(candidate, &offset, &daylight, &designation)) {
+      /* An instant the zone data leaves unspecified shows no wall time. */
+      if (errno == ENOTSUP) {
+        continue;
+      }
+      return -1;
+    }
+    if (offset != offsets[i]) {
+      continue;
+    }
+    ++matches;
+    match_time = candidate;
+    if (calendar->tm_isdst >= 0 && !daylight == !calendar->tm_isdst) {
+      ++selected;
+      selected_time = candidate;
+    }
+  }
+  /* Gaps and folds that tm_isdst cannot settle are a profile restriction. */
+  if (!matches || (matches > 1 && selected != 1)) {
+    errno = ENOTSUP;
+    return -1;
+  }
+  time_t result = matches == 1 ? match_time : selected_time;
+
+  struct tm converted;
+  if (!localtime_r(&result, &converted)) {
+    return -1;
+  }
+  *calendar = converted;
+  errno = saved_errno;
+  return result;
+}

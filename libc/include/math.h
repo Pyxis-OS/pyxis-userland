@@ -41,13 +41,18 @@ typedef double double_t;
 #define M_SQRT2         1.41421356237309504880  /* sqrt(2) */
 #define M_SQRT1_2       0.70710678118654752440  /* 1/sqrt(2) */
 
-/* fpclassify results. libc does not provide the C classification macros yet;
- * C++ code gets std::fpclassify and the rest from libc++'s <cmath>. */
+/* fpclassify results. Of the C classification macros, libc provides only
+ * isnan and isinf; C++ code gets std::fpclassify and the rest from libc++'s
+ * <cmath>. */
 #define FP_NAN 0
 #define FP_INFINITE 1
 #define FP_ZERO 2
 #define FP_SUBNORMAL 3
 #define FP_NORMAL 4
+
+/* Any real floating type; neither raises an FP exception. */
+#define isnan(value) __builtin_isnan(value)
+#define isinf(value) __builtin_isinf(value)
 
 #define MATH_ERRNO 1
 #define MATH_ERREXCEPT 2
@@ -62,6 +67,8 @@ float floorf(float value);
 /* Nearest integer, ties away from zero, independent of the FP rounding mode. */
 double round(double value);
 float roundf(float value);
+/* Integral part, rounded toward zero independently of the FP rounding mode. */
+double trunc(double value);
 double fmod(double value, double divisor);
 float fmodf(float value, float divisor);
 /* Store the integral part truncated toward zero and return the signed fraction. */

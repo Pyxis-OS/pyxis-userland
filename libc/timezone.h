@@ -1,6 +1,7 @@
 #ifndef LIBC_TIMEZONE_H
 #define LIBC_TIMEZONE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* POSIX rules appear inside TZif footers, never directly in the TZ setting. */
@@ -19,5 +20,8 @@ long long __tz_rule_to_secs(const struct tz_rule *rule, long long year);
  * default UTC borrows permanent storage. Outputs are usable only on success. */
 int timezone_offset(int64_t seconds, long *offset, int *daylight,
     const char **designation);
+/* Every distinct UTC offset the selected zone can report, borrowed like the
+ * designation. UTC has the single offset zero. */
+int timezone_offsets(const long **offsets, size_t *count);
 
 #endif
