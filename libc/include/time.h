@@ -94,10 +94,12 @@ struct tm *localtime(const time_t *timer);
 /* Inverse of localtime in the zone TZ selects, with the same zone errors.
  * tm_mon, tm_mday, tm_hour, tm_min and tm_sec may lie outside their ranges and
  * are normalized; tm_wday, tm_yday, tm_gmtoff and tm_zone are ignored. When
- * the wall time occurs once, tm_isdst is ignored. When it occurs more than
- * once (a fold), a nonnegative tm_isdst selects the only candidate whose
- * daylight flag matches; otherwise, and for a wall time skipped by a gap, fail
- * with ENOTSUP. Success stores the normalized localtime result in *calendar and
+ * the wall time occurs once, a nonnegative tm_isdst that disagrees with the
+ * zone reads it in the requested kind of time, using the offset of the nearest
+ * period of that kind; a zone with none, such as UTC, ignores it. When the
+ * wall time occurs more than once (a fold), a nonnegative tm_isdst selects the
+ * only candidate whose daylight flag matches; otherwise, and for a wall time
+ * skipped by a gap, fail with ENOTSUP. Success stores the normalized localtime result in *calendar and
  * preserves errno; failure returns -1, which is also a valid time, leaving
  * *calendar unchanged. EOVERFLOW when the result cannot be represented. */
 time_t mktime(struct tm *calendar);

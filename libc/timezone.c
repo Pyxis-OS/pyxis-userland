@@ -468,6 +468,50 @@ static int future_offset(const struct tz_footer *future, int64_t seconds,
   return 0;
 }
 
+/* Periods are numbered by the transitions that start them: period zero, with
+ * TZif type zero, lies before the first transition, period P starts at
+ * transition P - 1, and period transition_count is the footer's when present.
+ * Return the period containing SECONDS. */
+static size_t period_at(const struct timezone_data *zone, int64_t seconds)
+{
+  size_t low = 0, high = zone->transition_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (seconds < read_time(zone->transitions + middle * 8)) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return low;
+}
+
+/* The TZif type of a table period, not the footer's. */
+static const unsigned char *period_type(const struct timezone_data *zone, size_t period)
+{
+  unsigned index = period ? zone->indices[period - 1] : 0;
+  return zone->types + index * TZIF_TYPE_SIZE;
+}
+
+static bool type_has_flag(const struct timezone_data *zone, const unsigned char *type,
+    int daylight, long *offset)
+{
+  if (type[4] != daylight || !strcmp((const char *)zone->names + type[5], "-00")) {
+    return false;
+  }
+  *offset = (int32_t)read_u32(type);
+  return true;
+}
+
+static bool footer_has_flag(const struct tz_footer *future, int daylight, long *offset)
+{
+  if (!future->present || future->unspecified || (daylight && !future->daylight)) {
+    return false;
+  }
+  *offset = daylight ? future->daylight_offset : future->standard_offset;
+  return true;
+}
+
 /* Select the zone named by the current TZ, loading it if the name changed.
  * *zone is NULL for UTC. */
 static int select_zone(const struct timezone_data **zone)
@@ -530,19 +574,8 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight,
     }
   }
 
-  /* TZif type zero applies before the first transition (also with no table).
-   * Search for the first transition strictly later than the requested time. */
-  size_t low = 0, high = count;
-  while (low < high) {
-    size_t middle = low + (high - low) / 2;
-    if (seconds < read_time(zone->transitions + middle * 8)) {
-      high = middle;
-    } else {
-      low = middle + 1;
-    }
-  }
-  unsigned index = low ? zone->indices[low - 1] : 0;
-  const unsigned char *type = zone->types + index * TZIF_TYPE_SIZE;
+  size_t period = period_at(zone, seconds);
+  const unsigned char *type = period_type(zone, period);
   if (!strcmp((const char *)zone->names + type[5], "-00")) {
     errno = ENOTSUP;
     return -1;
@@ -551,4 +584,50 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight,
   *daylight = type[4];
   *designation = (const char *)zone->names + type[5];
   return 0;
+}
+
+int timezone_daylight_offset(int64_t seconds, int daylight, long *offset)
+{
+  const struct timezone_data *zone;
+  if (select_zone(&zone)) {
+    return -1;
+  }
+  if (!zone) {
+    return 1;
+  }
+  size_t count = zone->transition_count;
+  size_t current = period_at(zone, seconds);
+  /* Within the footer's rules, the rule names both offsets. */
+  if (current == count && footer_has_flag(&zone->future, daylight, offset)) {
+    return 0;
+  }
+
+  /* Otherwise the nearest table period with the flag, earlier on a tie. Every
+   * earlier period ends, and every later one starts, at a transition. */
+  bool found = false;
+  uint64_t nearest = UINT64_MAX;
+  long candidate;
+  for (size_t period = current; period-- > 0;) {
+    if (type_has_flag(zone, period_type(zone, period), daylight, &candidate)) {
+      nearest = (uint64_t)seconds - (uint64_t)read_time(zone->transitions + period * 8);
+      *offset = candidate;
+      found = true;
+      break;
+    }
+  }
+  for (size_t period = current + 1; period <= count; ++period) {
+    int64_t start = read_time(zone->transitions + (period - 1) * 8);
+    if ((uint64_t)start - (uint64_t)seconds >= nearest) {
+      break;
+    }
+    bool match = period == count ?
+        footer_has_flag(&zone->future, daylight, &candidate) :
+        type_has_flag(zone, period_type(zone, period), daylight, &candidate);
+    if (match) {
+      *offset = candidate;
+      found = true;
+      break;
+    }
+  }
+  return found ? 0 : 1;
 }

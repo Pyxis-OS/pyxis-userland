@@ -23,5 +23,10 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight,
 /* Every distinct UTC offset the selected zone can report, borrowed like the
  * designation. UTC has the single offset zero. */
 int timezone_offsets(const long **offsets, size_t *count);
+/* The UTC offset of the period nearest SECONDS whose daylight flag is
+ * DAYLIGHT: the footer rule's own offset within the rules, otherwise the
+ * closest earlier or later table period. Returns 1 when the zone has no such
+ * period, as UTC has no daylight time. */
+int timezone_daylight_offset(int64_t seconds, int daylight, long *offset);
 
 #endif

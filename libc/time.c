@@ -180,6 +180,7 @@ time_t mktime(struct tm *calendar)
   int64_t wall = __tm_to_secs(calendar);
   size_t matches = 0, selected = 0;
   int64_t match_time = 0, selected_time = 0;
+  int match_daylight = 0;
   for (size_t i = 0; i < offset_count; ++i) {
     int64_t candidate;
     long offset;
@@ -201,6 +202,7 @@ time_t mktime(struct tm *calendar)
     }
     ++matches;
     match_time = candidate;
+    match_daylight = daylight;
     if (calendar->tm_isdst >= 0 && !daylight == !calendar->tm_isdst) {
       ++selected;
       selected_time = candidate;
@@ -212,6 +214,22 @@ time_t mktime(struct tm *calendar)
     return -1;
   }
   time_t result = matches == 1 ? match_time : selected_time;
+
+  /* A tm_isdst that disagrees with the only match asks for the wall time in
+   * the other kind of time, as C specifies: use the offset of the nearest
+   * period of that kind. A zone without one, such as UTC, keeps the match. */
+  if (matches == 1 && calendar->tm_isdst >= 0 &&
+      !match_daylight != !calendar->tm_isdst) {
+    long requested;
+    int found = timezone_daylight_offset(match_time, calendar->tm_isdst > 0, &requested);
+    if (found < 0) {
+      return -1;
+    }
+    if (!found && __builtin_sub_overflow(wall, requested, &result)) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+  }
 
   struct tm converted;
   if (!localtime_r(&result, &converted)) {
