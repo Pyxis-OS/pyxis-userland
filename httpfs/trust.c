@@ -5,6 +5,7 @@
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
+#include <pyxis/working_path.h>
 #include <string.h>
 
 static enum call_status readonly_directory(handle_t handle)
@@ -33,13 +34,18 @@ enum call_status httpfs_trust_load(struct tls_runtime *runtime, const char *uri,
     struct tls_result *result, enum call_status *cleanup_status)
 {
   *result = (struct tls_result){0};
-  size_t depth = startup_working_directory_count();
-  const handle_t *cwd = startup_working_directories();
+  const struct path_context *current;
+  enum call_status status = pyxis_working_context(&current);
+  if (status != CALL_OK) {
+    goto failed;
+  }
+  size_t depth = current->count;
+  const handle_t *cwd = current->directories;
   struct path_root roots[STARTUP_ROOT_LIMIT];
   const struct startup_binding *selected_roots = startup_roots();
-  size_t root_count = startup_root_count();
-  enum call_status status = CALL_OK;
-  if (startup_namespace() != HANDLE_INVALID) {
+  size_t root_count = current->roots ? current->root_count : startup_root_count();
+  if (startup_namespace() != HANDLE_INVALID ||
+      current->namespace_handle != HANDLE_INVALID) {
     status = CALL_DENIED;
     goto failed;
   }
@@ -48,12 +54,13 @@ enum call_status httpfs_trust_load(struct tls_runtime *runtime, const char *uri,
     goto failed;
   }
   for (size_t i = 0; i < root_count; ++i) {
-    handle_t handle = selected_roots[i].handle;
+    handle_t handle = current->roots ? current->roots[i].handle : selected_roots[i].handle;
     status = readonly_directory(handle);
     if (status != CALL_OK) {
       goto failed;
     }
-    roots[i] = (struct path_root){(const char *)selected_roots[i].name, handle};
+    roots[i] = (struct path_root){current->roots ? current->roots[i].name :
+        (const char *)selected_roots[i].name, handle};
   }
   for (size_t i = 0; i < depth; ++i) {
     status = readonly_directory(cwd[i]);
