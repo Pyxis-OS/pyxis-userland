@@ -58,6 +58,9 @@ static void color_control(char *bytes, size_t capacity, terminal_color color,
 {
   if (color == TERMINAL_COLOR_DEFAULT) {
     snprintf(bytes, capacity, "%u", foreground ? 39 : 49);
+  } else if (color < 16) {
+    unsigned base = color < 8 ? (foreground ? 30 : 40) : (foreground ? 90 : 100);
+    snprintf(bytes, capacity, "%u", base + (unsigned)(color % 8));
   } else if (color <= 255) {
     snprintf(bytes, capacity, "%u;5;%u", foreground ? 38 : 48, (unsigned)color);
   } else {
