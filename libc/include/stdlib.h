@@ -45,8 +45,17 @@ void *realloc(void *pointer, size_t size);
  * result is released with free; realloc keeps only 16-byte alignment. */
 void *aligned_alloc(size_t alignment, size_t size);
 
-/* Borrowed immutable startup value; do not modify or free the result. */
+/* Single-threaded process environment, copied from immutable startup state.
+ * Borrowed values must not be modified or freed; successful mutation may
+ * invalidate them. Names are case-sensitive, nonempty and exclude '='.
+ * Empty values differ from absence. Invalid input sets EINVAL; allocation
+ * failure sets ENOMEM, with no fallback to the startup block. */
 char *getenv(const char *name);
+/* Copy name/value; overwrite zero preserves an existing value. Failure leaves
+ * the environment unchanged. There is no writable environ or putenv alias. */
+int setenv(const char *name, const char *value, int overwrite);
+/* Removing an absent name succeeds. */
+int unsetenv(const char *name);
 
 /* Replace the final six Xs with random filename characters and exclusively
  * create an empty read/write file; the returned descriptor owns its handle.
