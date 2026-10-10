@@ -93,8 +93,13 @@ float sqrtf(float value);
 double sin(double value);
 double cos(double value);
 double tan(double value);
+double asin(double value);
+double acos(double value);
 double atan(double value);
 double atan2(double y, double x);
+double sinh(double value);
+double cosh(double value);
+double tanh(double value);
 float sinf(float value);
 float cosf(float value);
 float tanf(float value);
@@ -105,6 +110,9 @@ float atan2f(float y, float x);
  * values NaN with invalid. */
 double log(double value);
 double log10(double value);
+double exp(double value);
+/* exp(value) - 1, accurate near zero. */
+double expm1(double value);
 float logf(float value);
 float log10f(float value);
 float expf(float value);

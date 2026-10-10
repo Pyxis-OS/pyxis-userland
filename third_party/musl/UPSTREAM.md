@@ -239,3 +239,18 @@ variable-width decoding state. UTF-8 back-reference matching is not reliable.
 Invalid subject UTF-8 returns `REG_NOMATCH` if the matcher encounters it; no
 whole-string validation is added. These limits are documented by Pyxis and are
 not silently repaired in the vendor import.
+
+Lua 5.1's math library adds these files from the same pin:
+
+- `src/math/asin.c` and `src/math/acos.c`, unmodified, using the existing
+  `sqrt` and `fabs`;
+- `src/math/exp.c`, unmodified, using the existing `exp_data` tables and error
+  helpers;
+- `src/math/sinh.c`, `cosh.c` and `tanh.c`, unmodified, with
+  `src/math/__expo2.c`, unmodified, and `src/math/expm1.c`, which they use for
+  large and small arguments; `expm1.c` replaces only `isnan` with
+  `__builtin_isnan`, as in `fmod.c`.
+
+`src/internal/libm.h` adds upstream's `GET_LOW_WORD` macro and declares
+`__expo2` without `hidden`; the public `math.h` also declares `expm1`. Out-of-domain arguments return NaN with invalid,
+and overflow and underflow raise FP exception flags; errno is unchanged.

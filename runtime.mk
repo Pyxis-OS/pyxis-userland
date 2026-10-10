@@ -44,6 +44,14 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/fmod.c \
                 third_party/musl/src/math/modf.c \
                 third_party/musl/src/math/pow.c \
+                third_party/musl/src/math/exp.c \
+                third_party/musl/src/math/expm1.c \
+                third_party/musl/src/math/__expo2.c \
+                third_party/musl/src/math/asin.c \
+                third_party/musl/src/math/acos.c \
+                third_party/musl/src/math/sinh.c \
+                third_party/musl/src/math/cosh.c \
+                third_party/musl/src/math/tanh.c \
                 third_party/musl/src/math/frexp.c \
                 third_party/musl/src/math/ldexp.c \
                 third_party/musl/src/math/exp_data.c \

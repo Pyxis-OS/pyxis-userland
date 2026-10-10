@@ -157,6 +157,11 @@ do {                                              \
   (hi) = asuint64(d) >> 32;                       \
 } while (0)
 
+#define GET_LOW_WORD(lo,d)                        \
+do {                                              \
+  (lo) = (uint32_t)asuint64(d);                   \
+} while (0)
+
 #define INSERT_WORDS(d,hi,lo)                     \
 do {                                              \
   (d) = asdouble(((uint64_t)(hi)<<32) | (uint32_t)(lo)); \
@@ -170,6 +175,7 @@ int    __rem_pio2(double,double*);
 double __sin(double,double,int);
 double __cos(double,double);
 double __tan(double,double,int);
+double __expo2(double,double);
 int    __rem_pio2f(float,double*);
 float  __sindf(double);
 float  __cosdf(double);
