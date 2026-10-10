@@ -39,6 +39,8 @@ extern int errno;
 #define E2BIG 28
 /* Compatibility vocabulary; current native calls do not report signal interruption. */
 #define EINTR 29
+/* Lookup met a symbolic link: Pyxis follows none, with or without O_NOFOLLOW. */
+#define ELOOP 30
 
 #ifdef __cplusplus
 }

@@ -43,15 +43,15 @@ struct stat {
 /* Resolve path like fopen. A file is opened with READ, or WRITE if READ is
  * denied, to learn its size; a file with neither right fails with EACCES. A
  * directory needs only LOOKUP on the way to it. Lookup never follows a
- * symlink, so a symlink entry fails with the lookup's error (ENOTSUP on a host
- * directory). A provider URI is opened as a file, which for HTTP(S) performs
+ * symlink, so a symlink entry fails with ELOOP (only host directories have
+ * them). A provider URI is opened as a file, which for HTTP(S) performs
  * the request. Sizes above the off_t range fail with EOVERFLOW. Unsupported
  * metadata leaves its validity bits clear without hiding other query errors.
  * Path stat does not retain a reference after return; use open/fstat when
  * identity comparison needs to keep the underlying object alive. */
 int stat(const char *__restrict path, struct stat *__restrict result);
 /* Equivalent to stat only under the current no-follow lookup contract: native
- * filesystems have no symlinks and host symlink lookup fails with ENOTSUP.
+ * filesystems have no symlinks and host symlink lookup fails with ELOOP.
  * Revisit this implementation if symlink metadata or following is introduced. */
 int lstat(const char *__restrict path, struct stat *__restrict result);
 /* Files report S_IFREG, size and available optional metadata. Consoles report

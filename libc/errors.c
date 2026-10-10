@@ -34,6 +34,8 @@ int libc_call_errno(enum call_status status)
   case CALL_OUTCOME_UNKNOWN: return EIO;
   case CALL_TIMED_OUT: return ETIMEDOUT;
   case CALL_NOT_EMPTY: return ENOTEMPTY;
+  case CALL_LINK_NOT_FOLLOWED: return ELOOP;
+  case CALL_NAME_TOO_LONG: return ENAMETOOLONG;
   default: return EIO;
   }
 }
@@ -96,6 +98,7 @@ char *strerror(int error)
   case ENOTTY: return "Not a terminal";
   case ENAMETOOLONG: return "Name too long";
   case E2BIG: return "Output buffer too small";
+  case ELOOP: return "Symbolic link not followed";
   default: return "Unknown error";
   }
 }

@@ -132,6 +132,8 @@ int report_directory_error(const char *program, const char *path, enum call_stat
   case CALL_ALREADY_EXISTS: message = "Already exists"; break;
   case CALL_READ_ONLY: message = "Read-only filesystem"; break;
   case CALL_NOT_EMPTY: message = "Directory not empty"; break;
+  case CALL_LINK_NOT_FOLLOWED: message = "Symbolic link not followed"; break;
+  case CALL_NAME_TOO_LONG: message = "Name too long"; break;
   default:
     return fprintf(stderr, "%s: %s: Native call failed (status %u)\n",
         program, path, (unsigned)status);

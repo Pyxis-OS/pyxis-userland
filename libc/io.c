@@ -8,7 +8,7 @@
 int open(const char *path, int flags, ...)
 {
   int access = flags & (O_WRONLY | O_RDWR);
-  if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL | O_APPEND)) ||
+  if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL | O_APPEND | O_NOFOLLOW)) ||
       access == (O_WRONLY | O_RDWR) ||
       (access == O_RDONLY && (flags & (O_CREAT | O_TRUNC))) ||
       ((flags & O_EXCL) && !(flags & O_CREAT))) {

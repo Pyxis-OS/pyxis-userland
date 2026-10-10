@@ -9,6 +9,11 @@
 /* Buffer bound for libc realpath only; ordinary native path lookup has no
  * fixed path-length bound. Includes the terminating NUL. */
 #define PATH_MAX 4096
+/* Longest path component, in bytes, that native (npfs) and host directories
+ * accept; longer names fail with ENAMETOOLONG there. RAM directories accept
+ * longer names. There is no pathconf: libc cannot ask which backing a
+ * directory has. */
+#define NAME_MAX 255
 
 #define SCHAR_MAX 127
 #define SCHAR_MIN (-SCHAR_MAX - 1)
