@@ -158,7 +158,7 @@ enum call_status mux_render(struct mux *mux)
     snprintf(footer, sizeof(footer), "Close pane %u and terminate its running work? y/n", mux->focused + 1);
   } else if (focused->browsing) {
     snprintf(footer, sizeof(footer), "Scrollback %zu/%zu | Page Up/Down, Home/End, Esc returns to live",
-        focused->scrollback, focused->emulator.history_count);
+        focused->scrollback, mux_emulator_history_rows(&focused->emulator));
   } else {
     snprintf(footer, sizeof(footer), "%s%s | Ctrl+B %s %%/\" split, arrows focus, b/e layout, [ history, x close%s",
         mux->layout.kind == MUX_BSP ? "BSP" : "Equal", mux->collapsed ? " (focused only)" : "",

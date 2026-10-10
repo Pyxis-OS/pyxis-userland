@@ -44,6 +44,9 @@ enum call_status term_colors(struct terminal *term, int foreground, int backgrou
 enum call_status term_reverse(struct terminal *term, bool enabled);
 enum call_status term_reset_style(struct terminal *term);
 enum call_status term_cursor_visible(struct terminal *term, bool visible);
+/* Enter the cleared alternate screen, saving the cursor, or leave it, restoring
+ * the screen and cursor that entering saved. */
+enum call_status term_alternate_screen(struct terminal *term, bool enabled);
 
 /* Logical input keys, independent of physical keyboard events. Bytes retain
  * their byte values, including Escape (27), Tab and control characters. */

@@ -30,9 +30,20 @@ struct mux_selection {
 enum mux_escape_state {
   MUX_TEXT,
   MUX_ESCAPE,
+  MUX_CHARSET, /* ESC ( ) * or +: the next byte names a character set. */
   MUX_CSI_ENTRY,
   MUX_CSI,
   MUX_CSI_IGNORE,
+};
+
+/* DECSC state, one per screen. */
+struct mux_saved_cursor {
+  size_t row;
+  size_t column;
+  signed char foreground;
+  signed char background;
+  bool reverse;
+  bool wrap_pending;
 };
 
 struct mux_emulator {
@@ -44,10 +55,19 @@ struct mux_emulator {
   size_t history_count;
   uint64_t scrolled_rows; /* Saturates at UINT64_MAX. */
   struct mux_selection selection;
+  /* Scroll region rows, inclusive; the full screen unless DECSTBM narrows it.
+   * Only the primary screen's full-width scrolling feeds history. */
+  size_t region_top;
+  size_t region_bottom;
+  /* The alternate screen is live: cells and other_cells are swapped, and it
+   * has no history. */
+  bool alternate;
+  struct mux_saved_cursor saved[2]; /* Indexed by alternate. */
 
   /* Owned storage. History retains each row's original width without reflow.
    * The maximum width seen supplies a stride, so output never allocates. */
   struct mux_cell *cells;
+  struct mux_cell *other_cells;
   struct mux_cell *history;
   size_t *history_widths;
   size_t history_start;
@@ -74,8 +94,11 @@ void mux_emulator_feed(struct mux_emulator *emulator, const void *bytes, size_t 
 void mux_emulator_fresh_line(struct mux_emulator *emulator);
 void mux_emulator_set_tab_width(struct mux_emulator *emulator, unsigned columns);
 
+/* Rows reachable behind the live screen: history_count, or zero while the
+ * alternate screen is live. */
+size_t mux_emulator_history_rows(const struct mux_emulator *emulator);
 /* Offset zero is the live screen. Larger offsets move back through history,
- * clamped to history_count. The borrowed row survives until feed/resize/destroy;
+ * clamped to mux_emulator_history_rows. The borrowed row survives until feed/resize/destroy;
  * its original width can differ from the current screen width. */
 const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t visible_row, size_t *width);

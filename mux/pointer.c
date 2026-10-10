@@ -179,7 +179,7 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
     size_t offset = pane->scrollback;
     if (rows < 0) {
       uint64_t step = (uint64_t)-rows;
-      size_t room = pane->emulator.history_count - offset;
+      size_t room = mux_emulator_history_rows(&pane->emulator) - offset;
       offset += step < room ? (size_t)step : room;
     } else {
       offset -= (uint64_t)rows < offset ? (size_t)rows : offset;

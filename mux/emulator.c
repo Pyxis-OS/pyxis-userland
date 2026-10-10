@@ -184,15 +184,22 @@ bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t row
     .background = -1,
     .tab_width = 8,
     .history_stride = columns,
+    .region_bottom = rows - 1,
+    .saved = {
+      {.foreground = -1, .background = -1},
+      {.foreground = -1, .background = -1},
+    },
   };
   initial.cells = calloc(rows * columns, sizeof(*initial.cells));
+  initial.other_cells = calloc(rows * columns, sizeof(*initial.other_cells));
   initial.history = calloc(MUX_HISTORY_ROWS * columns, sizeof(*initial.history));
   initial.history_widths = calloc(MUX_HISTORY_ROWS, sizeof(*initial.history_widths));
-  if (!initial.cells || !initial.history || !initial.history_widths) {
+  if (!initial.cells || !initial.other_cells || !initial.history || !initial.history_widths) {
     mux_emulator_destroy(&initial);
     return false;
   }
   fill_cells(initial.cells, rows * columns, blank_cell(&initial, false));
+  fill_cells(initial.other_cells, rows * columns, blank_cell(&initial, false));
   *emulator = initial;
   return true;
 }
@@ -200,9 +207,32 @@ bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t row
 void mux_emulator_destroy(struct mux_emulator *emulator)
 {
   free(emulator->cells);
+  free(emulator->other_cells);
   free(emulator->history);
   free(emulator->history_widths);
   memset(emulator, 0, sizeof(*emulator));
+}
+
+static size_t kept_first_row(size_t cursor_row, size_t rows)
+{
+  return cursor_row >= rows ? cursor_row - rows + 1 : 0;
+}
+
+/* Copy a screen into new cells, keeping the rows from first_row. */
+static void copy_screen(struct mux_cell *cells, size_t columns, size_t rows,
+    const struct mux_cell *old_cells, size_t old_columns, size_t old_rows,
+    size_t first_row, struct mux_cell blank)
+{
+  fill_cells(cells, rows * columns, blank);
+  size_t retained_rows = old_rows - first_row;
+  if (retained_rows > rows) {
+    retained_rows = rows;
+  }
+  size_t retained_columns = old_columns < columns ? old_columns : columns;
+  for (size_t i = 0; i < retained_rows; ++i) {
+    memcpy(cells + i * columns, old_cells + (first_row + i) * old_columns,
+        retained_columns * sizeof(*cells));
+  }
 }
 
 bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t rows)
@@ -215,7 +245,10 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
   }
 
   struct mux_cell *cells = calloc(rows * columns, sizeof(*cells));
-  if (!cells) {
+  struct mux_cell *other_cells = calloc(rows * columns, sizeof(*other_cells));
+  if (!cells || !other_cells) {
+    free(cells);
+    free(other_cells);
     return false;
   }
   struct mux_cell *history = emulator->history;
@@ -223,6 +256,7 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
     history = calloc(MUX_HISTORY_ROWS * columns, sizeof(*history));
     if (!history) {
       free(cells);
+      free(other_cells);
       return false;
     }
     for (size_t i = 0; i < emulator->history_count; ++i) {
@@ -233,22 +267,20 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
     }
   }
 
-  fill_cells(cells, rows * columns, blank_cell(emulator, false));
-  size_t first_row = emulator->cursor_row >= rows ?
-      emulator->cursor_row - rows + 1 : 0;
-  size_t retained_rows = emulator->rows - first_row;
-  if (retained_rows > rows) {
-    retained_rows = rows;
-  }
-  size_t retained_columns = emulator->columns < columns ? emulator->columns : columns;
-  for (size_t i = 0; i < retained_rows; ++i) {
-    memcpy(cells + i * columns,
-        emulator->cells + (first_row + i) * emulator->columns,
-        retained_columns * sizeof(*cells));
-  }
+  /* The hidden screen keeps the rows around its saved cursor. */
+  struct mux_cell blank = blank_cell(emulator, false);
+  struct mux_saved_cursor *hidden = &emulator->saved[!emulator->alternate];
+  size_t first_row = kept_first_row(emulator->cursor_row, rows);
+  size_t hidden_first_row = kept_first_row(hidden->row, rows);
+  copy_screen(cells, columns, rows, emulator->cells, emulator->columns, emulator->rows,
+      first_row, blank);
+  copy_screen(other_cells, columns, rows, emulator->other_cells, emulator->columns,
+      emulator->rows, hidden_first_row, blank);
 
   free(emulator->cells);
+  free(emulator->other_cells);
   emulator->cells = cells;
+  emulator->other_cells = other_cells;
   if (history != emulator->history) {
     free(emulator->history);
     emulator->history = history;
@@ -260,9 +292,27 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
     emulator->cursor_column = columns - 1;
   }
   emulator->cursor_row -= first_row;
+  for (size_t screen = 0; screen < 2; ++screen) {
+    struct mux_saved_cursor *saved = &emulator->saved[screen];
+    size_t kept = screen == emulator->alternate ? first_row : hidden_first_row;
+    saved->row -= saved->row < kept ? saved->row : kept;
+    if (saved->row >= rows) {
+      saved->row = rows - 1;
+    }
+    if (saved->column >= columns) {
+      saved->column = columns - 1;
+    }
+  }
+  emulator->region_top = 0;
+  emulator->region_bottom = rows - 1;
   emulator->wrap_pending = false;
   mux_emulator_clear_selection(emulator);
   return true;
+}
+
+size_t mux_emulator_history_rows(const struct mux_emulator *emulator)
+{
+  return emulator->alternate ? 0 : emulator->history_count;
 }
 
 const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
@@ -272,17 +322,18 @@ const struct mux_cell *mux_emulator_row(const struct mux_emulator *emulator,
   if (visible_row >= emulator->rows) {
     return NULL;
   }
-  if (scrollback_offset > emulator->history_count) {
-    scrollback_offset = emulator->history_count;
+  size_t history_rows = mux_emulator_history_rows(emulator);
+  if (scrollback_offset > history_rows) {
+    scrollback_offset = history_rows;
   }
-  size_t row = emulator->history_count - scrollback_offset + visible_row;
-  if (row < emulator->history_count) {
+  size_t row = history_rows - scrollback_offset + visible_row;
+  if (row < history_rows) {
     size_t slot = (emulator->history_start + row) % MUX_HISTORY_ROWS;
     *width = emulator->history_widths[slot];
     return emulator->history + slot * emulator->history_stride;
   }
   *width = emulator->columns;
-  return emulator->cells + (row - emulator->history_count) * emulator->columns;
+  return emulator->cells + (row - history_rows) * emulator->columns;
 }
 
 bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset,
@@ -294,8 +345,8 @@ bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset
       emulator->scrolled_rows > UINT64_MAX - emulator->rows) {
     return false;
   }
-  if (scrollback_offset > emulator->history_count) {
-    scrollback_offset = emulator->history_count;
+  if (scrollback_offset > mux_emulator_history_rows(emulator)) {
+    scrollback_offset = mux_emulator_history_rows(emulator);
   }
   struct mux_selection_point point = {
     .row = emulator->scrolled_rows - scrollback_offset + row,
@@ -320,8 +371,8 @@ bool mux_emulator_select(struct mux_emulator *emulator, size_t scrollback_offset
 bool mux_emulator_selected(const struct mux_emulator *emulator,
     size_t scrollback_offset, size_t row, size_t column)
 {
-  if (scrollback_offset > emulator->history_count) {
-    scrollback_offset = emulator->history_count;
+  if (scrollback_offset > mux_emulator_history_rows(emulator)) {
+    scrollback_offset = mux_emulator_history_rows(emulator);
   }
   return emulator->selection.active && selection_contains(emulator, (struct mux_selection_point){
     .row = emulator->scrolled_rows - scrollback_offset + row,
@@ -329,15 +380,9 @@ bool mux_emulator_selected(const struct mux_emulator *emulator,
   });
 }
 
-static void newline(struct mux_emulator *emulator)
+/* Move screen row `row` into history, as the oldest-evicting ring requires. */
+static void push_history(struct mux_emulator *emulator, size_t row)
 {
-  emulator->wrap_pending = false;
-  emulator->cursor_column = 0;
-  ++emulator->cursor_row;
-  if (emulator->cursor_row < emulator->rows) {
-    return;
-  }
-
   size_t slot;
   if (emulator->history_count == MUX_HISTORY_ROWS) {
     slot = emulator->history_start;
@@ -346,7 +391,8 @@ static void newline(struct mux_emulator *emulator)
     slot = (emulator->history_start + emulator->history_count) % MUX_HISTORY_ROWS;
     ++emulator->history_count;
   }
-  memcpy(emulator->history + slot * emulator->history_stride, emulator->cells,
+  memcpy(emulator->history + slot * emulator->history_stride,
+      emulator->cells + row * emulator->columns,
       emulator->columns * sizeof(*emulator->cells));
   emulator->history_widths[slot] = emulator->columns;
   if (emulator->scrolled_rows < UINT64_MAX) {
@@ -358,12 +404,125 @@ static void newline(struct mux_emulator *emulator)
        (emulator->selection.anchor.row < oldest || emulator->selection.end.row < oldest))) {
     mux_emulator_clear_selection(emulator);
   }
-  memmove(emulator->cells, emulator->cells + emulator->columns,
-      (emulator->rows - 1) * emulator->columns * sizeof(*emulator->cells));
-  emulator->cursor_row = emulator->rows - 1;
-  /* Native scrolling fills the new row with non-reversed current colors. */
-  fill_cells(emulator->cells + emulator->cursor_row * emulator->columns,
-      emulator->columns, blank_cell(emulator, false));
+}
+
+/* Scroll rows top..bottom (inclusive) up by count. Rows leaving the top of the
+ * primary screen enter history; other scrolling discards them. */
+static void scroll_up(struct mux_emulator *emulator, size_t top, size_t bottom, size_t count)
+{
+  size_t rows = bottom - top + 1;
+  if (count > rows) {
+    count = rows;
+  }
+  if (!emulator->alternate && top == 0) {
+    for (size_t i = 0; i < count; ++i) {
+      push_history(emulator, i);
+    }
+    /* Selection rows are absolute; they follow only whole-screen scrolling. */
+    if (bottom != emulator->rows - 1) {
+      mux_emulator_clear_selection(emulator);
+    }
+  } else {
+    mux_emulator_clear_selection(emulator);
+  }
+  memmove(emulator->cells + top * emulator->columns,
+      emulator->cells + (top + count) * emulator->columns,
+      (rows - count) * emulator->columns * sizeof(*emulator->cells));
+  /* Native scrolling fills new rows with non-reversed current colors. */
+  fill_cells(emulator->cells + (bottom + 1 - count) * emulator->columns,
+      count * emulator->columns, blank_cell(emulator, false));
+}
+
+/* Scroll rows top..bottom (inclusive) down by count, blanking the top. */
+static void scroll_down(struct mux_emulator *emulator, size_t top, size_t bottom, size_t count)
+{
+  size_t rows = bottom - top + 1;
+  if (count > rows) {
+    count = rows;
+  }
+  mux_emulator_clear_selection(emulator);
+  memmove(emulator->cells + (top + count) * emulator->columns,
+      emulator->cells + top * emulator->columns,
+      (rows - count) * emulator->columns * sizeof(*emulator->cells));
+  fill_cells(emulator->cells + top * emulator->columns, count * emulator->columns,
+      blank_cell(emulator, false));
+}
+
+/* LF: the bottom margin scrolls the region; below it the screen edge stops. */
+static void newline(struct mux_emulator *emulator)
+{
+  emulator->wrap_pending = false;
+  emulator->cursor_column = 0;
+  if (emulator->cursor_row == emulator->region_bottom) {
+    scroll_up(emulator, emulator->region_top, emulator->region_bottom, 1);
+  } else if (emulator->cursor_row + 1 < emulator->rows) {
+    ++emulator->cursor_row;
+  }
+}
+
+/* ESC M: the top margin scrolls the region down; above it the screen edge stops. */
+static void reverse_index(struct mux_emulator *emulator)
+{
+  emulator->wrap_pending = false;
+  if (emulator->cursor_row == emulator->region_top) {
+    scroll_down(emulator, emulator->region_top, emulator->region_bottom, 1);
+  } else if (emulator->cursor_row) {
+    --emulator->cursor_row;
+  }
+}
+
+static void save_cursor(struct mux_emulator *emulator)
+{
+  emulator->saved[emulator->alternate] = (struct mux_saved_cursor){
+    .row = emulator->cursor_row,
+    .column = emulator->cursor_column,
+    .foreground = emulator->foreground,
+    .background = emulator->background,
+    .reverse = emulator->reverse,
+    .wrap_pending = emulator->wrap_pending,
+  };
+}
+
+static void restore_cursor(struct mux_emulator *emulator)
+{
+  const struct mux_saved_cursor *saved = &emulator->saved[emulator->alternate];
+  emulator->cursor_row = saved->row < emulator->rows ? saved->row : emulator->rows - 1;
+  emulator->cursor_column = saved->column < emulator->columns ?
+      saved->column : emulator->columns - 1;
+  emulator->foreground = saved->foreground;
+  emulator->background = saved->background;
+  emulator->reverse = saved->reverse;
+  emulator->wrap_pending = saved->wrap_pending &&
+      emulator->cursor_column == emulator->columns - 1;
+}
+
+/* CSI ? 1049 h/l. Entering saves the primary cursor and shows a cleared
+ * alternate screen; leaving restores the primary screen and cursor. The scroll
+ * region resets either way. */
+static void select_screen(struct mux_emulator *emulator, bool alternate)
+{
+  if (emulator->alternate == alternate) {
+    return;
+  }
+  if (alternate) {
+    save_cursor(emulator);
+  }
+  struct mux_cell *cells = emulator->cells;
+  emulator->cells = emulator->other_cells;
+  emulator->other_cells = cells;
+  emulator->alternate = alternate;
+  mux_emulator_clear_selection(emulator);
+  emulator->region_top = 0;
+  emulator->region_bottom = emulator->rows - 1;
+  emulator->wrap_pending = false;
+  if (alternate) {
+    fill_cells(emulator->cells, emulator->rows * emulator->columns,
+        blank_cell(emulator, false));
+    emulator->cursor_row = 0;
+    emulator->cursor_column = 0;
+  } else {
+    restore_cursor(emulator);
+  }
 }
 
 void mux_emulator_fresh_line(struct mux_emulator *emulator)
@@ -419,10 +578,16 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
   size_t cell = emulator->cursor_row * emulator->columns + emulator->cursor_column;
   size_t cells = emulator->rows * emulator->columns;
 
+  bool in_region = emulator->cursor_row >= emulator->region_top &&
+      emulator->cursor_row <= emulator->region_bottom;
+
   if (emulator->private_csi) {
-    if (emulator->parameter_index == 0 && parameter == 25 &&
-        (command == 'h' || command == 'l')) {
-      emulator->cursor_visible = command == 'h';
+    if (emulator->parameter_index == 0 && (command == 'h' || command == 'l')) {
+      if (parameter == 25) {
+        emulator->cursor_visible = command == 'h';
+      } else if (parameter == 1049) {
+        select_screen(emulator, command == 'h');
+      }
     }
     return;
   }
@@ -432,23 +597,48 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
     }
     return;
   }
+  if (command == 'r') {
+    /* DECSTBM: one-based rows; zero or missing selects the screen edge. */
+    if (emulator->parameter_index > 1) {
+      return;
+    }
+    size_t top = parameter ? parameter : 1;
+    size_t bottom = emulator->parameters[1] ? emulator->parameters[1] : emulator->rows;
+    if (top < bottom && bottom <= emulator->rows) {
+      emulator->region_top = top - 1;
+      emulator->region_bottom = bottom - 1;
+      emulator->cursor_row = 0;
+      emulator->cursor_column = 0;
+      emulator->wrap_pending = false;
+    }
+    return;
+  }
   if (emulator->parameter_index > (command == 'H' ? 1u : 0u)) {
     return;
   }
+  if ((command == 's' || command == 'u') && parameter) {
+    return;
+  }
   if (command == 'A' || command == 'B' || command == 'C' || command == 'D' ||
-      command == 'G' || command == 'H' || command == 'J' || command == 'K') {
+      command == 'G' || command == 'H' || command == 'J' || command == 'K' ||
+      command == 'L' || command == 'M') {
     emulator->wrap_pending = false;
   }
 
   switch (command) {
-  case 'A':
-    emulator->cursor_row = count > emulator->cursor_row ?
-        0 : emulator->cursor_row - count;
+  case 'A': {
+    /* Inside the region the top margin stops the cursor, as in xterm. */
+    size_t limit = in_region ? emulator->region_top : 0;
+    emulator->cursor_row = count > emulator->cursor_row - limit ?
+        limit : emulator->cursor_row - count;
     break;
-  case 'B':
-    emulator->cursor_row = count >= emulator->rows - emulator->cursor_row ?
-        emulator->rows - 1 : emulator->cursor_row + count;
+  }
+  case 'B': {
+    size_t limit = in_region ? emulator->region_bottom : emulator->rows - 1;
+    emulator->cursor_row = count > limit - emulator->cursor_row ?
+        limit : emulator->cursor_row + count;
     break;
+  }
   case 'C':
     emulator->cursor_column = count >= emulator->columns - emulator->cursor_column ?
         emulator->columns - 1 : emulator->cursor_column + count;
@@ -485,6 +675,25 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
       erase_cells(emulator, 0, cells);
     }
     break;
+  case 'L':
+    /* Insert and delete lines act inside the region and return to column one. */
+    if (in_region) {
+      scroll_down(emulator, emulator->cursor_row, emulator->region_bottom, count);
+      emulator->cursor_column = 0;
+    }
+    break;
+  case 'M':
+    if (in_region) {
+      scroll_up(emulator, emulator->cursor_row, emulator->region_bottom, count);
+      emulator->cursor_column = 0;
+    }
+    break;
+  case 's':
+    save_cursor(emulator);
+    break;
+  case 'u':
+    restore_cursor(emulator);
+    break;
   }
 }
 
@@ -515,7 +724,23 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
   }
 
   if (emulator->escape_state == MUX_ESCAPE) {
-    emulator->escape_state = byte == '[' ? MUX_CSI_ENTRY : MUX_TEXT;
+    emulator->escape_state = MUX_TEXT;
+    if (byte == '[') {
+      emulator->escape_state = MUX_CSI_ENTRY;
+    } else if (byte == '(' || byte == ')' || byte == '*' || byte == '+') {
+      emulator->escape_state = MUX_CHARSET;
+    } else if (byte == '7') {
+      save_cursor(emulator);
+    } else if (byte == '8') {
+      restore_cursor(emulator);
+    } else if (byte == 'M') {
+      reverse_index(emulator);
+    }
+    return;
+  }
+  if (emulator->escape_state == MUX_CHARSET) {
+    /* Only the default set exists; the designation is consumed. */
+    emulator->escape_state = MUX_TEXT;
     return;
   }
   if (emulator->escape_state == MUX_CSI_ENTRY || emulator->escape_state == MUX_CSI ||

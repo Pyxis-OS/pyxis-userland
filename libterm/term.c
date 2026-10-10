@@ -130,3 +130,8 @@ enum call_status term_cursor_visible(struct terminal *term, bool visible)
 {
   return term_print(term, visible ? "\x1b[?25h" : "\x1b[?25l");
 }
+
+enum call_status term_alternate_screen(struct terminal *term, bool enabled)
+{
+  return term_print(term, enabled ? "\x1b[?1049h" : "\x1b[?1049l");
+}

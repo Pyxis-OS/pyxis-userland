@@ -186,13 +186,13 @@ static void command(struct mux *mux, unsigned key)
       pane->scrollback = 0;
     } else if (key == TERM_KEY_PAGE_UP || key == TERM_KEY_UP) {
       size_t step = key == TERM_KEY_UP ? 1 : page;
-      size_t remaining = pane->emulator.history_count - pane->scrollback;
+      size_t remaining = mux_emulator_history_rows(&pane->emulator) - pane->scrollback;
       pane->scrollback += step < remaining ? step : remaining;
     } else if (key == TERM_KEY_PAGE_DOWN || key == TERM_KEY_DOWN) {
       size_t step = key == TERM_KEY_DOWN ? 1 : page;
       pane->scrollback -= step < pane->scrollback ? step : pane->scrollback;
     } else if (key == TERM_KEY_HOME) {
-      pane->scrollback = pane->emulator.history_count;
+      pane->scrollback = mux_emulator_history_rows(&pane->emulator);
     } else if (key == TERM_KEY_END) {
       pane->scrollback = 0;
     }
@@ -413,7 +413,11 @@ static bool drain(struct mux *mux, struct mux_pane *pane)
       memcpy(&width, payload, sizeof(width));
       mux_emulator_set_tab_width(&pane->emulator, (unsigned)width);
     }
-    if (pane->browsing && pane->scrollback) {
+    if (pane->emulator.alternate) {
+      /* The alternate screen has no history: browsing returns to it. */
+      pane->browsing = false;
+      pane->scrollback = 0;
+    } else if (pane->browsing && pane->scrollback) {
       uint64_t moved = pane->emulator.scrolled_rows - before;
       size_t room = pane->emulator.history_count - pane->scrollback;
       pane->scrollback += moved < room ? (size_t)moved : room;
