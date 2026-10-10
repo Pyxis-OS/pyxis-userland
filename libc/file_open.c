@@ -133,7 +133,7 @@ int access(const char *path, int mode)
         false, false, true, NULL, &handle);
   }
   if (status != CALL_OK) {
-    errno = status == CALL_WRONG_TYPE ? ENOTDIR : libc_call_errno(status);
+    errno = status == CALL_WRONG_TYPE ? ENOTDIR : libc_path_errno(status, path, NULL);
     return -1;
   }
   return descriptor_release_handle(handle);
@@ -237,7 +237,7 @@ static int remove_kind(const char *path, uint64_t kind)
   free(directories);
   if (status != CALL_OK) {
     errno = kind == DIRECTORY_KIND_DIRECTORY && status == CALL_WRONG_TYPE ?
-        ENOTDIR : libc_call_errno(status);
+        ENOTDIR : libc_path_errno(status, path, NULL);
     return -1;
   }
   return 0;
@@ -293,7 +293,7 @@ int mkdir(const char *path, mode_t mode)
   free(component);
   free(directories);
   if (status != CALL_OK) {
-    errno = libc_call_errno(status);
+    errno = libc_path_errno(status, path, NULL);
     return -1;
   }
   return 0;
@@ -337,7 +337,7 @@ done:
     free(workspaces[i].directories);
   }
   if (status != CALL_OK) {
-    errno = libc_call_errno(status);
+    errno = libc_path_errno(status, old_path, new_path);
     return -1;
   }
   return 0;

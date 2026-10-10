@@ -1,5 +1,7 @@
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "errors.h"
 
@@ -35,6 +37,31 @@ int libc_call_errno(enum call_status status)
   }
 }
 
+/* Well-formed UTF-8, as mbtowc decodes it: shortest forms only, no surrogates,
+ * nothing above U+10FFFF. */
+static bool utf8_valid(const char *text)
+{
+  size_t length = strlen(text);
+  while (length) {
+    int count = mbtowc(NULL, text, length);
+    if (count <= 0) {
+      return false;
+    }
+    text += count;
+    length -= (size_t)count;
+  }
+  return true;
+}
+
+int libc_path_errno(enum call_status status, const char *path, const char *other)
+{
+  if (status == CALL_BAD_REQUEST &&
+      ((path && !utf8_valid(path)) || (other && !utf8_valid(other)))) {
+    return EILSEQ;
+  }
+  return libc_call_errno(status);
+}
+
 char *strerror(int error)
 {
   switch (error) {
@@ -47,7 +74,7 @@ char *strerror(int error)
   case EINVAL: return "Invalid argument";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";
-  case EILSEQ: return "Invalid or incomplete multibyte sequence";
+  case EILSEQ: return "Invalid character (not valid UTF-8)";
   case EBADF: return "Invalid stream or handle";
   case EACCES: return "Permission denied";
   case ENOTSUP: return "Operation not supported";

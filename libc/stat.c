@@ -44,7 +44,7 @@ int stat(const char *restrict path, struct stat *restrict result)
     }
   }
   if (status != CALL_OK) {
-    errno = libc_call_errno(status);
+    errno = libc_path_errno(status, path, NULL);
     return -1;
   }
   return 0;

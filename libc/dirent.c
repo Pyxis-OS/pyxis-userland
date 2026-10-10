@@ -42,7 +42,7 @@ DIR *opendir(const char *path)
   if (status != CALL_OK) {
     free(entry);
     free(directory);
-    errno = libc_call_errno(status);
+    errno = libc_path_errno(status, path, NULL);
     return NULL;
   }
   *directory = (struct libc_directory){

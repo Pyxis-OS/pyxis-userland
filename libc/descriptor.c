@@ -152,7 +152,7 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
     status = file_resize(handle, 0);
   }
   if (status != CALL_OK) {
-    int error = libc_call_errno(status);
+    int error = libc_path_errno(status, path, NULL);
     if (handle != HANDLE_INVALID) {
       descriptor_release_handle(handle);
     }
