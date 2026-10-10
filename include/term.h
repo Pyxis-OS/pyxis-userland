@@ -215,19 +215,23 @@ struct term_line_result term_read_line_marked(struct terminal *term, const char 
 /* Tab completion for one word of the line. The editor calls candidates() with
  * the text left of the cursor (line[0..cursor), NUL-terminated at cursor) and
  * the caller finds the word to complete. On success it fills names with heap
- * strings, ascending, unique and printable ASCII without spaces, each a full
- * replacement for line[start..cursor); the editor frees the strings and the
- * array. Returning false, or no names, leaves the line unchanged.
+ * strings, ascending, unique and printable ASCII (spaces allowed), each a full
+ * replacement for line[start..cursor), including any quoting the caller needs;
+ * the editor frees the strings and the array. Returning false, or no names,
+ * leaves the line unchanged.
  *
- * One name replaces the word and adds a space unless one follows. Several
- * names extend the word to their common prefix when that is longer. Otherwise
- * they are listed below the line in columns and the prompt and line are drawn
- * again. A replacement that does not fit the buffer changes nothing and sets
- * limit_reached. Tab is ignored when no completion is given, as before. */
+ * One name replaces the word and is followed by finish, or by a space when
+ * finish is NULL; a space that ends finish is dropped when one already follows
+ * the cursor. Several names extend the word to their common prefix when that
+ * is longer. Otherwise they are listed below the line in columns and the prompt
+ * and line are drawn again. A replacement that does not fit the buffer changes
+ * nothing and sets limit_reached. Tab is ignored when no completion is given,
+ * as before. */
 struct term_candidates {
   char **names;
   size_t count;
   size_t start;
+  const char *finish; /* Static or outliving the call; used for a lone name. */
 };
 
 struct term_completion {

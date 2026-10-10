@@ -232,6 +232,9 @@ static enum call_status list_candidates(struct line_editor *editor,
   return status == CALL_OK ? draw_line(editor, true, false) : status;
 }
 
+/* Longer than any line the editors accept, so only the buffer limit refuses. */
+#define COMPLETION_REPLACEMENT_MAX 1100
+
 /* Tab. Draws only when the line changes or a list is shown. */
 static enum call_status complete_word(struct line_editor *editor,
     const struct term_completion *completion, size_t limit, bool *limit_reached)
@@ -248,23 +251,28 @@ static enum call_status complete_word(struct line_editor *editor,
     const char *name = found.names[i];
     usable = name && *name;
     for (size_t j = 0; usable && name[j]; ++j) {
-      usable = name[j] > ' ' && name[j] <= '~';
+      usable = name[j] >= ' ' && name[j] <= '~';
     }
   }
   enum call_status status = CALL_OK;
   if (usable) {
     size_t word = editor->cursor - found.start;
-    char replacement[256]; /* Command names; longer ones are not completed. */
+    char replacement[COMPLETION_REPLACEMENT_MAX]; /* Longer words are not completed. */
     size_t length = 0;
     bool replace = false;
     if (found.count == 1) {
-      length = strlen(found.names[0]);
-      replace = length < sizeof(replacement) - 1;
+      const char *finish = found.finish ? found.finish : " ";
+      size_t name_length = strlen(found.names[0]);
+      size_t finish_length = strlen(finish);
+      if (finish_length && finish[finish_length - 1] == ' ' &&
+          editor->buffer[editor->cursor] == ' ') {
+        --finish_length;
+      }
+      replace = name_length + finish_length < sizeof(replacement);
       if (replace) {
-        memcpy(replacement, found.names[0], length);
-        if (editor->buffer[editor->cursor] != ' ') {
-          replacement[length++] = ' ';
-        }
+        memcpy(replacement, found.names[0], name_length);
+        memcpy(replacement + name_length, finish, finish_length);
+        length = name_length + finish_length;
       }
     } else {
       length = common_prefix(&found);
