@@ -18,6 +18,7 @@ int libc_call_errno(enum call_status status)
   case CALL_BUFFER_TOO_SMALL: return ERANGE;
   case CALL_UNAVAILABLE: return ENODEV;
   case CALL_QUEUE_FULL: return EAGAIN;
+  case CALL_WOULD_BLOCK: return EAGAIN;
   case CALL_ENDPOINT_CLOSED: return EPIPE;
   case CALL_BUSY: return EBUSY;
   case CALL_NO_MEMORY: return ENOMEM;

@@ -2,14 +2,15 @@
 #include <console.h>
 #include <syscall.h>
 
-enum call_status console_write(handle_t output, const void *bytes, size_t size, size_t *written)
+static enum call_status write_console(handle_t output, uint64_t operation,
+    const void *bytes, size_t size, size_t *written)
 {
   if (!written) {
     return CALL_BAD_REQUEST;
   }
   *written = 0;
   struct console_message message = {
-    .header = {PROTOCOL_CONSOLE, CONSOLE_WRITE},
+    .header = {PROTOCOL_CONSOLE, operation},
     .body.write = {
       .address = (uintptr_t)bytes,
       .length = size,
@@ -28,6 +29,17 @@ enum call_status console_write(handle_t output, const void *bytes, size_t size, 
   }
   *written = reply.written;
   return CALL_OK;
+}
+
+enum call_status console_write(handle_t output, const void *bytes, size_t size, size_t *written)
+{
+  return write_console(output, CONSOLE_WRITE, bytes, size, written);
+}
+
+enum call_status console_try_write(handle_t output, const void *bytes, size_t size,
+    size_t *written)
+{
+  return write_console(output, CONSOLE_TRY_WRITE, bytes, size, written);
 }
 
 enum call_status console_write_all(handle_t output, const void *bytes, size_t size)

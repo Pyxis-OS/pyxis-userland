@@ -5,8 +5,10 @@
 #include <directory.h>
 #include <errno.h>
 #include <file.h>
+#include <handle.h>
 #include <limits.h>
 #include <pipe.h>
+#include <pyxis/descriptor.h>
 #include <startup.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -230,6 +232,83 @@ int descriptor_stream(FILE *stream, struct startup_stream *binding)
   return 0;
 }
 
+int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *binding)
+{
+  if (!binding) {
+    return fail(EINVAL);
+  }
+  *binding = (struct pyxis_descriptor_binding){0};
+  struct descriptor_entry *entry = lookup(descriptor);
+  if (!entry) {
+    return -1;
+  }
+  struct pyxis_descriptor_binding result = {
+    .handle = entry->handle,
+    .access = (entry->readable ? PYXIS_DESCRIPTOR_READ : 0) |
+        (entry->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
+    .buffered_read = entry->ahead_count,
+  };
+  enum call_status status = handle_query(result.handle, &result.info);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  *binding = result;
+  return 0;
+}
+
+int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
+{
+  if (!handle || *handle == HANDLE_INVALID || !access ||
+      (access & ~(PYXIS_DESCRIPTOR_READ | PYXIS_DESCRIPTOR_WRITE))) {
+    return fail(EINVAL);
+  }
+  for (size_t i = 0; i < capacity; ++i) {
+    if (entries[i].state == DESCRIPTOR_OPEN && entries[i].handle == *handle) {
+      return fail(EBUSY);
+    }
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(*handle, &info);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  enum descriptor_kind kind;
+  uint64_t read_right, write_right;
+  if (info.protocol == PROTOCOL_FILE) {
+    kind = DESCRIPTOR_FILE;
+    read_right = FILE_RIGHT_READ;
+    write_right = FILE_RIGHT_WRITE;
+  } else if (info.protocol == PROTOCOL_PIPE && info.kind == HANDLE_KIND_NATIVE) {
+    kind = DESCRIPTOR_PIPE;
+    read_right = PIPE_RIGHT_READ;
+    write_right = PIPE_RIGHT_WRITE;
+  } else if (info.protocol == PROTOCOL_CONSOLE && info.kind == HANDLE_KIND_NATIVE) {
+    kind = DESCRIPTOR_CONSOLE;
+    read_right = CONSOLE_RIGHT_READ;
+    write_right = CONSOLE_RIGHT_WRITE;
+  } else {
+    return fail(ENOTSUP);
+  }
+  uint64_t rights = (access & PYXIS_DESCRIPTOR_READ ? read_right : 0) |
+      (access & PYXIS_DESCRIPTOR_WRITE ? write_right : 0);
+  if ((info.rights & rights) != rights ||
+      (info.kind == HANDLE_KIND_EXPORTED &&
+       (info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL)) {
+    return fail(EACCES);
+  }
+  int descriptor = reserve();
+  if (descriptor < 0) {
+    return -1;
+  }
+  entries[descriptor] = (struct descriptor_entry){
+    .state = DESCRIPTOR_OPEN, .kind = kind, .handle = *handle,
+    .readable = access & PYXIS_DESCRIPTOR_READ,
+    .writable = access & PYXIS_DESCRIPTOR_WRITE,
+  };
+  *handle = HANDLE_INVALID;
+  return descriptor;
+}
+
 bool descriptor_ready(int descriptor, bool writing)
 {
   struct descriptor_entry *entry = lookup(descriptor);
@@ -317,6 +396,70 @@ static size_t take_ahead(struct descriptor_entry *entry, void *buffer, size_t si
     entry->position += count;
   }
   return count;
+}
+
+static struct descriptor_entry *try_entry(int descriptor, size_t count, bool writing)
+{
+  if (!descriptor_ready(descriptor, writing)) {
+    return NULL;
+  }
+  if (count > (size_t)SSIZE_MAX) {
+    errno = EINVAL;
+    return NULL;
+  }
+  struct descriptor_entry *entry = &entries[descriptor];
+  if (entry->kind == DESCRIPTOR_FILE) {
+    errno = ENOTSUP;
+    return NULL;
+  }
+  return entry;
+}
+
+ssize_t pyxis_descriptor_try_read(int descriptor, void *buffer, size_t count)
+{
+  struct descriptor_entry *entry = try_entry(descriptor, count, false);
+  if (!entry) {
+    return -1;
+  }
+  if (!count) {
+    return 0;
+  }
+  if (entry->ahead_count) {
+    return (ssize_t)take_ahead(entry, buffer, count);
+  }
+  size_t read;
+  enum call_status status = entry->kind == DESCRIPTOR_PIPE ?
+      pipe_try_read(entry->handle, buffer, count, &read) :
+      console_read_timeout(entry->handle, buffer, count, 0, &read);
+  if (status != CALL_OK) {
+    return fail(status == CALL_TIMED_OUT ? EAGAIN : libc_call_errno(status));
+  }
+  if (read > count) {
+    return fail(EIO);
+  }
+  return (ssize_t)read;
+}
+
+ssize_t pyxis_descriptor_try_write(int descriptor, const void *buffer, size_t count)
+{
+  struct descriptor_entry *entry = try_entry(descriptor, count, true);
+  if (!entry) {
+    return -1;
+  }
+  if (!count) {
+    return 0;
+  }
+  size_t written;
+  enum call_status status = entry->kind == DESCRIPTOR_PIPE ?
+      pipe_try_write(entry->handle, buffer, count, &written) :
+      console_try_write(entry->handle, buffer, count, &written);
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  if (!written || written > count) {
+    return fail(EIO);
+  }
+  return (ssize_t)written;
 }
 
 static void discard_ahead(struct descriptor_entry *entry)

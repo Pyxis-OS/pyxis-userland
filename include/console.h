@@ -12,6 +12,11 @@
  * always makes progress. */
 enum call_status console_write(handle_t output, const void *bytes, size_t size, size_t *written);
 
+/* Same transfer contract, without waiting for output capacity. A full live
+ * terminal returns CALL_WOULD_BLOCK, with zero written and no pending write. */
+enum call_status console_try_write(handle_t output, const void *bytes, size_t size,
+    size_t *written);
+
 /* Repeats partial writes. Returns CALL_OK once all bytes are written, or the
  * failure status; earlier writes may already be visible. No terminator needed. */
 enum call_status console_write_all(handle_t output, const void *bytes, size_t size);
