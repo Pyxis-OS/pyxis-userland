@@ -256,7 +256,7 @@ static bool add_roots(struct shell *shell, const char *value, char quote,
     struct entries *entries)
 {
   size_t length = strlen(value);
-  for (size_t i = 0; i < shell->directory.root_count; ++i) {
+  for (size_t i = 0; i < shell->directory->root_count; ++i) {
     const char *name = shell->roots[i].name;
     size_t name_length = strlen(name);
     size_t common = length < name_length ? length : name_length;
