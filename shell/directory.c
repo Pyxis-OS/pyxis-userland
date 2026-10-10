@@ -287,3 +287,14 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
   return path_open_file(&shell->directory, path, rights, !input,
       &shell->workspace, file);
 }
+
+enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,
+    handle_t *directory)
+{
+  enum call_status status = prepare_workspace(shell, strlen(path));
+  if (status == CALL_OK) {
+    status = path_resolve(&shell->directory, path, DIRECTORY_KIND_DIRECTORY, rights,
+        &shell->workspace, directory);
+  }
+  return status;
+}

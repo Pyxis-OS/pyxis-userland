@@ -85,6 +85,13 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
 enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);
+/* Owned handle to a directory reached through the shell's own roots. */
+enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,
+    handle_t *directory);
+/* Tab completion of a command name: the first word of a pipeline stage.
+ * Offers builtins and the programs in bin:// and boot://. */
+bool shell_complete(void *context, const char *line, size_t cursor,
+    struct term_candidates *result);
 /* IMAGE is owned for plain programs, borrowed from BUNDLE when it is present. */
 enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,
     struct bundle_program **bundle);

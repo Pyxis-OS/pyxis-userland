@@ -44,12 +44,9 @@ static struct term_line_result read_command(struct shell *shell, char *line)
   if (shell->quiet_input) {
     return term_read_line_quiet(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
   }
-  if (shell->remote_prompt) {
-    return term_read_line_marked(&shell->terminal, prompt, &shell->history, line,
-        SHELL_LINE_CAPACITY);
-  }
-  return term_read_line_history(&shell->terminal, prompt, &shell->history, line,
-      SHELL_LINE_CAPACITY);
+  const struct term_completion completion = {shell_complete, shell};
+  return term_read_line_completing(&shell->terminal, prompt, &shell->history, &completion,
+      shell->remote_prompt, line, SHELL_LINE_CAPACITY);
 }
 
 static bool report_completion(struct shell *shell, handle_t events,
