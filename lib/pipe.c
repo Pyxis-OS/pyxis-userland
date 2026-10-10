@@ -36,7 +36,8 @@ enum call_status pipe_create(handle_t service, struct pipe_create_reply *reply)
   return status;
 }
 
-enum call_status pipe_read(handle_t reader, void *bytes, size_t capacity, size_t *read)
+static enum call_status pipe_read_call(handle_t reader, uint64_t operation,
+    void *bytes, size_t capacity, size_t *read)
 {
   if (!read) {
     return CALL_BAD_REQUEST;
@@ -44,7 +45,7 @@ enum call_status pipe_read(handle_t reader, void *bytes, size_t capacity, size_t
   *read = 0;
   size_t limit = capacity < PIPE_READ_MAX_BYTES ? capacity : PIPE_READ_MAX_BYTES;
   struct pipe_read_request request = {
-    .header = {PROTOCOL_PIPE, PIPE_READ},
+    .header = {PROTOCOL_PIPE, operation},
     .buffer = (uintptr_t)bytes, .capacity = limit,
   };
   struct pipe_read_reply response;
@@ -60,7 +61,18 @@ enum call_status pipe_read(handle_t reader, void *bytes, size_t capacity, size_t
   return CALL_OK;
 }
 
-enum call_status pipe_write(handle_t writer, const void *bytes, size_t length, size_t *written)
+enum call_status pipe_read(handle_t reader, void *bytes, size_t capacity, size_t *read)
+{
+  return pipe_read_call(reader, PIPE_READ, bytes, capacity, read);
+}
+
+enum call_status pipe_try_read(handle_t reader, void *bytes, size_t capacity, size_t *read)
+{
+  return pipe_read_call(reader, PIPE_TRY_READ, bytes, capacity, read);
+}
+
+static enum call_status pipe_write_call(handle_t writer, uint64_t operation,
+    const void *bytes, size_t length, size_t *written)
 {
   if (!written) {
     return CALL_BAD_REQUEST;
@@ -68,7 +80,7 @@ enum call_status pipe_write(handle_t writer, const void *bytes, size_t length, s
   *written = 0;
   size_t limit = length < PIPE_WRITE_MAX_BYTES ? length : PIPE_WRITE_MAX_BYTES;
   struct pipe_write_request request = {
-    .header = {PROTOCOL_PIPE, PIPE_WRITE},
+    .header = {PROTOCOL_PIPE, operation},
     .buffer = (uintptr_t)bytes, .length = limit,
   };
   struct pipe_write_reply response;
@@ -82,4 +94,14 @@ enum call_status pipe_write(handle_t writer, const void *bytes, size_t length, s
   }
   *written = response.length;
   return CALL_OK;
+}
+
+enum call_status pipe_write(handle_t writer, const void *bytes, size_t length, size_t *written)
+{
+  return pipe_write_call(writer, PIPE_WRITE, bytes, length, written);
+}
+
+enum call_status pipe_try_write(handle_t writer, const void *bytes, size_t length, size_t *written)
+{
+  return pipe_write_call(writer, PIPE_TRY_WRITE, bytes, length, written);
 }
