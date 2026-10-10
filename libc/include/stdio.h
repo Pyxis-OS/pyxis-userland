@@ -13,6 +13,9 @@ typedef struct pyxis_file FILE;
 
 #define EOF (-1)
 #define BUFSIZ 8192
+#define _IONBF 0
+#define _IOLBF 1
+#define _IOFBF 2
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -21,7 +24,7 @@ extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 
-/* Output is unbuffered. fread, and the character and line input built on it,
+/* Output defaults to unbuffered. fread, and the character and line input built on it,
  * may read up to BUFSIZ bytes ahead from files and pipes, never from consoles.
  * fopen accepts r/w/a, optional + and optional b (no effect), resolving native
  * capability paths and the initial directory. Private descriptors own handles,
@@ -29,8 +32,7 @@ extern FILE *stderr;
  * Read-ahead is private and never accompanies a delegated stream: do not read a
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
  * successful fseek or a write drops it, a failed seek keeps it. Standard
- * descriptors adopt exclusive startup handles once. No setvbuf, freopen or
- * wide I/O here. */
+ * descriptors adopt exclusive startup handles once. No freopen or wide I/O. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested
@@ -51,7 +53,25 @@ int remove(const char *path);
 /* File-only atomic rename/replacement. Paths use explicit startup roots/cwd;
  * directories and cross-filesystem copy fallbacks are not supported. */
 int rename(const char *old_path, const char *new_path);
+/* Flush queued output, retaining its unconfirmed suffix on failure; no native
+ * SYNC/durability promise. NULL flushes all outputs and reports the first error
+ * after attempting the others. Input flush drops file read-ahead/pushback,
+ * retaining pipe read-ahead. fclose flushes then closes even after a flush error.
+ * Direct descriptor I/O/close/dup2 and stream delegation require caller fflush
+ * first; pending bytes belong to FILE, not the shared descriptor object. */
 int fflush(FILE *stream);
+/* Configure before any stream I/O. Output _IOFBF flushes a full buffer, _IOLBF
+ * additionally flushes through newline, _IONBF writes immediately and disables
+ * future input read-ahead by this FILE (existing shared ahead is consumed).
+ * Buffered modes on input-only streams fail with ENOTSUP. Caller storage is
+ * borrowed until fclose; NULL allocates size bytes, or BUFSIZ for size zero.
+ * Buffered caller storage needs nonzero size. Failure preserves configuration.
+ * Buffering may accept bytes before backend I/O; later fflush/fclose report
+ * errors. A flush failure during fwrite counts only confirmed current-call
+ * bytes and keeps the unconfirmed suffix for fflush recovery. fseek flushes
+ * before moving; ftell includes queued output. */
+int setvbuf(FILE *__restrict stream, char *__restrict buffer, int mode, size_t size);
+void setbuf(FILE *__restrict stream, char *__restrict buffer);
 size_t fread(void *__restrict buffer, size_t size, size_t count, FILE *__restrict stream);
 /* Return bytes already read ahead, or else wait for initial data/EOF/error
  * from one backend transfer of at most capacity bytes, without filling a short

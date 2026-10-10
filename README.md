@@ -474,6 +474,26 @@ identity and modification time. Check `st_valid` with `STAT_DEV_VALID`,
 descriptors while comparing identity. Provider byte snapshots report their
 private domain without inventing object IDs or timestamps.
 
+Libc output remains unbuffered by default. `setvbuf` selects full or line output
+buffering before stream I/O, using caller storage until `fclose`, or allocated
+storage when passed NULL. `setbuf(stream, NULL)` selects immediate output and
+exact future input reads by that FILE. Full/line buffering on input-only streams
+fails with `ENOTSUP`; existing shared input read-ahead remains descriptor owned.
+`fflush` drains queued output without a durability promise and retains an
+unconfirmed suffix after failure. A flush failure during `fwrite` reports only
+confirmed bytes from that call; recover retained output with `fflush`, not a
+blind repeat of the write. `fclose` attempts flush and close, preserving the
+first error. `fseek` flushes before moving; `ftell` includes queued output.
+
+Call `fflush` before mixing buffered FILE output with descriptor I/O or delegated
+handles. `dup2` replaces the target descriptor while retaining its FILE
+association and selected access. Pending target output rejects with `EBUSY`;
+source validation/allocation failures preserve the target. A failed native
+close invalidates the target and reports the error without a release retry.
+FILE pushback/EOF are cleared on successful replacement; source position and
+read-ahead remain shared. A selected input FILE redirected to a write-only
+object subsequently reads with `EBADF`.
+
 [pyxis/descriptor.h](libc/include/pyxis/descriptor.h) bridges libc descriptors
 to borrowed native bindings and atomic handle adoption. Libc retains ownership
 of handles, file positions and read-ahead. Its try I/O supports native pipes and

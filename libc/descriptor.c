@@ -65,24 +65,22 @@ static struct descriptor_object *lookup(int descriptor)
   return entries[descriptor].object;
 }
 
-static int reserve(void)
+static int grow_entries(size_t required)
 {
-  size_t index;
-  for (index = 0; index < capacity; ++index) {
-    if (entries[index].state == DESCRIPTOR_FREE) {
-      entries[index].state = DESCRIPTOR_RESERVED;
-      return (int)index;
-    }
-  }
-
   size_t limit = (size_t)INT_MAX + 1;
   if (limit > SIZE_MAX / sizeof(*entries)) {
     limit = SIZE_MAX / sizeof(*entries);
   }
-  if (capacity == limit) {
+  if (required > limit) {
     return fail(EMFILE);
   }
-  size_t next = capacity > limit / 2 ? limit : capacity * 2;
+  if (required <= capacity) {
+    return 0;
+  }
+  size_t next = capacity;
+  while (next < required) {
+    next = next > limit / 2 ? limit : next * 2;
+  }
   struct descriptor_entry *grown = malloc(next * sizeof(*entries));
   if (!grown) {
     return -1;
@@ -94,6 +92,22 @@ static int reserve(void)
   }
   entries = grown;
   capacity = next;
+  return 0;
+}
+
+static int reserve(void)
+{
+  size_t index;
+  for (index = 0; index < capacity; ++index) {
+    if (entries[index].state == DESCRIPTOR_FREE) {
+      entries[index].state = DESCRIPTOR_RESERVED;
+      return (int)index;
+    }
+  }
+
+  if (grow_entries(capacity + 1) < 0) {
+    return -1;
+  }
   entries[index].state = DESCRIPTOR_RESERVED;
   return (int)index;
 }
@@ -397,6 +411,42 @@ int dup(int descriptor)
   return copy;
 }
 
+int dup2(int source, int target)
+{
+  struct descriptor_object *object = lookup(source);
+  if (!object) {
+    return -1;
+  }
+  if (target < 0) {
+    return fail(EBADF);
+  }
+  if (source == target) {
+    return target;
+  }
+  if (grow_entries((size_t)target + 1) < 0) {
+    return -1;
+  }
+  FILE *stream = entries[target].stream;
+  if (entries[target].state == DESCRIPTOR_RESERVED || (stream && stream->output_count)) {
+    return fail(EBUSY);
+  }
+  /* Retain before closing target; source and target can share the same object. */
+  ++object->references;
+  if (entries[target].state == DESCRIPTOR_OPEN && descriptor_close(target) < 0) {
+    --object->references;
+    return -1;
+  }
+  entries[target] = (struct descriptor_entry){
+    .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
+  };
+  if (stream) {
+    stream->descriptor = target;
+    stream->has_pushback = false;
+    stream->eof = false;
+  }
+  return target;
+}
+
 int descriptor_close(int descriptor)
 {
   struct descriptor_object *object = lookup(descriptor);
@@ -418,7 +468,7 @@ int descriptor_close(int descriptor)
   } else {
     *object = (struct descriptor_object){0};
   }
-  /* Never retry an uncertain release or reconnect a FILE after slot reuse.
+  /* Never retry an uncertain release or reconnect a FILE after its failure.
    * Any residual native entry is reclaimed by kernel process teardown. */
   return descriptor_release_handle(handle);
 }

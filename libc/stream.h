@@ -10,6 +10,11 @@ struct pyxis_file {
   bool eof, error, closed, allocated;
   bool has_pushback; /* One ungetc byte, returned before any descriptor input. */
   unsigned char pushback;
+  bool io_started, input_unbuffered, output_owned;
+  int output_mode; /* _IONBF by default; configuration precedes stream I/O. */
+  unsigned char *output; /* Borrowed caller storage, or owned allocation. */
+  size_t output_capacity, output_count;
+
 };
 
 int stream_error(FILE *stream, int error);

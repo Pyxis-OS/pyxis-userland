@@ -201,22 +201,91 @@ int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding)
   return descriptor_stream(current, binding);
 }
 
-int fflush(FILE *stream)
+static int flush_output(FILE *stream)
 {
-  /* There is no output buffering. Input fflush is undefined in ISO C; Pyxis
-   * drops file read-ahead so later reads refetch, and keeps pipe bytes. A prior
-   * error indicator does not make the flush fail, and NULL leaves input alone. */
-  if (stream && stream->closed) {
-    return stream_error(stream, EBADF);
-  }
-  if (stream) {
-    struct startup_stream binding;
-    if (descriptor_stream(stream, &binding) < 0) {
+  while (stream->output_count) {
+    if (!stream_ready(stream, true)) {
+      return EOF;
+    }
+    size_t written;
+    if (descriptor_write(stream->descriptor, stream->output, stream->output_count, &written) < 0) {
       return stream_error(stream, errno);
     }
-    stream->has_pushback = false;
-    descriptor_discard_input(stream->descriptor);
+    stream->output_count -= written;
+    memmove(stream->output, stream->output + written, stream->output_count);
   }
+  return 0;
+}
+
+int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
+{
+  if (!stream || stream->closed || stream->descriptor < 0) {
+    errno = EBADF;
+    return -1;
+  }
+  struct startup_stream binding;
+  if (descriptor_stream(stream, &binding) < 0) {
+    return -1;
+  }
+  if (stream->io_started || (mode != _IONBF && mode != _IOLBF && mode != _IOFBF)
+      || (mode != _IONBF && buffer && !size)) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (mode != _IONBF && !stream->writable) {
+    errno = ENOTSUP;
+    return -1;
+  }
+  bool owned = mode != _IONBF && !buffer;
+  size_t capacity = mode == _IONBF ? 0 : (size ? size : BUFSIZ);
+  unsigned char *output = mode == _IONBF ? NULL : (unsigned char *)buffer;
+  if (owned && !(output = malloc(capacity))) {
+    return -1;
+  }
+  if (stream->output_owned) {
+    free(stream->output);
+  }
+  stream->output = output;
+  stream->output_capacity = capacity;
+  stream->output_owned = owned;
+  stream->output_mode = mode;
+  stream->input_unbuffered = mode == _IONBF;
+  return 0;
+}
+
+void setbuf(FILE *restrict stream, char *restrict buffer)
+{
+  setvbuf(stream, buffer, buffer ? _IOFBF : _IONBF, BUFSIZ);
+}
+
+int fflush(FILE *stream)
+{
+  if (!stream) {
+    int error = 0;
+    for (FILE *current = streams; current; current = current->next) {
+      if (current->writable && flush_output(current) < 0 && !error) {
+        error = errno;
+      }
+    }
+    if (error) {
+      errno = error;
+      return EOF;
+    }
+    return 0;
+  }
+  if (stream->closed) {
+    return stream_error(stream, EBADF);
+  }
+  struct startup_stream binding;
+  if (descriptor_stream(stream, &binding) < 0) {
+    return stream_error(stream, errno);
+  }
+  stream->io_started = true;
+  if (flush_output(stream) < 0) {
+    return EOF;
+  }
+  stream->has_pushback = false;
+  descriptor_discard_input(stream->descriptor);
   return 0;
 }
 
@@ -230,6 +299,11 @@ static void dispose_stream(FILE *stream)
     *link = stream->next;
   }
   stream->closed = true;
+  if (stream->output_owned) {
+    free(stream->output);
+  }
+  stream->output = NULL;
+  stream->output_count = 0;
   if (stream->allocated) {
     free(stream);
   }
@@ -240,12 +314,15 @@ int fclose(FILE *stream)
   if (!stream || stream->closed) {
     return stream_error(stream, EBADF);
   }
-  int result = descriptor_close(stream->descriptor);
-  if (result < 0) {
-    stream_error(stream, errno);
+  int error = flush_output(stream) < 0 ? errno : 0;
+  if (descriptor_close(stream->descriptor) < 0 && !error) {
+    error = errno;
+  }
+  if (error) {
+    stream_error(stream, error);
   }
   dispose_stream(stream);
-  return result < 0 ? EOF : 0;
+  return error ? EOF : 0;
 }
 
 void stdio_finish(void)
@@ -260,8 +337,12 @@ void stdio_finish(void)
 /* Buffered reads may fetch ahead of the request; exact reads never do. */
 static size_t read_some(void *buffer, size_t capacity, FILE *stream, bool buffered)
 {
+  stream->io_started = true;
+  if (flush_output(stream) < 0) {
+    return 0;
+  }
   size_t read;
-  int result = buffered ?
+  int result = buffered && !stream->input_unbuffered ?
       descriptor_read_buffered(stream->descriptor, buffer, capacity, &read) :
       descriptor_read(stream->descriptor, buffer, capacity, &read);
   if (result < 0) {
@@ -328,6 +409,15 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
   return total / size;
 }
 
+static int flush_write(FILE *stream, size_t *previous_pending)
+{
+  size_t before = stream->output_count;
+  int result = flush_output(stream);
+  size_t confirmed = before - stream->output_count;
+  *previous_pending -= confirmed < *previous_pending ? confirmed : *previous_pending;
+  return result;
+}
+
 size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
 {
   if (!size || !count) {
@@ -343,8 +433,41 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   /* ISO C requires a positioning call between reading and writing; like
    * read-ahead, an unread pushback byte is dropped by the write. */
   stream->has_pushback = false;
+  stream->io_started = true;
+  descriptor_discard_input(stream->descriptor);
   size_t bytes = size * count, total = 0;
+  size_t previous_pending = stream->output_count;
+  bool output_error = false;
   while (total < bytes) {
+    if (stream->output_mode != _IONBF) {
+      if (stream->output_count == stream->output_capacity
+          && flush_write(stream, &previous_pending) < 0) {
+        output_error = true;
+        break;
+      }
+      size_t chunk = stream->output_capacity - stream->output_count;
+      if (chunk > bytes - total) {
+        chunk = bytes - total;
+      }
+      const unsigned char *input = (const unsigned char *)buffer + total;
+      bool newline = false;
+      if (stream->output_mode == _IOLBF) {
+        const unsigned char *end = memchr(input, '\n', chunk);
+        if (end) {
+          chunk = (size_t)(end - input) + 1;
+          newline = true;
+        }
+      }
+      memcpy(stream->output + stream->output_count, input, chunk);
+      stream->output_count += chunk;
+      total += chunk;
+      if ((newline || stream->output_count == stream->output_capacity)
+          && flush_write(stream, &previous_pending) < 0) {
+        output_error = true;
+        break;
+      }
+      continue;
+    }
     size_t written;
     if (descriptor_write(stream->descriptor, (const char *)buffer + total,
                          bytes - total, &written) < 0) {
@@ -355,6 +478,9 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   }
   /* Report whole elements, but retain every confirmed byte in the position,
    * including a partial final element before a later failure. */
+  if (output_error) {
+    total -= stream->output_count - previous_pending;
+  }
   return total / size;
 }
 
@@ -464,6 +590,7 @@ int ungetc(int character, FILE *stream)
   if (character == EOF || !stream_ready(stream, false) || stream->has_pushback) {
     return EOF;
   }
+  stream->io_started = true;
   stream->pushback = (unsigned char)character;
   stream->has_pushback = true;
   stream->eof = false;
@@ -530,7 +657,12 @@ int fseek(FILE *stream, long offset, int origin)
     }
     --offset;
   }
-  if (descriptor_seek(stream->descriptor, offset, origin) < 0) {
+  if (origin != SEEK_SET && origin != SEEK_CUR && origin != SEEK_END) {
+    errno = EINVAL;
+    return -1;
+  }
+  stream->io_started = true;
+  if (flush_output(stream) < 0 || descriptor_seek(stream->descriptor, offset, origin) < 0) {
     return -1;
   }
   stream->eof = false;
@@ -544,7 +676,15 @@ long ftell(FILE *stream)
     errno = EBADF;
     return -1;
   }
+  stream->io_started = true;
   long position = descriptor_tell(stream->descriptor);
+  if (position >= 0 && stream->output_count) {
+    if (stream->output_count > (uint64_t)LONG_MAX - (uint64_t)position) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    position += (long)stream->output_count;
+  }
   /* The pushed-back byte is unread again. Before the first byte the position
    * stays zero; ISO C leaves it indeterminate there. */
   if (position > 0 && stream->has_pushback) {

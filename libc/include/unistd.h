@@ -67,6 +67,13 @@ ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset);
  * cursor and read-ahead; the new slot has no FILE association. Closing either
  * slot leaves the other valid; only final close releases the native handle. */
 int dup(int descriptor);
+/* Replace target with a shared reference to source, retaining target's FILE
+ * association and selected access; selected rights may fail against the new
+ * object. Require fflush first: pending FILE output rejects with EBUSY. Source
+ * validation/capacity failures preserve target. One failed native target close
+ * leaves target invalidated and returns its error; never retries release.
+ * Source==target validates and returns unchanged. */
+int dup2(int source, int target);
 /* Invalidates this slot's FILE association even on release failure; never retries. */
 int close(int descriptor);
 /* Set a writable file's size through native RESIZE. Growth reads as zero and
