@@ -42,6 +42,11 @@ actual-grant preparation; plain FILE paths keep ordinary launch behavior.
 Logical `bin://NAME` aliases retain literal FILE lookup before the same bin
 candidates and catalog, without rescue fallback. ZIP launch remains unavailable.
 
+`tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
+Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping
+can split a UTF-8 branch. `--ascii` selects ASCII branches and continuation
+prefixes; filenames keep the existing output behavior.
+
 The [native installer](installer/README.md) consumes the SDK's pinned npfs
 codecs and explicit install-mode disk/source grants. It is packaged normally;
 `init-installed` receives the persistent `system://` and `home://` volumes from

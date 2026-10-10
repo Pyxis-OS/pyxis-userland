@@ -14,12 +14,13 @@ struct tree {
   size_t levels; /* Levels to show below an operand; SIZE_MAX for all. */
   size_t directories, files;
   bool failed;
+  bool ascii;
   char prefix[TREE_DEPTH_LIMIT * INDENT_BYTES + 1];
 };
 
 static int usage(void)
 {
-  fprintf(stderr, "usage: tree [-L levels] [--] [directory...]\n");
+  fprintf(stderr, "usage: tree [--ascii] [-L levels] [--] [directory...]\n");
   return EXIT_FAILURE;
 }
 
@@ -55,7 +56,9 @@ static int walk(struct tree *tree, const char *path, size_t depth)
     const struct ls_entry *entry = &listing.entries[i];
     bool last = i + 1 == listing.count;
     bool directory = entry->kind == LS_DIRECTORY;
-    if (fputs(tree->prefix, stdout) == EOF || fputs(last ? "└── " : "├── ", stdout) == EOF ||
+    const char *branch = tree->ascii ? (last ? "`-- " : "|-- ") :
+        (last ? "└── " : "├── ");
+    if (fputs(tree->prefix, stdout) == EOF || fputs(branch, stdout) == EOF ||
         ls_print_name(entry, tree->output.terminal) != 0 || fputc('\n', stdout) == EOF) {
       result = -1;
       break;
@@ -81,7 +84,7 @@ static int walk(struct tree *tree, const char *path, size_t depth)
       continue;
     }
     size_t used = strlen(tree->prefix);
-    const char *indent = last ? "    " : TREE_CONTINUATION;
+    const char *indent = last ? "    " : tree->ascii ? "|   " : TREE_CONTINUATION;
     memcpy(tree->prefix + used, indent, strlen(indent) + 1);
     result = walk(tree, child, depth + 1);
     tree->prefix[used] = '\0';
@@ -111,6 +114,8 @@ int main(int argc, char **argv)
     const char *argument = argv[i];
     if (options && !strcmp(argument, "--")) {
       options = false;
+    } else if (options && !strcmp(argument, "--ascii")) {
+      tree.ascii = true;
     } else if (options && argument[0] == '-' && argument[1]) {
       const char *value = NULL;
       if (argument[1] == 'L') {
