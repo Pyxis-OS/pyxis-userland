@@ -3,14 +3,23 @@
 #include <directory.h>
 #include <file.h>
 #include <handle.h>
+#include <pyxis_fs/npfs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define PROGRAM_SUFFIX ".pxe"
+#define BUNDLE_SUFFIX ".pxb"
 #define NEWC_HEADER_BYTES 110u
 #define NEWC_TRAILER "TRAILER!!!"
 #define BIN_RIGHTS DIRECTORY_CONTENT_RIGHTS
+#define SOURCE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
+    DIRECTORY_RIGHT_READ_FILES)
+/* Installer settings, not ABI: bounded traversal and native destination names.
+ * The fixed-depth heap stack owns at most one directory pair per level. */
+#define TREE_MAX_DEPTH 32u
+#define TREE_MAX_ENTRIES 65536u
+#define TREE_NAME_BYTES (NPFS_NAME_MAX + 1)
 /* One file call each way per chunk. */
 #define COPY_BYTES (FILE_READ_MAX_BYTES < FILE_WRITE_MAX_BYTES ? FILE_READ_MAX_BYTES : \
     FILE_WRITE_MAX_BYTES)
@@ -48,9 +57,67 @@ static bool listed(char *const *names, size_t count, const char *name)
   return false;
 }
 
-static int compare_names(const void *left, const void *right)
+static int compare_programs(const void *left, const void *right)
 {
-  return strcmp(*(char *const *)left, *(char *const *)right);
+  const struct install_program *a = left, *b = right;
+  return strcmp(a->name, b->name);
+}
+
+static const struct install_program *find_program(const struct install_programs *programs,
+    const char *name)
+{
+  for (size_t i = 0; i < programs->count; ++i) {
+    if (!strcmp(programs->entries[i].name, name)) {
+      return &programs->entries[i];
+    }
+  }
+  return NULL;
+}
+
+static bool has_suffix(const char *name, const char *suffix)
+{
+  size_t length = strlen(name), suffix_length = strlen(suffix);
+  return length > suffix_length && !strcmp(name + length - suffix_length, suffix);
+}
+
+static bool add_program(struct install_programs *programs, const char *name, uint64_t kind)
+{
+  if (programs->count == TREE_MAX_ENTRIES) {
+    return false;
+  }
+  struct install_program *larger = realloc(programs->entries,
+      (programs->count + 1) * sizeof(*larger));
+  if (!larger) {
+    return false;
+  }
+  programs->entries = larger;
+  char *copy = strdup(name);
+  if (!copy) {
+    return false;
+  }
+  larger[programs->count++] = (struct install_program){.name = copy, .kind = kind};
+  return true;
+}
+
+static bool read_entry(handle_t directory, const struct directory_cursor *cursor,
+    char name[TREE_NAME_BYTES], struct directory_enumerate_reply *entry)
+{
+  enum call_status status = directory_enumerate(directory, cursor, name, TREE_NAME_BYTES, entry);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: cannot enumerate program directory (status %u)\n", status);
+    return false;
+  }
+  if (entry->outcome == DIRECTORY_ENTRY || entry->outcome == DIRECTORY_END) {
+    return true;
+  }
+  if (entry->outcome == DIRECTORY_BUFFER_TOO_SMALL) {
+    fprintf(stderr, "installer: program entry name exceeds %u bytes\n", NPFS_NAME_MAX);
+  } else if (entry->outcome == DIRECTORY_CHANGED) {
+    fputs("installer: program directory changed during traversal\n", stderr);
+  } else {
+    fputs("installer: invalid program directory enumeration reply\n", stderr);
+  }
+  return false;
 }
 
 /* Reads a whole small file into a NUL-terminated buffer. */
@@ -107,46 +174,43 @@ bool install_programs_list(handle_t boot, struct install_programs *programs)
   char **rescue = NULL;
   size_t rescue_count = 0;
   bool ok = read_rescue_list(boot, &rescue, &rescue_count);
-  size_t capacity = 128;
-  char *name = ok ? malloc(capacity) : NULL;
-  ok = name != NULL;
+  char name[TREE_NAME_BYTES];
+  size_t entries = 0;
   struct directory_cursor cursor = {0};
   while (ok) {
     struct directory_enumerate_reply entry;
-    ok = directory_enumerate(boot, &cursor, name, capacity, &entry) == CALL_OK &&
-        entry.outcome != DIRECTORY_CHANGED;
+    ok = read_entry(boot, &cursor, name, &entry);
     if (!ok || entry.outcome == DIRECTORY_END) {
       break;
     }
-    if (entry.outcome == DIRECTORY_BUFFER_TOO_SMALL) {
-      char *larger = realloc(name, entry.name_size);
-      ok = larger != NULL;
-      name = ok ? larger : name;
-      capacity = ok ? entry.name_size : capacity;
-      continue;
-    }
     cursor = entry.cursor;
-    size_t length = strlen(name), suffix = strlen(PROGRAM_SUFFIX);
-    if (entry.kind != DIRECTORY_KIND_FILE || length <= suffix ||
-        strcmp(name + length - suffix, PROGRAM_SUFFIX) ||
-        listed(rescue, rescue_count, name)) {
+    if (++entries > TREE_MAX_ENTRIES) {
+      ok = false;
+      break;
+    }
+    bool program = entry.kind == DIRECTORY_KIND_FILE && has_suffix(name, PROGRAM_SUFFIX) &&
+        !listed(rescue, rescue_count, name);
+    bool bundle = entry.kind == DIRECTORY_KIND_DIRECTORY && has_suffix(name, BUNDLE_SUFFIX);
+    if (!program && !bundle) {
       continue;
     }
-    ok = add_name(&programs->names, &programs->count, name);
+    ok = add_program(programs, name, entry.kind);
   }
-  free(name);
   free_names(rescue, rescue_count);
   if (!ok) {
     install_programs_destroy(programs);
     return false;
   }
-  qsort(programs->names, programs->count, sizeof(*programs->names), compare_names);
+  qsort(programs->entries, programs->count, sizeof(*programs->entries), compare_programs);
   return true;
 }
 
 void install_programs_destroy(struct install_programs *programs)
 {
-  free_names(programs->names, programs->count);
+  for (size_t i = 0; i < programs->count; ++i) {
+    free(programs->entries[i].name);
+  }
+  free(programs->entries);
   *programs = (struct install_programs){0};
 }
 
@@ -168,6 +232,20 @@ static bool newc_field(const uint8_t *header, unsigned index, uint32_t *value)
 static size_t align4(size_t value)
 {
   return (value + 3) & ~(size_t)3;
+}
+
+static bool program_path(const struct install_programs *programs, const char *path)
+{
+  for (size_t i = 0; i < programs->count; ++i) {
+    const struct install_program *program = &programs->entries[i];
+    size_t length = strlen(program->name);
+    if (!strncmp(path, program->name, length) &&
+        (path[length] == '\0' ||
+          (program->kind == DIRECTORY_KIND_DIRECTORY && path[length] == '/'))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool install_archive_filter(const struct install_source *archive,
@@ -200,7 +278,7 @@ bool install_archive_filter(const struct install_source *archive,
     }
     const char *name = (const char *)input + offset + NEWC_HEADER_BYTES;
     bool trailer = !strcmp(name, NEWC_TRAILER);
-    if (trailer || !listed(programs->names, programs->count, name)) {
+    if (trailer || !program_path(programs, name)) {
       memcpy(output + used, input + offset, next - offset);
       used += next - offset;
     }
@@ -221,36 +299,70 @@ fail:
   return false;
 }
 
-/* Removes every file in DIRECTORY; revision directories hold only files. */
+struct tree_level {
+  handle_t source, target;
+  struct directory_cursor cursor;
+  size_t entries;
+  char name[TREE_NAME_BYTES];
+};
+
+/* Mutations invalidate enumeration cursors. Restart at zero after each child
+ * removal; descend before removing directories, including empty ones. */
 static bool clear_directory(handle_t directory)
 {
-  char **names = NULL;
-  size_t count = 0, capacity = 128;
-  char *name = malloc(capacity);
-  bool ok = name != NULL;
-  struct directory_cursor cursor = {0};
+  struct tree_level *levels = calloc(TREE_MAX_DEPTH + 1, sizeof(*levels));
+  if (!levels) {
+    return false;
+  }
+  levels[0].target = directory;
+  unsigned depth = 0;
+  size_t entries = 0;
+  bool ok = true;
   while (ok) {
+    struct tree_level *level = &levels[depth];
+    const struct directory_cursor start = {0};
+    char name[TREE_NAME_BYTES];
     struct directory_enumerate_reply entry;
-    ok = directory_enumerate(directory, &cursor, name, capacity, &entry) == CALL_OK &&
-        entry.outcome != DIRECTORY_CHANGED;
-    if (!ok || entry.outcome == DIRECTORY_END) {
+    ok = read_entry(level->target, &start, name, &entry);
+    if (!ok) {
       break;
     }
-    if (entry.outcome == DIRECTORY_BUFFER_TOO_SMALL) {
-      char *larger = realloc(name, entry.name_size);
-      ok = larger != NULL;
-      name = ok ? larger : name;
-      capacity = ok ? entry.name_size : capacity;
+    if (entry.outcome == DIRECTORY_END) {
+      if (!depth) {
+        break;
+      }
+      handle_close(level->target);
+      --depth;
+      ok = directory_remove(levels[depth].target, level->name,
+          DIRECTORY_KIND_DIRECTORY) == CALL_OK;
       continue;
     }
-    cursor = entry.cursor;
-    ok = add_name(&names, &count, name);
+    if (++entries > TREE_MAX_ENTRIES) {
+      ok = false;
+      break;
+    }
+    if (entry.kind == DIRECTORY_KIND_FILE) {
+      ok = directory_remove(level->target, name, DIRECTORY_KIND_FILE) == CALL_OK;
+    } else if (entry.kind == DIRECTORY_KIND_DIRECTORY && depth < TREE_MAX_DEPTH) {
+      handle_t child = HANDLE_INVALID;
+      ok = directory_lookup(level->target, name, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS,
+          &child) == CALL_OK;
+      if (ok) {
+        ++depth;
+        levels[depth] = (struct tree_level){.target = child};
+        strcpy(levels[depth].name, name);
+      }
+    } else {
+      ok = false;
+    }
   }
-  for (size_t i = 0; ok && i < count; ++i) {
-    ok = directory_remove(directory, names[i], DIRECTORY_KIND_FILE) == CALL_OK;
+  while (depth) {
+    handle_close(levels[depth--].target);
   }
-  free(name);
-  free_names(names, count);
+  if (!ok) {
+    fputs("installer: cannot clear program tree within traversal limits\n", stderr);
+  }
+  free(levels);
   return ok;
 }
 
@@ -312,6 +424,130 @@ static bool verify_program(handle_t boot, handle_t directory, const char *name,
   return ok;
 }
 
+static bool verify_entry_count(handle_t directory, size_t expected)
+{
+  struct directory_cursor cursor = {0};
+  size_t count = 0;
+  for (;;) {
+    char name[TREE_NAME_BYTES];
+    struct directory_enumerate_reply entry;
+    if (!read_entry(directory, &cursor, name, &entry)) {
+      return false;
+    }
+    if (entry.outcome == DIRECTORY_END) {
+      return count == expected;
+    }
+    if (++count > expected) {
+      return false;
+    }
+    cursor = entry.cursor;
+  }
+}
+
+/* The boot archive is immutable and the admitted target pool is offline.
+ * Root selection comes from PROGRAMS; every descendant belongs to its unit.
+ * Verification checks every source name at its exact kind, then independently
+ * counts destination entries at each level to detect extras without sorting. */
+static bool walk_programs(handle_t boot, handle_t directory,
+    const struct install_programs *programs, uint8_t *buffers, bool verify)
+{
+  struct tree_level *levels = calloc(TREE_MAX_DEPTH + 1, sizeof(*levels));
+  if (!levels) {
+    return false;
+  }
+  levels[0] = (struct tree_level){.source = boot, .target = directory};
+  unsigned depth = 0;
+  size_t entries = 0, root_entries = 0;
+  bool ok = true;
+  while (ok) {
+    struct tree_level *level = &levels[depth];
+    char name[TREE_NAME_BYTES];
+    struct directory_enumerate_reply entry;
+    ok = read_entry(level->source, &level->cursor, name, &entry);
+    if (!ok) {
+      break;
+    }
+    if (entry.outcome == DIRECTORY_END) {
+      if (verify && !verify_entry_count(level->target, level->entries)) {
+        fputs("installer: installed program directory has missing or extra entries\n", stderr);
+        ok = false;
+        break;
+      }
+      if (!depth) {
+        ok = root_entries == programs->count;
+        break;
+      }
+      handle_close(level->source);
+      handle_close(level->target);
+      --depth;
+      continue;
+    }
+    level->cursor = entry.cursor;
+    if (!depth) {
+      const struct install_program *program = find_program(programs, name);
+      if (!program) {
+        continue;
+      }
+      if (program->kind != entry.kind) {
+        ok = false;
+        break;
+      }
+      ++root_entries;
+    }
+    if (++entries > TREE_MAX_ENTRIES) {
+      fputs("installer: program trees exceed the entry limit\n", stderr);
+      ok = false;
+      break;
+    }
+    ++level->entries;
+    if (entry.kind == DIRECTORY_KIND_FILE) {
+      ok = verify ? verify_program(level->source, level->target, name,
+          buffers, buffers + COPY_BYTES) :
+          copy_program(level->source, level->target, name, buffers);
+    } else if (entry.kind == DIRECTORY_KIND_DIRECTORY) {
+      if (depth == TREE_MAX_DEPTH) {
+        fputs("installer: program tree exceeds the directory depth limit\n", stderr);
+        ok = false;
+        break;
+      }
+      handle_t source = HANDLE_INVALID, target = HANDLE_INVALID;
+      ok = directory_lookup(level->source, name, DIRECTORY_KIND_DIRECTORY, SOURCE_RIGHTS,
+          &source) == CALL_OK;
+      if (ok) {
+        ok = (verify ? directory_lookup(level->target, name, DIRECTORY_KIND_DIRECTORY,
+              SOURCE_RIGHTS, &target) :
+            directory_create(level->target, name, DIRECTORY_KIND_DIRECTORY,
+              BIN_RIGHTS, &target)) == CALL_OK;
+      }
+      if (!ok) {
+        fprintf(stderr, "installer: cannot %s program directory %s\n",
+            verify ? "verify" : "copy", name);
+        if (source != HANDLE_INVALID) {
+          handle_close(source);
+        }
+        break;
+      }
+      ++depth;
+      levels[depth] = (struct tree_level){.source = source, .target = target};
+      strcpy(levels[depth].name, name);
+    } else {
+      fprintf(stderr, "installer: unsupported program entry kind for %s\n", name);
+      ok = false;
+    }
+  }
+  while (depth) {
+    handle_close(levels[depth].source);
+    handle_close(levels[depth].target);
+    --depth;
+  }
+  free(levels);
+  if (!ok) {
+    fprintf(stderr, "installer: cannot %s complete program trees in the bin volume\n",
+        verify ? "verify" : "copy");
+  }
+  return ok;
+}
+
 static enum call_status open_bin(const struct install_disk *disk, handle_t *root)
 {
   enum call_status status = disk_create_volume(disk->handle, INSTALL_POOL_PARTITION,
@@ -349,8 +585,8 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
   if (!ok) {
     fprintf(stderr, "installer: cannot prepare bin://%s (status %u)\n", revision, status);
   }
-  for (size_t i = 0; ok && i < programs->count; ++i) {
-    ok = copy_program(boot, directory, programs->names[i], buffers);
+  if (ok) {
+    ok = walk_programs(boot, directory, programs, buffers, false);
   }
   if (ok) {
     status = directory_sync(directory);
@@ -359,8 +595,8 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
       fprintf(stderr, "installer: bin volume sync failed (status %u)\n", status);
     }
   }
-  for (size_t i = 0; ok && i < programs->count; ++i) {
-    ok = verify_program(boot, directory, programs->names[i], buffers, buffers + COPY_BYTES);
+  if (ok) {
+    ok = walk_programs(boot, directory, programs, buffers, true);
   }
   if (directory != HANDLE_INVALID) {
     handle_close(directory);
@@ -376,49 +612,43 @@ bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
     const char *previous)
 {
   handle_t root = HANDLE_INVALID;
-  char **names = NULL;
-  size_t count = 0, capacity = 128;
-  char *name = malloc(capacity);
-  bool ok = name && disk_open_volume(disk->handle, INSTALL_POOL_PARTITION,
+  size_t entries = 0;
+  bool changed = false;
+  bool ok = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION,
       INSTALL_BIN_VOLUME, BIN_RIGHTS, &root) == CALL_OK;
   struct directory_cursor cursor = {0};
   while (ok) {
+    char name[TREE_NAME_BYTES];
     struct directory_enumerate_reply entry;
-    ok = directory_enumerate(root, &cursor, name, capacity, &entry) == CALL_OK &&
-        entry.outcome != DIRECTORY_CHANGED;
+    ok = read_entry(root, &cursor, name, &entry);
     if (!ok || entry.outcome == DIRECTORY_END) {
       break;
     }
-    if (entry.outcome == DIRECTORY_BUFFER_TOO_SMALL) {
-      char *larger = realloc(name, entry.name_size);
-      ok = larger != NULL;
-      name = ok ? larger : name;
-      capacity = ok ? entry.name_size : capacity;
-      continue;
+    if (++entries > TREE_MAX_ENTRIES) {
+      ok = false;
+      break;
     }
     cursor = entry.cursor;
-    if (entry.kind == DIRECTORY_KIND_DIRECTORY && strcmp(name, keep) &&
-        (!previous || strcmp(name, previous))) {
-      ok = add_name(&names, &count, name);
+    if (entry.kind != DIRECTORY_KIND_DIRECTORY || !strcmp(name, keep) ||
+        (previous && !strcmp(name, previous))) {
+      continue;
     }
-  }
-  for (size_t i = 0; ok && i < count; ++i) {
     handle_t directory = HANDLE_INVALID;
-    ok = directory_lookup(root, names[i], DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS,
+    ok = directory_lookup(root, name, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS,
           &directory) == CALL_OK && clear_directory(directory);
     if (directory != HANDLE_INVALID) {
       handle_close(directory);
     }
-    ok = ok && directory_remove(root, names[i], DIRECTORY_KIND_DIRECTORY) == CALL_OK;
+    ok = ok && directory_remove(root, name, DIRECTORY_KIND_DIRECTORY) == CALL_OK;
     if (ok) {
-      printf("Removed old programs bin://%s\n", names[i]);
+      changed = true;
+      printf("Removed old programs bin://%s\n", name);
+      cursor = (struct directory_cursor){0};
     }
   }
-  if (ok && count) {
+  if (ok && changed) {
     ok = directory_sync(root) == CALL_OK;
   }
-  free(name);
-  free_names(names, count);
   if (root != HANDLE_INVALID) {
     handle_close(root);
   }

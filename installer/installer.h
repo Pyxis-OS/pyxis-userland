@@ -111,23 +111,30 @@ bool install_esp_write(const struct install_esp *esp);
 bool install_esp_verify(const struct install_esp *esp);
 void install_esp_destroy(struct install_esp *esp);
 
-/* Executables that leave the boot archive: root-level .pxe entries not named
- * in boot://share/installer/rescue.list, sorted. */
+/* Complete program units that leave the boot archive: non-rescue root .pxe
+ * files and root .pxb directories, sorted by name. */
+struct install_program {
+  char *name;
+  uint64_t kind;
+};
+
 struct install_programs {
-  char **names;
+  struct install_program *entries;
   size_t count;
 };
 bool install_programs_list(handle_t boot, struct install_programs *programs);
 void install_programs_destroy(struct install_programs *programs);
-/* The rescue archive: the newc boot archive without PROGRAMS, as owned memory. */
+/* The rescue archive: newc without selected roots or their descendants, as
+ * owned memory. Descendant matching respects component boundaries. */
 bool install_archive_filter(const struct install_source *archive,
     const struct install_programs *programs, struct install_source *rescue);
 /* Outside any raw claim on the pool: creates the bin volume if missing, writes
- * every program into bin/REVISION, replacing an earlier partial copy, syncs the
- * pool and compares the copies with their sources. */
+ * complete program trees into bin/REVISION, replacing an earlier partial copy,
+ * syncs the pool and verifies names, kinds, structure, sizes and bytes. */
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
     const struct install_programs *programs, const char *revision);
-/* Removes every revision directory except KEEP and PREVIOUS (which may be NULL). */
+/* Recursively removes revisions except KEEP and PREVIOUS (which may be NULL).
+ * The caller skips this best-effort stage when the previous revision is unknown. */
 bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
     const char *previous);
 

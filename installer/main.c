@@ -728,8 +728,14 @@ done:
   }
   if (attempted_write && result != EXIT_SUCCESS) {
     if (updating && !esp_attempted) {
-      fputs("Update failed before the EFI boot files changed; the disk still boots its\n"
-          "previous revision. Boot the live image again, then choose Update.\n", stderr);
+      if (strcmp(selected->update.revision, INSTALL_UNKNOWN_REVISION) &&
+          strcmp(selected->update.revision, revision)) {
+        fputs("Update failed before the EFI boot files changed; the disk still boots its\n"
+            "previous revision. Boot the live image again, then choose Update.\n", stderr);
+      } else {
+        fputs("Update failed before the EFI boot files changed; its program revision may\n"
+            "be partially rewritten. Boot the live image again, then choose Update.\n", stderr);
+      }
     } else if (updating) {
       fputs("Update failed; the EFI boot files may be partially rebuilt.\n"
           "Boot the live image again, then choose Update to rebuild this disk's boot files.\n", stderr);

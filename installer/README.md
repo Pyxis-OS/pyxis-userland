@@ -25,6 +25,24 @@ another disk refuse the candidate. The live revision comes from SYSTEM_INFO.
 This checks opening compatibility and available boot identity, not whole-pool
 integrity or complete bootability.
 
+Root `.pxb` directories move as complete program units to `bin/REVISION`,
+beside root `.pxe` files outside `share/installer/rescue.list`. Copy preserves
+empty directories and uses bounded file buffers. After pool sync, verification
+checks names, kinds, directory structure, file sizes and bytes, rejecting missing
+or extra entries. The rescue archive excludes each selected root and its
+descendants using component boundaries. Other archive contents stay packaged.
+Installer traversal settings allow 32 directory levels below the revision root,
+65536 entries per traversal and native destination names of at most 255 bytes.
+Unsupported entry kinds, changed listings and exhausted limits fail the stage.
+
+Programs are copied, synced and verified before publishing the ESP. A failed
+program stage leaves its partial revision for the next run to clear and rewrite;
+same-revision or unknown-revision interruption can damage the previously used
+program tree. After success, old revisions are recursively removed except the
+current and previous revisions; an unknown previous revision skips cleanup.
+Cleanup remains best effort. Writable target admission refuses retained pools,
+so this is an offline update and does not need program revision leases.
+
 After the exact word `update`, inspection repeats under exclusive raw access and
 checks that partition bounds and GUIDs still match. The shared fresh ESP writer
 first clears and flushes the reserved area, including both FAT boot sectors.
