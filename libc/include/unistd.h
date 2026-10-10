@@ -25,6 +25,14 @@ extern "C" {
  * whole name and NUL must fit, else ENAMETOOLONG; failure preserves NAME. */
 int gethostname(char *name, size_t size);
 
+/* Change the retained native working chain atomically. Failure preserves cwd
+ * and rights. getcwd returns its normalized scheme:// description; external
+ * renames can leave it stale. Unknown launch spelling fails with ENOTSUP.
+ * Too little space fails with ERANGE and preserves the buffer. NULL buffer
+ * allocates size bytes, or the required length when size is zero. */
+int chdir(const char *path);
+char *getcwd(char *buffer, size_t size);
+
 /* Native lookup using the caller's grants, with each owned handle immediately
  * released. F_OK requests no child rights; files R_OK/W_OK require READ/WRITE,
  * directories require ENUMERATE / CREATE|REMOVE. Combined modes require both.

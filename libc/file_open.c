@@ -4,6 +4,7 @@
 #include <handle.h>
 #include <path.h>
 #include <provider.h>
+#include <pyxis/working_path.h>
 #include <random.h>
 #include <startup.h>
 #include <stdlib.h>
@@ -27,8 +28,13 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   if (!path || !*path) {
     return CALL_BAD_REQUEST;
   }
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    return status;
+  }
   size_t length = strlen(path);
-  size_t depth = startup_working_directory_count();
+  size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
     return CALL_LIMIT;
@@ -57,20 +63,16 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
     .component = component, .component_capacity = length + 1,
     .http = http, .response = info, .clock = startup_resource("clock"),
   };
-  /* Path resolution borrows the initial chain; its temporary copies retain
-   * authority through each call. It never changes or closes the startup chain. */
-  struct path_context context = {
-    .directories = (handle_t *)startup_working_directories(), .count = depth,
-  };
-  enum call_status status;
+  /* Resolution borrows the shared cwd; scratch copies retain authority
+   * through each call without changing the retained working chain. */
   if (native_only) {
-    status = path_resolve_native(&context, path, kind, rights, &workspace, handle);
+    status = path_resolve_native(context, path, kind, rights, &workspace, handle);
   } else if (exclusive) {
-    status = path_create_file(&context, path, rights, &workspace, handle);
+    status = path_create_file(context, path, rights, &workspace, handle);
   } else if (kind == DIRECTORY_KIND_FILE) {
-    status = path_open_file(&context, path, rights, create, &workspace, handle);
+    status = path_open_file(context, path, rights, create, &workspace, handle);
   } else {
-    status = path_resolve(&context, path, kind, rights, &workspace, handle);
+    status = path_resolve(context, path, kind, rights, &workspace, handle);
   }
   free(http);
   free(component);
@@ -208,8 +210,14 @@ static int remove_kind(const char *path, uint64_t kind)
     errno = EINVAL;
     return -1;
   }
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    errno = libc_path_errno(status, path, NULL);
+    return -1;
+  }
   size_t length = strlen(path);
-  size_t depth = startup_working_directory_count();
+  size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
     errno = EOVERFLOW;
@@ -229,10 +237,7 @@ static int remove_kind(const char *path, uint64_t kind)
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1,
   };
-  struct path_context context = {
-    .directories = (handle_t *)startup_working_directories(), .count = depth,
-  };
-  enum call_status status = path_remove(&context, path, kind, &workspace);
+  status = path_remove(context, path, kind, &workspace);
   free(component);
   free(directories);
   if (status != CALL_OK) {
@@ -265,8 +270,14 @@ int mkdir(const char *path, mode_t mode)
     errno = EINVAL;
     return -1;
   }
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    errno = libc_path_errno(status, path, NULL);
+    return -1;
+  }
   size_t length = strlen(path);
-  size_t depth = startup_working_directory_count();
+  size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
     errno = EOVERFLOW;
@@ -286,10 +297,7 @@ int mkdir(const char *path, mode_t mode)
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1,
   };
-  struct path_context context = {
-    .directories = (handle_t *)startup_working_directories(), .count = depth,
-  };
-  enum call_status status = path_create_directory(&context, path, &workspace);
+  status = path_create_directory(context, path, &workspace);
   free(component);
   free(directories);
   if (status != CALL_OK) {
@@ -303,8 +311,13 @@ int rename(const char *old_path, const char *new_path)
 {
   const char *paths[] = {old_path, new_path};
   struct path_workspace workspaces[2] = {0};
-  size_t depth = startup_working_directory_count();
-  enum call_status status = CALL_OK;
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    errno = libc_path_errno(status, old_path, new_path);
+    return -1;
+  }
+  size_t depth = context->count;
   for (size_t i = 0; i < 2; ++i) {
     if (!paths[i] || !*paths[i]) {
       status = CALL_BAD_REQUEST;
@@ -326,10 +339,7 @@ int rename(const char *old_path, const char *new_path)
     }
   }
 
-  struct path_context context = {
-    .directories = (handle_t *)startup_working_directories(), .count = depth,
-  };
-  status = path_rename(&context, old_path, new_path, DIRECTORY_RENAME_REPLACE,
+  status = path_rename(context, old_path, new_path, DIRECTORY_RENAME_REPLACE,
       &workspaces[0], &workspaces[1]);
 done:
   for (size_t i = 0; i < 2; ++i) {
