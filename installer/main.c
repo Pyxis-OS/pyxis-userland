@@ -5,6 +5,7 @@
 #include <file.h>
 #include <handle.h>
 #include <path.h>
+#include <power.h>
 #include <pyxis_fs/npfs.h>
 #include <random.h>
 #include <startup.h>
@@ -53,6 +54,27 @@ static bool decimal(const char *text, uint64_t *value)
   }
   *value = result;
   return true;
+}
+
+/* Offered after the final success message only. Restart flushes the mounted
+ * pools. A failed call leaves the system running and the installation done. */
+static void offer_restart(struct terminal *terminal, handle_t power, bool updating)
+{
+  if (power == HANDLE_INVALID) {
+    return;
+  }
+  printf("Remove the %s medium before the machine restarts.\n", updating ? "live" : "install");
+  char line[16];
+  struct term_line_result result = term_read_line(terminal,
+      "Press Enter to restart, or type stay to remain here: ", line, sizeof(line));
+  if (result.status != TERM_LINE_OK || result.length) {
+    puts("Not restarting.");
+    return;
+  }
+  enum call_status status = power_restart(power);
+  fprintf(stderr, "installer: restart failed (status %u)\n"
+      "The %s is complete; restart the machine yourself after removing the medium.\n",
+      status, updating ? "update" : "installation");
 }
 
 static bool choose_action(struct terminal *terminal, bool *updating)
@@ -695,6 +717,7 @@ int main(int argc, char **argv)
         "Deleting system://SAFE_TO_WIPE marks this installation as final.");
   }
   result = EXIT_SUCCESS;
+  offer_restart(&terminal, startup_resource("power"), updating);
 
 done:
   if (claimed) {

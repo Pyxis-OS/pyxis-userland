@@ -5,7 +5,10 @@
 takes no arguments. It requires the explicit disk inventory, original
 kernel/archive FILE grants, read-only boot assets, private memory, console,
 clock, randomness and read-only SYSTEM_INFO. It receives no launcher, mount,
-network, writable tmp or namespace authority.
+network, writable tmp or namespace authority. An optional `power` resource,
+narrowed to the RESTART right, lets it offer a restart after the final
+`installed` or `updated` message: only an empty line restarts, any other input
+stays, and a failed call is reported with status 0 and manual-restart text.
 
 The first screen offers Install and Update. Install retains the Proceed / Read
 the room consent flow described below. Update requires healthy matching GPT
