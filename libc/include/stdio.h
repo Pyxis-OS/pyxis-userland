@@ -29,9 +29,16 @@ extern FILE *stderr;
  * Read-ahead is private and never accompanies a delegated stream: do not read a
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
  * successful fseek or a write drops it, a failed seek keeps it. Standard
- * descriptors adopt exclusive startup handles once. No fdopen, setvbuf,
- * freopen or wide I/O here. */
+ * descriptors adopt exclusive startup handles once. No setvbuf, freopen or
+ * wide I/O here. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
+/* Associate one FILE with an existing descriptor using fopen mode syntax.
+ * Failure retains caller ownership; success transfers it to fclose. Requested
+ * access must fit the descriptor, and FILE operations obey that selection.
+ * Position/read-ahead are retained; w never creates/truncates. a enables shared
+ * non-atomic append policy without moving the cursor. A second association
+ * fails with EBUSY; malformed modes use EINVAL, unavailable access EBADF. */
+FILE *fdopen(int descriptor, const char *mode);
 /* Open an exclusive read/write file under tmp:// and remove its name before
  * return. Requires native random/clock and tmp CREATE/REMOVE/file READ/WRITE.
  * Removal authority is checked before creation. Failure returns NULL with errno;

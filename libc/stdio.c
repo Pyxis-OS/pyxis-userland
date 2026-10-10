@@ -33,6 +33,10 @@ bool stream_ready(FILE *stream, bool writing)
     stream_error(stream, EBADF);
     return false;
   }
+  if (writing ? !stream->writable : !stream->readable) {
+    stream_error(stream, EBADF);
+    return false;
+  }
   if (!descriptor_ready(stream->descriptor, writing)) {
     stream_error(stream, errno);
     return false;
@@ -48,7 +52,10 @@ static void register_stream(FILE *stream)
 
 static void standard_stream(FILE *stream, enum startup_stream_index index)
 {
-  *stream = (FILE){.descriptor = -1};
+  *stream = (FILE){
+    .descriptor = -1, .readable = index == STARTUP_STDIN,
+    .writable = index != STARTUP_STDIN,
+  };
   descriptor_adopt_standard(index, stream);
   register_stream(stream);
 }
@@ -95,8 +102,36 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
   if (!stream) {
     return NULL;
   }
-  *stream = (FILE){.descriptor = -1, .allocated = true};
+  *stream = (FILE){
+    .descriptor = -1, .allocated = true,
+    .readable = options.readable, .writable = options.writable,
+  };
   if (descriptor_open(path, &options, stream) < 0) {
+    free(stream);
+    return NULL;
+  }
+  register_stream(stream);
+  return stream;
+}
+
+FILE *fdopen(int descriptor, const char *mode)
+{
+  struct descriptor_mode options;
+  if (!parse_mode(mode, &options)) {
+    errno = EINVAL;
+    return NULL;
+  }
+  FILE *stream = malloc(sizeof(*stream));
+  if (!stream) {
+    return NULL;
+  }
+  *stream = (FILE){
+    .descriptor = -1, .allocated = true,
+    .readable = options.readable, .writable = options.writable,
+  };
+  /* Association has no fallible work after taking ownership. In particular,
+   * w neither creates nor truncates, and no mode resets existing input. */
+  if (descriptor_associate(descriptor, &options, stream) < 0) {
     free(stream);
     return NULL;
   }
@@ -111,7 +146,9 @@ FILE *tmpfile(void)
   if (!stream) {
     return NULL;
   }
-  *stream = (FILE){.descriptor = -1, .allocated = true};
+  *stream = (FILE){
+    .descriptor = -1, .allocated = true, .readable = true, .writable = true,
+  };
   handle_t parent;
   uint64_t rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
       DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
@@ -173,6 +210,10 @@ int fflush(FILE *stream)
     return stream_error(stream, EBADF);
   }
   if (stream) {
+    struct startup_stream binding;
+    if (descriptor_stream(stream, &binding) < 0) {
+      return stream_error(stream, errno);
+    }
     stream->has_pushback = false;
     descriptor_discard_input(stream->descriptor);
   }

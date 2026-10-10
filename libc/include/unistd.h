@@ -63,7 +63,11 @@ ssize_t write(int descriptor, const void *buffer, size_t count);
  * FILE indicators or pushback. Zero count touches no buffer or backend. */
 ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset);
 ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset);
-/* Invalidates any FILE association even on release failure; never retries. */
+/* Lowest free descriptor sharing the open handle, access, append policy,
+ * cursor and read-ahead; the new slot has no FILE association. Closing either
+ * slot leaves the other valid; only final close releases the native handle. */
+int dup(int descriptor);
+/* Invalidates this slot's FILE association even on release failure; never retries. */
 int close(int descriptor);
 /* Set a writable file's size through native RESIZE. Growth reads as zero and
  * shrinking discards the tail; the descriptor position is unchanged. Negative

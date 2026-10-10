@@ -14,8 +14,9 @@ struct descriptor_mode {
   bool readable, writable, append, create, truncate, exclusive;
 };
 
-/* Entries own their native handle and cursor. A FILE association owns neither;
- * close invalidates it before reuse. No entry pointer escapes this module. */
+/* Entries reference an open object owning handle, access, cursor and read-ahead.
+ * A FILE association owns neither; close invalidates it before slot reuse.
+ * No entry pointer escapes this module; open objects stay stable on growth. */
 void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
@@ -24,6 +25,9 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
 int descriptor_tmpfile(FILE *stream, handle_t parent);
 /* Borrow the actual associated handle; never changes input, position or flags. */
 int descriptor_stream(FILE *stream, struct startup_stream *binding);
+/* Validate mode/access and reject an existing association before changing any
+ * state. Success takes ownership for fclose and retains cursor/read-ahead. */
+int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FILE *stream);
 bool descriptor_ready(int descriptor, bool writing);
 int descriptor_close(int descriptor);
 /* One CLOSE attempt for an owned temporary handle; same reply/error validation
