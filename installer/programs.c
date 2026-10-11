@@ -648,7 +648,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
       status = directory_lookup(root, revision, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS,
           &directory);
       if (status == CALL_OK) {
-        install_progress_begin("Removing interrupted program revision entries",
+        install_progress_begin("Clearing existing program revision entries",
             INSTALL_PROGRESS_NONE, "entries");
         if (!clear_directory(directory)) {
           status = CALL_IO;
