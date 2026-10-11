@@ -23,6 +23,10 @@ extern "C" {
 
 /* Count wide characters before the terminating null. */
 size_t wcslen(const wchar_t *string);
+wchar_t *wcschr(const wchar_t *text, wchar_t value);
+wchar_t *wcsrchr(const wchar_t *text, wchar_t value);
+wchar_t *wcspbrk(const wchar_t *text, const wchar_t *characters);
+wchar_t *wcsstr(const wchar_t *text, const wchar_t *needle);
 
 /* Native C-locale numeric grammar and range/error semantics. */
 long wcstol(const wchar_t *__restrict text, wchar_t **__restrict end, int base);

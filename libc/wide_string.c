@@ -1,6 +1,51 @@
 #include <stdint.h>
 #include <wchar.h>
 
+wchar_t *wcschr(const wchar_t *text, wchar_t value)
+{
+  do {
+    if (*text == value) {
+      return (wchar_t *)text;
+    }
+  } while (*text++);
+  return NULL;
+}
+
+wchar_t *wcsrchr(const wchar_t *text, wchar_t value)
+{
+  const wchar_t *found = NULL;
+  do {
+    if (*text == value) {
+      found = text;
+    }
+  } while (*text++);
+  return (wchar_t *)found;
+}
+
+wchar_t *wcspbrk(const wchar_t *text, const wchar_t *characters)
+{
+  for (; *text; ++text) {
+    if (wcschr(characters, *text)) {
+      return (wchar_t *)text;
+    }
+  }
+  return NULL;
+}
+
+wchar_t *wcsstr(const wchar_t *text, const wchar_t *needle)
+{
+  size_t length = wcslen(needle);
+  if (!length) {
+    return (wchar_t *)text;
+  }
+  for (; *text; ++text) {
+    if (*text == *needle && !wcsncmp(text, needle, length)) {
+      return (wchar_t *)text;
+    }
+  }
+  return NULL;
+}
+
 wchar_t *wmemcpy(wchar_t *restrict output, const wchar_t *restrict input,
   size_t count)
 {
