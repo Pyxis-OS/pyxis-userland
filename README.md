@@ -101,9 +101,13 @@ interactive `pyxis-remote --mux`. The daemon creates the outer mux and brokers
 up to eight independent pane groups, retaining cleanup supervision. At most two
 mux connections share the existing four connection slots. Mux and pane shells
 retain the remote allowlist, with no physical pointer or clipboard grants.
-Initial host geometry is fixed for this slice; keyboard controls, Pyxis colours
-and UTF-8 work, while stock `xfer` refuses and prompt/drop automation is disabled.
-Both packaged boot configurations leave the setting false. Enable it only on a
+Host character-window resize is negotiated only for `--mux`, within 512×256;
+explicit client dimensions are ceilings. Tiny windows clip retained panes and
+growth restores the layout. Native queued bytes and partial CSI/UTF-8 remain in
+order; applied outer geometry does not acknowledge pane redraw or host display.
+Keyboard controls, Pyxis colours and UTF-8 work, while stock `xfer` refuses and
+prompt/drop automation is disabled.
+Both packaged boot configurations leave `remote_multiplexer` false. Enable it only on a
 trusted network: any peer reaching the unauthenticated service can request panes
 with that space's existing filesystem and program grants.
 
