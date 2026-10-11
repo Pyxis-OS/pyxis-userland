@@ -32,6 +32,7 @@ static const uint8_t glyph_digits[10][GLYPH_HEIGHT] = {
 static const uint8_t glyph_l[GLYPH_HEIGHT] = {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f};
 static const uint8_t glyph_m[GLYPH_HEIGHT] = {0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11};
 static const uint8_t glyph_r[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11};
+static const uint8_t glyph_s[GLYPH_HEIGHT] = {0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e};
 static const uint8_t glyph_x[GLYPH_HEIGHT] = {0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11};
 static const uint8_t glyph_y[GLYPH_HEIGHT] = {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04};
 static const uint8_t glyph_minus[GLYPH_HEIGHT] = {0, 0, 0, 0x1f, 0, 0, 0};
@@ -64,7 +65,7 @@ struct mouse_state {
   int64_t x, y;
   int32_t dx, dy;
   uint32_t buttons;
-  int scroll; /* -1 away from the user, +1 toward, 0 idle. */
+  int32_t scroll_x, scroll_y;
   uint64_t scroll_until;
   bool keyboard_focused;
   bool pointer_focused;
@@ -119,6 +120,7 @@ static const uint8_t *glyph(char character)
   case 'M': return glyph_m;
   case 'O': return glyph_o;
   case 'R': return glyph_r;
+  case 'S': return glyph_s;
   case 'T': return glyph_t;
   case 'W': return glyph_w;
   case 'X': return glyph_x;
@@ -158,14 +160,14 @@ static void draw_arrow(const struct screen *screen, int64_t x, int64_t y, int64_
 }
 
 static void draw_button(const struct screen *screen, int64_t x, int64_t y, int64_t size,
-    char label, bool pressed, uint32_t pressed_color)
+    const char *label, bool pressed, uint32_t pressed_color)
 {
   const struct colors *colors = &screen->colors;
-  fill_rect(screen, x, y, size, size, pressed ? pressed_color : colors->idle);
+  fill_rect(screen, x, y, size - 1, size - 1, pressed ? pressed_color : colors->idle);
   int64_t scale = size / 20 > 0 ? size / 20 : 1;
-  char text[] = {label, '\0'};
-  draw_text(screen, x + (size - GLYPH_WIDTH * scale) / 2,
-      y + (size - GLYPH_HEIGHT * scale) / 2, scale, text, colors->text);
+  int64_t text_width = ((int64_t)strlen(label) * (GLYPH_WIDTH + 1) - 1) * scale;
+  draw_text(screen, x + (size - text_width) / 2,
+      y + (size - GLYPH_HEIGHT * scale) / 2, scale, label, colors->text);
 }
 
 static void draw_panel(const struct screen *screen, const struct mouse_state *state)
@@ -173,26 +175,37 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
   const struct colors *colors = &screen->colors;
   int64_t width = screen->panel_width;
   int64_t margin = width / 12;
-  int64_t box = (width - 4 * margin) / 3;
+  int64_t box = (width - 2 * margin) / 8;
   fill_rect(screen, 0, 0, width, screen->height, colors->panel);
 
   int64_t y = margin;
-  draw_button(screen, margin, y, box, 'L', state->buttons & POINTER_BUTTON_LEFT, colors->left);
-  draw_button(screen, 2 * margin + box, y, box, 'M',
-      state->buttons & POINTER_BUTTON_MIDDLE, colors->middle);
-  draw_button(screen, 3 * margin + 2 * box, y, box, 'R',
-      state->buttons & POINTER_BUTTON_RIGHT, colors->right);
+  for (unsigned button = 0; button < 32; ++button) {
+    char label[3];
+    snprintf(label, sizeof(label), "%u", button + 1);
+    uint32_t color = button == 1 ? colors->right : button == 2 ? colors->middle : colors->left;
+    draw_button(screen, margin + (button % 8) * box, y + (button / 8) * box,
+        box, label, state->buttons & (UINT32_C(1) << button), color);
+  }
 
-  y += box + margin;
-  int64_t arrow = box;
-  int64_t arrow_x = (width - arrow) / 2;
-  draw_arrow(screen, arrow_x, y, arrow, true, state->scroll < 0 ? colors->left : colors->idle);
-  y += arrow + margin / 2;
-  draw_arrow(screen, arrow_x, y, arrow, false, state->scroll > 0 ? colors->left : colors->idle);
+  y += 4 * box + margin;
+  int64_t arrow = 2 * box;
+  draw_arrow(screen, margin, y, arrow, true,
+      state->scroll_y < 0 ? colors->left : colors->idle);
+  draw_arrow(screen, width - margin - arrow, y, arrow, false,
+      state->scroll_y > 0 ? colors->left : colors->idle);
 
   y += arrow + margin;
-  int64_t scale = box / 16 > 0 ? box / 16 : 1;
+  int64_t scale = (width - 2 * margin) / (16 * (GLYPH_WIDTH + 1));
+  if (scale < 1) {
+    scale = 1;
+  }
   char line[24];
+  snprintf(line, sizeof(line), "SX %ld", (long)state->scroll_x);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "SY %ld", (long)state->scroll_y);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
   snprintf(line, sizeof(line), "X %lld", (long long)state->x);
   draw_text(screen, margin, y, scale, line, colors->text);
   y += (GLYPH_HEIGHT + 3) * scale;
@@ -263,13 +276,16 @@ static void apply_pointer(const struct screen *screen, struct mouse_state *state
   }
   if (event->type == POINTER_GEOMETRY_CHANGED && state->locked &&
       (event->flags & POINTER_EVENT_LOCKED)) {
+    state->scroll_x = state->scroll_y = 0;
+    state->scroll_until = 0;
     state->buttons = event->buttons;
     return;
   }
   if (event->type != POINTER_INPUT) {
     /* Revocation/reset ends held controls; locked resize preserves them. */
     state->buttons = 0;
-    state->scroll = 0;
+    state->scroll_x = state->scroll_y = 0;
+    state->scroll_until = 0;
     state->dx = 0;
     state->dy = 0;
     return;
@@ -282,8 +298,9 @@ static void apply_pointer(const struct screen *screen, struct mouse_state *state
   state->buttons = event->buttons;
   state->dx = state->locked ? event->dx : 0;
   state->dy = state->locked ? event->dy : 0;
-  if (event->wheel) {
-    state->scroll = event->wheel < 0 ? -1 : 1;
+  if (event->scroll_x || event->scroll_y) {
+    state->scroll_x = event->scroll_x;
+    state->scroll_y = event->scroll_y;
     state->scroll_until = now + SCROLL_SHOWN_NS;
   }
   if (!state->locked && (state->buttons & POINTER_BUTTON_LEFT) &&
@@ -305,7 +322,8 @@ static enum call_status refresh_lock_state(struct mouse_state *state, handle_t p
   bool locked = (flags & POINTER_EVENT_LOCKED) != 0;
   if (state->pointer_focused != focused || state->locked != locked) {
     state->buttons = 0;
-    state->scroll = 0;
+    state->scroll_x = state->scroll_y = 0;
+    state->scroll_until = 0;
     state->dx = 0;
     state->dy = 0;
     state->dirty = true;
@@ -323,9 +341,10 @@ static enum call_status refresh_geometry(struct screen *screen, struct display_b
     return status;
   }
   state->observed_generation = state->geometry.generation;
+  state->scroll_x = state->scroll_y = 0;
+  state->scroll_until = 0;
   if (!state->locked) {
     state->buttons = 0;
-    state->scroll = 0;
     state->dx = 0;
     state->dy = 0;
   }
@@ -383,7 +402,13 @@ static enum call_status refresh_geometry(struct screen *screen, struct display_b
 static enum call_status apply_key(struct mouse_state *state, handle_t pointer,
     const struct keyboard_event *event)
 {
-  state->keyboard_focused = (event->flags & KEYBOARD_EVENT_FOCUSED) != 0;
+  bool focused = (event->flags & KEYBOARD_EVENT_FOCUSED) != 0;
+  if (state->keyboard_focused != focused || event->action == KEY_STATE_RESET) {
+    state->scroll_x = state->scroll_y = 0;
+    state->scroll_until = 0;
+    state->dirty = true;
+  }
+  state->keyboard_focused = focused;
   if (!state->keyboard_focused || event->action != KEY_PRESS) {
     return CALL_OK;
   }
@@ -468,7 +493,8 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
           state.locked && (event.flags & POINTER_EVENT_LOCKED);
       if (event.type != POINTER_INPUT && !locked_geometry) {
         state.buttons = 0;
-        state.scroll = 0;
+        state.scroll_x = state.scroll_y = 0;
+        state.scroll_until = 0;
         state.dx = 0;
         state.dy = 0;
         state.dirty = true;
@@ -508,8 +534,9 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
     if (status != CALL_TIMED_OUT) {
       return status;
     }
-    if (state.scroll && now >= state.scroll_until) {
-      state.scroll = 0;
+    if ((state.scroll_x || state.scroll_y) && now >= state.scroll_until) {
+      state.scroll_x = state.scroll_y = 0;
+      state.scroll_until = 0;
       state.dirty = true;
     }
 

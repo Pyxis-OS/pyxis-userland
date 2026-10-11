@@ -388,11 +388,48 @@ static int decode_override(lua_State *state)
   return 0;
 }
 
+static bool read_scroll_direction(lua_State *state, int input, const char *key)
+{
+  config_field(state, input, key);
+  bool natural = true;
+  if (!lua_isnil(state, -1)) {
+    size_t length = 0;
+    const char *value = lua_type(state, -1) == LUA_TSTRING ?
+        lua_tolstring(state, -1, &length) : NULL;
+    if (!machine_scroll_direction_parse(value, length, &natural)) {
+      luaL_error(state, "input.%s must be natural or traditional", key);
+    }
+  }
+  lua_pop(state, 1);
+  return natural;
+}
+
+static void read_input(lua_State *state, struct boot_config *config)
+{
+  config->mouse_scroll_natural = config->touchpad_scroll_natural = true;
+  config_field(state, 1, "input");
+  if (!lua_isnil(state, -1)) {
+    static const char *const keys[] = {"mouse_scroll_direction", "touchpad_scroll_direction",
+        "diagnostics"};
+    config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
+    int input = lua_absindex(state, -1);
+    config->mouse_scroll_natural = read_scroll_direction(state, input, keys[0]);
+    config->touchpad_scroll_natural = read_scroll_direction(state, input, keys[1]);
+    config_field(state, input, "diagnostics");
+    if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
+      luaL_error(state, "input.diagnostics must be a boolean");
+    }
+    config->input_diagnostics = lua_toboolean(state, -1);
+    lua_pop(state, 1);
+  }
+  lua_pop(state, 1);
+}
+
 static int decode_archive(lua_State *state)
 {
   struct boot_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  static const char *const keys[] = {"hostname", "volumes", "spaces"};
+  static const char *const keys[] = {"hostname", "input", "volumes", "spaces"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
   config_field(state, 1, "hostname");
   const char *name = MACHINE_HOSTNAME_DEFAULT;
@@ -407,6 +444,7 @@ static int decode_archive(lua_State *state)
   memcpy(config->hostname, name, length);
   config->hostname[length] = '\0';
   lua_pop(state, 1);
+  read_input(state, config);
   read_volumes(state, config);
   read_spaces(state, config);
   return 0;
@@ -423,14 +461,14 @@ static enum boot_config_result result_of(enum config_result result, struct boot_
 
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config)
 {
-  *config = (struct boot_config){0};
+  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
   return result_of(config_read(path, decode_archive, config), config);
 }
 
 enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config)
 {
-  *config = (struct boot_config){0};
+  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
   return result_of(config_read_bytes(name, bytes, size, decode_override, config), config);
 }
 
@@ -454,7 +492,7 @@ void boot_config_free(struct boot_config *config)
   }
   free(config->spaces);
   free(config->volumes);
-  *config = (struct boot_config){0};
+  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
 }
 
 const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const char *name)

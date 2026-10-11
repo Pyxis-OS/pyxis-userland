@@ -1,4 +1,5 @@
 #include <machine_settings.h>
+#include <string.h>
 
 bool machine_hostname_valid(const char *name, size_t length)
 {
@@ -14,4 +15,20 @@ bool machine_hostname_valid(const char *name, size_t length)
     }
   }
   return true;
+}
+
+bool machine_scroll_direction_parse(const char *name, size_t length, bool *natural)
+{
+  if (!name || !natural) {
+    return false;
+  }
+  if (length == sizeof("natural") - 1 && !memcmp(name, "natural", length)) {
+    *natural = true;
+    return true;
+  }
+  if (length == sizeof("traditional") - 1 && !memcmp(name, "traditional", length)) {
+    *natural = false;
+    return true;
+  }
+  return false;
 }

@@ -61,8 +61,10 @@ struct boot_space {
 
 /* One parsed file. Owns every string and array. */
 struct boot_config {
-  /* Archive-only default; the pool boot override cannot rename the machine. */
+  /* Archive-only machine defaults; pool boot overrides contain volumes/spaces. */
   char hostname[MACHINE_HOSTNAME_MAX + 1];
+  bool mouse_scroll_natural, touchpad_scroll_natural;
+  bool input_diagnostics;
   struct boot_volume *volumes;
   size_t volume_count;
   struct boot_space *spaces;
@@ -84,7 +86,7 @@ enum boot_config_result {
   BOOT_CONFIG_INVALID,
 };
 
-/* Reads an archive default through libc, including its hostname, or a pool
+/* Reads archive defaults through libc, including hostname/input policy, or a pool
  * boot override from SIZE bytes. The override accepts only volumes and spaces.
  * Schema errors go to stderr. CONFIG is cleared first and must be freed. */
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config);

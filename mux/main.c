@@ -171,6 +171,7 @@ static void focus_pane(struct mux *mux, unsigned selected)
       return;
     }
   }
+  mux_pointer_clear_scroll(mux);
   mux->focused = selected;
   if (mux->collapsed) {
     mux->error = place(mux);
@@ -635,6 +636,7 @@ static enum call_status run(struct mux *mux)
     if (input_capacity && (events[0] & (WAIT_READABLE | WAIT_ERROR))) {
       status = term_read_timeout(&mux->terminal, mux->input, sizeof(mux->input), 0, &mux->input_size);
       if (status == CALL_INPUT_LOST) {
+        mux_pointer_clear_scroll(mux);
         mux->input_at = mux->input_size = mux->escape_size = 0;
         mux->prefix = mux->confirm = false;
         notice(mux, "Outer input lost; retry the command");

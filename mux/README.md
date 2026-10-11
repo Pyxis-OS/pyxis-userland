@@ -19,8 +19,12 @@ grants remain independent. Remote mux retains keyboard controls.
 
 Left dragging selects visible pane text only after crossing into a different
 cell while held. A press clears the old selection; a click or movement within
-the starting cell leaves none. Content and heading clicks focus a pane. Wheel over content moves that pane's history by three rows per detent
+the starting cell leaves none. Content and heading clicks focus a pane. Vertical
+scroll over content moves that pane's history by three rows per 120-unit detent,
+retaining signed partial detents in each pane until a complete step is available,
 without changing keyboard focus, returning to live input at the newest row.
+Horizontal scroll has no history action. Partial detents clear on view/geometry
+changes, input reset and keyboard or pointer focus changes.
 Layout, resize and explicit history movement clear selection. Unrelated output
 and color changes preserve it; selected character mutation, eviction or movement
 outside the visible view clears it. Selection is a colored overlay. Copy exports

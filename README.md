@@ -66,6 +66,17 @@ unreadable or invalid key reports the reason and keeps the archive default.
 Names are 1–63 ASCII letters, digits and internal hyphens, preserving case;
 the stored key accepts one trailing LF or none. Boot init sets the kernel's
 name once before creating spaces. `system://config/boot.lua` cannot set it.
+The archive's `input` table selects `mouse_scroll_direction` and
+`touchpad_scroll_direction`, each `natural` or `traditional` (natural by default).
+Installed boots read `system://config/machine/input/mouse/scroll-direction` and
+`system://config/machine/input/touchpad/scroll-direction`, accepting the exact
+lowercase value with one trailing LF or none. Missing, unreadable or invalid
+keys keep their respective archive defaults. `input.diagnostics = true` in the
+archive enables fallback reports; it defaults false. Stock boot init installs
+both directions once before starting spaces, including rescue. The `input_policy`
+grant stays in boot init. `system://config/boot.lua` cannot override input policy.
+Store changes apply next boot; explicitly sync
+edited keys before reboot. No settings writer or live policy update is provided.
 `clipboard_local` and `clipboard_shared` independently request the named
 clipboard grants. Stock local interactive spaces enable both; remote startup
 enables neither. An omitted setting retains the existing multiplexer default,
@@ -443,8 +454,12 @@ A failed replacement retains the old mapping until another resize.
 Rendering continues without input focus; focus loss clears held controls.
 Once the view is complete it idles until input or a resize needs another draw.
 
-`mousetest` shows mouse buttons, wheel direction and the kernel's surface-local
-position, with a drawing pad for the left button and a custom system cursor.
+`mousetest` shows numbered buttons 1–32, both precise scroll axes and the kernel's
+surface-local position, with a drawing pad for the left button and a custom system cursor.
+Buttons 1/2/3 are left/right/middle. `SX`/`SY` show the latest scroll report in
+120 units per detent; positive means viewport right/down. Vertical arrows follow
+`SY`. The indicators expire after 500 ms and clear on reset, geometry or focus
+changes. Direction policy has already been applied by the kernel.
 `H` toggles cursor visibility, `D` restores the default image, `C` restores the
 custom image and `W` warps to the surface center. Escape returns to the TTY.
 `L` requests pointer lock or cancels it. The panel shows `FREE` when unlocked,
@@ -457,7 +472,7 @@ It needs display, keyboard, pointer and clock grants. Resizing replaces its
 mapping and preserves the overlapping drawing; failure retains the old mapping.
 Locked resize preserves relative counts and accepted buttons.
 Its update loop keeps running without input focus, clearing held buttons on
-focus, boundary and state changes and allowing the wheel indicator to expire.
+focus, boundary and state changes and allowing the scroll indicators to expire.
 Keyboard and pointer controls follow their own session's focus.
 
 `httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.

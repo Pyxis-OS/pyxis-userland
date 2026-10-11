@@ -4,6 +4,11 @@
 -- optional so that a damaged home volume still starts pyxis, in tmp://.
 return {
   hostname = "pyxis",
+  input = {
+    mouse_scroll_direction = "natural",
+    touchpad_scroll_direction = "natural",
+    diagnostics = false,
+  },
   volumes = {
     system = { kind = "npfs", partition = 2, volume = "system" },
     home = { kind = "npfs", partition = 2, volume = "home" },

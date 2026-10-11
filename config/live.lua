@@ -3,6 +3,11 @@
 -- lasts until reboot; spaces start in it unless start names another root.
 return {
   hostname = "pyxis",
+  input = {
+    mouse_scroll_direction = "natural",
+    touchpad_scroll_direction = "natural",
+    diagnostics = false,
+  },
   volumes = {
     host = { kind = "virtio-fs" },
     home = { kind = "ram" },

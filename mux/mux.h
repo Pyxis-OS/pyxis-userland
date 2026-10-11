@@ -18,6 +18,7 @@ struct mux_pane {
   struct mux_emulator emulator;
   struct process_result result;
   size_t scrollback;
+  int32_t scroll_remainder;
   bool browsing;
   unsigned char pending[256];
   size_t pending_size;
@@ -68,6 +69,7 @@ struct mux {
 
 enum call_status mux_render(struct mux *mux, bool *progress);
 void mux_pointer_clear_selection(struct mux *mux);
+void mux_pointer_clear_scroll(struct mux *mux);
 enum call_status mux_pointer_advance_view(struct mux *mux);
 enum call_status mux_pointer_change_view(struct mux *mux);
 void mux_pointer_drain(struct mux *mux);

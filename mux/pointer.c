@@ -3,6 +3,13 @@
 #define MUX_WHEEL_ROWS 3
 #define MUX_DRAIN_EVENTS 8
 
+void mux_pointer_clear_scroll(struct mux *mux)
+{
+  for (unsigned i = 0; i < MUX_PANES; ++i) {
+    mux->panes[i].scroll_remainder = 0;
+  }
+}
+
 void mux_pointer_clear_selection(struct mux *mux)
 {
   for (unsigned i = 0; i < MUX_PANES; ++i) {
@@ -17,6 +24,7 @@ void mux_pointer_clear_selection(struct mux *mux)
 
 enum call_status mux_pointer_advance_view(struct mux *mux)
 {
+  mux_pointer_clear_scroll(mux);
   if (!mux->pointer_owned) {
     return CALL_OK;
   }
@@ -107,14 +115,17 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
   if (event->generation != mux->pointer_geometry.surface.generation ||
       event->mapping_identity != mux->pointer_geometry.surface.mapping_identity) {
     mux_pointer_clear_selection(mux);
+    mux_pointer_clear_scroll(mux);
     mux->error = terminal_pointer_get_geometry(mux->pointer, &mux->pointer_geometry);
     return;
   }
   /* Outer CONSOLE RESIZED is processed by main before using the new grid. */
   if (event->generation != mux->geometry.generation) {
+    mux_pointer_clear_scroll(mux);
     return;
   }
   if (event->type != POINTER_INPUT || !(event->flags & POINTER_EVENT_FOCUSED)) {
+    mux_pointer_clear_scroll(mux);
     mux->pointer_buttons = 0;
     if (mux->dragging) {
       mux_emulator_clear_selection(&mux->panes[mux->selection_pane].emulator);
@@ -151,6 +162,7 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
     int pane = event->x >= 0 && event->y >= 0 ? hit_pane(mux, column, row, false) : -1;
     if (pane >= 0) {
       if (mux->focused != (unsigned)pane) {
+        mux_pointer_clear_scroll(mux);
         mux->error = terminal_pointer_cancel_clipboard(mux->pointer);
         if (mux->error != CALL_OK) {
           return;
@@ -169,13 +181,15 @@ static void pointer_input(struct mux *mux, const struct pointer_event *event)
     }
   }
 
-  if (event->wheel && event->x >= 0 && event->y >= 0) {
+  if (event->scroll_y && event->x >= 0 && event->y >= 0) {
     int slot = hit_pane(mux, column, row, true);
     if (slot < 0) {
       return;
     }
     struct mux_pane *pane = &mux->panes[slot];
-    int64_t rows = (int64_t)event->wheel * MUX_WHEEL_ROWS;
+    int64_t scroll = (int64_t)event->scroll_y + pane->scroll_remainder;
+    int64_t rows = scroll / POINTER_SCROLL_UNITS_PER_DETENT * MUX_WHEEL_ROWS;
+    pane->scroll_remainder = scroll % POINTER_SCROLL_UNITS_PER_DETENT;
     size_t offset = pane->scrollback;
     if (rows < 0) {
       uint64_t step = (uint64_t)-rows;
