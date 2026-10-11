@@ -9,6 +9,8 @@ make SDK=/path/to/sdk threadprobe
 Run manually from an interactive shell. `session` delegates the `threads`
 resource; ordinary foreground and background launches do not. Each invocation
 replaces the shell and needs a fresh session afterward.
+Local mux pane shells and remote terminal shells retain the optional native
+service for this explicit session delegation.
 
 ```text
 session bin://threadprobe.pxe lifecycle

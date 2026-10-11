@@ -514,8 +514,22 @@ int main(int argc, char **argv)
   memory = startup_resource("memory");
   threads = startup_resource("threads");
   clock_service = startup_resource("clock");
-  if (argc != 2 || memory == HANDLE_INVALID || threads == HANDLE_INVALID || clock_service == HANDLE_INVALID) {
+  if (argc != 2) {
     fputs("usage: session bin://threadprobe.pxe lifecycle|inspect|bind|refusal|exhaust|stop|fault|close\n", stderr);
+    return 1;
+  }
+  const struct {
+    const char *name;
+    handle_t handle;
+  } required[] = {{"memory", memory}, {"threads", threads}, {"clock", clock_service}};
+  bool missing = false;
+  for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); ++i) {
+    if (required[i].handle == HANDLE_INVALID) {
+      fprintf(stderr, "threadprobe: missing native startup grant '%s'\n", required[i].name);
+      missing = true;
+    }
+  }
+  if (missing) {
     return 1;
   }
   if (!strcmp(argv[1], "--child-stop") || !strcmp(argv[1], "--child-fault")) {

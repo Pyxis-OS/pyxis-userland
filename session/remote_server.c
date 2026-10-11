@@ -6,6 +6,7 @@
 #include <abi/file.h>
 #include <abi/log.h>
 #include <abi/memory.h>
+#include <abi/thread.h>
 #include <abi/namespace.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
@@ -161,7 +162,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 15, RESOURCE_CAPACITY = 19 };
+  enum { OPTIONAL_COUNT = 16, RESOURCE_CAPACITY = 20 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -176,6 +177,11 @@ int launch_remote_server(const struct session_config *config,
     {(uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT},
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
+  handle_t threads = startup_resource("threads");
+  if (threads != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", grant_count};
+    grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
+  }
   handle_t remote_power = startup_resource("remote_power");
   if (remote_power != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"remote_power", grant_count};
