@@ -50,6 +50,10 @@ typedef double double_t;
 #define FP_SUBNORMAL 3
 #define FP_NORMAL 4
 
+/* Exceptional integer-exponent results used by the C math contract. */
+#define FP_ILOGB0 (-2147483647 - 1)
+#define FP_ILOGBNAN (-2147483647 - 1)
+
 /* Any real floating type; neither raises an FP exception. */
 #define isnan(value) __builtin_isnan(value)
 #define isinf(value) __builtin_isinf(value)
