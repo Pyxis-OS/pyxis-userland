@@ -30,5 +30,6 @@ struct pyxis_file {
 
 int stream_error(FILE *stream, int error);
 bool stream_ready(FILE *stream, bool writing);
+bool stream_byte_ready(FILE *stream, bool writing);
 
 #endif

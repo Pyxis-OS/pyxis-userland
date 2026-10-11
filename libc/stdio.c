@@ -54,6 +54,11 @@ static bool select_orientation(FILE *stream, int orientation)
   return true;
 }
 
+bool stream_byte_ready(FILE *stream, bool writing)
+{
+  return stream_ready(stream, writing) && select_orientation(stream, STREAM_BYTE_ORIENTED);
+}
+
 static size_t pushback_bytes(FILE *stream)
 {
   return stream->has_pushback ? 1 :
@@ -538,7 +543,7 @@ char *fgets(char *restrict buffer, int capacity, FILE *restrict stream)
     stream_error(stream, EINVAL);
     return NULL;
   }
-  if (!stream_ready(stream, false)) {
+  if (!stream_byte_ready(stream, false)) {
     return NULL;
   }
   int length = 0;
@@ -721,7 +726,8 @@ wint_t fputwc(wchar_t character, FILE *stream)
     stream_error(stream, errno);
     return WEOF;
   }
-  return write_bytes(bytes, length, stream) == length ? (wint_t)character : WEOF;
+  size_t written = write_bytes(bytes, length, stream);
+  return written == length && !stream->output_flush_failed ? (wint_t)character : WEOF;
 }
 
 wint_t putwc(wchar_t character, FILE *stream)
@@ -747,7 +753,7 @@ int putchar(int character)
 
 int fputs(const char *restrict text, FILE *restrict stream)
 {
-  if (!stream_ready(stream, true)) {
+  if (!stream_byte_ready(stream, true)) {
     return EOF;
   }
   size_t length = strlen(text);

@@ -5,7 +5,7 @@
 
 int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
 {
-  if (!stream_ready(stream, true)) {
+  if (!stream_byte_ready(stream, true)) {
     return EOF;
   }
   char local[256];
