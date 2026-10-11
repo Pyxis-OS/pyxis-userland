@@ -52,6 +52,44 @@ enum call_status thread_exit(handle_t threads, uint64_t value)
   return checked_status(syscall_call(threads, &message, sizeof(message), NULL, 0), 0);
 }
 
+enum call_status thread_address_wait(handle_t threads, uintptr_t address,
+    uint64_t expected, uint64_t word_size, uint64_t deadline)
+{
+  struct thread_message message = {0};
+  message.header = (struct message_header){PROTOCOL_THREAD_SERVICE, THREAD_ADDRESS_WAIT};
+  message.body.address_wait = (struct thread_address_wait){
+    .address = address, .expected = expected, .deadline = deadline, .word_size = word_size,
+  };
+  return checked_status(syscall_call(threads, &message, sizeof(message), NULL, 0), 0);
+}
+
+enum call_status thread_address_wake(handle_t threads, uintptr_t address,
+    uint64_t word_size, uint64_t maximum, uint64_t *woken)
+{
+  if (!woken) {
+    return CALL_BAD_REQUEST;
+  }
+  *woken = 0;
+  if (!maximum) {
+    return CALL_BAD_REQUEST;
+  }
+  struct thread_message message = {0};
+  message.header = (struct message_header){PROTOCOL_THREAD_SERVICE, THREAD_ADDRESS_WAKE};
+  message.body.address_wake = (struct thread_address_wake){
+    .address = address, .word_size = word_size, .maximum = maximum,
+  };
+  struct thread_address_wake_reply reply;
+  enum call_status status = checked_status(syscall_call(threads, &message,
+      sizeof(message), &reply, sizeof(reply)), sizeof(reply));
+  if (status == CALL_OK) {
+    if (reply.woken > maximum) {
+      return CALL_OUTCOME_UNKNOWN;
+    }
+    *woken = reply.woken;
+  }
+  return status;
+}
+
 enum call_status thread_wait(handle_t completion, struct thread_result *result)
 {
   if (!result) {
