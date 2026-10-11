@@ -1,6 +1,7 @@
 #include "mux.h"
 #include "../common/pane_cwd.h"
 #include <clock.h>
+#include <console.h>
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
@@ -78,6 +79,9 @@ static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect,
   mux_emulator_set_tab_width(&pane->emulator, mux->tab_width);
   enum call_status status = mux_session_start(width, height, mux->tab_width, cwd, &pane->session);
   if (status != CALL_OK) {
+    if (status == CALL_OUTCOME_UNKNOWN) {
+      mux->error = status;
+    }
     mux_emulator_destroy(&pane->emulator);
     snprintf(mux->notice, sizeof(mux->notice), "Cannot start pane (status %u)", status);
     mux->dirty = true;
@@ -532,9 +536,8 @@ static enum call_status run(struct mux *mux)
         }
       }
     }
-    if (mux->dirty && mux->error == CALL_OK) {
-      mux->error = mux_render(mux);
-      mux->dirty = false;
+    if ((mux->dirty || mux->render_active) && mux->error == CALL_OK) {
+      mux->error = mux_render(mux, &progress);
     }
     if (mux->error != CALL_OK || !any_panes(mux)) {
       break;
@@ -547,6 +550,11 @@ static enum call_status run(struct mux *mux)
         .events = WAIT_RESIZED | (input_capacity ? WAIT_READABLE : 0),
         .observed_generation = mux->geometry.generation};
     size_t count = 1;
+    size_t writable_entry = SIZE_MAX;
+    if (mux->output.blocked) {
+      writable_entry = count;
+      interests[count++] = (struct wait_interest){mux->terminal.output, WAIT_WRITABLE, 0};
+    }
     size_t pointer_entry = SIZE_MAX;
     if (mux->pointer_owned) {
       pointer_entry = count;
@@ -589,12 +597,39 @@ static enum call_status run(struct mux *mux)
         mux->error = place(mux);
       }
     }
+    if (writable_entry != SIZE_MAX && (events[writable_entry] & WAIT_ERROR)) {
+      return CALL_ENDPOINT_CLOSED;
+    }
     if (pointer_entry != SIZE_MAX && mux->error == CALL_OK) {
       if (events[pointer_entry] & WAIT_ERROR) {
         return CALL_ENDPOINT_CLOSED;
       }
       if (events[pointer_entry] & WAIT_READABLE) {
-        mux_pointer_drain(mux);
+        if (mux->dirty || mux->render_active) {
+          /* These coordinates can name a view whose bytes are only partly
+           * accepted. Consume them fairly; the final render advances the view
+           * again before accepting selection or clipboard coordinates. */
+          for (unsigned i = 0; i < MUX_DRAIN_RECORDS; ++i) {
+            struct pointer_event event;
+            status = terminal_pointer_read(mux->pointer, POINTER_READ_POLL, &event);
+            if (status == CALL_TIMED_OUT) {
+              break;
+            }
+            if (status != CALL_OK) {
+              return status;
+            }
+            if (event.type == TERMINAL_POINTER_CLIPBOARD_ACTION) {
+              status = terminal_pointer_cancel_clipboard(mux->pointer);
+              if (status != CALL_OK) {
+                return status;
+              }
+            }
+          }
+          mux->dragging = false;
+          mux->pointer_buttons = 0;
+        } else {
+          mux_pointer_drain(mux);
+        }
       }
     }
     if (input_capacity && (events[0] & (WAIT_READABLE | WAIT_ERROR))) {
@@ -643,7 +678,9 @@ int main(int argc, char **argv)
     return 1;
   }
   if (mux.terminal.input == HANDLE_INVALID || mux.terminal.output == HANDLE_INVALID ||
-      mux.clock == HANDLE_INVALID || startup_resource("terminal") == HANDLE_INVALID ||
+      mux.clock == HANDLE_INVALID ||
+      (startup_resource("terminal") == HANDLE_INVALID &&
+          startup_resource("pane_broker") == HANDLE_INVALID) ||
       startup_resource("launcher") == HANDLE_INVALID) {
     fputs("mux: missing terminal, clock, session creation or launcher authority\n", stderr);
     return 1;
@@ -708,11 +745,14 @@ int main(int argc, char **argv)
       status = released;
     }
   }
-  term_reset_style(&mux.terminal);
-  term_cursor_visible(&mux.terminal, true);
-  term_fresh_line(&mux.terminal);
+  /* ESC abandons a partial CSI. Exit restoration and diagnostics cannot wait
+   * for a stalled outer queue; the remote client also restores its host modes. */
+  size_t restored;
+  console_try_write(mux.terminal.output, "\033[0m\033[?25h\r\n", 12, &restored);
   if (status != CALL_OK) {
-    fprintf(stderr, "mux: stopped (status %u)\n", status);
+    char diagnostic[64];
+    int length = snprintf(diagnostic, sizeof(diagnostic), "mux: stopped (status %u)\n", status);
+    console_try_write(mux.terminal.output, diagnostic, (size_t)length, &restored);
   }
   return status == CALL_OK ? 0 : 1;
 }

@@ -9,8 +9,8 @@
 #include <term.h>
 #include <terminal_pointer.h>
 
-_Static_assert(MUX_PANES * 2 + 2 <= WAIT_MAX_INTERESTS,
-    "pane output/lifecycle, outer input and pointer must fit one native wait");
+_Static_assert(MUX_PANES * 2 + 3 <= WAIT_MAX_INTERESTS,
+    "pane output/lifecycle, outer input/output and pointer must fit one native wait");
 
 struct mux_pane {
   bool used, root_done, group_done, output_eof, remove_when_done;
@@ -21,6 +21,18 @@ struct mux_pane {
   bool browsing;
   unsigned char pending[256];
   size_t pending_size;
+};
+
+#define MUX_RENDER_BYTES 8192
+#define MUX_RENDER_CELLS 256
+
+struct mux_output {
+  unsigned char bytes[MUX_RENDER_BYTES];
+  size_t size, at;
+  struct terminal_cell cells[MUX_RENDER_CELLS];
+  size_t ends[MUX_RENDER_CELLS];
+  size_t first, count, committed;
+  bool reset, finish, blocked;
 };
 
 struct mux {
@@ -48,10 +60,12 @@ struct mux {
   uint64_t escape_deadline;
   struct terminal_cell *frame, *previous;
   size_t frame_columns, frame_rows;
-  bool frame_valid;
+  bool frame_valid, render_active, render_again;
+  size_t render_scan;
+  struct mux_output output;
 };
 
-enum call_status mux_render(struct mux *mux);
+enum call_status mux_render(struct mux *mux, bool *progress);
 void mux_pointer_clear_selection(struct mux *mux);
 enum call_status mux_pointer_advance_view(struct mux *mux);
 enum call_status mux_pointer_change_view(struct mux *mux);

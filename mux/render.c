@@ -1,4 +1,5 @@
 #include "mux.h"
+#include <console.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,36 +7,15 @@
 #define SELECTION_FOREGROUND 0
 #define SELECTION_BACKGROUND 6
 
-struct output_buffer {
-  struct terminal *terminal;
-  unsigned char bytes[8192];
-  size_t size;
-  enum call_status status;
-};
+#define MUX_RENDER_SCAN 2048
 
-static void flush(struct output_buffer *output)
+static void append(struct mux_output *output, const void *bytes, size_t length)
 {
-  if (output->status == CALL_OK && output->size) {
-    output->status = term_write_all(output->terminal, output->bytes, output->size);
-  }
-  output->size = 0;
+  memcpy(output->bytes + output->size, bytes, length);
+  output->size += length;
 }
 
-static void append(struct output_buffer *output, const void *bytes, size_t length)
-{
-  if (output->status != CALL_OK) {
-    return;
-  }
-  if (length > sizeof(output->bytes) - output->size) {
-    flush(output);
-  }
-  if (output->status == CALL_OK) {
-    memcpy(output->bytes + output->size, bytes, length);
-    output->size += length;
-  }
-}
-
-static void position(struct output_buffer *output, size_t row, size_t column)
+static void position(struct mux_output *output, size_t row, size_t column)
 {
   char bytes[32];
   int length = snprintf(bytes, sizeof(bytes), "\033[%zu;%zuH", row + 1, column + 1);
@@ -70,7 +50,7 @@ static void color_control(char *bytes, size_t capacity, terminal_color color,
   }
 }
 
-static void style(struct output_buffer *output, struct terminal_cell cell)
+static void style(struct mux_output *output, struct terminal_cell cell)
 {
   char foreground[24], background[24];
   color_control(foreground, sizeof(foreground), cell.foreground, true);
@@ -99,12 +79,13 @@ static void label(struct mux *mux, size_t row, size_t column, size_t width,
   }
 }
 
-enum call_status mux_render(struct mux *mux)
+static enum call_status compose(struct mux *mux)
 {
   struct mux_rect view = mux_viewport(mux);
   size_t columns = view.width, rows = view.height;
   if (!columns || !rows) {
     mux->frame_valid = false;
+    mux->render_active = false;
     return CALL_OK;
   }
   if (columns != mux->frame_columns || rows != mux->frame_rows) {
@@ -122,6 +103,8 @@ enum call_status mux_render(struct mux *mux)
     mux->frame_columns = columns;
     mux->frame_rows = rows;
     mux->frame_valid = false;
+    mux->render_scan = 0;
+    mux->render_again = false;
   }
   struct terminal_cell blank = {.character = ' ', .foreground = TERMINAL_COLOR_DEFAULT,
       .background = TERMINAL_COLOR_DEFAULT};
@@ -190,44 +173,151 @@ enum call_status mux_render(struct mux *mux)
   }
   label(mux, rows - 1, 0, columns, footer, true);
 
-  struct output_buffer output = {.terminal = &mux->terminal};
-  append(&output, "\033[?25l", 6);
-  if (!mux->frame_valid) {
-    append(&output, "\033[0m\033[2J", 8);
-  }
-  for (size_t y = 0; y < rows; ++y) {
-    for (size_t x = 0; x < columns;) {
-      size_t index = y * columns + x;
-      if (mux->frame_valid && same_cell(mux->frame[index], mux->previous[index])) {
-        ++x;
-        continue;
-      }
-      position(&output, y, x);
-      struct terminal_cell cell = mux->frame[index];
-      style(&output, cell);
-      do {
-        char bytes[3];
-        size_t length = terminal_character_encode(mux->frame[y * columns + x].character, bytes);
-        append(&output, bytes, length);
-        ++x;
-      } while (x < columns && same_style(cell, mux->frame[y * columns + x]) &&
-          (!mux->frame_valid || !same_cell(mux->frame[y * columns + x], mux->previous[y * columns + x])));
-    }
-  }
-  append(&output, "\033[0m", 4);
+  return CALL_OK;
+}
+
+static void cursor(struct mux *mux)
+{
+  struct mux_output *output = &mux->output;
+  append(output, "\033[0m", 4);
+  const struct mux_pane *focused = &mux->panes[mux->focused];
   const struct mux_rect *rect = &mux->rectangles[mux->focused];
   if (rect->height > 1 && focused->emulator.cursor_visible && !focused->browsing &&
       !mux->confirm && !mux->prefix && !focused->root_done &&
       focused->emulator.cursor_row < rect->height - 1 &&
       focused->emulator.cursor_column < rect->width) {
-    position(&output, rect->y + 1 + focused->emulator.cursor_row,
+    position(output, rect->y + 1 + focused->emulator.cursor_row,
         rect->x + focused->emulator.cursor_column);
-    append(&output, "\033[?25h", 6);
+    append(output, "\033[?25h", 6);
   }
-  flush(&output);
-  if (output.status == CALL_OK) {
-    memcpy(mux->previous, mux->frame, rows * columns * sizeof(*mux->frame));
+  output->finish = true;
+}
+
+static enum call_status flush(struct mux *mux, size_t *budget, bool *progress)
+{
+  struct mux_output *output = &mux->output;
+  size_t length = output->size - output->at;
+  if (length > *budget) {
+    length = *budget;
+  }
+  size_t written;
+  enum call_status status = console_try_write(mux->terminal.output,
+      output->bytes + output->at, length, &written);
+  output->blocked = status == CALL_WOULD_BLOCK;
+  if (status == CALL_WOULD_BLOCK) {
+    return CALL_OK;
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  output->at += written;
+  *budget -= written;
+  *progress = true;
+  /* Each snapshot becomes the accepted cell only after its entire UTF-8
+   * glyph, including any partial suffix, has entered the outer queue. */
+  while (output->committed < output->count &&
+      output->at >= output->ends[output->committed]) {
+    mux->previous[output->first + output->committed] = output->cells[output->committed];
+    ++output->committed;
+  }
+  if (output->at != output->size) {
+    return CALL_OK;
+  }
+  if (output->reset) {
+    for (size_t i = 0; i < mux->frame_columns * mux->frame_rows; ++i) {
+      mux->previous[i].character = UINT16_MAX;
+    }
     mux->frame_valid = true;
   }
-  return output.status;
+  if (output->finish) {
+    mux->render_active = false;
+    mux->render_scan = 0;
+    if (!mux->dirty) {
+      status = mux_pointer_advance_view(mux);
+    }
+  }
+  output->size = output->at = 0;
+  output->count = output->committed = 0;
+  output->reset = output->finish = output->blocked = false;
+  return status;
+}
+
+enum call_status mux_render(struct mux *mux, bool *progress)
+{
+  size_t budget = MUX_RENDER_BYTES, scanned = 0;
+  while (budget && scanned < MUX_RENDER_SCAN) {
+    if (mux->output.size) {
+      enum call_status status = flush(mux, &budget, progress);
+      if (status != CALL_OK || mux->output.size) {
+        return status;
+      }
+    }
+    /* Finish queued bytes before reallocating: they name cells and control
+     * sequences from the old geometry. Dirty state coalesces while stalled. */
+    if (mux->dirty) {
+      bool again = mux->render_active && mux->render_scan;
+      enum call_status status = compose(mux);
+      if (status != CALL_OK) {
+        return status;
+      }
+      mux->dirty = false;
+      if (!mux->frame_columns || !mux->frame_rows ||
+          !mux_viewport(mux).width || !mux_viewport(mux).height) {
+        return CALL_OK;
+      }
+      mux->render_active = true;
+      mux->render_again |= again;
+      *progress = true;
+    }
+    if (!mux->render_active) {
+      return CALL_OK;
+    }
+    struct mux_output *output = &mux->output;
+    if (!mux->frame_valid) {
+      append(output, "\033[?25l\033[0m\033[2J", 14);
+      output->reset = true;
+      continue;
+    }
+    size_t total = mux->frame_columns * mux->frame_rows;
+    while (mux->render_scan < total && scanned < MUX_RENDER_SCAN &&
+        same_cell(mux->frame[mux->render_scan], mux->previous[mux->render_scan])) {
+      ++mux->render_scan;
+      ++scanned;
+      *progress = true;
+    }
+    if (mux->render_scan == total) {
+      if (mux->render_again) {
+        mux->render_scan = 0;
+        mux->render_again = false;
+        continue;
+      }
+      cursor(mux);
+      continue;
+    }
+    if (scanned == MUX_RENDER_SCAN) {
+      break;
+    }
+    size_t first = mux->render_scan;
+    size_t row = first / mux->frame_columns;
+    size_t column = first % mux->frame_columns;
+    append(output, "\033[?25l", 6);
+    position(output, row, column);
+    struct terminal_cell cell = mux->frame[first];
+    style(output, cell);
+    output->first = first;
+    do {
+      char bytes[3];
+      struct terminal_cell next = mux->frame[mux->render_scan];
+      size_t length = terminal_character_encode(next.character, bytes);
+      append(output, bytes, length);
+      output->cells[output->count] = next;
+      output->ends[output->count++] = output->size;
+      ++mux->render_scan;
+      ++column;
+      ++scanned;
+    } while (column < mux->frame_columns && output->count < MUX_RENDER_CELLS &&
+        scanned < MUX_RENDER_SCAN && same_style(cell, mux->frame[mux->render_scan]) &&
+        !same_cell(mux->frame[mux->render_scan], mux->previous[mux->render_scan]));
+  }
+  return CALL_OK;
 }
