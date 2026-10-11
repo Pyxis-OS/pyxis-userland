@@ -6,7 +6,7 @@ Build with an SDK exporting `pyxis_fs/fat32.h` and `libfat32-read.a`:
 make -j16 SDK=/path/to/sdk init-fat32-inspect fat32-inspect
 ```
 
-Use the trusted **FAT32 Inspector** boot entry. Its bootstrap creates the install
+Use the trusted **Inspect FAT32 (read-only)** boot entry. Its bootstrap creates the install
 console space, lists disks and asks for an explicit disk ID and a one-based GPT entry.
 Keep the media quiescent until inspection exits. The selected disk is
 opened read-only. The inspector receives exactly INFO/READ disk authority,
