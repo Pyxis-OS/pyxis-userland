@@ -506,6 +506,19 @@ static enum call_status broker_launch(struct remote_context *context,
     }
   }
   status = launcher_launch(bound, &request, &shell->process);
+  /* The launcher helper folds malformed replies into ordinary errors, and
+   * BAD_BUFFER can follow publication. Retain group cleanup ownership and
+   * prevent a new split when this reply cannot prove that no child ran. */
+  switch (status) {
+  case CALL_BAD_REQUEST:
+  case CALL_BAD_BUFFER:
+  case CALL_UNAVAILABLE:
+  case CALL_ABANDONED:
+    status = CALL_OUTCOME_UNKNOWN;
+    break;
+  default:
+    break;
+  }
 
 done:
   owned_close(&image);
