@@ -107,8 +107,9 @@ growth restores the layout. Native queued bytes and partial CSI/UTF-8 remain in
 order; applied outer geometry does not acknowledge pane redraw or host display.
 Keyboard controls, Pyxis colours and UTF-8 work, while stock `xfer` refuses and
 prompt/drop automation is disabled.
-Both packaged boot configurations leave `remote_multiplexer` false. Enable it only on a
-trusted network: any peer reaching the unauthenticated service can request panes
+Packaged live Remote enables `remote_multiplexer`; installed defaults have no
+Remote space. Plain clients still select the shell. Use it only on a trusted
+network: any peer reaching the unauthenticated service can request panes
 with that space's existing filesystem and program grants.
 
 Its opt-in `term_read_line_marked` editor writes OSC 133;B after drawing each
