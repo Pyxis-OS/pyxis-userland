@@ -420,14 +420,15 @@ static enum call_status complete_word(struct line_editor *editor,
 
 static struct term_line_result read_line(struct terminal *term, const char *prompt,
     const char *initial, struct term_history *history, const struct term_completion *completion,
-    char *buffer, size_t capacity, bool quiet, bool marked)
+    char *buffer, size_t capacity, bool quiet, bool marked, struct term_line_service *service)
 {
   struct term_line_result result = {.status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST};
   if (!buffer || !capacity) {
     return result;
   }
   buffer[0] = '\0';
-  if (!term || !prompt || !initial) {
+  if (!term || !prompt || !initial ||
+      (service && service->receiver != HANDLE_INVALID && !service->ready)) {
     return result;
   }
 
@@ -488,8 +489,15 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     }
   }
   if (!adaptive) {
+    if (service && service->receiver != HANDLE_INVALID) {
+      if (result.error == CALL_OK) {
+        result.error = CALL_BAD_HANDLE;
+      }
+      return result;
+    }
     reader.clock = HANDLE_INVALID;
   }
+  reader.service = service ? service->receiver : HANDLE_INVALID;
   result.error = CALL_OK;
   if (!quiet) {
     result.error = term_fresh_line(term);
@@ -509,7 +517,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
   char *draft = NULL;
   struct history_search search = {0};
   result.error = draw_line(&editor, true, false);
-  if (result.error == CALL_OK && marked) {
+  if (result.error == CALL_OK && marked && !quiet) {
     result.error = term_print(term, "\x1b]133;B\a");
   }
 
@@ -528,6 +536,11 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     struct term_event event;
     result.error = term_read_editor_event(&reader, &event);
     if (result.error == CALL_OK) {
+      if (event.kind == TERM_EVENT_SERVICE) {
+        service->ready(service->context);
+        reader.service = service->receiver;
+        continue;
+      }
       if (event.kind == TERM_EVENT_RESIZED) {
         if (event.size.columns > UINT16_MAX || event.size.rows > UINT16_MAX) {
           result.error = CALL_BAD_REQUEST;
@@ -834,16 +847,17 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 static struct term_line_result read_line_passthrough(struct terminal *term,
     const char *prompt, const char *initial, struct term_history *history,
     const struct term_completion *completion, char *buffer, size_t capacity, bool quiet,
-    bool marked)
+    bool marked, struct term_line_service *service)
 {
   /* Invalid arguments keep read_line's handled BAD_REQUEST result. */
   if (!term || !prompt || !buffer || !capacity) {
-    return read_line(term, prompt, initial, history, completion, buffer, capacity, quiet, marked);
+    return read_line(term, prompt, initial, history, completion, buffer, capacity, quiet, marked,
+        service);
   }
   handle_t passthrough;
   bool held = term_passthrough(term, &passthrough) == CALL_OK;
   struct term_line_result result = read_line(term, prompt, initial, history, completion, buffer,
-      capacity, quiet, marked);
+      capacity, quiet, marked, service);
   if (held && handle_close(passthrough) != 0) {
     /* A retained grant would keep Ctrl+C from interrupting this program. */
     result = (struct term_line_result){.status = TERM_LINE_ERROR, .error = CALL_BAD_HANDLE};
@@ -857,31 +871,32 @@ static struct term_line_result read_line_passthrough(struct terminal *term,
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, false, false, NULL);
 }
 
 struct term_line_result term_read_line_history(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, false, NULL);
 }
 
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, true, false);
+  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, true, false, NULL);
 }
 
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, initial, NULL, NULL, buffer, capacity, false, false);
+  return read_line_passthrough(term, prompt, initial, NULL, NULL, buffer, capacity, false, false,
+      NULL);
 }
 
 struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, true);
+  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, true, NULL);
 }
 
 struct term_line_result term_read_line_completing(struct terminal *term, const char *prompt,
@@ -889,5 +904,13 @@ struct term_line_result term_read_line_completing(struct terminal *term, const c
     char *buffer, size_t capacity)
 {
   return read_line_passthrough(term, prompt, "", history, completion, buffer, capacity, false,
-      marked);
+      marked, NULL);
+}
+
+struct term_line_result term_read_line_servicing(struct terminal *term, const char *prompt,
+    struct term_history *history, const struct term_completion *completion, bool marked,
+    bool quiet, struct term_line_service *service, char *buffer, size_t capacity)
+{
+  return read_line_passthrough(term, prompt, "", history, completion, buffer, capacity, quiet,
+      marked, service);
 }

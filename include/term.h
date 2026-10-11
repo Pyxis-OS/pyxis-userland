@@ -75,6 +75,7 @@ enum term_event_kind {
   TERM_EVENT_KEY, TERM_EVENT_RESIZED,
   TERM_EVENT_PASTE_BEGIN, TERM_EVENT_PASTE_DATA, TERM_EVENT_PASTE_END,
   TERM_EVENT_PASTE_CANCEL,
+  TERM_EVENT_SERVICE,
 };
 
 struct term_event {
@@ -90,10 +91,15 @@ struct term_event {
 
 /* One reader exclusively owns key decoding for its borrowed terminal. Resize
  * events retain partial Escape/CSI state and the original 100 ms byte deadline.
- * Clock READ authority is explicit; no handles are acquired or closed here. */
+ * Clock READ authority is explicit; no handles are acquired or closed here.
+ * Optional service is a borrowed owned-endpoint receiver with RECEIVE authority.
+ * READABLE, CLOSED or ERROR produces SERVICE after terminal events; it consumes
+ * no message and retains decoder state and the byte deadline. HANDLE_INVALID
+ * disables it. The caller owns receiving, closure and the receiver's lifetime. */
 struct term_event_reader {
   struct terminal *term;
   handle_t clock;
+  handle_t service;
   struct console_size_reply size;
   uint64_t byte_deadline;
   unsigned state, parameter;
@@ -249,5 +255,24 @@ struct term_completion {
 struct term_line_result term_read_line_completing(struct terminal *term, const char *prompt,
     struct term_history *history, const struct term_completion *completion, bool marked,
     char *buffer, size_t capacity);
+
+/* Borrowed service receiver and context, both outliving the line call. The
+ * callback handles native receiver readiness only while editing and must return
+ * promptly without reading or writing the terminal. It may set receiver to
+ * HANDLE_INVALID to stop service wakeups, including after closure. */
+struct term_line_service {
+  handle_t receiver;
+  void (*ready)(void *context);
+  void *context;
+};
+
+/* Completing editor with optional receiver service and quiet output. An enabled
+ * service requires the startup clock READ grant; failure is returned rather
+ * than silently falling back to input-only waits. NULL service or an invalid
+ * receiver preserves ordinary editing. Quiet suppresses the prompt marker too.
+ * The service receiver is never acquired or closed. */
+struct term_line_result term_read_line_servicing(struct terminal *term, const char *prompt,
+    struct term_history *history, const struct term_completion *completion, bool marked,
+    bool quiet, struct term_line_service *service, char *buffer, size_t capacity);
 
 #endif

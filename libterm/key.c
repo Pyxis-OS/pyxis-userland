@@ -218,18 +218,24 @@ static enum call_status read_event(struct term_event_reader *reader,
     if (framing) {
       return CALL_OK;
     }
-    struct wait_interest interests[] = {
+    struct wait_interest interests[3] = {
       {.handle = reader->term->input, .events = WAIT_READABLE},
       {.handle = reader->term->output, .events = WAIT_RESIZED,
        .observed_generation = reader->size.generation},
     };
-    uint64_t events[2];
+    size_t interest_count = 2;
+    if (reader->service != HANDLE_INVALID) {
+      interests[interest_count++] = (struct wait_interest){
+        .handle = reader->service, .events = WAIT_READABLE,
+      };
+    }
+    uint64_t events[3];
     if (input_status == CALL_OK) {
       events[0] = WAIT_READABLE;
       events[1] = 0;
       status = CALL_OK;
     } else {
-      status = wait_many(interests, 2, deadline, events);
+      status = wait_many(interests, interest_count, deadline, events);
     }
     if (status == CALL_TIMED_OUT) {
       if (reader->state != TEXT) {
@@ -265,6 +271,10 @@ static enum call_status read_event(struct term_event_reader *reader,
       return CALL_UNAVAILABLE;
     }
     if (!readable) {
+      if (interest_count == 3 && (events[2] & (WAIT_READABLE | WAIT_CLOSED | WAIT_ERROR))) {
+        event->kind = TERM_EVENT_SERVICE;
+        return CALL_OK;
+      }
       if (timed && !timeout_ms && reader->state == TEXT) {
         return CALL_TIMED_OUT;
       }
