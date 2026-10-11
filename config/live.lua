@@ -16,7 +16,7 @@ return {
       clipboard_local = true, clipboard_shared = true,
       roots = { host = { access = "read-only", optional = true }, home = "read-only" } },
     { name = "remote", title = "Remote", init = "boot://init-remote",
-      screenshot = true, remote_power = true,
+      launch = true, screenshot = true, remote_power = true,
       roots = { host = { access = "read-write", optional = true }, home = "read-write" },
       start = "tmp" },
   },

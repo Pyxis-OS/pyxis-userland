@@ -89,7 +89,10 @@ between trusted launches and session configuration cannot create or replace it.
 The daemon listens for matching UDP beacons on port 2324, closes discovery
 before connecting to the sender, and resumes discovery after the old session
 group finishes cleanup. Remote shells receive ordinary UDP OPEN authority
-and neither the discovery grant nor its environment variable. Without the
+and neither the discovery grant nor its environment variable. Packaged live Remote
+enables `launch = true`: foreground children receive LAUNCH bound to their session
+or mux pane group, so descendants remain covered by its cleanup. Installed defaults
+have no Remote space; owner-added entries can opt in with the same setting. Without the
 option, the existing four-client TCP listener remains available.
 
 The remote server selects `shell --remote-prompt` for its normal root shell.
