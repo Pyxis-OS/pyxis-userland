@@ -75,7 +75,8 @@ remains invalid, flushes the complete replacement tree, then writes both boot
 sectors. The final flush precedes raw release for GPT rescan. This keeps a
 partly replaced tree rebuildable instead of recognizing stale identity files. FAT traversal and byte comparison verify all authored
 boot files, followed by a read-only `system` root reopen. Only then is `updated`
-reported. GPT and pool are never written, replayed or migrated by Update. An
+reported. Update does not rewrite GPT, format or migrate the pool, or replay
+journal contents during admission. Its program stage writes the pool. An
 interrupted update is recovered by booting live media again and choosing Update;
 there is no fallback entry, rollback or retry of failed mutations. Read-only
 verification retains the pool until reboot.
