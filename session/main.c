@@ -24,6 +24,7 @@
 #include <abi/profile.h>
 #include <abi/log.h>
 #include <abi/memory.h>
+#include <abi/thread.h>
 #include <abi/endpoint.h>
 #include <abi/namespace.h>
 #include <abi/net_config.h>
@@ -75,7 +76,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 27, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 28, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   const struct path_context *context;
@@ -143,6 +144,11 @@ static int launch_session(const struct session_config *config, const struct netw
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
+  handle_t threads = startup_resource("threads");
+  if (threads != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", grant_count};
+    grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
+  }
   handle_t child_launcher = startup_resource("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};

@@ -8,6 +8,7 @@
 #include <abi/file.h>
 #include <abi/log.h>
 #include <abi/memory.h>
+#include <abi/thread.h>
 #include <abi/display.h>
 #include <abi/clock.h>
 #include <abi/system_info.h>
@@ -55,7 +56,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[31];
+  struct launch_binding resources[32];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -165,6 +166,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     bool read_only, const struct network_environment *environment)
 {
   bool session = mode == SHELL_SESSION;
+  handle_t threads = session ? startup_resource("threads") : HANDLE_INVALID;
+  bool has_threads = threads != HANDLE_INVALID;
   bool pass_child_launcher = session && shell->child_launcher != HANDLE_INVALID;
   bool has_launcher = session ||
       (mode == SHELL_FOREGROUND && shell->child_launcher != HANDLE_INVALID);
@@ -216,7 +219,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 31 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 32 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -250,7 +253,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t audio_index = screen_capture_index + (has_screen_capture ? 1 : 0);
   size_t clipboard_local_index = audio_index + (has_audio ? 1 : 0);
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
-  size_t grant_count = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
+  size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
+  size_t grant_count = threads_index + (has_threads ? 1 : 0);
   prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -435,10 +439,17 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[clipboard_shared_index] = (struct launch_grant){clipboard_shared, CLIPBOARD_RIGHTS, 0};
   }
 
+  if (has_threads) {
+    grants[threads_index] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
+  }
+
   struct launch_binding *resources = prepared->resources;
   resources[0] = (struct launch_binding){(uintptr_t)"output", CHILD_OUTPUT};
   resources[1] = (struct launch_binding){(uintptr_t)"memory", CHILD_MEMORY};
   size_t resource_count = 2;
+  if (has_threads) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", threads_index};
+  }
   if (named_input) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"input", input_index};
   }

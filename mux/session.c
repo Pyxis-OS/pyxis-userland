@@ -10,6 +10,7 @@
 #include <abi/file.h>
 #include <abi/log.h>
 #include <abi/memory.h>
+#include <abi/thread.h>
 #include <abi/keyboard.h>
 #include <abi/net_config.h>
 #include <abi/namespace.h>
@@ -65,7 +66,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 22, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 23, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
@@ -145,7 +146,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     const char *name;
     uint64_t rights;
   } allowed[] = {
-    {"memory", MEMORY_RIGHT_MANAGE}, {"clock", CLOCK_RIGHTS},
+    {"memory", MEMORY_RIGHT_MANAGE}, {"threads", THREAD_RIGHT_MANAGE},
+    {"clock", CLOCK_RIGHTS},
     {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
     {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
     {"audio", AUDIO_RIGHT_PLAYBACK},

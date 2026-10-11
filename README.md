@@ -172,6 +172,7 @@ the line editor's empty-line-only behavior.
 
 For manually invoked performance measurements, see [iobench](iobench/README.md)
 for files and pipes and [ipcbench](ipcbench/README.md) for CALL/SEND.
+For manual native sibling qualification, see [threadprobe](threadprobe/README.md).
 
 `session.pxe --configure-network` applies `config/network.lua`. A `net0` table
 requires exactly one selector: `driver = "virtio"` or a locally supplied `mac`

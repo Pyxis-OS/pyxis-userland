@@ -7,6 +7,7 @@
 #include <abi/launcher.h>
 #include <abi/log.h>
 #include <abi/memory.h>
+#include <abi/thread.h>
 #include <abi/namespace.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
@@ -54,6 +55,7 @@
  * additionally receives the rights in owner_rights. */
 enum service {
   SERVICE_MEMORY,
+  SERVICE_THREADS,
   SERVICE_LAUNCHER,
   SERVICE_CLOCK,
   SERVICE_SYSTEM_INFO,
@@ -77,6 +79,7 @@ static const struct {
   uint64_t owner_rights;
 } services[SERVICE_COUNT] = {
   [SERVICE_MEMORY] = {"memory", MEMORY_RIGHT_MANAGE, 0},
+  [SERVICE_THREADS] = {"threads", THREAD_RIGHT_MANAGE, 0},
   [SERVICE_LAUNCHER] = {"launcher", LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP, 0},
   [SERVICE_CLOCK] = {"clock", CLOCK_RIGHTS, 0},
   [SERVICE_SYSTEM_INFO] = {"system_info", SYSTEM_INFO_RIGHT_READ, 0},
