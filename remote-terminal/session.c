@@ -387,7 +387,7 @@ failed:
 static enum call_status broker_launch(struct remote_context *context,
     size_t columns, size_t rows, unsigned tab_width,
     const struct pyxis_working_snapshot *cwd, handle_t bootstrap, handle_t broker_caller,
-    struct remote_shell *shell)
+    uint64_t deadline, struct remote_shell *shell)
 {
   *shell = (struct remote_shell){0};
   size_t depth = cwd ? cwd->context.count : 1;
@@ -494,6 +494,17 @@ static enum call_status broker_launch(struct remote_context *context,
     .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
     .namespace_grant = context->namespace_index == SIZE_MAX ? 0 : context->namespace_index + FIRST_OPTIONAL + 1,
   };
+  if (deadline) {
+    uint64_t now;
+    status = clock_now(startup_resource("clock"), &now);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    if (now >= deadline) {
+      status = CALL_TIMED_OUT;
+      goto done;
+    }
+  }
   status = launcher_launch(bound, &request, &shell->process);
 
 done:
@@ -552,7 +563,7 @@ enum call_status remote_mux_launch(size_t columns, size_t rows, unsigned tab_wid
   }
   broker->receiver = endpoint.receiver;
   status = broker_launch(&broker->context, columns, rows, tab_width, NULL,
-      HANDLE_INVALID, endpoint.caller, shell);
+      HANDLE_INVALID, endpoint.caller, 0, shell);
   owned_close(&endpoint.caller);
   return status;
 }
@@ -701,15 +712,19 @@ static void broker_record(struct remote_broker *broker, struct endpoint_packet *
       status = CALL_BAD_REQUEST;
     } else {
       status = broker_launch(&broker->context, request.columns, request.rows, request.tab_width,
-          pane->directories ? &pane->cwd : NULL, pane->bootstrap, HANDLE_INVALID, &pane->shell);
+          pane->directories ? &pane->cwd : NULL, pane->bootstrap, HANDLE_INVALID,
+          pane->request.deadline, &pane->shell);
       pane->published = status == CALL_OK;
       pyxis_working_snapshot_close(&pane->cwd);
       owned_close(&pane->bootstrap);
-      /* Synchronous capture/HOST work may have outlasted the request budget. */
-      uint64_t completed_at;
-      enum call_status clock_status = clock_now(startup_resource("clock"), &completed_at);
-      if (clock_status != CALL_OK || completed_at >= pane->request.deadline) {
-        status = clock_status != CALL_OK ? clock_status : CALL_TIMED_OUT;
+      /* Publication cannot become a retryable timeout or clock failure. An
+       * untrustworthy launch response likewise remains OUTCOME_UNKNOWN. */
+      if (status == CALL_OK) {
+        uint64_t completed_at;
+        enum call_status clock_status = clock_now(startup_resource("clock"), &completed_at);
+        if (clock_status != CALL_OK || completed_at >= pane->request.deadline) {
+          status = CALL_OUTCOME_UNKNOWN;
+        }
       }
     }
   } else if (request.operation == PANE_BROKER_ACCEPT && pane->published &&
@@ -742,7 +757,7 @@ static void broker_record(struct remote_broker *broker, struct endpoint_packet *
   }
 }
 
-bool remote_broker_service(struct remote_broker *broker, uint64_t now)
+bool remote_broker_service(struct remote_broker *broker)
 {
   bool progress = false;
   for (unsigned i = 0; i < PANE_BROKER_PANES; ++i) {
@@ -760,10 +775,19 @@ bool remote_broker_service(struct remote_broker *broker, uint64_t now)
       }
       continue;
     }
-    if (pane->request.deadline && now >= pane->request.deadline) {
-      pane_cancel(broker, pane);
-      progress = true;
+    if (pane->request.deadline) {
+      uint64_t now;
+      enum call_status status = clock_now(startup_resource("clock"), &now);
+      if (status != CALL_OK) {
+        broker->error = status;
+      } else if (now >= pane->request.deadline) {
+        pane_cancel(broker, pane);
+        progress = true;
+      }
     }
+  }
+  if (broker->error != CALL_OK) {
+    remote_broker_seal(broker);
   }
   if (broker->sealed || broker->receiver == HANDLE_INVALID) {
     return progress;
@@ -776,6 +800,14 @@ bool remote_broker_service(struct remote_broker *broker, uint64_t now)
         broker->error = status;
         remote_broker_seal(broker);
       }
+      break;
+    }
+    uint64_t now;
+    status = clock_now(startup_resource("clock"), &now);
+    if (status != CALL_OK) {
+      pane_broker_packet_close(&packet);
+      broker->error = status;
+      remote_broker_seal(broker);
       break;
     }
     broker_record(broker, &packet, now);

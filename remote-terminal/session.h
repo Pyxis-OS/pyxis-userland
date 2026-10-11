@@ -55,7 +55,7 @@ struct remote_broker {
 enum call_status remote_mux_launch(size_t columns, size_t rows, unsigned tab_width,
     struct remote_broker *broker, struct remote_shell *shell);
 /* Service a bounded number of messages without awaiting another chunk. */
-bool remote_broker_service(struct remote_broker *broker, uint64_t now);
+bool remote_broker_service(struct remote_broker *broker);
 void remote_broker_seal(struct remote_broker *broker);
 bool remote_broker_complete(const struct remote_broker *broker);
 uint64_t remote_broker_deadline(const struct remote_broker *broker, uint64_t deadline);

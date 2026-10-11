@@ -415,7 +415,7 @@ static bool finish_output(struct client *client, uint64_t now)
 static bool service_client(struct client *client, unsigned tab_width, uint64_t now)
 {
   observe_completion(client, now);
-  bool broker_progress = client->broker && remote_broker_service(client->broker, now);
+  bool broker_progress = client->broker && remote_broker_service(client->broker);
   if (client->broker && client->broker->error != CALL_OK) {
     report("pane broker", client->broker->error);
     failed = true;
@@ -777,7 +777,7 @@ int main(int argc, char **argv)
           }
         }
       }
-      remote_broker_service(clients[i].broker, 0);
+      remote_broker_service(clients[i].broker);
       remote_broker_release(clients[i].broker);
       free(clients[i].broker);
     }
