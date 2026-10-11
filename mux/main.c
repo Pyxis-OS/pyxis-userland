@@ -605,10 +605,10 @@ static enum call_status run(struct mux *mux)
         return CALL_ENDPOINT_CLOSED;
       }
       if (events[pointer_entry] & WAIT_READABLE) {
-        if (mux->dirty || mux->render_active) {
-          /* These coordinates can name a view whose bytes are only partly
-           * accepted. Consume them fairly; the final render advances the view
-           * again before accepting selection or clipboard coordinates. */
+        if (mux_pointer_view_pending(mux)) {
+          /* A layout/history/scroll barrier changed coordinate meaning before
+           * its complete presentation was accepted. Ordinary selection/cell
+           * redraws keep servicing the drag without another view invalidation. */
           for (unsigned i = 0; i < MUX_DRAIN_RECORDS; ++i) {
             struct pointer_event event;
             status = terminal_pointer_read(mux->pointer, POINTER_READ_POLL, &event);

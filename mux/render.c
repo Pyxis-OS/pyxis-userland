@@ -179,7 +179,7 @@ static enum call_status compose(struct mux *mux)
 static void cursor(struct mux *mux)
 {
   struct mux_output *output = &mux->output;
-  append(output, "\033[0m", 4);
+  append(output, "\033[?25l\033[0m", 10);
   const struct mux_pane *focused = &mux->panes[mux->focused];
   const struct mux_rect *rect = &mux->rectangles[mux->focused];
   if (rect->height > 1 && focused->emulator.cursor_visible && !focused->browsing &&
@@ -232,8 +232,11 @@ static enum call_status flush(struct mux *mux, size_t *budget, bool *progress)
   if (output->finish) {
     mux->render_active = false;
     mux->render_scan = 0;
-    if (!mux->dirty) {
+    if (!mux->dirty && mux_pointer_view_pending(mux)) {
       status = mux_pointer_advance_view(mux);
+      if (status == CALL_OK) {
+        mux->rendered_pointer_mapping = mux->pointer_geometry.surface.mapping_identity;
+      }
     }
   }
   output->size = output->at = 0;

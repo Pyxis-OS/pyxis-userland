@@ -62,6 +62,7 @@ struct mux {
   size_t frame_columns, frame_rows;
   bool frame_valid, render_active, render_again;
   size_t render_scan;
+  uint64_t rendered_pointer_mapping;
   struct mux_output output;
 };
 
@@ -71,6 +72,14 @@ enum call_status mux_pointer_advance_view(struct mux *mux);
 enum call_status mux_pointer_change_view(struct mux *mux);
 void mux_pointer_drain(struct mux *mux);
 void mux_clipboard_action(struct mux *mux, const struct pointer_event *event);
+
+/* Cell, cursor and selection redraws keep their existing coordinate meaning.
+ * Existing view barriers advance the identity when that meaning changes. */
+static inline bool mux_pointer_view_pending(const struct mux *mux)
+{
+  return mux->pointer_owned && mux->pointer_geometry.surface.mapping_identity !=
+      mux->rendered_pointer_mapping;
+}
 
 static inline struct mux_rect mux_viewport(const struct mux *mux)
 {
