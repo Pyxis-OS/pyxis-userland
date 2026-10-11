@@ -45,6 +45,10 @@ static bool decimal(const char *text, uint64_t *value)
 
 static bool prompt(struct terminal *terminal, const char *label, char *line, size_t bytes)
 {
+  if (fflush(stdout) != 0) {
+    fputs("fat32 selector: output failed\n", stderr);
+    return false;
+  }
   struct term_line_result result = term_read_line(terminal, label, line, bytes);
   if (result.status != TERM_LINE_OK || result.limit_reached) {
     fputs("fat32 selector: selection cancelled or input refused\n", stderr);
@@ -117,14 +121,21 @@ static int select_disk(void)
     goto done;
   }
   puts("Keep this media quiescent until inspection exits; stop all external writers.");
+  if (fflush(stdout) != 0) {
+    fputs("fat32 selector: output failed\n", stderr);
+    goto done;
+  }
   status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &opened);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 selector: read-only open failed (status %u)\n", status);
     goto done;
   }
   status = handle_copy_restricted(opened, DISK_RIGHT_INFO | DISK_RIGHT_READ, 0, &selected);
-  if (status != CALL_OK || !close_handle(&opened)) {
+  if (status != CALL_OK) {
     fprintf(stderr, "fat32 selector: disk attenuation failed (status %u)\n", status);
+    goto done;
+  }
+  if (!close_handle(&opened)) {
     goto done;
   }
   status = directory_lookup(boot, "fat32-inspect.pxe", DIRECTORY_KIND_FILE,
@@ -165,10 +176,13 @@ static int select_disk(void)
     fprintf(stderr, "fat32 selector: launch failed (status %u)\n", status);
     goto done;
   }
-  if (!close_handle(&selected) || !close_handle(&image) || !close_handle(&launcher)) {
-    goto done;
-  }
+  bool closed_sources = close_handle(&selected);
+  closed_sources = close_handle(&image) && closed_sources;
+  closed_sources = close_handle(&launcher) && closed_sources;
   result = wait_child(child);
+  if (!closed_sources) {
+    result = EXIT_FAILURE;
+  }
 
 done:
   bool closed = close_handle(&opened);
@@ -252,10 +266,10 @@ static int create_selector(void)
       closed = close_handle(&sources[i]) && closed;
     }
   }
-  if (!closed) {
-    goto done;
-  }
   result = wait_child(child);
+  if (!closed) {
+    result = EXIT_FAILURE;
+  }
 
 done:
   free(cpus);

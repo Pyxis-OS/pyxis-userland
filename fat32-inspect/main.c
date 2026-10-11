@@ -95,7 +95,12 @@ static bool print_name(const char *name, size_t bytes)
 {
   for (size_t i = 0; i < bytes; ++i) {
     unsigned char byte = (unsigned char)name[i];
-    if (byte >= 0x20 && byte <= 0x7e && byte != '\\') {
+    if (byte == 0xc2 && i + 1 < bytes && (unsigned char)name[i + 1] >= 0x80 &&
+        (unsigned char)name[i + 1] <= 0x9f) {
+      if (fprintf(stdout, "\\u%04x", (unsigned char)name[++i]) < 0) {
+        return false;
+      }
+    } else if (byte >= 0x20 && byte != 0x7f && byte != '\\') {
       if (fputc(byte, stdout) == EOF) {
         return false;
       }
@@ -113,9 +118,15 @@ static bool list_entry(void *context, const struct fat32_entry *entry)
       entry->file_bytes) < 0 || !print_name(entry->name, entry->name_bytes)) {
     return false;
   }
-  if (entry->has_long_name && (fputs(" [alias: ", stdout) == EOF ||
-      !print_name(entry->alias, entry->alias_bytes) || fputc(']', stdout) == EOF)) {
-    return false;
+  if (entry->has_long_name) {
+    if (entry->alias_ascii) {
+      if (fputs(" [alias: ", stdout) == EOF || !print_name(entry->alias, entry->alias_bytes) ||
+          fputc(']', stdout) == EOF) {
+        return false;
+      }
+    } else if (fputs(" [non-ASCII short alias]", stdout) == EOF) {
+      return false;
+    }
   }
   return fputc('\n', stdout) != EOF;
 }
@@ -132,13 +143,14 @@ static bool allocate_workspace(struct fat32_workspace *workspace, size_t bytes)
     fputs("fat32-inspect: LIMIT (workspace exceeds the 32 MiB policy)\n", stderr);
     return false;
   }
-  void *memory = malloc(bytes);
-  if (!memory) {
+  free(workspace->memory);
+  workspace->memory = NULL;
+  workspace->bytes = 0;
+  workspace->memory = malloc(bytes);
+  if (!workspace->memory) {
     fputs("fat32-inspect: NO_MEMORY\n", stderr);
     return false;
   }
-  free(workspace->memory);
-  workspace->memory = memory;
   workspace->bytes = bytes;
   return true;
 }
@@ -216,6 +228,7 @@ int main(int argc, char **argv)
   result = EXIT_SUCCESS;
   for (;;) {
     if (fflush(stdout) != 0) {
+      report(FAT32_OUTPUT, &backing);
       result = EXIT_FAILURE;
       break;
     }

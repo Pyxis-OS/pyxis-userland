@@ -15,8 +15,9 @@ The ordinary boot profile supplies no disk inventory authority.
 
 At `fat32>` enter `info`, `check`, `list /PATH`, `read /PATH` or `quit`.
 Paths use ASCII names or displayed ASCII short aliases; spaces are literal path
-bytes, with no quoting or expansion. Listing escapes nonprintable/non-ASCII
-bytes and backslashes as `\xNN`; reading streams the original file bytes.
+bytes, with no quoting or expansion. Listing preserves validated UTF-8 names,
+escaping ASCII controls and backslashes as `\xNN` and C1 controls as `\u00NN`.
+Only supported ASCII short aliases are printed; reading streams the original file bytes.
 Errors are reported explicitly. Admission validates GPT and FAT32 geometry;
 `check` also checks whole-volume allocation and reachability. No command writes,
 repairs or mounts the media.
