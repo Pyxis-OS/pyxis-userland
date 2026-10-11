@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+struct tm;
+
 typedef unsigned int wint_t;
 #define WEOF ((wint_t)-1)
 
