@@ -25,6 +25,8 @@ struct mux_selection {
 enum mux_escape_state {
   MUX_TEXT,
   MUX_ESCAPE,
+  MUX_OSC,
+  MUX_OSC_ESCAPE,
   MUX_CHARSET, /* ESC ( ) * or +: the next byte names a character set. */
   MUX_CSI_ENTRY,
   MUX_CSI,

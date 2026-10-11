@@ -162,7 +162,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 16, RESOURCE_CAPACITY = 20 };
+  enum { OPTIONAL_COUNT = 17, RESOURCE_CAPACITY = 21 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -181,6 +181,13 @@ int launch_remote_server(const struct session_config *config,
   if (threads != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", grant_count};
     grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
+  }
+  handle_t remote_mux_terminal = startup_resource("remote_mux_terminal");
+  if (remote_mux_terminal != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"remote_mux_terminal", grant_count};
+    grants[grant_count++] = (struct launch_grant){remote_mux_terminal,
+        TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t remote_power = startup_resource("remote_power");
   if (remote_power != HANDLE_INVALID) {

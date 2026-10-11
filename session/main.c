@@ -76,7 +76,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 28, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 29, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   const struct path_context *context;
@@ -311,6 +311,13 @@ static int launch_session(const struct session_config *config, const struct netw
   if (power != HANDLE_INVALID && !start_remote_services) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", grant_count};
     grants[grant_count++] = (struct launch_grant){power, POWER_RIGHTS, 0};
+  }
+  handle_t remote_mux_terminal = startup_resource("remote_mux_terminal");
+  if (remote_mux_terminal != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"remote_mux_terminal", grant_count};
+    grants[grant_count++] = (struct launch_grant){remote_mux_terminal,
+        TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t remote_power = startup_resource("remote_power");
   if (remote_power != HANDLE_INVALID) {

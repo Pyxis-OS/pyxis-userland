@@ -254,7 +254,7 @@ static void read_roots(lua_State *state, struct boot_space *space)
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
-    "network", "launch", "multiplexer", "clipboard_local", "clipboard_shared",
+    "network", "launch", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
     "screenshot", "power", "remote_power"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
@@ -321,6 +321,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: multiplexer must be a boolean", space->name);
   }
   space->multiplexer = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "remote_multiplexer");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: remote_multiplexer must be a boolean", space->name);
+  }
+  space->remote_multiplexer = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "clipboard_local");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {

@@ -697,6 +697,12 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
 
 static void put_byte(struct mux_emulator *emulator, unsigned char byte)
 {
+  if (emulator->escape_state == MUX_OSC || emulator->escape_state == MUX_OSC_ESCAPE) {
+    bool ended = byte == '\a' ||
+        (emulator->escape_state == MUX_OSC_ESCAPE && byte == '\\');
+    emulator->escape_state = ended ? MUX_TEXT : byte == 0x1b ? MUX_OSC_ESCAPE : MUX_OSC;
+    return;
+  }
   if (byte < 0x20 || byte == 0x7f) {
     flush_utf8(emulator);
   }
@@ -727,7 +733,9 @@ static void put_byte(struct mux_emulator *emulator, unsigned char byte)
 
   if (emulator->escape_state == MUX_ESCAPE) {
     emulator->escape_state = MUX_TEXT;
-    if (byte == '[') {
+    if (byte == ']') {
+      emulator->escape_state = MUX_OSC;
+    } else if (byte == '[') {
       emulator->escape_state = MUX_CSI_ENTRY;
     } else if (byte == '(' || byte == ')' || byte == '*' || byte == '+') {
       emulator->escape_state = MUX_CHARSET;

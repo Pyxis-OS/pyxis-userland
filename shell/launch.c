@@ -56,7 +56,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[32];
+  struct launch_binding resources[33];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -174,6 +174,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   handle_t mux_terminal = session ? startup_resource("mux_terminal") : HANDLE_INVALID;
   bool has_mux_terminal = mux_terminal != HANDLE_INVALID;
+  handle_t remote_mux_terminal = session ? startup_resource("remote_mux_terminal") : HANDLE_INVALID;
+  bool has_remote_mux_terminal = remote_mux_terminal != HANDLE_INVALID;
   handle_t terminal_pointer = has_mux_terminal ? startup_resource("terminal_pointer") : HANDLE_INVALID;
   bool has_terminal_pointer = terminal_pointer != HANDLE_INVALID;
   bool pass_clipboard = session || mode == SHELL_FOREGROUND;
@@ -219,7 +221,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 32 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 33 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -246,7 +248,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t namespace_service_index = publication_index + (provider ? 1 : 0);
   size_t terminal_index = namespace_service_index + (has_namespace_service ? 1 : 0);
   size_t mux_terminal_index = terminal_index + (has_terminal ? 1 : 0);
-  size_t terminal_pointer_index = mux_terminal_index + (has_mux_terminal ? 1 : 0);
+  size_t remote_mux_terminal_index = mux_terminal_index + (has_mux_terminal ? 1 : 0);
+  size_t terminal_pointer_index = remote_mux_terminal_index + (has_remote_mux_terminal ? 1 : 0);
   size_t power_index = terminal_pointer_index + (has_terminal_pointer ? 1 : 0);
   size_t remote_power_index = power_index + (has_power ? 1 : 0);
   size_t screen_capture_index = remote_power_index + (has_remote_power ? 1 : 0);
@@ -369,6 +372,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     grants[mux_terminal_index] = (struct launch_grant){mux_terminal,
         rights & TERMINAL_SERVICE_RIGHT_CREATE, transport};
+  }
+  if (has_remote_mux_terminal) {
+    grants[remote_mux_terminal_index] = (struct launch_grant){remote_mux_terminal,
+        TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   if (has_terminal_pointer) {
     grants[terminal_pointer_index] = (struct launch_grant){terminal_pointer,
@@ -523,6 +530,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_mux_terminal) {
     resources[resource_count++] = (struct launch_binding){
         (uintptr_t)"mux_terminal", mux_terminal_index};
+  }
+  if (has_remote_mux_terminal) {
+    resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)"remote_mux_terminal", remote_mux_terminal_index};
   }
   if (has_terminal_pointer) {
     resources[resource_count++] = (struct launch_binding){

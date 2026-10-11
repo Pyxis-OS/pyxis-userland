@@ -492,6 +492,11 @@ static void cleanup(struct transfer *transfer)
 
 int main(int argc, char **argv)
 {
+  const char *mux_profile = getenv("PYXIS_REMOTE_MUX");
+  if (mux_profile && !strcmp(mux_profile, "1")) {
+    fputs("xfer: file transfer is unavailable inside a remote mux pane\n", stderr);
+    return EXIT_FAILURE;
+  }
   bool sending = argc == 3 && !strcmp(argv[1], "send");
   bool overwrite = argc == 5 && !strcmp(argv[1], "receive") && !strcmp(argv[2], "--overwrite");
   bool receiving = (argc == 4 && !strcmp(argv[1], "receive")) || overwrite;

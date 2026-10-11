@@ -51,6 +51,7 @@ struct boot_space {
   bool network;
   bool launch;
   bool multiplexer; /* Local terminal startup may create pane sessions. */
+  bool remote_multiplexer; /* Explicit remote pane-broker opt-in. */
   bool clipboard_local; /* Explicit space-local graphics/store delegation. */
   bool clipboard_shared; /* Independent cross-space graphics/store delegation. */
   bool screenshot; /* Receives whole-screen capture authority. */
