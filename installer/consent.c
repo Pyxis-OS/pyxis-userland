@@ -1,5 +1,8 @@
 #include "installer.h"
+#include "inventory.h"
+#include "digest.h"
 
+#include <directory.h>
 #include <pyxis_fs/npfs.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -422,8 +425,8 @@ static enum inspection allocated_pointer(struct pool_view *pool, uint64_t block)
   return pool->scratch[2][bit / 8] & (1u << (bit % 8)) ? INSPECT_OK : INSPECT_DAMAGED;
 }
 
-static enum inspection mapping_read(struct pool_view *pool, const uint64_t *pointers,
-    uint64_t logical, uint64_t *leaf)
+static enum inspection mapping_read_kind(struct pool_view *pool, const uint64_t *pointers,
+    uint64_t logical, bool sparse, uint64_t *leaf)
 {
   struct npfs_map_path path;
   if (npfs_map_path(logical, &path) != NPFS_OK) {
@@ -432,6 +435,10 @@ static enum inspection mapping_read(struct pool_view *pool, const uint64_t *poin
   uint64_t block = pointers[path.slot], ancestors[3];
   for (unsigned depth = 0; depth < path.depth; depth++) {
     if (!block) {
+      if (sparse) {
+        *leaf = 0;
+        return INSPECT_OK;
+      }
       return INSPECT_DAMAGED;
     }
     for (unsigned i = 0; i < depth; i++) {
@@ -455,11 +462,21 @@ static enum inspection mapping_read(struct pool_view *pool, const uint64_t *poin
       return INSPECT_DAMAGED;
     }
   }
+  if (!block && sparse) {
+    *leaf = 0;
+    return INSPECT_OK;
+  }
   enum inspection status = allocated_pointer(pool, block);
   if (status == INSPECT_OK) {
     *leaf = block;
   }
   return status;
+}
+
+static enum inspection mapping_read(struct pool_view *pool, const uint64_t *pointers,
+    uint64_t logical, uint64_t *leaf)
+{
+  return mapping_read_kind(pool, pointers, logical, false, leaf);
 }
 
 static enum inspection read_inode(struct pool_view *pool, const struct npfs_volume *volume,
@@ -871,8 +888,8 @@ static bool update_layout(const struct install_disk *disk, const struct gpt_copy
   return true;
 }
 
-static enum inspection update_catalog(struct pool_view *pool, struct npfs_volume *system,
-    bool *found)
+static enum inspection update_catalog(struct pool_view *pool, const char *name,
+    struct npfs_volume *selected, bool *found)
 {
   install_progress_begin("Inspecting update volume catalog", INSTALL_PROGRESS_RAW_READ,
       "pages checked");
@@ -910,9 +927,9 @@ static enum inspection update_catalog(struct pool_view *pool, struct npfs_volume
           goto done;
         }
       }
-      if (volume->name_length == sizeof("system") - 1 &&
-          !memcmp(volume->name, "system", sizeof("system") - 1)) {
-        *system = *volume;
+      if (volume->name_length == strlen(name) &&
+          !memcmp(volume->name, name, volume->name_length)) {
+        *selected = *volume;
         *found = true;
       }
     }
@@ -1064,12 +1081,22 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
     if (status != INSPECT_OK) {
       goto inspection_failed;
     }
+    uint64_t base = page * NPFS_BITMAP_BITS;
+    uint64_t count = pool->blocks - base;
+    if (count > NPFS_BITMAP_BITS) {
+      count = NPFS_BITMAP_BITS;
+    }
+    for (uint64_t bit = 0; bit < count; bit++) {
+      if (!(pool->scratch[0][bit / 8] & (1u << (bit % 8)))) {
+        update->free_blocks++;
+      }
+    }
     install_progress_advance(0, 1);
   }
   struct npfs_volume system;
   bool found;
   update->reason = "npfs volume catalog is damaged or incompatible";
-  status = update_catalog(pool, &system, &found);
+  status = update_catalog(pool, "system", &system, &found);
   if (status != INSPECT_OK) {
     goto inspection_failed;
   }
@@ -1095,5 +1122,457 @@ done:
   free(block);
   free(pool);
   free(maps);
+  return success;
+}
+
+struct prior_directory {
+  struct npfs_inode inode;
+  uint64_t number, position, page_number;
+  size_t records, path_bytes;
+  bool page_loaded;
+  uint8_t page[NPFS_BLOCK_SIZE];
+};
+
+static enum inspection prior_next(struct pool_view *pool, const struct npfs_volume *volume,
+    struct prior_directory *directory, struct npfs_dirent *entry, bool *end)
+{
+  *end = false;
+  while (directory->position < directory->inode.size) {
+    uint64_t logical = directory->position / NPFS_BLOCK_SIZE;
+    if (!directory->page_loaded || directory->page_number != logical) {
+      uint64_t leaf;
+      enum inspection status = mapping_read(pool, directory->inode.pointers, logical, &leaf);
+      if (status != INSPECT_OK) {
+        return status;
+      }
+      status = pool_read(pool, leaf, NPFS_METADATA_DIRECTORY, directory->page);
+      if (status != INSPECT_OK) {
+        return status;
+      }
+      directory->page_number = logical;
+      directory->page_loaded = true;
+    }
+    size_t offset = (size_t)(directory->position % NPFS_BLOCK_SIZE);
+    /* Free records consume inspection work too, even in an empty namespace. */
+    if (++directory->records > INSTALL_TREE_MAX_ENTRIES ||
+        npfs_dirent_decode(&pool->header, directory->page + offset,
+          NPFS_BLOCK_SIZE - offset, entry) != NPFS_OK) {
+      return INSPECT_DAMAGED;
+    }
+    directory->position += entry->record_length;
+    if (!entry->inode) {
+      continue;
+    }
+    if (entry->inode == 1 || entry->inode >= volume->inode_bytes / NPFS_INODE_SIZE) {
+      return INSPECT_DAMAGED;
+    }
+    return INSPECT_OK;
+  }
+  *end = true;
+  return INSPECT_OK;
+}
+
+static enum inspection prior_linked_inode(struct pool_view *pool,
+    const struct npfs_volume *volume, uint64_t number, uint64_t parent,
+    struct npfs_inode *inode)
+{
+  enum inspection status = read_inode(pool, volume, number, inode);
+  if (status != INSPECT_OK) {
+    return status;
+  }
+  if (inode->kind == NPFS_INODE_FREE || (inode->cleanup & NPFS_CLEANUP_DETACHED) ||
+      inode->cleanup_next >= volume->inode_bytes / NPFS_INODE_SIZE ||
+      (inode->kind == NPFS_INODE_DIRECTORY && inode->parent != parent)) {
+    return INSPECT_DAMAGED;
+  }
+  return INSPECT_OK;
+}
+
+static enum inspection prior_lookup(struct pool_view *pool, const struct npfs_volume *volume,
+    uint64_t parent, const struct npfs_inode *directory, const char *name,
+    uint64_t *number, struct npfs_inode *inode)
+{
+  struct prior_directory *cursor = calloc(1, sizeof(*cursor));
+  if (!cursor) {
+    return INSPECT_FATAL;
+  }
+  cursor->inode = *directory;
+  cursor->number = parent;
+  *number = 0;
+  size_t length = strlen(name);
+  enum inspection status = INSPECT_OK;
+  install_progress_begin("Inspecting previous revision directory", INSTALL_PROGRESS_RAW_READ, "entries");
+  for (;;) {
+    struct npfs_dirent entry;
+    bool end;
+    status = prior_next(pool, volume, cursor, &entry, &end);
+    if (status != INSPECT_OK || end) {
+      break;
+    }
+    install_progress_advance(0, 1);
+    if (entry.name_length != length || memcmp(entry.name, name, length)) {
+      continue;
+    }
+    if (*number) {
+      status = INSPECT_DAMAGED;
+      break;
+    }
+    *number = entry.inode;
+    status = prior_linked_inode(pool, volume, *number, parent, inode);
+    if (status != INSPECT_OK) {
+      break;
+    }
+  }
+  install_progress_finish();
+  free(cursor);
+  return status;
+}
+
+static enum inspection prior_file_block(struct pool_view *pool, const struct npfs_inode *inode,
+    uint64_t logical, uint8_t bytes[NPFS_BLOCK_SIZE])
+{
+  uint64_t leaf;
+  enum inspection status = mapping_read_kind(pool, inode->pointers, logical, true, &leaf);
+  if (status != INSPECT_OK) {
+    return status;
+  }
+  if (!leaf) {
+    memset(bytes, 0, NPFS_BLOCK_SIZE);
+    return INSPECT_OK;
+  }
+  return raw_pool_read(pool, leaf, bytes);
+}
+
+static enum inspection prior_hash_file(struct pool_view *pool, const struct npfs_inode *inode,
+    char sha256[65])
+{
+  struct install_digest digest = {0};
+  if (!install_digest_begin(&digest)) {
+    return INSPECT_FATAL;
+  }
+  enum inspection status = INSPECT_OK;
+  for (uint64_t offset = 0; offset < inode->size;) {
+    status = prior_file_block(pool, inode, offset / NPFS_BLOCK_SIZE, pool->scratch[0]);
+    if (status != INSPECT_OK) {
+      break;
+    }
+    size_t length = inode->size - offset < NPFS_BLOCK_SIZE ?
+        (size_t)(inode->size - offset) : NPFS_BLOCK_SIZE;
+    if (!install_digest_update(&digest, pool->scratch[0], length)) {
+      status = INSPECT_FATAL;
+      break;
+    }
+    install_progress_advance(length, 0);
+    offset += length;
+  }
+  if (status == INSPECT_OK && !install_digest_finish(&digest, sha256)) {
+    status = INSPECT_FATAL;
+  }
+  install_digest_abort(&digest);
+  return status;
+}
+
+static int compare_prior_inodes(const void *left, const void *right)
+{
+  uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
+  return (a > b) - (a < b);
+}
+
+static enum inspection prior_tree(struct pool_view *pool, const struct npfs_volume *volume,
+    uint64_t root_number, const struct npfs_inode *root, struct install_manifest *manifest)
+{
+  struct prior_directory *levels = calloc(INSTALL_TREE_MAX_DEPTH + 1, sizeof(*levels));
+  uint64_t *seen = malloc((INSTALL_TREE_MAX_ENTRIES + 1) * sizeof(*seen));
+  char *path = malloc((INSTALL_TREE_MAX_DEPTH + 1) * (NPFS_NAME_MAX + 1));
+  if (!levels || !seen || !path) {
+    free(levels);
+    free(seen);
+    free(path);
+    return INSPECT_FATAL;
+  }
+  levels[0].inode = *root;
+  levels[0].number = root_number;
+  seen[0] = root_number;
+  path[0] = '\0';
+  unsigned depth = 0;
+  size_t entries = 0;
+  enum inspection status = INSPECT_OK;
+  install_progress_begin("Reading and hashing previous program inventory", INSTALL_PROGRESS_WORK, "entries");
+  for (;;) {
+    struct prior_directory *level = &levels[depth];
+    struct npfs_dirent entry;
+    bool end;
+    status = prior_next(pool, volume, level, &entry, &end);
+    if (status != INSPECT_OK) {
+      break;
+    }
+    if (end) {
+      if (!depth) {
+        break;
+      }
+      --depth;
+      path[levels[depth].path_bytes] = '\0';
+      continue;
+    }
+    if (++entries > INSTALL_TREE_MAX_ENTRIES) {
+      status = INSPECT_DAMAGED;
+      break;
+    }
+    seen[entries] = entry.inode;
+    struct npfs_inode inode;
+    status = prior_linked_inode(pool, volume, entry.inode, level->number, &inode);
+    if (status != INSPECT_OK) {
+      break;
+    }
+    if (!depth && entry.name_length == sizeof(INSTALL_MANIFEST_NAME) - 1 &&
+        !memcmp(entry.name, INSTALL_MANIFEST_NAME, entry.name_length)) {
+      continue;
+    }
+    for (unsigned ancestor = 0; ancestor <= depth; ancestor++) {
+      if (entry.inode == levels[ancestor].number) {
+        status = INSPECT_DAMAGED;
+        break;
+      }
+    }
+    if (status != INSPECT_OK) {
+      break;
+    }
+    size_t length = level->path_bytes;
+    if (length) {
+      path[length++] = '/';
+    }
+    memcpy(path + length, entry.name, entry.name_length);
+    length += entry.name_length;
+    path[length] = '\0';
+    char sha256[65];
+    uint64_t kind, bytes;
+    if (inode.kind == NPFS_INODE_FILE) {
+      kind = DIRECTORY_KIND_FILE;
+      bytes = inode.size;
+      status = prior_hash_file(pool, &inode, sha256);
+    } else {
+      kind = DIRECTORY_KIND_DIRECTORY;
+      bytes = 0;
+      if (depth == INSTALL_TREE_MAX_DEPTH) {
+        status = INSPECT_DAMAGED;
+      }
+    }
+    if (status != INSPECT_OK) {
+      break;
+    }
+    enum install_manifest_status added = install_manifest_add(manifest, path, kind, bytes,
+        kind == DIRECTORY_KIND_FILE ? sha256 : NULL);
+    if (added != INSTALL_MANIFEST_OK) {
+      status = added == INSTALL_MANIFEST_NO_MEMORY ? INSPECT_FATAL : INSPECT_DAMAGED;
+      break;
+    }
+    if (kind == DIRECTORY_KIND_DIRECTORY) {
+      ++depth;
+      levels[depth] = (struct prior_directory){
+        .inode = inode, .number = entry.inode, .path_bytes = length,
+      };
+    } else {
+      path[level->path_bytes] = '\0';
+    }
+    install_progress_advance(0, 1);
+  }
+  if (status == INSPECT_OK) {
+    install_progress_begin("Validating previous inventory structure", INSTALL_PROGRESS_NONE, NULL);
+    qsort(seen, entries + 1, sizeof(*seen), compare_prior_inodes);
+    for (size_t i = 1; i <= entries; i++) {
+      if (seen[i - 1] == seen[i]) {
+        status = INSPECT_DAMAGED;
+        break;
+      }
+    }
+  }
+  if (status == INSPECT_OK) {
+    enum install_manifest_status sealed = install_manifest_seal(manifest);
+    if (sealed != INSTALL_MANIFEST_OK) {
+      status = sealed == INSTALL_MANIFEST_NO_MEMORY ? INSPECT_FATAL : INSPECT_DAMAGED;
+    }
+  }
+  install_progress_finish();
+  free(path);
+  free(seen);
+  free(levels);
+  return status;
+}
+
+static enum inspection prior_manifest(struct pool_view *pool, const struct npfs_inode *inode,
+    const char *revision, struct install_manifest *manifest, bool *valid)
+{
+  *valid = false;
+  if (inode->kind != NPFS_INODE_FILE || inode->size > INSTALL_MANIFEST_MAX_BYTES) {
+    return INSPECT_OK;
+  }
+  size_t length = (size_t)inode->size;
+  uint8_t *text = malloc(length ? length : 1);
+  if (!text) {
+    return INSPECT_FATAL;
+  }
+  install_progress_begin("Reading previous revision manifest", INSTALL_PROGRESS_RAW_READ, NULL);
+  enum inspection status = INSPECT_OK;
+  for (size_t offset = 0; offset < length;) {
+    status = prior_file_block(pool, inode, offset / NPFS_BLOCK_SIZE, pool->scratch[0]);
+    if (status != INSPECT_OK) {
+      break;
+    }
+    size_t bytes = length - offset < NPFS_BLOCK_SIZE ? length - offset : NPFS_BLOCK_SIZE;
+    memcpy(text + offset, pool->scratch[0], bytes);
+    offset += bytes;
+  }
+  if (status == INSPECT_OK) {
+    install_progress_begin("Parsing previous revision manifest", INSTALL_PROGRESS_NONE, NULL);
+    enum install_manifest_status parsed = install_manifest_parse(text, length, manifest);
+    if (parsed == INSTALL_MANIFEST_NO_MEMORY) {
+      status = INSPECT_FATAL;
+    } else if (parsed == INSTALL_MANIFEST_OK) {
+      *valid = !strcmp(manifest->revision, revision);
+      if (!*valid) {
+        install_manifest_destroy(manifest);
+      }
+    }
+  }
+  free(text);
+  return status;
+}
+
+void install_prior_destroy(struct install_prior *prior)
+{
+  install_manifest_destroy(&prior->inventory);
+  memset(prior, 0, sizeof(*prior));
+}
+
+bool install_prior_read(const struct install_disk *disk, const struct install_update *update,
+    bool inventory_legacy, struct install_prior *prior)
+{
+  *prior = (struct install_prior){
+    .state = INSTALL_PRIOR_UNKNOWN, .reason = "previous revision is unknown",
+  };
+  if (!update->eligible || update->layout.pool_start > disk->bytes ||
+      update->layout.pool_bytes > disk->bytes - update->layout.pool_start ||
+      update->layout.pool_bytes % NPFS_BLOCK_SIZE) {
+    prior->reason = "prior inventory requires an admitted update target";
+    return false;
+  }
+  struct pool_view *pool = calloc(1, sizeof(*pool));
+  if (!pool) {
+    prior->reason = "out of memory during prior inventory inspection";
+    return false;
+  }
+  pool->disk = disk;
+  pool->offset = update->layout.pool_start;
+  pool->blocks = update->layout.pool_bytes / NPFS_BLOCK_SIZE;
+  bool success = false, degraded = false;
+  enum inspection status = select_pool(pool, &degraded, true, &prior->reason);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  if (pool->control.state != NPFS_JOURNAL_EMPTY) {
+    prior->reason = "prior inventory requires an empty journal";
+    goto done;
+  }
+  struct npfs_volume bin;
+  bool found;
+  status = update_catalog(pool, INSTALL_BIN_VOLUME, &bin, &found);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  if (!found) {
+    enum install_manifest_status initialized = install_manifest_init(&prior->inventory,
+        INSTALL_UNKNOWN_REVISION);
+    if (initialized == INSTALL_MANIFEST_OK) {
+      initialized = install_manifest_seal(&prior->inventory);
+    }
+    if (initialized != INSTALL_MANIFEST_OK) {
+      status = initialized == INSTALL_MANIFEST_NO_MEMORY ? INSPECT_FATAL : INSPECT_DAMAGED;
+      goto failed;
+    }
+    prior->state = INSTALL_PRIOR_EMPTY;
+    prior->reason = "no bin volume; no installed program inventory";
+    success = true;
+    goto done;
+  }
+  if (!strcmp(update->revision, INSTALL_UNKNOWN_REVISION) ||
+      !npfs_name_valid((const uint8_t *)update->revision, strlen(update->revision))) {
+    prior->reason = "previous revision is unknown or is not a valid directory name";
+    success = true;
+    goto done;
+  }
+  status = update_system(pool, &bin);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  struct npfs_inode root, revision_root, manifest_inode;
+  status = read_inode(pool, &bin, 1, &root);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  uint64_t revision_number, manifest_number;
+  status = prior_lookup(pool, &bin, 1, &root, update->revision,
+      &revision_number, &revision_root);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  if (!revision_number) {
+    prior->reason = "previous program revision directory is absent";
+    success = true;
+    goto done;
+  }
+  if (revision_root.kind != NPFS_INODE_DIRECTORY) {
+    status = INSPECT_DAMAGED;
+    goto failed;
+  }
+  status = prior_lookup(pool, &bin, revision_number, &revision_root, INSTALL_MANIFEST_NAME,
+      &manifest_number, &manifest_inode);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  bool valid = false;
+  if (manifest_number) {
+    status = prior_manifest(pool, &manifest_inode, update->revision, &prior->inventory, &valid);
+    if (status != INSPECT_OK) {
+      goto failed;
+    }
+  }
+  if (valid) {
+    prior->state = INSTALL_PRIOR_MANIFEST;
+    prior->reason = "previous recorded revision manifest";
+    success = true;
+    goto done;
+  }
+  prior->needs_legacy = true;
+  prior->reason = manifest_number ? "previous revision manifest is invalid" :
+      "previous revision manifest is missing";
+  if (!inventory_legacy) {
+    success = true;
+    goto done;
+  }
+  enum install_manifest_status initialized = install_manifest_init(&prior->inventory,
+      update->revision);
+  if (initialized != INSTALL_MANIFEST_OK) {
+    status = initialized == INSTALL_MANIFEST_NO_MEMORY ? INSPECT_FATAL : INSPECT_DAMAGED;
+    goto failed;
+  }
+  status = prior_tree(pool, &bin, revision_number, &revision_root, &prior->inventory);
+  if (status != INSPECT_OK) {
+    goto failed;
+  }
+  prior->state = INSTALL_PRIOR_SYNTHESIZED;
+  prior->needs_legacy = false;
+  prior->reason = "previous revision read and hashed without mounting";
+  success = true;
+  goto done;
+failed:
+  prior->reason = status == INSPECT_FATAL ? "I/O, allocation or hashing failure during prior inventory" :
+      "prior inventory metadata is damaged or exceeds inspection bounds";
+done:
+  install_progress_finish();
+  free(pool);
+  if (!success) {
+    install_manifest_destroy(&prior->inventory);
+    prior->needs_legacy = false;
+  }
   return success;
 }
