@@ -1,9 +1,33 @@
 #include "installer.h"
+#include "digest.h"
 
 #include <file.h>
 #include <pyxis_fs/npfs.h>
 #include <stdio.h>
 #include <string.h>
+
+static struct install_digest inspection_hash;
+static bool fingerprinting;
+
+bool install_read_fingerprint_begin(void)
+{
+  install_read_fingerprint_abort();
+  fingerprinting = install_digest_begin(&inspection_hash);
+  return fingerprinting;
+}
+
+bool install_read_fingerprint_finish(char digest[65])
+{
+  bool active = fingerprinting;
+  fingerprinting = false;
+  return active && install_digest_finish(&inspection_hash, digest);
+}
+
+void install_read_fingerprint_abort(void)
+{
+  install_digest_abort(&inspection_hash);
+  fingerprinting = false;
+}
 
 void npfs_memory_copy(void *destination, const void *source, size_t length)
 {
@@ -52,6 +76,16 @@ bool install_read(const struct install_disk *disk, uint64_t offset, void *bytes,
       fprintf(stderr, "installer: disk read failed at byte %llu (status %u)\n",
           (unsigned long long)offset, status);
       return false;
+    }
+    if (fingerprinting) {
+      uint8_t extent[16];
+      npfs_put_u64(extent, offset);
+      npfs_put_u64(extent + 8, count);
+      if (!install_digest_update(&inspection_hash, extent, sizeof(extent)) ||
+          !install_digest_update(&inspection_hash, destination, count)) {
+        install_read_fingerprint_abort();
+        return false;
+      }
     }
     install_progress_io(INSTALL_PROGRESS_RAW_READ,
         skip || length < alignment ? alignment : count);

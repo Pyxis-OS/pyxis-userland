@@ -3,6 +3,7 @@
 
 #include <abi/handle.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>
 
 enum install_progress_measure {
@@ -34,6 +35,7 @@ struct install_progress_record {
 typedef void (*install_progress_sink)(void *context, const struct install_progress_record *record);
 void install_progress_bind(install_progress_sink sink, void *context);
 void install_progress_plain(handle_t clock);
+void install_progress_plain_stream(handle_t clock, FILE *output);
 void install_progress_begin(const char *phase, enum install_progress_measure measure,
     const char *item_unit);
 void install_progress_bytes_total(uint64_t total);

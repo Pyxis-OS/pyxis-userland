@@ -52,11 +52,13 @@ struct install_update {
   const char *reason;
   struct install_layout layout;
   char revision[64];
+  uint64_t free_blocks;
 };
 
 struct install_consent {
   bool eligible, final_pool, degraded;
   uint32_t pools, volumes;
+  uint8_t existing_guid[16];
   const char *reason;
   /* Owned, printable escaped volume labels; NULL when none were readable. */
   char *volume_labels;
@@ -64,6 +66,10 @@ struct install_consent {
 
 /* All inputs are borrowed. Reads allow byte ranges; writes require native
  * logical-block alignment. Chunking never retries a failed operation. */
+bool install_read_fingerprint_begin(void);
+bool install_read_fingerprint_finish(char digest[65]);
+void install_read_fingerprint_abort(void);
+
 bool install_read(const struct install_disk *disk, uint64_t offset,
     void *bytes, size_t length);
 bool install_write(const struct install_disk *disk, uint64_t offset,
@@ -133,11 +139,13 @@ void install_programs_destroy(struct install_programs *programs);
  * owned memory. Descendant matching respects component boundaries. */
 bool install_archive_filter(const struct install_source *archive,
     struct install_programs *programs, struct install_source *rescue);
+struct install_manifest;
 /* Outside any raw claim on the pool: creates the bin volume if missing, writes
  * complete program trees into bin/REVISION, replacing an earlier partial copy,
  * syncs the pool and verifies names, kinds, structure, sizes and bytes. */
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
-    const struct install_programs *programs, const char *revision);
+    const struct install_programs *programs, const char *revision,
+    const struct install_manifest *manifest, const char *manifest_text, size_t manifest_bytes);
 /* Recursively removes revisions except KEEP and PREVIOUS (which may be NULL).
  * The caller skips this best-effort stage when the previous revision is unknown. */
 bool install_programs_cleanup(const struct install_disk *disk, const char *keep,

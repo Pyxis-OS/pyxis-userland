@@ -16,6 +16,7 @@ static bool measuring;
 
 static struct {
   handle_t clock;
+  FILE *output;
   uint64_t last_ns, checked_bytes, checked_items;
   bool terminal, row, enabled, timed;
 } plain;
@@ -99,7 +100,7 @@ void install_progress_pause(void)
 static void plain_end_row(void)
 {
   if (plain.row) {
-    if (putchar('\n') == EOF) {
+    if (fputc('\n', plain.output) == EOF) {
       plain.enabled = false;
     }
     plain.row = false;
@@ -108,27 +109,27 @@ static void plain_end_row(void)
 
 static bool plain_counter(const struct install_progress_record *snapshot)
 {
-  if (printf("%s%s: ", plain.terminal ? "\r" : "", snapshot->phase) < 0) {
+  if (fprintf(plain.output, "%s%s: ", plain.terminal ? "\r" : "", snapshot->phase) < 0) {
     return false;
   }
   if (snapshot->item_unit) {
-    if (printf("%llu", (unsigned long long)snapshot->items) < 0 ||
+    if (fprintf(plain.output, "%llu", (unsigned long long)snapshot->items) < 0 ||
         (snapshot->total_items_known &&
-          printf("/%llu", (unsigned long long)snapshot->total_items) < 0) ||
-        printf(" %s%s", snapshot->item_unit,
+          fprintf(plain.output, "/%llu", (unsigned long long)snapshot->total_items) < 0) ||
+        fprintf(plain.output, " %s%s", snapshot->item_unit,
           snapshot->measure == INSTALL_PROGRESS_NONE ? "" : ", ") < 0) {
       return false;
     }
   }
   if (snapshot->measure != INSTALL_PROGRESS_NONE) {
-    if (printf("%llu", (unsigned long long)snapshot->bytes) < 0 ||
+    if (fprintf(plain.output, "%llu", (unsigned long long)snapshot->bytes) < 0 ||
         (snapshot->total_bytes_known &&
-          printf("/%llu", (unsigned long long)snapshot->total_bytes) < 0) ||
-        fputs(" bytes", stdout) == EOF) {
+          fprintf(plain.output, "/%llu", (unsigned long long)snapshot->total_bytes) < 0) ||
+        fputs(" bytes", plain.output) == EOF) {
       return false;
     }
   }
-  return plain.terminal || putchar('\n') != EOF;
+  return plain.terminal || fputc('\n', plain.output) != EOF;
 }
 
 static void plain_observe(void *context, const struct install_progress_record *snapshot)
@@ -143,7 +144,7 @@ static void plain_observe(void *context, const struct install_progress_record *s
   }
   if (snapshot->event == INSTALL_PROGRESS_BEGIN) {
     plain.checked_bytes = plain.checked_items = 0;
-    if (printf("%s...\n", snapshot->phase) < 0) {
+    if (fprintf(plain.output, "%s...\n", snapshot->phase) < 0) {
       plain.enabled = false;
     }
     plain.timed = clock_now(plain.clock, &plain.last_ns) == CALL_OK;
@@ -180,9 +181,14 @@ static void plain_observe(void *context, const struct install_progress_record *s
   }
 }
 
-void install_progress_plain(handle_t clock)
+void install_progress_plain_stream(handle_t clock, FILE *output)
 {
   install_progress_finish();
-  plain = (typeof(plain)){.clock = clock, .terminal = isatty(STDOUT_FILENO), .enabled = true};
+  plain = (typeof(plain)){.clock = clock, .output = output, .terminal = isatty(fileno(output)), .enabled = true};
   install_progress_bind(plain_observe, NULL);
+}
+
+void install_progress_plain(handle_t clock)
+{
+  install_progress_plain_stream(clock, stdout);
 }

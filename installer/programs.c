@@ -1,4 +1,6 @@
 #include "installer.h"
+#include "manifest.h"
+#include "digest.h"
 
 #include <directory.h>
 #include <file.h>
@@ -195,7 +197,7 @@ bool install_programs_list(handle_t boot, struct install_programs *programs)
       break;
     }
     cursor = entry.cursor;
-    if (++entries > TREE_MAX_ENTRIES) {
+    if (++entries >= TREE_MAX_ENTRIES) {
       ok = false;
       break;
     }
@@ -448,7 +450,7 @@ static bool copy_program(handle_t boot, handle_t directory, const char *name, ui
 }
 
 static bool verify_program(handle_t boot, handle_t directory, const char *name,
-    uint8_t *expected, uint8_t *actual)
+    uint8_t *expected, uint8_t *actual, const struct install_manifest_entry *record)
 {
   handle_t source = HANDLE_INVALID, target = HANDLE_INVALID;
   uint64_t size = 0, copied = 0;
@@ -458,17 +460,24 @@ static bool verify_program(handle_t boot, handle_t directory, const char *name,
         &target) == CALL_OK &&
       file_size(source, &size) == CALL_OK && file_size(target, &copied) == CALL_OK &&
       size == copied;
+  struct install_digest digest = {0};
+  ok = ok && record && record->kind == DIRECTORY_KIND_FILE && record->size == size &&
+      install_digest_begin(&digest);
   struct install_source from = {.handle = source, .bytes = size};
   struct install_source to = {.handle = target, .bytes = size};
   for (uint64_t offset = 0; ok && offset < size;) {
     size_t length = size - offset < COPY_BYTES ? (size_t)(size - offset) : COPY_BYTES;
     ok = install_source_read(&from, offset, expected, length) &&
-        install_source_read(&to, offset, actual, length) && !memcmp(expected, actual, length);
+        install_source_read(&to, offset, actual, length) && !memcmp(expected, actual, length) &&
+        install_digest_update(&digest, actual, length);
     if (ok) {
       install_progress_advance(length, 0);
     }
     offset += length;
   }
+  char sha256[65];
+  ok = ok && install_digest_finish(&digest, sha256) && !strcmp(sha256, record->sha256);
+  install_digest_abort(&digest);
   if (ok) {
     install_progress_advance(0, 1);
   }
@@ -505,15 +514,38 @@ static bool verify_entry_count(handle_t directory, size_t expected)
   }
 }
 
+static const struct install_manifest_entry *manifest_find(const struct install_manifest *manifest,
+    const char *path)
+{
+  size_t low = 0, high = manifest->count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    int order = strcmp(manifest->entries[middle].path, path);
+    if (!order) {
+      return &manifest->entries[middle];
+    }
+    if (order < 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return NULL;
+}
+
 /* The boot archive is immutable and the admitted target pool is offline.
  * Root selection comes from PROGRAMS; every descendant belongs to its unit.
  * Verification checks every source name at its exact kind, then independently
  * counts destination entries at each level to detect extras without sorting. */
 static bool walk_programs(handle_t boot, handle_t directory,
-    const struct install_programs *programs, uint8_t *buffers, bool verify)
+    const struct install_programs *programs, uint8_t *buffers, bool verify,
+    const struct install_manifest *manifest)
 {
   struct tree_level *levels = calloc(TREE_MAX_DEPTH + 1, sizeof(*levels));
-  if (!levels) {
+  char *path = malloc((TREE_MAX_DEPTH + 1) * TREE_NAME_BYTES);
+  if (!levels || !path) {
+    free(levels);
+    free(path);
     return false;
   }
   levels[0] = (struct tree_level){.source = boot, .target = directory};
@@ -536,7 +568,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
         break;
       }
       if (!depth) {
-        ok = root_entries == programs->count;
+        ok = root_entries == programs->count && entries == manifest->count;
         break;
       }
       handle_close(level->source);
@@ -556,16 +588,27 @@ static bool walk_programs(handle_t boot, handle_t directory,
       }
       ++root_entries;
     }
-    if (++entries > TREE_MAX_ENTRIES) {
+    if (++entries >= TREE_MAX_ENTRIES) {
       install_progress_pause();
       fputs("installer: program trees exceed the entry limit\n", stderr);
       ok = false;
       break;
     }
     ++level->entries;
+    path[0] = '\0';
+    for (unsigned parent = 1; parent <= depth; parent++) {
+      strcat(path, levels[parent].name);
+      strcat(path, "/");
+    }
+    strcat(path, name);
+    const struct install_manifest_entry *record = manifest_find(manifest, path);
+    if (!record || record->kind != entry.kind) {
+      ok = false;
+      break;
+    }
     if (entry.kind == DIRECTORY_KIND_FILE) {
       ok = verify ? verify_program(level->source, level->target, name,
-          buffers, buffers + COPY_BYTES) :
+          buffers, buffers + COPY_BYTES, record) :
           copy_program(level->source, level->target, name, buffers);
     } else if (entry.kind == DIRECTORY_KIND_DIRECTORY) {
       if (depth == TREE_MAX_DEPTH) {
@@ -607,6 +650,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
     --depth;
   }
   free(levels);
+  free(path);
   if (!ok) {
     install_progress_pause();
     fprintf(stderr, "installer: cannot %s complete program trees in the bin volume\n",
@@ -634,7 +678,8 @@ static enum call_status open_bin(const struct install_disk *disk, handle_t *root
 }
 
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
-    const struct install_programs *programs, const char *revision)
+    const struct install_programs *programs, const char *revision,
+    const struct install_manifest *manifest, const char *manifest_text, size_t manifest_bytes)
 {
   handle_t root = HANDLE_INVALID, directory = HANDLE_INVALID;
   install_progress_begin("Opening program volume", INSTALL_PROGRESS_NONE, NULL);
@@ -667,7 +712,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
       install_progress_items_total(programs->files);
       install_progress_bytes_total(programs->bytes);
     }
-    ok = walk_programs(boot, directory, programs, buffers, false);
+    ok = walk_programs(boot, directory, programs, buffers, false, manifest);
     install_progress_finish();
   }
   if (ok) {
@@ -686,7 +731,54 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
       install_progress_items_total(programs->files);
       install_progress_bytes_total(programs->bytes);
     }
-    ok = walk_programs(boot, directory, programs, buffers, true);
+    ok = walk_programs(boot, directory, programs, buffers, true, manifest);
+  }
+  if (ok) {
+    install_progress_begin("Publishing revision manifest", INSTALL_PROGRESS_WORK, "files");
+    install_progress_bytes_total(manifest_bytes);
+    handle_t file = HANDLE_INVALID;
+    ok = directory_create(directory, INSTALL_MANIFEST_NAME, DIRECTORY_KIND_FILE,
+        FILE_RIGHTS, &file) == CALL_OK;
+    for (size_t offset = 0; ok && offset < manifest_bytes;) {
+      size_t count = manifest_bytes - offset < COPY_BYTES ? manifest_bytes - offset : COPY_BYTES;
+      size_t written = 0;
+      ok = file_write(file, offset, manifest_text + offset, count, &written) == CALL_OK &&
+          written == count;
+      if (ok) {
+        install_progress_advance(count, 0);
+        offset += count;
+      }
+    }
+    if (ok) {
+      install_progress_advance(0, 1);
+      install_progress_begin("Syncing revision manifest", INSTALL_PROGRESS_NONE, NULL);
+      ok = directory_sync(directory) == CALL_OK;
+    }
+    if (ok) {
+      install_progress_begin("Verifying revision manifest (filesystem view; may be cached)",
+          INSTALL_PROGRESS_WORK, NULL);
+      install_progress_bytes_total(manifest_bytes);
+      struct install_source from = {.handle = file, .bytes = manifest_bytes};
+      uint64_t size;
+      ok = file_size(file, &size) == CALL_OK && size == manifest_bytes;
+      for (size_t offset = 0; ok && offset < manifest_bytes;) {
+        size_t count = manifest_bytes - offset < COPY_BYTES ? manifest_bytes - offset : COPY_BYTES;
+        ok = install_source_read(&from, offset, buffers, count) &&
+            !memcmp(buffers, manifest_text + offset, count);
+        if (ok) {
+          install_progress_advance(count, 0);
+          offset += count;
+        }
+      }
+      ok = ok && verify_entry_count(directory, programs->count + 1);
+    }
+    if (file != HANDLE_INVALID) {
+      ok = handle_close(file) == 0 && ok;
+    }
+    if (!ok) {
+      install_progress_pause();
+      fputs("installer: revision manifest publication/verification failed\n", stderr);
+    }
   }
   install_progress_finish();
   if (directory != HANDLE_INVALID || root != HANDLE_INVALID) {
@@ -724,7 +816,7 @@ bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
     if (!ok || entry.outcome == DIRECTORY_END) {
       break;
     }
-    if (++entries > TREE_MAX_ENTRIES) {
+    if (++entries >= TREE_MAX_ENTRIES) {
       ok = false;
       break;
     }

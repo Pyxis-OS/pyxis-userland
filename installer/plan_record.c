@@ -69,7 +69,10 @@ bool install_plan_record_valid(const struct install_plan_record *record)
       !revision_valid(record->previous, !record->updating) ||
       !hash_valid(record->source_hash) || !hash_valid(record->target_hash) ||
       !nonzero_id(record->layout.disk_guid) || !nonzero_id(record->layout.esp_guid) ||
-      !nonzero_id(record->layout.pool_guid)) {
+      !nonzero_id(record->layout.pool_guid) ||
+      !memcmp(record->layout.disk_guid, record->layout.esp_guid, 16) ||
+      !memcmp(record->layout.disk_guid, record->layout.pool_guid, 16) ||
+      !memcmp(record->layout.esp_guid, record->layout.pool_guid, 16)) {
     return false;
   }
   struct install_disk disk = {

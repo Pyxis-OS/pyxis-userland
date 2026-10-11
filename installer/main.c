@@ -1,4 +1,5 @@
-#include "installer.h"
+#include "plan.h"
+#include "../xfer/hash.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -18,6 +19,11 @@
 #define JOURNAL_DEFAULT_MIN_MIB UINT64_C(8)
 #define JOURNAL_MAX_MIB UINT64_C(1024)
 
+static void say(const char *text)
+{
+  fprintf(stderr, "%s\n", text);
+}
+
 struct target {
   struct disk_info info;
   struct install_consent consent;
@@ -30,11 +36,11 @@ static bool read_line(struct terminal *terminal, const char *prompt, const char 
 {
   struct term_line_result result = term_read_line_initial(terminal, prompt, initial, line, capacity);
   if (result.status != TERM_LINE_OK) {
-    puts("Cancelled. Nothing was written.");
+    say("Cancelled. Nothing was written.");
     return false;
   }
   if (result.limit_reached) {
-    puts("Input was too long; enter the value again.");
+    say("Input was too long; enter the value again.");
     return false;
   }
   return true;
@@ -63,12 +69,12 @@ static void offer_restart(struct terminal *terminal, handle_t power, bool updati
   if (power == HANDLE_INVALID) {
     return;
   }
-  printf("Remove the %s medium before the machine restarts.\n", updating ? "live" : "install");
+  fprintf(stderr, "Remove the %s medium before the machine restarts.\n", updating ? "live" : "install");
   char line[16];
   struct term_line_result result = term_read_line(terminal,
       "Press Enter to restart, or type stay to remain here: ", line, sizeof(line));
   if (result.status != TERM_LINE_OK || result.length) {
-    puts("Not restarting.");
+    say("Not restarting.");
     return;
   }
   install_progress_begin("Restarting (includes pool sync)", INSTALL_PROGRESS_NONE, NULL);
@@ -79,25 +85,26 @@ static void offer_restart(struct terminal *terminal, handle_t power, bool updati
       status, updating ? "update" : "installation");
 }
 
-static bool choose_action(struct terminal *terminal, bool *updating)
+static bool choose_action(struct terminal *terminal, bool *updating, bool *replay)
 {
-  puts("1. Install\n2. Update");
+  say("1. Install\n2. Update\n3. Replay a printed plan");
   char line[16];
   for (;;) {
     if (!read_line(terminal, "Choice: ", "", line, sizeof(line))) {
       return false;
     }
-    if (!strcmp(line, "1") || !strcmp(line, "2")) {
+    if (!strcmp(line, "1") || !strcmp(line, "2") || !strcmp(line, "3")) {
+      *replay = line[0] == '3';
       *updating = line[0] == '2';
       return true;
     }
-    puts("Enter 1 or 2.");
+    say("Enter 1, 2 or 3.");
   }
 }
 
 static bool choose_mode(struct terminal *terminal, bool *read_the_room)
 {
-  puts("1. Proceed with installation\n2. Read the room");
+  say("1. Proceed with installation\n2. Read the room");
   char line[16];
   for (;;) {
     if (!read_line(terminal, "Choice: ", "", line, sizeof(line))) {
@@ -107,7 +114,7 @@ static bool choose_mode(struct terminal *terminal, bool *read_the_room)
       *read_the_room = line[0] == '2';
       return true;
     }
-    puts("Enter 1 or 2.");
+    say("Enter 1 or 2.");
   }
 }
 
@@ -176,15 +183,6 @@ static bool inspect_update(const struct install_disk *disk, struct install_updat
     update->reason = "recognized Pyxis installation";
   }
   return true;
-}
-
-static bool same_layout(const struct install_layout *left, const struct install_layout *right)
-{
-  return left->esp_start == right->esp_start && left->esp_bytes == right->esp_bytes &&
-      left->pool_start == right->pool_start && left->pool_bytes == right->pool_bytes &&
-      !memcmp(left->disk_guid, right->disk_guid, 16) &&
-      !memcmp(left->esp_guid, right->esp_guid, 16) &&
-      !memcmp(left->pool_guid, right->pool_guid, 16);
 }
 
 static bool inventory(handle_t disks, bool read_the_room, bool updating, struct target **output,
@@ -262,21 +260,21 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
     const char *reason = updating ? target->update.reason : target->consent.reason;
     char guid[37];
     install_guid_text(target->info.gpt_guid, guid);
-    printf("%zu. Disk %llu: %llu MiB, GUID %s; %s: ", i + 1,
+    fprintf(stderr, "%zu. Disk %llu: %llu MiB, GUID %s; %s: ", i + 1,
         (unsigned long long)target->info.id,
         (unsigned long long)(target->info.block_count * target->info.block_size / INSTALL_MIB),
         npfs_id_valid(target->info.gpt_guid) ? guid : "unavailable",
         offered ? "eligible" : "ineligible");
     if (updating && offered && target->boot_rebuild) {
-      printf("Pyxis installation (boot files damaged: %s)", reason);
+      fprintf(stderr, "Pyxis installation (boot files damaged: %s)", reason);
     } else {
-      fputs(reason, stdout);
+      fputs(reason, stderr);
     }
-    printf("%s\n", degraded ? " (degraded metadata)" : "");
+    fprintf(stderr, "%s\n", degraded ? " (degraded metadata)" : "");
     if (updating && offered) {
-      printf("   Installed kernel revision: %s\n", target->update.revision);
+      fprintf(stderr, "   Installed kernel revision: %s\n", target->update.revision);
       if (target->boot_rebuild) {
-        puts("   Boot files damaged or missing; Update will rebuild them.");
+        say("   Boot files damaged or missing; Update will rebuild them.");
       }
     }
     if (offered) {
@@ -285,7 +283,7 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
     }
   }
   if (!eligible) {
-    puts("No eligible disks. Nothing was written.");
+    say("No eligible disks. Nothing was written.");
     return NULL;
   }
   if (eligible == 1) {
@@ -301,125 +299,8 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
         (updating ? targets[number - 1].update.eligible : targets[number - 1].consent.eligible)) {
       return &targets[number - 1];
     }
-    puts("Enter the number of an eligible disk.");
+    say("Enter the number of an eligible disk.");
   }
-}
-
-static bool source_open(const char *path, struct install_source *source)
-{
-  install_progress_begin("Inspecting installation sources", INSTALL_PROGRESS_NONE, NULL);
-  source->handle = HANDLE_INVALID;
-  handle_t directories[4];
-  char component[64];
-  struct path_workspace workspace = {
-    .directories = directories, .directory_capacity = 4,
-    .component = component, .component_capacity = sizeof(component),
-  };
-  enum call_status status = path_resolve(NULL, path, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &workspace, &source->handle);
-  if (status != CALL_OK || file_size(source->handle, &source->bytes) != CALL_OK || !source->bytes) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot read source %s\n", path);
-    return false;
-  }
-  return true;
-}
-
-static char *boot_configuration(const struct install_source *source, const uint8_t guid[16],
-    size_t *bytes)
-{
-  if (source->bytes > SIZE_MAX - 512) {
-    return NULL;
-  }
-  size_t size = (size_t)source->bytes;
-  install_progress_begin("Reading boot configuration template", INSTALL_PROGRESS_SOURCE_READ, NULL);
-  install_progress_bytes_total(size);
-  char *input = malloc(size + 1), *output = malloc(size + 512);
-  if (!input || !output || !install_source_read(source, 0, input, size)) {
-    free(input);
-    free(output);
-    return NULL;
-  }
-  input[size] = '\0';
-  if (memchr(input, '\0', size)) {
-    free(input);
-    free(output);
-    return NULL;
-  }
-  char disk_guid[37], normal[256], rescue[256], menu_timeout[32];
-  install_guid_text(guid, disk_guid);
-  snprintf(normal, sizeof(normal),
-      "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s\n", disk_guid);
-  snprintf(rescue, sizeof(rescue),
-      "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s " INSTALL_RESCUE_OPTION "\n",
-      disk_guid);
-  snprintf(menu_timeout, sizeof(menu_timeout), "timeout: %d\n", INSTALL_MENU_TIMEOUT_SECONDS);
-  bool skip = false, timeout = false, command = false, rescue_command = false;
-  bool install_entry = false;
-  size_t used = 0;
-  char *line = input;
-  while (*line) {
-    char *end = strchr(line, '\n');
-    size_t length = end ? (size_t)(end - line) : strlen(line);
-    if (length == strlen("/Install Pyxis") && !memcmp(line, "/Install Pyxis", length)) {
-      skip = true;
-      install_entry = true;
-    } else if (length && line[0] == '/') {
-      skip = false;
-    }
-    bool default_entry = length >= strlen("default_entry:") &&
-      !memcmp(line, "default_entry:", strlen("default_entry:"));
-    if (!skip && !default_entry) {
-      const char *replacement = NULL;
-      if (length == strlen("# PYXIS_BOOT_MENU_TIMEOUT") &&
-          !memcmp(line, "# PYXIS_BOOT_MENU_TIMEOUT", length)) {
-        if (timeout) {
-          goto invalid;
-        }
-        timeout = true;
-        replacement = menu_timeout;
-      } else if (length == strlen("# PYXIS_NORMAL_COMMAND_LINE") &&
-          !memcmp(line, "# PYXIS_NORMAL_COMMAND_LINE", length)) {
-        if (command) {
-          goto invalid;
-        }
-        command = true;
-        replacement = normal;
-      } else if (length == strlen("# PYXIS_RESCUE_COMMAND_LINE") &&
-          !memcmp(line, "# PYXIS_RESCUE_COMMAND_LINE", length)) {
-        if (rescue_command) {
-          goto invalid;
-        }
-        rescue_command = true;
-        replacement = rescue;
-      }
-      size_t copy = replacement ? strlen(replacement) : length;
-      if (copy + 1 > size + 512 - used) {
-        goto invalid;
-      }
-      memcpy(output + used, replacement ? replacement : line, copy);
-      used += copy;
-      if (!replacement) {
-        output[used++] = '\n';
-      }
-    }
-    if (!end) {
-      break;
-    }
-    line = end + 1;
-  }
-  if (!timeout || !command || !rescue_command || !install_entry) {
-    goto invalid;
-  }
-  output[used] = '\0';
-  *bytes = used;
-  free(input);
-  return output;
-
-invalid:
-  free(input);
-  free(output);
-  return NULL;
 }
 
 static bool new_ids(handle_t clock, handle_t random, struct install_layout *layout,
@@ -467,45 +348,67 @@ static bool choose_journal(struct terminal *terminal, const struct install_layou
     if (decimal(line, &journal) && pool_header(layout, journal, pool_id, header)) {
       return true;
     }
-    puts("Enter a size from 1 to 1024 MiB that leaves room for pool metadata and files.");
+    say("Enter a size from 1 to 1024 MiB that leaves room for pool metadata and files.");
   }
 }
 
-static bool marker_verify(const struct install_disk *disk)
+static struct target *replay_target(struct target *targets, size_t count,
+    const struct install_plan_record *record)
 {
-  handle_t root = HANDLE_INVALID, marker = HANDLE_INVALID;
-  bool ok = disk_open_volume(disk->handle, 2, "system",
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &root) == CALL_OK &&
-      directory_lookup(root, "SAFE_TO_WIPE", DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &marker) == CALL_OK;
-  uint64_t size;
-  if (ok) {
-    ok = file_size(marker, &size) == CALL_OK && size == 0;
+  if (!record->portable) {
+    fputs("installer: this target has no portable identity; use interactive planning\n", stderr);
+    return NULL;
   }
-  if (marker != HANDLE_INVALID) {
-    ok = handle_close(marker) == 0 && ok;
+  struct target *match = NULL;
+  for (size_t i = 0; i < count; i++) {
+    const struct disk_info *info = &targets[i].info;
+    if (memcmp(info->gpt_guid, record->existing_guid, 16)) {
+      continue;
+    }
+    if (match || (info->gpt_status != DISK_GPT_HEALTHY && info->gpt_status != DISK_GPT_DEGRADED)) {
+      fputs("installer: replay target identity is ambiguous or unavailable\n", stderr);
+      return NULL;
+    }
+    match = &targets[i];
   }
-  if (root != HANDLE_INVALID) {
-    ok = handle_close(root) == 0 && ok;
+  bool eligible = match && (record->updating ? match->update.eligible : match->consent.eligible);
+  if (!eligible) {
+    fputs("installer: reviewed target is absent or no longer eligible\n", stderr);
+    return NULL;
   }
-  return ok;
+  return match;
 }
 
-static bool system_verify(const struct install_disk *disk)
+static bool record_matches(const struct install_plan_record *expected,
+    const struct install_plan_record *actual)
 {
-  handle_t root = HANDLE_INVALID;
-  if (disk_open_volume(disk->handle, 2, "system", DIRECTORY_RIGHT_LOOKUP, &root) != CALL_OK) {
-    return false;
-  }
-  return handle_close(root) == 0;
+  return !strcmp(expected->revision, actual->revision) &&
+      !strcmp(expected->source_hash, actual->source_hash) &&
+      !strcmp(expected->target_hash, actual->target_hash);
 }
 
 int main(int argc, char **argv)
 {
-  (void)argv;
-  if (argc != 1) {
-    install_progress_pause();
-    fputs("installer takes no arguments\n", stderr);
+  bool print_only = false, dry_run = false, replay = false;
+  const char *explicit_consent = NULL;
+  for (int i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "--plan")) {
+      print_only = true;
+    } else if (!strcmp(argv[i], "--dry-run")) {
+      dry_run = true;
+    } else if (!strcmp(argv[i], "--apply")) {
+      replay = true;
+    } else if (!strncmp(argv[i], "--confirm=", 10) && !explicit_consent) {
+      explicit_consent = argv[i] + 10;
+    } else {
+      fputs("usage: installer [--plan | --apply] [--dry-run] [--confirm=wipe|update]\n", stderr);
+      return EXIT_FAILURE;
+    }
+  }
+  if ((print_only && replay) || (explicit_consent &&
+        (!replay || print_only || dry_run ||
+          (strcmp(explicit_consent, "wipe") && strcmp(explicit_consent, "update"))))) {
+    fputs("installer: invalid plan/apply options\n", stderr);
     return EXIT_FAILURE;
   }
   struct terminal terminal = {
@@ -513,313 +416,144 @@ int main(int argc, char **argv)
   };
   handle_t disks = startup_resource("disks"), boot = startup_root("boot");
   handle_t clock = startup_resource("clock"), random = startup_resource("random");
-  struct install_source kernel = {.handle = startup_resource("boot_kernel")};
-  struct install_source archive = {.handle = startup_resource("boot_archive")};
-  struct install_source efi = {.handle = HANDLE_INVALID}, template = {.handle = HANDLE_INVALID};
-  struct install_source rescue = {.handle = HANDLE_INVALID};
-  struct install_programs programs = {0};
-  struct install_disk disk = {.handle = HANDLE_INVALID};
+  handle_t kernel = startup_resource("boot_kernel"), archive = startup_resource("boot_archive");
+  struct install_plan plan = {.disk.handle = HANDLE_INVALID,
+    .efi.handle = HANDLE_INVALID, .template.handle = HANDLE_INVALID};
+  struct install_plan_record expected = {0};
   struct target *targets = NULL;
   size_t count = 0;
-  char *configuration = NULL;
-  struct install_esp *esp = NULL;
-  bool claimed = false, attempted_write = false, esp_attempted = false, updating = false;
+  bool updating = false, read_the_room = false, crypto = false;
   int result = EXIT_FAILURE;
   if (disks == HANDLE_INVALID || boot == HANDLE_INVALID || clock == HANDLE_INVALID ||
-      random == HANDLE_INVALID || kernel.handle == HANDLE_INVALID || archive.handle == HANDLE_INVALID ||
+      random == HANDLE_INVALID || kernel == HANDLE_INVALID || archive == HANDLE_INVALID ||
       terminal.input == HANDLE_INVALID || terminal.output == HANDLE_INVALID) {
-    install_progress_pause();
     fputs("installer: missing install-mode authority\n", stderr);
     goto done;
   }
-  bool read_the_room = false;
-  if (!choose_action(&terminal, &updating) ||
-      (!updating && !choose_mode(&terminal, &read_the_room))) {
+  if (!replay && !choose_action(&terminal, &updating, &replay)) {
     goto done;
   }
-  install_progress_plain(clock);
-  install_progress_begin("Reading source revision", INSTALL_PROGRESS_NONE, NULL);
-  struct system_info_identity identity;
-  if (system_info_get_identity(startup_resource("system_info"), &identity) != CALL_OK) {
-    install_progress_pause();
-    fputs("installer: kernel identity unavailable; nothing was written\n", stderr);
+  if (replay) {
+    say("Supply one framed printed plan on standard input (ending with end).");
+    if (!install_plan_record_parse(stdin, &expected)) {
+      fputs("installer: invalid, incomplete or unsupported plan; nothing was written\n", stderr);
+      goto done;
+    }
+    updating = expected.updating;
+    read_the_room = expected.read_the_room;
+  } else if (!updating && !choose_mode(&terminal, &read_the_room)) {
     goto done;
   }
-  install_progress_finish();
-  const char *revision = identity.build_revision[0] ? identity.build_revision :
-      INSTALL_UNKNOWN_REVISION;
-  char revision_record[sizeof(identity.build_revision) + 1];
-  snprintf(revision_record, sizeof(revision_record), "%s\n", revision);
-  printf("Live kernel revision: %s\n", revision);
-  if (!source_open("boot://share/installer/BOOTX64.EFI", &efi) ||
-      !source_open("boot://share/installer/limine.conf.template", &template) ||
-      file_size(kernel.handle, &kernel.bytes) != CALL_OK || !kernel.bytes ||
-      file_size(archive.handle, &archive.bytes) != CALL_OK || !archive.bytes ||
-      !install_programs_list(boot, &programs) ||
-      !install_archive_filter(&archive, &programs, &rescue) ||
+  install_progress_plain_stream(clock, stderr);
+  install_progress_begin("Initializing revision hashing", INSTALL_PROGRESS_NONE, NULL);
+  crypto = hash_init(clock, random);
+  if (!crypto || !install_plan_sources(&plan, disks, boot, kernel, archive, clock,
+        startup_resource("system_info")) ||
       !inventory(disks, read_the_room, updating, &targets, &count)) {
-    install_progress_pause();
-    fputs("installer: sources or disk inventory unavailable; nothing was written\n", stderr);
+    fputs("installer: sources or inventory unavailable; nothing was written\n", stderr);
     goto done;
   }
-  install_progress_finish();
-  struct target *selected = choose_target(&terminal, targets, count, updating);
+  char revision[64];
+  strcpy(revision, plan.record.revision);
+  struct target *selected = replay ? replay_target(targets, count, &expected) :
+      choose_target(&terminal, targets, count, updating);
   if (!selected) {
     goto done;
   }
-  disk.info = selected->info;
-  disk.bytes = disk.info.block_count * disk.info.block_size;
-  struct install_layout layout = {0};
-  uint8_t pool_id[16], volume_id[16];
-  struct npfs_header header;
-  if (updating) {
-    layout = selected->update.layout;
-    printf("Disk %llu: installed %s; live %s.\n",
-        (unsigned long long)disk.info.id, selected->update.revision, revision);
-    printf("Update will write %zu programs to bin://%s, then replace this disk's EFI boot files.\n"
-        "Its GPT and existing volumes will be preserved.\n", programs.count, revision);
+  if (replay) {
+    plan.record = expected;
+    strcpy(plan.record.revision, revision);
   } else {
-    if (!install_layout_plan(&disk, &layout) || !new_ids(clock, random, &layout, pool_id, volume_id)) {
+    plan.record.updating = updating;
+    plan.record.read_the_room = read_the_room;
+    plan.record.block_count = selected->info.block_count;
+    plan.record.block_size = selected->info.block_size;
+    const uint8_t *existing_guid = updating ? selected->update.layout.disk_guid :
+        selected->consent.existing_guid;
+    memcpy(plan.record.existing_guid, existing_guid, 16);
+    plan.record.portable = npfs_id_valid(existing_guid);
+    if (updating) {
+      plan.record.layout = selected->update.layout;
+      strcpy(plan.record.previous, selected->update.revision);
+    } else {
+      struct install_disk disk = {.info = selected->info,
+        .bytes = selected->info.block_count * selected->info.block_size};
+      if (!install_layout_plan(&disk, &plan.record.layout) ||
+          !new_ids(clock, random, &plan.record.layout, plan.record.pool_id, plan.record.volume_id) ||
+          !choose_journal(&terminal, &plan.record.layout, plan.record.pool_id, &plan.header)) {
+        goto done;
+      }
+      plan.record.journal_mib = plan.header.journal_blocks * NPFS_BLOCK_SIZE / INSTALL_MIB;
+    }
+  }
+  bool prepared = install_plan_prepare(&plan, &selected->info);
+  if (!prepared && plan.prior.needs_legacy && !replay) {
+    install_progress_pause();
+    say("The previous revision has no valid manifest. Read and hash its programs once?");
+    char choice[16];
+    if (!read_line(&terminal, "Type scan to build a read-only inventory, or cancel: ",
+          "", choice, sizeof(choice)) || strcmp(choice, "scan")) {
       goto done;
     }
-    install_progress_finish();
-    char guid[37];
-    install_guid_text(disk.info.gpt_guid, guid);
-    printf("Disk %llu: %llu MiB, GUID %s\n", (unsigned long long)disk.info.id,
-        (unsigned long long)(disk.bytes / INSTALL_MIB),
-        npfs_id_valid(disk.info.gpt_guid) ? guid : "unavailable");
-    puts("The entire disk will be rebuilt. Volumes to destroy:");
-    puts(selected->consent.volume_labels ? selected->consent.volume_labels : "  none readable");
-    if (!choose_journal(&terminal, &layout, pool_id, &header)) {
+    plan.record.legacy = true;
+    prepared = install_plan_prepare(&plan, &selected->info);
+  }
+  if (!prepared || (replay && !record_matches(&expected, &plan.record))) {
+    install_progress_pause();
+    fputs("installer: plan cannot be prepared, no longer matches, or exceeds capacity;\n"
+        "nothing was written. Build and review a new plan.\n", stderr);
+    goto done;
+  }
+  if (!install_plan_report(&plan, stderr)) {
+    goto done;
+  }
+  if (!print_only && !dry_run && !replay) {
+    char action[16];
+    if (!read_line(&terminal, "Review action: 1 apply, 2 print plan, 3 dry-run: ",
+          "1", action, sizeof(action))) {
+      goto done;
+    }
+    if (!strcmp(action, "2")) {
+      print_only = true;
+    } else if (!strcmp(action, "3")) {
+      dry_run = true;
+    } else if (strcmp(action, "1")) {
+      say("Cancelled. Nothing was written.");
       goto done;
     }
   }
-  size_t configuration_bytes;
-  configuration = boot_configuration(&template, layout.disk_guid, &configuration_bytes);
-  if (!configuration) {
-    install_progress_pause();
-    fputs("installer: boot template cannot be filled\n", stderr);
+  if (print_only) {
+    result = install_plan_record_format(stdout, &plan.record) ? EXIT_SUCCESS : EXIT_FAILURE;
     goto done;
   }
-  install_progress_begin("Planning EFI boot file layout", INSTALL_PROGRESS_NONE, NULL);
-  esp = install_esp_plan(&disk, &layout, &efi, &kernel, &rescue,
-      configuration, configuration_bytes, revision_record, strlen(revision_record),
-      npfs_get_u32(layout.esp_guid));
-  if (!esp) {
-    install_progress_pause();
-    fputs("installer: boot sources do not fit the fresh ESP\n", stderr);
+  if (dry_run) {
+    say("Dry-run complete. Nothing was written.");
+    result = EXIT_SUCCESS;
     goto done;
-  }
-  install_progress_finish();
-  if (!updating) {
-    printf("New layout: 512 MiB ESP, %llu MiB pool, %llu MiB journal; "
-        "system, bin and home volumes.\n",
-        (unsigned long long)(layout.pool_bytes / INSTALL_MIB),
-        (unsigned long long)(header.journal_blocks * NPFS_BLOCK_SIZE / INSTALL_MIB));
   }
   char confirmation[16];
-  if (!read_line(&terminal, updating ? "Type update to continue: " : "Type wipe to continue: ",
-      "", confirmation, sizeof(confirmation)) || strcmp(confirmation, updating ? "update" : "wipe")) {
-    puts("Nothing was written.");
-    goto done;
-  }
-  install_progress_begin("Claiming target disk and rechecking eligibility", INSTALL_PROGRESS_NONE, NULL);
-  enum call_status status = disks_open(disks, disk.info.id, DISK_ACCESS_READ_WRITE, &disk.handle);
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot claim disk (status %u); nothing was written\n", status);
-    goto done;
-  }
-  claimed = true;
-  if (updating) {
-    struct install_update current;
-    bool boot_rebuild;
-    if (disk_get_info(disk.handle, &disk.info) != CALL_OK ||
-        !inspect_update(&disk, &current, &boot_rebuild) || !current.eligible ||
-        !same_layout(&layout, &current.layout)) {
-      install_progress_pause();
-      fputs("installer: update target changed or cannot be revalidated; nothing was written\n", stderr);
+  bool interactive_consent = !explicit_consent;
+  if (!explicit_consent) {
+    if (!read_line(&terminal, updating ? "Type update to confirm this plan: " :
+          "Type wipe to confirm this plan: ", "", confirmation, sizeof(confirmation))) {
       goto done;
     }
-  } else {
-    struct install_consent current = {0};
-    bool consent_ok = install_scan_consent(&disk, read_the_room, &current) && current.eligible &&
-        current.pools == selected->consent.pools && current.volumes == selected->consent.volumes &&
-        !strcmp(current.reason, selected->consent.reason) &&
-        !strcmp(current.volume_labels ? current.volume_labels : "",
-          selected->consent.volume_labels ? selected->consent.volume_labels : "");
-    install_consent_destroy(&current);
-    if (!consent_ok) {
-      install_progress_pause();
-      fputs("installer: consent changed or cannot be revalidated; nothing was written\n", stderr);
-      goto done;
-    }
+    explicit_consent = confirmation;
   }
-  bool created_valid = false;
-  int64_t created_ns = 0;
-  if (!updating) {
-    struct clock_wall_reading wall;
-    created_valid = clock_wall_now(clock, &wall) == CALL_OK;
-    created_ns = created_valid ? npfs_timestamp(wall.seconds, wall.nanoseconds) : 0;
-  }
-  /* Programs first, then the ESP: an interruption before the ESP switch leaves
-   * the old kernel booting the old revision's programs. */
-  attempted_write = true;
-  if (!updating) {
-    if (!install_pool_format(&disk, &layout, &header, volume_id, created_ns, created_valid)) {
-      goto done;
-    }
-    if (!install_gpt_write(&disk, &layout)) {
-      goto done;
-    }
-    install_progress_begin("Flushing pool and GPT", INSTALL_PROGRESS_NONE, NULL);
-    status = disk_flush(disk.handle);
-    if (status != CALL_OK) {
-      install_progress_pause();
-      fprintf(stderr, "installer: pool sync failed (status %u)\n", status);
-      goto done;
-    }
-  }
-  install_progress_begin("Releasing raw claim and rescanning GPT", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_release(disk.handle);
-  claimed = false;
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: raw release/GPT rescan failed (status %u)\n", status);
+  if (!install_plan_execute(&plan, explicit_consent)) {
     goto done;
-  }
-  install_progress_begin("Checking GPT read-back", INSTALL_PROGRESS_NONE, NULL);
-  struct disk_info verified;
-  if (disk_get_info(disk.handle, &verified) != CALL_OK || verified.gpt_status != DISK_GPT_HEALTHY ||
-      memcmp(verified.gpt_guid, layout.disk_guid, 16)) {
-    install_progress_pause();
-    fputs("installer: GPT read-back failed\n", stderr);
-    goto done;
-  }
-  /* Update adds home to pools made before it existed and never opens it. */
-  install_progress_begin("Preparing home volume", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_create_volume(disk.handle, INSTALL_POOL_PARTITION, INSTALL_HOME_VOLUME);
-  install_progress_finish();
-  if (status == CALL_OK) {
-    puts("Created the home volume.");
-  } else if (status != CALL_ALREADY_EXISTS) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot create the home volume (status %u)\n", status);
-    goto done;
-  }
-  printf("Writing %zu programs to bin://%s...\n", programs.count, revision);
-  if (!install_programs_write(&disk, boot, &programs, revision)) {
-    goto done;
-  }
-  install_progress_begin("Claiming EFI partition", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_claim(disk.handle, INSTALL_ESP_PARTITION);
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot claim the EFI partition (status %u)\n", status);
-    goto done;
-  }
-  claimed = true;
-  esp_attempted = true;
-  if (!install_esp_write(esp)) {
-    goto done;
-  }
-  install_progress_begin("Flushing EFI boot files", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_flush(disk.handle);
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: final sync failed (status %u)\n", status);
-    goto done;
-  }
-  install_progress_begin("Releasing EFI partition and rescanning GPT", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_release(disk.handle);
-  claimed = false;
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: EFI partition release failed (status %u)\n", status);
-    goto done;
-  }
-  if (!install_esp_verify(esp)) {
-    install_progress_pause();
-    fputs("installer: read-back check failed\n", stderr);
-    goto done;
-  }
-  install_progress_begin(updating ? "Reopening system read-only" :
-      "Reopening system read-only and checking its marker", INSTALL_PROGRESS_NONE, NULL);
-  if (updating ? !system_verify(&disk) : !marker_verify(&disk)) {
-    install_progress_pause();
-    fputs("installer: read-back check failed\n", stderr);
-    goto done;
-  }
-  /* Keep the new revision and the one the disk booted until now. When that
-   * one is unknown, as after damaged boot files, nothing is removed. */
-  install_progress_finish();
-  const char *previous = updating ? selected->update.revision : NULL;
-  if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
-    puts("Older program directories were kept: the previous revision is unknown.");
-  } else {
-    if (!install_programs_cleanup(&disk, revision, previous)) {
-      install_progress_pause();
-      fputs("installer: old program directories could not all be removed\n", stderr);
-    }
-  }
-  install_progress_finish();
-  if (updating) {
-    puts("updated\nBoot from this disk after removing the live medium.");
-  } else {
-    puts("installed\nBoot from this disk after removing the install medium.\n"
-        "Deleting system://SAFE_TO_WIPE marks this installation as final.");
   }
   result = EXIT_SUCCESS;
-  offer_restart(&terminal, startup_resource("power"), updating);
+  if (interactive_consent) {
+    offer_restart(&terminal, startup_resource("power"), updating);
+  }
 
 done:
   install_progress_finish();
-  if (claimed) {
-    install_progress_begin("Releasing failed operation raw claim", INSTALL_PROGRESS_NONE, NULL);
-    enum call_status status = disk_release(disk.handle);
-    if (status != CALL_OK) {
-      install_progress_pause();
-      fprintf(stderr, "installer: cleanup release failed (status %u)\n", status);
-    }
-  }
-  install_progress_finish();
-  if (attempted_write && result != EXIT_SUCCESS) {
-    if (updating && !esp_attempted) {
-      if (strcmp(selected->update.revision, INSTALL_UNKNOWN_REVISION) &&
-          strcmp(selected->update.revision, revision)) {
-        install_progress_pause();
-        fputs("Update failed before the EFI boot files changed; the disk still boots its\n"
-            "previous revision. Boot the live image again, then choose Update.\n", stderr);
-      } else {
-        install_progress_pause();
-        fputs("Update failed before the EFI boot files changed; its program revision may\n"
-            "be partially rewritten. Boot the live image again, then choose Update.\n", stderr);
-      }
-    } else if (updating) {
-      install_progress_pause();
-      fputs("Update failed; the EFI boot files may be partially rebuilt.\n"
-          "Boot the live image again, then choose Update to rebuild this disk's boot files.\n", stderr);
-    } else {
-      fputs("Installation failed; the disk may be partially rebuilt.\n"
-          "Boot the live image again, then run the installer and choose Read the room to reinstall this disk.\n",
-          stderr);
-    }
-  }
-  install_progress_begin("Closing installer handles and releasing source buffers", INSTALL_PROGRESS_NONE, NULL);
-  install_esp_destroy(esp);
-  free(rescue.memory);
-  install_programs_destroy(&programs);
-  free(configuration);
+  install_plan_destroy(&plan);
   destroy_targets(targets, count);
-  if (disk.handle != HANDLE_INVALID) {
-    handle_close(disk.handle);
+  if (crypto) {
+    hash_close();
   }
-  if (efi.handle != HANDLE_INVALID) {
-    handle_close(efi.handle);
-  }
-  if (template.handle != HANDLE_INVALID) {
-    handle_close(template.handle);
-  }
-  install_progress_finish();
   return result;
 }

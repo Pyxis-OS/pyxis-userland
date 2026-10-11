@@ -777,6 +777,9 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   bool ambiguous = primary && backup && !gpt_agree(&maps[0], &maps[1]);
   bool valid_gpt = mbr && (primary || backup) && !ambiguous;
   consent->degraded = valid_gpt && primary != backup;
+  if (valid_gpt) {
+    memcpy(consent->existing_guid, maps[primary ? 0 : 1].guid, 16);
+  }
   bool all_marked = true, damaged_pool = false, empty_pool = false;
   /* Both valid conflicting maps are inspected. Identical extents are scanned
    * once; overlapping but different extents are independently inspected. */
