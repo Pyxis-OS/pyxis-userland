@@ -2,6 +2,8 @@
 #define LIBC_WCHAR_H
 
 #include <stddef.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 typedef unsigned int wint_t;
 #define WEOF ((wint_t)-1)
@@ -21,6 +23,32 @@ extern "C" {
 
 /* Count wide characters before the terminating null. */
 size_t wcslen(const wchar_t *string);
+
+/* Native C-locale numeric grammar and range/error semantics. */
+long wcstol(const wchar_t *__restrict text, wchar_t **__restrict end, int base);
+unsigned long wcstoul(const wchar_t *__restrict text, wchar_t **__restrict end, int base);
+long long wcstoll(const wchar_t *__restrict text, wchar_t **__restrict end, int base);
+unsigned long long wcstoull(const wchar_t *__restrict text, wchar_t **__restrict end, int base);
+float wcstof(const wchar_t *__restrict text, wchar_t **__restrict end);
+double wcstod(const wchar_t *__restrict text, wchar_t **__restrict end);
+long double wcstold(const wchar_t *__restrict text, wchar_t **__restrict end);
+/* Counts wide characters; insufficient capacity returns -1, never truncated
+ * success. Native numeric formats, Unicode literals and c/s with optional l;
+ * unsupported conversions (including n) fail with EINVAL. */
+int swprintf(wchar_t *__restrict output, size_t capacity,
+    const wchar_t *__restrict format, ...);
+int vswprintf(wchar_t *__restrict output, size_t capacity,
+    const wchar_t *__restrict format, va_list args);
+
+/* An unoriented stream becomes wide; byte-oriented streams fail with EINVAL.
+ * UTF-8 conversion and one complete character of pushback belong to the FILE,
+ * independently of descriptor read-ahead. Failed seek preserves that state. */
+int fwide(FILE *stream, int mode);
+wint_t fgetwc(FILE *stream);
+wint_t getwc(FILE *stream);
+wint_t ungetwc(wint_t character, FILE *stream);
+wint_t fputwc(wchar_t character, FILE *stream);
+wint_t putwc(wchar_t character, FILE *stream);
 
 int mbsinit(const mbstate_t *state);
 /* Return bytes consumed from this call, zero for NUL, (size_t)-2 for an

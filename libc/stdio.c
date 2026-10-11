@@ -44,6 +44,28 @@ bool stream_ready(FILE *stream, bool writing)
   return true;
 }
 
+static bool select_orientation(FILE *stream, int orientation)
+{
+  if (stream->orientation && stream->orientation != orientation) {
+    stream_error(stream, EINVAL);
+    return false;
+  }
+  stream->orientation = orientation;
+  return true;
+}
+
+static size_t pushback_bytes(FILE *stream)
+{
+  return stream->has_pushback ? 1 :
+      stream->has_wide_pushback ? stream->wide_pushback_bytes : 0;
+}
+
+static void discard_pushback(FILE *stream)
+{
+  stream->has_pushback = false;
+  stream->has_wide_pushback = false;
+}
+
 static void register_stream(FILE *stream)
 {
   stream->next = streams;
@@ -287,7 +309,10 @@ int fflush(FILE *stream)
   if (flush_output(stream) < 0) {
     return EOF;
   }
-  stream->has_pushback = false;
+  discard_pushback(stream);
+  if (binding.protocol == PROTOCOL_FILE) {
+    stream->wide_input = (mbstate_t){0};
+  }
   descriptor_discard_input(stream->descriptor);
   return 0;
 }
@@ -374,6 +399,9 @@ size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
   if (!capacity || !stream_ready(stream, false)) {
     return 0;
   }
+  if (!select_orientation(stream, STREAM_BYTE_ORIENTED)) {
+    return 0;
+  }
   if (take_pushback(buffer, stream)) {
     return 1;
   }
@@ -395,6 +423,9 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
     stream_error(stream, EOVERFLOW);
     return 0;
   }
+  if (!select_orientation(stream, STREAM_BYTE_ORIENTED)) {
+    return 0;
+  }
   size_t bytes = size * count, total = 0;
   if (take_pushback(buffer, stream)) {
     total = 1;
@@ -412,24 +443,15 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
   return total / size;
 }
 
-size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
+static size_t write_bytes(const void *buffer, size_t bytes, FILE *stream)
 {
-  if (!size || !count) {
-    return 0;
-  }
-  if (!stream_ready(stream, true)) {
-    return 0;
-  }
-  if (count > SIZE_MAX / size) {
-    stream_error(stream, EOVERFLOW);
-    return 0;
-  }
   /* ISO C requires a positioning call between reading and writing; like
    * read-ahead, an unread pushback byte is dropped by the write. */
-  stream->has_pushback = false;
+  discard_pushback(stream);
+  stream->wide_input = (mbstate_t){0};
   stream->io_started = true;
   descriptor_discard_input(stream->descriptor);
-  size_t bytes = size * count, total = 0;
+  size_t total = 0;
   // A failed old queue keeps ownership even after clearerr; drain it first.
   if (stream->output_flush_failed && flush_output(stream) < 0) {
     return 0;
@@ -473,7 +495,25 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   /* Buffered bytes are accepted when copied into FILE ownership, including
    * retained output after a flush failure. Unbuffered bytes count only confirmed
    * backend progress. As usual, a partial final element may be consumed. */
-  return total / size;
+  return total;
+}
+
+size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
+{
+  if (!size || !count) {
+    return 0;
+  }
+  if (!stream_ready(stream, true)) {
+    return 0;
+  }
+  if (count > SIZE_MAX / size) {
+    stream_error(stream, EOVERFLOW);
+    return 0;
+  }
+  if (!select_orientation(stream, STREAM_BYTE_ORIENTED)) {
+    return 0;
+  }
+  return write_bytes(buffer, size * count, stream) / size;
 }
 
 int fgetc(FILE *stream)
@@ -582,11 +622,111 @@ int ungetc(int character, FILE *stream)
   if (character == EOF || !stream_ready(stream, false) || stream->has_pushback) {
     return EOF;
   }
+  if (!select_orientation(stream, STREAM_BYTE_ORIENTED)) {
+    return EOF;
+  }
   stream->io_started = true;
   stream->pushback = (unsigned char)character;
   stream->has_pushback = true;
   stream->eof = false;
   return stream->pushback;
+}
+
+int fwide(FILE *stream, int mode)
+{
+  if (!stream || stream->closed) {
+    errno = EBADF;
+    return 0;
+  }
+  struct startup_stream binding;
+  if (descriptor_stream(stream, &binding) < 0) {
+    return 0;
+  }
+  if (!stream->orientation && mode) {
+    stream->orientation = mode > 0 ? STREAM_WIDE_ORIENTED : STREAM_BYTE_ORIENTED;
+  }
+  return stream->orientation;
+}
+
+wint_t fgetwc(FILE *stream)
+{
+  if (!stream_ready(stream, false) || !select_orientation(stream, STREAM_WIDE_ORIENTED)) {
+    return WEOF;
+  }
+  stream->io_started = true;
+  if (stream->has_wide_pushback) {
+    stream->has_wide_pushback = false;
+    return stream->wide_pushback;
+  }
+  if (stream->eof) {
+    return WEOF;
+  }
+  for (;;) {
+    char byte;
+    if (!read_some(&byte, 1, stream, true)) {
+      if (stream->eof && !mbsinit(&stream->wide_input)) {
+        stream->wide_input = (mbstate_t){0};
+        stream_error(stream, EILSEQ);
+      }
+      return WEOF;
+    }
+    wchar_t value;
+    size_t count = mbrtowc(&value, &byte, 1, &stream->wide_input);
+    if (count == (size_t)-1) {
+      stream_error(stream, errno);
+      return WEOF;
+    }
+    if (count != (size_t)-2) {
+      return (wint_t)value;
+    }
+  }
+}
+
+wint_t getwc(FILE *stream)
+{
+  return fgetwc(stream);
+}
+
+wint_t ungetwc(wint_t character, FILE *stream)
+{
+  if (character == WEOF || !stream_ready(stream, false) || stream->has_wide_pushback) {
+    return WEOF;
+  }
+  if (!select_orientation(stream, STREAM_WIDE_ORIENTED)) {
+    return WEOF;
+  }
+  char bytes[MB_LEN_MAX];
+  mbstate_t state = {0};
+  size_t length = wcrtomb(bytes, (wchar_t)character, &state);
+  if (length == (size_t)-1) {
+    return WEOF;
+  }
+  stream->io_started = true;
+  stream->wide_pushback = character;
+  stream->wide_pushback_bytes = length;
+  stream->has_wide_pushback = true;
+  stream->eof = false;
+  return character;
+}
+
+wint_t fputwc(wchar_t character, FILE *stream)
+{
+  if (!stream_ready(stream, true) || !select_orientation(stream, STREAM_WIDE_ORIENTED)) {
+    return WEOF;
+  }
+  char bytes[MB_LEN_MAX];
+  mbstate_t state = {0};
+  size_t length = wcrtomb(bytes, character, &state);
+  if (length == (size_t)-1) {
+    stream_error(stream, errno);
+    return WEOF;
+  }
+  return write_bytes(bytes, length, stream) == length ? (wint_t)character : WEOF;
+}
+
+wint_t putwc(wchar_t character, FILE *stream)
+{
+  return fputwc(character, stream);
 }
 
 int fputc(int character, FILE *stream)
@@ -642,12 +782,13 @@ int fseek(FILE *stream, long offset, int origin)
     return -1;
   }
   /* A relative seek counts from the position before any ungetc byte. */
-  if (origin == SEEK_CUR && stream->has_pushback) {
-    if (offset == LONG_MIN) {
+  size_t pushed = pushback_bytes(stream);
+  if (origin == SEEK_CUR && pushed) {
+    if (offset < LONG_MIN + (long)pushed) {
       errno = EOVERFLOW;
       return -1;
     }
-    --offset;
+    offset -= (long)pushed;
   }
   if (origin != SEEK_SET && origin != SEEK_CUR && origin != SEEK_END) {
     errno = EINVAL;
@@ -658,7 +799,8 @@ int fseek(FILE *stream, long offset, int origin)
     return -1;
   }
   stream->eof = false;
-  stream->has_pushback = false;
+  discard_pushback(stream);
+  stream->wide_input = (mbstate_t){0};
   return 0;
 }
 
@@ -672,8 +814,9 @@ long ftell(FILE *stream)
   long position = descriptor_tell_output(stream->descriptor, stream->output_count);
   /* The pushed-back byte is unread again. Before the first byte the position
    * stays zero; ISO C leaves it indeterminate there. */
-  if (position > 0 && stream->has_pushback) {
-    --position;
+  size_t pushed = pushback_bytes(stream);
+  if (position > 0) {
+    position = (uint64_t)position >= pushed ? position - (long)pushed : 0;
   }
   return position;
 }

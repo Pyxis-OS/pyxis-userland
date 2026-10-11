@@ -31,6 +31,9 @@ int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t limit);
 /* The C locale is the only locale, so collation is strcmp's byte order. */
 int strcoll(const char *left, const char *right);
+/* Identity transform for C-locale byte collation. Returns the complete length
+ * excluding NUL; capacity zero permits a NULL output. */
+size_t strxfrm(char *__restrict output, const char *__restrict text, size_t capacity);
 char *strchr(const char *text, int character);
 /* As strchr, but returns the terminating NUL instead of NULL when absent. */
 char *strchrnul(const char *text, int character);

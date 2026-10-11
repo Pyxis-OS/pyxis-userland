@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <sys/types.h>
+#include <sys/random.h>
 
 #ifdef __cplusplus
 extern "C" {

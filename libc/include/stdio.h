@@ -32,7 +32,9 @@ extern FILE *stderr;
  * Read-ahead is private and never accompanies a delegated stream: do not read a
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
  * successful fseek or a write drops it, a failed seek keeps it. Standard
- * descriptors adopt exclusive startup handles once. No freopen or wide I/O. */
+ * descriptors adopt exclusive startup handles once. No freopen. Byte/wide
+ * orientation is selected by the first I/O operation (or fwide), remains until
+ * close and rejects mixing with EINVAL. Zero-sized transfers do not orient. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested
