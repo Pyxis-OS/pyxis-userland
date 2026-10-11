@@ -21,6 +21,12 @@ session bin://threadprobe.pxe exhaust
 session bin://threadprobe.pxe stop
 session bin://threadprobe.pxe fault
 session bin://threadprobe.pxe close
+session bin://threadprobe.pxe park32
+session bin://threadprobe.pxe park64
+session bin://threadprobe.pxe park-refusal
+session bin://threadprobe.pxe park-inspect
+session bin://threadprobe.pxe park-unmap
+session bin://threadprobe.pxe park-stop
 ```
 
 `lifecycle` creates two siblings with independent eager 64 KiB native stacks and
@@ -61,8 +67,41 @@ It requires the admitted CALL to unwind with ENDPOINT_CLOSED, completion to
 follow retirement, and subsequent reservation release to succeed. This checks
 one bounded interleaving, not every device or capability race.
 
+`park32` and `park64` put two siblings on one atomic word for 64 rounds. Each
+round requires a positive native one-waiter wake count while the predicate is
+unchanged, then advances the predicate and wakes remaining registrations. The
+parent requires every round to finish within five seconds, checks returned wake
+counts against the siblings' observed OK results, joins both and requires an
+empty final wake. A readiness flag alone is not treated as proof of enrollment.
+The wake with an unchanged predicate exercises the required predicate recheck.
+
+`park-refusal` checks writable .bss, stack and ordinary heap words, mismatch,
+zero-deadline polling, future 20 ms absolute deadlines, empty wake and unaligned,
+unmapped, read-only and invalid 32-bit expected-value refusals. Heap backing is
+released after expiry. Failed wake counts must be cleared. Use GDB at the
+native wait and after its timed return to inspect timer/bucket detachment and
+zero mapping borrowers; successful user results alone do not prove that state.
+
+`park-inspect` holds two 64-bit waiters until Enter. Before releasing them, use
+the printed word/context addresses and matching debug ELF to inspect both bucket
+registrations, their mapping incarnations, task waits and zero mapping borrowers.
+`park-unmap` similarly requires GDB to establish its one waiter's enrollment
+before Enter: releasing its separate ordinary RAM page must return BAD_BUFFER
+to WAIT. It allocates a new page and wakes it before collecting the old result,
+requiring zero old registrations. The summary reports whether the address was
+reused; only a reused address exercises that ABA case. Allocation placement is
+not promised by the probe. Do not release before verifying the waiter is parked:
+an earlier user load racing unmap can legitimately fault instead.
+
+`park-stop` reuses the existing process supervisor with two native parking
+siblings. Before transferring their observers, the child requires each sibling
+to have consumed an actual wake with its predicate still false. Termination must
+yield STOPPED for both siblings and TERMINATED for the process. Inspect bucket
+and timer detachment with GDB; the probe adds no timer, output or boot automation.
+
 Siblings enter a small assembly trampoline, use native wrappers, atomics and raw
 FS assembly, and EXIT explicitly. They never rerun process startup or use shared
 libc allocation, stdio or errno. Parent printing happens before sibling creation
 and after completion. These manual probes do not advertise thread-safe libc,
-pthreads, C11 threads, address parking or language TLS.
+pthread/C11 runtime or language TLS. Parking modes require the SDK/kernel address
+WAIT/WAKE gate; there is no cross-process wait, requeue or lock-ownership handoff.

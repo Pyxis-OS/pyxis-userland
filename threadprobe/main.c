@@ -19,7 +19,7 @@
 #define PROBE_STACK_BYTES (64 * 1024)
 #define PROBE_MARKER UINT64_C(0x7468726561640000)
 
-enum child_action { CHILD_HOLD, CHILD_CALL, CHILD_FAULT };
+enum child_action { CHILD_HOLD, CHILD_CALL, CHILD_FAULT, CHILD_PARK };
 
 struct probe_context {
   struct memory_reservation stack;
@@ -34,11 +34,18 @@ struct probe_context {
   uint64_t observed_rsp;
   uint32_t observed_mxcsr;
   enum child_action action;
+  uintptr_t park_address;
+  uint64_t park_size, park_rounds;
+  uint64_t park_ready, park_done, park_wakes;
+  enum call_status park_status;
 };
 
 /* Kept in ordinary shared process storage for debugger inspection. */
 static struct probe_context contexts[2];
 static uint64_t shared_count;
+static uint32_t parking32;
+static uint64_t parking64;
+static const uint64_t parking_readonly;
 static handle_t memory, threads, clock_service;
 extern void threadprobe_entry(void);
 [[noreturn]] void threadprobe_child(struct probe_context *context);
@@ -61,6 +68,32 @@ static void publish(uint64_t *word, uint64_t value)
   }
 }
 
+static uint64_t parking_value(const struct probe_context *context)
+{
+  return context->park_size == THREAD_ADDRESS_WORD32_BYTES ?
+      __atomic_load_n((uint32_t *)context->park_address, __ATOMIC_ACQUIRE) :
+      __atomic_load_n((uint64_t *)context->park_address, __ATOMIC_ACQUIRE);
+}
+
+static uint64_t parking_child(struct probe_context *context)
+{
+  for (uint64_t round = 1; round <= context->park_rounds; ++round) {
+    publish(&context->park_ready, round);
+    while (parking_value(context) < round) {
+      enum call_status status = thread_address_wait(context->threads, context->park_address,
+          round - 1, context->park_size, THREAD_ADDRESS_NO_DEADLINE);
+      if (status == CALL_OK) {
+        __atomic_fetch_add(&context->park_wakes, 1, __ATOMIC_ACQ_REL);
+      } else if (status != CALL_WOULD_BLOCK) {
+        context->park_status = status;
+        return status;
+      }
+    }
+    publish(&context->park_done, round);
+  }
+  return context->marker;
+}
+
 [[noreturn]] void threadprobe_child(struct probe_context *context)
 {
   __asm__ volatile("mov %%fs:0, %0" : "=r"(context->observed_fs));
@@ -69,7 +102,9 @@ static void publish(uint64_t *word, uint64_t value)
   __atomic_fetch_add(&shared_count, 1, __ATOMIC_ACQ_REL);
   publish(&context->ready, 1);
   uint64_t value = context->observed_fs;
-  if (context->action == CHILD_CALL) {
+  if (context->action == CHILD_PARK) {
+    value = parking_child(context);
+  } else if (context->action == CHILD_CALL) {
     struct endpoint_packet reply;
     value = endpoint_request(context->caller, NULL, 0, NULL, 0, 0, &reply);
   } else {
@@ -229,6 +264,201 @@ static int lifecycle(bool inspect)
   }
   printf("threadprobe: lifecycle %s; shared count %llu; distinct stack/FS, repeated WAIT and readiness\n",
       valid ? "passed" : "failed", (unsigned long long)shared_count);
+  return valid ? 0 : 1;
+}
+
+static uint64_t parking_deadline(void)
+{
+  uint64_t now;
+  if (clock_now(clock_service, &now) != CALL_OK || now > UINT64_MAX - UINT64_C(5000000000)) {
+    stop_process(1);
+  }
+  return now + UINT64_C(5000000000);
+}
+
+static void parking_pause(uint64_t deadline)
+{
+  uint64_t now;
+  if (clock_now(clock_service, &now) != CALL_OK || now >= deadline ||
+      clock_sleep_for(clock_service, UINT64_C(1000000)) != CALL_OK) {
+    stop_process(1);
+  }
+}
+
+static void parking_enter(void)
+{
+  char byte;
+  size_t size;
+  if (console_read(startup_stream(STARTUP_STDIN).handle, &byte, 1, &size) != CALL_OK || size != 1) {
+    stop_process(1);
+  }
+}
+
+static uint64_t parking_wake(uintptr_t address, uint64_t word_size, uint64_t maximum)
+{
+  uint64_t woken;
+  if (thread_address_wake(threads, address, word_size, maximum, &woken) != CALL_OK) {
+    stop_process(1);
+  }
+  return woken;
+}
+
+static int parking_contention(uint64_t word_size, bool inspect)
+{
+  if (!prepare_pair()) {
+    return 1;
+  }
+  uintptr_t address = word_size == THREAD_ADDRESS_WORD32_BYTES ?
+      (uintptr_t)&parking32 : (uintptr_t)&parking64;
+  uint64_t rounds = inspect ? 1 : 64;
+  for (unsigned i = 0; i < 2; ++i) {
+    contexts[i].action = CHILD_PARK;
+    contexts[i].park_address = address;
+    contexts[i].park_size = word_size;
+    contexts[i].park_rounds = rounds;
+  }
+  printf("threadprobe: parking word=%p size=%llu contexts=%p rounds=%llu\n",
+      (void *)address, (unsigned long long)word_size, (void *)contexts,
+      (unsigned long long)rounds);
+  if (inspect) {
+    puts("threadprobe: inspect both parked registrations with GDB, then press Enter");
+  }
+  fflush(stdout);
+  for (unsigned i = 0; i < 2; ++i) {
+    if (start(&contexts[i]) != CALL_OK || !await_ready(&contexts[i])) {
+      stop_process(1);
+    }
+  }
+  uint64_t woken = 0;
+  for (uint64_t round = 1; round <= rounds; ++round) {
+    uint64_t deadline = parking_deadline();
+    while (load(&contexts[0].park_ready) < round || load(&contexts[1].park_ready) < round) {
+      parking_pause(deadline);
+    }
+    if (inspect) {
+      parking_enter();
+      deadline = parking_deadline();
+    } else {
+      uint64_t before = load(&contexts[0].park_wakes) + load(&contexts[1].park_wakes);
+      uint64_t count;
+      while (!(count = parking_wake(address, word_size, 1))) {
+        parking_pause(deadline);
+      }
+      woken += count;
+      /* Wake with the predicate unchanged, proving a real parked registration
+       * and requiring the child to recheck rather than treat wake as ownership. */
+      while (load(&contexts[0].park_wakes) + load(&contexts[1].park_wakes) == before) {
+        parking_pause(deadline);
+      }
+    }
+    if (word_size == THREAD_ADDRESS_WORD32_BYTES) {
+      __atomic_store_n(&parking32, (uint32_t)round, __ATOMIC_RELEASE);
+    } else {
+      publish(&parking64, round);
+    }
+    while (load(&contexts[0].park_done) < round || load(&contexts[1].park_done) < round) {
+      woken += parking_wake(address, word_size, UINT64_MAX);
+      parking_pause(deadline);
+    }
+  }
+  bool valid = true;
+  for (unsigned i = 0; i < 2; ++i) {
+    valid &= collect(&contexts[i], contexts[i].marker);
+    valid &= contexts[i].park_status == CALL_OK;
+    valid &= release_context(&contexts[i]);
+  }
+  uint64_t observed = load(&contexts[0].park_wakes) + load(&contexts[1].park_wakes);
+  valid &= observed == woken && woken >= (inspect ? 2 : rounds);
+  valid &= parking_wake(address, word_size, UINT64_MAX) == 0;
+  printf("threadprobe: parking %s; size=%llu rounds=%llu woken=%llu observed=%llu; empty after completion\n",
+      valid ? "passed" : "failed", (unsigned long long)word_size,
+      (unsigned long long)rounds, (unsigned long long)woken, (unsigned long long)observed);
+  return valid ? 0 : 1;
+}
+
+static int parking_refusal(void)
+{
+  uintptr_t address = (uintptr_t)&parking64;
+  uint64_t stack_word = 0;
+  uint64_t now, woken = UINT64_MAX;
+  bool valid = thread_address_wait(threads, address, 1, THREAD_ADDRESS_WORD64_BYTES, 0) ==
+      CALL_WOULD_BLOCK;
+  valid &= thread_address_wait(threads, address, 0, THREAD_ADDRESS_WORD64_BYTES, 0) == CALL_TIMED_OUT;
+  if (clock_now(clock_service, &now) != CALL_OK || now > UINT64_MAX - UINT64_C(20000000)) {
+    return 1;
+  }
+  valid &= thread_address_wait(threads, address, 0, THREAD_ADDRESS_WORD64_BYTES,
+      now + UINT64_C(20000000)) == CALL_TIMED_OUT;
+  valid &= thread_address_wake(threads, address, THREAD_ADDRESS_WORD64_BYTES, UINT64_MAX,
+      &woken) == CALL_OK && woken == 0;
+  valid &= thread_address_wait(threads, (uintptr_t)&stack_word, 1,
+      THREAD_ADDRESS_WORD64_BYTES, 0) == CALL_WOULD_BLOCK;
+  struct memory_region region;
+  if (memory_allocate(memory, MEMORY_PAGE_SIZE, &region) != CALL_OK) {
+    return 1;
+  }
+  if (clock_now(clock_service, &now) != CALL_OK || now > UINT64_MAX - UINT64_C(20000000)) {
+    memory_release(memory, region);
+    return 1;
+  }
+  valid &= thread_address_wait(threads, region.address, 0, THREAD_ADDRESS_WORD64_BYTES,
+      now + UINT64_C(20000000)) == CALL_TIMED_OUT;
+  valid &= thread_address_wake(threads, region.address, THREAD_ADDRESS_WORD64_BYTES, UINT64_MAX,
+      &woken) == CALL_OK && woken == 0;
+  valid &= memory_release(memory, region) == CALL_OK;
+  valid &= thread_address_wait(threads, address + 1, 0, THREAD_ADDRESS_WORD64_BYTES, 0) ==
+      CALL_BAD_REQUEST;
+  valid &= thread_address_wait(threads, 0, 0, THREAD_ADDRESS_WORD64_BYTES, 0) == CALL_BAD_BUFFER;
+  valid &= thread_address_wait(threads, (uintptr_t)&parking_readonly, 0,
+      THREAD_ADDRESS_WORD64_BYTES, 0) == CALL_BAD_BUFFER;
+  valid &= thread_address_wait(threads, (uintptr_t)&parking32, UINT64_C(1) << 32,
+      THREAD_ADDRESS_WORD32_BYTES, 0) == CALL_BAD_REQUEST;
+  woken = UINT64_MAX;
+  valid &= thread_address_wake(threads, address, THREAD_ADDRESS_WORD64_BYTES, 0, &woken) ==
+      CALL_BAD_REQUEST && woken == 0;
+  woken = UINT64_MAX;
+  valid &= thread_address_wake(threads, (uintptr_t)&parking_readonly,
+      THREAD_ADDRESS_WORD64_BYTES, 1, &woken) == CALL_BAD_BUFFER && woken == 0;
+  printf("threadprobe: parking refusals %s; .bss/stack/heap, mismatch, poll/future expiry, empty wake and bad addresses\n",
+      valid ? "passed" : "failed");
+  return valid ? 0 : 1;
+}
+
+static int parking_unmap(void)
+{
+  if (!prepare_pair()) {
+    return 1;
+  }
+  struct memory_region region, replacement;
+  if (memory_allocate(memory, MEMORY_PAGE_SIZE, &region) != CALL_OK) {
+    release_context(&contexts[0]);
+    release_context(&contexts[1]);
+    return 1;
+  }
+  contexts[0].action = CHILD_PARK;
+  contexts[0].park_address = region.address;
+  contexts[0].park_size = THREAD_ADDRESS_WORD64_BYTES;
+  contexts[0].park_rounds = 1;
+  printf("threadprobe: withdrawal word=%#llx context=%p; inspect its parked registration with GDB, then Enter\n",
+      (unsigned long long)region.address, (void *)&contexts[0]);
+  fflush(stdout);
+  if (start(&contexts[0]) != CALL_OK || !await_ready(&contexts[0])) {
+    stop_process(1);
+  }
+  parking_enter();
+  if (memory_release(memory, region) != CALL_OK ||
+      memory_allocate(memory, MEMORY_PAGE_SIZE, &replacement) != CALL_OK) {
+    stop_process(1);
+  }
+  bool same_address = replacement.address == region.address;
+  bool valid = parking_wake(replacement.address, THREAD_ADDRESS_WORD64_BYTES, UINT64_MAX) == 0;
+  valid &= collect(&contexts[0], CALL_BAD_BUFFER);
+  valid &= contexts[0].park_status == CALL_BAD_BUFFER;
+  valid &= memory_release(memory, replacement) == CALL_OK;
+  valid &= release_context(&contexts[0]);
+  valid &= release_context(&contexts[1]);
+  printf("threadprobe: withdrawal %s; old WAIT BAD_BUFFER, new mapping has no old waiter; reused address=%u\n",
+      valid ? "passed" : "failed", same_address);
   return valid ? 0 : 1;
 }
 
@@ -394,15 +624,30 @@ static int close_race(void)
   return valid ? 0 : 1;
 }
 
-[[noreturn]] static void supervised_child(bool fault)
+[[noreturn]] static void supervised_child(bool fault, bool parking)
 {
   if (!prepare_pair()) {
     stop_process(1);
   }
   contexts[0].action = fault ? CHILD_FAULT : CHILD_HOLD;
+  if (parking) {
+    for (unsigned i = 0; i < 2; ++i) {
+      contexts[i].action = CHILD_PARK;
+      contexts[i].park_address = (uintptr_t)&parking64;
+      contexts[i].park_size = THREAD_ADDRESS_WORD64_BYTES;
+      contexts[i].park_rounds = 1;
+    }
+  }
   for (unsigned i = 0; i < 2; ++i) {
     if (start(&contexts[i]) != CALL_OK || !await_ready(&contexts[i])) {
       stop_process(1);
+    }
+  }
+  if (parking) {
+    uint64_t deadline = parking_deadline();
+    while (!load(&contexts[0].park_wakes) || !load(&contexts[1].park_wakes)) {
+      parking_wake((uintptr_t)&parking64, THREAD_ADDRESS_WORD64_BYTES, UINT64_MAX);
+      parking_pause(deadline);
     }
   }
   struct endpoint_grant observers[2] = {
@@ -421,7 +666,7 @@ static int close_race(void)
   }
 }
 
-static int supervise(bool fault)
+static int supervise(bool fault, bool parking)
 {
   struct endpoint_create_reply endpoint;
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
@@ -443,7 +688,8 @@ static int supervise(bool fault)
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"threads", THREADS},
     {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"bootstrap", BOOTSTRAP},
   };
-  uint64_t arguments[] = {(uintptr_t)"threadprobe", (uintptr_t)(fault ? "--child-fault" : "--child-stop")};
+  const char *mode = parking ? "--child-park-stop" : fault ? "--child-fault" : "--child-stop";
+  uint64_t arguments[] = {(uintptr_t)"threadprobe", (uintptr_t)mode};
   struct launch_request request = {
     .image = image, .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
     .resources = (uintptr_t)resources, .resource_count = GRANT_COUNT,
@@ -505,7 +751,7 @@ static int supervise(bool fault)
   valid &= handle_close(endpoint.caller) == 0;
   valid &= handle_close(endpoint.receiver) == 0;
   printf("threadprobe: process %s %s; live sibling completions STOPPED, process reclaimed (status %u)\n",
-      fault ? "fault" : "stop", valid ? "passed" : "failed", status);
+      parking ? "park-stop" : fault ? "fault" : "stop", valid ? "passed" : "failed", status);
   return valid ? 0 : 1;
 }
 
@@ -515,7 +761,9 @@ int main(int argc, char **argv)
   threads = startup_resource("threads");
   clock_service = startup_resource("clock");
   if (argc != 2) {
-    fputs("usage: session bin://threadprobe.pxe lifecycle|inspect|bind|refusal|exhaust|stop|fault|close\n", stderr);
+    fputs("usage: session bin://threadprobe.pxe "
+        "lifecycle|inspect|bind|refusal|exhaust|stop|fault|close|"
+        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop\n", stderr);
     return 1;
   }
   const struct {
@@ -532,8 +780,9 @@ int main(int argc, char **argv)
   if (missing) {
     return 1;
   }
-  if (!strcmp(argv[1], "--child-stop") || !strcmp(argv[1], "--child-fault")) {
-    supervised_child(!strcmp(argv[1], "--child-fault"));
+  if (!strcmp(argv[1], "--child-stop") || !strcmp(argv[1], "--child-fault") ||
+      !strcmp(argv[1], "--child-park-stop")) {
+    supervised_child(!strcmp(argv[1], "--child-fault"), !strcmp(argv[1], "--child-park-stop"));
   }
   if (!strcmp(argv[1], "lifecycle") || !strcmp(argv[1], "inspect")) {
     return lifecycle(!strcmp(argv[1], "inspect"));
@@ -551,7 +800,20 @@ int main(int argc, char **argv)
     return close_race();
   }
   if (!strcmp(argv[1], "stop") || !strcmp(argv[1], "fault")) {
-    return supervise(!strcmp(argv[1], "fault"));
+    return supervise(!strcmp(argv[1], "fault"), false);
+  }
+  if (!strcmp(argv[1], "park32") || !strcmp(argv[1], "park64") || !strcmp(argv[1], "park-inspect")) {
+    return parking_contention(!strcmp(argv[1], "park32") ? THREAD_ADDRESS_WORD32_BYTES :
+        THREAD_ADDRESS_WORD64_BYTES, !strcmp(argv[1], "park-inspect"));
+  }
+  if (!strcmp(argv[1], "park-refusal")) {
+    return parking_refusal();
+  }
+  if (!strcmp(argv[1], "park-unmap")) {
+    return parking_unmap();
+  }
+  if (!strcmp(argv[1], "park-stop")) {
+    return supervise(false, true);
   }
   fputs("threadprobe: unknown mode\n", stderr);
   return 1;
