@@ -1,5 +1,4 @@
 #include "installer.h"
-#include "progress.h"
 
 #include <stdio.h>
 #include <stdlib.h>

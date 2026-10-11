@@ -1,5 +1,4 @@
 #include "installer.h"
-#include "progress.h"
 
 #include <pyxis_fs/npfs.h>
 #include <stdlib.h>

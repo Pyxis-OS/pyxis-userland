@@ -31,10 +31,20 @@ including record padding and the trailer, without counting trailing archive
 padding or claiming a byte total. Copy reports successfully written file bytes
 and completed files; verification counts successfully compared payload bytes
 once and matched files. Both include bundle descendants and use the existing
-archive pass's file total when known, without another tree scan. Recursive
+archive pass's file and byte totals when known, without another tree scan. Recursive
 removal counts deleted files and directories. Phase lines cover volume opening,
-revision preparation, pool sync and final directory-handle closing. Progress
-is best-effort and does not establish durability or success.
+revision preparation, pool sync and final directory-handle closing. A reusable synchronous phase/counter observer in `progress.h` feeds the plain
+sink; the future TUI can consume the same records. Labels and units are static,
+record pointers are borrowed only during callbacks, and observers cannot reenter
+reporting. END stops observation, not the operation's success or durability
+check; PAUSE closes the active row before a diagnostic without losing counters.
+
+The plain sink redraws at most four times per second on a console, or emits
+newline updates at most once per second elsewhere. Clock checks are coalesced
+at 64 KiB or 32 items; small phases show transition/final records. Blocking
+calls have a phase line, without invented percentages or animation. Clock
+failure disables timed updates but retains phase/final counts; output failure
+disables the sink. Neither can change consent, I/O, publication or the result.
 
 Root `.pxb` directories move as complete program units to `bin/REVISION`,
 beside root `.pxe` files outside `share/installer/rescue.list`. Copy preserves

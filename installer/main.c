@@ -226,6 +226,7 @@ static bool inventory(handle_t disks, bool read_the_room, bool updating, struct 
       *reason_out = "too small for a 512 MiB ESP and writable pool";
       continue;
     }
+    install_progress_begin("Opening disk for read-only inspection", INSTALL_PROGRESS_NONE, NULL);
     status = disks_open(disks, info.id, DISK_ACCESS_READ_ONLY, &disk.handle);
     if (status != CALL_OK) {
       *reason_out = "raw inspection unavailable";

@@ -125,7 +125,7 @@ struct install_programs {
   size_t count;
   size_t files;
   uint64_t bytes;
-  bool files_known;
+  bool totals_known;
 };
 bool install_programs_list(handle_t boot, struct install_programs *programs);
 void install_programs_destroy(struct install_programs *programs);

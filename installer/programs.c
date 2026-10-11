@@ -1,5 +1,4 @@
 #include "installer.h"
-#include "progress.h"
 
 #include <directory.h>
 #include <file.h>
@@ -282,7 +281,7 @@ bool install_archive_filter(const struct install_source *archive,
    * with the header, then its data padded to four bytes. */
   size_t used = 0, files = 0;
   uint64_t program_bytes = 0;
-  bool files_known = true;
+  bool totals_known = true;
   for (size_t offset = 0;;) {
     uint32_t file_size, name_size;
     if (size - offset < NEWC_HEADER_BYTES || memcmp(input + offset, "07070", 5) ||
@@ -300,13 +299,13 @@ bool install_archive_filter(const struct install_source *archive,
     bool trailer = !strcmp(name, NEWC_TRAILER);
     /* Boot normalizes leading ./; progress must not claim a raw-path total. */
     if (!strncmp(name, "./", 2)) {
-      files_known = false;
+      totals_known = false;
     }
     bool selected = !trailer && program_path(programs, name);
     if (selected) {
       uint32_t mode;
       if (!newc_field(input + offset, 1, &mode)) {
-        files_known = false;
+        totals_known = false;
       } else if ((mode & 0170000) == 0100000) {
         ++files;
         program_bytes += file_size;
@@ -327,7 +326,7 @@ bool install_archive_filter(const struct install_source *archive,
   rescue->bytes = used;
   programs->files = files;
   programs->bytes = program_bytes;
-  programs->files_known = files_known;
+  programs->totals_known = totals_known;
   install_progress_finish();
   return true;
 
@@ -664,7 +663,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
   }
   if (ok) {
     install_progress_begin("Copying programs to bin", INSTALL_PROGRESS_WORK, "files");
-    if (programs->files_known) {
+    if (programs->totals_known) {
       install_progress_items_total(programs->files);
       install_progress_bytes_total(programs->bytes);
     }
@@ -683,7 +682,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
   if (ok) {
     install_progress_begin("Verifying copied programs (filesystem view; may be cached)",
         INSTALL_PROGRESS_WORK, "files");
-    if (programs->files_known) {
+    if (programs->totals_known) {
       install_progress_items_total(programs->files);
       install_progress_bytes_total(programs->bytes);
     }
