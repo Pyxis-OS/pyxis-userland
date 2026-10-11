@@ -276,6 +276,14 @@ static uint64_t parking_deadline(void)
   return now + UINT64_C(5000000000);
 }
 
+static void parking_poll(uint64_t deadline)
+{
+  uint64_t now;
+  if (clock_now(clock_service, &now) != CALL_OK || now >= deadline) {
+    stop_process(1);
+  }
+}
+
 static void parking_pause(uint64_t deadline)
 {
   uint64_t now;
@@ -342,7 +350,7 @@ static int parking_contention(uint64_t word_size, bool inspect)
       uint64_t before = load(&contexts[0].park_wakes) + load(&contexts[1].park_wakes);
       uint64_t count;
       while (!(count = parking_wake(address, word_size, 1))) {
-        parking_pause(deadline);
+        parking_poll(deadline);
       }
       woken += count;
       /* Wake with the predicate unchanged, proving a real parked registration
@@ -358,7 +366,11 @@ static int parking_contention(uint64_t word_size, bool inspect)
     }
     while (load(&contexts[0].park_done) < round || load(&contexts[1].park_done) < round) {
       woken += parking_wake(address, word_size, UINT64_MAX);
-      parking_pause(deadline);
+      if (inspect) {
+        parking_pause(deadline);
+      } else {
+        parking_poll(deadline);
+      }
     }
   }
   bool valid = true;

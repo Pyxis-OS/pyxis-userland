@@ -74,6 +74,9 @@ parent requires every round to finish within five seconds, checks returned wake
 counts against the siblings' observed OK results, joins both and requires an
 empty final wake. A readiness flag alone is not treated as proof of enrollment.
 The wake with an unchanged predicate exercises the required predicate recheck.
+These two modes poll wake enrollment and round completion with native clock
+reads rather than a fixed sleep, allowing wake before physical parking. Use GDB
+to establish that early-notification path; scheduling alone does not prove it.
 
 `park-refusal` checks writable .bss, stack and ordinary heap words, mismatch,
 zero-deadline polling, future 20 ms absolute deadlines, empty wake and unaligned,
