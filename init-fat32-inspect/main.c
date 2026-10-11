@@ -117,10 +117,6 @@ static int select_disk(void)
     goto done;
   }
   puts("Keep this media quiescent until inspection exits; stop all external writers.");
-  if (!prompt(&terminal, "Type quiescent to confirm: ", line, sizeof(line)) ||
-      strcmp(line, "quiescent") != 0) {
-    goto done;
-  }
   status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &opened);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 selector: read-only open failed (status %u)\n", status);
@@ -247,9 +243,14 @@ static int create_selector(void)
     fprintf(stderr, "fat32 bootstrap: space launch failed (status %u)\n", status);
     goto done;
   }
+  free(cpus);
+  cpus = NULL;
   bool closed = close_handle(&image);
+  /* Libc needs its startup memory grant through process retirement. */
   for (unsigned i = 0; i < SOURCE_COUNT; ++i) {
-    closed = close_handle(&sources[i]) && closed;
+    if (i != MEMORY) {
+      closed = close_handle(&sources[i]) && closed;
+    }
   }
   if (!closed) {
     goto done;
@@ -261,7 +262,9 @@ done:
   bool closed_all = close_handle(&image);
   closed_all = close_handle(&child) && closed_all;
   for (unsigned i = 0; i < SOURCE_COUNT; ++i) {
-    closed_all = close_handle(&sources[i]) && closed_all;
+    if (i != MEMORY) {
+      closed_all = close_handle(&sources[i]) && closed_all;
+    }
   }
   return closed_all ? result : EXIT_FAILURE;
 }

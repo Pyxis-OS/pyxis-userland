@@ -7,8 +7,8 @@ make -j16 SDK=/path/to/sdk init-fat32-inspect fat32-inspect
 ```
 
 Use the trusted **FAT32 Inspector** boot entry. Its bootstrap creates the install
-console space, lists disks and asks for an explicit disk ID, a one-based GPT entry
-and confirmation that the media will remain quiescent. The selected disk is
+console space, lists disks and asks for an explicit disk ID and a one-based GPT entry.
+Keep the media quiescent until inspection exits. The selected disk is
 opened read-only. The inspector receives exactly INFO/READ disk authority,
 memory and native console streams, with no disk service, launcher or roots.
 The ordinary boot profile supplies no disk inventory authority.
