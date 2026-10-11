@@ -93,6 +93,17 @@ and neither the discovery grant nor its environment variable. Without the
 option, the existing four-client TCP listener remains available.
 
 The remote server selects `shell --remote-prompt` for its normal root shell.
+An explicit `remote_multiplexer = true` Remote-space setting additionally allows
+interactive `pyxis-remote --mux`. The daemon creates the outer mux and brokers
+up to eight independent pane groups, retaining cleanup supervision. At most two
+mux connections share the existing four connection slots. Mux and pane shells
+retain the remote allowlist, with no physical pointer or clipboard grants.
+Initial host geometry is fixed for this slice; keyboard controls, Pyxis colours
+and UTF-8 work, while stock `xfer` refuses and prompt/drop automation is disabled.
+Both packaged boot configurations leave the setting false. Enable it only on a
+trusted network: any peer reaching the unauthenticated service can request panes
+with that space's existing filesystem and program grants.
+
 Its opt-in `term_read_line_marked` editor writes OSC 133;B after drawing each
 empty prompt, before reading input. Quiet shells and ordinary callers keep their
 existing output behavior; shell children do not inherit this option.

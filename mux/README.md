@@ -6,9 +6,12 @@ readiness bound, terminal pointer control, view identities and the shared
 terminal style and UTF-8 text headers/sources.
 No compiler-container rebuild is required.
 
-Trusted session startup selects `mux.pxe` only for a local space whose boot
-configuration sets `multiplexer = true`; ordinary launch does not supply its
-terminal creation or execution-group creation authority. Optional
+Trusted local session startup selects `mux.pxe` when boot configuration sets
+`multiplexer = true`. A Remote space can separately set
+`remote_multiplexer = true` for interactive `pyxis-remote --mux` connections.
+Remote mux asks the trusted daemon to create and supervise its pane groups;
+it receives a connection-scoped broker caller instead of creation authority.
+Ordinary launch supplies neither path. Optional
 `--tab-width 1..32` sets the initial spacing of each pane.
 Local mux receives a separate `terminal_pointer` grant through trusted session
 startup. Pane children receive no controller; their existing graphics pointer
@@ -35,6 +38,12 @@ allocates nothing. `layout.c` owns the eight-leaf split tree independently of
 presentation. `pointer.c` owns spatial hit testing and view barriers.
 `main.c` owns input routing, readiness and lifecycle; `render.c`
 composes styled cells through the borrowed outer CONSOLE handles.
+Its fixed pending buffer resumes CONSOLE try-writes and commits cell snapshots
+only after their complete output bytes are accepted. A blocked outer stream
+keeps input, pane output and lifecycle servicing active; newer frames coalesce.
+The private SEND broker in `common/pane_broker.c` transfers owned cwd directory
+chains without reopening paths. Uncertain publication ends mux and cancels all
+tracked pane groups; it is never retried as a split.
 
 Pane cells and the 1,024-row history retain tagged default, indexed and RGB
 colors, plus bold, italic, underline and reverse. Indexed colors 0–15 remain

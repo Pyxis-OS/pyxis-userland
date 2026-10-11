@@ -2,6 +2,10 @@
 
 Transfer one regular file through an interactive `pyxis-remote` terminal:
 
+Remote mux connections do not support transfer. Their trusted startup propagates
+`PYXIS_REMOTE_MUX=1`; stock `xfer` refuses before emitting its transfer protocol.
+The marker describes the execution profile and confers no authority.
+
 ```sh
 xfer send tmp://Example.class
 xfer receive /home/user/Example.class Example.class
