@@ -471,9 +471,13 @@ static void revision_text(const uint8_t *bytes, size_t size, char revision[64])
     return;
   }
   for (size_t i = 0; i < size; ++i) {
-    if (bytes[i] < 33 || bytes[i] > 126) {
+    if (bytes[i] < 33 || bytes[i] > 126 || bytes[i] == '/') {
       return;
     }
+  }
+  if ((size == 1 && bytes[0] == '.') ||
+      (size == 2 && bytes[0] == '.' && bytes[1] == '.')) {
+    return;
   }
   memcpy(revision, bytes, size);
   revision[size] = '\0';

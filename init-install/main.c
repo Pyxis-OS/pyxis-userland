@@ -36,8 +36,7 @@ static bool close_sources(const handle_t *sources, size_t count)
 
 int main(int argc, char **argv)
 {
-  (void)argc;
-  (void)argv;
+
   /* The kernel adds the install space's console, input devices and display. */
   enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, POWER,
     FACTORY, SOURCE_COUNT, GRANT_COUNT = FACTORY };
@@ -51,6 +50,7 @@ int main(int argc, char **argv)
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
+  const char **arguments = NULL;
   int result = EXIT_FAILURE;
   for (unsigned i = 0; i < SOURCE_COUNT; i++) {
     /* Without power the installer simply offers no restart. */
@@ -103,14 +103,22 @@ int main(int argc, char **argv)
   };
   bool has_power = sources[POWER] != HANDLE_INVALID;
   struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT_ROOT}};
-  const char *arguments[] = {"boot://installer.pxe"};
+  arguments = argc > 0 ? calloc((size_t)argc, sizeof(*arguments)) : NULL;
+  if (!arguments) {
+    fputs("init-install: cannot prepare installer arguments\n", stderr);
+    goto done;
+  }
+  arguments[0] = "boot://installer.pxe";
+  for (int i = 1; i < argc; i++) {
+    arguments[i] = argv[i];
+  }
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT - !has_power,
     .resources = (uintptr_t)resources,
     .resource_count = sizeof(resources) / sizeof(resources[0]) - !has_power,
     .roots = (uintptr_t)roots, .root_count = sizeof(roots) / sizeof(roots[0]),
-    .argv = (uintptr_t)arguments, .argc = 1,
+    .argv = (uintptr_t)arguments, .argc = (uint64_t)argc,
   };
   struct space_definition space = {.name = "install", .title = "Install"};
   status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,
@@ -139,6 +147,7 @@ int main(int argc, char **argv)
   }
 
 done:
+  free(arguments);
   free(cpus);
   if (child != HANDLE_INVALID && handle_close(child) != 0) {
     result = EXIT_FAILURE;

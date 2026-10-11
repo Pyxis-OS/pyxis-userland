@@ -341,7 +341,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
 bool install_plan_revalidate(const struct install_plan *plan)
 {
   struct install_disk disk = plan->disk;
-  struct disk_info current;
+  struct disk_info current = {0};
   struct install_prior prior = {0};
   struct install_consent consent = {0};
   char fingerprint[65], source_hash[65];
@@ -359,6 +359,22 @@ bool install_plan_revalidate(const struct install_plan *plan)
   return ok;
 }
 
+static void report_name(FILE *output, const char *name)
+{
+  fputc('"', output);
+  for (const unsigned char *byte = (const unsigned char *)name; *byte; byte++) {
+    if (*byte < 32 || *byte > 126 || *byte == '"' || *byte == '\\') {
+      static const char digits[] = "0123456789abcdef";
+      fputs("\\x", output);
+      fputc(digits[*byte >> 4], output);
+      fputc(digits[*byte & 15], output);
+    } else {
+      fputc(*byte, output);
+    }
+  }
+  fputc('"', output);
+}
+
 bool install_plan_report(const struct install_plan *plan, FILE *output)
 {
   if (!plan->ready) {
@@ -370,10 +386,38 @@ bool install_plan_report(const struct install_plan *plan, FILE *output)
       plan->record.updating ? "Update" : "Install",
       (unsigned long long)(plan->disk.bytes / INSTALL_MIB),
       plan->record.portable ? guid : "unavailable (interactive apply only)");
+  fprintf(output, "ESP: byte %llu, length %llu; pool: byte %llu, length %llu.\n",
+      (unsigned long long)plan->record.layout.esp_start,
+      (unsigned long long)plan->record.layout.esp_bytes,
+      (unsigned long long)plan->record.layout.pool_start,
+      (unsigned long long)plan->record.layout.pool_bytes);
+  if (!plan->record.updating) {
+    fprintf(output, "Journal: %llu MiB; Read the room: %s.\n",
+        (unsigned long long)plan->record.journal_mib,
+        plan->record.read_the_room ? "yes" : "no");
+  } else {
+    fprintf(output, "Previous revision: %s; explicit legacy scan: %s.\n",
+        plan->record.previous, plan->record.legacy ? "yes" : "no");
+  }
   fprintf(output, "Programs revision %s; %zu files, %llu payload bytes.\n",
       plan->record.revision, plan->manifest.files, (unsigned long long)plan->manifest.bytes);
   if (plan->record.updating && plan->prior.state == INSTALL_PRIOR_UNKNOWN) {
     fprintf(output, "Previous Programs report: unknown (%s); no unchanged claim.\n", plan->prior.reason);
+    for (size_t i = 0; i < plan->programs.count; i++) {
+      const char *name = plan->programs.entries[i].name;
+      size_t length = strlen(name);
+      uint64_t bytes = 0;
+      for (size_t entry = 0; entry < plan->manifest.count; entry++) {
+        const struct install_manifest_entry *record = &plan->manifest.entries[entry];
+        if (!strncmp(record->path, name, length) &&
+            (!record->path[length] || record->path[length] == '/')) {
+          bytes += record->size;
+        }
+      }
+      fputs("  unknown ", output);
+      report_name(output, name);
+      fprintf(output, "; old size unknown, new %llu bytes\n", (unsigned long long)bytes);
+    }
   } else {
     const struct install_manifest *previous = plan->record.updating ? &plan->prior.inventory : NULL;
     if (!install_manifest_report(output, previous, &plan->manifest)) {

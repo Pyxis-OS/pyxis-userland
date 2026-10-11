@@ -184,7 +184,8 @@ static void plain_observe(void *context, const struct install_progress_record *s
 void install_progress_plain_stream(handle_t clock, FILE *output)
 {
   install_progress_finish();
-  plain = (typeof(plain)){.clock = clock, .output = output, .terminal = isatty(fileno(output)), .enabled = true};
+  plain = (typeof(plain)){.clock = clock, .output = output,
+    .terminal = isatty(fileno(output)), .enabled = true};
   install_progress_bind(plain_observe, NULL);
 }
 
