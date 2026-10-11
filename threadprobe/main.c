@@ -699,6 +699,7 @@ static int supervise(bool fault, bool parking)
     status = launcher_launch(startup_resource("launcher"), &request, &child);
   }
   bool valid = status == CALL_OK;
+  uint64_t supervisor_woken = UINT64_MAX;
   struct endpoint_packet packet;
   if (valid) {
     uint64_t now, events;
@@ -722,8 +723,13 @@ static int supervise(bool fault, bool parking)
     }
     valid = status == CALL_OK && packet.kind == ENDPOINT_MESSAGE_CALL && packet.grant_count == 2;
     if (valid) {
+      if (parking) {
+        valid = thread_address_wake(threads, (uintptr_t)&parking64,
+            THREAD_ADDRESS_WORD64_BYTES, UINT64_MAX, &supervisor_woken) == CALL_OK &&
+            supervisor_woken == 0;
+      }
       status = fault ? endpoint_reply(packet.receipt, 0, NULL, 0, NULL, 0) : process_terminate(child);
-      valid = status == CALL_OK;
+      valid &= status == CALL_OK;
       if (!valid) {
         process_terminate(child);
       }
@@ -752,6 +758,10 @@ static int supervise(bool fault, bool parking)
   valid &= handle_close(endpoint.receiver) == 0;
   printf("threadprobe: process %s %s; live sibling completions STOPPED, process reclaimed (status %u)\n",
       parking ? "park-stop" : fault ? "fault" : "stop", valid ? "passed" : "failed", status);
+  if (parking) {
+    printf("threadprobe: process-key isolation %s; supervisor same-address WAKE count %llu\n",
+        valid ? "passed" : "failed", (unsigned long long)supervisor_woken);
+  }
   return valid ? 0 : 1;
 }
 

@@ -96,7 +96,10 @@ an earlier user load racing unmap can legitimately fault instead.
 `park-stop` reuses the existing process supervisor with two native parking
 siblings. Before transferring their observers, the child requires each sibling
 to have consumed an actual wake with its predicate still false. Termination must
-yield STOPPED for both siblings and TERMINATED for the process. Inspect bucket
+yield STOPPED for both siblings and TERMINATED for the process. Before stopping
+the child, the supervisor wakes its own word at the same ELF virtual address and
+requires an OK result with zero registrations, checking process-key isolation.
+The isolation result prints after child/thread completion. Inspect bucket
 and timer detachment with GDB; the probe adds no timer, output or boot automation.
 
 Siblings enter a small assembly trampoline, use native wrappers, atomics and raw
