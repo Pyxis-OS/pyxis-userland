@@ -7,9 +7,6 @@
 #include <string.h>
 #include <wchar.h>
 
-/* Declared by wchar.h when the restartable UTF-8 interface is assembled. */
-extern wint_t btowc(int character);
-
 enum length_modifier { LENGTH_INT, LENGTH_HH, LENGTH_H, LENGTH_L, LENGTH_LL,
                        LENGTH_J, LENGTH_Z, LENGTH_T, LENGTH_BIG_L };
 
@@ -26,7 +23,9 @@ struct wide_output {
 
 static int put_character(struct wide_output *out, wchar_t character)
 {
-  if (out->length >= out->capacity - 1 || out->length == INT_MAX) return EOVERFLOW;
+  if (out->length >= out->capacity - 1 || out->length == INT_MAX) {
+    return EOVERFLOW;
+  }
   out->buffer[out->length++] = character;
   return 0;
 }
@@ -36,7 +35,9 @@ static int decimal(const wchar_t **format)
   int value = 0;
   while (**format >= L'0' && **format <= L'9') {
     int digit = *(*format)++ - L'0';
-    if (value > (INT_MAX - digit) / 10) return -1;
+    if (value > (INT_MAX - digit) / 10) {
+      return -1;
+    }
     value = value * 10 + digit;
   }
   return value;
@@ -60,7 +61,9 @@ width:
   if (**format == L'*') {
     ++*format;
     spec->width = va_arg(*args, int);
-    if (spec->width == INT_MIN) return EOVERFLOW;
+    if (spec->width == INT_MIN) {
+      return EOVERFLOW;
+    }
     if (spec->width < 0) {
       spec->left = true;
       spec->width = -spec->width;
@@ -73,7 +76,9 @@ width:
     if (**format == L'*') {
       ++*format;
       spec->precision = va_arg(*args, int);
-      if (spec->precision < 0) spec->precision = -1;
+      if (spec->precision < 0) {
+        spec->precision = -1;
+      }
     } else if ((spec->precision = decimal(format)) < 0) {
       return EOVERFLOW;
     }
@@ -111,7 +116,9 @@ static char *write_decimal(char *cursor, unsigned value)
     digits[count++] = '0' + value % 10;
     value /= 10;
   } while (value);
-  while (count) *cursor++ = digits[--count];
+  while (count) {
+    *cursor++ = digits[--count];
+  }
   return cursor;
 }
 
@@ -119,12 +126,24 @@ static void numeric_format(char *buffer, const struct conversion *spec, char kin
 {
   char *cursor = buffer;
   *cursor++ = '%';
-  if (spec->left) *cursor++ = '-';
-  if (spec->plus) *cursor++ = '+';
-  if (spec->space) *cursor++ = ' ';
-  if (spec->alternate) *cursor++ = '#';
-  if (spec->zero) *cursor++ = '0';
-  if (spec->width) cursor = write_decimal(cursor, spec->width);
+  if (spec->left) {
+    *cursor++ = '-';
+  }
+  if (spec->plus) {
+    *cursor++ = '+';
+  }
+  if (spec->space) {
+    *cursor++ = ' ';
+  }
+  if (spec->alternate) {
+    *cursor++ = '#';
+  }
+  if (spec->zero) {
+    *cursor++ = '0';
+  }
+  if (spec->width) {
+    cursor = write_decimal(cursor, spec->width);
+  }
   if (spec->precision >= 0) {
     *cursor++ = '.';
     cursor = write_decimal(cursor, spec->precision);
@@ -148,13 +167,19 @@ static int consume_numeric(va_list *args, enum length_modifier length, wchar_t k
 {
   if (kind == L'f' || kind == L'F' || kind == L'e' || kind == L'E' ||
       kind == L'g' || kind == L'G' || kind == L'a' || kind == L'A') {
-    if (length == LENGTH_BIG_L) (void)va_arg(*args, long double);
-    else if (length == LENGTH_INT || length == LENGTH_L) (void)va_arg(*args, double);
-    else return EINVAL;
+    if (length == LENGTH_BIG_L) {
+      (void)va_arg(*args, long double);
+    } else if (length == LENGTH_INT || length == LENGTH_L) {
+      (void)va_arg(*args, double);
+    } else {
+      return EINVAL;
+    }
     return 0;
   }
   if (kind == L'p') {
-    if (length != LENGTH_INT) return EINVAL;
+    if (length != LENGTH_INT) {
+      return EINVAL;
+    }
     (void)va_arg(*args, void *);
     return 0;
   }
@@ -166,25 +191,40 @@ static int consume_numeric(va_list *args, enum length_modifier length, wchar_t k
     case LENGTH_HH:
     case LENGTH_H: (void)va_arg(*args, int); break;
     case LENGTH_INT:
-      if (signed_value) (void)va_arg(*args, int);
-      else (void)va_arg(*args, unsigned int);
+      if (signed_value) {
+        (void)va_arg(*args, int);
+      } else {
+        (void)va_arg(*args, unsigned int);
+      }
       break;
     case LENGTH_L:
-      if (signed_value) (void)va_arg(*args, long);
-      else (void)va_arg(*args, unsigned long);
+      if (signed_value) {
+        (void)va_arg(*args, long);
+      } else {
+        (void)va_arg(*args, unsigned long);
+      }
       break;
     case LENGTH_LL:
-      if (signed_value) (void)va_arg(*args, long long);
-      else (void)va_arg(*args, unsigned long long);
+      if (signed_value) {
+        (void)va_arg(*args, long long);
+      } else {
+        (void)va_arg(*args, unsigned long long);
+      }
       break;
     case LENGTH_J:
-      if (signed_value) (void)va_arg(*args, intmax_t);
-      else (void)va_arg(*args, uintmax_t);
+      if (signed_value) {
+        (void)va_arg(*args, intmax_t);
+      } else {
+        (void)va_arg(*args, uintmax_t);
+      }
       break;
     case LENGTH_Z:
     case LENGTH_T:
-      if (signed_value) (void)va_arg(*args, ptrdiff_t);
-      else (void)va_arg(*args, size_t);
+      if (signed_value) {
+        (void)va_arg(*args, ptrdiff_t);
+      } else {
+        (void)va_arg(*args, size_t);
+      }
       break;
     default: return EINVAL;
   }
@@ -233,7 +273,9 @@ static int numeric_conversion(struct wide_output *out, const struct conversion *
 static int string_conversion(struct wide_output *out, const struct conversion *spec,
   wchar_t kind, va_list *args)
 {
-  if (spec->length != LENGTH_INT && spec->length != LENGTH_L) return EINVAL;
+  if (spec->length != LENGTH_INT && spec->length != LENGTH_L) {
+    return EINVAL;
+  }
   wchar_t character;
   const wchar_t *wide = NULL;
   const char *narrow = NULL;
@@ -243,22 +285,33 @@ static int string_conversion(struct wide_output *out, const struct conversion *s
       character = (wchar_t)va_arg(*args, wint_t);
     } else {
       wint_t converted = btowc(va_arg(*args, int));
-      if (converted == WEOF) return EILSEQ;
+      if (converted == WEOF) {
+        return EILSEQ;
+      }
       character = (wchar_t)converted;
     }
     wide = &character;
     count = 1;
   } else {
-    if (spec->length == LENGTH_L) wide = va_arg(*args, const wchar_t *);
-    else narrow = va_arg(*args, const char *);
+    if (spec->length == LENGTH_L) {
+      wide = va_arg(*args, const wchar_t *);
+    } else {
+      narrow = va_arg(*args, const char *);
+    }
     const char *cursor = narrow;
     while (spec->precision < 0 || count < (size_t)spec->precision) {
-      if (wide ? !wide[count] : !*cursor) break;
+      if (wide ? !wide[count] : !*cursor) {
+        break;
+      }
       if (count >= out->capacity - out->length - 1 ||
-          count >= (size_t)INT_MAX - out->length) return EOVERFLOW;
+          count >= (size_t)INT_MAX - out->length) {
+        return EOVERFLOW;
+      }
       if (narrow) {
         int bytes = mbtowc(NULL, cursor, strnlen(cursor, MB_CUR_MAX));
-        if (bytes < 0) return EILSEQ;
+        if (bytes < 0) {
+          return EILSEQ;
+        }
         cursor += bytes;
       }
       ++count;
@@ -266,23 +319,32 @@ static int string_conversion(struct wide_output *out, const struct conversion *s
   }
   size_t total = (size_t)spec->width > count ? (size_t)spec->width : count;
   if (total >= out->capacity - out->length ||
-      total > (size_t)INT_MAX - out->length) return EOVERFLOW;
+      total > (size_t)INT_MAX - out->length) {
+    return EOVERFLOW;
+  }
   size_t padding = total - count;
   if (!spec->left) {
-    for (size_t index = 0; index < padding; ++index) out->buffer[out->length++] = L' ';
+    for (size_t index = 0; index < padding; ++index) {
+      out->buffer[out->length++] = L' ';
+    }
   }
   for (size_t index = 0; index < count; ++index) {
     wchar_t value;
-    if (wide) value = wide[index];
-    else {
+    if (wide) {
+      value = wide[index];
+    } else {
       int bytes = mbtowc(&value, narrow, strnlen(narrow, MB_CUR_MAX));
-      if (bytes < 0) return EILSEQ;
+      if (bytes < 0) {
+        return EILSEQ;
+      }
       narrow += bytes;
     }
     out->buffer[out->length++] = value;
   }
   if (spec->left) {
-    for (size_t index = 0; index < padding; ++index) out->buffer[out->length++] = L' ';
+    for (size_t index = 0; index < padding; ++index) {
+      out->buffer[out->length++] = L' ';
+    }
   }
   return 0;
 }
@@ -317,7 +379,9 @@ int vswprintf(wchar_t *restrict buffer, size_t capacity,
       } else {
         error = numeric_conversion(&out, &spec, *cursor, &copy);
       }
-      if (*cursor) ++cursor;
+      if (*cursor) {
+        ++cursor;
+      }
     }
   }
   va_end(copy);
