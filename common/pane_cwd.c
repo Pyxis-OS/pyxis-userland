@@ -199,7 +199,11 @@ void pane_cwd_provider_serve(void *context)
     return;
   }
   struct endpoint_packet packet = {0};
-  if (receive_ready(provider->receiver, 0, &packet) != CALL_OK) {
+  enum call_status ready = receive_ready(provider->receiver, 0, &packet);
+  if (ready != CALL_OK) {
+    if (ready != CALL_WOULD_BLOCK) {
+      pane_cwd_provider_close(provider);
+    }
     return;
   }
   struct pane_cwd_request begin;

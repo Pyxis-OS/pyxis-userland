@@ -1,4 +1,5 @@
 #include "mux.h"
+#include "../common/pane_cwd.h"
 #include <clock.h>
 #include <handle.h>
 #include <launcher.h>
@@ -65,7 +66,8 @@ static enum call_status place(struct mux *mux)
   return CALL_OK;
 }
 
-static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect)
+static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect,
+    const struct pyxis_working_snapshot *cwd)
 {
   struct mux_pane *pane = &mux->panes[slot];
   size_t width = pane_columns(rect), height = pane_rows(rect);
@@ -74,7 +76,7 @@ static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect)
     return false;
   }
   mux_emulator_set_tab_width(&pane->emulator, mux->tab_width);
-  enum call_status status = mux_session_start(width, height, mux->tab_width, &pane->session);
+  enum call_status status = mux_session_start(width, height, mux->tab_width, cwd, &pane->session);
   if (status != CALL_OK) {
     mux_emulator_destroy(&pane->emulator);
     snprintf(mux->notice, sizeof(mux->notice), "Cannot start pane (status %u)", status);
@@ -103,7 +105,22 @@ static void split(struct mux *mux, enum mux_axis axis)
     notice(mux, "Not enough room for 12 columns and 4 content rows per pane");
     return;
   }
-  if (start_pane(mux, slot, rectangles[slot])) {
+  struct pyxis_working_snapshot cwd = {0};
+  struct mux_pane *source = &mux->panes[mux->focused];
+  bool inherited = false;
+  if (!source->root_done && !source->remove_when_done) {
+    struct mux_session *session = &source->session;
+    if (session->cwd_caller == HANDLE_INVALID && session->cwd_bootstrap != HANDLE_INVALID) {
+      pane_cwd_receive_service(session->cwd_bootstrap, &session->cwd_caller);
+    }
+    if (session->cwd_caller != HANDLE_INVALID) {
+      inherited = pane_cwd_snapshot(startup_resource("service"), session->cwd_caller,
+          mux->clock, &cwd) == CALL_OK;
+    }
+  }
+  bool started = start_pane(mux, slot, rectangles[slot], inherited ? &cwd : NULL);
+  pyxis_working_snapshot_close(&cwd);
+  if (started) {
     mux->layout = next;
     mux->focused = slot;
     mux->notice[0] = 0;
@@ -139,6 +156,25 @@ static void dismiss(struct mux *mux, unsigned slot)
   mux->error = place(mux);
 }
 
+static void focus_pane(struct mux *mux, unsigned selected)
+{
+  if (selected >= MUX_PANES || !mux->panes[selected].used || selected == mux->focused) {
+    return;
+  }
+  if (mux->pointer_owned) {
+    mux->error = terminal_pointer_cancel_clipboard(mux->pointer);
+    if (mux->error != CALL_OK) {
+      return;
+    }
+  }
+  mux->focused = selected;
+  if (mux->collapsed) {
+    mux->error = place(mux);
+  } else {
+    mux->dirty = true;
+  }
+}
+
 static void focus(struct mux *mux, enum mux_axis axis, bool forward)
 {
   int selected = mux_layout_neighbor(mux->rectangles, (int)mux->focused, axis, forward);
@@ -152,24 +188,19 @@ static void focus(struct mux *mux, enum mux_axis axis, bool forward)
       }
     }
   }
-  if (mux->focused != (unsigned)selected && mux->pointer_owned) {
-    mux->error = terminal_pointer_cancel_clipboard(mux->pointer);
-    if (mux->error != CALL_OK) {
-      return;
-    }
-  }
-  mux->focused = (unsigned)selected;
-  if (mux->collapsed) {
-    mux->error = place(mux);
-  } else {
-    mux->dirty = true;
-  }
+  focus_pane(mux, (unsigned)selected);
 }
 
 static void command(struct mux *mux, unsigned key)
 {
   struct mux_pane *pane = &mux->panes[mux->focused];
   mux->dirty = true;
+  if (key >= '0' && key <= '9') {
+    if (key >= '1' && key <= '8') {
+      focus_pane(mux, key - '1');
+    }
+    return;
+  }
   if (pane->browsing) {
     if (key != 27 && key != 'q' && key != TERM_KEY_PAGE_UP && key != TERM_KEY_UP &&
         key != TERM_KEY_PAGE_DOWN && key != TERM_KEY_DOWN && key != TERM_KEY_HOME &&
@@ -650,7 +681,7 @@ int main(int argc, char **argv)
   if (!initial.height) {
     initial.height = 1;
   }
-  if (status != CALL_OK || !start_pane(&mux, 0, initial)) {
+  if (status != CALL_OK || !start_pane(&mux, 0, initial, NULL)) {
     if (mux.pointer_owned) {
       terminal_pointer_release(mux.pointer);
     }

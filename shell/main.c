@@ -4,6 +4,7 @@
 #include <abi/console.h>
 #include "../common/directory.h"
 #include "../common/session_wait.h"
+#include "../common/pane_cwd.h"
 #include <startup.h>
 #include <handle.h>
 #include <terminal.h>
@@ -11,7 +12,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-static struct term_line_result read_command(struct shell *shell, char *line)
+struct shell_cwd_service {
+  struct pane_cwd_provider provider;
+  struct term_line_service line;
+};
+
+static void serve_cwd(void *context)
+{
+  struct shell_cwd_service *service = context;
+  pane_cwd_provider_serve(&service->provider);
+  service->line.receiver = service->provider.receiver;
+}
+
+static struct term_line_result read_command(struct shell *shell, char *line,
+    struct term_line_service *service)
 {
   size_t columns, rows;
   enum call_status status = term_size(&shell->terminal, &columns, &rows);
@@ -46,11 +60,17 @@ static struct term_line_result read_command(struct shell *shell, char *line)
     prompt[used++] = byte >= ' ' && byte <= '~' ? byte : '?';
   }
   memcpy(prompt + used, "> ", 3);
+  const struct term_completion completion = {shell_complete, shell};
+  if (service->receiver != HANDLE_INVALID) {
+    return term_read_line_servicing(&shell->terminal, prompt,
+        shell->quiet_input ? NULL : &shell->history,
+        shell->quiet_input ? NULL : &completion, shell->remote_prompt,
+        shell->quiet_input, service, line, SHELL_LINE_CAPACITY);
+  }
   /* The quiet editor still measures the prompt, preserving the line limit. */
   if (shell->quiet_input) {
     return term_read_line_quiet(&shell->terminal, prompt, line, SHELL_LINE_CAPACITY);
   }
-  const struct term_completion completion = {shell_complete, shell};
   return term_read_line_completing(&shell->terminal, prompt, &shell->history, &completion,
       shell->remote_prompt, line, SHELL_LINE_CAPACITY);
 }
@@ -142,6 +162,7 @@ int main(int argc, char **argv)
       (input_rights & CONSOLE_RIGHT_INTERRUPT);
 
   int result = EXIT_FAILURE;
+  struct shell_cwd_service cwd_service = {0};
   char *line = malloc(script != HANDLE_INVALID ? SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
   char **arguments = malloc(SHELL_LINE_CAPACITY * sizeof(*arguments));
   if (!line || !arguments) {
@@ -177,9 +198,17 @@ int main(int argc, char **argv)
   if (!quiet_input) {
     shell_history_load(&shell);
   }
+  handle_t cwd_bootstrap = startup_resource("pane_cwd");
+  if (cwd_bootstrap != HANDLE_INVALID) {
+    pane_cwd_provider_init(&cwd_service.provider, shell.service, cwd_bootstrap, shell.clock);
+    handle_close(cwd_bootstrap);
+    cwd_service.line = (struct term_line_service){
+      .receiver = cwd_service.provider.receiver, .ready = serve_cwd, .context = &cwd_service,
+    };
+  }
 
   for (;;) {
-    struct term_line_result read = read_command(&shell, line);
+    struct term_line_result read = read_command(&shell, line, &cwd_service.line);
     if (read.status == TERM_LINE_EOF) {
       result = EXIT_SUCCESS;
       break;
@@ -233,6 +262,7 @@ int main(int argc, char **argv)
   }
 
 done:
+  pane_cwd_provider_close(&cwd_service.provider);
   if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
     result = EXIT_FAILURE;
   }

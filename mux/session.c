@@ -26,6 +26,7 @@
 #include <abi/udp.h>
 #include <console.h>
 #include <directory.h>
+#include <endpoint.h>
 #include <handle.h>
 #include <launcher.h>
 #include <startup.h>
@@ -39,6 +40,12 @@ static enum call_status copy_grant(handle_t source, struct launch_grant *grant)
 
 void mux_session_release(struct mux_session *session)
 {
+  if (session->cwd_caller != HANDLE_INVALID) {
+    handle_close(session->cwd_caller);
+  }
+  if (session->cwd_bootstrap != HANDLE_INVALID) {
+    handle_close(session->cwd_bootstrap);
+  }
   if (session->group != HANDLE_INVALID) {
     execution_group_terminate(session->group);
   }
@@ -55,7 +62,7 @@ void mux_session_release(struct mux_session *session)
 }
 
 enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_width,
-    struct mux_session *session)
+    const struct pyxis_working_snapshot *cwd, struct mux_session *session)
 {
   *session = (struct mux_session){0};
   size_t root_count = startup_root_count();
@@ -64,9 +71,12 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   if (status != CALL_OK) {
     return status;
   }
+  if (cwd) {
+    context = &cwd->context;
+  }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 23, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 24, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
@@ -84,6 +94,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   struct pyxis_environment_snapshot environment = {0};
   struct terminal_create_reply terminal = {0};
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
+  struct endpoint_create_reply bootstrap = {0};
   status = terminal_create(startup_resource("terminal"), columns, rows,
       &terminal);
   if (status != CALL_OK) {
@@ -123,6 +134,12 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
+  if (startup_resource("service") != HANDLE_INVALID &&
+      endpoint_create(startup_resource("service"), &bootstrap) == CALL_OK) {
+    session->cwd_bootstrap = bootstrap.receiver;
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pane_cwd", grant_count};
+    grants[grant_count++] = (struct launch_grant){bootstrap.caller, 0, HANDLE_TRANSPORT_SEND};
+  }
   handle_t child_launcher = startup_resource("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
     struct handle_info info;
@@ -202,7 +219,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     .resources = (uintptr_t)resources, .resource_count = resource_count,
     .roots = (uintptr_t)roots, .root_count = root_count,
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
-    .working_path = (uintptr_t)pyxis_working_path(),
+    .working_path = (uintptr_t)(cwd ? cwd->path : pyxis_working_path()),
     .environment = (uintptr_t)environment.variables,
     .environment_count = environment.count,
     .argv = (uintptr_t)arguments, .argc = 1,
@@ -220,6 +237,9 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   status = launcher_launch(bound, &request, &session->process);
 
 done:
+  if (bootstrap.caller != HANDLE_INVALID) {
+    handle_close(bootstrap.caller);
+  }
   pyxis_environment_snapshot_close(&environment);
   if (image != HANDLE_INVALID) {
     handle_close(image);
