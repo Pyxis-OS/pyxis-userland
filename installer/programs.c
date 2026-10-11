@@ -1,6 +1,6 @@
 #include "installer.h"
+#include "progress.h"
 
-#include <clock.h>
 #include <directory.h>
 #include <file.h>
 #include <handle.h>
@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define PROGRAM_SUFFIX ".pxe"
 #define BUNDLE_SUFFIX ".pxb"
@@ -25,53 +24,6 @@
 /* One file call each way per chunk. */
 #define COPY_BYTES (FILE_READ_MAX_BYTES < FILE_WRITE_MAX_BYTES ? FILE_READ_MAX_BYTES : \
     FILE_WRITE_MAX_BYTES)
-
-/* One installer copy stage owns this display state. Observation failure never
- * changes the copy result; no filesystem sync is implied by the counters. */
-static struct {
-  handle_t clock;
-  uint64_t bytes, last_ns;
-  size_t files, total;
-  bool terminal, active, enabled, total_known;
-} progress;
-
-void install_progress_end(void)
-{
-  if (progress.active) {
-    putchar('\n');
-    progress.active = false;
-  }
-}
-
-static void progress_show(bool final)
-{
-  uint64_t now;
-  if (!progress.enabled) {
-    return;
-  }
-  if (clock_now(progress.clock, &now) != CALL_OK) {
-    install_progress_end();
-    progress.enabled = false;
-    return;
-  }
-  uint64_t interval = progress.terminal ? UINT64_C(250000000) : UINT64_C(1000000000);
-  if (!final && now - progress.last_ns < interval) {
-    return;
-  }
-  progress.last_ns = now;
-  const char *prefix = progress.terminal ? "\r" : "";
-  const char *suffix = progress.terminal ? "" : "\n";
-  unsigned long long mib = progress.bytes / INSTALL_MIB;
-  int result = progress.total_known ?
-      printf("%sbin://: %zu/%zu files, %llu MiB%s", prefix, progress.files,
-          progress.total, mib, suffix) :
-      printf("%sbin://: %zu files, %llu MiB%s", prefix, progress.files, mib, suffix);
-  progress.active = progress.terminal;
-  if (result < 0) {
-    progress.enabled = false;
-    install_progress_end();
-  }
-}
 
 static bool add_name(char ***names, size_t *count, const char *name)
 {
@@ -153,14 +105,14 @@ static bool read_entry(handle_t directory, const struct directory_cursor *cursor
 {
   enum call_status status = directory_enumerate(directory, cursor, name, TREE_NAME_BYTES, entry);
   if (status != CALL_OK) {
-    install_progress_end();
+    install_progress_pause();
     fprintf(stderr, "installer: cannot enumerate program directory (status %u)\n", status);
     return false;
   }
   if (entry->outcome == DIRECTORY_ENTRY || entry->outcome == DIRECTORY_END) {
     return true;
   }
-  install_progress_end();
+  install_progress_pause();
   if (entry->outcome == DIRECTORY_BUFFER_TOO_SMALL) {
     fprintf(stderr, "installer: program entry name exceeds %u bytes\n", NPFS_NAME_MAX);
   } else if (entry->outcome == DIRECTORY_CHANGED) {
@@ -178,6 +130,7 @@ static char *read_text(handle_t file)
   if (file_size(file, &size) != CALL_OK || size > 64 * 1024) {
     return NULL;
   }
+  install_progress_bytes_total(size);
   char *text = malloc(size + 1);
   struct install_source source = {.handle = file, .bytes = size};
   if (!text || !install_source_read(&source, 0, text, size)) {
@@ -190,6 +143,7 @@ static char *read_text(handle_t file)
 
 static bool read_rescue_list(handle_t boot, char ***names, size_t *count)
 {
+  install_progress_begin("Reading rescue program list", INSTALL_PROGRESS_SOURCE_READ, NULL);
   handle_t share = HANDLE_INVALID, installer = HANDLE_INVALID, list = HANDLE_INVALID;
   char *text = NULL;
   bool ok = directory_lookup(boot, "share", DIRECTORY_KIND_DIRECTORY,
@@ -210,12 +164,16 @@ static bool read_rescue_list(handle_t boot, char ***names, size_t *count)
     line = end ? end + 1 : NULL;
   }
   free(text);
+  install_progress_begin("Closing rescue list handles", INSTALL_PROGRESS_NONE, "handles");
   const handle_t handles[] = {list, installer, share};
   for (size_t i = 0; i < sizeof(handles) / sizeof(handles[0]); ++i) {
     if (handles[i] != HANDLE_INVALID) {
-      handle_close(handles[i]);
+      if (handle_close(handles[i]) == 0) {
+        install_progress_advance(0, 1);
+      }
     }
   }
+  install_progress_finish();
   return ok;
 }
 
@@ -225,6 +183,9 @@ bool install_programs_list(handle_t boot, struct install_programs *programs)
   char **rescue = NULL;
   size_t rescue_count = 0;
   bool ok = read_rescue_list(boot, &rescue, &rescue_count);
+  if (ok) {
+    install_progress_begin("Inventorying source program roots", INSTALL_PROGRESS_NONE, "entries");
+  }
   char name[TREE_NAME_BYTES];
   size_t entries = 0;
   struct directory_cursor cursor = {0};
@@ -239,6 +200,7 @@ bool install_programs_list(handle_t boot, struct install_programs *programs)
       ok = false;
       break;
     }
+    install_progress_advance(0, 1);
     bool program = entry.kind == DIRECTORY_KIND_FILE && has_suffix(name, PROGRAM_SUFFIX) &&
         !listed(rescue, rescue_count, name);
     bool bundle = entry.kind == DIRECTORY_KIND_DIRECTORY && has_suffix(name, BUNDLE_SUFFIX);
@@ -248,6 +210,7 @@ bool install_programs_list(handle_t boot, struct install_programs *programs)
     ok = add_program(programs, name, entry.kind);
   }
   free_names(rescue, rescue_count);
+  install_progress_finish();
   if (!ok) {
     install_programs_destroy(programs);
     return false;
@@ -302,8 +265,11 @@ static bool program_path(const struct install_programs *programs, const char *pa
 bool install_archive_filter(const struct install_source *archive,
     struct install_programs *programs, struct install_source *rescue)
 {
+  install_progress_begin("Reading source boot archive", INSTALL_PROGRESS_SOURCE_READ, NULL);
+  install_progress_bytes_total(archive->bytes);
   *rescue = (struct install_source){.handle = HANDLE_INVALID};
   if (archive->bytes > SIZE_MAX) {
+    install_progress_finish();
     return false;
   }
   size_t size = (size_t)archive->bytes;
@@ -311,6 +277,7 @@ bool install_archive_filter(const struct install_source *archive,
   if (!input || !output || !install_source_read(archive, 0, input, size)) {
     goto fail;
   }
+  install_progress_begin("Filtering rescue boot archive", INSTALL_PROGRESS_WORK, "records");
   /* newc: each record is a 110-byte header, its name padded to four bytes
    * with the header, then its data padded to four bytes. */
   size_t used = 0, files = 0;
@@ -347,6 +314,7 @@ bool install_archive_filter(const struct install_source *archive,
       memcpy(output + used, input + offset, next - offset);
       used += next - offset;
     }
+    install_progress_advance(next - offset, 1);
     offset = next;
     if (trailer) {
       break;
@@ -357,12 +325,15 @@ bool install_archive_filter(const struct install_source *archive,
   rescue->bytes = used;
   programs->files = files;
   programs->files_known = files_known;
+  install_progress_finish();
   return true;
 
 fail:
+  install_progress_pause();
   fputs("installer: the boot archive is not a valid newc archive\n", stderr);
   free(input);
   free(output);
+  install_progress_finish();
   return false;
 }
 
@@ -402,6 +373,9 @@ static bool clear_directory(handle_t directory)
       --depth;
       ok = directory_remove(levels[depth].target, level->name,
           DIRECTORY_KIND_DIRECTORY) == CALL_OK;
+      if (ok) {
+        install_progress_advance(0, 1);
+      }
       continue;
     }
     if (++entries > TREE_MAX_ENTRIES) {
@@ -410,6 +384,9 @@ static bool clear_directory(handle_t directory)
     }
     if (entry.kind == DIRECTORY_KIND_FILE) {
       ok = directory_remove(level->target, name, DIRECTORY_KIND_FILE) == CALL_OK;
+      if (ok) {
+        install_progress_advance(0, 1);
+      }
     } else if (entry.kind == DIRECTORY_KIND_DIRECTORY && depth < TREE_MAX_DEPTH) {
       handle_t child = HANDLE_INVALID;
       ok = directory_lookup(level->target, name, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS,
@@ -427,6 +404,7 @@ static bool clear_directory(handle_t directory)
     handle_close(levels[depth--].target);
   }
   if (!ok) {
+    install_progress_pause();
     fputs("installer: cannot clear program tree within traversal limits\n", stderr);
   }
   free(levels);
@@ -447,14 +425,12 @@ static bool copy_program(handle_t boot, handle_t directory, const char *name, ui
     ok = install_source_read(&from, offset, buffer, length) &&
         file_write(target, offset, buffer, length, &written) == CALL_OK && written == length;
     if (ok) {
-      progress.bytes += written;
-      progress_show(false);
+      install_progress_advance(written, 0);
     }
     offset += length;
   }
   if (ok) {
-    ++progress.files;
-    progress_show(false);
+    install_progress_advance(0, 1);
   }
   if (source != HANDLE_INVALID) {
     handle_close(source);
@@ -463,7 +439,7 @@ static bool copy_program(handle_t boot, handle_t directory, const char *name, ui
     handle_close(target);
   }
   if (!ok) {
-    install_progress_end();
+    install_progress_pause();
     fprintf(stderr, "installer: cannot copy %s into the bin volume\n", name);
   }
   return ok;
@@ -486,7 +462,13 @@ static bool verify_program(handle_t boot, handle_t directory, const char *name,
     size_t length = size - offset < COPY_BYTES ? (size_t)(size - offset) : COPY_BYTES;
     ok = install_source_read(&from, offset, expected, length) &&
         install_source_read(&to, offset, actual, length) && !memcmp(expected, actual, length);
+    if (ok) {
+      install_progress_advance(length, 0);
+    }
     offset += length;
+  }
+  if (ok) {
+    install_progress_advance(0, 1);
   }
   if (source != HANDLE_INVALID) {
     handle_close(source);
@@ -495,6 +477,7 @@ static bool verify_program(handle_t boot, handle_t directory, const char *name,
     handle_close(target);
   }
   if (!ok) {
+    install_progress_pause();
     fprintf(stderr, "installer: bin://%s does not match its source\n", name);
   }
   return ok;
@@ -545,6 +528,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
     }
     if (entry.outcome == DIRECTORY_END) {
       if (verify && !verify_entry_count(level->target, level->entries)) {
+        install_progress_pause();
         fputs("installer: installed program directory has missing or extra entries\n", stderr);
         ok = false;
         break;
@@ -571,7 +555,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
       ++root_entries;
     }
     if (++entries > TREE_MAX_ENTRIES) {
-      install_progress_end();
+      install_progress_pause();
       fputs("installer: program trees exceed the entry limit\n", stderr);
       ok = false;
       break;
@@ -583,7 +567,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
           copy_program(level->source, level->target, name, buffers);
     } else if (entry.kind == DIRECTORY_KIND_DIRECTORY) {
       if (depth == TREE_MAX_DEPTH) {
-        install_progress_end();
+        install_progress_pause();
         fputs("installer: program tree exceeds the directory depth limit\n", stderr);
         ok = false;
         break;
@@ -598,7 +582,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
               BIN_RIGHTS, &target)) == CALL_OK;
       }
       if (!ok) {
-        install_progress_end();
+        install_progress_pause();
         fprintf(stderr, "installer: cannot %s program directory %s\n",
             verify ? "verify" : "copy", name);
         if (source != HANDLE_INVALID) {
@@ -610,7 +594,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
       levels[depth] = (struct tree_level){.source = source, .target = target};
       strcpy(levels[depth].name, name);
     } else {
-      install_progress_end();
+      install_progress_pause();
       fprintf(stderr, "installer: unsupported program entry kind for %s\n", name);
       ok = false;
     }
@@ -622,7 +606,7 @@ static bool walk_programs(handle_t boot, handle_t directory,
   }
   free(levels);
   if (!ok) {
-    install_progress_end();
+    install_progress_pause();
     fprintf(stderr, "installer: cannot %s complete program trees in the bin volume\n",
         verify ? "verify" : "copy");
   }
@@ -634,61 +618,74 @@ static enum call_status open_bin(const struct install_disk *disk, handle_t *root
   enum call_status status = disk_create_volume(disk->handle, INSTALL_POOL_PARTITION,
       INSTALL_BIN_VOLUME);
   if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
+    install_progress_pause();
     fprintf(stderr, "installer: cannot create the bin volume (status %u)\n", status);
     return status;
   }
   status = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION, INSTALL_BIN_VOLUME,
       BIN_RIGHTS, root);
   if (status != CALL_OK) {
+    install_progress_pause();
     fprintf(stderr, "installer: cannot open the bin volume (status %u)\n", status);
   }
   return status;
 }
 
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
-    const struct install_programs *programs, const char *revision, handle_t clock)
+    const struct install_programs *programs, const char *revision)
 {
   handle_t root = HANDLE_INVALID, directory = HANDLE_INVALID;
-  progress = (typeof(progress)){.clock = clock, .terminal = isatty(STDOUT_FILENO),
-    .enabled = true, .total = programs->files, .total_known = programs->files_known};
-  progress.enabled = clock_now(clock, &progress.last_ns) == CALL_OK;
-  puts("Preparing bin revision directory...");
+  install_progress_begin("Opening program volume", INSTALL_PROGRESS_NONE, NULL);
   uint8_t *buffers = malloc(2 * COPY_BYTES);
   enum call_status status = buffers ? open_bin(disk, &root) : CALL_NO_MEMORY;
   if (status == CALL_OK) {
+    install_progress_begin("Preparing bin revision directory", INSTALL_PROGRESS_NONE, NULL);
     status = directory_create(root, revision, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS, &directory);
     /* A rerun after an interrupted program stage rewrites the directory. */
     if (status == CALL_ALREADY_EXISTS) {
       status = directory_lookup(root, revision, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS,
           &directory);
-      if (status == CALL_OK && !clear_directory(directory)) {
-        status = CALL_IO;
+      if (status == CALL_OK) {
+        install_progress_begin("Removing interrupted program revision entries",
+            INSTALL_PROGRESS_NONE, "entries");
+        if (!clear_directory(directory)) {
+          status = CALL_IO;
+        }
       }
     }
   }
   bool ok = status == CALL_OK;
   if (!ok) {
+    install_progress_pause();
     fprintf(stderr, "installer: cannot prepare bin://%s (status %u)\n", revision, status);
   }
   if (ok) {
-    ok = walk_programs(boot, directory, programs, buffers, false);
-    if (ok) {
-      progress_show(true);
+    install_progress_begin("Copying programs to bin", INSTALL_PROGRESS_WORK, "files");
+    if (programs->files_known) {
+      install_progress_items_total(programs->files);
     }
-    install_progress_end();
-    progress.enabled = false;
+    ok = walk_programs(boot, directory, programs, buffers, false);
+    install_progress_finish();
   }
   if (ok) {
-    puts("Flushing program pool...");
+    install_progress_begin("Flushing program pool", INSTALL_PROGRESS_NONE, NULL);
     status = directory_sync(directory);
     ok = status == CALL_OK;
     if (!ok) {
+      install_progress_pause();
       fprintf(stderr, "installer: bin volume sync failed (status %u)\n", status);
     }
   }
   if (ok) {
-    puts("Verifying copied programs...");
+    install_progress_begin("Verifying copied programs", INSTALL_PROGRESS_WORK, "files");
+    if (programs->files_known) {
+      install_progress_items_total(programs->files);
+    }
     ok = walk_programs(boot, directory, programs, buffers, true);
+  }
+  install_progress_finish();
+  if (directory != HANDLE_INVALID || root != HANDLE_INVALID) {
+    install_progress_begin("Closing program directory handles", INSTALL_PROGRESS_NONE, NULL);
   }
   if (directory != HANDLE_INVALID) {
     handle_close(directory);
@@ -697,17 +694,23 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
     handle_close(root);
   }
   free(buffers);
+  install_progress_finish();
   return ok;
 }
 
 bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
     const char *previous)
 {
+  install_progress_begin("Opening program volume for cleanup", INSTALL_PROGRESS_NONE, NULL);
   handle_t root = HANDLE_INVALID;
   size_t entries = 0;
   bool changed = false;
   bool ok = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION,
       INSTALL_BIN_VOLUME, BIN_RIGHTS, &root) == CALL_OK;
+  if (ok) {
+    install_progress_begin("Removing older program revision entries",
+        INSTALL_PROGRESS_NONE, "entries");
+  }
   struct directory_cursor cursor = {0};
   while (ok) {
     char name[TREE_NAME_BYTES];
@@ -734,15 +737,21 @@ bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
     ok = ok && directory_remove(root, name, DIRECTORY_KIND_DIRECTORY) == CALL_OK;
     if (ok) {
       changed = true;
+      install_progress_advance(0, 1);
+      install_progress_pause();
       printf("Removed old programs bin://%s\n", name);
       cursor = (struct directory_cursor){0};
     }
   }
   if (ok && changed) {
+    install_progress_begin("Flushing program cleanup", INSTALL_PROGRESS_NONE, NULL);
     ok = directory_sync(root) == CALL_OK;
   }
+  install_progress_finish();
   if (root != HANDLE_INVALID) {
+    install_progress_begin("Closing program cleanup directory", INSTALL_PROGRESS_NONE, NULL);
     handle_close(root);
   }
+  install_progress_finish();
   return ok;
 }

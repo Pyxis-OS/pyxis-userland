@@ -25,18 +25,25 @@ another disk refuse the candidate. The live revision comes from SYSTEM_INFO.
 This checks opening compatibility and available boot identity, not whole-pool
 integrity or complete bootability.
 
-During program copying, `bin://` progress reports completed files (including
-bundle descendants) and successfully written MiB. Console output redraws one
-row at most four times per second; other output uses newline records at most
-once per second. A final record closes the stage. Separate phase messages
-announce pool flush, copy verification and EFI replacement/flush/publication.
-Progress is best-effort and is not a durability or success indication.
+Program preparation reports rescue-list/archive source bytes, enumerated source
+root entries and parsed archive records. Filtering counts complete record bytes,
+including record padding and the trailer, without counting trailing archive
+padding or claiming a byte total. Copy reports successfully written file bytes
+and completed files; verification counts successfully compared payload bytes
+once and matched files. Both include bundle descendants and use the existing
+archive pass's file total when known, without another tree scan. Recursive
+removal counts deleted files and directories. Phase lines cover volume opening,
+revision preparation, pool sync and final directory-handle closing. Progress
+is best-effort and does not establish durability or success.
 
 Root `.pxb` directories move as complete program units to `bin/REVISION`,
 beside root `.pxe` files outside `share/installer/rescue.list`. Copy preserves
 empty directories and uses bounded file buffers. After pool sync, verification
 checks names, kinds, directory structure, file sizes and bytes, rejecting missing
-or extra entries. The rescue archive excludes each selected root and its
+or extra entries. These are ordinary filesystem reads and may use cached copied
+bytes; they do not guarantee fresh device read-back. ESP verification separately
+reads the authored FAT metadata and boot files through raw disk reads after
+flush and release. The rescue archive excludes each selected root and its
 descendants using component boundaries. Other archive contents stay packaged.
 Installer traversal settings allow 32 directory levels below the revision root,
 65536 entries per traversal and native destination names of at most 255 bytes.
