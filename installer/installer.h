@@ -1,11 +1,12 @@
 #ifndef USERSPACE_INSTALLER_H
 #define USERSPACE_INSTALLER_H
 
+#include "progress.h"
+
 #include <disk.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "progress.h"
 
 #define INSTALL_MIB UINT64_C(1048576)
 #define INSTALL_ESP_BYTES (UINT64_C(512) * INSTALL_MIB)
@@ -123,6 +124,7 @@ struct install_programs {
   struct install_program *entries;
   size_t count;
   size_t files;
+  uint64_t bytes;
   bool files_known;
 };
 bool install_programs_list(handle_t boot, struct install_programs *programs);

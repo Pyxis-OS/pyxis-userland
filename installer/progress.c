@@ -58,6 +58,7 @@ void install_progress_bytes_total(uint64_t total)
   if (measuring) {
     record.total_bytes = total;
     record.total_bytes_known = true;
+    emit(INSTALL_PROGRESS_UPDATE);
   }
 }
 
@@ -66,6 +67,7 @@ void install_progress_items_total(uint64_t total)
   if (measuring) {
     record.total_items = total;
     record.total_items_known = true;
+    emit(INSTALL_PROGRESS_UPDATE);
   }
 }
 
