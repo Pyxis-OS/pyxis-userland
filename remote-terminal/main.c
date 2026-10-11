@@ -16,6 +16,10 @@
 #include <abi/execution_group.h>
 
 #define CLIENT_LIMIT 4
+#define MUX_CLIENT_LIMIT 2
+
+static_assert(CLIENT_LIMIT * 3 + 1 + MUX_CLIENT_LIMIT * (PANE_BROKER_PANES + 1) <=
+    WAIT_MAX_INTERESTS, "remote streams, terminals, lifecycle and pane brokers fit one wait");
 #define MUX_CONNECTION_LIMIT 2
 #define CLIENT_WAIT_LIMIT (CLIENT_LIMIT * 3 + 1 + MUX_CONNECTION_LIMIT * (PANE_BROKER_PANES + 1))
 static_assert(CLIENT_WAIT_LIMIT <= WAIT_MAX_INTERESTS);
