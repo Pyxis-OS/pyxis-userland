@@ -82,6 +82,7 @@ float powf(float base, float exponent);
 /* Round to an integral value in the current rounding mode (round to nearest,
  * ties to even, by default). The long forms are unspecified when the result
  * doesn't fit, as in C. */
+double rint(double value);
 float rintf(float value);
 long lrint(double value);
 long lrintf(float value);
