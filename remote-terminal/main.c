@@ -45,6 +45,8 @@ struct client {
   struct remote_shell shell;
   struct remote_broker *broker;
   bool ready;
+  bool resize_enabled;
+  bool initial_geometry_pending;
   bool closing;
   bool group_complete;
   bool shell_ready;
@@ -57,6 +59,9 @@ struct client {
   uint32_t error;
   struct process_result result;
   uint64_t deadline;
+  uint64_t resize_id;
+  uint32_t initial_columns;
+  uint32_t initial_rows;
   unsigned char input[FRAME_SIZE];
   size_t received;
   size_t injected;
@@ -97,6 +102,28 @@ static void queue_frame(struct client *client, uint32_t type, const void *data, 
   client->output_type = type;
 }
 
+static void queue_geometry(struct client *client, uint64_t id, uint32_t columns,
+    uint32_t rows)
+{
+  unsigned char payload[REMOTE_GEOMETRY_SIZE];
+  remote_encode_u64(payload, id);
+  remote_encode_u32(payload + 8, columns);
+  remote_encode_u32(payload + 12, rows);
+  queue_frame(client, REMOTE_GEOMETRY, payload, sizeof(payload));
+}
+
+static bool input_frame_pending(const struct client *client)
+{
+  return client->received >= REMOTE_HEADER_SIZE &&
+      client->received == REMOTE_HEADER_SIZE + remote_decode_u32(client->input + 4);
+}
+
+static bool resize_pending(const struct client *client)
+{
+  return !client->closing && input_frame_pending(client) &&
+      remote_decode_u32(client->input) == REMOTE_RESIZE;
+}
+
 static void begin_close(struct client *client, uint32_t cause, uint64_t now)
 {
   if (client->closing) {
@@ -110,6 +137,7 @@ static void begin_close(struct client *client, uint32_t cause, uint64_t now)
   client->deadline = now + DRAIN_NS;
   client->received = 0;
   client->injected = 0;
+  client->initial_geometry_pending = false;
   if (client->shell.group != HANDLE_INVALID) {
     enum call_status status = execution_group_terminate(client->shell.group);
     if (status != CALL_OK) {
@@ -181,6 +209,7 @@ static bool valid_header(const struct client *client)
     return type == REMOTE_HELLO && length == REMOTE_HELLO_SIZE;
   }
   return (type == REMOTE_INPUT && !client->input_ended && length && length <= REMOTE_PAYLOAD_MAX) ||
+      (type == REMOTE_RESIZE && client->resize_enabled && length == REMOTE_GEOMETRY_SIZE) ||
       ((type == REMOTE_END_INPUT || type == REMOTE_CLOSE) && !length);
 }
 
@@ -195,7 +224,8 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
     uint32_t columns = remote_decode_u32(payload), rows = remote_decode_u32(payload + 4);
     uint32_t options = remote_decode_u32(payload + 8);
     if (!columns || columns > REMOTE_COLUMNS_MAX || !rows || rows > REMOTE_ROWS_MAX ||
-        (options & ~REMOTE_OPTIONS)) {
+        (options & ~REMOTE_OPTIONS) ||
+        ((options & REMOTE_OPTION_RESIZE) && !(options & REMOTE_OPTION_MULTIPLEXER))) {
       reject(client, REMOTE_ERROR_BAD_FRAME, now);
       return true;
     }
@@ -223,8 +253,35 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
       return true;
     }
     client->ready = true;
+    client->resize_enabled = options & REMOTE_OPTION_RESIZE;
+    client->initial_geometry_pending = client->resize_enabled;
+    client->initial_columns = columns;
+    client->initial_rows = rows;
     client->deadline = 0;
     queue_frame(client, REMOTE_READY, NULL, 0);
+    break;
+  }
+  case REMOTE_RESIZE: {
+    uint64_t id = remote_decode_u64(payload);
+    uint32_t columns = remote_decode_u32(payload + 8), rows = remote_decode_u32(payload + 12);
+    if (!id || id <= client->resize_id || !columns || columns > REMOTE_COLUMNS_MAX ||
+        !rows || rows > REMOTE_ROWS_MAX) {
+      reject(client, REMOTE_ERROR_BAD_FRAME, now);
+      return true;
+    }
+    if (client->output_length || client->initial_geometry_pending) {
+      return false;
+    }
+    status = terminal_resize(client->shell.attachment, columns, rows);
+    if (status != CALL_OK) {
+      report("resize terminal", status);
+      reject(client, REMOTE_ERROR_INTERNAL, now);
+      return true;
+    }
+    /* The held frame keeps its ID until native acceptance. Queue its reply
+     * before draining records produced with the new geometry. */
+    queue_geometry(client, id, columns, rows);
+    client->resize_id = id;
     break;
   }
   case REMOTE_INPUT: {
@@ -346,6 +403,14 @@ static bool collect_output(struct client *client, uint64_t now)
     return true;
   }
   if (!client->ready || client->output_eof) {
+    return false;
+  }
+  if (client->initial_geometry_pending) {
+    queue_geometry(client, 0, client->initial_columns, client->initial_rows);
+    client->initial_geometry_pending = false;
+    return true;
+  }
+  if (resize_pending(client)) {
     return false;
   }
   unsigned char record[TERMINAL_RECORD_MAX];
@@ -470,9 +535,7 @@ static bool service_client(struct client *client, unsigned tab_width, uint64_t n
 static uint64_t stream_interests(const struct client *client)
 {
   uint64_t interests = WAIT_PEER_FIN;
-  bool input_pending = client->received >= REMOTE_HEADER_SIZE &&
-      client->received == REMOTE_HEADER_SIZE + remote_decode_u32(client->input + 4);
-  if (client->closing || !input_pending) {
+  if (client->closing || !input_frame_pending(client)) {
     interests |= WAIT_READABLE;
   }
   if (client->output_length) {
@@ -484,7 +547,8 @@ static uint64_t stream_interests(const struct client *client)
 static uint64_t terminal_interests(const struct client *client)
 {
   uint64_t interests = 0;
-  if (client->ready && !client->output_eof && !client->output_length) {
+  if (client->ready && !client->output_eof && !client->output_length &&
+      !client->initial_geometry_pending && !resize_pending(client)) {
     interests |= WAIT_READABLE;
   }
   if (!client->closing && client->received >= REMOTE_HEADER_SIZE &&
