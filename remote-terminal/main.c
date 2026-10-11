@@ -47,6 +47,7 @@ struct client {
   bool ready;
   bool resize_enabled;
   bool initial_geometry_pending;
+  bool initial_geometry_announced;
   bool closing;
   bool group_complete;
   bool shell_ready;
@@ -408,6 +409,7 @@ static bool collect_output(struct client *client, uint64_t now)
   if (client->initial_geometry_pending) {
     queue_geometry(client, 0, client->initial_columns, client->initial_rows);
     client->initial_geometry_pending = false;
+    client->initial_geometry_announced = true;
     return true;
   }
   if (resize_pending(client)) {
@@ -426,6 +428,10 @@ static bool collect_output(struct client *client, uint64_t now)
   }
   if (!reply.length) {
     client->output_eof = true;
+    return true;
+  }
+  if (client->closing && client->resize_enabled && !client->initial_geometry_announced) {
+    /* Cleanup must drain to EOF, but presentation has no announced geometry. */
     return true;
   }
   struct terminal_record header;
