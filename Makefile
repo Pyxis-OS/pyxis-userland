@@ -46,8 +46,8 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/complete.o \
                  $(BUILD)/shell/complete_path.o $(BUILD)/common/pane_cwd.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
-MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o $(BUILD)/mux/pointer.o $(BUILD)/mux/clipboard.o $(BUILD)/common/pane_cwd.o
-REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o
+MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o $(BUILD)/mux/pointer.o $(BUILD)/mux/clipboard.o $(BUILD)/common/pane_cwd.o $(BUILD)/common/pane_broker.o
+REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.o
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o

@@ -16,6 +16,8 @@ struct mux_session {
 /* Borrow startup authority and optional cwd through synchronous launch capture;
  * NULL cwd uses the mux's space-start context. Success owns the attachment,
  * observers and private root-shell bootstrap/query channel.
+ * A remote broker retains independent cleanup ownership. OUTCOME_UNKNOWN
+ * requires mux exit; an uncertain publication cannot be retried.
  * TAB_WIDTH is 1..32. Failure terminates any created group and releases all
  * owned handles. */
 enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_width,

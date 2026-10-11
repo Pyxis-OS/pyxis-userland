@@ -13,8 +13,12 @@
 #include <tcp.h>
 #include <wait.h>
 #include <udp.h>
+#include <abi/execution_group.h>
 
 #define CLIENT_LIMIT 4
+#define MUX_CONNECTION_LIMIT 2
+#define CLIENT_WAIT_LIMIT (CLIENT_LIMIT * 3 + 1 + MUX_CONNECTION_LIMIT * (PANE_BROKER_PANES + 1))
+static_assert(CLIENT_WAIT_LIMIT <= WAIT_MAX_INTERESTS);
 #define SERVICE_ROUNDS 4
 #define HELLO_NS UINT64_C(10000000000)
 #define DRAIN_NS UINT64_C(5000000000)
@@ -35,6 +39,7 @@ struct client {
   bool occupied;
   handle_t stream;
   struct remote_shell shell;
+  struct remote_broker *broker;
   bool ready;
   bool closing;
   bool group_complete;
@@ -58,6 +63,7 @@ struct client {
 };
 
 static bool failed;
+static unsigned mux_connections;
 
 static void report(const char *operation, enum call_status status)
 {
@@ -91,6 +97,9 @@ static void begin_close(struct client *client, uint32_t cause, uint64_t now)
 {
   if (client->closing) {
     return;
+  }
+  if (client->broker) {
+    remote_broker_seal(client->broker);
   }
   client->closing = true;
   client->cause = cause;
@@ -186,8 +195,24 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
       reject(client, REMOTE_ERROR_BAD_FRAME, now);
       return true;
     }
-    status = remote_shell_launch(columns, rows, tab_width,
-        options & REMOTE_OPTION_NO_SHELL_ECHO, &client->shell);
+    if (options & REMOTE_OPTION_MULTIPLEXER) {
+      if ((options & REMOTE_OPTION_NO_SHELL_ECHO) || mux_connections >= MUX_CONNECTION_LIMIT ||
+          startup_resource("remote_mux_terminal") == HANDLE_INVALID ||
+          startup_resource("service") == HANDLE_INVALID) {
+        reject(client, REMOTE_ERROR_RESOURCE, now);
+        return true;
+      }
+      client->broker = calloc(1, sizeof(*client->broker));
+      if (!client->broker) {
+        reject(client, REMOTE_ERROR_RESOURCE, now);
+        return true;
+      }
+      ++mux_connections;
+      status = remote_mux_launch(columns, rows, tab_width, client->broker, &client->shell);
+    } else {
+      status = remote_shell_launch(columns, rows, tab_width,
+          options & REMOTE_OPTION_NO_SHELL_ECHO, &client->shell);
+    }
     if (status != CALL_OK) {
       report("launch shell", status);
       reject(client, REMOTE_ERROR_LAUNCH, now);
@@ -361,7 +386,9 @@ static bool collect_output(struct client *client, uint64_t now)
 
 static bool finish_output(struct client *client, uint64_t now)
 {
-  if (!client->closing || !client->group_complete || client->output_length || client->error) {
+  if (!client->closing || !client->group_complete ||
+      (client->broker && !remote_broker_complete(client->broker)) ||
+      client->output_length || client->error) {
     return false;
   }
   if (client->ready && client->output_eof && !client->final_sent) {
@@ -388,6 +415,12 @@ static bool finish_output(struct client *client, uint64_t now)
 static bool service_client(struct client *client, unsigned tab_width, uint64_t now)
 {
   observe_completion(client, now);
+  bool broker_progress = client->broker && remote_broker_service(client->broker, now);
+  if (client->broker && client->broker->error != CALL_OK) {
+    report("pane broker", client->broker->error);
+    failed = true;
+    begin_close(client, REMOTE_CAUSE_SERVER_ERROR, now);
+  }
   if (client->deadline && now >= client->deadline && client->stream != HANDLE_INVALID) {
     if (!client->closing) {
       reject(client, REMOTE_ERROR_HELLO_TIMEOUT, now);
@@ -415,13 +448,19 @@ static bool service_client(struct client *client, unsigned tab_width, uint64_t n
       break;
     }
   }
-  if (client->stream == HANDLE_INVALID && client->group_complete) {
+  if (client->stream == HANDLE_INVALID && client->group_complete &&
+      (!client->broker || remote_broker_complete(client->broker))) {
     close_handle(&client->shell.attachment);
     close_handle(&client->shell.process);
+    if (client->broker) {
+      remote_broker_release(client->broker);
+      free(client->broker);
+      --mux_connections;
+    }
     *client = (struct client){0};
     return true;
   }
-  return progress;
+  return progress || broker_progress;
 }
 
 static uint64_t stream_interests(const struct client *client)
@@ -609,8 +648,9 @@ int main(int argc, char **argv)
         progress = true;
       }
     }
-    struct wait_interest interests[CLIENT_LIMIT * 3 + 1];
-    uint64_t events[CLIENT_LIMIT * 3 + 1];
+    struct wait_interest interests[CLIENT_WAIT_LIMIT];
+    uint64_t events[CLIENT_WAIT_LIMIT];
+    size_t pane_entries[CLIENT_LIMIT][PANE_BROKER_PANES];
     size_t stream_entries[CLIENT_LIMIT], lifecycle_entries[CLIENT_LIMIT];
     size_t count = 0;
     unsigned active = 0;
@@ -618,6 +658,9 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < CLIENT_LIMIT; ++i) {
       struct client *client = &clients[i];
       stream_entries[i] = lifecycle_entries[i] = SIZE_MAX;
+      for (unsigned pane = 0; pane < PANE_BROKER_PANES; ++pane) {
+        pane_entries[i][pane] = SIZE_MAX;
+      }
       if (!client->occupied) {
         continue;
       }
@@ -632,6 +675,20 @@ int main(int argc, char **argv)
       uint64_t terminal_events = terminal_interests(client);
       if (client->shell.attachment != HANDLE_INVALID && terminal_events) {
         interests[count++] = (struct wait_interest){.handle = client->shell.attachment, .events = terminal_events};
+      }
+      if (client->broker) {
+        struct remote_broker *broker = client->broker;
+        deadline = remote_broker_deadline(broker, deadline);
+        if (broker->receiver != HANDLE_INVALID) {
+          interests[count++] = (struct wait_interest){.handle = broker->receiver, .events = WAIT_READABLE};
+        }
+        for (unsigned pane = 0; pane < PANE_BROKER_PANES; ++pane) {
+          if (broker->panes[pane].used && broker->panes[pane].shell.group != HANDLE_INVALID) {
+            pane_entries[i][pane] = count;
+            interests[count++] = (struct wait_interest){.handle = broker->panes[pane].shell.group,
+                .events = WAIT_COMPLETE};
+          }
+        }
       }
       handle_t lifecycle = client->closing ? client->shell.group : client->shell.process;
       if (lifecycle != HANDLE_INVALID) {
@@ -662,6 +719,13 @@ int main(int argc, char **argv)
     accept_ready = listener_entry != SIZE_MAX && events[listener_entry];
     for (unsigned i = 0; i < CLIENT_LIMIT; ++i) {
       struct client *client = &clients[i];
+      if (client->broker) {
+        for (unsigned pane = 0; pane < PANE_BROKER_PANES; ++pane) {
+          if (pane_entries[i][pane] != SIZE_MAX && events[pane_entries[i][pane]]) {
+            client->broker->panes[pane].group_ready = true;
+          }
+        }
+      }
       if (lifecycle_entries[i] != SIZE_MAX && events[lifecycle_entries[i]]) {
         if (client->closing) {
           client->group_ready = true;
@@ -684,6 +748,39 @@ int main(int argc, char **argv)
       tcp_abort(clients[i].stream);
     }
     close_handle(&clients[i].stream);
+    if (clients[i].broker) {
+      remote_broker_seal(clients[i].broker);
+    }
+    if (clients[i].shell.group != HANDLE_INVALID) {
+      enum call_status status = execution_group_terminate(clients[i].shell.group);
+      if (status != CALL_OK) {
+        report("shutdown outer termination", status);
+      }
+    }
+  }
+  for (unsigned i = 0; i < CLIENT_LIMIT; ++i) {
+    if (clients[i].shell.group != HANDLE_INVALID) {
+      enum call_status status = execution_group_wait(clients[i].shell.group);
+      if (status != CALL_OK) {
+        report("shutdown outer cleanup", status);
+      }
+    }
+    if (clients[i].broker) {
+      for (unsigned pane = 0; pane < PANE_BROKER_PANES; ++pane) {
+        struct remote_pane *tracked = &clients[i].broker->panes[pane];
+        if (tracked->used && tracked->shell.group != HANDLE_INVALID) {
+          enum call_status status = execution_group_wait(tracked->shell.group);
+          if (status != CALL_OK) {
+            report("shutdown pane cleanup", status);
+          } else {
+            tracked->group_ready = true;
+          }
+        }
+      }
+      remote_broker_service(clients[i].broker, 0);
+      remote_broker_release(clients[i].broker);
+      free(clients[i].broker);
+    }
     close_handle(&clients[i].shell.attachment);
     close_handle(&clients[i].shell.process);
     close_handle(&clients[i].shell.group);

@@ -2,7 +2,12 @@
 #define REMOTE_SESSION_H
 
 #include <abi/process.h>
+#include <abi/launcher.h>
 #include <terminal.h>
+#include <startup.h>
+#include <network_environment.h>
+#include <pyxis/environment.h>
+#include "../common/pane_broker.h"
 
 struct remote_shell {
   handle_t attachment;
@@ -13,5 +18,48 @@ struct remote_shell {
 /* No echo selects the root shell's quiet line editor; children never inherit it. */
 enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_width,
     bool no_echo, struct remote_shell *shell);
+
+#define REMOTE_POLICY_GRANTS (17 + STARTUP_ROOT_LIMIT + 1)
+
+/* Retained authority and initial environment belong to this connection. The
+ * network environment borrows strings from inherited and its own DNS buffer. */
+struct remote_context {
+  struct launch_grant grants[REMOTE_POLICY_GRANTS];
+  size_t grant_count;
+  struct launch_binding resources[17], roots[STARTUP_ROOT_LIMIT];
+  size_t resource_count, root_count;
+  size_t directory, namespace_index;
+  bool allow_launch;
+  struct pyxis_environment_snapshot inherited;
+  struct network_environment environment;
+};
+
+struct remote_pane {
+  bool used, published, closing, group_ready;
+  struct pane_broker_message request;
+  handle_t reply, bootstrap;
+  struct pyxis_working_snapshot cwd;
+  size_t directories, bytes;
+  struct remote_shell shell;
+};
+
+struct remote_broker {
+  handle_t receiver;
+  bool sealed;
+  enum call_status error;
+  uint64_t last_id;
+  struct remote_context context;
+  struct remote_pane panes[PANE_BROKER_PANES];
+};
+
+enum call_status remote_mux_launch(size_t columns, size_t rows, unsigned tab_width,
+    struct remote_broker *broker, struct remote_shell *shell);
+/* Service a bounded number of messages without awaiting another chunk. */
+bool remote_broker_service(struct remote_broker *broker, uint64_t now);
+void remote_broker_seal(struct remote_broker *broker);
+bool remote_broker_complete(const struct remote_broker *broker);
+uint64_t remote_broker_deadline(const struct remote_broker *broker, uint64_t deadline);
+/* Only after every pane group has completed. */
+void remote_broker_release(struct remote_broker *broker);
 
 #endif

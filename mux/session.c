@@ -1,6 +1,7 @@
 #include <pyxis/environment.h>
 #include <pyxis/working_path.h>
 #include "session.h"
+#include "../common/pane_broker.h"
 #include <abi/clock.h>
 #include <abi/clipboard.h>
 #include <abi/console.h>
@@ -65,6 +66,25 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     const struct pyxis_working_snapshot *cwd, struct mux_session *session)
 {
   *session = (struct mux_session){0};
+  if (startup_resource("pane_broker") != HANDLE_INVALID) {
+    struct endpoint_create_reply bootstrap = {0};
+    enum call_status status = endpoint_create(startup_resource("service"), &bootstrap);
+    if (status != CALL_OK) {
+      return status;
+    }
+    struct pane_broker_result result = {0};
+    status = pane_broker_start(columns, rows, tab_width, cwd, bootstrap.caller, &result);
+    handle_close(bootstrap.caller);
+    if (status != CALL_OK) {
+      handle_close(bootstrap.receiver);
+      return status;
+    }
+    session->attachment = result.attachment;
+    session->process = result.process;
+    session->group = result.group;
+    session->cwd_bootstrap = bootstrap.receiver;
+    return CALL_OK;
+  }
   size_t root_count = startup_root_count();
   const struct path_context *context;
   enum call_status status = pyxis_working_context(&context);
