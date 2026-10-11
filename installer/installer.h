@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "progress.h"
 
 #define INSTALL_MIB UINT64_C(1048576)
 #define INSTALL_ESP_BYTES (UINT64_C(512) * INSTALL_MIB)
