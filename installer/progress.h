@@ -1,7 +1,7 @@
 #ifndef USERSPACE_INSTALLER_PROGRESS_H
 #define USERSPACE_INSTALLER_PROGRESS_H
 
-#include <abi/types.h>
+#include <abi/handle.h>
 #include <stdbool.h>
 #include <stdint.h>
 

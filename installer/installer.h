@@ -135,9 +135,7 @@ bool install_archive_filter(const struct install_source *archive,
  * complete program trees into bin/REVISION, replacing an earlier partial copy,
  * syncs the pool and verifies names, kinds, structure, sizes and bytes. */
 bool install_programs_write(const struct install_disk *disk, handle_t boot,
-    const struct install_programs *programs, const char *revision, handle_t clock);
-/* Ends the installer's active progress row before a diagnostic. No disk I/O. */
-void install_progress_end(void);
+    const struct install_programs *programs, const char *revision);
 /* Recursively removes revisions except KEEP and PREVIOUS (which may be NULL).
  * The caller skips this best-effort stage when the previous revision is unknown. */
 bool install_programs_cleanup(const struct install_disk *disk, const char *keep,

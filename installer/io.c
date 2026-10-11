@@ -48,10 +48,13 @@ bool install_read(const struct install_disk *disk, uint64_t offset, void *bytes,
       status = disk_read(disk->handle, offset, destination, count);
     }
     if (status != CALL_OK) {
+      install_progress_pause();
       fprintf(stderr, "installer: disk read failed at byte %llu (status %u)\n",
           (unsigned long long)offset, status);
       return false;
     }
+    install_progress_io(INSTALL_PROGRESS_RAW_READ,
+        skip || length < alignment ? alignment : count);
     destination += count;
     offset += count;
     length -= count;
@@ -71,10 +74,12 @@ bool install_write(const struct install_disk *disk, uint64_t offset,
     size_t count = length < DISK_IO_MAX_BYTES ? length : DISK_IO_MAX_BYTES;
     enum call_status status = disk_write(disk->handle, offset, source, count);
     if (status != CALL_OK) {
+      install_progress_pause();
       fprintf(stderr, "installer: disk write failed at byte %llu (status %u); stopping\n",
           (unsigned long long)offset, status);
       return false;
     }
+    install_progress_io(INSTALL_PROGRESS_RAW_WRITE, count);
     source += count;
     offset += count;
     length -= count;
@@ -108,6 +113,7 @@ bool install_source_read(const struct install_source *source, uint64_t offset,
   }
   if (source->memory) {
     memcpy(bytes, source->memory + offset, length);
+    install_progress_io(INSTALL_PROGRESS_SOURCE_READ, length);
     return true;
   }
   uint8_t *destination = bytes;
@@ -115,11 +121,12 @@ bool install_source_read(const struct install_source *source, uint64_t offset,
     size_t count = 0;
     enum call_status status = file_read(source->handle, offset, destination, length, &count);
     if (status != CALL_OK || count == 0 || count > length) {
-      install_progress_end();
+      install_progress_pause();
       fprintf(stderr, "installer: source read failed at byte %llu (status %u)\n",
           (unsigned long long)offset, status);
       return false;
     }
+    install_progress_io(INSTALL_PROGRESS_SOURCE_READ, count);
     offset += count;
     destination += count;
     length -= count;
