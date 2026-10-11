@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "progress.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -494,6 +495,8 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     refuse(&esp, "ESP extent or logical-sector geometry is unsupported");
     return esp.state;
   }
+  install_progress_begin("Inspecting installed EFI geometry and FAT metadata",
+      INSTALL_PROGRESS_RAW_READ, NULL);
   bool success = read_metadata(&esp);
   struct esp_path boot = {.name = "boot", .alias = "BOOT       ", .directory = true};
   struct esp_path children[2] = {
@@ -504,6 +507,7 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
   /* A path found before later directory damage can still expose a foreign
    * binding. Incomplete validation keeps its REBUILD diagnostic. */
   if (success) {
+    install_progress_begin("Inspecting installed EFI boot paths", INSTALL_PROGRESS_RAW_READ, NULL);
     bool complete = find_paths(&esp, esp.root, &boot, 1);
     success = esp.state != INSTALL_ESP_REFUSED && !boot.damaged &&
         (complete || (esp.state == INSTALL_ESP_REBUILD && boot.found));
@@ -534,6 +538,7 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
   }
   if (success) {
     bool complete;
+    install_progress_begin("Inspecting installed EFI disk binding", INSTALL_PROGRESS_RAW_READ, NULL);
     success = read_file(&esp, &config, configuration, &complete);
     /* Complete successful data reads can still expose a foreign binding when
      * the terminal FAT entry is damaged. Failed raw reads never qualify. */
@@ -546,6 +551,7 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     if (children[1].size > sizeof(bytes)) {
       success = rebuild(&esp, "ESP revision record exceeds the 64-byte inspection limit");
     } else {
+      install_progress_begin("Reading installed kernel revision", INSTALL_PROGRESS_RAW_READ, NULL);
       success = read_file(&esp, &children[1], bytes, NULL);
       if (success) {
         revision_text(bytes, children[1].size, revision);
@@ -554,5 +560,6 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
   }
   free(configuration);
   free(esp.seen);
+  install_progress_finish();
   return esp.state;
 }

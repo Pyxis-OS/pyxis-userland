@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "progress.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -233,6 +234,7 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
       efi->bytes > UINT32_MAX || kernel->bytes > UINT32_MAX ||
       archive->bytes > UINT32_MAX || configuration_bytes > UINT32_MAX ||
       revision_bytes > UINT32_MAX) {
+    install_progress_pause();
     fputs("installer: invalid ESP extent, geometry or source size\n", stderr);
     return NULL;
   }
@@ -307,6 +309,7 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
     uint64_t clusters = node->directory ? 1 :
         ((uint64_t)node->size + ESP_CLUSTER_BYTES - 1) / ESP_CLUSTER_BYTES;
     if (clusters > esp->cluster_count - (esp->next_cluster - 2)) {
+      install_progress_pause();
       fputs("installer: boot files do not fit in the ESP\n", stderr);
       install_esp_destroy(esp);
       return NULL;
@@ -360,6 +363,7 @@ static bool esp_flush(const struct install_esp *esp)
 {
   enum call_status status = disk_flush(esp->disk->handle);
   if (status != CALL_OK) {
+    install_progress_pause();
     fprintf(stderr, "installer: ESP sync failed (status %u); stopping\n", status);
     return false;
   }
@@ -374,27 +378,42 @@ bool install_esp_write(const struct install_esp *esp)
   uint8_t bytes[ESP_CLUSTER_BYTES];
   /* Persist invalid boot geometry before any old FAT, directory or file bytes
    * can be replaced. Stale configuration/revision must not validate a mixed tree. */
-  puts("Invalidating old EFI boot geometry and flushing...");
-  if (!install_zero(esp->disk, esp->layout->esp_start, esp->fat_offset) || !esp_flush(esp)) {
+  install_progress_begin("Invalidating old EFI boot geometry", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  install_progress_bytes_total(esp->fat_offset);
+  if (!install_zero(esp->disk, esp->layout->esp_start, esp->fat_offset)) {
+    install_progress_finish();
     return false;
   }
-  puts("Writing EFI replacement tree...");
+  install_progress_begin("Flushing invalid EFI boot geometry", INSTALL_PROGRESS_NONE, NULL);
+  if (!esp_flush(esp)) {
+    install_progress_finish();
+    return false;
+  }
+  install_progress_begin("Writing EFI replacement tree", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  uint64_t tree_bytes = 4u * esp->sector_bytes + ESP_FAT_COUNT * esp->fat_bytes;
+  for (unsigned i = 0; i < ESP_NODE_COUNT; ++i) {
+    tree_bytes += (uint64_t)esp->nodes[i].clusters * ESP_CLUSTER_BYTES;
+  }
+  install_progress_bytes_total(tree_bytes);
   make_fsinfo(esp, bytes);
   if (!esp_write(esp, (uint64_t)ESP_FSINFO_SECTOR * esp->sector_bytes, bytes, esp->sector_bytes) ||
       !esp_write(esp, (uint64_t)(ESP_BACKUP_SECTOR + ESP_FSINFO_SECTOR) * esp->sector_bytes,
           bytes, esp->sector_bytes)) {
+    install_progress_finish();
     return false;
   }
   memset(bytes, 0, esp->sector_bytes);
   put16(bytes + 510, ESP_BOOT_SIGNATURE);
   if (!esp_write(esp, 2u * esp->sector_bytes, bytes, esp->sector_bytes) ||
       !esp_write(esp, (ESP_BACKUP_SECTOR + 2u) * esp->sector_bytes, bytes, esp->sector_bytes)) {
+    install_progress_finish();
     return false;
   }
   for (unsigned i = 0; i < ESP_FAT_COUNT; ++i) {
     for (uint64_t offset = 0; offset < esp->fat_bytes; offset += ESP_CLUSTER_BYTES) {
       if (!esp_write(esp, esp->fat_offset + i * esp->fat_bytes + offset,
           esp->fat + offset, ESP_CLUSTER_BYTES)) {
+        install_progress_finish();
         return false;
       }
     }
@@ -405,6 +424,7 @@ bool install_esp_write(const struct install_esp *esp)
       make_directory(esp, i, bytes);
       uint64_t offset = esp->data_offset + (uint64_t)(node->first - 2) * ESP_CLUSTER_BYTES;
       if (!esp_write(esp, offset, bytes, ESP_CLUSTER_BYTES)) {
+        install_progress_finish();
         return false;
       }
       continue;
@@ -417,10 +437,12 @@ bool install_esp_write(const struct install_esp *esp)
       }
       memset(bytes, 0, sizeof(bytes));
       if (!source_read(node, consumed, bytes, length)) {
+        install_progress_finish();
         return false;
       }
       uint64_t offset = esp->data_offset + (uint64_t)(node->first + j - 2) * ESP_CLUSTER_BYTES;
       if (!esp_write(esp, offset, bytes, sizeof(bytes))) {
+        install_progress_finish();
         return false;
       }
       consumed += length;
@@ -428,14 +450,18 @@ bool install_esp_write(const struct install_esp *esp)
   }
   /* Publish boot geometry only after the complete replacement tree is durable.
    * The caller's final sync also covers both boot sectors. */
-  puts("Flushing EFI replacement tree...");
+  install_progress_begin("Flushing EFI replacement tree", INSTALL_PROGRESS_NONE, NULL);
   if (!esp_flush(esp)) {
+    install_progress_finish();
     return false;
   }
-  puts("Publishing EFI boot sectors...");
+  install_progress_begin("Publishing EFI boot sectors", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  install_progress_bytes_total(2u * esp->sector_bytes);
   make_boot(esp, bytes);
-  return esp_write(esp, 0, bytes, esp->sector_bytes) &&
+  bool ok = esp_write(esp, 0, bytes, esp->sector_bytes) &&
       esp_write(esp, (uint64_t)ESP_BACKUP_SECTOR * esp->sector_bytes, bytes, esp->sector_bytes);
+  install_progress_finish();
+  return ok;
 }
 
 static bool take_cluster(struct esp_reader *reader, uint32_t cluster)
@@ -690,11 +716,21 @@ bool install_esp_verify(const struct install_esp *esp)
     return false;
   }
   struct esp_reader reader = {.esp = esp};
+  install_progress_begin("Reading back EFI metadata and FAT copies", INSTALL_PROGRESS_RAW_READ, NULL);
   bool success = read_metadata(&reader);
+  if (success) {
+    install_progress_begin("Reading back EFI boot paths and file bytes", INSTALL_PROGRESS_RAW_READ,
+        "files checked");
+    install_progress_items_total(ESP_NODE_COUNT - ESP_EFI_FILE);
+  }
   for (unsigned i = 0; success && i < ESP_NODE_COUNT; ++i) {
     success = esp->nodes[i].directory ? verify_directory(&reader, i) : verify_file(&reader, i);
+    if (success && !esp->nodes[i].directory) {
+      install_progress_advance(0, 1);
+    }
   }
   if (success) {
+    install_progress_begin("Checking EFI allocation accounting", INSTALL_PROGRESS_NONE, NULL);
     for (uint32_t cluster = 2; cluster < reader.clusters + 2; ++cluster) {
       bool used = (reader.seen[cluster / 8] & (1u << (cluster % 8))) != 0;
       uint32_t entry = get32(reader.fat + (size_t)cluster * 4);
@@ -716,6 +752,7 @@ bool install_esp_verify(const struct install_esp *esp)
   }
   free(reader.fat);
   free(reader.seen);
+  install_progress_finish();
   if (!success) {
     fputs("installer: ESP metadata, boot paths or source-byte verification failed\n", stderr);
   }

@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "progress.h"
 
 #include <pyxis_fs/npfs.h>
 #include <stdio.h>
@@ -90,6 +91,8 @@ bool install_gpt_write(const struct install_disk *disk, const struct install_lay
   uint8_t entries[GPT_ARRAY_BYTES] = {0};
   uint8_t block[DISK_IO_MAX_BYTES];
   uint64_t block_size = disk->info.block_size;
+  install_progress_begin("Writing GPT metadata", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  install_progress_bytes_total(2 * GPT_ARRAY_BYTES + 3 * block_size);
   partition_entry(entries, esp_type, layout->esp_guid,
       layout->esp_start, layout->esp_bytes, block_size, "Pyxis EFI");
   partition_entry(entries + GPT_ENTRY_BYTES, pool_type, layout->pool_guid,
@@ -97,15 +100,18 @@ bool install_gpt_write(const struct install_disk *disk, const struct install_lay
   uint32_t array_crc = install_crc32(entries, sizeof(entries));
   uint64_t backup_header = disk->bytes - block_size;
   if (!install_write(disk, backup_header - sizeof(entries), entries, sizeof(entries))) {
+    install_progress_finish();
     return false;
   }
   header_encode(block, disk, layout, true, array_crc);
   if (!install_write(disk, backup_header, block, block_size) ||
       !install_write(disk, 2 * block_size, entries, sizeof(entries))) {
+    install_progress_finish();
     return false;
   }
   header_encode(block, disk, layout, false, array_crc);
   if (!install_write(disk, block_size, block, block_size)) {
+    install_progress_finish();
     return false;
   }
   memset(block, 0, block_size);
@@ -117,5 +123,7 @@ bool install_gpt_write(const struct install_disk *disk, const struct install_lay
   uint64_t covered = disk->info.block_count - 1;
   npfs_put_u32(protective + 12, covered > UINT32_MAX ? UINT32_MAX : (uint32_t)covered);
   npfs_put_u16(block + 510, UINT16_C(0xaa55));
-  return install_write(disk, 0, block, block_size);
+  bool ok = install_write(disk, 0, block, block_size);
+  install_progress_finish();
+  return ok;
 }

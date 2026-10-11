@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "progress.h"
 
 #include <pyxis_fs/npfs.h>
 #include <stdio.h>
@@ -51,6 +52,8 @@ static bool zero_bytes(const uint8_t *bytes, size_t length)
 static enum gpt_state read_gpt(const struct install_disk *disk, unsigned copy,
     uint8_t *block, struct gpt_copy *gpt)
 {
+  install_progress_begin(copy ? "Inspecting backup GPT metadata" :
+      "Inspecting primary GPT metadata", INSTALL_PROGRESS_RAW_READ, NULL);
   uint64_t last = disk->info.block_count - 1;
   uint64_t location = copy ? last : 1;
   size_t block_bytes = (size_t)disk->info.block_size;
@@ -246,6 +249,9 @@ static enum inspection load_overlay(struct pool_view *pool)
   }
   uint32_t crc = npfs_payload_begin(&pool->control);
   size_t index = 0;
+  install_progress_begin("Validating committed journal descriptors", INSTALL_PROGRESS_RAW_READ,
+      "pages checked");
+  install_progress_items_total(pool->control.descriptor_blocks);
   for (uint32_t page = 0; page < pool->control.descriptor_blocks; page++) {
     enum inspection status = raw_pool_read(pool, pool->header.journal_start + 2 + page, pool->scratch[0]);
     if (status != INSPECT_OK) {
@@ -269,7 +275,11 @@ static enum inspection load_overlay(struct pool_view *pool)
       };
       index++;
     }
+    install_progress_advance(0, 1);
   }
+  install_progress_begin("Validating committed journal images", INSTALL_PROGRESS_RAW_READ,
+      "images checked");
+  install_progress_items_total(count);
   for (size_t i = 0; i < count; i++) {
     enum inspection status = raw_pool_read(pool,
       pool->header.journal_start + 2 + pool->control.descriptor_blocks + i, pool->scratch[0]);
@@ -282,7 +292,10 @@ static enum inspection load_overlay(struct pool_view *pool)
       return status;
     }
     pool->overlay[i].crc = npfs_crc32c(pool->scratch[0], NPFS_BLOCK_SIZE);
+    install_progress_advance(0, 1);
   }
+  install_progress_begin("Checking committed journal checksum and descriptor uniqueness",
+      INSTALL_PROGRESS_NONE, NULL);
   if (index != count || npfs_crc_finish(crc) != pool->control.payload_crc) {
     return INSPECT_DAMAGED;
   }
@@ -328,6 +341,7 @@ static enum inspection pool_read(struct pool_view *pool, uint64_t home, uint32_t
 static enum inspection select_pool(struct pool_view *pool, bool *degraded,
     bool writable, const char **reason)
 {
+  install_progress_begin("Inspecting pool header copies", INSTALL_PROGRESS_RAW_READ, NULL);
   if (reason) {
     *reason = "npfs pool headers are damaged or incompatible";
   }
@@ -367,6 +381,7 @@ static enum inspection select_pool(struct pool_view *pool, bool *degraded,
   }
   struct npfs_control controls[2];
   bool valid[2];
+  install_progress_begin("Inspecting pool journal controls", INSTALL_PROGRESS_RAW_READ, NULL);
   for (unsigned i = 0; i < 2; i++) {
     status = raw_pool_read(pool, pool->header.journal_start + i, pool->scratch[i]);
     if (status != INSPECT_OK) {
@@ -577,6 +592,9 @@ static bool append_label(struct install_consent *consent, unsigned partition, co
 static enum inspection inspect_volumes(struct pool_view *pool, unsigned partition,
     struct install_consent *consent, bool *all_marked)
 {
+  install_progress_begin("Inspecting consent volume catalog", INSTALL_PROGRESS_RAW_READ,
+      "pages checked");
+  install_progress_items_total(NPFS_VOLUME_TABLE_BLOCKS);
   struct npfs_volume *volumes = calloc(NPFS_VOLUME_COUNT, sizeof(*volumes));
   if (!volumes) {
     return INSPECT_FATAL;
@@ -614,7 +632,11 @@ static enum inspection inspect_volumes(struct pool_view *pool, unsigned partitio
       live++;
       consent->volumes++;
     }
+    install_progress_advance(0, 1);
   }
+  install_progress_begin("Inspecting volume consent markers", INSTALL_PROGRESS_RAW_READ,
+      "volumes inspected");
+  install_progress_items_total(live);
   for (unsigned i = 0; i < NPFS_VOLUME_COUNT; i++) {
     if (volumes[i].state != NPFS_VOLUME_LIVE) {
       continue;
@@ -629,6 +651,7 @@ static enum inspection inspect_volumes(struct pool_view *pool, unsigned partitio
     } else if (has_marker) {
       marked++;
     }
+    install_progress_advance(0, 1);
   }
   consent->final_pool |= readable && live && !marked;
   *all_marked = readable && live && marked == live;
@@ -641,6 +664,7 @@ done:
 static enum inspection inspect_partition(const struct install_disk *disk, uint64_t first,
     uint64_t last, unsigned number, struct install_consent *consent, bool *all_marked)
 {
+  install_progress_begin("Inspecting partition pool signatures", INSTALL_PROGRESS_RAW_READ, NULL);
   uint64_t offset = first * disk->info.block_size;
   uint64_t bytes = (last - first + 1) * disk->info.block_size;
   *all_marked = true;
@@ -716,6 +740,7 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   }
   bool success = false;
   consent->reason = "I/O failure during consent inspection";
+  install_progress_begin("Inspecting disk protective MBR", INSTALL_PROGRESS_RAW_READ, NULL);
   if (!install_read(disk, 0, block, (size_t)disk->info.block_size)) {
     goto done;
   }
@@ -808,6 +833,7 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   }
   success = true;
 done:
+  install_progress_finish();
   free(block);
   free(maps);
   return success;
@@ -849,6 +875,9 @@ static bool update_layout(const struct install_disk *disk, const struct gpt_copy
 static enum inspection update_catalog(struct pool_view *pool, struct npfs_volume *system,
     bool *found)
 {
+  install_progress_begin("Inspecting update volume catalog", INSTALL_PROGRESS_RAW_READ,
+      "pages checked");
+  install_progress_items_total(NPFS_VOLUME_TABLE_BLOCKS);
   struct npfs_volume *volumes = calloc(NPFS_VOLUME_COUNT, sizeof(*volumes));
   if (!volumes) {
     return INSPECT_FATAL;
@@ -888,6 +917,7 @@ static enum inspection update_catalog(struct pool_view *pool, struct npfs_volume
         *found = true;
       }
     }
+    install_progress_advance(0, 1);
   }
 done:
   free(volumes);
@@ -900,7 +930,11 @@ static enum inspection update_system(struct pool_view *pool, const struct npfs_v
 {
   uint64_t count = volume->inode_bytes / NPFS_INODE_SIZE;
   uint64_t cleanup_count = 0;
+  install_progress_begin("Inspecting system inode metadata", INSTALL_PROGRESS_RAW_READ,
+      "inodes checked");
+  install_progress_items_total(count);
   for (uint64_t first = 0; first < count;) {
+    uint64_t before = first;
     uint64_t leaf;
     enum inspection status = mapping_read(pool, volume->pointers,
         first / (NPFS_BLOCK_SIZE / NPFS_INODE_SIZE), &leaf);
@@ -925,7 +959,10 @@ static enum inspection update_system(struct pool_view *pool, const struct npfs_v
         cleanup_count++;
       }
     }
+    install_progress_advance(0, first - before);
   }
+  install_progress_begin("Inspecting system cleanup chain", INSTALL_PROGRESS_RAW_READ,
+      "inodes checked");
   uint64_t next = volume->cleanup_head, walked = 0;
   while (next) {
     struct npfs_inode inode;
@@ -940,6 +977,7 @@ static enum inspection update_system(struct pool_view *pool, const struct npfs_v
       return INSPECT_DAMAGED;
     }
     next = inode.cleanup_next;
+    install_progress_advance(0, 1);
   }
   return walked == cleanup_count ? INSPECT_OK : INSPECT_DAMAGED;
 }
@@ -968,6 +1006,7 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
     goto done;
   }
   update->reason = "I/O failure during update inspection";
+  install_progress_begin("Inspecting disk protective MBR", INSTALL_PROGRESS_RAW_READ, NULL);
   if (!install_read(disk, 0, block, (size_t)disk->info.block_size)) {
     goto done;
   }
@@ -1017,12 +1056,16 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
     goto done;
   }
   update->reason = "npfs allocation bitmap is damaged";
+  install_progress_begin("Inspecting allocation bitmap", INSTALL_PROGRESS_RAW_READ,
+      "pages checked");
+  install_progress_items_total(pool->header.bitmap_blocks);
   for (uint64_t page = 0; page < pool->header.bitmap_blocks; page++) {
     status = pool_read(pool, pool->header.bitmap_start + page,
         NPFS_METADATA_BITMAP, pool->scratch[0]);
     if (status != INSPECT_OK) {
       goto inspection_failed;
     }
+    install_progress_advance(0, 1);
   }
   struct npfs_volume system;
   bool found;
@@ -1049,6 +1092,7 @@ inspection_failed:
     success = false;
   }
 done:
+  install_progress_finish();
   free(block);
   free(pool);
   free(maps);

@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "progress.h"
 
 #include <pyxis_fs/npfs.h>
 #include <stdlib.h>
@@ -162,6 +163,9 @@ bool install_pool_format(const struct install_disk *disk,
     goto done;
   }
 
+  install_progress_begin("Writing fresh pool metadata", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  install_progress_bytes_total((header->bitmap_blocks + header->volume_blocks + 6) *
+      NPFS_BLOCK_SIZE);
   for (uint64_t index = 0; index < header->bitmap_blocks; index++) {
     uint64_t base = index * NPFS_BITMAP_BITS;
     memset(metadata->bitmap, 0, NPFS_BLOCK_SIZE);
@@ -199,6 +203,7 @@ bool install_pool_format(const struct install_disk *disk,
   }
 
 done:
+  install_progress_finish();
   free(metadata);
   return ok;
 }
