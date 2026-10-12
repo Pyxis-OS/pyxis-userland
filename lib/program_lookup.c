@@ -22,12 +22,13 @@ static enum call_status open_bundle(const struct path_context *context,
 static enum call_status open_catalog(const struct path_context *context,
     const char *command, handle_t *image, struct bundle_program **bundle)
 {
-  const char *catalog;
-  enum call_status status = pyxis_environment_get("PYXIS_BUNDLE_CATALOG", &catalog);
+  char *catalog;
+  enum call_status status = pyxis_environment_copy("PYXIS_BUNDLE_CATALOG", &catalog);
   if (status != CALL_OK || !catalog) {
     return status == CALL_OK ? CALL_NOT_FOUND : status;
   }
   status = bundle_command_open(context, catalog, command, bundle);
+  free(catalog);
   if (status == CALL_OK) {
     *image = bundle_program_image(*bundle);
   }
