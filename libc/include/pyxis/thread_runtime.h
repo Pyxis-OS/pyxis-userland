@@ -44,7 +44,9 @@ enum call_status libc_thread_collect(handle_t memory, handle_t completion,
 
 /* Run this thread's language TLS destructors in reverse registration order,
  * then up to four key passes. Native EXIT must not return; refusal stops the
- * process. It does not run process exit handlers or release its live context. */
+ * process. Recursive exit from a destructor stops the process instead of
+ * reporting normal completion with an incomplete drain. It does not run process
+ * exit handlers or release its live context. */
 __attribute__((noreturn)) void libc_thread_exit(handle_t threads, uint64_t value);
 
 /* Process-local generational keys; values belong to the calling TCB. Deleting

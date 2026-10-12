@@ -198,10 +198,13 @@ void libc_thread_destructors(void)
 {
   struct libc_thread_record *record = libc_thread_record();
   libc_once_thread_cleanup();
-  if (!record->destroying) {
-    record->destroying = true;
-    libc_thread_destructors();
+  /* A recursive exit cannot claim normal completion while abandoning later
+   * language/key cleanup (which may own exit-notification locks). */
+  if (record->destroying) {
+    _Exit(EXIT_FAILURE);
   }
+  record->destroying = true;
+  libc_thread_destructors();
   libc_once_thread_cleanup();
   thread_exit(threads, value);
   _Exit(EXIT_FAILURE);
