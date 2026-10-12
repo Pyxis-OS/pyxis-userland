@@ -6,7 +6,18 @@
 #include <unistd.h>
 #include "errors.h"
 #include "working_path_internal.h"
+#include "thread_sync.h"
 
+/* Published chains are immutable. Retention keeps grants live while readers
+ * duplicate or resolve outside the publication guard. */
+struct working_state {
+  size_t references;
+  struct pyxis_working_snapshot snapshot;
+};
+
+static struct libc_lock working_guard;
+static struct working_state *working_state;
+/* Stable borrowed view; internal readers retain working_state instead. */
 static struct pyxis_working_snapshot working;
 static bool initialized;
 
@@ -91,11 +102,8 @@ void pyxis_working_snapshot_close(struct pyxis_working_snapshot *snapshot)
   *snapshot = (struct pyxis_working_snapshot){0};
 }
 
-static enum call_status initialize(void)
+static enum call_status initial_snapshot(struct pyxis_working_snapshot *result)
 {
-  if (initialized) {
-    return CALL_OK;
-  }
   size_t depth = startup_working_directory_count();
   if (depth > SIZE_MAX / sizeof(handle_t)) {
     return CALL_LIMIT;
@@ -119,9 +127,69 @@ static enum call_status initialize(void)
     free(storage);
     return status;
   }
-  working = initial;
-  initialized = true;
+  *result = initial;
   return CALL_OK;
+}
+
+static void working_release(struct working_state *state)
+{
+  if (!state) {
+    return;
+  }
+  libc_lock_acquire(&working_guard);
+  bool destroy = !--state->references;
+  libc_lock_release(&working_guard);
+  if (destroy) {
+    pyxis_working_snapshot_close(&state->snapshot);
+    free(state);
+  }
+}
+
+static enum call_status working_acquire(struct working_state **result)
+{
+  *result = NULL;
+  libc_lock_acquire(&working_guard);
+  if (initialized) {
+    if (working_state && working_state->references == SIZE_MAX) {
+      libc_lock_release(&working_guard);
+      return CALL_LIMIT;
+    }
+    if (working_state) {
+      ++working_state->references;
+    }
+    *result = working_state;
+    libc_lock_release(&working_guard);
+    return CALL_OK;
+  }
+  libc_lock_release(&working_guard);
+  struct working_state *initial = calloc(1, sizeof(*initial));
+  if (!initial) {
+    return CALL_NO_MEMORY;
+  }
+  enum call_status status = initial_snapshot(&initial->snapshot);
+  if (status != CALL_OK) {
+    free(initial);
+    return status;
+  }
+  initial->references = 1;
+  libc_lock_acquire(&working_guard);
+  if (!initialized) {
+    working_state = initial;
+    working = initial->snapshot;
+    initialized = true;
+    initial = NULL;
+  }
+  if (working_state && working_state->references == SIZE_MAX) {
+    status = CALL_LIMIT;
+  } else {
+    if (working_state) {
+      ++working_state->references;
+    }
+    *result = working_state;
+  }
+  libc_lock_release(&working_guard);
+  working_release(initial);
+  return status;
 }
 
 enum call_status pyxis_working_context(const struct path_context **context)
@@ -130,40 +198,30 @@ enum call_status pyxis_working_context(const struct path_context **context)
     return CALL_BAD_REQUEST;
   }
   *context = NULL;
-  enum call_status status = initialize();
+  struct working_state *state;
+  enum call_status status = working_acquire(&state);
   if (status == CALL_OK) {
     *context = &working.context;
+    working_release(state);
   }
   return status;
 }
 
 const char *pyxis_working_path(void)
 {
-  enum call_status status = initialize();
+  struct working_state *state;
+  enum call_status status = working_acquire(&state);
   if (status != CALL_OK) {
     errno = libc_call_errno(status);
     return NULL;
   }
-  return working.path;
+  const char *path = state ? state->snapshot.path : NULL;
+  working_release(state);
+  return path;
 }
 
-enum call_status pyxis_working_bindings(const struct path_root *roots,
-    size_t count, handle_t namespace_handle)
-{
-  if (count && !roots) {
-    return CALL_BAD_REQUEST;
-  }
-  enum call_status status = initialize();
-  if (status == CALL_OK) {
-    working.context.roots = roots;
-    working.context.root_count = count;
-    working.context.namespace_handle = namespace_handle;
-  }
-  return status;
-}
-
-enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snapshot,
-    const char *cwd_override)
+enum call_status libc_working_snapshot_from(const struct pyxis_working_snapshot *source,
+    struct pyxis_working_snapshot *snapshot, const char *cwd_override)
 {
   if (!snapshot) {
     return CALL_BAD_REQUEST;
@@ -172,11 +230,8 @@ enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snap
   if (cwd_override && !*cwd_override) {
     return CALL_BAD_REQUEST;
   }
-  enum call_status status = initialize();
-  if (status != CALL_OK) {
-    return status;
-  }
-  size_t depth = working.context.count;
+  enum call_status status = CALL_OK;
+  size_t depth = source->context.count;
   size_t length = cwd_override ? strlen(cwd_override) : 0;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
@@ -196,9 +251,9 @@ enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snap
     goto done;
   }
   if (cwd_override) {
-    status = libc_path_description(working.path, cwd_override, &snapshot->path);
-  } else if (working.path) {
-    snapshot->path = strdup(working.path);
+    status = libc_path_description(source->path, cwd_override, &snapshot->path);
+  } else if (source->path) {
+    snapshot->path = strdup(source->path);
     if (!snapshot->path) {
       status = CALL_NO_MEMORY;
     }
@@ -207,14 +262,14 @@ enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snap
     goto done;
   }
   status = path_context_init(&snapshot->context, storage, slots,
-      working.context.directories, depth);
+      source->context.directories, depth);
   if (status != CALL_OK) {
     goto done;
   }
   storage = NULL;
-  snapshot->context.roots = working.context.roots;
-  snapshot->context.root_count = working.context.root_count;
-  snapshot->context.namespace_handle = working.context.namespace_handle;
+  snapshot->context.roots = source->context.roots;
+  snapshot->context.root_count = source->context.root_count;
+  snapshot->context.namespace_handle = source->context.namespace_handle;
   if (cwd_override) {
     status = path_change(&snapshot->context, cwd_override, &workspace);
   }
@@ -228,26 +283,95 @@ done:
   return status;
 }
 
+enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snapshot,
+    const char *cwd_override)
+{
+  if (!snapshot) {
+    return CALL_BAD_REQUEST;
+  }
+  *snapshot = (struct pyxis_working_snapshot){0};
+  struct working_state *state;
+  enum call_status status = working_acquire(&state);
+  if (status == CALL_OK) {
+    const struct pyxis_working_snapshot empty = {0};
+    status = libc_working_snapshot_from(state ? &state->snapshot : &empty,
+        snapshot, cwd_override);
+    working_release(state);
+  }
+  return status;
+}
+
+static enum call_status working_replace(const char *path, const struct path_root *roots,
+    size_t count, handle_t namespace_handle, bool bindings)
+{
+  for (;;) {
+    struct working_state *previous;
+    enum call_status status = working_acquire(&previous);
+    if (status != CALL_OK) {
+      return status;
+    }
+    struct working_state *next = calloc(1, sizeof(*next));
+    if (!next) {
+      working_release(previous);
+      return CALL_NO_MEMORY;
+    }
+    next->references = 1;
+    const struct pyxis_working_snapshot empty = {0};
+    status = libc_working_snapshot_from(previous ? &previous->snapshot : &empty,
+        &next->snapshot, path);
+    if (status == CALL_OK && bindings) {
+      next->snapshot.context.roots = roots;
+      next->snapshot.context.root_count = count;
+      next->snapshot.context.namespace_handle = namespace_handle;
+    }
+    if (status != CALL_OK) {
+      working_release(next);
+      working_release(previous);
+      return status;
+    }
+    libc_lock_acquire(&working_guard);
+    bool publish = working_state == previous;
+    if (publish) {
+      working_state = next;
+      working = next->snapshot;
+    }
+    libc_lock_release(&working_guard);
+    if (publish) {
+      working_release(previous); /* Drop the publication reference. */
+      working_release(previous); /* Drop this reader reference. */
+      return CALL_OK;
+    }
+    working_release(next);
+    working_release(previous);
+  }
+}
+
 enum call_status pyxis_working_change(const char *path)
 {
   if (!path || !*path) {
     return CALL_BAD_REQUEST;
   }
-  struct pyxis_working_snapshot next;
-  enum call_status status = pyxis_working_snapshot_init(&next, path);
-  if (status != CALL_OK) {
-    return status;
+  return working_replace(path, NULL, 0, HANDLE_INVALID, false);
+}
+
+enum call_status pyxis_working_bindings(const struct path_root *roots,
+    size_t count, handle_t namespace_handle)
+{
+  if (count && !roots) {
+    return CALL_BAD_REQUEST;
   }
-  struct pyxis_working_snapshot previous = working;
-  working = next;
-  pyxis_working_snapshot_close(&previous);
-  return CALL_OK;
+  return working_replace(NULL, roots, count, namespace_handle, true);
 }
 
 void pyxis_working_clear(void)
 {
-  pyxis_working_snapshot_close(&working);
+  libc_lock_acquire(&working_guard);
+  struct working_state *previous = working_state;
+  working_state = NULL;
+  working = (struct pyxis_working_snapshot){0};
   initialized = true;
+  libc_lock_release(&working_guard);
+  working_release(previous);
 }
 
 int chdir(const char *path)
@@ -262,27 +386,36 @@ int chdir(const char *path)
 
 char *getcwd(char *buffer, size_t size)
 {
-  enum call_status status = initialize();
+  struct working_state *state;
+  enum call_status status = working_acquire(&state);
   if (status != CALL_OK) {
     errno = libc_call_errno(status);
     return NULL;
   }
-  if (!working.path) {
+  if (!state || !state->snapshot.path) {
+    working_release(state);
     errno = ENOTSUP;
     return NULL;
   }
-  size_t length = strlen(working.path) + 1;
+  size_t length = strlen(state->snapshot.path) + 1;
+  int error = 0;
   if ((buffer || size) && size < length) {
-    errno = ERANGE;
-    return NULL;
-  }
-  if (!buffer) {
-    buffer = malloc(size ? size : length);
+    error = ERANGE;
+  } else {
     if (!buffer) {
-      errno = ENOMEM;
-      return NULL;
+      buffer = malloc(size ? size : length);
+      if (!buffer) {
+        error = ENOMEM;
+      }
+    }
+    if (!error) {
+      memcpy(buffer, state->snapshot.path, length);
     }
   }
-  memcpy(buffer, working.path, length);
+  working_release(state);
+  if (error) {
+    errno = error;
+    return NULL;
+  }
   return buffer;
 }

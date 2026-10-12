@@ -9,13 +9,18 @@ extern "C" {
 
 /* One retained native cwd, seeded lazily from startup. The view address stays
  * stable, but its contents and borrowed description change on successful cd.
- * Unknown initial spelling does not prevent relative capability lookup. */
+ * Exclude change, bindings and clear from lookup through the last use of a
+ * borrowed view. Internal file lookup uses owned snapshots instead. Unknown
+ * initial spelling does not prevent relative capability lookup. */
 enum call_status pyxis_working_context(const struct path_context **context);
 const char *pyxis_working_path(void);
 enum call_status pyxis_working_change(const char *path);
 
 /* Borrow a complete binding set and namespace override, with no copies or
- * additional authority. Keep names and grants alive until replaced or cleared.
+ * additional authority. Names and grants remain caller-owned: keep them alive
+ * through every borrowed view and snapshot using them, including after a
+ * replacement; do not mutate them during use. Replacing bindings does not
+ * close or retain their grants.
  * NULL roots and an invalid namespace select the immutable startup bindings. */
 enum call_status pyxis_working_bindings(const struct path_root *roots,
     size_t count, handle_t namespace_handle);

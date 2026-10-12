@@ -28,15 +28,17 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   if (!path || !*path) {
     return CALL_BAD_REQUEST;
   }
-  const struct path_context *context;
-  enum call_status status = pyxis_working_context(&context);
+  struct pyxis_working_snapshot cwd;
+  enum call_status status = pyxis_working_snapshot_init(&cwd, NULL);
   if (status != CALL_OK) {
     return status;
   }
   size_t length = strlen(path);
+  const struct path_context *context = &cwd.context;
   size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    pyxis_working_snapshot_close(&cwd);
     return CALL_LIMIT;
   }
   /* Each path byte can introduce at most one component. This sizes temporary
@@ -47,6 +49,7 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   if (!directories || !component) {
     free(component);
     free(directories);
+    pyxis_working_snapshot_close(&cwd);
     return CALL_NO_MEMORY;
   }
   struct provider_http_workspace *http = NULL;
@@ -55,6 +58,7 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
     if (!http) {
       free(component);
       free(directories);
+      pyxis_working_snapshot_close(&cwd);
       return CALL_NO_MEMORY;
     }
   }
@@ -63,8 +67,7 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
     .component = component, .component_capacity = length + 1,
     .http = http, .response = info, .clock = startup_resource("clock"),
   };
-  /* Resolution borrows the shared cwd; scratch copies retain authority
-   * through each call without changing the retained working chain. */
+  /* The owned cwd remains valid through blocking provider calls. */
   if (native_only) {
     status = path_resolve_native(context, path, kind, rights, &workspace, handle);
   } else if (exclusive) {
@@ -77,6 +80,7 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   free(http);
   free(component);
   free(directories);
+  pyxis_working_snapshot_close(&cwd);
   return status;
 }
 
@@ -210,16 +214,18 @@ static int remove_kind(const char *path, uint64_t kind)
     errno = EINVAL;
     return -1;
   }
-  const struct path_context *context;
-  enum call_status status = pyxis_working_context(&context);
+  struct pyxis_working_snapshot cwd;
+  enum call_status status = pyxis_working_snapshot_init(&cwd, NULL);
   if (status != CALL_OK) {
     errno = libc_path_errno(status, path, NULL);
     return -1;
   }
   size_t length = strlen(path);
+  const struct path_context *context = &cwd.context;
   size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    pyxis_working_snapshot_close(&cwd);
     errno = EOVERFLOW;
     return -1;
   }
@@ -230,6 +236,7 @@ static int remove_kind(const char *path, uint64_t kind)
   if (!directories || !component) {
     free(component);
     free(directories);
+    pyxis_working_snapshot_close(&cwd);
     errno = ENOMEM;
     return -1;
   }
@@ -240,6 +247,7 @@ static int remove_kind(const char *path, uint64_t kind)
   status = path_remove(context, path, kind, &workspace);
   free(component);
   free(directories);
+  pyxis_working_snapshot_close(&cwd);
   if (status != CALL_OK) {
     errno = kind == DIRECTORY_KIND_DIRECTORY && status == CALL_WRONG_TYPE ?
         ENOTDIR : libc_path_errno(status, path, NULL);
@@ -270,16 +278,18 @@ int mkdir(const char *path, mode_t mode)
     errno = EINVAL;
     return -1;
   }
-  const struct path_context *context;
-  enum call_status status = pyxis_working_context(&context);
+  struct pyxis_working_snapshot cwd;
+  enum call_status status = pyxis_working_snapshot_init(&cwd, NULL);
   if (status != CALL_OK) {
     errno = libc_path_errno(status, path, NULL);
     return -1;
   }
   size_t length = strlen(path);
+  const struct path_context *context = &cwd.context;
   size_t depth = context->count;
   if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
       depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    pyxis_working_snapshot_close(&cwd);
     errno = EOVERFLOW;
     return -1;
   }
@@ -290,6 +300,7 @@ int mkdir(const char *path, mode_t mode)
   if (!directories || !component) {
     free(component);
     free(directories);
+    pyxis_working_snapshot_close(&cwd);
     errno = ENOMEM;
     return -1;
   }
@@ -300,6 +311,7 @@ int mkdir(const char *path, mode_t mode)
   status = path_create_directory(context, path, &workspace);
   free(component);
   free(directories);
+  pyxis_working_snapshot_close(&cwd);
   if (status != CALL_OK) {
     errno = libc_path_errno(status, path, NULL);
     return -1;
@@ -311,12 +323,13 @@ int rename(const char *old_path, const char *new_path)
 {
   const char *paths[] = {old_path, new_path};
   struct path_workspace workspaces[2] = {0};
-  const struct path_context *context;
-  enum call_status status = pyxis_working_context(&context);
+  struct pyxis_working_snapshot cwd;
+  enum call_status status = pyxis_working_snapshot_init(&cwd, NULL);
   if (status != CALL_OK) {
     errno = libc_path_errno(status, old_path, new_path);
     return -1;
   }
+  const struct path_context *context = &cwd.context;
   size_t depth = context->count;
   for (size_t i = 0; i < 2; ++i) {
     if (!paths[i] || !*paths[i]) {
@@ -346,6 +359,7 @@ done:
     free(workspaces[i].component);
     free(workspaces[i].directories);
   }
+  pyxis_working_snapshot_close(&cwd);
   if (status != CALL_OK) {
     errno = libc_path_errno(status, old_path, new_path);
     return -1;

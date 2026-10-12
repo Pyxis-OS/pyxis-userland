@@ -5,9 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include "errors.h"
+#include "thread_sync.h"
 
-static struct pyxis_environment_snapshot environment;
-static bool environment_initialized;
+/* Published snapshots are immutable; the guard protects references and the
+ * current pointer. Readers copy outside the guard while retaining their state. */
+struct environment_state {
+  size_t references;
+  struct pyxis_environment_snapshot snapshot;
+};
+
+static struct libc_lock environment_guard;
+static struct environment_state *environment;
 
 static bool name_valid(const char *name)
 {
@@ -86,15 +94,57 @@ static enum call_status snapshot_copy(const struct startup_variable *variables,
   return CALL_OK;
 }
 
-static enum call_status environment_init(void)
+static void environment_release(struct environment_state *state)
 {
-  if (environment_initialized) {
+  libc_lock_acquire(&environment_guard);
+  bool destroy = !--state->references;
+  libc_lock_release(&environment_guard);
+  if (destroy) {
+    pyxis_environment_snapshot_close(&state->snapshot);
+    free(state);
+  }
+}
+
+static enum call_status environment_acquire(struct environment_state **result)
+{
+  libc_lock_acquire(&environment_guard);
+  if (environment) {
+    if (environment->references == SIZE_MAX) {
+      libc_lock_release(&environment_guard);
+      return CALL_LIMIT;
+    }
+    ++environment->references;
+    *result = environment;
+    libc_lock_release(&environment_guard);
     return CALL_OK;
   }
+  libc_lock_release(&environment_guard);
+
+  struct environment_state *initial = calloc(1, sizeof(*initial));
+  if (!initial) {
+    return CALL_NO_MEMORY;
+  }
   enum call_status status = snapshot_copy(startup_environment_variables(),
-    startup_environment_count(), &environment);
-  if (status == CALL_OK) {
-    environment_initialized = true;
+      startup_environment_count(), &initial->snapshot);
+  if (status != CALL_OK) {
+    free(initial);
+    return status;
+  }
+  initial->references = 1;
+  libc_lock_acquire(&environment_guard);
+  if (!environment) {
+    environment = initial;
+    initial = NULL;
+  }
+  if (environment->references == SIZE_MAX) {
+    status = CALL_LIMIT;
+  } else {
+    ++environment->references;
+    *result = environment;
+  }
+  libc_lock_release(&environment_guard);
+  if (initial) {
+    environment_release(initial);
   }
   return status;
 }
@@ -105,36 +155,25 @@ enum call_status pyxis_environment_snapshot_init(struct pyxis_environment_snapsh
     return CALL_BAD_REQUEST;
   }
   *snapshot = (struct pyxis_environment_snapshot){0};
-  enum call_status status = environment_init();
-  if (status != CALL_OK) {
-    return status;
+  struct environment_state *state;
+  enum call_status status = environment_acquire(&state);
+  if (status == CALL_OK) {
+    status = snapshot_copy(state->snapshot.variables, state->snapshot.count, snapshot);
+    environment_release(state);
   }
-  return snapshot_copy(environment.variables, environment.count, snapshot);
+  return status;
 }
 
-static size_t environment_find(const char *name)
+static size_t environment_find(const struct pyxis_environment_snapshot *snapshot,
+    const char *name)
 {
-  for (size_t index = 0; index < environment.count; index++) {
-    const char *stored_name = (const char *)(uintptr_t)environment.variables[index].name;
+  for (size_t index = 0; index < snapshot->count; index++) {
+    const char *stored_name = (const char *)(uintptr_t)snapshot->variables[index].name;
     if (strcmp(name, stored_name) == 0) {
       return index;
     }
   }
-  return environment.count;
-}
-
-static int environment_ready(const char *name)
-{
-  if (!name_valid(name)) {
-    errno = EINVAL;
-    return -1;
-  }
-  enum call_status status = environment_init();
-  if (status != CALL_OK) {
-    errno = libc_call_errno(status);
-    return -1;
-  }
-  return 0;
+  return snapshot->count;
 }
 
 enum call_status pyxis_environment_get(const char *name, const char **value)
@@ -146,16 +185,40 @@ enum call_status pyxis_environment_get(const char *name, const char **value)
   if (!name_valid(name)) {
     return CALL_BAD_REQUEST;
   }
-  enum call_status status = environment_init();
+  struct environment_state *state;
+  enum call_status status = environment_acquire(&state);
   if (status != CALL_OK) {
     return status;
   }
-  size_t index = environment_find(name);
-  if (index == environment.count) {
-    return CALL_NOT_FOUND;
+  size_t index = environment_find(&state->snapshot, name);
+  if (index == state->snapshot.count) {
+    status = CALL_NOT_FOUND;
+  } else {
+    *value = (const char *)(uintptr_t)state->snapshot.variables[index].value;
   }
-  *value = (const char *)(uintptr_t)environment.variables[index].value;
-  return CALL_OK;
+  environment_release(state);
+  return status;
+}
+
+enum call_status pyxis_environment_copy(const char *name, char **value)
+{
+  if (!value) {
+    return CALL_BAD_REQUEST;
+  }
+  *value = NULL;
+  if (!name_valid(name)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct environment_state *state;
+  enum call_status status = environment_acquire(&state);
+  if (status != CALL_OK) {
+    return status;
+  }
+  size_t index = environment_find(&state->snapshot, name);
+  status = index == state->snapshot.count ? CALL_NOT_FOUND :
+      string_copy((const char *)(uintptr_t)state->snapshot.variables[index].value, value);
+  environment_release(state);
+  return status;
 }
 
 char *getenv(const char *name)
@@ -168,75 +231,105 @@ char *getenv(const char *name)
   return (char *)value;
 }
 
+static int environment_mutate(const char *name, const char *value, bool overwrite)
+{
+  if (!name_valid(name)) {
+    errno = EINVAL;
+    return -1;
+  }
+  for (;;) {
+    struct environment_state *previous;
+    enum call_status status = environment_acquire(&previous);
+    if (status != CALL_OK) {
+      errno = libc_call_errno(status);
+      return -1;
+    }
+    size_t index = environment_find(&previous->snapshot, name);
+    bool found = index < previous->snapshot.count;
+    if ((value && found && !overwrite) || (!value && !found)) {
+      environment_release(previous);
+      return 0;
+    }
+    struct environment_state *next = calloc(1, sizeof(*next));
+    if (!next) {
+      environment_release(previous);
+      errno = ENOMEM;
+      return -1;
+    }
+    next->references = 1;
+    status = snapshot_copy(previous->snapshot.variables, previous->snapshot.count,
+        &next->snapshot);
+    if (status == CALL_OK && !value) {
+      free((void *)(uintptr_t)next->snapshot.variables[index].name);
+      free((void *)(uintptr_t)next->snapshot.variables[index].value);
+      --next->snapshot.count;
+      memmove(&next->snapshot.variables[index], &next->snapshot.variables[index + 1],
+          (next->snapshot.count - index) * sizeof(*next->snapshot.variables));
+    } else if (status == CALL_OK) {
+      char *copy = NULL;
+      status = string_copy(value, &copy);
+      if (status == CALL_OK && found) {
+        free((void *)(uintptr_t)next->snapshot.variables[index].value);
+        next->snapshot.variables[index].value = (uint64_t)(uintptr_t)copy;
+      } else if (status == CALL_OK) {
+        char *name_copy = NULL;
+        status = string_copy(name, &name_copy);
+        if (status == CALL_OK &&
+            next->snapshot.count >= SIZE_MAX / sizeof(struct startup_variable)) {
+          status = CALL_LIMIT;
+        }
+        struct startup_variable *variables = NULL;
+        if (status == CALL_OK) {
+          variables = realloc(next->snapshot.variables,
+              (next->snapshot.count + 1) * sizeof(*variables));
+          if (!variables) {
+            status = CALL_NO_MEMORY;
+          }
+        }
+        if (status == CALL_OK) {
+          next->snapshot.variables = variables;
+          variables[next->snapshot.count++] = (struct startup_variable){
+            .name = (uint64_t)(uintptr_t)name_copy,
+            .value = (uint64_t)(uintptr_t)copy,
+          };
+        } else {
+          free(name_copy);
+          free(copy);
+        }
+      }
+    }
+    if (status != CALL_OK) {
+      environment_release(next);
+      environment_release(previous);
+      errno = libc_call_errno(status);
+      return -1;
+    }
+    libc_lock_acquire(&environment_guard);
+    bool publish = environment == previous;
+    if (publish) {
+      environment = next;
+    }
+    libc_lock_release(&environment_guard);
+    if (publish) {
+      environment_release(previous); /* Drop the publication reference. */
+      environment_release(previous); /* Drop this reader reference. */
+      return 0;
+    }
+    environment_release(next);
+    environment_release(previous);
+  }
+}
+
 int setenv(const char *name, const char *value, int overwrite)
 {
   if (!value) {
     errno = EINVAL;
     return -1;
   }
-  if (environment_ready(name) < 0) {
-    return -1;
-  }
-  size_t index = environment_find(name);
-  if (index < environment.count && !overwrite) {
-    return 0;
-  }
-
-  char *value_copy = NULL;
-  enum call_status status = string_copy(value, &value_copy);
-  if (status != CALL_OK) {
-    errno = libc_call_errno(status);
-    return -1;
-  }
-  if (index < environment.count) {
-    free((void *)(uintptr_t)environment.variables[index].value);
-    environment.variables[index].value = (uint64_t)(uintptr_t)value_copy;
-    return 0;
-  }
-
-  char *name_copy = NULL;
-  status = string_copy(name, &name_copy);
-  if (status != CALL_OK) {
-    free(value_copy);
-    errno = libc_call_errno(status);
-    return -1;
-  }
-  if (environment.count >= SIZE_MAX / sizeof(*environment.variables)) {
-    free(name_copy);
-    free(value_copy);
-    errno = EOVERFLOW;
-    return -1;
-  }
-  struct startup_variable *variables = realloc(environment.variables,
-    (environment.count + 1) * sizeof(*variables));
-  if (!variables) {
-    free(name_copy);
-    free(value_copy);
-    errno = ENOMEM;
-    return -1;
-  }
-  variables[environment.count] = (struct startup_variable){
-    .name = (uint64_t)(uintptr_t)name_copy,
-    .value = (uint64_t)(uintptr_t)value_copy,
-  };
-  environment.variables = variables;
-  environment.count++;
-  return 0;
+  return environment_mutate(name, value, overwrite != 0);
 }
 
 int unsetenv(const char *name)
 {
-  if (environment_ready(name) < 0) {
-    return -1;
-  }
-  size_t index = environment_find(name);
-  if (index == environment.count) {
-    return 0;
-  }
-  free((void *)(uintptr_t)environment.variables[index].name);
-  free((void *)(uintptr_t)environment.variables[index].value);
-  environment.count--;
-  memmove(&environment.variables[index], &environment.variables[index + 1],
-    (environment.count - index) * sizeof(*environment.variables));
-  return 0;
+  return environment_mutate(name, NULL, false);
 }

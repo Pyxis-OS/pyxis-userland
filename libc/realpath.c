@@ -62,7 +62,7 @@ static enum call_status target_info(handle_t handle, uint64_t kind,
 
 /* Retaining a cwd is sufficient for relative lookup, but its tracked description
  * does not prove any of its parents. Check the whole live chain, not just cwd. */
-static enum call_status prove_ancestry(const struct path_context *original, const char *path)
+static enum call_status prove_ancestry(const struct pyxis_working_snapshot *cwd, const char *path)
 {
   if (!path) {
     return CALL_BAD_OPERATION;
@@ -71,7 +71,8 @@ static enum call_status prove_ancestry(const struct path_context *original, cons
     return CALL_LIMIT;
   }
   struct pyxis_working_snapshot candidate;
-  enum call_status status = pyxis_working_snapshot_init(&candidate, path);
+  enum call_status status = libc_working_snapshot_from(cwd, &candidate, path);
+  const struct path_context *original = &cwd->context;
   if (status != CALL_OK) {
     return status;
   }
@@ -103,13 +104,15 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
     errno = ENAMETOOLONG;
     return NULL;
   }
-  const struct path_context *context;
-  enum call_status status = pyxis_working_context(&context);
+  struct pyxis_working_snapshot cwd;
+  enum call_status status = pyxis_working_snapshot_init(&cwd, NULL);
   if (status != CALL_OK) {
     errno = libc_path_errno(status, path, NULL);
     return NULL;
   }
+  const struct path_context *context = &cwd.context;
   if (context->count > SIZE_MAX / sizeof(handle_t) - PATH_MAX - 1) {
+    pyxis_working_snapshot_close(&cwd);
     errno = EOVERFLOW;
     return NULL;
   }
@@ -119,6 +122,7 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
   if (!directories || !component) {
     free(component);
     free(directories);
+    pyxis_working_snapshot_close(&cwd);
     errno = ENOMEM;
     return NULL;
   }
@@ -139,9 +143,9 @@ char *realpath(const char *__restrict path, char *__restrict resolved)
   if (status == CALL_OK && (original_info.valid & IDENTITY_VALID) != IDENTITY_VALID) {
     status = CALL_BAD_OPERATION;
   }
-  const char *current = pyxis_working_path();
+  const char *current = cwd.path;
   if (status == CALL_OK && !explicit_scheme(path)) {
-    status = prove_ancestry(context, current);
+    status = prove_ancestry(&cwd, current);
   }
   if (status == CALL_OK) {
     status = libc_path_description(current, path, &description);
@@ -172,6 +176,7 @@ done:
   }
   free(component);
   free(directories);
+  pyxis_working_snapshot_close(&cwd);
   if (error) {
     free(description);
     errno = error;
