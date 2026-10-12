@@ -515,7 +515,10 @@ static enum call_status close_transport(struct http_stream *fetch, bool framed)
         status = aborted;
       }
     } else {
-      tcp_shutdown_write(fetch->stream);
+      enum call_status stopped = tcp_shutdown_write(fetch->stream);
+      if (status == CALL_OK) {
+        status = stopped;
+      }
     }
     if (handle_close(fetch->stream) != 0 && status == CALL_OK) {
       status = CALL_BAD_HANDLE;
