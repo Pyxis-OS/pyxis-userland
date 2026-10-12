@@ -510,7 +510,10 @@ static enum call_status close_transport(struct http_stream *fetch, bool framed)
   }
   if (fetch->stream != HANDLE_INVALID) {
     if (!framed || !fetch->result->request_sent) {
-      status = tcp_abort(fetch->stream);
+      enum call_status aborted = tcp_abort(fetch->stream);
+      if (status == CALL_OK) {
+        status = aborted;
+      }
     } else {
       tcp_shutdown_write(fetch->stream);
     }
@@ -1074,6 +1077,13 @@ uint64_t http_stream_pending(const struct http_stream *stream)
   return stream->pending ? stream->pending : stream->dns.pending;
 }
 
+static void retain_dns_cleanup(struct http_stream *stream)
+{
+  if (stream->result->close_status == CALL_OK) {
+    stream->result->close_status = stream->dns.exchange.cleanup_status;
+  }
+}
+
 enum call_status http_stream_abort(struct http_stream *stream)
 {
   if (!stream->cooperative) {
@@ -1097,13 +1107,15 @@ enum call_status http_stream_abort(struct http_stream *stream)
   if (stream->dns.endpoint != HANDLE_INVALID) {
     dns_query_abort(&stream->dns);
   }
+  retain_dns_cleanup(stream);
   http_release_request(&stream->outgoing);
-  return CALL_OK;
+  return stream->result->close_status;
 }
 
 bool http_stream_completion(struct http_stream *stream, const struct endpoint_packet *packet)
 {
   if (stream->dns.pending && dns_query_completion(&stream->dns, packet)) {
+    retain_dns_cleanup(stream);
     return true;
   }
   if (!stream->pending || packet->kind != ENDPOINT_MESSAGE_COMPLETION ||
@@ -1248,7 +1260,9 @@ enum http_step_result http_stream_step(struct http_stream *stream, void *bytes,
           stream->authority.random, stream->authority.dns_server, &name,
           stream->deadline, stream->receiver, stream->next_id);
     }
-    switch (dns_query_step(&stream->dns)) {
+    enum dns_query_step dns_step = dns_query_step(&stream->dns);
+    retain_dns_cleanup(stream);
+    switch (dns_step) {
     case DNS_QUERY_WAIT:
       step_result(stream, HTTP_STEP_WAIT, wait);
       wait->deadline_ns = stream->dns.attempt_deadline;
@@ -1256,7 +1270,8 @@ enum http_step_result http_stream_step(struct http_stream *stream, void *bytes,
     case DNS_QUERY_PROGRESS:
       return HTTP_STEP_PROGRESS;
     case DNS_QUERY_DONE:
-      if (!network(stream, stream->dns.exchange.status)) {
+      if (!network(stream, stream->dns.exchange.status) ||
+          !network(stream, stream->result->close_status)) {
         break;
       }
       stream->result->dns_rcode = stream->dns.exchange.reply.rcode;

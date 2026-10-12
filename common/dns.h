@@ -60,6 +60,7 @@ struct dns_exchange {
   struct dns_reply reply;
   enum dns_response response;
   enum call_status status;
+  enum call_status cleanup_status; /* First endpoint cleanup failure, independent of status. */
   const char *operation; /* Diagnostic stage on native failure. */
 };
 

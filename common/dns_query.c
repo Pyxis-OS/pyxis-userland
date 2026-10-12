@@ -105,17 +105,22 @@ static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_
   /* CLOSE retires asynchronously. SHUTDOWN releases the port before a retry. */
   enum call_status stopped = udp_shutdown(endpoint.handle);
   int closed = handle_close(endpoint.handle);
-  if (exchange->status == CALL_OK && (stopped != CALL_OK || closed)) {
+  enum call_status cleanup = stopped != CALL_OK ? stopped : closed ? CALL_BAD_HANDLE : CALL_OK;
+  if (exchange->cleanup_status == CALL_OK) {
+    exchange->cleanup_status = cleanup;
+  }
+  if (exchange->status == CALL_OK && cleanup != CALL_OK) {
     exchange->operation = "UDP cleanup";
-    exchange->status = stopped != CALL_OK ? stopped : CALL_BAD_HANDLE;
+    exchange->status = cleanup;
   }
 }
 
 void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
     const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
 {
+  enum call_status cleanup = CALL_OK;
   for (unsigned i = 0; i < DNS_ATTEMPTS; ++i) {
-    *exchange = (struct dns_exchange){0};
+    *exchange = (struct dns_exchange){.cleanup_status = cleanup};
     if (deadline_ns) {
       exchange->operation = "clock";
       exchange->status = check_deadline(clock, deadline_ns);
@@ -124,6 +129,7 @@ void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
       }
     }
     query_attempt(udp, clock, random, server, name, deadline_ns, exchange);
+    cleanup = exchange->cleanup_status;
     if (exchange->status != CALL_TIMED_OUT) {
       return;
     }
@@ -143,9 +149,13 @@ static void query_close(struct dns_query_state *query)
   enum call_status stopped = udp_shutdown(query->endpoint);
   int closed = handle_close(query->endpoint);
   query->endpoint = HANDLE_INVALID;
-  if (query->exchange.status == CALL_OK && (stopped != CALL_OK || closed)) {
+  enum call_status cleanup = stopped != CALL_OK ? stopped : closed ? CALL_BAD_HANDLE : CALL_OK;
+  if (query->exchange.cleanup_status == CALL_OK) {
+    query->exchange.cleanup_status = cleanup;
+  }
+  if (query->exchange.status == CALL_OK && cleanup != CALL_OK) {
     query->exchange.operation = "UDP cleanup";
-    query->exchange.status = stopped != CALL_OK ? stopped : CALL_BAD_HANDLE;
+    query->exchange.status = cleanup;
   }
 }
 
@@ -185,7 +195,8 @@ enum dns_query_step dns_query_step(struct dns_query_state *query)
     return query_done(query);
   }
   if (query->stage == DNS_STAGE_OPEN) {
-    query->exchange = (struct dns_exchange){.operation = "clock"};
+    query->exchange = (struct dns_exchange){.operation = "clock",
+      .cleanup_status = query->exchange.cleanup_status};
     query->exchange.status = udp_deadline(query->clock, DNS_ATTEMPT_NS,
         &query->attempt_deadline);
     if (query->exchange.status != CALL_OK) {
