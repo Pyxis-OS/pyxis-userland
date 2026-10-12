@@ -173,7 +173,12 @@ enum call_status http_transaction_status(handle_t observation, uint64_t deadline
   memcpy(&response, packet.data, sizeof(response));
   if (response.phase > HTTP_TRANSACTION_ABORTED || response.submission > HTTP_SUBMISSION_SENT ||
       response.status >= CALL_STATUS_COUNT || response.source_status >= CALL_STATUS_COUNT ||
-      response.cleanup_status >= CALL_STATUS_COUNT) {
+      response.cleanup_status >= CALL_STATUS_COUNT ||
+      response.framing > HTTP_FRAMING_FAILED || response.http_status > 999 ||
+      (response.http_status && response.http_status < 100) ||
+      response.tls_native_status >= CALL_STATUS_COUNT || response.tls_cleanup_attempted > 1 ||
+      !memchr(response.media_type, 0, sizeof(response.media_type)) ||
+      !memchr(response.location, 0, sizeof(response.location))) {
     return CALL_BAD_REQUEST;
   }
   *status = response;
