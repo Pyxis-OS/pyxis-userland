@@ -52,6 +52,12 @@ codecs and explicit install-mode disk/source grants. It is packaged normally;
 `init-installed` receives the persistent `system://` and `home://` volumes from
 boot init while retaining RAM `tmp://`.
 
+The dedicated [native FAT32 inspection bootstrap](init-fat32-mount/README.md)
+mounts an explicit scratch GPT selection or the trusted boot-ESP selection
+read-only, delegates an `esp` root to direct ordinary `ls`/`cat` children and
+explicitly retires the mount after closing data views. It is separate from raw
+inspection/writing and supplies no installed shell binding or editor workflow.
+
 `boot://boot-init.pxe` is the boot init the kernel starts in Caelum's space. It
 reads `config/live.lua`, or `config/installed.lua` plus the pool override
 `system://config/boot.lua` on installed boots, mounts each configured volume

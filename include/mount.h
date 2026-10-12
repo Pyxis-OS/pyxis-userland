@@ -26,4 +26,25 @@ enum call_status mount_open_volume(handle_t mount, uint64_t partition,
  * outcome unknown, with no automatic retry. */
 enum call_status mount_sync(handle_t mount);
 
+/* Borrow the fixed boot-ESP issuer. No device/partition selector is accepted.
+ * Rights are exact LOOKUP/ENUMERATE/READ_FILES bits. Success owns a root/control
+ * pair; failure clears both. No URI binding or implicit mount is performed.
+ * Malformed replies are outcome unknown; never retry uncertain admission
+ * automatically. Closing either handle does not retire the instance. */
+enum call_status mount_open_fat32(handle_t issuer, uint64_t rights,
+    struct mount_fat32_reply *mount);
+
+/* Reopen only the bound FAT32 instance under its original rights ceiling.
+ * Success owns a root; failure clears it. Retired controls cannot reopen. */
+enum call_status mount_reopen_fat32(handle_t control, uint64_t rights, handle_t *root);
+
+/* Observe actual bound-instance state through OBSERVE. Failure preserves state.
+ * A retired control remains an observable tombstone. */
+enum call_status mount_observe(handle_t control, struct mount_state_reply *state);
+
+/* Requires RETIRE. BUSY leaves the instance active while data objects, admitted
+ * work or cleanup remain. OK completes retirement and releases exclusion;
+ * repeating on a retired control is safe. Closing controls never retires. */
+enum call_status mount_retire(handle_t control);
+
 #endif
