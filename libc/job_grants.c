@@ -1,4 +1,5 @@
 #include "job_internal.h"
+#include <directory.h>
 #include <handle.h>
 #include <abi/audio.h>
 #include <abi/clipboard.h>
@@ -192,5 +193,78 @@ enum call_status libc_job_validate_grants(const struct launch_grant *grants, siz
       return status;
     }
   }
+  return CALL_OK;
+}
+
+static bool capture_protocol_denied(uint64_t protocol)
+{
+  switch (protocol) {
+  case PROTOCOL_CONSOLE:
+  case PROTOCOL_KEYBOARD:
+  case PROTOCOL_POINTER:
+  case PROTOCOL_DISPLAY:
+  case PROTOCOL_SCREEN_CAPTURE:
+  case PROTOCOL_CLIPBOARD:
+  case PROTOCOL_AUDIO:
+  case PROTOCOL_SPACE:
+  case PROTOCOL_LOG:
+  case PROTOCOL_MOUNT:
+  case PROTOCOL_DISKS:
+  case PROTOCOL_DISK:
+    return true;
+  default:
+    return false;
+  }
+}
+
+enum call_status libc_job_validate_capture_grants(const struct launch_grant *grants,
+    size_t count, handle_t private_root)
+{
+  enum call_status status = libc_job_validate_grants(grants, count);
+  if (status != CALL_OK) {
+    return status;
+  }
+  struct handle_info root_info;
+  status = handle_query(private_root, &root_info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (root_info.protocol != PROTOCOL_DIRECTORY || root_info.kind != HANDLE_KIND_NATIVE ||
+      root_info.transport) {
+    return CALL_WRONG_TYPE;
+  }
+  struct file_info_reply root_identity;
+  status = directory_info(private_root, &root_identity);
+  if (status != CALL_OK) {
+    return status;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (grants[i].source == private_root) {
+      return CALL_DENIED;
+    }
+    struct handle_info info;
+    status = handle_query(grants[i].source, &info);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (capture_protocol_denied(info.protocol)) {
+      return CALL_DENIED;
+    }
+    if (info.protocol == PROTOCOL_DIRECTORY) {
+      struct file_info_reply identity;
+      status = directory_info(grants[i].source, &identity);
+      if (status != CALL_OK) {
+        return status;
+      }
+      uint64_t identity_bits = FILE_INFO_DOMAIN_VALID | FILE_INFO_OBJECT_VALID;
+      if ((root_identity.valid & identity_bits) == identity_bits &&
+          (identity.valid & identity_bits) == identity_bits &&
+          root_identity.domain == identity.domain && root_identity.object == identity.object) {
+        return CALL_DENIED;
+      }
+    }
+  }
+  /* Identity can reject known aliases, but cannot establish private RAM backing,
+   * exclusive access, subtree isolation or trusted provider/credential behavior. */
   return CALL_OK;
 }

@@ -298,7 +298,7 @@ static enum call_status capture_stream(struct job_preparation *prepared,
 }
 
 static enum call_status capture_handles(struct job_preparation *prepared,
-    handle_t launcher, const struct pyxis_job_options *options)
+    handle_t launcher, const struct pyxis_job_options *options, handle_t private_root)
 {
   struct handle_info info;
   enum call_status status = handle_query(launcher, &info);
@@ -348,7 +348,17 @@ static enum call_status capture_handles(struct job_preparation *prepared,
       }
     }
   }
-  status = libc_job_validate_grants(prepared->grants, prepared->request.grant_count);
+  if (private_root != HANDLE_INVALID) {
+    if (prepared->request.streams[STARTUP_STDIN].protocol != STARTUP_STREAM_NONE ||
+        prepared->request.streams[STARTUP_STDOUT].protocol != PROTOCOL_FILE ||
+        prepared->request.streams[STARTUP_STDERR].protocol != PROTOCOL_FILE) {
+      return CALL_DENIED;
+    }
+    status = libc_job_validate_capture_grants(prepared->grants,
+        prepared->request.grant_count, private_root);
+  } else {
+    status = libc_job_validate_grants(prepared->grants, prepared->request.grant_count);
+  }
   if (status != CALL_OK) {
     return status;
   }
@@ -389,7 +399,7 @@ static void discard_preparation(struct job_preparation *prepared)
 }
 
 enum call_status libc_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t *observer)
+    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer)
 {
   *observer = HANDLE_INVALID;
   struct pyxis_job_options selected = *options;
@@ -400,7 +410,7 @@ enum call_status libc_job_launch(handle_t launcher,
   }
   enum call_status status = capture_metadata(&prepared, &selected);
   if (status == CALL_OK) {
-    status = capture_handles(&prepared, launcher, &selected);
+    status = capture_handles(&prepared, launcher, &selected, private_root);
   }
   if (status == CALL_OK) {
     for (size_t i = STARTUP_STDOUT; i < STARTUP_STREAM_COUNT; ++i) {

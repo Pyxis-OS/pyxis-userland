@@ -564,6 +564,12 @@ belongs to the trusted caller; no descendant launch, bundle expansion, capture,
 deadline or implicit inheritance is added. See the header for ownership and
 the uncertain-publication rule.
 
+[pyxis/capture.h](libc/include/pyxis/capture.h) adds private unlinked RAM FILE
+stdout/stderr, an absolute deadline, polled per-stream limits and capped reads.
+The caller supplies an explicitly private work root and audits child reachability.
+It retains storage through process retirement and, optionally, a fresh group.
+Unknown direct admission stays quarantined until caller/session teardown.
+
 ## License
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See

@@ -9,8 +9,8 @@ struct pyxis_job {
   bool complete;
 };
 
-enum call_status pyxis_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, struct pyxis_job **job)
+static enum call_status launch_job(handle_t launcher,
+    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job)
 {
   if (!job) {
     return CALL_BAD_REQUEST;
@@ -23,13 +23,31 @@ enum call_status pyxis_job_launch(handle_t launcher,
   if (!owned) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = libc_job_launch(launcher, options, &owned->observer);
+  enum call_status status = libc_job_launch(launcher, options, private_root, &owned->observer);
   if (status != CALL_OK) {
     free(owned);
     return status;
   }
   *job = owned;
   return CALL_OK;
+}
+
+enum call_status pyxis_job_launch(handle_t launcher,
+    const struct pyxis_job_options *options, struct pyxis_job **job)
+{
+  return launch_job(launcher, options, HANDLE_INVALID, job);
+}
+
+enum call_status libc_job_launch_captured(handle_t launcher,
+    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job)
+{
+  if (private_root == HANDLE_INVALID) {
+    if (job) {
+      *job = NULL;
+    }
+    return CALL_BAD_REQUEST;
+  }
+  return launch_job(launcher, options, private_root, job);
 }
 
 handle_t pyxis_job_observer(const struct pyxis_job *job)
