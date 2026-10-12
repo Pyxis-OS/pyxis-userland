@@ -38,6 +38,19 @@ enum call_status pyxis_job_launch(handle_t launcher,
   return launch_job(launcher, options, HANDLE_INVALID, job);
 }
 
+enum call_status pyxis_job_launch_observer(handle_t launcher,
+    const struct pyxis_job_options *options, handle_t *observer)
+{
+  if (!observer) {
+    return CALL_BAD_REQUEST;
+  }
+  *observer = HANDLE_INVALID;
+  if (!options) {
+    return CALL_BAD_REQUEST;
+  }
+  return libc_job_launch(launcher, options, HANDLE_INVALID, observer);
+}
+
 enum call_status libc_job_launch_captured(handle_t launcher,
     const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job)
 {
