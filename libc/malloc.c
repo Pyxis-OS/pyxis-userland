@@ -8,6 +8,7 @@
 #include <tlsf.h>
 #include "runtime.h"
 #include "tlsf_user.h"
+#include "thread_sync.h"
 
 #define HEAP_ALIGNMENT 16
 #define HEAP_ALIGNMENT_MAX MEMORY_PAGE_SIZE
@@ -17,6 +18,7 @@
 
 static unsigned char control[HEAP_CONTROL_BYTES] __attribute__((aligned(HEAP_ALIGNMENT)));
 static tlsf_t allocator;
+static struct libc_lock heap_guard;
 static handle_t memory = HANDLE_INVALID;
 
 void malloc_init(void)
@@ -32,7 +34,7 @@ void malloc_init(void)
   handle_copy_restricted(startup_resource("memory"), MEMORY_RIGHT_MANAGE, 0, &memory);
 }
 
-static bool add_pool(size_t request)
+static bool allocate_pool(size_t request, struct memory_region *region)
 {
   size_t overhead = tlsf_pool_overhead() + HEAP_POOL_PREFIX_BYTES;
   /* Leave space for memalign's leading split and TLSF size-class rounding. */
@@ -53,17 +55,7 @@ static bool add_pool(size_t request)
     return false;
   }
 
-  struct memory_region region;
-  if (memory_allocate(memory, bytes, &region) != CALL_OK) {
-    return false;
-  }
-  /* TLSF forms a header one word before the pool; keep it inside our mapping. */
-  void *pool = (unsigned char *)(uintptr_t)region.address + HEAP_POOL_PREFIX_BYTES;
-  if (!tlsf_add_pool(allocator, pool, region.size - HEAP_POOL_PREFIX_BYTES)) {
-    tlsf_assert(memory_release(memory, region) == CALL_OK);
-    return false;
-  }
-  return true;
+  return memory_allocate(memory, bytes, region) == CALL_OK;
 }
 
 static void *allocate(size_t alignment, size_t size)
@@ -74,10 +66,30 @@ static void *allocate(size_t alignment, size_t size)
     errno = ENOMEM;
     return NULL;
   }
+  libc_lock_acquire(&heap_guard);
   void *pointer = tlsf_memalign(allocator, alignment, size);
-  /* A new pool also needs room for the leading gap of a stricter alignment. */
-  if (!pointer && add_pool(size + (alignment - HEAP_ALIGNMENT))) {
-    pointer = tlsf_memalign(allocator, alignment, size);
+  libc_lock_release(&heap_guard);
+  if (pointer) {
+    return pointer;
+  }
+
+  /* Native growth pauses siblings, which may own the heap guard. Growth and
+   * failed-pool release happen outside it. Concurrent growers each publish a
+   * retained pool and allocate before another caller can consume it. */
+  struct memory_region region;
+  if (allocate_pool(size + (alignment - HEAP_ALIGNMENT), &region)) {
+    /* TLSF forms a header one word before the pool; keep it inside our mapping. */
+    void *pool = (unsigned char *)(uintptr_t)region.address + HEAP_POOL_PREFIX_BYTES;
+    libc_lock_acquire(&heap_guard);
+    bool added = tlsf_add_pool(allocator, pool,
+        region.size - HEAP_POOL_PREFIX_BYTES) != NULL;
+    if (added) {
+      pointer = tlsf_memalign(allocator, alignment, size);
+    }
+    libc_lock_release(&heap_guard);
+    if (!added) {
+      tlsf_assert(memory_release(memory, region) == CALL_OK);
+    }
   }
   if (!pointer) {
     errno = ENOMEM;
@@ -108,7 +120,9 @@ void *aligned_alloc(size_t alignment, size_t size)
 void free(void *pointer)
 {
   if (pointer) {
+    libc_lock_acquire(&heap_guard);
     tlsf_free(allocator, pointer);
+    libc_lock_release(&heap_guard);
   }
 }
 
@@ -135,7 +149,9 @@ void *realloc(void *pointer, size_t size)
   if (!pointer) {
     return malloc(size);
   }
+  libc_lock_acquire(&heap_guard);
   size_t capacity = tlsf_block_size(pointer);
+  libc_lock_release(&heap_guard);
   if (size <= capacity) {
     return pointer;
   }
