@@ -842,26 +842,30 @@ static int create_browser(bool boot_selected, bool writable)
   for (uint64_t i = 0; i < cpu.online_count; ++i) {
     cpus[i / 64] |= UINT64_C(1) << (i % 64);
   }
-  struct launch_grant grants[] = {
-    {sources[AUTHORITY], boot_selected ? MOUNT_RIGHT_OPEN_ROOT :
+  enum { GRANT_AUTHORITY, GRANT_MEMORY, GRANT_LAUNCHER, GRANT_BOOT, GRANT_TMP, GRANT_COUNT };
+  struct launch_grant grants[GRANT_COUNT] = {
+    [GRANT_AUTHORITY] = {sources[AUTHORITY], boot_selected ? MOUNT_RIGHT_OPEN_ROOT :
         DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN, 0},
-    {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
-    {sources[LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0},
-    {sources[BOOT], writable ? ROOT_RIGHTS : DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, 0},
-    {sources[TMP], ROOT_RIGHTS, 0},
+    [GRANT_MEMORY] = {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
+    [GRANT_LAUNCHER] = {sources[LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0},
+    [GRANT_BOOT] = {sources[BOOT], writable ? ROOT_RIGHTS :
+        DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, 0},
+    [GRANT_TMP] = {sources[TMP], ROOT_RIGHTS, 0},
   };
   struct launch_binding resources[] = {
-    {(uintptr_t)(boot_selected ? "esp_mount" : "disks"), AUTHORITY},
-    {(uintptr_t)"memory", MEMORY},
-    {(uintptr_t)"launcher", LAUNCHER},
+    {(uintptr_t)(boot_selected ? "esp_mount" : "disks"), GRANT_AUTHORITY},
+    {(uintptr_t)"memory", GRANT_MEMORY},
+    {(uintptr_t)"launcher", GRANT_LAUNCHER},
   };
-  struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT}, {(uintptr_t)"tmp", TMP}};
+  struct launch_binding roots[] = {
+    {(uintptr_t)"boot", GRANT_BOOT}, {(uintptr_t)"tmp", GRANT_TMP},
+  };
   const char *arguments[] = {
     "boot://init-fat32-mount.pxe", writable ? "--select-scratch-write" :
         boot_selected ? "--browse-boot" : "--browse-scratch",
   };
   struct launch_request request = {
-    .image = image, .grants = (uintptr_t)grants, .grant_count = writable ? 5 : 4,
+    .image = image, .grants = (uintptr_t)grants, .grant_count = writable ? GRANT_COUNT : GRANT_TMP,
     .resources = (uintptr_t)resources, .resource_count = 3,
     .roots = (uintptr_t)roots, .root_count = writable ? 2 : 1,
     .argv = (uintptr_t)arguments, .argc = 2,
