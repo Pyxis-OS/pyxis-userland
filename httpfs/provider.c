@@ -538,14 +538,13 @@ static void publish_status(struct loop *loop, struct transaction *transaction,
 static void commit_request(struct loop *loop, struct transaction *transaction,
     struct endpoint_packet *packet)
 {
-  if (transaction->handed_off) {
+  if (transaction->handed_off ||
+      (transaction->work && transaction->work->commit.receipt)) {
     struct http_commit_reply response = {.http_status = transaction->response.status};
     reply(loop, packet, CALL_OK, &response, sizeof(response), NULL, 0);
   } else if (!transaction->work) {
     reply(loop, packet, transaction->failure == CALL_OK ? CALL_BAD_OPERATION : transaction->failure,
         NULL, 0, NULL, 0);
-  } else if (transaction->work->commit.receipt) {
-    reply(loop, packet, CALL_BUSY, NULL, 0, NULL, 0);
   } else if (transaction->phase != HTTP_TRANSACTION_STAGING) {
     reply(loop, packet, transaction->failure == CALL_OK ? CALL_BUSY : transaction->failure,
         NULL, 0, NULL, 0);
