@@ -831,7 +831,9 @@ enum call_status http_stream_close(struct http_stream *stream)
   if (http_stream_pending(stream)) {
     return CALL_BUSY;
   }
-  http_release_request(&stream->outgoing);
+  if (stream->cooperative && stream->result->state != HTTP_RESPONSE_COMPLETE) {
+    http_stream_abort(stream);
+  }
   enum call_status status = stream->result->close_status;
   if (stream->result->state == HTTP_RESPONSE_PENDING) {
     fail(stream, HTTP_ABORTED);
@@ -840,6 +842,7 @@ enum call_status http_stream_close(struct http_stream *stream)
   } else if (stream->tls || stream->stream != HANDLE_INVALID) {
     status = close_transport(stream, false);
   }
+  http_release_request(&stream->outgoing);
   volatile unsigned char *body = (volatile unsigned char *)stream->body_bytes;
   for (size_t i = 0; i < sizeof(stream->body_bytes); ++i) {
     body[i] = 0;
