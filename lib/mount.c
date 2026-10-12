@@ -120,7 +120,7 @@ enum call_status mount_reopen_fat32(handle_t control, uint64_t rights, handle_t 
     return CALL_BAD_REQUEST;
   }
   *root = HANDLE_INVALID;
-  if (!fat32_rights(rights)) {
+  if (rights & ~DIRECTORY_CONTENT_RIGHTS) {
     return CALL_BAD_REQUEST;
   }
   struct {
@@ -155,6 +155,45 @@ enum call_status mount_observe(handle_t control, struct mount_state_reply *state
 enum call_status mount_retire(handle_t control)
 {
   struct message_header message = {PROTOCOL_MOUNT, MOUNT_RETIRE};
+  struct syscall_result result = syscall_call(control, &message, sizeof(message), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
+enum call_status mount_begin(handle_t control, struct mount_interval_reply *interval)
+{
+  if (!interval) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header message = {PROTOCOL_MOUNT, MOUNT_BEGIN};
+  struct mount_interval_reply reply = {0};
+  struct syscall_result result = syscall_call(control, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status != CALL_OK) {
+    return result.status;
+  }
+  if (!reply.id || !reply.deadline_ns) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *interval = reply;
+  return CALL_OK;
+}
+
+enum call_status mount_end(handle_t control, uint64_t id)
+{
+  if (!id) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct mount_interval_request body;
+  } message = {{PROTOCOL_MOUNT, MOUNT_END}, {id}};
   struct syscall_result result = syscall_call(control, &message, sizeof(message), NULL, 0);
   if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
     return CALL_OUTCOME_UNKNOWN;

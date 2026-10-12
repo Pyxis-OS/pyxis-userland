@@ -162,21 +162,24 @@ enum call_status disk_open_volume(handle_t disk, uint64_t partition,
 }
 
 enum call_status disk_open_fat32(handle_t disk, uint64_t partition,
-    uint64_t rights, struct mount_fat32_reply *mount)
+    uint64_t access, uint64_t rights, struct mount_fat32_reply *mount)
 {
   if (!mount) {
     return CALL_BAD_REQUEST;
   }
   *mount = (struct mount_fat32_reply){HANDLE_INVALID, HANDLE_INVALID};
   if (!partition || partition > UINT32_MAX ||
-      (rights & ~(DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-          DIRECTORY_RIGHT_READ_FILES))) {
+      (access != MOUNT_ACCESS_READ_ONLY && access != MOUNT_ACCESS_READ_WRITE) ||
+      (rights & ~DIRECTORY_CONTENT_RIGHTS) ||
+      (access == MOUNT_ACCESS_READ_ONLY &&
+          (rights & ~(DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+              DIRECTORY_RIGHT_READ_FILES)))) {
     return CALL_BAD_REQUEST;
   }
   struct {
     struct message_header header;
     struct disk_fat32_request body;
-  } message = {{PROTOCOL_DISK, DISK_OPEN_FAT32}, {partition, rights}};
+  } message = {{PROTOCOL_DISK, DISK_OPEN_FAT32}, {partition, access, rights}};
   struct mount_fat32_reply reply = {HANDLE_INVALID, HANDLE_INVALID};
   enum call_status status = reply_status(syscall_call(disk, &message, sizeof(message),
       &reply, sizeof(reply)), sizeof(reply));

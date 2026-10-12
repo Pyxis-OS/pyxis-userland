@@ -39,13 +39,14 @@ enum call_status disk_open_volume(handle_t disk, uint64_t partition,
     const char *name, uint64_t rights, handle_t *root);
 
 /* Admit the selected FAT32 GPT partition through MOUNT authority. Rights are
- * exact LOOKUP/ENUMERATE/READ_FILES bits, independently narrowed. Success owns
+ * exact DIRECTORY_CONTENT_RIGHTS bits. access fixes RO/RW instance mode; RW
+ * also needs disk WRITE and a released raw claim. Success owns
  * both root and bound control; failure clears both. The control can reopen only
  * this instance and explicitly retire it after every data reference drains.
  * Closing either handle does not retire the instance. Malformed replies are
  * outcome unknown; do not retry an uncertain admission automatically. */
 enum call_status disk_open_fat32(handle_t disk, uint64_t partition,
-    uint64_t rights, struct mount_fat32_reply *mount);
+    uint64_t access, uint64_t rights, struct mount_fat32_reply *mount);
 
 /* Needs MOUNT and WRITE. Appends a live volume NAME with an empty root to the
  * npfs pool in PARTITION, durably. A taken name returns ALREADY_EXISTS. */
