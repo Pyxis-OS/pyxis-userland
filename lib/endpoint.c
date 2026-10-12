@@ -1,4 +1,9 @@
 #include <endpoint.h>
+#include <abi/completion.h>
+#include <abi/directory.h>
+#include <abi/file.h>
+#include <abi/tcp.h>
+#include <abi/udp.h>
 #include <handle.h>
 #include <syscall.h>
 #include <stdbool.h>
@@ -8,6 +13,55 @@ static enum call_status checked_status(struct syscall_result result)
   return result.status < CALL_STATUS_COUNT ? result.status : CALL_UNAVAILABLE;
 }
 
+static bool completion_valid(const struct endpoint_packet *packet)
+{
+  uint64_t flags = COMPLETION_FLAG_NOT_STARTED | COMPLETION_FLAG_CANCEL_REQUESTED |
+      COMPLETION_FLAG_PROGRESS_KNOWN;
+  if (!packet->correlation_id || packet->receipt == HANDLE_INVALID ||
+      packet->delivery != ENDPOINT_DELIVERED || packet->result >= CALL_STATUS_COUNT ||
+      (packet->completion_flags & ~flags) || packet->grant_count > 1 ||
+      packet->object_id != 0 || packet->rights != 0 || !packet->deadline_ns ||
+      (packet->reason != CALL_OK && packet->reason != CALL_TIMED_OUT &&
+      packet->reason != CALL_ENDPOINT_CLOSED && packet->reason != CALL_ABANDONED)) {
+    return false;
+  }
+  uint64_t returned_rights = 0;
+  switch (packet->protocol) {
+  case PROTOCOL_TCP_SERVICE:
+    if (packet->operation != TCP_CONNECT) {
+      return false;
+    }
+    returned_rights = TCP_RIGHTS;
+    break;
+  case PROTOCOL_UDP:
+    if (packet->operation != UDP_SEND && packet->operation != UDP_RECEIVE) {
+      return false;
+    }
+    break;
+  case PROTOCOL_DIRECTORY:
+    if (packet->operation == DIRECTORY_CREATE) {
+      returned_rights = FILE_RIGHTS;
+    } else if (packet->operation != DIRECTORY_REMOVE) {
+      return false;
+    }
+    break;
+  case PROTOCOL_FILE:
+    if (packet->operation != FILE_READ && packet->operation != FILE_WRITE &&
+        packet->operation != FILE_RESIZE && packet->operation != FILE_SIZE) {
+      return false;
+    }
+    break;
+  default:
+    return false;
+  }
+  bool returned = returned_rights && packet->result == CALL_OK;
+  if (packet->grant_count != (returned ? 1u : 0u)) {
+    return false;
+  }
+  return !returned || (packet->grants[0].handle != HANDLE_INVALID &&
+      packet->grants[0].rights == returned_rights && packet->grants[0].transport == 0);
+}
+
 static bool packet_valid(const struct endpoint_packet *packet, size_t size,
     bool received, uint64_t deadline_ns, uint64_t protocol, uint64_t operation)
 {
@@ -15,6 +69,12 @@ static bool packet_valid(const struct endpoint_packet *packet, size_t size,
       packet->size > ENDPOINT_DATA_MAX ||
       size != ENDPOINT_PACKET_HEADER_SIZE + packet->size ||
       packet->grant_count > ENDPOINT_GRANTS_MAX) {
+    return false;
+  }
+  if (received && packet->kind == ENDPOINT_MESSAGE_COMPLETION) {
+    return completion_valid(packet);
+  }
+  if (packet->correlation_id || packet->completion_flags || packet->progress) {
     return false;
   }
   if (received) {

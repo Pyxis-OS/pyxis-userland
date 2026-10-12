@@ -44,7 +44,7 @@ enum call_status endpoint_notify(handle_t client, uint64_t protocol,
     uint64_t operation, const void *bytes, size_t size,
     const struct endpoint_grant *grants, size_t grant_count);
 
-/* RECEIVE returns a kernel-authenticated CALL or SEND kind, an owned receipt,
+/* RECEIVE returns a kernel-authenticated kind, an owned receipt,
  * and zero to four owned attachment handles. CANCEL names an already owned
  * CALL receipt: it is an alias, not another grant or handle to close. It has
  * no payload, attachments or result and carries a timeout or closure reason. The
@@ -52,7 +52,11 @@ enum call_status endpoint_notify(handle_t client, uint64_t protocol,
  * receiver may retain receipts while receiving more work. Successful REPLY
  * consumes a CALL receipt automatically. Finish SEND or canceled CALL with
  * endpoint_finish(); separately delivered attachments remain owned. Closing
- * an unanswered CALL receipt abandons the call. */
+ * an unanswered CALL receipt abandons the call. Native COMPLETION carries the
+ * correlation ID, actual result/progress and separate cancellation reason.
+ * Closing its zero-right receipt acknowledges that operation; attached native
+ * grants remain independent. Failed collection leaves completion work queued
+ * for retry without replaying the native operation. */
 enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request);
 enum call_status endpoint_reply(handle_t receipt, uint64_t application_result,
     const void *bytes, size_t size, const struct endpoint_grant *grants,
