@@ -570,6 +570,12 @@ The caller supplies an explicitly private work root and audits child reachabilit
 It retains storage through process retirement and, optionally, a fresh group.
 Unknown direct admission stays quarantined until caller/session teardown.
 
+[pyxis/pipeline.h](libc/include/pyxis/pipeline.h) publishes an explicit native
+stage array atomically and pumps owned finite input, final stdout and combined
+stderr concurrently through directional pipes. It returns every stage result,
+input acceptance/closure and capped private captures, retaining endpoints and
+observers through cleanup. Existing shell/Lua launch behavior is unchanged.
+
 ## License
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See
