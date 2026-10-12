@@ -18,6 +18,10 @@
 #include <stdio.h>
 #include <string.h>
 
+int threadprobe_runtime(bool inspect);
+int threadprobe_runtime_time(void);
+int threadprobe_runtime_limit(void);
+
 #define PROBE_STACK_BYTES (64 * 1024)
 #define PROBE_MARKER UINT64_C(0x7468726561640000)
 #define PROBE_TLS_INITIAL UINT32_C(0x746c7307)
@@ -1035,7 +1039,7 @@ int main(int argc, char **argv)
   if (argc != 2) {
     fputs("usage: session bin://threadprobe.pxe "
         "lifecycle|inspect|tls|tls-inspect|tls-stop|tls-fault|bind|refusal|exhaust|stop|fault|close|"
-        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop\n", stderr);
+        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop|runtime|runtime-inspect|runtime-time|runtime-limit\n", stderr);
     return 1;
   }
   const struct {
@@ -1058,6 +1062,15 @@ int main(int argc, char **argv)
     supervised_child(!strcmp(argv[1], "--child-fault") || !strcmp(argv[1], "--child-tls-fault"),
         !strcmp(argv[1], "--child-park-stop"),
         !strcmp(argv[1], "--child-tls-stop") || !strcmp(argv[1], "--child-tls-fault"));
+  }
+  if (!strcmp(argv[1], "runtime") || !strcmp(argv[1], "runtime-inspect")) {
+    return threadprobe_runtime(!strcmp(argv[1], "runtime-inspect"));
+  }
+  if (!strcmp(argv[1], "runtime-time")) {
+    return threadprobe_runtime_time();
+  }
+  if (!strcmp(argv[1], "runtime-limit")) {
+    return threadprobe_runtime_limit();
   }
   if (!strcmp(argv[1], "lifecycle") || !strcmp(argv[1], "inspect")) {
     return lifecycle(!strcmp(argv[1], "inspect"));
