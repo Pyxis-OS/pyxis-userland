@@ -440,7 +440,35 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
       }
       return COMMAND_OK;
     }
-    return shell_error(shell, "usage: namespace create | namespace remove NAME\n");
+    bool optional_alias = count == 5 && !strcmp(arguments[2], "--optional");
+    if ((count == 4 || optional_alias) && !strcmp(arguments[1], "alias")) {
+      const char *name = arguments[optional_alias ? 3 : 2];
+      const char *source = arguments[optional_alias ? 4 : 3];
+      for (size_t i = 0; i < shell->directory->root_count; ++i) {
+        if (!strcmp(shell->roots[i].name, name)) {
+          return shell_error(shell, "namespace: %s conflicts with a filesystem root\n", name);
+        }
+      }
+      handle_t client = HANDLE_INVALID;
+      enum call_status status = namespace_lookup(shell->namespace, source, &client);
+      if (optional_alias && status == CALL_NOT_FOUND) {
+        return COMMAND_OK;
+      }
+      if (status == CALL_OK) {
+        uint64_t rights, transport;
+        status = handle_rights(client, &rights, &transport);
+        if (status == CALL_OK) {
+          status = namespace_publish(shell->namespace, name, client, rights, transport);
+        }
+      }
+      if (client != HANDLE_INVALID && handle_close(client) && status == CALL_OK) {
+        status = CALL_BAD_HANDLE;
+      }
+      return status == CALL_OK ? COMMAND_OK :
+          shell_error(shell, "namespace: alias %s failed (status %u)\n", name, status);
+    }
+    return shell_error(shell,
+        "usage: namespace create | namespace remove NAME | namespace alias [--optional] NAME SOURCE\n");
   }
   /* is_builtin leaves only service. */
   bool replace = count > 1 && !strcmp(arguments[1], "replace");

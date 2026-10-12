@@ -10,7 +10,7 @@ enum call_status stream_read(handle_t stream, void *bytes, size_t capacity,
     return CALL_BAD_REQUEST;
   }
   *read = 0;
-  if (capacity > STREAM_READ_MAX_BYTES || (capacity && !bytes)) {
+  if (!capacity || capacity > STREAM_READ_MAX_BYTES || !bytes) {
     return CALL_BAD_REQUEST;
   }
   struct handle_info info;

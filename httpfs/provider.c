@@ -294,10 +294,11 @@ static enum call_status submit(struct loop *loop, struct transaction *transactio
   if (!deadline) {
     return transaction->cleanup;
   }
-  uint64_t id = ++loop->next_id;
+  uint64_t id = loop->next_id;
   enum call_status status = completion_submit(target, loop->receiver, id,
       protocol, operation, deadline, bytes, size);
   if (status == CALL_OK) {
+    ++loop->next_id;
     transaction->pending = id;
     transaction->staging_operation = kind;
   }
@@ -762,7 +763,7 @@ static void response_request(struct loop *loop, struct transaction *transaction,
     reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
   } else {
     memcpy(&request, packet->data, sizeof(request));
-    if (request.capacity > STREAM_READ_MAX_BYTES) {
+    if (!request.capacity || request.capacity > STREAM_READ_MAX_BYTES) {
       reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
     } else if (!transaction->work) {
       deliver_read(loop, transaction, packet);
@@ -961,6 +962,19 @@ static void legacy_publish(struct loop *loop, struct transaction *transaction, b
     }
     memcpy(bytes + sizeof(header), response->location, header.location_size);
     size = sizeof(header) + header.location_size;
+    if (status == CALL_OK) {
+      status = http_stream_abort(transaction->engine);
+      enum call_status closed = http_stream_close(transaction->engine);
+      if (closed != CALL_BUSY) {
+        transaction->engine = NULL;
+      }
+      if (status == CALL_OK) {
+        status = closed;
+      }
+      if (status != CALL_OK) {
+        transaction->cleanup = status;
+      }
+    }
   } else {
     status = export(loop, transaction, 0, FACET_SNAPSHOT, &client);
     header.protocol = PROTOCOL_FILE;
@@ -986,7 +1000,6 @@ static void legacy_publish(struct loop *loop, struct transaction *transaction, b
     abort_transaction(loop, transaction, status);
   } else if (redirect) {
     /* Redirect handoff intentionally discards transport, never its body. */
-    http_stream_abort(transaction->engine);
     transaction->phase = HTTP_TRANSACTION_COMPLETE;
   }
 }
@@ -1405,7 +1418,7 @@ static bool alive(const struct loop *loop)
 enum call_status httpfs_serve(handle_t service, handle_t receiver,
     const struct http_client *client, bool custom_trust, handle_t staging)
 {
-  struct loop loop = {.service = service, .receiver = receiver, .client = *client,
+  struct loop loop = {.service = service, .receiver = receiver, .client = *client, .next_id = 1,
     .staging = staging, .published = true, .custom_trust = custom_trust};
   while (loop.fatal == CALL_OK && alive(&loop)) {
     struct wait_interest interests[2] = {{.handle = receiver, .events = WAIT_READABLE}};
