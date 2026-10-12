@@ -23,16 +23,14 @@ static enum call_status adoption_status(int error)
   }
 }
 
-enum call_status libc_capture_file_create(handle_t private_root, handle_t clock,
-    handle_t *file, int *writer)
+enum call_status libc_capture_file_create_native(handle_t private_root, handle_t clock,
+    handle_t *file)
 {
-  if (file) {
-    *file = HANDLE_INVALID;
+  if (!file) {
+    return CALL_BAD_REQUEST;
   }
-  if (writer) {
-    *writer = -1;
-  }
-  if (!file || !writer || private_root == HANDLE_INVALID || clock == HANDLE_INVALID) {
+  *file = HANDLE_INVALID;
+  if (private_root == HANDLE_INVALID || clock == HANDLE_INVALID) {
     return CALL_BAD_REQUEST;
   }
 
@@ -43,7 +41,6 @@ enum call_status libc_capture_file_create(handle_t private_root, handle_t clock,
   }
   char name[64];
   handle_t created = HANDLE_INVALID;
-  handle_t writable = HANDLE_INVALID;
   status = CALL_ALREADY_EXISTS;
   for (unsigned int attempt = 0; attempt < TEMPORARY_CREATE_ATTEMPTS; ++attempt) {
     int length = snprintf(name, sizeof(name), "capture_%016" PRIx64 "_%u", now, attempt);
@@ -62,6 +59,33 @@ enum call_status libc_capture_file_create(handle_t private_root, handle_t clock,
      * the name is removed. Unpredictable names are not the privacy boundary. */
     status = directory_remove(private_root, name, DIRECTORY_KIND_FILE);
   }
+  if (status == CALL_OK) {
+    *file = created;
+    return CALL_OK;
+  }
+  int saved_errno = errno;
+  if (created != HANDLE_INVALID) {
+    descriptor_release_handle(created);
+  }
+  errno = saved_errno;
+  return status;
+}
+
+enum call_status libc_capture_file_create(handle_t private_root, handle_t clock,
+    handle_t *file, int *writer)
+{
+  if (file) {
+    *file = HANDLE_INVALID;
+  }
+  if (writer) {
+    *writer = -1;
+  }
+  if (!file || !writer) {
+    return CALL_BAD_REQUEST;
+  }
+  handle_t created = HANDLE_INVALID;
+  handle_t writable = HANDLE_INVALID;
+  enum call_status status = libc_capture_file_create_native(private_root, clock, &created);
   if (status == CALL_OK) {
     status = handle_copy_restricted(created, FILE_RIGHT_WRITE, 0, &writable);
   }

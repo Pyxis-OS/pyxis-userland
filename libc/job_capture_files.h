@@ -11,4 +11,9 @@
 enum call_status libc_capture_file_create(handle_t private_root, handle_t clock,
     handle_t *file, int *writer);
 
+/* Same create/unlink contract, without adopting a descriptor. Pipeline output
+ * is pumped by its owner into this FILE; children receive PIPE writers only. */
+enum call_status libc_capture_file_create_native(handle_t private_root, handle_t clock,
+    handle_t *file);
+
 #endif
