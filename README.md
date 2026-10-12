@@ -556,6 +556,14 @@ consoles; files use the standard descriptor APIs. Foreground bundles can request
 `pipe` with `create` rights in their manifest. An unrequested grant is omitted;
 an unavailable required grant prevents launch.
 
+[pyxis/job.h](libc/include/pyxis/job.h) owns a single direct native child through
+the caller's existing launcher. It uses explicit resource/stream selections and
+owned cwd/environment snapshots, checks every final grant, and retains a
+WAIT/TERMINATE observer through stage retirement. Namespace/provider auditing
+belongs to the trusted caller; no descendant launch, bundle expansion, capture,
+deadline or implicit inheritance is added. See the header for ownership and
+the uncertain-publication rule.
+
 ## License
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See

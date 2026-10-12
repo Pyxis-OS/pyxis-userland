@@ -79,6 +79,10 @@ long descriptor_tell_output(int descriptor, size_t pending);
 /* Input fflush: drop file read-ahead so later reads refetch; keep pipe bytes. */
 void descriptor_discard_input(int descriptor);
 
+/* Validate WRITE access and flush only this descriptor's associated FILE output.
+ * Preserve input and leave streams without pending output unchanged. */
+int libc_stdio_flush_descriptor(int descriptor);
+
 int descriptor_response(int descriptor, struct pyxis_response_info *info);
 
 enum call_status file_open_path_response(const char *path, uint64_t rights,

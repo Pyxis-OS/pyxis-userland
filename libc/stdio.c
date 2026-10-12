@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <startup.h>
+#include <pyxis/descriptor.h>
 #include <pyxis/stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -244,6 +245,24 @@ static int flush_output(FILE *stream)
     memmove(stream->output, stream->output + written, stream->output_count);
   }
   stream->output_flush_failed = false;
+  return 0;
+}
+
+int libc_stdio_flush_descriptor(int descriptor)
+{
+  struct pyxis_descriptor_binding binding;
+  if (pyxis_descriptor_borrow(descriptor, &binding) < 0) {
+    return -1;
+  }
+  if (!(binding.access & PYXIS_DESCRIPTOR_WRITE)) {
+    errno = EBADF;
+    return -1;
+  }
+  for (FILE *current = streams; current; current = current->next) {
+    if (current->descriptor == descriptor) {
+      return current->output_count ? flush_output(current) : 0;
+    }
+  }
   return 0;
 }
 
