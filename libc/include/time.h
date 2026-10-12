@@ -27,7 +27,7 @@ struct tm {
   int tm_yday; /* January 1 is zero. */
   int tm_isdst;
   long tm_gmtoff; /* Seconds east of UTC; zero for gmtime. */
-  const char *tm_zone; /* Borrowed timezone designation; UTC for gmtime. */
+  const char *tm_zone; /* Borrowed until process exit; UTC for gmtime. */
 };
 
 #define TIME_UTC 1
@@ -71,27 +71,29 @@ size_t strftime(char *__restrict output, size_t capacity,
 /* Proleptic Gregorian UTC conversion, including negative timestamps.
  * Fail with EOVERFLOW if tm_year cannot fit in int, EINVAL for NULL inputs.
  * gmtime_r leaves the destination unchanged on failure; gmtime returns borrowed
- * static storage overwritten by later successful gmtime calls. No allocation.
+ * per-thread storage overwritten by later successful gmtime calls on that
+ * thread. No allocation.
  * Locale selection is not implemented. */
 struct tm *gmtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *gmtime(const time_t *timer);
 
 /* TZ absent/empty means UTC without file access. Otherwise TZ is an IANA name
  * under boot://share/zoneinfo, using the process's boot directory capability.
- * TZ is read from the current environment on each call; a changed name loads
- * that zone lazily into process-owned heap storage, replacing the cache.
+ * Each call snapshots TZ from the current shared environment and retains its
+ * selected zone for the whole conversion. A changed name loads that zone lazily
+ * into process-owned heap storage, replacing the cache.
  * Return NULL with errno on file/allocation errors, EINVAL for invalid names or
  * malformed/unsupported TZif, ENOTSUP where zone data leaves time unspecified,
  * and EOVERFLOW when the calendar cannot be represented. No UTC fallback.
  * Success preserves errno; localtime_r leaves result unchanged on failure.
- * localtime returns static storage overwritten by its next successful call.
- * tm_zone points into the cached zone and is valid until a successful selection
- * reload or process exit; UTC uses permanent storage.
- * The cache and static results assume one thread per process, like errno. */
+ * localtime returns per-thread storage overwritten by its next successful call
+ * on that thread. tm_zone borrows an immutable designation until process exit;
+ * changing TZ or replacing the cache does not invalidate it. */
 struct tm *localtime_r(const time_t *__restrict timer, struct tm *__restrict result);
 struct tm *localtime(const time_t *timer);
 
-/* Inverse of localtime in the zone TZ selects, with the same zone errors.
+/* Inverse of localtime in one retained zone selected from the current TZ,
+ * with the same zone errors.
  * tm_mon, tm_mday, tm_hour, tm_min and tm_sec may lie outside their ranges and
  * are normalized; tm_wday, tm_yday, tm_gmtoff and tm_zone are ignored. When
  * the wall time occurs once, a nonnegative tm_isdst that disagrees with the

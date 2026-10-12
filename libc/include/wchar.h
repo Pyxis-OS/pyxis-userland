@@ -12,7 +12,8 @@ typedef unsigned int wint_t;
 
 /* All-zero initialization is the initial UTF-8 state. An incomplete scalar
  * stores its accumulated value, remaining continuation bytes and total length.
- * Conversion errors reset the state. Implicit states are single-threaded. */
+ * Conversion errors reset the state. Each function has its own per-thread
+ * implicit state; caller-supplied state requires caller exclusion during use. */
 typedef struct {
   unsigned int value;
   unsigned int remaining;
@@ -59,7 +60,7 @@ wint_t putwc(wchar_t character, FILE *stream);
 int mbsinit(const mbstate_t *state);
 /* Return bytes consumed from this call, zero for NUL, (size_t)-2 for an
  * incomplete scalar, or (size_t)-1 with EILSEQ. NULL text converts a NUL.
- * A NULL state selects the function's own persistent conversion state. */
+ * A NULL state selects the function's own persistent per-thread state. */
 size_t mbrtowc(wchar_t *__restrict output, const char *__restrict text,
   size_t size, mbstate_t *__restrict state);
 size_t mbrlen(const char *__restrict text, size_t size,
