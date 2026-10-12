@@ -4,6 +4,8 @@
 #include <memory.h>
 #include <pyxis/thread_runtime.h>
 #include <stdbool.h>
+#include <time.h>
+#include <wchar.h>
 
 struct startup_info;
 struct libc_once_frame;
@@ -32,6 +34,11 @@ struct thread_destructor_block {
   struct thread_destructor handlers[LIBC_THREAD_DESTRUCTOR_BLOCK];
 };
 
+enum libc_conversion_state {
+  LIBC_MBR_TOWC, LIBC_MBR_LEN, LIBC_WCR_TOMB, LIBC_MBS_RTOWCS,
+  LIBC_MBS_NRTOWCS, LIBC_WCS_RTOMBS, LIBC_WCS_NRTOMBS, LIBC_CONVERSION_STATES,
+};
+
 struct libc_thread_record {
   struct libc_thread_record *self;
   int errno_value;
@@ -42,6 +49,9 @@ struct libc_thread_record {
   uint64_t thread_identity;
   struct libc_once_frame *once_frames;
   bool destroying;
+  /* Built-in implicit C state uses the TCB, keeping TLS-free TCC links valid. */
+  struct tm utc_result, local_result;
+  mbstate_t conversion_states[LIBC_CONVERSION_STATES];
 };
 
 _Static_assert(offsetof(struct libc_thread_record, self) == 0, "FS self pointer");

@@ -5,6 +5,7 @@
 #include "errors.h"
 #include "time_impl.h"
 #include "timezone.h"
+#include "thread_private.h"
 
 #define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
 
@@ -123,8 +124,7 @@ struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result)
 
 struct tm *gmtime(const time_t *timer)
 {
-  static _Thread_local struct tm result;
-  return gmtime_r(timer, &result);
+  return gmtime_r(timer, &libc_thread_record()->utc_result);
 }
 
 static struct tm *localtime_snapshot(const struct timezone_snapshot *zone,
@@ -179,8 +179,7 @@ struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
 
 struct tm *localtime(const time_t *timer)
 {
-  static _Thread_local struct tm result;
-  return localtime_r(timer, &result);
+  return localtime_r(timer, &libc_thread_record()->local_result);
 }
 
 static time_t make_time(const struct timezone_snapshot *zone, struct tm *calendar)
