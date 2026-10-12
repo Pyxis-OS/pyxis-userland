@@ -1,11 +1,15 @@
 # Native read-only FAT32 inspection
 
 `init-fat32-mount` is a dedicated trusted bootstrap, separate from the raw engine
-inspector, scratch writer and ordinary boot configuration. Its default profile
-uses install-mode `disks` authority and asks for an explicit disk ID and one-based
-GPT entry. `--boot` uses only the initial bootstrap's `esp_mount` issuer, fixed by
-the kernel to the executable's boot GPT disk/ESP identity. Missing selection or
-failed admission reports an error without selecting other media.
+inspector, scratch writer and ordinary boot configuration. Build the image with
+`INIT=boot://init-fat32-mount.pxe`. A boot entry with `boot.install=1` supplies
+trusted `disks` authority and selects scratch mode, asking for an explicit disk ID
+and one-based GPT entry. Without that authority the bootstrap uses only the initial
+bootstrap's `esp_mount` issuer, fixed by the kernel to the executable's boot GPT
+disk/ESP identity. `--boot` explicitly selects that mode even if DISKS is present.
+The kernel's `--installed` and `--default-config` startup flags do not change this
+authority-based selection. Missing selection or failed admission reports an error
+without selecting other media; boot-ESP failure never falls back to scratch mode.
 
 The bootstrap creates an inspection console space. It retains the selected
 read-only DISK or boot issuer, bound mount control and root. Direct `ls`/`cat`

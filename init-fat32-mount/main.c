@@ -524,9 +524,14 @@ int main(int argc, char **argv)
   if (argc == 2 && !strcmp(argv[1], "--browse-boot")) {
     return browse(true);
   }
-  if (argc == 1 || (argc == 2 && !strcmp(argv[1], "--boot"))) {
-    return create_browser(argc == 2);
+  bool boot_selected = startup_resource("disks") == HANDLE_INVALID;
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--boot")) {
+      boot_selected = true;
+    } else if (strcmp(argv[i], "--installed") && strcmp(argv[i], "--default-config")) {
+      fputs("init-fat32-mount: invalid bootstrap arguments\n", stderr);
+      return EXIT_FAILURE;
+    }
   }
-  fputs("init-fat32-mount: invalid bootstrap arguments\n", stderr);
-  return EXIT_FAILURE;
+  return create_browser(boot_selected);
 }
