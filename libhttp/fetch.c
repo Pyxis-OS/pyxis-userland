@@ -10,118 +10,64 @@
 #include <tcp.h>
 
 #define HTTP_CHUNK_LINE_MAX 8192
-#define HTTP_INITIAL_CAPACITY 4096
 
-struct fetch {
-  const struct http_authority *authority;
-  struct http_result *result;
-  struct http_body body;
+enum body_stage {
+  BODY_FIXED,
+  BODY_CLOSE,
+  BODY_CHUNK_SIZE,
+  BODY_CHUNK_DATA,
+  BODY_CHUNK_END,
+  BODY_TRAILERS,
+  BODY_FRAMED,
+};
+
+struct http_stream {
+  struct http_authority authority;
+  struct http_response *result;
   handle_t stream;
   struct tls_connection *tls;
-  uint64_t deadline;
-  const char *uri_text;
-  struct provider_http_budget limit;
-  size_t buffered, header_bytes, fields;
+  uint64_t deadline, remaining;
+  struct http_response_limits limit;
+  size_t header_receive_max, buffered, header_bytes, fields;
+  enum body_stage stage;
   char bytes[HTTP_HEADERS_MAX];
   struct phr_header headers[HTTP_FIELDS_MAX];
 };
 
 struct framing {
   bool length_present, chunked;
-  size_t length;
+  uint64_t length;
 };
 
-static bool fail(struct fetch *fetch, enum http_error error)
+static bool fail(struct http_stream *fetch, enum http_error error)
 {
-  fetch->result->error = error;
+  if (fetch->result->error == HTTP_OK) {
+    fetch->result->error = error;
+  }
   return false;
 }
 
-static bool network(struct fetch *fetch, enum call_status status)
+static bool network(struct http_stream *fetch, enum call_status status)
 {
   if (status == CALL_OK) {
     return true;
   }
-  fetch->result->network_status = status;
+  if (fetch->result->error == HTTP_OK) {
+    fetch->result->network_status = status;
+  }
   return fail(fetch, HTTP_NETWORK_ERROR);
 }
 
-static bool check_deadline(struct fetch *fetch)
+static bool check_deadline(struct http_stream *fetch)
 {
   uint64_t now;
-  if (!network(fetch, clock_now(fetch->authority->clock, &now))) {
+  if (!network(fetch, clock_now(fetch->authority.clock, &now))) {
     return false;
   }
   return network(fetch, now >= fetch->deadline ? CALL_TIMED_OUT : CALL_OK);
 }
 
-void http_body_release(struct http_body *body)
-{
-  if (body->storage) {
-    body->storage->reserved -= body->capacity;
-  }
-  free(body->data);
-  *body = (struct http_body){0};
-}
-
-static bool reserve_body(struct fetch *fetch, size_t capacity)
-{
-  struct http_body *body = &fetch->body;
-  if (capacity > fetch->limit.body_bytes) {
-    return fail(fetch, HTTP_LIMIT);
-  }
-  if (capacity <= body->capacity) {
-    return true;
-  }
-  struct http_storage *storage = body->storage;
-  if (storage->reserved > HTTP_STORAGE_MAX || capacity > HTTP_STORAGE_MAX - storage->reserved) {
-    return fail(fetch, HTTP_QUOTA);
-  }
-  /* Keep the old reservation until replacement storage actually exists. */
-  storage->reserved += capacity;
-  unsigned char *data = malloc(capacity);
-  if (!data) {
-    storage->reserved -= capacity;
-    return fail(fetch, HTTP_NO_MEMORY);
-  }
-  if (body->size) {
-    memcpy(data, body->data, body->size);
-  }
-  free(body->data);
-  storage->reserved -= body->capacity;
-  body->data = data;
-  body->capacity = capacity;
-  return true;
-}
-
-static bool append_body(struct fetch *fetch, const char *bytes, size_t size)
-{
-  struct http_body *body = &fetch->body;
-  if (size > fetch->limit.body_bytes - body->size) {
-    return fail(fetch, HTTP_LIMIT);
-  }
-  size_t needed = body->size + size;
-  if (needed > body->capacity) {
-    size_t capacity = body->capacity ? body->capacity : HTTP_INITIAL_CAPACITY;
-    while (capacity < needed) {
-      capacity *= 2;
-    }
-    if (capacity > fetch->limit.body_bytes) {
-      capacity = fetch->limit.body_bytes;
-    }
-    if (!reserve_body(fetch, capacity)) {
-      return false;
-    }
-  }
-  if (size) {
-    memcpy(body->data + body->size, bytes, size);
-  }
-  body->size += size;
-  fetch->result->consumed.body_bytes = body->size;
-  return true;
-}
-
-static void consume(struct fetch *fetch, size_t count)
+static void consume(struct http_stream *fetch, size_t count)
 {
   fetch->buffered -= count;
   memmove(fetch->bytes, fetch->bytes + count, fetch->buffered);
@@ -129,7 +75,7 @@ static void consume(struct fetch *fetch, size_t count)
 
 /* Only close-delimited bodies accept EOF. TLS reports it exclusively for an
  * authenticated close_notify; incomplete framed input remains an HTTP error. */
-static bool receive(struct fetch *fetch, size_t capacity, bool *eof)
+static bool receive(struct http_stream *fetch, size_t capacity, bool *eof)
 {
   if (!check_deadline(fetch)) {
     return false;
@@ -163,7 +109,7 @@ static bool receive(struct fetch *fetch, size_t capacity, bool *eof)
   return true;
 }
 
-static bool receive_required(struct fetch *fetch, size_t capacity)
+static bool receive_required(struct http_stream *fetch, size_t capacity)
 {
   bool eof;
   if (!receive(fetch, capacity, &eof)) {
@@ -172,18 +118,15 @@ static bool receive_required(struct fetch *fetch, size_t capacity)
   return !eof || fail(fetch, HTTP_BAD_RESPONSE);
 }
 
-static bool receive_headers(struct fetch *fetch)
+static bool receive_headers(struct http_stream *fetch)
 {
   size_t remaining = fetch->limit.header_bytes - fetch->header_bytes;
   if (fetch->buffered >= remaining) {
     return fail(fetch, HTTP_LIMIT);
   }
   size_t capacity = remaining - fetch->buffered;
-  size_t body = fetch->limit.body_bytes - fetch->body.size;
-  /* A zero body allowance still permits headers. Single-byte reads then stop
-   * exactly at their terminator, without prefetching any body. */
-  if (capacity > (body ? body : 1)) {
-    capacity = body ? body : 1;
+  if (capacity > fetch->header_receive_max) {
+    capacity = fetch->header_receive_max;
   }
   return receive_required(fetch, capacity);
 }
@@ -202,7 +145,7 @@ static bool valid_lines(const char *bytes, size_t size)
   return true;
 }
 
-static bool count_headers(struct fetch *fetch, size_t bytes, size_t fields)
+static bool count_headers(struct http_stream *fetch, size_t bytes, size_t fields)
 {
   if (bytes > fetch->limit.header_bytes - fetch->header_bytes ||
       fields > fetch->limit.fields - fetch->fields) {
@@ -223,7 +166,7 @@ static bool field_is(const struct phr_header *header, const char *name)
   return http_equal(header->name, header->name_len, name);
 }
 
-static bool parse_fields(struct fetch *fetch, size_t count, struct framing *framing,
+static bool parse_fields(struct http_stream *fetch, size_t count, struct framing *framing,
     bool trailer, bool redirect)
 {
   bool encoding = false, media_type = false;
@@ -245,15 +188,16 @@ static bool parse_fields(struct fetch *fetch, size_t count, struct framing *fram
     bool transfer_encoding = field_is(header, "transfer-encoding");
     bool content_encoding = field_is(header, "content-encoding");
     bool content_type = field_is(header, "content-type");
-    if (redirect && field_is(header, "location")) {
+    if (!trailer && redirect && field_is(header, "location")) {
       if (fetch->result->location[0] || !length || memchr(value, 0, length)) {
-        return fail(fetch, HTTP_INVALID_LOCATION);
+        fetch->result->invalid_location = true;
+      } else {
+        if (length > HTTP_URI_MAX) {
+          return fail(fetch, HTTP_LIMIT);
+        }
+        memcpy(fetch->result->location, value, length);
+        fetch->result->location[length] = 0;
       }
-      if (length > HTTP_URI_MAX) {
-        return fail(fetch, HTTP_LIMIT);
-      }
-      memcpy(fetch->result->location, value, length);
-      fetch->result->location[length] = 0;
     }
     if (trailer) {
       /* Trailers cannot change the framing or representation already consumed. */
@@ -268,13 +212,13 @@ static bool parse_fields(struct fetch *fetch, size_t count, struct framing *fram
       if (framing->length_present || !length) {
         return fail(fetch, HTTP_BAD_RESPONSE);
       }
-      size_t size = 0;
+      uint64_t size = 0;
       for (size_t j = 0; j < length; ++j) {
         if (value[j] < '0' || value[j] > '9') {
           return fail(fetch, HTTP_BAD_RESPONSE);
         }
         unsigned digit = value[j] - '0';
-        if (size > (SIZE_MAX - digit) / 10) {
+        if (size > (UINT64_MAX - digit) / 10) {
           return fail(fetch, HTTP_LIMIT);
         }
         size = size * 10 + digit;
@@ -317,7 +261,7 @@ static bool parse_fields(struct fetch *fetch, size_t count, struct framing *fram
   return !(framing->chunked && framing->length_present) || fail(fetch, HTTP_BAD_RESPONSE);
 }
 
-static bool response_headers(struct fetch *fetch, struct framing *framing)
+static bool response_headers(struct http_stream *fetch, struct framing *framing)
 {
   size_t previous = 0;
   for (;;) {
@@ -377,34 +321,16 @@ static bool response_headers(struct fetch *fetch, struct framing *framing)
     if (minor == 0 && framing->chunked) {
       return fail(fetch, HTTP_BAD_RESPONSE);
     }
-    if (redirect) {
-      char destination[HTTP_URI_MAX + 1];
-      enum call_status resolved = http_url_resolve(fetch->uri_text,
-          fetch->result->location, destination);
-      if (!fetch->result->location[0] || resolved != CALL_OK) {
-        return fail(fetch, resolved == CALL_FILE_TOO_LARGE ?
-            HTTP_LIMIT : HTTP_INVALID_LOCATION);
-      }
-      if (fetch->buffered > fetch->limit.body_bytes) {
-        return fail(fetch, HTTP_LIMIT);
-      }
-      fetch->result->consumed.body_bytes = fetch->buffered;
-      fetch->result->outcome = PROVIDER_OUTCOME_REDIRECT;
-      fetch->result->media_type[0] = 0;
-      return true;
-    }
-    if (status != 200 && status != 204) {
-      return fail(fetch, HTTP_REJECTED_STATUS);
-    }
     if (status == 204 && (framing->length_present || framing->chunked)) {
       return fail(fetch, HTTP_BAD_RESPONSE);
     }
-    fetch->result->outcome = PROVIDER_OUTCOME_BYTES;
+    fetch->result->length_present = framing->length_present;
+    fetch->result->length = framing->length;
     return true;
   }
 }
 
-static bool trailers(struct fetch *fetch)
+static bool trailers(struct http_stream *fetch)
 {
   for (;;) {
     size_t field_limit = fetch->limit.fields - fetch->fields;
@@ -426,9 +352,8 @@ static bool trailers(struct fetch *fetch)
   }
 }
 
-/* picohttpparser decodes chunk data; validate ignored extension syntax before
- * handing it a complete bounded size line. Do not let its trailer-skipping
- * option bypass field validation and the aggregate header budget. */
+/* Validate ignored extensions as well as the checked chunk-size arithmetic.
+ * Chunk lines have a per-line bound; no cumulative body/overhead allowance. */
 static bool chunk_extensions(const char *line, size_t size)
 {
   size_t i = 0;
@@ -503,119 +428,7 @@ static bool chunk_extensions(const char *line, size_t size)
   return true;
 }
 
-static bool chunked_body(struct fetch *fetch)
-{
-  struct phr_chunked_decoder decoder = {0};
-  for (;;) {
-    if (!check_deadline(fetch)) {
-      return false;
-    }
-    size_t line_size;
-    for (;;) {
-      char *end = memchr(fetch->bytes, '\n', fetch->buffered);
-      line_size = end ? (size_t)(end - fetch->bytes) + 1 : 0;
-      if (line_size > HTTP_CHUNK_LINE_MAX || (!end && fetch->buffered >= HTTP_CHUNK_LINE_MAX)) {
-        return fail(fetch, HTTP_LIMIT);
-      }
-      if (end) {
-        break;
-      }
-      size_t capacity = HTTP_CHUNK_LINE_MAX - fetch->buffered;
-      size_t body = fetch->limit.body_bytes - fetch->body.size;
-      if (capacity > (body ? body : 1)) {
-        capacity = body ? body : 1;
-      }
-      if (!receive_required(fetch, capacity)) {
-        return false;
-      }
-    }
-    if (line_size < 3 || fetch->bytes[line_size - 2] != '\r' ||
-        !chunk_extensions(fetch->bytes, line_size - 2)) {
-      return fail(fetch, HTTP_BAD_RESPONSE);
-    }
-    size_t decoded = line_size;
-    ssize_t state = phr_decode_chunked(&decoder, fetch->bytes, &decoded);
-    if (state == -1 || decoded) {
-      return fail(fetch, HTTP_BAD_RESPONSE);
-    }
-    consume(fetch, line_size);
-    if (state == 0) {
-      return trailers(fetch);
-    }
-    if (decoder.bytes_left_in_chunk > fetch->limit.body_bytes - fetch->body.size) {
-      return fail(fetch, HTTP_LIMIT);
-    }
-    while (decoder.bytes_left_in_chunk) {
-      if (!fetch->buffered && !receive_required(fetch, decoder.bytes_left_in_chunk)) {
-        return false;
-      }
-      size_t count = fetch->buffered;
-      if (count > decoder.bytes_left_in_chunk) {
-        count = decoder.bytes_left_in_chunk;
-      }
-      decoded = count;
-      if (phr_decode_chunked(&decoder, fetch->bytes, &decoded) != -2 || decoded != count) {
-        return fail(fetch, HTTP_BAD_RESPONSE);
-      }
-      if (!append_body(fetch, fetch->bytes, decoded)) {
-        return false;
-      }
-      consume(fetch, count);
-    }
-    while (fetch->buffered < 2) {
-      if (!receive_required(fetch, 2 - fetch->buffered)) {
-        return false;
-      }
-    }
-    decoded = 2;
-    if (phr_decode_chunked(&decoder, fetch->bytes, &decoded) != -2 || decoded) {
-      return fail(fetch, HTTP_BAD_RESPONSE);
-    }
-    consume(fetch, 2);
-  }
-}
-
-static bool response_body(struct fetch *fetch, const struct framing *framing)
-{
-  if (fetch->result->status == 204) {
-    return true;
-  }
-  if (framing->chunked) {
-    return chunked_body(fetch);
-  }
-  if (framing->length_present && !reserve_body(fetch, framing->length)) {
-    return false;
-  }
-  for (;;) {
-    if (!check_deadline(fetch)) {
-      return false;
-    }
-    size_t count = fetch->buffered;
-    if (framing->length_present && count > framing->length - fetch->body.size) {
-      count = framing->length - fetch->body.size;
-    }
-    if (!append_body(fetch, fetch->bytes, count)) {
-      return false;
-    }
-    consume(fetch, count);
-    if (framing->length_present && fetch->body.size == framing->length) {
-      return true;
-    }
-    bool eof;
-    size_t capacity = framing->length_present ? framing->length - fetch->body.size :
-        fetch->limit.body_bytes - fetch->body.size;
-    /* EOF needs a one-byte probe at the exact close-delimited limit. Any extra
-     * byte fails before it can be retained or allocated as decoded body. */
-    if (!receive(fetch, capacity ? capacity : 1, &eof)) {
-      return false;
-    }
-    if (eof) {
-      return !framing->length_present || fail(fetch, HTTP_BAD_RESPONSE);
-    }
-  }
-}
-
-static bool resolve(struct fetch *fetch, const char *host, uint32_t *address)
+static bool resolve(struct http_stream *fetch, const char *host, uint32_t *address)
 {
   if (udp_parse_address(host, address)) {
     return true;
@@ -624,7 +437,7 @@ static bool resolve(struct fetch *fetch, const char *host, uint32_t *address)
   if (!dns_name_from_text(host, &name)) {
     return fail(fetch, HTTP_INVALID_URI);
   }
-  const struct http_authority *authority = fetch->authority;
+  const struct http_authority *authority = &fetch->authority;
   if (authority->udp == HANDLE_INVALID || authority->random == HANDLE_INVALID) {
     return network(fetch, CALL_DENIED);
   }
@@ -644,7 +457,7 @@ static bool resolve(struct fetch *fetch, const char *host, uint32_t *address)
   return true;
 }
 
-static bool send_bytes(struct fetch *fetch, const char *bytes, size_t size,
+static bool send_bytes(struct http_stream *fetch, const char *bytes, size_t size,
     size_t *accepted)
 {
   if (!check_deadline(fetch)) {
@@ -667,7 +480,7 @@ static bool send_bytes(struct fetch *fetch, const char *bytes, size_t size,
   return *accepted > 0 || network(fetch, CALL_IO);
 }
 
-static bool send_request(struct fetch *fetch, const struct http_uri *uri)
+static bool send_request(struct http_stream *fetch, const struct http_uri *uri)
 {
   char request[HTTP_URI_MAX + 384];
   int length = snprintf(request, sizeof(request),
@@ -687,43 +500,78 @@ static bool send_request(struct fetch *fetch, const struct http_uri *uri)
   return true;
 }
 
-void http_fetch(const struct http_client *client, struct http_storage *storage,
-    const char *uri_text, uint64_t deadline_ns,
-    const struct provider_open_request *request, struct http_result *result)
+static enum call_status close_transport(struct http_stream *fetch, bool framed)
 {
-  *result = (struct http_result){0};
-  struct provider_http_budget limit = {
-    .body_bytes = HTTP_BODY_MAX, .header_bytes = HTTP_HEADERS_MAX,
-    .fields = HTTP_FIELDS_MAX, .informational = HTTP_INFORMATIONAL_MAX,
-  };
-  if (request) {
-    if (request->flags != PROVIDER_OPEN_HTTP &&
-        request->flags != (PROVIDER_OPEN_HTTP | PROVIDER_OPEN_ORIGIN_CROSSED)) {
-      result->error = HTTP_INVALID_URI;
-      return;
+  enum call_status status = CALL_OK;
+  if (fetch->tls) {
+    if (framed) {
+      tls_close_notify(fetch->tls, &fetch->result->tls_cleanup);
     }
-    limit = request->remaining;
-    if (limit.body_bytes > HTTP_BODY_MAX || limit.header_bytes > HTTP_HEADERS_MAX ||
-        limit.fields > HTTP_FIELDS_MAX || limit.informational > HTTP_INFORMATIONAL_MAX) {
-      result->error = HTTP_INVALID_URI;
-      return;
+    tls_connection_free(fetch->tls);
+    fetch->tls = NULL;
+  }
+  if (fetch->stream != HANDLE_INVALID) {
+    if (!framed) {
+      status = tcp_abort(fetch->stream);
+    } else {
+      tcp_shutdown_write(fetch->stream);
+    }
+    if (handle_close(fetch->stream) != 0 && status == CALL_OK) {
+      status = CALL_BAD_HANDLE;
+    }
+    fetch->stream = HANDLE_INVALID;
+  }
+  fetch->result->close_status = status;
+  return status;
+}
+
+static enum http_read_result finish(struct http_stream *fetch, bool framed)
+{
+  bool success = framed && check_deadline(fetch);
+  enum call_status closed = close_transport(fetch, success);
+  if (success && !network(fetch, closed)) {
+    success = false;
+  }
+  fetch->result->state = success ? HTTP_RESPONSE_COMPLETE : HTTP_RESPONSE_FAILED;
+  return success ? HTTP_READ_COMPLETE : HTTP_READ_FAILED;
+}
+
+struct http_stream *http_get_open_prefetch(const struct http_client *client,
+    const char *uri_text, uint64_t deadline_ns, const struct http_response_limits *limits,
+    size_t header_receive_max, struct http_response *result)
+{
+  *result = (struct http_response){.state = HTTP_RESPONSE_FAILED};
+  struct http_response_limits limit = {
+    .header_bytes = HTTP_HEADERS_MAX, .fields = HTTP_FIELDS_MAX,
+    .informational = HTTP_INFORMATIONAL_MAX,
+  };
+  if (!client || !uri_text || !header_receive_max || header_receive_max > HTTP_HEADERS_MAX) {
+    result->error = HTTP_BAD_ARGUMENT;
+    return NULL;
+  }
+  if (limits) {
+    limit = *limits;
+    if (limit.header_bytes > HTTP_HEADERS_MAX || limit.fields > HTTP_FIELDS_MAX ||
+        limit.informational > HTTP_INFORMATIONAL_MAX) {
+      result->error = HTTP_BAD_ARGUMENT;
+      return NULL;
     }
   }
   const struct http_authority *authority = &client->authority;
   if (authority->tcp == HANDLE_INVALID || authority->clock == HANDLE_INVALID) {
     result->error = HTTP_NETWORK_ERROR;
     result->network_status = CALL_DENIED;
-    return;
+    return NULL;
   }
   uint64_t now;
   result->network_status = clock_now(authority->clock, &now);
   if (result->network_status != CALL_OK) {
     result->error = HTTP_NETWORK_ERROR;
-    return;
+    return NULL;
   }
   if (now > UINT64_MAX - HTTP_FETCH_NS) {
     result->error = HTTP_LIMIT;
-    return;
+    return NULL;
   }
   uint64_t deadline = now + HTTP_FETCH_NS;
   if (deadline_ns && deadline_ns < deadline) {
@@ -732,86 +580,225 @@ void http_fetch(const struct http_client *client, struct http_storage *storage,
   struct http_uri uri;
   result->error = http_parse_uri(uri_text, &uri);
   if (result->error != HTTP_OK) {
-    return;
+    return NULL;
   }
   if (uri.scheme != client->scheme) {
     result->error = HTTP_UNSUPPORTED;
-    return;
+    return NULL;
   }
   if (uri.scheme == HTTP_SCHEME_HTTPS && !client->tls) {
     result->error = HTTP_TLS_ERROR;
     result->tls_failure.error = TLS_BAD_STATE;
-    return;
+    return NULL;
   }
-  struct fetch *fetch = calloc(1, sizeof(*fetch));
+  struct http_stream *fetch = calloc(1, sizeof(*fetch));
   if (!fetch) {
     result->error = HTTP_NO_MEMORY;
-    return;
+    return NULL;
   }
-  fetch->authority = authority;
+  fetch->authority = *authority;
   fetch->result = result;
-  fetch->body.storage = storage;
   fetch->stream = HANDLE_INVALID;
   fetch->deadline = deadline;
-  fetch->uri_text = uri_text;
   fetch->limit = limit;
+  fetch->header_receive_max = header_receive_max;
   uint32_t address;
   struct tcp_connect_reply connection;
   struct framing framing;
-  bool success = false;
   if (!check_deadline(fetch) || !resolve(fetch, uri.host, &address) ||
       !network(fetch, tcp_connect(authority->tcp, address, uri.port, deadline, &connection))) {
-    goto done;
+    goto failed;
   }
   fetch->stream = connection.handle;
   if (uri.scheme == HTTP_SCHEME_HTTPS) {
-    struct tls_authority tls_authority = {
-      .random = authority->random,
-      .clock = authority->clock,
-    };
+    struct tls_authority tls_authority = {.random = authority->random, .clock = authority->clock};
     if (!tls_connection_open(client->tls, &tls_authority, fetch->stream, uri.host,
         deadline, &fetch->tls, &result->tls_failure)) {
       fail(fetch, HTTP_TLS_ERROR);
-      goto done;
+      goto failed;
     }
   }
-  success = send_request(fetch, &uri) && response_headers(fetch, &framing) &&
-      (result->outcome == PROVIDER_OUTCOME_REDIRECT || response_body(fetch, &framing)) &&
-      check_deadline(fetch);
+  if (!send_request(fetch, &uri) || !response_headers(fetch, &framing) || !check_deadline(fetch)) {
+    goto failed;
+  }
+  fetch->remaining = framing.length;
+  fetch->stage = result->status == 204 || result->status == 304 ? BODY_FRAMED :
+      framing.chunked ? BODY_CHUNK_SIZE : framing.length_present ? BODY_FIXED : BODY_CLOSE;
+  result->state = HTTP_RESPONSE_PENDING;
+  return fetch;
 
-done:
-  if (fetch->tls) {
-    if (success && result->outcome != PROVIDER_OUTCOME_REDIRECT) {
-      tls_close_notify(fetch->tls, &result->tls_cleanup);
-    }
-    tls_connection_free(fetch->tls);
-  }
-  if (fetch->stream != HANDLE_INVALID) {
-    if (!success || result->outcome == PROVIDER_OUTCOME_REDIRECT) {
-      enum call_status aborted = tcp_abort(fetch->stream);
-      if (success && aborted != CALL_OK) {
-        success = network(fetch, aborted);
-      }
-    } else {
-      /* HTTP frames the request without EOF. Half-close only after the complete
-       * response; a later transport failure cannot invalidate retained bytes. */
-      tcp_shutdown_write(fetch->stream);
-    }
-    if (handle_close(fetch->stream) != 0 && success) {
-      success = network(fetch, CALL_BAD_HANDLE);
-    }
-  }
-  if (success) {
-    if (result->outcome == PROVIDER_OUTCOME_BYTES) {
-      result->body = fetch->body;
-    }
-  } else {
-    http_body_release(&fetch->body);
-    result->media_type[0] = 0;
-    result->location[0] = 0;
-    result->outcome = PROVIDER_OUTCOME_ERROR;
-  }
+failed:
+  close_transport(fetch, false);
   free(fetch);
+  return NULL;
+}
+
+struct http_stream *http_get_open(const struct http_client *client, const char *uri,
+    uint64_t deadline_ns, const struct http_response_limits *limits, struct http_response *response)
+{
+  return http_get_open_prefetch(client, uri, deadline_ns, limits, HTTP_HEADERS_MAX, response);
+}
+
+size_t http_stream_read_ahead(const struct http_stream *stream)
+{
+  return stream->buffered;
+}
+
+bool http_stream_check_deadline(struct http_stream *stream)
+{
+  return check_deadline(stream);
+}
+
+static bool chunk_size(struct http_stream *fetch)
+{
+  size_t line_size;
+  for (;;) {
+    char *end = memchr(fetch->bytes, '\n', fetch->buffered);
+    line_size = end ? (size_t)(end - fetch->bytes) + 1 : 0;
+    if (line_size > HTTP_CHUNK_LINE_MAX || (!end && fetch->buffered >= HTTP_CHUNK_LINE_MAX)) {
+      return fail(fetch, HTTP_LIMIT);
+    }
+    if (end) {
+      break;
+    }
+    if (!receive_required(fetch, HTTP_CHUNK_LINE_MAX - fetch->buffered)) {
+      return false;
+    }
+  }
+  if (line_size < 3 || fetch->bytes[line_size - 2] != '\r' ||
+      !chunk_extensions(fetch->bytes, line_size - 2)) {
+    return fail(fetch, HTTP_BAD_RESPONSE);
+  }
+  uint64_t value = 0;
+  for (size_t i = 0; i < line_size - 2; i++) {
+    unsigned char byte = fetch->bytes[i];
+    unsigned digit;
+    if (byte >= '0' && byte <= '9') {
+      digit = byte - '0';
+    } else if (byte >= 'a' && byte <= 'f') {
+      digit = byte - 'a' + 10;
+    } else if (byte >= 'A' && byte <= 'F') {
+      digit = byte - 'A' + 10;
+    } else {
+      break;
+    }
+    if (value > (UINT64_MAX - digit) / 16) {
+      return fail(fetch, HTTP_LIMIT);
+    }
+    value = value * 16 + digit;
+  }
+  if (value > UINT64_MAX - fetch->result->consumed.body_bytes) {
+    return fail(fetch, HTTP_LIMIT);
+  }
+  consume(fetch, line_size);
+  fetch->remaining = value;
+  fetch->stage = value ? BODY_CHUNK_DATA : BODY_TRAILERS;
+  return true;
+}
+
+enum http_read_result http_stream_read(struct http_stream *fetch, void *bytes,
+    size_t capacity, size_t *count)
+{
+  *count = 0;
+  if (fetch->result->state != HTTP_RESPONSE_PENDING) {
+    return fetch->result->state == HTTP_RESPONSE_COMPLETE ? HTTP_READ_COMPLETE : HTTP_READ_FAILED;
+  }
+  if (!bytes || !capacity) {
+    fail(fetch, HTTP_BAD_ARGUMENT);
+    return finish(fetch, false);
+  }
+  if (capacity > HTTP_READ_MAX) {
+    capacity = HTTP_READ_MAX;
+  }
+  for (;;) {
+    if (!check_deadline(fetch)) {
+      return finish(fetch, false);
+    }
+    if (fetch->stage == BODY_FRAMED || (fetch->stage == BODY_FIXED && !fetch->remaining)) {
+      return finish(fetch, true);
+    }
+    if (fetch->stage == BODY_CHUNK_SIZE) {
+      if (!chunk_size(fetch)) {
+        return finish(fetch, false);
+      }
+      continue;
+    }
+    if (fetch->stage == BODY_CHUNK_END) {
+      while (fetch->buffered < 2) {
+        if (!receive_required(fetch, 2 - fetch->buffered)) {
+          return finish(fetch, false);
+        }
+      }
+      if (fetch->bytes[0] != '\r' || fetch->bytes[1] != '\n') {
+        fail(fetch, HTTP_BAD_RESPONSE);
+        return finish(fetch, false);
+      }
+      consume(fetch, 2);
+      fetch->stage = BODY_CHUNK_SIZE;
+      continue;
+    }
+    if (fetch->stage == BODY_TRAILERS) {
+      if (!trailers(fetch)) {
+        return finish(fetch, false);
+      }
+      return finish(fetch, true);
+    }
+    bool framed = fetch->stage != BODY_CLOSE;
+    if (!fetch->buffered) {
+      size_t receive_max = capacity;
+      if (framed && fetch->remaining < receive_max) {
+        receive_max = (size_t)fetch->remaining;
+      }
+      bool eof;
+      if (!receive(fetch, receive_max, &eof)) {
+        return finish(fetch, false);
+      }
+      if (eof) {
+        if (framed) {
+          fail(fetch, HTTP_BAD_RESPONSE);
+        }
+        return finish(fetch, !framed);
+      }
+      if (!fetch->buffered) {
+        network(fetch, CALL_IO);
+        return finish(fetch, false);
+      }
+    }
+    size_t take = fetch->buffered < capacity ? fetch->buffered : capacity;
+    if (framed && fetch->remaining < take) {
+      take = (size_t)fetch->remaining;
+    }
+    if (take > UINT64_MAX - fetch->result->consumed.body_bytes) {
+      fail(fetch, HTTP_LIMIT);
+      return finish(fetch, false);
+    }
+    memcpy(bytes, fetch->bytes, take);
+    consume(fetch, take);
+    fetch->result->consumed.body_bytes += take;
+    if (framed) {
+      fetch->remaining -= take;
+      if (!fetch->remaining && fetch->stage == BODY_CHUNK_DATA) {
+        fetch->stage = BODY_CHUNK_END;
+      }
+    }
+    *count = take;
+    if (fetch->stage == BODY_FIXED && !fetch->remaining) {
+      finish(fetch, true);
+    }
+    return HTTP_READ_DATA;
+  }
+}
+
+enum call_status http_stream_close(struct http_stream *stream)
+{
+  enum call_status status = stream->result->close_status;
+  if (stream->result->state == HTTP_RESPONSE_PENDING) {
+    fail(stream, HTTP_ABORTED);
+    status = close_transport(stream, false);
+    stream->result->state = HTTP_RESPONSE_FAILED;
+  }
+  free(stream);
+  return status;
 }
 
 const char *http_error_name(enum http_error error)
@@ -829,6 +816,8 @@ const char *http_error_name(enum http_error error)
   case HTTP_NETWORK_ERROR: return "native network operation failed";
   case HTTP_DNS_ERROR: return "DNS answer unavailable or invalid";
   case HTTP_TLS_ERROR: return "TLS operation failed";
+  case HTTP_ABORTED: return "response abandoned before completion";
+  case HTTP_BAD_ARGUMENT: return "invalid HTTP stream argument";
   default: return "invalid result";
   }
 }
@@ -872,6 +861,9 @@ enum call_status http_result_status(const struct http_result *result)
     return CALL_BAD_REQUEST;
   case HTTP_UNSUPPORTED:
     return CALL_BAD_OPERATION;
+  case HTTP_BAD_ARGUMENT:
+    return CALL_BAD_REQUEST;
+  case HTTP_ABORTED:
   case HTTP_BAD_RESPONSE:
     return CALL_IO;
   case HTTP_REJECTED_STATUS:

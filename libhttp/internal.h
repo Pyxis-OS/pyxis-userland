@@ -14,5 +14,6 @@ struct http_stream *http_get_open_prefetch(const struct http_client *client,
     const char *uri, uint64_t deadline_ns, const struct http_response_limits *limits,
     size_t header_receive_max, struct http_response *response);
 size_t http_stream_read_ahead(const struct http_stream *stream);
+bool http_stream_check_deadline(struct http_stream *stream);
 
 #endif
