@@ -125,7 +125,11 @@ enum call_status http_transaction_commit(struct http_prepared *prepared,
     } else {
       if (reader) {
         prepared->response = packet.grants[0].handle;
-        handle_close(packet.grants[1].handle);
+        if (prepared->observation == HANDLE_INVALID) {
+          prepared->observation = packet.grants[1].handle;
+        } else {
+          handle_close(packet.grants[1].handle);
+        }
       }
       *reply = response;
       return CALL_OK;

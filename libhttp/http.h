@@ -170,6 +170,7 @@ enum http_step_result http_stream_step(struct http_stream *stream, void *bytes,
 bool http_stream_completion(struct http_stream *stream,
     const struct endpoint_packet *packet);
 uint64_t http_stream_pending(const struct http_stream *stream);
+size_t http_stream_read_ahead(const struct http_stream *stream);
 enum call_status http_stream_abort(struct http_stream *stream);
 
 enum http_read_result {
