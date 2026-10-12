@@ -126,9 +126,11 @@ void *bsearch(const void *key, const void *base, size_t count, size_t size,
 /* Register a handler for exit or a return from main. Handlers run once each,
  * in reverse order of registration, including handlers registered while exit
  * runs them. The first 32 registrations always succeed; later ones use the heap
- * and return nonzero if it is exhausted. Single-threaded, like errno. */
+ * and return nonzero if it is exhausted. Registrations remain single-threaded
+ * until the thread-safe libc gate. */
 int atexit(void (*handler)(void));
-/* exit runs exit handlers, then .fini_array, then closes stdio streams.
+/* exit runs calling-thread TLS/key destructors, exit handlers, .fini_array,
+ * then closes stdio streams. Workers must be joined before these finalizers.
  * _Exit and abort skip libc cleanup. */
 __attribute__((noreturn)) void exit(int status);
 __attribute__((noreturn)) void _Exit(int status);

@@ -5,8 +5,9 @@
 extern "C" {
 #endif
 
-/* One thread per process today; this must become thread-local with threads. */
-extern int errno;
+/* Libc establishes the FS-addressed record before any errno-using code. */
+int *__errno_location(void);
+#define errno (*__errno_location())
 
 #define ENOMEM 1
 #define EINVAL 2

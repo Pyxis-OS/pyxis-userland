@@ -1,6 +1,7 @@
 #include <startup.h>
 #include <stdlib.h>
 #include "runtime.h"
+#include "thread_private.h"
 
 extern int main(int argc, char **argv);
 
@@ -22,6 +23,7 @@ static void run_init_array(void)
   if (!startup_init(info)) {
     _Exit(EXIT_FAILURE);
   }
+  libc_thread_bootstrap(info);
   stdio_init();
   malloc_init();
   run_init_array();

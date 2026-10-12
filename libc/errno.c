@@ -1,3 +1,7 @@
 #include <errno.h>
+#include "thread_private.h"
 
-int errno;
+int *__errno_location(void)
+{
+  return &libc_thread_record()->errno_value;
+}

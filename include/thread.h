@@ -12,7 +12,8 @@
 enum call_status thread_create(handle_t threads, const struct thread_create *request,
     handle_t *completion);
 
-/* Bind the current thread's guarded FS context once. Rebinding returns BUSY.
+/* SET_FS or MANAGE binds the current thread's guarded FS context once.
+ * Rebinding returns BUSY.
  * This establishes only a raw native FS base, not a libc or language TLS layout. */
 enum call_status thread_set_fs(handle_t threads, struct thread_fs_context context);
 

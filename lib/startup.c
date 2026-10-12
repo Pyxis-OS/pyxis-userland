@@ -37,7 +37,7 @@ static bool valid_bindings(const struct startup_info *info, uint64_t address,
   }
   const struct startup_binding *bindings = (const void *)(uintptr_t)address;
   for (size_t i = 0; i < count; ++i) {
-    if (bindings[i].handle == HANDLE_INVALID ||
+    if (bindings[i].handle == HANDLE_INVALID || bindings[i].handle == info->thread_fs ||
         !terminated((uintptr_t)info, info->read_only_size, bindings[i].name)) {
       return false;
     }
@@ -58,7 +58,8 @@ static bool valid_streams(const struct startup_info *info)
       }
       continue;
     }
-    if ((stream->protocol != PROTOCOL_CONSOLE &&
+    if (stream->handle == info->thread_fs ||
+        (stream->protocol != PROTOCOL_CONSOLE &&
          stream->protocol != PROTOCOL_FILE &&
          stream->protocol != PROTOCOL_PIPE) || stream->handle == HANDLE_INVALID) {
       return false;
@@ -95,7 +96,8 @@ static bool valid_startup(const struct startup_info *info)
   if (!info || (uintptr_t)info % _Alignof(struct startup_info) ||
       info->version != STARTUP_VERSION || info->size > STARTUP_MAX_SIZE ||
       info->read_only_size < sizeof(*info) || info->read_only_size >= info->size ||
-      (uintptr_t)info > UINTPTR_MAX - info->size) {
+      (uintptr_t)info > UINTPTR_MAX - info->size || info->thread_fs == HANDLE_INVALID ||
+      info->thread_fs == info->namespace_handle) {
     return false;
   }
   if (!valid_bindings(info, info->resources, info->resource_count) ||
@@ -130,7 +132,7 @@ static bool valid_startup(const struct startup_info *info)
 
   const handle_t *directories = (const void *)(uintptr_t)info->working_directories;
   for (size_t i = 0; i < info->working_directory_count; ++i) {
-    if (directories[i] == HANDLE_INVALID) {
+    if (directories[i] == HANDLE_INVALID || directories[i] == info->thread_fs) {
       return false;
     }
   }

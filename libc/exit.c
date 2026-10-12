@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <syscall.h>
 #include "runtime.h"
+#include "thread_private.h"
 
 /* C guarantees 32 registrations; further blocks come from the heap. */
 #define EXIT_BLOCK_HANDLERS 32
@@ -98,6 +99,7 @@ static void run_fini_array(void)
 
 [[noreturn]] void exit(int status)
 {
+  libc_thread_destructors();
   run_exit_handlers();
   run_fini_array();
   stdio_finish();

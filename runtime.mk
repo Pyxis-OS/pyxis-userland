@@ -166,6 +166,10 @@ $(BUILD)/libc/tlsf.o: third_party/tlsf/tlsf.c
 
 $(BUILD)/libc/malloc.o: private CPPFLAGS += -Ithird_party/tlsf
 
+# Initial FS is zero. Bootstrap and its startup/native helpers use no language
+# TLS, errno or compiler-generated libc copy/zero calls.
+$(BUILD)/libc/tls.o $(BUILD)/libc/startup.o: private CFLAGS += -fno-builtin
+
 $(BUILD)/libc/time.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CPPFLAGS += -Ithird_party/musl/src/internal

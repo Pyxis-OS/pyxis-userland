@@ -9,6 +9,7 @@ PHDRS {
   text PT_LOAD FLAGS(5);   /* PF_R | PF_X */
   rodata PT_LOAD FLAGS(4); /* PF_R */
   data PT_LOAD FLAGS(6);   /* PF_R | PF_W */
+  tls PT_TLS FLAGS(4);     /* Static template metadata; bytes use a LOAD. */
 }
 SECTIONS {
   . = USER_LINK_BASE;
@@ -32,6 +33,17 @@ SECTIONS {
   .gcc_except_table : { *(.gcc_except_table .gcc_except_table.*) } :rodata
 
   . = ALIGN(USER_PAGE_SIZE);
+  __tls_alignment = MAX(1, MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
+  .tdata : ALIGN(__tls_alignment) {
+    __tls_template_start = .;
+    *(.tdata .tdata.*)
+    __tls_template_init_end = .;
+  } :data :tls
+  .tbss (NOLOAD) : {
+    *(.tbss .tbss.*)
+  } :data :tls
+  /* LLD's TLS NOBITS location counter need not advance the ordinary data VA. */
+  __tls_template_end = ADDR(.tbss) + SIZEOF(.tbss);
   /* libc runs .init_array before main and .fini_array after exit handlers. */
   .init_array : {
     __init_array_start = .;
