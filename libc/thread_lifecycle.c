@@ -30,7 +30,6 @@ struct lifecycle_record {
   enum lifecycle_state state;
   bool joining;
   uint32_t published;
-  uint32_t publication_waiters;
   enum entry_kind kind;
   union {
     void *(*pthread_start)(void *);
@@ -259,8 +258,7 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
    * creator has finished accessing this record and its bounded wake word. */
   *thread = identity(record);
   __atomic_store_n(&record->published, 1, __ATOMIC_RELEASE);
-  if (__atomic_load_n(&record->publication_waiters, __ATOMIC_ACQUIRE) &&
-      libc_wake(&record->published, UINT64_MAX)) {
+  if (libc_wake(&record->published, UINT64_MAX)) {
     _Exit(EXIT_FAILURE);
   }
   libc_lock_release(&registry_lock);
@@ -272,14 +270,10 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
   struct lifecycle_record *record = argument;
   /* Native CREATE can dispatch before its caller receives the observer. No
    * user callback publishes a joinable identity until that observer is ready. */
-  if (!__atomic_load_n(&record->published, __ATOMIC_ACQUIRE)) {
-    __atomic_fetch_add(&record->publication_waiters, 1, __ATOMIC_ACQ_REL);
-    while (!__atomic_load_n(&record->published, __ATOMIC_ACQUIRE)) {
-      if (libc_park(&record->published, 0, THREAD_ADDRESS_NO_DEADLINE)) {
-        _Exit(EXIT_FAILURE);
-      }
+  while (!__atomic_load_n(&record->published, __ATOMIC_ACQUIRE)) {
+    if (libc_park(&record->published, 0, THREAD_ADDRESS_NO_DEADLINE)) {
+      _Exit(EXIT_FAILURE);
     }
-    __atomic_fetch_sub(&record->publication_waiters, 1, __ATOMIC_ACQ_REL);
   }
   uint64_t value;
   if (record->kind == ENTRY_PTHREAD) {
