@@ -35,6 +35,14 @@ enum tls_error {
   TLS_DEADLINE,
 };
 
+enum tls_step_result {
+  TLS_STEP_PROGRESS,
+  TLS_STEP_EOF,
+  TLS_STEP_WANT_READ,
+  TLS_STEP_WANT_WRITE,
+  TLS_STEP_FAILED,
+};
+
 struct tls_result {
   enum tls_error error;
   enum call_status native_status;
@@ -83,6 +91,38 @@ bool tls_read(struct tls_connection *connection, void *data, size_t capacity,
     size_t *length, bool *eof, struct tls_result *result);
 bool tls_write(struct tls_connection *connection, const void *data, size_t size,
     size_t *accepted, struct tls_result *result);
+/* At most one library read/write call using native TRY I/O, without a network
+ * readiness wait. PROGRESS reports a positive short count; EOF is authenticated close_notify
+ * on read only. WANT reports zero count and TLS_OK: wait for the indicated stream
+ * readiness under the original deadline, then retry. FAILED reports zero count;
+ * disregard read storage and only free the connection. A step can make several
+ * native TRY calls while processing buffered TLS records. No TCP authority beyond
+ * the borrowed stream's READ/WRITE is required.
+ *
+ * After write WANT, keep the exact plaintext pointer and size alive and unchanged
+ * and resume with identical arguments until PROGRESS, tls_stop_write or
+ * connection_free. The encrypted record remains owned by Mbed TLS; do not replay
+ * the plaintext. Reads
+ * may interleave, but any read-side BIO send while a write is pending fails with
+ * TLS_UNSUPPORTED before native I/O (including a TLS 1.2 renegotiation alert).
+ * A read WANT_WRITE owns buffered protocol output: resume that read before any
+ * new application write. The retry first flushes that existing protocol record
+ * through the public library alert API, then reads if the flush completes.
+ * close_notify refuses pending application or read-side output without sending.
+ * These rules also apply when mixing blocking and step
+ * operations. Ownership remains single-task. */
+enum tls_step_result tls_read_step(struct tls_connection *connection, void *data,
+    size_t capacity, size_t *length, struct tls_result *result);
+enum tls_step_result tls_write_step(struct tls_connection *connection, const void *data,
+    size_t size, size_t *accepted, struct tls_result *result);
+/* Irreversibly stop application writes without wire I/O or a clock check. This
+ * idempotent local operation releases any saved plaintext pointer and size, so
+ * the caller may release that storage. Encrypted application output stays owned
+ * by the library until connection_free: reads may continue, but a read-side send
+ * still fails with TLS_UNSUPPORTED if application output remains pending. Future
+ * write and close_notify calls fail without sending. Only use on a live verified
+ * connection; failed transfers still permit only connection_free. */
+bool tls_stop_write(struct tls_connection *connection, struct tls_result *result);
 /* At most 100 ms of the remaining original deadline; does not wait for peer
  * shutdown. Diagnostic failure after completed HTTP framing cannot invalidate
  * the retained response. No time remaining means a successful skipped attempt. */

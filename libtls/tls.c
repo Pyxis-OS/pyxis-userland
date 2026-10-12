@@ -25,7 +25,10 @@ struct tls_connection {
   struct tls_authority authority;
   handle_t stream;
   uint64_t deadline;
+  const void *pending_write;
+  size_t pending_write_size;
   bool verified, failed, eof, closed;
+  bool application_output_pending, read_output_pending, write_stopped;
 };
 
 /* Keep the payload aligned as malloc would; bookkeeping is charged too. */
@@ -42,6 +45,7 @@ static struct {
   const struct tls_authority *authority;
   uint64_t deadline;
   struct tls_result *result;
+  bool nonblocking, reading;
 } operation;
 static struct tls_result *allocation_result;
 static const char *const protocols[] = {"http/1.1", NULL};
@@ -116,6 +120,8 @@ static void end(void)
   operation.authority = NULL;
   operation.deadline = 0;
   operation.result = NULL;
+  operation.nonblocking = false;
+  operation.reading = false;
   allocation_result = NULL;
 }
 
@@ -430,9 +436,31 @@ void tls_runtime_free(struct tls_runtime *runtime)
   owner = NULL;
 }
 
+static bool transport_deadline(uint64_t maximum_wait, uint64_t *deadline)
+{
+  uint64_t now;
+  if ((operation.result && operation.result->error != TLS_OK) || !monotonic(&now)) {
+    return false;
+  }
+  if (now >= operation.deadline) {
+    return native_failure(TLS_DEADLINE, CALL_TIMED_OUT);
+  }
+  *deadline = operation.deadline;
+  if (maximum_wait < operation.deadline - now) {
+    *deadline = now + maximum_wait;
+  }
+  return true;
+}
+
 static int send_bytes(void *context, const unsigned char *data, size_t size)
 {
   struct tls_connection *connection = context;
+  /* A read-side alert must not flush an unfinished application record: the
+   * subsequent application write retry would encrypt the plaintext again. */
+  if (operation.reading && connection->application_output_pending) {
+    native_failure(TLS_UNSUPPORTED, CALL_BAD_OPERATION);
+    return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+  }
   if (!check_deadline()) {
     return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
   }
@@ -440,7 +468,25 @@ static int send_bytes(void *context, const unsigned char *data, size_t size)
     size = TCP_WRITE_MAX_BYTES;
   }
   struct tcp_write_reply reply;
-  enum call_status status = tcp_write(connection->stream, data, size, operation.deadline, &reply);
+  enum call_status status;
+  if (operation.nonblocking) {
+    status = tcp_try_write(connection->stream, data, size, &reply);
+  } else {
+    uint64_t deadline;
+    if (!transport_deadline(TCP_WRITE_MAX_WAIT_NS, &deadline)) {
+      return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+    }
+    status = tcp_write(connection->stream, data, size, deadline, &reply);
+    if (status == CALL_TIMED_OUT) {
+      if (!check_deadline()) {
+        return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+      }
+      status = tcp_try_write(connection->stream, data, size, &reply);
+    }
+  }
+  if (status == CALL_WOULD_BLOCK) {
+    return MBEDTLS_ERR_SSL_WANT_WRITE;
+  }
   if (status != CALL_OK || !reply.length) {
     native_failure(status == CALL_TIMED_OUT ? TLS_DEADLINE : TLS_TRANSPORT_ERROR,
         status == CALL_OK ? CALL_IO : status);
@@ -459,7 +505,25 @@ static int receive_bytes(void *context, unsigned char *data, size_t size)
     size = TCP_READ_MAX_BYTES;
   }
   struct tcp_read_reply reply;
-  enum call_status status = tcp_read(connection->stream, data, size, operation.deadline, &reply);
+  enum call_status status;
+  if (operation.nonblocking) {
+    status = tcp_try_read(connection->stream, data, size, &reply);
+  } else {
+    uint64_t deadline;
+    if (!transport_deadline(TCP_READ_MAX_WAIT_NS, &deadline)) {
+      return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+    }
+    status = tcp_read(connection->stream, data, size, deadline, &reply);
+    if (status == CALL_TIMED_OUT) {
+      if (!check_deadline()) {
+        return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+      }
+      status = tcp_try_read(connection->stream, data, size, &reply);
+    }
+  }
+  if (status == CALL_WOULD_BLOCK) {
+    return MBEDTLS_ERR_SSL_WANT_READ;
+  }
   if (status != CALL_OK) {
     native_failure(status == CALL_TIMED_OUT ? TLS_DEADLINE : TLS_TRANSPORT_ERROR, status);
     return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
@@ -549,75 +613,156 @@ static bool connection_begin(struct tls_connection *connection, struct tls_resul
   return success;
 }
 
-bool tls_read(struct tls_connection *connection, void *data, size_t capacity,
-    size_t *length, bool *eof, struct tls_result *result)
+static enum tls_step_result transfer_result(struct tls_connection *connection,
+    int code, size_t *count, bool reading, struct tls_result *result)
+{
+  enum tls_step_result step = TLS_STEP_FAILED;
+  if (result->error == TLS_OK) {
+    if (code > 0) {
+      if (check_deadline()) {
+        *count = code;
+        step = TLS_STEP_PROGRESS;
+      }
+    } else if (reading && code == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+      if (check_deadline()) {
+        connection->eof = true;
+        step = TLS_STEP_EOF;
+      }
+    } else if (code == MBEDTLS_ERR_SSL_WANT_READ || code == MBEDTLS_ERR_SSL_WANT_WRITE) {
+      if (check_deadline()) {
+        step = code == MBEDTLS_ERR_SSL_WANT_READ ? TLS_STEP_WANT_READ : TLS_STEP_WANT_WRITE;
+      }
+    } else {
+      if (!code) {
+        code = reading ? MBEDTLS_ERR_SSL_CONN_EOF : MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+      }
+      library_result(result, code, TLS_PROTOCOL_ERROR);
+    }
+  }
+  connection->failed = step == TLS_STEP_FAILED;
+  return step;
+}
+
+static enum tls_step_result read_transfer(struct tls_connection *connection,
+    void *data, size_t capacity, size_t *length, bool nonblocking,
+    struct tls_result *result)
 {
   *length = 0;
-  *eof = false;
-  bool success = connection_begin(connection, result);
-  if (!success) {
+  if (!connection_begin(connection, result)) {
     end();
-    return false;
+    return TLS_STEP_FAILED;
   }
   if (connection->eof) {
-    *eof = true;
     end();
-    return true;
+    return TLS_STEP_EOF;
   }
   if (!data || !capacity) {
     connection->failed = true;
+    fail(result, TLS_BAD_STATE);
     end();
-    return fail(result, TLS_BAD_STATE);
+    return TLS_STEP_FAILED;
   }
+  operation.nonblocking = nonblocking;
+  operation.reading = true;
   int code;
   do {
-    code = mbedtls_ssl_read(&connection->ssl, data, capacity);
-  } while (retryable(code) && check_deadline());
-  if (code == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
-    success = check_deadline();
-    connection->eof = *eof = success;
-  } else if (code > 0) {
-    success = result->error == TLS_OK && check_deadline();
-    if (success) {
-      *length = code;
+    code = 0;
+    if (connection->read_output_pending) {
+      /* Only a verified read with no pending application output can set this
+       * flag, on BIO WANT_WRITE. Its record remains buffered: this public call
+       * only flushes that record, and its alert arguments are unused. A stream
+       * ssl_read retry does not itself flush a previous read-side alert. */
+      code = mbedtls_ssl_send_alert_message(&connection->ssl,
+          MBEDTLS_SSL_ALERT_LEVEL_WARNING, MBEDTLS_SSL_ALERT_MSG_NO_RENEGOTIATION);
+      if (!code) {
+        connection->read_output_pending = false;
+      }
     }
-  } else {
-    success = library_result(result, code ? code : MBEDTLS_ERR_SSL_CONN_EOF, TLS_PROTOCOL_ERROR);
-  }
-  connection->failed = !success;
+    if (!code) {
+      code = mbedtls_ssl_read(&connection->ssl, data, capacity);
+    }
+    if (code == MBEDTLS_ERR_SSL_WANT_WRITE && result->error == TLS_OK) {
+      connection->read_output_pending = true;
+    }
+  } while (!nonblocking && retryable(code) && check_deadline());
+  enum tls_step_result step = transfer_result(connection, code, length, true, result);
   end();
-  return success;
+  return step;
+}
+
+static enum tls_step_result write_transfer(struct tls_connection *connection,
+    const void *data, size_t size, size_t *accepted, bool nonblocking,
+    struct tls_result *result)
+{
+  *accepted = 0;
+  if (!connection_begin(connection, result)) {
+    end();
+    return TLS_STEP_FAILED;
+  }
+  if (!data || !size || connection->eof || connection->write_stopped ||
+      connection->read_output_pending ||
+      (connection->pending_write &&
+       (connection->pending_write != data || connection->pending_write_size != size))) {
+    connection->failed = true;
+    fail(result, TLS_BAD_STATE);
+    end();
+    return TLS_STEP_FAILED;
+  }
+  connection->pending_write = data;
+  connection->pending_write_size = size;
+  connection->application_output_pending = true;
+  operation.nonblocking = nonblocking;
+  int code;
+  do {
+    code = mbedtls_ssl_write(&connection->ssl, data, size);
+  } while (!nonblocking && retryable(code) && check_deadline());
+  enum tls_step_result step = transfer_result(connection, code, accepted, false, result);
+  if (step == TLS_STEP_PROGRESS) {
+    connection->application_output_pending = false;
+    connection->pending_write = NULL;
+    connection->pending_write_size = 0;
+  }
+  end();
+  return step;
+}
+
+enum tls_step_result tls_read_step(struct tls_connection *connection, void *data,
+    size_t capacity, size_t *length, struct tls_result *result)
+{
+  return read_transfer(connection, data, capacity, length, true, result);
+}
+
+enum tls_step_result tls_write_step(struct tls_connection *connection, const void *data,
+    size_t size, size_t *accepted, struct tls_result *result)
+{
+  return write_transfer(connection, data, size, accepted, true, result);
+}
+
+bool tls_read(struct tls_connection *connection, void *data, size_t capacity,
+    size_t *length, bool *eof, struct tls_result *result)
+{
+  enum tls_step_result step = read_transfer(connection, data, capacity, length, false, result);
+  *eof = step == TLS_STEP_EOF;
+  return step == TLS_STEP_PROGRESS || step == TLS_STEP_EOF;
 }
 
 bool tls_write(struct tls_connection *connection, const void *data, size_t size,
     size_t *accepted, struct tls_result *result)
 {
-  *accepted = 0;
-  bool success = connection_begin(connection, result);
-  if (!success) {
-    end();
-    return false;
-  }
-  if (!data || !size || connection->eof) {
-    connection->failed = true;
-    end();
+  return write_transfer(connection, data, size, accepted, false, result) == TLS_STEP_PROGRESS;
+}
+
+bool tls_stop_write(struct tls_connection *connection, struct tls_result *result)
+{
+  *result = (struct tls_result){0};
+  if (!connection || !owner || owner->connection != connection || !connection->verified ||
+      connection->failed || operation.result) {
     return fail(result, TLS_BAD_STATE);
   }
-  int code;
-  do {
-    code = mbedtls_ssl_write(&connection->ssl, data, size);
-  } while (retryable(code) && check_deadline());
-  if (code > 0) {
-    success = result->error == TLS_OK && check_deadline();
-    if (success) {
-      *accepted = code;
-    }
-  } else {
-    success = library_result(result, code ? code : MBEDTLS_ERR_SSL_INTERNAL_ERROR, TLS_PROTOCOL_ERROR);
-  }
-  connection->failed = !success;
-  end();
-  return success;
+  connection->write_stopped = true;
+  connection->pending_write = NULL;
+  connection->pending_write_size = 0;
+  return true;
 }
 
 bool tls_close_notify(struct tls_connection *connection, struct tls_result *result)
@@ -625,6 +770,11 @@ bool tls_close_notify(struct tls_connection *connection, struct tls_result *resu
   *result = (struct tls_result){0};
   if (!connection || !owner || owner->connection != connection || !connection->verified ||
       connection->failed || operation.result) {
+    return fail(result, TLS_BAD_STATE);
+  }
+  if (connection->write_stopped || connection->application_output_pending ||
+      connection->read_output_pending) {
+    connection->failed = true;
     return fail(result, TLS_BAD_STATE);
   }
   if (connection->closed) {
@@ -685,7 +835,7 @@ const char *tls_error_name(enum tls_error error)
   case TLS_CERTIFICATE_ERROR: return "certificate verification failed";
   case TLS_PROTOCOL_ERROR: return "TLS protocol failure";
   case TLS_TRUNCATED: return "TLS stream truncated";
-  case TLS_UNSUPPORTED: return "unsupported negotiated protocol";
+  case TLS_UNSUPPORTED: return "unsupported TLS operation or protocol";
   case TLS_LIMIT: return "TLS encoded size limit";
   case TLS_QUOTA: return "TLS allocation quota";
   case TLS_NO_MEMORY: return "TLS allocation failed";
