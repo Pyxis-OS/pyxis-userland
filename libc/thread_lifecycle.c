@@ -1,3 +1,4 @@
+#include "memory_operations.h"
 #include <abi/message.h>
 #include <clock.h>
 #include <errno.h>
@@ -182,7 +183,7 @@ static int release_record(struct lifecycle_record *record)
     }
   }
   if (record->stack.identity) {
-    enum call_status status = memory_release_reservation(memory, record->stack.identity);
+    enum call_status status = libc_memory_release_reservation(memory, record->stack.identity);
     if (status == CALL_OK) {
       record->stack = (struct memory_reservation){0};
     } else if (!error) {
@@ -227,7 +228,7 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
     record->start.c11_start = c11_start;
   }
   record->argument = argument;
-  enum call_status status = memory_allocate_guarded(memory, stack_size, &record->stack);
+  enum call_status status = libc_memory_allocate_guarded(memory, stack_size, &record->stack);
   if (status == CALL_OK) {
     status = libc_thread_context_prepare(memory, &record->context);
   }
@@ -241,7 +242,7 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
       .context_identity = record->context.reservation.identity,
       .fs_base = record->context.fs_base,
     };
-    status = thread_create(service, &request, &record->completion);
+    status = libc_native_thread_create(service, &request, &record->completion);
   }
   if (status == CALL_OUTCOME_UNKNOWN) {
     /* The sibling may own these pins already. Only process teardown may

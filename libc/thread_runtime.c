@@ -1,3 +1,4 @@
+#include "memory_operations.h"
 #include <stdlib.h>
 #include <stdbool.h>
 #include <thread.h>
@@ -123,7 +124,7 @@ int __cxa_thread_atexit_impl(void (*function)(void *), void *argument, void *mod
   struct thread_destructor_block *block = record->destructors;
   if (block->count == LIBC_THREAD_DESTRUCTOR_BLOCK) {
     struct memory_region region;
-    if (memory_allocate(record->memory, sizeof(*block), &region) != CALL_OK) {
+    if (libc_memory_allocate(record->memory, sizeof(*block), &region) != CALL_OK) {
       /* Compiler-generated registration ignores the result. Losing a required
        * destructor would falsely report successful TLS initialization. */
       _Exit(EXIT_FAILURE);
@@ -146,7 +147,7 @@ static void run_language_destructors(struct libc_thread_record *record)
         return;
       }
       record->destructors = block->previous;
-      if (memory_release(record->memory, block->region) != CALL_OK) {
+      if (libc_memory_release(record->memory, block->region) != CALL_OK) {
         _Exit(EXIT_FAILURE);
       }
       continue;

@@ -1,3 +1,4 @@
+#include "memory_operations.h"
 #include <handle.h>
 #include <startup.h>
 #include <stdlib.h>
@@ -57,7 +58,7 @@ enum call_status libc_thread_context_prepare(handle_t memory,
     return status;
   }
   struct memory_reservation reservation;
-  status = memory_allocate_guarded(owned_memory, usable, &reservation);
+  status = libc_memory_allocate_guarded(owned_memory, usable, &reservation);
   if (status != CALL_OK) {
     handle_close(owned_memory);
     return status;
@@ -66,7 +67,7 @@ enum call_status libc_thread_context_prepare(handle_t memory,
   uintptr_t reservation_end = reservation.address + reservation.size;
   if (rounded > reservation_end - usable_start ||
       alignment - 1 > UINTPTR_MAX - usable_start - rounded) {
-    memory_release_reservation(owned_memory, reservation.identity);
+    libc_memory_release_reservation(owned_memory, reservation.identity);
     handle_close(owned_memory);
     return CALL_BAD_REQUEST;
   }
@@ -75,7 +76,7 @@ enum call_status libc_thread_context_prepare(handle_t memory,
   uintptr_t fs = (usable_start + rounded + alignment - 1) & ~(alignment - 1);
   uintptr_t image = fs - rounded;
   if (fs > reservation_end || sizeof(struct libc_thread_record) > reservation_end - fs) {
-    memory_release_reservation(owned_memory, reservation.identity);
+    libc_memory_release_reservation(owned_memory, reservation.identity);
     handle_close(owned_memory);
     return CALL_BAD_REQUEST;
   }
@@ -108,7 +109,7 @@ enum call_status libc_thread_context_release(handle_t memory,
   handle_t owned_memory = record->memory;
   struct thread_destructor_block *block = record->destructors;
   struct thread_destructor_block *first = &record->first_destructors;
-  enum call_status status = memory_release_reservation(memory, context->reservation.identity);
+  enum call_status status = libc_memory_release_reservation(memory, context->reservation.identity);
   if (status != CALL_OK) {
     return status;
   }
@@ -116,7 +117,7 @@ enum call_status libc_thread_context_release(handle_t memory,
   enum call_status cleanup = CALL_OK;
   while (block != first) {
     struct thread_destructor_block *previous = block->previous;
-    enum call_status released = memory_release(owned_memory, block->region);
+    enum call_status released = libc_memory_release(owned_memory, block->region);
     if (cleanup == CALL_OK && released != CALL_OK) {
       cleanup = released;
     }
