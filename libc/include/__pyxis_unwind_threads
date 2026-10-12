@@ -1,0 +1,40 @@
+#ifndef LIBC_CXX_UNWIND_THREADS
+#define LIBC_CXX_UNWIND_THREADS
+
+#ifndef __ASSEMBLER__
+#include <pthread.h>
+#include <stdlib.h>
+
+/* Libunwind's internal cache paths ignore failed RWMutex acquisition. These
+ * checked adapters are forced into that archive only; direct pthread users
+ * retain ordinary error returns. The underlying locks are real libc rwlocks. */
+static inline int libc_unwind_read_lock(pthread_rwlock_t *lock)
+{
+  if (pthread_rwlock_rdlock(lock)) {
+    _Exit(EXIT_FAILURE);
+  }
+  return 0;
+}
+
+static inline int libc_unwind_write_lock(pthread_rwlock_t *lock)
+{
+  if (pthread_rwlock_wrlock(lock)) {
+    _Exit(EXIT_FAILURE);
+  }
+  return 0;
+}
+
+static inline int libc_unwind_unlock(pthread_rwlock_t *lock)
+{
+  if (pthread_rwlock_unlock(lock)) {
+    _Exit(EXIT_FAILURE);
+  }
+  return 0;
+}
+
+#define pthread_rwlock_rdlock libc_unwind_read_lock
+#define pthread_rwlock_wrlock libc_unwind_write_lock
+#define pthread_rwlock_unlock libc_unwind_unlock
+#endif
+
+#endif
