@@ -502,6 +502,7 @@ static enum call_status close_transport(struct http_stream *fetch, bool framed)
   enum call_status status = fetch->result->close_status;
   if (fetch->tls) {
     if (framed && fetch->result->request_sent && !fetch->cooperative) {
+      fetch->result->tls_cleanup_attempted = true;
       tls_close_notify(fetch->tls, &fetch->result->tls_cleanup);
     }
     tls_connection_free(fetch->tls);

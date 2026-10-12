@@ -82,6 +82,7 @@ struct http_response {
   enum call_status network_status, close_status;
   unsigned status, dns_rcode;
   struct tls_result tls_failure, tls_cleanup;
+  bool tls_cleanup_attempted;
   bool length_present, invalid_location;
   uint64_t length;
   enum call_status source_status;
@@ -211,6 +212,7 @@ struct http_result {
   unsigned dns_rcode;
   struct tls_result tls_failure;
   struct tls_result tls_cleanup; /* Diagnostic only after complete framing. */
+  bool tls_cleanup_attempted;
   char media_type[HTTP_MEDIA_TYPE_MAX + 1];
   char location[HTTP_URI_MAX + 1]; /* Validated URI reference, never a body. */
   struct http_body body; /* Owned only on success; no partial body on failure. */

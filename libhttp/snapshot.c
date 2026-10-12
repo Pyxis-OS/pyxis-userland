@@ -97,6 +97,7 @@ static void response_metadata(struct http_result *result, const struct http_resp
   result->dns_rcode = response->dns_rcode;
   result->tls_failure = response->tls_failure;
   result->tls_cleanup = response->tls_cleanup;
+  result->tls_cleanup_attempted = response->tls_cleanup_attempted;
   memcpy(result->media_type, response->media_type, sizeof(result->media_type));
   memcpy(result->location, response->location, sizeof(result->location));
 }
