@@ -782,9 +782,6 @@ enum http_read_result http_stream_read(struct http_stream *fetch, void *bytes,
       }
     }
     *count = take;
-    if (fetch->stage == BODY_FIXED && !fetch->remaining) {
-      finish(fetch, true);
-    }
     return HTTP_READ_DATA;
   }
 }

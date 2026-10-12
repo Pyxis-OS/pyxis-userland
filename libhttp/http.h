@@ -95,7 +95,8 @@ enum http_read_result {
 /* One synchronous GET through headers, no redirect/replay. NULL limits select
  * bounded ordinary metadata limits. Bodies have no total-byte allowance.
  * One overall 30-second/earlier-caller deadline remains until task 2.
- * RESPONSE is caller-owned and must live until close; failure initializes it
+ * RESPONSE is caller-owned: observe without modifying it while live, and retain
+ * it until close; failure initializes it
  * and returns NULL. Borrowed handles/runtime must remain valid until close.
  * A returned stream owns bounded scratch, not response-body storage. */
 struct http_stream *http_get_open(const struct http_client *client, const char *uri,
