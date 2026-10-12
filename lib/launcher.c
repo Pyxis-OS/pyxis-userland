@@ -76,16 +76,16 @@ enum call_status launcher_launch(handle_t launcher, const struct launch_request 
   struct syscall_result result = syscall_call(launcher, &message, sizeof(message),
       &reply, sizeof(reply));
   if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
+    return CALL_OUTCOME_UNKNOWN;
   }
   if (result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
-    return CALL_BAD_REQUEST;
+    return CALL_OUTCOME_UNKNOWN;
   }
   if (result.status != CALL_OK) {
     return result.status;
   }
   if (reply == HANDLE_INVALID) {
-    return CALL_BAD_REQUEST;
+    return CALL_OUTCOME_UNKNOWN;
   }
   *child = reply;
   return CALL_OK;
