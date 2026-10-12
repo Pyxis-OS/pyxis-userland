@@ -402,11 +402,12 @@ int libc_condition_signal(struct libc_condition *condition, bool all)
   return 0;
 }
 
-int libc_once_run(struct libc_once *once, void (*initialize)(void))
+int libc_once_begin(struct libc_once *once, struct libc_once_frame *frame, int *run)
 {
-  if (!once || !initialize) {
+  if (!once || !frame || !run) {
     return EINVAL;
   }
+  *run = 0;
   for (;;) {
     libc_lock_acquire(&once->guard);
     uint32_t state = __atomic_load_n(&once->state, __ATOMIC_RELAXED);
@@ -421,17 +422,9 @@ int libc_once_run(struct libc_once *once, void (*initialize)(void))
     if (!state) {
       __atomic_store_n(&once->state, 1, __ATOMIC_RELAXED);
       libc_lock_release(&once->guard);
-      struct libc_once_frame frame = {.object = once};
-      libc_thread_once_push(&frame);
-      initialize();
-      libc_thread_once_pop(&frame);
-      libc_lock_acquire(&once->guard);
-      __atomic_store_n(&once->state, 2, __ATOMIC_RELEASE);
-      bool wake = once->waiters != 0;
-      libc_lock_release(&once->guard);
-      if (wake) {
-        notify(&once->state, UINT64_MAX);
-      }
+      *frame = (struct libc_once_frame){.object = once};
+      libc_thread_once_push(frame);
+      *run = 1;
       return 0;
     }
     if (once->waiters == UINT32_MAX) {
@@ -450,19 +443,50 @@ int libc_once_run(struct libc_once *once, void (*initialize)(void))
   }
 }
 
+static void finish_once(struct libc_once_frame *frame, uint32_t state)
+{
+  struct libc_once *once = frame->object;
+  libc_thread_once_pop(frame);
+  libc_lock_acquire(&once->guard);
+  __atomic_store_n(&once->state, state, __ATOMIC_RELEASE);
+  bool wake = once->waiters != 0;
+  libc_lock_release(&once->guard);
+  if (wake) {
+    notify(&once->state, UINT64_MAX);
+  }
+}
+
+void libc_once_complete(struct libc_once_frame *frame)
+{
+  finish_once(frame, 2);
+}
+
+void libc_once_abort(struct libc_once_frame *frame)
+{
+  finish_once(frame, 0);
+}
+
+int libc_once_run(struct libc_once *once, void (*initialize)(void))
+{
+  if (!initialize) {
+    return EINVAL;
+  }
+  struct libc_once_frame frame;
+  int run;
+  int error = libc_once_begin(once, &frame, &run);
+  if (error || !run) {
+    return error;
+  }
+  initialize();
+  libc_once_complete(&frame);
+  return 0;
+}
+
 void libc_once_thread_cleanup(void)
 {
   struct libc_once_frame *frame;
   while ((frame = libc_thread_once_head())) {
-    struct libc_once *once = frame->object;
-    libc_thread_once_pop(frame);
-    libc_lock_acquire(&once->guard);
-    __atomic_store_n(&once->state, 0, __ATOMIC_RELEASE);
-    bool wake = once->waiters != 0;
-    libc_lock_release(&once->guard);
-    if (wake) {
-      notify(&once->state, UINT64_MAX);
-    }
+    libc_once_abort(frame);
   }
 }
 

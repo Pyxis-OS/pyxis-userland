@@ -23,11 +23,6 @@ int libc_condition_wait(struct libc_condition *condition, struct libc_mutex *mut
     const struct timespec *time);
 int libc_condition_signal(struct libc_condition *condition, bool all);
 
-struct libc_once_frame {
-  struct libc_once_frame *previous;
-  struct libc_once *object;
-};
-
 int libc_once_run(struct libc_once *once, void (*initialize)(void));
 void libc_once_thread_cleanup(void);
 

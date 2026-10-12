@@ -1,0 +1,230 @@
+#ifndef LIBC_CXX_EXTERNAL_THREADING
+#define LIBC_CXX_EXTERNAL_THREADING
+
+#include <__chrono/duration.h>
+#include <__config>
+#include <errno.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <threads.h>
+#include <time.h>
+
+#define _LIBCPP_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
+#define _LIBCPP_CONDVAR_INITIALIZER PTHREAD_COND_INITIALIZER
+#define _LIBCPP_EXEC_ONCE_INITIALIZER LIBC_ONCE_INITIALIZER
+#define _LIBCPP_NULL_THREAD 0
+#define _LIBCPP_TLS_DESTRUCTOR_CC
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+using __libcpp_timespec_t = ::timespec;
+using __libcpp_mutex_t = ::pthread_mutex_t;
+using __libcpp_recursive_mutex_t = ::pthread_mutex_t;
+using __libcpp_condvar_t = ::pthread_cond_t;
+using __libcpp_exec_once_flag = ::libc_once;
+using __libcpp_thread_id = ::pthread_t;
+using __libcpp_thread_t = ::pthread_t;
+using __libcpp_tls_key = ::pthread_key_t;
+
+/* Several runtime paths ignore lock errors. An unexpected retained-service
+ * failure cannot let them continue with unprotected shared metadata. */
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_sync_integrity(int error)
+{
+  if (error) {
+    ::_Exit(EXIT_FAILURE);
+  }
+  return 0;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_recursive_mutex_init(__libcpp_recursive_mutex_t *mutex)
+{
+  return ::libc_mutex_init(mutex, LIBC_MUTEX_RECURSIVE);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_recursive_mutex_lock(__libcpp_recursive_mutex_t *mutex)
+{
+  return __libcpp_sync_integrity(::pthread_mutex_lock(mutex));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI bool __libcpp_recursive_mutex_trylock(__libcpp_recursive_mutex_t *mutex)
+{
+  int error = ::pthread_mutex_trylock(mutex);
+  if (error == EBUSY) {
+    return false;
+  }
+  __libcpp_sync_integrity(error);
+  return true;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_recursive_mutex_unlock(__libcpp_recursive_mutex_t *mutex)
+{
+  return __libcpp_sync_integrity(::pthread_mutex_unlock(mutex));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_recursive_mutex_destroy(__libcpp_recursive_mutex_t *mutex)
+{
+  return ::pthread_mutex_destroy(mutex);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_mutex_lock(__libcpp_mutex_t *mutex)
+{
+  return __libcpp_sync_integrity(::pthread_mutex_lock(mutex));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI bool __libcpp_mutex_trylock(__libcpp_mutex_t *mutex)
+{
+  int error = ::pthread_mutex_trylock(mutex);
+  if (error == EBUSY) {
+    return false;
+  }
+  __libcpp_sync_integrity(error);
+  return true;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_mutex_unlock(__libcpp_mutex_t *mutex)
+{
+  return __libcpp_sync_integrity(::pthread_mutex_unlock(mutex));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_mutex_destroy(__libcpp_mutex_t *mutex)
+{
+  return ::pthread_mutex_destroy(mutex);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_condvar_signal(__libcpp_condvar_t *condition)
+{
+  return __libcpp_sync_integrity(::pthread_cond_signal(condition));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_condvar_broadcast(__libcpp_condvar_t *condition)
+{
+  return __libcpp_sync_integrity(::pthread_cond_broadcast(condition));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_condvar_wait(__libcpp_condvar_t *condition,
+    __libcpp_mutex_t *mutex)
+{
+  return __libcpp_sync_integrity(::pthread_cond_wait(condition, mutex));
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_condvar_timedwait(__libcpp_condvar_t *condition,
+    __libcpp_mutex_t *mutex, __libcpp_timespec_t *time)
+{
+  return ::pthread_cond_timedwait(condition, mutex, time);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_condvar_destroy(__libcpp_condvar_t *condition)
+{
+  return ::pthread_cond_destroy(condition);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_execute_once(__libcpp_exec_once_flag *once,
+    void (*initialize)(void))
+{
+  if (!initialize) {
+    return EINVAL;
+  }
+  ::libc_once_frame frame;
+  int run;
+  int error = ::libc_once_begin(once, &frame, &run);
+  if (error || !run) {
+    return error;
+  }
+#if __has_feature(cxx_exceptions)
+  try {
+    initialize();
+  } catch (...) {
+    ::libc_once_abort(&frame);
+    throw;
+  }
+#else
+  initialize();
+#endif
+  ::libc_once_complete(&frame);
+  return 0;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI bool __libcpp_thread_id_equal(__libcpp_thread_id left,
+    __libcpp_thread_id right)
+{
+  return ::pthread_equal(left, right);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI bool __libcpp_thread_id_less(__libcpp_thread_id left,
+    __libcpp_thread_id right)
+{
+  return left < right;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI bool __libcpp_thread_isnull(const __libcpp_thread_t *thread)
+{
+  return !*thread;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_thread_create(__libcpp_thread_t *thread,
+    void *(*start)(void *), void *argument)
+{
+  return ::pthread_create(thread, nullptr, start, argument);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI __libcpp_thread_id __libcpp_thread_get_current_id()
+{
+  return ::pthread_self();
+}
+
+inline _LIBCPP_HIDE_FROM_ABI __libcpp_thread_id __libcpp_thread_get_id(const __libcpp_thread_t *thread)
+{
+  return *thread;
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_thread_join(__libcpp_thread_t *thread)
+{
+  return ::pthread_join(*thread, nullptr);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_thread_detach(__libcpp_thread_t *thread)
+{
+  /* Refusal leaves the C++ thread joinable; std::thread::detach throws. */
+  return ::pthread_detach(*thread);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI void __libcpp_thread_yield()
+{
+  /* A weak processor hint under native preemption, with no forced reschedule
+   * or fairness promise. This is not a successful POSIX scheduler operation. */
+  __asm__ volatile("pause");
+}
+
+inline _LIBCPP_HIDE_FROM_ABI void __libcpp_thread_sleep_for(const chrono::nanoseconds &duration)
+{
+  if (duration.count() <= 0) {
+    return;
+  }
+  auto nanoseconds = duration.count();
+  ::timespec time = {nanoseconds / 1000000000, static_cast<long>(nanoseconds % 1000000000)};
+  if (::thrd_sleep(&time, nullptr)) {
+    /* The void C++ hook cannot report unavailable authority or a failed sleep
+     * as a successful elapsed duration. Use libc's retained clock grants. */
+    ::_Exit(EXIT_FAILURE);
+  }
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_tls_create(__libcpp_tls_key *key,
+    void (*destructor)(void *))
+{
+  return ::pthread_key_create(key, destructor);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI void *__libcpp_tls_get(__libcpp_tls_key key)
+{
+  return ::pthread_getspecific(key);
+}
+
+inline _LIBCPP_HIDE_FROM_ABI int __libcpp_tls_set(__libcpp_tls_key key, void *value)
+{
+  return ::pthread_setspecific(key, value);
+}
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif

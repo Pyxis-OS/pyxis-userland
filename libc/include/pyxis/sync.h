@@ -49,6 +49,11 @@ struct libc_once {
 
 #define LIBC_ONCE_INITIALIZER {{0}, 0, 0}
 
+struct libc_once_frame {
+  struct libc_once_frame *previous;
+  struct libc_once *object;
+};
+
 struct libc_rwlock {
   struct libc_lock guard;
   uint32_t state;
@@ -75,6 +80,14 @@ int libc_mutex_destroy(struct libc_mutex *mutex);
 int libc_mutex_lock(struct libc_mutex *mutex);
 int libc_mutex_trylock(struct libc_mutex *mutex);
 int libc_mutex_unlock(struct libc_mutex *mutex);
+
+/* A C++ adapter keeps the frame on its own stack so an exception can abort
+ * initialization without unwinding through a C callback frame. Begin sets run
+ * to one only for the initializer; that caller must complete or abort once.
+ * Ordinary thread exit aborts outstanding frames through the TCB chain. */
+int libc_once_begin(struct libc_once *once, struct libc_once_frame *frame, int *run);
+void libc_once_complete(struct libc_once_frame *frame);
+void libc_once_abort(struct libc_once_frame *frame);
 
 #ifdef __cplusplus
 }
