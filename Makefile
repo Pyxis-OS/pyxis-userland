@@ -116,8 +116,12 @@ iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-
 ipcbench: $(BUILD)/ipcbench.pxe
 threadprobe: $(BUILD)/threadprobe.pxe
 
-$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/runtime.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/runtime.o $(BUILD)/threadprobe/runtime_cxx.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(PYXIS_CXX_LDLIBS)
+
+$(BUILD)/threadprobe/runtime_cxx.o: threadprobe/runtime_cxx.cpp Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	@mkdir -p $(@D)
+	$(CXX) $(PYXIS_CXX_CPPFLAGS) $(PYXIS_CXXFLAGS) -ftls-model=local-exec -c $< -o $@
 
 # This helper uses language TLS without the shared C++ standard library profile.
 $(BUILD)/threadprobe/tls_objects.o: threadprobe/tls_objects.cpp Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
@@ -305,4 +309,4 @@ clean:
 -include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
 -include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d) $(SCREENSHOT_OBJECTS:.o=.d)
 
--include $(BUILD)/threadprobe/tls_objects.d
+-include $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d

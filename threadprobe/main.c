@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 
+int threadprobe_runtime_cxx(void);
 int threadprobe_runtime(bool inspect);
 int threadprobe_runtime_time(void);
 int threadprobe_runtime_limit(void);
@@ -1039,7 +1040,7 @@ int main(int argc, char **argv)
   if (argc != 2) {
     fputs("usage: session bin://threadprobe.pxe "
         "lifecycle|inspect|tls|tls-inspect|tls-stop|tls-fault|bind|refusal|exhaust|stop|fault|close|"
-        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop|runtime|runtime-inspect|runtime-time|runtime-limit\n", stderr);
+        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop|runtime|runtime-inspect|runtime-time|runtime-limit|runtime-cxx\n", stderr);
     return 1;
   }
   const struct {
@@ -1065,6 +1066,11 @@ int main(int argc, char **argv)
   }
   if (!strcmp(argv[1], "runtime") || !strcmp(argv[1], "runtime-inspect")) {
     return threadprobe_runtime(!strcmp(argv[1], "runtime-inspect"));
+  }
+  if (!strcmp(argv[1], "runtime-cxx")) {
+    int failures = threadprobe_runtime_cxx();
+    printf("threadprobe: runtime-cxx %s; failure bits=%#x\n", failures ? "failed" : "passed", failures);
+    return failures ? 1 : 0;
   }
   if (!strcmp(argv[1], "runtime-time")) {
     return threadprobe_runtime_time();
