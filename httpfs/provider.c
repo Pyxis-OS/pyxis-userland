@@ -1464,38 +1464,25 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
   struct loop loop = {.service = service, .receiver = receiver, .client = *client, .next_id = 1,
     .staging = staging, .published = true, .custom_trust = custom_trust};
   while (loop.fatal == CALL_OK && alive(&loop)) {
-    struct wait_interest interests[2] = {{.handle = receiver, .events = WAIT_READABLE}};
-    size_t count = 1;
-    struct transaction *transaction = loop.active;
-    if (transaction && !transaction->aborting && transaction->wait.stream && transaction->wait.events) {
-      interests[count++] = (struct wait_interest){.handle = transaction->wait.stream, .events = transaction->wait.events};
-    }
-    uint64_t events[2] = {0};
-    enum call_status status = wait_many(interests, count, 0, events);
-    if (status != CALL_OK && status != CALL_TIMED_OUT) {
+    struct endpoint_packet packet = {0};
+    enum call_status status = endpoint_try_receive(receiver, &packet);
+    bool received = status == CALL_OK;
+    if (received) {
+      receive_packet(&loop, &packet);
+    } else if (status != CALL_WOULD_BLOCK) {
       loop.fatal = status;
       break;
     }
-    if (events[0] & WAIT_READABLE) {
-      struct endpoint_packet packet = {0};
-      status = endpoint_try_receive(receiver, &packet);
-      if (status != CALL_OK && status != CALL_WOULD_BLOCK) {
-        loop.fatal = status;
-        break;
-      }
-      if (status == CALL_OK) {
-        receive_packet(&loop, &packet);
-      }
-    } else if (events[0] & WAIT_CLOSED) {
-      loop.fatal = CALL_ENDPOINT_CLOSED;
-      break;
-    }
     bool advanced = progress(&loop);
-    if (loop.fatal != CALL_OK || !alive(&loop) || advanced || (events[0] & WAIT_READABLE)) {
+    if (loop.fatal != CALL_OK || !alive(&loop) || advanced || received) {
       continue;
     }
-    transaction = loop.active;
-    count = 1;
+    /* TRY consumes no empty queue. Registration-before-scan in wait_many
+     * observes arrivals between this collection attempt and parking. */
+    struct wait_interest interests[2] = {{.handle = receiver, .events = WAIT_READABLE}};
+    uint64_t events[2] = {0};
+    size_t count = 1;
+    struct transaction *transaction = loop.active;
     if (transaction && !transaction->aborting && transaction->wait.stream && transaction->wait.events) {
       interests[count++] = (struct wait_interest){.handle = transaction->wait.stream, .events = transaction->wait.events};
     }
