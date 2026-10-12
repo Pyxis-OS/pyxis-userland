@@ -2,6 +2,8 @@
 #include <syscall.h>
 #include "runtime.h"
 #include "thread_private.h"
+#include "thread_platform.h"
+#include "thread_sync.h"
 
 /* C guarantees 32 registrations; further blocks come from the heap. */
 #define EXIT_BLOCK_HANDLERS 32
@@ -22,6 +24,8 @@ struct exit_block {
 
 static struct exit_block first_block;
 static struct exit_block *current_block = &first_block;
+static struct libc_lock exit_guard;
+static unsigned int exit_started;
 
 /* The Itanium C++ ABI identifies a module's handlers by the address of its
  * __dso_handle. A static executable is one module. */
@@ -34,16 +38,28 @@ extern void (*const __fini_array_end[])(void) __attribute__((weak));
 
 static int register_handler(struct exit_handler handler)
 {
-  if (current_block->count == EXIT_BLOCK_HANDLERS) {
-    struct exit_block *block = calloc(1, sizeof(*block));
-    if (!block) {
+  struct exit_block *prepared = NULL;
+  for (;;) {
+    libc_lock_acquire(&exit_guard);
+    if (current_block->count < EXIT_BLOCK_HANDLERS) {
+      current_block->handlers[current_block->count++] = handler;
+      libc_lock_release(&exit_guard);
+      free(prepared);
+      return 0;
+    }
+    if (prepared) {
+      prepared->previous = current_block;
+      prepared->handlers[prepared->count++] = handler;
+      current_block = prepared;
+      libc_lock_release(&exit_guard);
+      return 0;
+    }
+    libc_lock_release(&exit_guard);
+    prepared = calloc(1, sizeof(*prepared));
+    if (!prepared) {
       return -1;
     }
-    block->previous = current_block;
-    current_block = block;
   }
-  current_block->handlers[current_block->count++] = handler;
-  return 0;
 }
 
 int atexit(void (*handler)(void))
@@ -65,14 +81,18 @@ int __cxa_atexit(void (*handler)(void *), void *argument, void *module)
 static void run_exit_handlers(void)
 {
   for (;;) {
+    libc_lock_acquire(&exit_guard);
     if (current_block->count == 0) {
       if (!current_block->previous) {
+        libc_lock_release(&exit_guard);
         return;
       }
       current_block = current_block->previous;
+      libc_lock_release(&exit_guard);
       continue;
     }
     struct exit_handler handler = current_block->handlers[--current_block->count];
+    libc_lock_release(&exit_guard);
     if (handler.c_function) {
       handler.c_function();
     } else {
@@ -99,7 +119,14 @@ static void run_fini_array(void)
 
 [[noreturn]] void exit(int status)
 {
+  if (!libc_thread_shutdown_ready() ||
+      __atomic_exchange_n(&exit_started, 1, __ATOMIC_ACQ_REL)) {
+    _Exit(status);
+  }
+  libc_once_thread_cleanup();
+  libc_thread_record()->destroying = true;
   libc_thread_destructors();
+  libc_once_thread_cleanup();
   run_exit_handlers();
   run_fini_array();
   stdio_finish();

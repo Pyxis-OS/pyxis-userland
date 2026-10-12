@@ -120,7 +120,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/internal/floatscan.c
 MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
-                $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(MUSL_OBJECTS)
+                $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(BUILD)/libc/thread_entry.o $(MUSL_OBJECTS)
 
 .PHONY: all libpyxis libterm libc clean FORCE
 all: $(START_OBJECT) libpyxis libterm libc

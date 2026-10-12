@@ -48,8 +48,9 @@ typedef struct {
 extern "C" {
 #endif
 
-/* Joinable libc-created siblings only. Initial/native-created threads have
- * identities but no join observer. Detach, cancellation, scheduling policies,
+/* Joinable libc-created siblings only. The initial thread has an identity but
+ * no join observer. Raw native tasks are outside the managed runtime profile.
+ * Detach, cancellation, scheduling policies,
  * robust recovery and process-shared synchronization are outside this profile. */
 int pthread_attr_init(pthread_attr_t *attributes);
 int pthread_attr_destroy(pthread_attr_t *attributes);

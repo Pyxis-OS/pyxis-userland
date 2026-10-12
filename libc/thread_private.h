@@ -3,6 +3,7 @@
 
 #include <memory.h>
 #include <pyxis/thread_runtime.h>
+#include <stdbool.h>
 
 struct startup_info;
 struct libc_once_frame;

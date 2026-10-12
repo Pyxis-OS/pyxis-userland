@@ -75,6 +75,10 @@ char *strerror(int error)
   case EDQUOT: return "Storage quota exceeded";
   case EFBIG: return "File too large";
   case EINVAL: return "Invalid argument";
+  case EPERM: return "Operation not permitted";
+  case EDEADLK: return "Operation would deadlock";
+  case ESRCH: return "No such thread";
+  case ECANCELED: return "Thread stopped without a result";
   case EINTR: return "Interrupted operation";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";

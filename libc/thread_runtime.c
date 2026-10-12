@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <thread.h>
 #include "thread_private.h"
+#include "thread_sync.h"
 
 struct thread_key_entry {
   uint32_t generation;
@@ -10,20 +11,16 @@ struct thread_key_entry {
 };
 
 static struct thread_key_entry key_registry[LIBC_THREAD_KEY_LIMIT];
-static unsigned int key_guard;
+static struct libc_lock key_guard;
 
 static void lock_keys(void)
 {
-  while (__atomic_exchange_n(&key_guard, 1, __ATOMIC_ACQUIRE)) {
-    while (__atomic_load_n(&key_guard, __ATOMIC_RELAXED)) {
-      __asm__ volatile("pause");
-    }
-  }
+  libc_lock_acquire(&key_guard);
 }
 
 static void unlock_keys(void)
 {
-  __atomic_store_n(&key_guard, 0, __ATOMIC_RELEASE);
+  libc_lock_release(&key_guard);
 }
 
 static bool key_index(libc_thread_key key, size_t *index, uint32_t *generation)
@@ -199,7 +196,13 @@ void libc_thread_destructors(void)
 
 [[noreturn]] void libc_thread_exit(handle_t threads, uint64_t value)
 {
-  libc_thread_destructors();
+  struct libc_thread_record *record = libc_thread_record();
+  libc_once_thread_cleanup();
+  if (!record->destroying) {
+    record->destroying = true;
+    libc_thread_destructors();
+  }
+  libc_once_thread_cleanup();
   thread_exit(threads, value);
   _Exit(EXIT_FAILURE);
 }
