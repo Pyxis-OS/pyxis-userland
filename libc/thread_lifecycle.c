@@ -255,13 +255,15 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
   }
   libc_lock_acquire(&registry_lock);
   record->state = THREAD_ACTIVE;
-  libc_lock_release(&registry_lock);
+  /* Publication can run the child immediately. Exclude join/reuse until the
+   * creator has finished accessing this record and its bounded wake word. */
   *thread = identity(record);
   __atomic_store_n(&record->published, 1, __ATOMIC_RELEASE);
   if (__atomic_load_n(&record->publication_waiters, __ATOMIC_ACQUIRE) &&
       libc_wake(&record->published, UINT64_MAX)) {
     _Exit(EXIT_FAILURE);
   }
+  libc_lock_release(&registry_lock);
   return 0;
 }
 
