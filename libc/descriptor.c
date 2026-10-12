@@ -18,6 +18,7 @@
 #include "descriptor.h"
 #include "errors.h"
 #include "stream.h"
+#include "thread_sync.h"
 
 enum descriptor_state { DESCRIPTOR_FREE, DESCRIPTOR_RESERVED, DESCRIPTOR_OPEN };
 enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE };
@@ -26,7 +27,10 @@ enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE };
  * native handle, access, append policy, logical position and unread read-ahead.
  * Position is the next byte delivered; backend reads start after read-ahead. */
 struct descriptor_object {
-  size_t references;
+  size_t references; /* Descriptor aliases, protected by table_guard. */
+  size_t storage; /* Aliases and admitted operations; no native grant copies. */
+  bool closed;
+  struct libc_mutex read_guard, write_guard;
   bool allocated;
   enum descriptor_kind kind;
   handle_t handle;
@@ -39,6 +43,7 @@ struct descriptor_object {
 };
 
 struct descriptor_entry {
+  uint64_t generation;
   enum descriptor_state state;
   struct descriptor_object *object;
   FILE *stream; /* Non-owning; only one FILE can associate with this slot. */
@@ -48,11 +53,25 @@ static struct descriptor_object startup_objects[STARTUP_STREAM_COUNT];
 static struct descriptor_entry startup_entries[STARTUP_STREAM_COUNT];
 static struct descriptor_entry *entries = startup_entries;
 static size_t capacity = STARTUP_STREAM_COUNT;
+static struct libc_lock table_guard;
 
 static int fail(int error)
 {
   errno = error;
   return -1;
+}
+
+static void unlock_object(struct libc_mutex *mutex)
+{
+  if (libc_mutex_unlock(mutex)) {
+    __builtin_trap();
+  }
+}
+
+static void install_locked(int descriptor, struct descriptor_entry entry)
+{
+  entry.generation = entries[descriptor].generation + 1;
+  entries[descriptor] = entry;
 }
 
 static struct descriptor_object *lookup(int descriptor)
@@ -65,6 +84,7 @@ static struct descriptor_object *lookup(int descriptor)
   return entries[descriptor].object;
 }
 
+/* Allocation and native operations never run with table_guard held. */
 static int grow_entries(size_t required)
 {
   size_t limit = (size_t)INT_MAX + 1;
@@ -74,42 +94,106 @@ static int grow_entries(size_t required)
   if (required > limit) {
     return fail(EMFILE);
   }
-  if (required <= capacity) {
+  for (;;) {
+    libc_lock_acquire(&table_guard);
+    size_t current = capacity;
+    libc_lock_release(&table_guard);
+    if (required <= current) {
+      return 0;
+    }
+    size_t next = current;
+    while (next < required) {
+      next = next > limit / 2 ? limit : next * 2;
+    }
+    struct descriptor_entry *grown = calloc(next, sizeof(*grown));
+    if (!grown) {
+      return -1;
+    }
+    libc_lock_acquire(&table_guard);
+    if (capacity != current) {
+      libc_lock_release(&table_guard);
+      free(grown);
+      continue;
+    }
+    struct descriptor_entry *previous = entries;
+    memcpy(grown, entries, current * sizeof(*entries));
+    entries = grown;
+    capacity = next;
+    libc_lock_release(&table_guard);
+    if (previous != startup_entries) {
+      free(previous);
+    }
     return 0;
   }
-  size_t next = capacity;
-  while (next < required) {
-    next = next > limit / 2 ? limit : next * 2;
-  }
-  struct descriptor_entry *grown = malloc(next * sizeof(*entries));
-  if (!grown) {
-    return -1;
-  }
-  memcpy(grown, entries, capacity * sizeof(*entries));
-  memset(grown + capacity, 0, (next - capacity) * sizeof(*entries));
-  if (entries != startup_entries) {
-    free(entries);
-  }
-  entries = grown;
-  capacity = next;
-  return 0;
 }
 
 static int reserve(void)
 {
-  size_t index;
-  for (index = 0; index < capacity; ++index) {
-    if (entries[index].state == DESCRIPTOR_FREE) {
-      entries[index].state = DESCRIPTOR_RESERVED;
-      return (int)index;
+  for (;;) {
+    libc_lock_acquire(&table_guard);
+    for (size_t index = 0; index < capacity; ++index) {
+      if (entries[index].state == DESCRIPTOR_FREE) {
+        entries[index].state = DESCRIPTOR_RESERVED;
+        ++entries[index].generation;
+        libc_lock_release(&table_guard);
+        return (int)index;
+      }
+    }
+    size_t required = capacity + 1;
+    libc_lock_release(&table_guard);
+    if (grow_entries(required) < 0) {
+      return -1;
     }
   }
+}
 
-  if (grow_entries(capacity + 1) < 0) {
-    return -1;
+static void publish(int descriptor, struct descriptor_entry entry)
+{
+  libc_lock_acquire(&table_guard);
+  install_locked(descriptor, entry);
+  if (entry.state == DESCRIPTOR_OPEN && entry.stream) {
+    __atomic_store_n(&entry.stream->descriptor, descriptor, __ATOMIC_RELEASE);
   }
-  entries[index].state = DESCRIPTOR_RESERVED;
-  return (int)index;
+  libc_lock_release(&table_guard);
+}
+
+struct descriptor_object *descriptor_hold(int descriptor)
+{
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(descriptor);
+  if (object) {
+    size_t count = __atomic_load_n(&object->storage, __ATOMIC_RELAXED);
+    while (count != SIZE_MAX && !__atomic_compare_exchange_n(&object->storage,
+        &count, count + 1, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+    }
+    if (count == SIZE_MAX) {
+      object = NULL;
+      errno = EMFILE;
+    }
+  }
+  libc_lock_release(&table_guard);
+  return object;
+}
+
+void descriptor_drop(struct descriptor_object *object)
+{
+  if (!object || __atomic_sub_fetch(&object->storage, 1, __ATOMIC_ACQ_REL)) {
+    return;
+  }
+  free(object->ahead);
+  free(object->response);
+  if (object->allocated) {
+    free(object);
+  }
+}
+
+static int object_ready(struct descriptor_object *object, bool writing)
+{
+  if (!object || __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE) ||
+      (writing ? !object->writable : !object->readable)) {
+    return fail(EBADF);
+  }
+  return 0;
 }
 
 int descriptor_release_handle(handle_t handle)
@@ -134,7 +218,9 @@ void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream)
    * Adopt without allocation or a copy that would prolong endpoint lifetime. */
   struct descriptor_object *object = &startup_objects[index];
   *object = (struct descriptor_object){
-    .references = 1,
+    .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .references = 1, .storage = 1,
     .kind = binding.protocol == PROTOCOL_FILE ? DESCRIPTOR_FILE :
             binding.protocol == PROTOCOL_PIPE ? DESCRIPTOR_PIPE : DESCRIPTOR_CONSOLE,
     .handle = binding.handle,
@@ -155,7 +241,7 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
   }
   struct descriptor_object *object = malloc(sizeof(*object));
   if (!object) {
-    entries[descriptor] = (struct descriptor_entry){0};
+    publish(descriptor, (struct descriptor_entry){0});
     return -1;
   }
   handle_t handle = HANDLE_INVALID;
@@ -189,21 +275,20 @@ int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *
     }
     free(response);
     free(object);
-    entries[descriptor] = (struct descriptor_entry){0};
+    publish(descriptor, (struct descriptor_entry){0});
     return fail(error);
   }
   *object = (struct descriptor_object){
-    .references = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
+    .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .references = 1, .storage = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
     .response = response,
     .position = position, .readable = mode->readable, .writable = mode->writable,
     .append = mode->append,
   };
-  entries[descriptor] = (struct descriptor_entry){
+  publish(descriptor, (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
-  };
-  if (stream) {
-    stream->descriptor = descriptor;
-  }
+  });
   return descriptor;
 }
 
@@ -215,7 +300,7 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
   }
   struct descriptor_object *object = malloc(sizeof(*object));
   if (!object) {
-    entries[descriptor] = (struct descriptor_entry){0};
+    publish(descriptor, (struct descriptor_entry){0});
     return -1;
   }
   char name[] = "tmp_XXXXXX";
@@ -243,35 +328,36 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
       descriptor_release_handle(handle);
     }
     free(object);
-    entries[descriptor] = (struct descriptor_entry){0};
+    publish(descriptor, (struct descriptor_entry){0});
     return fail(error);
   }
   *object = (struct descriptor_object){
-    .references = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
+    .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .references = 1, .storage = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
     .readable = true, .writable = true,
   };
-  entries[descriptor] = (struct descriptor_entry){
+  publish(descriptor, (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
-  };
-  stream->descriptor = descriptor;
+  });
   return descriptor;
 }
 
 int descriptor_stream(FILE *stream, struct startup_stream *binding)
 {
-  struct descriptor_object *entry = lookup(stream->descriptor);
-  if (!entry) {
-    return -1;
+  libc_lock_acquire(&table_guard);
+  int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
+  struct descriptor_object *object = lookup(descriptor);
+  int error = !object || entries[descriptor].stream != stream ? EBADF : 0;
+  if (!error) {
+    *binding = (struct startup_stream){
+      .protocol = object->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
+          object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE : PROTOCOL_CONSOLE,
+      .handle = object->handle,
+    };
   }
-  if (entries[stream->descriptor].stream != stream) {
-    return fail(EBADF);
-  }
-  *binding = (struct startup_stream){
-    .protocol = entry->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
-        entry->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE : PROTOCOL_CONSOLE,
-    .handle = entry->handle,
-  };
-  return 0;
+  libc_lock_release(&table_guard);
+  return error ? fail(error) : 0;
 }
 
 int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *binding)
@@ -280,17 +366,24 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
     return fail(EINVAL);
   }
   *binding = (struct pyxis_descriptor_binding){0};
-  struct descriptor_object *entry = lookup(descriptor);
-  if (!entry) {
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (!object) {
     return -1;
   }
+  int error = libc_mutex_lock(&object->read_guard);
+  if (error) {
+    descriptor_drop(object);
+    return fail(error);
+  }
   struct pyxis_descriptor_binding result = {
-    .handle = entry->handle,
-    .access = (entry->readable ? PYXIS_DESCRIPTOR_READ : 0) |
-        (entry->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
-    .buffered_read = entry->ahead_count,
+    .handle = object->handle,
+    .access = (object->readable ? PYXIS_DESCRIPTOR_READ : 0) |
+        (object->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
+    .buffered_read = object->ahead_count,
   };
+  unlock_object(&object->read_guard);
   enum call_status status = handle_query(result.handle, &result.info);
+  descriptor_drop(object);
   if (status != CALL_OK) {
     return fail(libc_call_errno(status));
   }
@@ -304,11 +397,14 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
       (access & ~(PYXIS_DESCRIPTOR_READ | PYXIS_DESCRIPTOR_WRITE))) {
     return fail(EINVAL);
   }
+  libc_lock_acquire(&table_guard);
   for (size_t i = 0; i < capacity; ++i) {
     if (entries[i].state == DESCRIPTOR_OPEN && entries[i].object->handle == *handle) {
+      libc_lock_release(&table_guard);
       return fail(EBUSY);
     }
   }
+  libc_lock_release(&table_guard);
   struct handle_info info;
   enum call_status status = handle_query(*handle, &info);
   if (status != CALL_OK) {
@@ -344,137 +440,225 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
   }
   struct descriptor_object *object = malloc(sizeof(*object));
   if (!object) {
-    entries[descriptor] = (struct descriptor_entry){0};
+    publish(descriptor, (struct descriptor_entry){0});
     return -1;
   }
   *object = (struct descriptor_object){
-    .references = 1, .allocated = true, .kind = kind, .handle = *handle,
+    .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = *handle,
     .readable = access & PYXIS_DESCRIPTOR_READ,
     .writable = access & PYXIS_DESCRIPTOR_WRITE,
   };
-  entries[descriptor] = (struct descriptor_entry){
+  publish(descriptor, (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object,
-  };
+  });
   *handle = HANDLE_INVALID;
   return descriptor;
 }
 
 bool descriptor_ready(int descriptor, bool writing)
 {
-  struct descriptor_object *entry = lookup(descriptor);
-  if (!entry) {
-    return false;
-  }
-  if (writing ? !entry->writable : !entry->readable) {
-    errno = EBADF;
-    return false;
-  }
-  return true;
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  bool ready = object_ready(object, writing) == 0;
+  descriptor_drop(object);
+  return ready;
 }
 
 int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FILE *stream)
 {
+  libc_lock_acquire(&table_guard);
   struct descriptor_object *object = lookup(descriptor);
-  if (!object) {
-    return -1;
+  int error = !object ? EBADF :
+      (mode->readable && !object->readable) || (mode->writable && !object->writable) ?
+      EBADF : entries[descriptor].stream ? EBUSY : 0;
+  if (!error) {
+    if (mode->append) {
+      __atomic_store_n(&object->append, true, __ATOMIC_RELEASE);
+    }
+    entries[descriptor].stream = stream;
+    ++entries[descriptor].generation;
+    __atomic_store_n(&stream->descriptor, descriptor, __ATOMIC_RELEASE);
   }
-  if ((mode->readable && !object->readable) || (mode->writable && !object->writable)) {
-    return fail(EBADF);
+  libc_lock_release(&table_guard);
+  if (error) {
+    return fail(error);
   }
-  if (entries[descriptor].stream) {
-    return fail(EBUSY);
-  }
-  /* Append is shared open-object policy. Selecting a enables it for every
-   * duplicate without changing the cursor; other modes never turn it off. */
-  if (mode->append) {
-    object->append = true;
-  }
-  entries[descriptor].stream = stream;
-  stream->descriptor = descriptor;
   return 0;
 }
 
 int dup(int descriptor)
 {
-  struct descriptor_object *object = lookup(descriptor);
-  if (!object) {
+  struct descriptor_object *held = descriptor_hold(descriptor);
+  if (!held) {
     return -1;
   }
   int copy = reserve();
   if (copy < 0) {
-    return -1;
+    int error = errno;
+    descriptor_drop(held);
+    return fail(error);
   }
-  ++object->references;
-  entries[copy] = (struct descriptor_entry){
-    .state = DESCRIPTOR_OPEN, .object = object,
-  };
-  return copy;
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(descriptor);
+  int error = !object || object != held ? EBADF : object->references == SIZE_MAX ||
+      __atomic_load_n(&object->storage, __ATOMIC_RELAXED) == SIZE_MAX ? EMFILE : 0;
+  if (!error) {
+    ++object->references;
+    __atomic_add_fetch(&object->storage, 1, __ATOMIC_RELAXED);
+    install_locked(copy, (struct descriptor_entry){.state = DESCRIPTOR_OPEN, .object = object});
+  } else {
+    install_locked(copy, (struct descriptor_entry){0});
+  }
+  libc_lock_release(&table_guard);
+  descriptor_drop(held);
+  return error ? fail(error) : copy;
 }
 
-int dup2(int source, int target)
+/* Caller owns the detached alias reference; storage survives logical close. */
+static int release_alias(struct descriptor_object *object, bool final)
 {
-  struct descriptor_object *object = lookup(source);
-  if (!object) {
-    return -1;
-  }
-  if (target < 0) {
+  int result = final ? descriptor_release_handle(object->handle) : 0;
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+static int close_entry(int descriptor, FILE *stream, struct descriptor_object *expected)
+{
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(descriptor);
+  if (!object || (stream && (entries[descriptor].stream != stream || object != expected))) {
+    libc_lock_release(&table_guard);
     return fail(EBADF);
   }
-  if (source == target) {
-    return target;
+  if (entries[descriptor].stream) {
+    __atomic_store_n(&entries[descriptor].stream->descriptor, -1, __ATOMIC_RELEASE);
   }
-  if (grow_entries((size_t)target + 1) < 0) {
-    return -1;
+  install_locked(descriptor, (struct descriptor_entry){0});
+  bool final = --object->references == 0;
+  if (final) {
+    __atomic_store_n(&object->closed, true, __ATOMIC_RELEASE);
   }
-  FILE *stream = entries[target].stream;
-  if (entries[target].state == DESCRIPTOR_RESERVED || (stream && stream->output_count)) {
-    return fail(EBUSY);
-  }
-  /* Retain before closing target; source and target can share the same object. */
-  ++object->references;
-  if (entries[target].state == DESCRIPTOR_OPEN && descriptor_close(target) < 0) {
-    --object->references;
-    return -1;
-  }
-  entries[target] = (struct descriptor_entry){
-    .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
-  };
-  if (stream) {
-    stream->descriptor = target;
-    stream->has_pushback = false;
-    stream->eof = false;
-  }
-  return target;
+  libc_lock_release(&table_guard);
+  /* Never wait on cursor/FILE locks before releasing native grant authority. */
+  return release_alias(object, final);
 }
 
 int descriptor_close(int descriptor)
 {
-  struct descriptor_object *object = lookup(descriptor);
-  if (!object) {
+  return close_entry(descriptor, NULL, NULL);
+}
+
+int descriptor_close_stream(FILE *stream, struct descriptor_object *object)
+{
+  int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
+  return close_entry(descriptor, stream, object);
+}
+
+int dup2(int source, int target)
+{
+  if (target < 0) {
+    return fail(EBADF);
+  }
+  if (source == target) {
+    struct descriptor_object *object = descriptor_hold(source);
+    if (!object) {
+      return -1;
+    }
+    descriptor_drop(object);
+    return target;
+  }
+  struct descriptor_object *held = descriptor_hold(source);
+  if (!held) {
     return -1;
   }
-  if (entries[descriptor].stream) {
-    entries[descriptor].stream->descriptor = -1;
+  if (grow_entries((size_t)target + 1) < 0) {
+    int error = errno;
+    descriptor_drop(held);
+    return fail(error);
   }
-  entries[descriptor] = (struct descriptor_entry){0};
-  if (--object->references) {
-    return 0;
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *initial = lookup(source);
+  if (!initial || initial != held) {
+    libc_lock_release(&table_guard);
+    descriptor_drop(held);
+    return fail(EBADF);
   }
-  handle_t handle = object->handle;
-  free(object->ahead);
-  free(object->response);
-  if (object->allocated) {
-    free(object);
-  } else {
-    *object = (struct descriptor_object){0};
+  uint64_t source_generation = entries[source].generation;
+  uint64_t target_generation = entries[target].generation;
+  FILE *stream = entries[target].stream;
+  if (stream && !stream_retain_association(stream)) {
+    libc_lock_release(&table_guard);
+    descriptor_drop(held);
+    return fail(EBUSY);
   }
-  /* Never retry an uncertain release or reconnect a FILE after its failure.
-   * Any residual native entry is reclaimed by kernel process teardown. */
-  return descriptor_release_handle(handle);
+  libc_lock_release(&table_guard);
+  if (stream && !stream_try_lock(stream)) {
+    stream_release(stream);
+    descriptor_drop(held);
+    return fail(EBUSY);
+  }
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(source);
+  int error = !object || object != held || entries[source].generation != source_generation ?
+      EBADF : entries[target].generation != target_generation ||
+      entries[target].state == DESCRIPTOR_RESERVED || entries[target].stream != stream || (stream && stream->output_count) ? EBUSY :
+      __atomic_load_n(&object->storage, __ATOMIC_RELAXED) == SIZE_MAX ? EMFILE : 0;
+  struct descriptor_object *previous = NULL;
+  bool final = false;
+  if (!error) {
+    ++object->references;
+    __atomic_add_fetch(&object->storage, 1, __ATOMIC_RELAXED);
+    if (entries[target].state == DESCRIPTOR_OPEN) {
+      previous = entries[target].object;
+      final = --previous->references == 0;
+      if (final) {
+        __atomic_store_n(&previous->closed, true, __ATOMIC_RELEASE);
+      }
+    }
+    install_locked(target, (struct descriptor_entry){
+      .state = DESCRIPTOR_RESERVED, .stream = stream,
+    });
+    if (stream) {
+      __atomic_store_n(&stream->descriptor, -1, __ATOMIC_RELEASE);
+    }
+  }
+  libc_lock_release(&table_guard);
+  if (!error && previous && release_alias(previous, final) < 0) {
+    error = errno;
+  }
+  if (!error) {
+    publish(target, (struct descriptor_entry){
+      .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
+    });
+    if (stream) {
+      stream->has_pushback = false;
+      stream->has_wide_pushback = false;
+      stream->eof = false;
+    }
+  } else if (previous) {
+    publish(target, (struct descriptor_entry){0});
+    libc_lock_acquire(&table_guard);
+    bool last = --object->references == 0;
+    if (last) {
+      __atomic_store_n(&object->closed, true, __ATOMIC_RELEASE);
+    }
+    libc_lock_release(&table_guard);
+    release_alias(object, last);
+  }
+  if (stream) {
+    stream_unlock(stream);
+    stream_release(stream);
+  }
+  descriptor_drop(held);
+  return error ? fail(error) : target;
 }
 
 void descriptor_finish(void)
 {
+  /* Orderly finalizers require joined workers and closed thread admission. */
   for (size_t i = 0; i < capacity; ++i) {
     if (entries[i].state == DESCRIPTOR_OPEN) {
       descriptor_close((int)i);
@@ -530,16 +714,15 @@ static size_t take_ahead(struct descriptor_object *entry, void *buffer, size_t s
   return count;
 }
 
-static struct descriptor_object *try_entry(int descriptor, size_t count, bool writing)
+static struct descriptor_object *try_entry(struct descriptor_object *entry, size_t count, bool writing)
 {
-  if (!descriptor_ready(descriptor, writing)) {
+  if (object_ready(entry, writing) < 0) {
     return NULL;
   }
   if (count > (size_t)SSIZE_MAX) {
     errno = EINVAL;
     return NULL;
   }
-  struct descriptor_object *entry = entries[descriptor].object;
   if (entry->kind == DESCRIPTOR_FILE) {
     errno = ENOTSUP;
     return NULL;
@@ -547,9 +730,9 @@ static struct descriptor_object *try_entry(int descriptor, size_t count, bool wr
   return entry;
 }
 
-ssize_t pyxis_descriptor_try_read(int descriptor, void *buffer, size_t count)
+static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, size_t count)
 {
-  struct descriptor_object *entry = try_entry(descriptor, count, false);
+  entry = try_entry(entry, count, false);
   if (!entry) {
     return -1;
   }
@@ -572,9 +755,9 @@ ssize_t pyxis_descriptor_try_read(int descriptor, void *buffer, size_t count)
   return (ssize_t)read;
 }
 
-ssize_t pyxis_descriptor_try_write(int descriptor, const void *buffer, size_t count)
+static ssize_t try_write_locked(struct descriptor_object *entry, const void *buffer, size_t count)
 {
-  struct descriptor_object *entry = try_entry(descriptor, count, true);
+  entry = try_entry(entry, count, true);
   if (!entry) {
     return -1;
   }
@@ -632,16 +815,15 @@ static int read_exact(struct descriptor_object *entry, void *buffer, size_t size
   return 0;
 }
 
-int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
+static int read_locked(struct descriptor_object *entry, void *buffer, size_t size, size_t *read)
 {
   *read = 0;
-  if (!descriptor_ready(descriptor, false)) {
+  if (object_ready(entry, false) < 0) {
     return -1;
   }
   if (!size) {
     return 0;
   }
-  struct descriptor_object *entry = entries[descriptor].object;
   if (entry->ahead_count) {
     *read = take_ahead(entry, buffer, size);
     return 0;
@@ -649,14 +831,14 @@ int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
   return read_exact(entry, buffer, size, read);
 }
 
-int descriptor_read_complete(int descriptor, void *buffer, size_t size, size_t *read)
+static int read_complete_locked(struct descriptor_object *entry, void *buffer, size_t size, size_t *read)
 {
-  if (descriptor_read(descriptor, buffer, size, read) < 0) {
+  if (read_locked(entry, buffer, size, read) < 0) {
     return -1;
   }
-  while (*read < size && entries[descriptor].object->kind == DESCRIPTOR_FILE) {
+  while (*read < size && entry->kind == DESCRIPTOR_FILE) {
     size_t more;
-    if (descriptor_read(descriptor, (char *)buffer + *read, size - *read, &more) < 0) {
+    if (read_locked(entry, (char *)buffer + *read, size - *read, &more) < 0) {
       return 0;
     }
     if (!more) {
@@ -667,16 +849,15 @@ int descriptor_read_complete(int descriptor, void *buffer, size_t size, size_t *
   return 0;
 }
 
-int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *read)
+static int read_buffered_locked(struct descriptor_object *entry, void *buffer, size_t size, size_t *read)
 {
   *read = 0;
-  if (!descriptor_ready(descriptor, false)) {
+  if (object_ready(entry, false) < 0) {
     return -1;
   }
   if (!size) {
     return 0;
   }
-  struct descriptor_object *entry = entries[descriptor].object;
   if (entry->ahead_count) {
     *read = take_ahead(entry, buffer, size);
     return 0;
@@ -711,26 +892,22 @@ int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *
   return 0;
 }
 
-void descriptor_discard_input(int descriptor)
+static void discard_input_locked(struct descriptor_object *entry)
 {
-  if (descriptor < 0 || (size_t)descriptor >= capacity ||
-      entries[descriptor].state != DESCRIPTOR_OPEN ||
-      entries[descriptor].object->kind != DESCRIPTOR_FILE) {
-    return;
+  if (entry->kind == DESCRIPTOR_FILE) {
+    discard_ahead(entry);
   }
-  discard_ahead(entries[descriptor].object);
 }
 
-int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written)
+static int write_locked(struct descriptor_object *entry, const void *buffer, size_t size, size_t *written)
 {
   *written = 0;
-  if (!descriptor_ready(descriptor, true)) {
+  if (object_ready(entry, true) < 0) {
     return -1;
   }
   if (!size) {
     return 0;
   }
-  struct descriptor_object *entry = entries[descriptor].object;
   /* Files can refetch speculative bytes at the shared logical position.
    * Pipe bytes already consumed from the backend must remain available. */
   if (entry->kind == DESCRIPTOR_FILE) {
@@ -739,7 +916,7 @@ int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *wr
   uint64_t position = entry->position;
   enum call_status status;
   if (entry->kind == DESCRIPTOR_FILE) {
-    if (entry->append) {
+    if (__atomic_load_n(&entry->append, __ATOMIC_ACQUIRE)) {
       /* SIZE followed by WRITE preserves stdio's non-atomic append behavior. */
       status = file_size(entry->handle, &position);
       if (status != CALL_OK) {
@@ -768,14 +945,13 @@ int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *wr
   return 0;
 }
 
-int descriptor_pread(int descriptor, void *buffer, size_t size, uint64_t offset,
+static int pread_locked(struct descriptor_object *entry, void *buffer, size_t size, uint64_t offset,
     size_t *read)
 {
   *read = 0;
-  if (!descriptor_ready(descriptor, false)) {
+  if (object_ready(entry, false) < 0) {
     return -1;
   }
-  struct descriptor_object *entry = entries[descriptor].object;
   if (entry->kind != DESCRIPTOR_FILE) {
     return fail(ESPIPE);
   }
@@ -797,14 +973,13 @@ int descriptor_pread(int descriptor, void *buffer, size_t size, uint64_t offset,
   return 0;
 }
 
-int descriptor_pwrite(int descriptor, const void *buffer, size_t size, uint64_t offset,
+static int pwrite_locked(struct descriptor_object *entry, const void *buffer, size_t size, uint64_t offset,
     size_t *written)
 {
   *written = 0;
-  if (!descriptor_ready(descriptor, true)) {
+  if (object_ready(entry, true) < 0) {
     return -1;
   }
-  struct descriptor_object *entry = entries[descriptor].object;
   if (entry->kind != DESCRIPTOR_FILE) {
     return fail(ESPIPE);
   }
@@ -829,9 +1004,8 @@ int descriptor_pwrite(int descriptor, const void *buffer, size_t size, uint64_t 
   return 0;
 }
 
-int descriptor_seek(int descriptor, long offset, int origin)
+static int seek_locked(struct descriptor_object *entry, long offset, int origin)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return -1;
   }
@@ -861,9 +1035,8 @@ int descriptor_seek(int descriptor, long offset, int origin)
   return 0;
 }
 
-int descriptor_resize(int descriptor, uint64_t size)
+static int resize_locked(struct descriptor_object *entry, uint64_t size)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return -1;
   }
@@ -880,9 +1053,8 @@ int descriptor_resize(int descriptor, uint64_t size)
   return 0;
 }
 
-int descriptor_sync(int descriptor)
+static int sync_locked(struct descriptor_object *entry)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return -1;
   }
@@ -896,9 +1068,8 @@ int descriptor_sync(int descriptor)
   return 0;
 }
 
-int descriptor_stat(int descriptor, struct stat *result)
+static int stat_locked(struct descriptor_object *entry, struct stat *result)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return -1;
   }
@@ -917,9 +1088,8 @@ int descriptor_stat(int descriptor, struct stat *result)
   return 0;
 }
 
-int descriptor_terminal(int descriptor)
+static int terminal_locked(struct descriptor_object *entry)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return 0;
   }
@@ -930,9 +1100,8 @@ int descriptor_terminal(int descriptor)
   return 1;
 }
 
-long descriptor_tell_output(int descriptor, size_t pending)
+static long tell_output_locked(struct descriptor_object *entry, size_t pending)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return -1;
   }
@@ -940,7 +1109,7 @@ long descriptor_tell_output(int descriptor, size_t pending)
     return fail(ESPIPE);
   }
   uint64_t position = entry->position;
-  if (pending && entry->append) {
+  if (pending && __atomic_load_n(&entry->append, __ATOMIC_ACQUIRE)) {
     handle_t handle = entry->handle;
     enum call_status status = file_size(handle, &position);
     if (status != CALL_OK) {
@@ -953,14 +1122,13 @@ long descriptor_tell_output(int descriptor, size_t pending)
   return (long)(position + pending);
 }
 
-long descriptor_tell(int descriptor)
+static long tell_locked(struct descriptor_object *entry)
 {
-  return descriptor_tell_output(descriptor, 0);
+  return tell_output_locked(entry, 0);
 }
 
-int descriptor_response(int descriptor, struct pyxis_response_info *info)
+static int response_locked(struct descriptor_object *entry, struct pyxis_response_info *info)
 {
-  struct descriptor_object *entry = lookup(descriptor);
   if (!entry) {
     return -1;
   }
@@ -968,4 +1136,404 @@ int descriptor_response(int descriptor, struct pyxis_response_info *info)
     *info = *entry->response;
   }
   return 0;
+}
+
+/* Operation locks serialize mutable state, never native grant ownership. */
+static struct libc_mutex *object_guard(struct descriptor_object *object, bool writing)
+{
+  return writing && object->kind != DESCRIPTOR_FILE ? &object->write_guard : &object->read_guard;
+}
+
+static int object_enter(struct descriptor_object *object, bool writing)
+{
+  if (!object || __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
+    return fail(EBADF);
+  }
+  struct libc_mutex *guard = object_guard(object, writing);
+  int error = libc_mutex_lock(guard);
+  if (error) {
+    return fail(error);
+  }
+  if (__atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
+    unlock_object(guard);
+    return fail(EBADF);
+  }
+  return 0;
+}
+
+bool descriptor_object_ready(struct descriptor_object *object, bool writing)
+{
+  return object_ready(object, writing) == 0;
+}
+
+int descriptor_object_stream(struct descriptor_object *object, struct startup_stream *binding)
+{
+  if (!object || __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
+    return fail(EBADF);
+  }
+  *binding = (struct startup_stream){
+    .protocol = object->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
+        object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE : PROTOCOL_CONSOLE,
+    .handle = object->handle,
+  };
+  return 0;
+}
+
+int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = read_locked(object, buffer, size, read);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_read(int descriptor, void *buffer, size_t size, size_t *read)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_read(object, buffer, size, read);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_read_complete(struct descriptor_object *object, void *buffer, size_t size, size_t *read)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = read_complete_locked(object, buffer, size, read);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_read_complete(int descriptor, void *buffer, size_t size, size_t *read)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_read_complete(object, buffer, size, read);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_read_buffered(struct descriptor_object *object, void *buffer, size_t size, size_t *read)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = read_buffered_locked(object, buffer, size, read);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_read_buffered(int descriptor, void *buffer, size_t size, size_t *read)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_read_buffered(object, buffer, size, read);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_write(struct descriptor_object *object, const void *buffer, size_t size, size_t *written)
+{
+  if (object_enter(object, true) < 0) {
+    return -1;
+  }
+  int result = write_locked(object, buffer, size, written);
+  unlock_object(object_guard(object, true));
+  return result;
+}
+
+int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_write(object, buffer, size, written);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_pread(struct descriptor_object *object, void *buffer, size_t size, uint64_t offset, size_t *read)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = pread_locked(object, buffer, size, offset, read);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_pread(int descriptor, void *buffer, size_t size, uint64_t offset, size_t *read)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_pread(object, buffer, size, offset, read);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_pwrite(struct descriptor_object *object, const void *buffer, size_t size, uint64_t offset, size_t *written)
+{
+  if (object_enter(object, true) < 0) {
+    return -1;
+  }
+  int result = pwrite_locked(object, buffer, size, offset, written);
+  unlock_object(object_guard(object, true));
+  return result;
+}
+
+int descriptor_pwrite(int descriptor, const void *buffer, size_t size, uint64_t offset, size_t *written)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_pwrite(object, buffer, size, offset, written);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_seek(struct descriptor_object *object, long offset, int origin)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = seek_locked(object, offset, origin);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_seek(int descriptor, long offset, int origin)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_seek(object, offset, origin);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_resize(struct descriptor_object *object, uint64_t size)
+{
+  if (object_enter(object, true) < 0) {
+    return -1;
+  }
+  int result = resize_locked(object, size);
+  unlock_object(object_guard(object, true));
+  return result;
+}
+
+int descriptor_resize(int descriptor, uint64_t size)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_resize(object, size);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_sync(struct descriptor_object *object)
+{
+  if (object_enter(object, true) < 0) {
+    return -1;
+  }
+  int result = sync_locked(object);
+  unlock_object(object_guard(object, true));
+  return result;
+}
+
+int descriptor_sync(int descriptor)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_sync(object);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_stat(struct descriptor_object *object, struct stat *metadata)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = stat_locked(object, metadata);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_stat(int descriptor, struct stat *metadata)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_stat(object, metadata);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_terminal(struct descriptor_object *object)
+{
+  if (object_enter(object, false) < 0) {
+    return 0;
+  }
+  int result = terminal_locked(object);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_terminal(int descriptor)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_terminal(object);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+long descriptor_object_tell_output(struct descriptor_object *object, size_t pending)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  long result = tell_output_locked(object, pending);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+long descriptor_tell_output(int descriptor, size_t pending)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  long result = descriptor_object_tell_output(object, pending);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+long descriptor_object_tell(struct descriptor_object *object)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  long result = tell_locked(object);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+long descriptor_tell(int descriptor)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  long result = descriptor_object_tell(object);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+int descriptor_object_response(struct descriptor_object *object, struct pyxis_response_info *info)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = response_locked(object, info);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_response(int descriptor, struct pyxis_response_info *info)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = descriptor_object_response(object, info);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+void descriptor_object_discard_input(struct descriptor_object *object)
+{
+  if (object_enter(object, false) < 0) {
+    return;
+  }
+  discard_input_locked(object);
+  unlock_object(object_guard(object, false));
+}
+
+void descriptor_discard_input(int descriptor)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  descriptor_object_discard_input(object);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+}
+
+ssize_t pyxis_descriptor_try_read(int descriptor, void *buffer, size_t count)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (object_enter(object, false) < 0) {
+    descriptor_drop(object);
+    return -1;
+  }
+  ssize_t result = try_read_locked(object, buffer, count);
+  unlock_object(object_guard(object, false));
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+ssize_t pyxis_descriptor_try_write(int descriptor, const void *buffer, size_t count)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (object_enter(object, true) < 0) {
+    descriptor_drop(object);
+    return -1;
+  }
+  ssize_t result = try_write_locked(object, buffer, count);
+  unlock_object(object_guard(object, true));
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+long descriptor_seek_position(int descriptor, long offset, int origin)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (object_enter(object, false) < 0) {
+    descriptor_drop(object);
+    return -1;
+  }
+  long result = seek_locked(object, offset, origin) < 0 ? -1 : tell_locked(object);
+  unlock_object(&object->read_guard);
+  int error = errno;
+  descriptor_drop(object);
+  errno = error;
+  return result;
+}
+
+/* An outer FILE operation serializes complete regular-file transfers. Pipe
+ * and console directions remain independent and are locked by each transfer. */
+bool descriptor_file_begin(struct descriptor_object *object)
+{
+  if (!object || object->kind != DESCRIPTOR_FILE ||
+      __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
+    return false;
+  }
+  return object_enter(object, false) == 0;
+}
+
+void descriptor_file_end(struct descriptor_object *object)
+{
+  unlock_object(&object->read_guard);
 }

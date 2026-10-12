@@ -3,6 +3,7 @@
 #include <handle.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <startup.h>
 #include <pyxis/descriptor.h>
 #include <pyxis/stdio.h>
@@ -12,12 +13,158 @@
 #include "errors.h"
 #include "runtime.h"
 #include "stream.h"
+#include "thread_sync.h"
+#include "thread_platform.h"
 
 static FILE standard_input, standard_output, standard_error;
 FILE *stdin = &standard_input;
 FILE *stdout = &standard_output;
 FILE *stderr = &standard_error;
 static FILE *streams;
+static struct libc_lock stream_guard;
+
+bool stream_retain(FILE *stream)
+{
+  libc_lock_acquire(&stream_guard);
+  FILE *current = streams;
+  while (current && current != stream) {
+    current = current->next;
+  }
+  bool retained = current && !current->closing && current->references != UINT32_MAX;
+  if (retained) {
+    ++current->references;
+  }
+  libc_lock_release(&stream_guard);
+  return retained;
+}
+
+bool stream_retain_association(FILE *stream)
+{
+  if (atomic_load_explicit(&stream->closing, memory_order_acquire)) {
+    return false;
+  }
+  uint32_t count = atomic_load_explicit(&stream->references, memory_order_relaxed);
+  while (count != UINT32_MAX) {
+    if (atomic_compare_exchange_weak_explicit(&stream->references, &count, count + 1,
+        memory_order_relaxed, memory_order_relaxed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void stream_release(FILE *stream)
+{
+  libc_lock_acquire(&stream_guard);
+  --stream->references;
+  bool dispose = stream->closing && !stream->references && stream->allocated;
+  libc_lock_release(&stream_guard);
+  if (dispose) {
+    free(stream);
+  }
+}
+
+bool stream_try_lock(FILE *stream)
+{
+  int error = libc_mutex_trylock(&stream->lock);
+  if (!error && stream->operation_depth) {
+    stream_unlock(stream);
+    error = EBUSY;
+  }
+  if (error) {
+    errno = error;
+  }
+  return error == 0;
+}
+
+void stream_unlock(FILE *stream)
+{
+  if (libc_mutex_unlock(&stream->lock)) {
+    __builtin_trap();
+  }
+}
+
+static bool stream_acquire_retained(FILE *stream)
+{
+  int error = libc_mutex_lock(&stream->lock);
+  if (error) {
+    stream_release(stream);
+    errno = error;
+    return false;
+  }
+  uint64_t self = libc_thread_self();
+  if (self && __atomic_load_n(&stream->operation_owner, __ATOMIC_ACQUIRE) == self) {
+    ++stream->operation_depth;
+    stream_release(stream); /* The outer FILE admission owns recursive uses. */
+    return true;
+  }
+  stream->operation_depth = 1;
+  __atomic_store_n(&stream->operation_owner, libc_thread_self(), __ATOMIC_RELEASE);
+  int saved = errno;
+  int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
+  stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
+  stream->operation_cursor = descriptor_file_begin(stream->operation);
+  errno = saved;
+  return true;
+}
+
+bool stream_acquire(FILE *stream)
+{
+  uint64_t self = libc_thread_self();
+  libc_lock_acquire(&stream_guard);
+  FILE *current = streams;
+  while (current && current != stream) {
+    current = current->next;
+  }
+  bool recursive = current && self &&
+      __atomic_load_n(&current->operation_owner, __ATOMIC_ACQUIRE) == self;
+  if (!current || (!recursive && (current->closing || current->references == UINT32_MAX))) {
+    libc_lock_release(&stream_guard);
+    errno = EBADF;
+    return false;
+  }
+  if (!recursive) {
+    ++current->references;
+  }
+  libc_lock_release(&stream_guard);
+  if (recursive) {
+    int error = libc_mutex_lock(&stream->lock);
+    if (error) {
+      errno = error;
+      return false;
+    }
+    ++stream->operation_depth;
+    return true;
+  }
+  return stream_acquire_retained(stream);
+}
+
+void stream_end(FILE *stream)
+{
+  int saved = errno;
+  bool outer = --stream->operation_depth == 0;
+  if (outer) {
+    if (stream->operation_cursor) {
+      descriptor_file_end(stream->operation);
+      stream->operation_cursor = false;
+    }
+    descriptor_drop(stream->operation);
+    stream->operation = NULL;
+    __atomic_store_n(&stream->operation_owner, 0, __ATOMIC_RELEASE);
+  }
+  stream_unlock(stream);
+  if (outer) {
+    stream_release(stream);
+  }
+  errno = saved;
+}
+
+void stream_operation_end(struct stream_operation *operation)
+{
+  if (operation->stream) {
+    stream_end(operation->stream);
+  }
+}
 
 int stream_error(FILE *stream, int error)
 {
@@ -38,7 +185,7 @@ bool stream_ready(FILE *stream, bool writing)
     stream_error(stream, EBADF);
     return false;
   }
-  if (!descriptor_ready(stream->descriptor, writing)) {
+  if (!descriptor_object_ready(stream->operation, writing)) {
     stream_error(stream, errno);
     return false;
   }
@@ -74,14 +221,16 @@ static void discard_pushback(FILE *stream)
 
 static void register_stream(FILE *stream)
 {
+  libc_lock_acquire(&stream_guard);
   stream->next = streams;
   streams = stream;
+  libc_lock_release(&stream_guard);
 }
 
 static void standard_stream(FILE *stream, enum startup_stream_index index)
 {
   *stream = (FILE){
-    .descriptor = -1, .readable = index == STARTUP_STDIN,
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .readable = index == STARTUP_STDIN,
     .writable = index != STARTUP_STDIN,
   };
   descriptor_adopt_standard(index, stream);
@@ -131,7 +280,7 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
     return NULL;
   }
   *stream = (FILE){
-    .descriptor = -1, .allocated = true,
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .allocated = true,
     .readable = options.readable, .writable = options.writable,
   };
   if (descriptor_open(path, &options, stream) < 0) {
@@ -154,7 +303,7 @@ FILE *fdopen(int descriptor, const char *mode)
     return NULL;
   }
   *stream = (FILE){
-    .descriptor = -1, .allocated = true,
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .allocated = true,
     .readable = options.readable, .writable = options.writable,
   };
   /* Association has no fallible work after taking ownership. In particular,
@@ -175,7 +324,7 @@ FILE *tmpfile(void)
     return NULL;
   }
   *stream = (FILE){
-    .descriptor = -1, .allocated = true, .readable = true, .writable = true,
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .allocated = true, .readable = true, .writable = true,
   };
   handle_t parent;
   uint64_t rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
@@ -213,20 +362,21 @@ int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding)
     errno = EINVAL;
     return -1;
   }
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   bool standard = stream == &standard_input || stream == &standard_output ||
       stream == &standard_error;
-  if (standard && stream->descriptor < 0) {
+  if (standard && __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0) {
     return 0;
   }
-  FILE *current = streams;
-  while (current && current != stream) {
-    current = current->next;
-  }
-  if (!current || current->closed) {
+  FILE *current = stream;
+  if (current->closed) {
     errno = EBADF;
     return -1;
   }
-  return descriptor_stream(current, binding);
+  return descriptor_object_stream(current->operation, binding);
 }
 
 static int flush_output(FILE *stream)
@@ -237,7 +387,7 @@ static int flush_output(FILE *stream)
       return EOF;
     }
     size_t written;
-    if (descriptor_write(stream->descriptor, stream->output, stream->output_count, &written) < 0) {
+    if (descriptor_object_write(stream->operation, stream->output, stream->output_count, &written) < 0) {
       stream->output_flush_failed = true;
       return stream_error(stream, errno);
     }
@@ -250,30 +400,54 @@ static int flush_output(FILE *stream)
 
 int libc_stdio_flush_descriptor(int descriptor)
 {
-  struct pyxis_descriptor_binding binding;
-  if (pyxis_descriptor_borrow(descriptor, &binding) < 0) {
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (!object || !descriptor_object_ready(object, true)) {
+    descriptor_drop(object);
     return -1;
   }
-  if (!(binding.access & PYXIS_DESCRIPTOR_WRITE)) {
-    errno = EBADF;
-    return -1;
-  }
+  FILE *stream = NULL;
+  libc_lock_acquire(&stream_guard);
   for (FILE *current = streams; current; current = current->next) {
-    if (current->descriptor == descriptor) {
-      return current->output_count ? flush_output(current) : 0;
+    if (__atomic_load_n(&current->descriptor, __ATOMIC_ACQUIRE) == descriptor &&
+        !current->closing && current->references != UINT32_MAX) {
+      ++current->references;
+      stream = current;
+      break;
     }
   }
-  return 0;
+  libc_lock_release(&stream_guard);
+  int result = 0;
+  if (stream) {
+    if (stream_acquire_retained(stream)) {
+      if (stream->operation == object) {
+        result = stream->output_count ? flush_output(stream) : 0;
+      } else {
+        errno = EBADF;
+        result = -1;
+      }
+      stream_end(stream);
+    } else {
+      result = -1;
+    }
+  }
+  int saved = errno;
+  descriptor_drop(object);
+  errno = saved;
+  return result;
 }
 
 int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
 {
-  if (!stream || stream->closed || stream->descriptor < 0) {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  if (!stream || stream->closed || __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0) {
     errno = EBADF;
     return -1;
   }
   struct startup_stream binding;
-  if (descriptor_stream(stream, &binding) < 0) {
+  if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return -1;
   }
   if (stream->io_started || (mode != _IONBF && mode != _IOLBF && mode != _IOFBF)
@@ -304,29 +478,77 @@ int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
 
 void setbuf(FILE *restrict stream, char *restrict buffer)
 {
+  if (!stream_acquire(stream)) {
+    return;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   setvbuf(stream, buffer, buffer ? _IOFBF : _IONBF, BUFSIZ);
+}
+
+static int flush_all(void)
+{
+  FILE **snapshot = NULL;
+  size_t count = 0;
+  for (;;) {
+    libc_lock_acquire(&stream_guard);
+    size_t needed = 0;
+    for (FILE *current = streams; current; current = current->next) {
+      ++needed;
+    }
+    if (needed <= count) {
+      size_t index = 0;
+      for (FILE *current = streams; current; current = current->next) {
+        if (!current->closing && current->references != UINT32_MAX) {
+          ++current->references;
+          snapshot[index++] = current;
+        }
+      }
+      count = index;
+      libc_lock_release(&stream_guard);
+      break;
+    }
+    libc_lock_release(&stream_guard);
+    free(snapshot);
+    if (needed > SIZE_MAX / sizeof(*snapshot) ||
+        !(snapshot = malloc(needed * sizeof(*snapshot)))) {
+      errno = ENOMEM;
+      return EOF;
+    }
+    count = needed;
+  }
+  int error = 0;
+  for (size_t index = 0; index < count; ++index) {
+    FILE *current = snapshot[index];
+    if (stream_acquire_retained(current)) {
+      if (current->writable && flush_output(current) < 0 && !error) {
+        error = errno;
+      }
+      stream_end(current);
+    } else if (!error) {
+      error = errno;
+    }
+  }
+  free(snapshot);
+  if (error) {
+    errno = error;
+  }
+  return error ? EOF : 0;
 }
 
 int fflush(FILE *stream)
 {
+  if (stream && !stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream) {
-    int error = 0;
-    for (FILE *current = streams; current; current = current->next) {
-      if (current->writable && flush_output(current) < 0 && !error) {
-        error = errno;
-      }
-    }
-    if (error) {
-      errno = error;
-      return EOF;
-    }
-    return 0;
+    return flush_all();
   }
   if (stream->closed) {
     return stream_error(stream, EBADF);
   }
   struct startup_stream binding;
-  if (descriptor_stream(stream, &binding) < 0) {
+  if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return stream_error(stream, errno);
   }
   stream->io_started = true;
@@ -337,43 +559,67 @@ int fflush(FILE *stream)
   if (binding.protocol == PROTOCOL_FILE) {
     stream->wide_input = (mbstate_t){0};
   }
-  descriptor_discard_input(stream->descriptor);
+  descriptor_object_discard_input(stream->operation);
   return 0;
 }
 
 static void dispose_stream(FILE *stream)
 {
-  FILE **link = &streams;
-  while (*link && *link != stream) {
-    link = &(*link)->next;
-  }
-  if (*link) {
-    *link = stream->next;
-  }
   stream->closed = true;
   if (stream->output_owned) {
     free(stream->output);
   }
   stream->output = NULL;
   stream->output_count = 0;
-  if (stream->allocated) {
-    free(stream);
-  }
 }
 
 int fclose(FILE *stream)
 {
-  if (!stream || stream->closed) {
-    return stream_error(stream, EBADF);
+  libc_lock_acquire(&stream_guard);
+  FILE **link = &streams;
+  while (*link && *link != stream) {
+    link = &(*link)->next;
   }
-  int error = flush_output(stream) < 0 ? errno : 0;
-  if (descriptor_close(stream->descriptor) < 0 && !error) {
+  if (!*link || stream->closing) {
+    libc_lock_release(&stream_guard);
+    errno = EBADF;
+    return EOF;
+  }
+  if (stream->references == UINT32_MAX) {
+    libc_lock_release(&stream_guard);
+    errno = EOVERFLOW;
+    return EOF;
+  }
+  stream->closing = true;
+  ++stream->references; /* Closing owner prevents storage reclamation. */
+  libc_lock_release(&stream_guard);
+  /* Already admitted users retain storage; queued users can observe closed.
+   * Raw descriptor close never waits on this FILE operation lock. */
+  int error = libc_mutex_lock(&stream->lock);
+  if (error) {
+    __builtin_trap();
+  }
+  int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
+  stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
+  error = flush_output(stream) < 0 ? errno : 0;
+  if (descriptor_close_stream(stream, stream->operation) < 0 && !error) {
     error = errno;
   }
-  if (error) {
-    stream_error(stream, error);
-  }
+  descriptor_drop(stream->operation);
+  stream->operation = NULL;
   dispose_stream(stream);
+  libc_lock_acquire(&stream_guard);
+  link = &streams;
+  while (*link != stream) {
+    link = &(*link)->next;
+  }
+  *link = stream->next;
+  libc_lock_release(&stream_guard);
+  stream_unlock(stream);
+  stream_release(stream);
+  if (error) {
+    errno = error;
+  }
   return error ? EOF : 0;
 }
 
@@ -382,7 +628,12 @@ void stdio_finish(void)
   fflush(NULL);
   descriptor_finish();
   while (streams) {
-    dispose_stream(streams);
+    FILE *stream = streams;
+    streams = stream->next;
+    dispose_stream(stream);
+    if (stream->allocated) {
+      free(stream);
+    }
   }
 }
 
@@ -395,8 +646,8 @@ static size_t read_some(void *buffer, size_t capacity, FILE *stream, bool buffer
   }
   size_t read;
   int result = buffered && !stream->input_unbuffered ?
-      descriptor_read_buffered(stream->descriptor, buffer, capacity, &read) :
-      descriptor_read(stream->descriptor, buffer, capacity, &read);
+      descriptor_object_read_buffered(stream->operation, buffer, capacity, &read) :
+      descriptor_object_read(stream->operation, buffer, capacity, &read);
   if (result < 0) {
     stream_error(stream, errno);
     return 0;
@@ -420,7 +671,14 @@ static bool take_pushback(unsigned char *byte, FILE *stream)
 
 size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
 {
-  if (!capacity || !stream_ready(stream, false)) {
+  if (!capacity) {
+    return 0;
+  }
+  if (!stream_acquire(stream)) {
+    return 0;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  if (!stream_ready(stream, false)) {
     return 0;
   }
   if (!select_orientation(stream, STREAM_BYTE_ORIENTED)) {
@@ -440,6 +698,10 @@ size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict st
   if (!size || !count) {
     return 0;
   }
+  if (!stream_acquire(stream)) {
+    return 0;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream_ready(stream, false)) {
     return 0;
   }
@@ -474,7 +736,7 @@ static size_t write_bytes(const void *buffer, size_t bytes, FILE *stream)
   discard_pushback(stream);
   stream->wide_input = (mbstate_t){0};
   stream->io_started = true;
-  descriptor_discard_input(stream->descriptor);
+  descriptor_object_discard_input(stream->operation);
   size_t total = 0;
   // A failed old queue keeps ownership even after clearerr; drain it first.
   if (stream->output_flush_failed && flush_output(stream) < 0) {
@@ -509,7 +771,7 @@ static size_t write_bytes(const void *buffer, size_t bytes, FILE *stream)
       continue;
     }
     size_t written;
-    if (descriptor_write(stream->descriptor, (const char *)buffer + total,
+    if (descriptor_object_write(stream->operation, (const char *)buffer + total,
                          bytes - total, &written) < 0) {
       stream_error(stream, errno);
       break;
@@ -527,6 +789,10 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
   if (!size || !count) {
     return 0;
   }
+  if (!stream_acquire(stream)) {
+    return 0;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream_ready(stream, true)) {
     return 0;
   }
@@ -542,22 +808,38 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
 
 int fgetc(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   unsigned char byte;
   return fread(&byte, 1, 1, stream) == 1 ? byte : EOF;
 }
 
 int getc(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return fgetc(stream);
 }
 
 int getchar(void)
 {
+  if (!stream_acquire(stdin)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stdin};
   return fgetc(stdin);
 }
 
 char *fgets(char *restrict buffer, int capacity, FILE *restrict stream)
 {
+  if (!stream_acquire(stream)) {
+    return NULL;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (capacity <= 0) {
     stream_error(stream, EINVAL);
     return NULL;
@@ -606,6 +888,10 @@ static bool grow_line(char **line, size_t *capacity, size_t required)
 
 ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream)
 {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!line || !capacity) {
     return stream_error(stream, EINVAL);
   }
@@ -643,6 +929,10 @@ ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict 
 
 int ungetc(int character, FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (character == EOF || !stream_ready(stream, false) || stream->has_pushback) {
     return EOF;
   }
@@ -658,12 +948,16 @@ int ungetc(int character, FILE *stream)
 
 int fwide(FILE *stream, int mode)
 {
+  if (!stream_acquire(stream)) {
+    return 0;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream || stream->closed) {
     errno = EBADF;
     return 0;
   }
   struct startup_stream binding;
-  if (descriptor_stream(stream, &binding) < 0) {
+  if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return 0;
   }
   if (!stream->orientation && mode) {
@@ -674,6 +968,10 @@ int fwide(FILE *stream, int mode)
 
 wint_t fgetwc(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return WEOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream_ready(stream, false) || !select_orientation(stream, STREAM_WIDE_ORIENTED)) {
     return WEOF;
   }
@@ -708,11 +1006,19 @@ wint_t fgetwc(FILE *stream)
 
 wint_t getwc(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return WEOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return fgetwc(stream);
 }
 
 wint_t ungetwc(wint_t character, FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return WEOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (character == WEOF || !stream_ready(stream, false) || stream->has_wide_pushback) {
     return WEOF;
   }
@@ -735,6 +1041,10 @@ wint_t ungetwc(wint_t character, FILE *stream)
 
 wint_t fputwc(wchar_t character, FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return WEOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream_ready(stream, true) || !select_orientation(stream, STREAM_WIDE_ORIENTED)) {
     return WEOF;
   }
@@ -751,27 +1061,47 @@ wint_t fputwc(wchar_t character, FILE *stream)
 
 wint_t putwc(wchar_t character, FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return WEOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return fputwc(character, stream);
 }
 
 int fputc(int character, FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   unsigned char byte = character;
   return fwrite(&byte, 1, 1, stream) == 1 ? byte : EOF;
 }
 
 int putc(int character, FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return fputc(character, stream);
 }
 
 int putchar(int character)
 {
+  if (!stream_acquire(stdout)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stdout};
   return fputc(character, stdout);
 }
 
 int fputs(const char *restrict text, FILE *restrict stream)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream_byte_ready(stream, true)) {
     return EOF;
   }
@@ -781,27 +1111,47 @@ int fputs(const char *restrict text, FILE *restrict stream)
 
 int puts(const char *text)
 {
+  if (!stream_acquire(stdout)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stdout};
   return fputs(text, stdout) == EOF ? EOF : fputc('\n', stdout);
 }
 
 int feof(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return 0;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return stream->eof;
 }
 
 int ferror(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return 0;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return stream->error;
 }
 
 void clearerr(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   stream->eof = false;
   stream->error = false;
 }
 
 int fseek(FILE *stream, long offset, int origin)
 {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream || stream->closed) {
     errno = EBADF;
     return -1;
@@ -820,7 +1170,7 @@ int fseek(FILE *stream, long offset, int origin)
     return -1;
   }
   stream->io_started = true;
-  if (flush_output(stream) < 0 || descriptor_seek(stream->descriptor, offset, origin) < 0) {
+  if (flush_output(stream) < 0 || descriptor_object_seek(stream->operation, offset, origin) < 0) {
     return -1;
   }
   stream->eof = false;
@@ -831,12 +1181,16 @@ int fseek(FILE *stream, long offset, int origin)
 
 long ftell(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream || stream->closed) {
     errno = EBADF;
     return -1;
   }
   stream->io_started = true;
-  long position = descriptor_tell_output(stream->descriptor, stream->output_count);
+  long position = descriptor_object_tell_output(stream->operation, stream->output_count);
   /* The pushed-back byte is unread again. Before the first byte the position
    * stays zero; ISO C leaves it indeterminate there. */
   size_t pushed = pushback_bytes(stream);
@@ -848,6 +1202,10 @@ long ftell(FILE *stream)
 
 void rewind(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   fseek(stream, 0, SEEK_SET);
   clearerr(stream);
 }
@@ -856,21 +1214,33 @@ static_assert(sizeof(off_t) == sizeof(long), "fseeko and ftello forward to fseek
 
 int fseeko(FILE *stream, off_t offset, int origin)
 {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return fseek(stream, offset, origin);
 }
 
 off_t ftello(FILE *stream)
 {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   return ftell(stream);
 }
 
 int fileno(FILE *stream)
 {
-  if (!stream || stream->closed || stream->descriptor < 0) {
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  if (!stream || stream->closed || __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0) {
     errno = EBADF;
     return -1;
   }
-  return stream->descriptor;
+  return __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
 }
 
 int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info)
@@ -884,15 +1254,16 @@ int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info)
     errno = EINVAL;
     return -1;
   }
-  FILE *current = streams;
-  while (current && current != stream) {
-    current = current->next;
+  if (!stream_acquire(stream)) {
+    return -1;
   }
-  if (!current || current->closed) {
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  FILE *current = stream;
+  if (current->closed) {
     errno = EBADF;
     return -1;
   }
-  if (stream->descriptor < 0) {
+  if (__atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0) {
     enum startup_stream_index index = stream == &standard_input ? STARTUP_STDIN :
         stream == &standard_output ? STARTUP_STDOUT : STARTUP_STDERR;
     bool standard = stream == &standard_input || stream == &standard_output ||
@@ -901,5 +1272,5 @@ int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info)
       return 0;
     }
   }
-  return descriptor_response(stream->descriptor, info);
+  return descriptor_object_response(stream->operation, info);
 }

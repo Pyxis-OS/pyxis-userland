@@ -16,7 +16,9 @@ struct descriptor_mode {
 
 /* Entries reference an open object owning handle, access, cursor and read-ahead.
  * A FILE association owns neither; close invalidates it before slot reuse.
- * No entry pointer escapes this module; open objects stay stable on growth. */
+ * No entry pointer escapes this module; open objects stay stable on growth.
+ * Admitted operations retain storage only. Final alias CLOSE releases native
+ * authority immediately, outside exclusion; storage outlives admitted calls. */
 void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
@@ -55,7 +57,7 @@ int descriptor_read_complete(int descriptor, void *buffer, size_t capacity, size
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written);
 /* File-only explicit offsets, without changing the private position. Read
  * bypasses read-ahead; nonempty write discards it before dispatch. Both snapshot
- * the held handle and never access an entry pointer after a blocking call. */
+ * the held handle and retain object storage across every blocking call. */
 int descriptor_pread(int descriptor, void *buffer, size_t size, uint64_t offset,
     size_t *read);
 int descriptor_pwrite(int descriptor, const void *buffer, size_t size, uint64_t offset,
@@ -98,5 +100,35 @@ enum call_status file_create_path(const char *path, uint64_t rights, handle_t *h
 enum call_status file_temporary_name(char *suffix);
 /* Return one owned directory handle with exactly rights, resolved like a file. */
 enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle);
+
+struct descriptor_object;
+/* Hold storage only. Final alias CLOSE never waits for this reference. */
+struct descriptor_object *descriptor_hold(int descriptor);
+void descriptor_drop(struct descriptor_object *object);
+bool descriptor_file_begin(struct descriptor_object *object);
+void descriptor_file_end(struct descriptor_object *object);
+static inline void descriptor_scope_end(struct descriptor_object **object)
+{
+  descriptor_drop(*object);
+}
+int descriptor_close_stream(FILE *stream, struct descriptor_object *object);
+bool descriptor_object_ready(struct descriptor_object *object, bool writing);
+int descriptor_object_stream(struct descriptor_object *object, struct startup_stream *binding);
+int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
+int descriptor_object_read_complete(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
+int descriptor_object_read_buffered(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
+int descriptor_object_write(struct descriptor_object *object, const void *buffer, size_t size, size_t *written);
+int descriptor_object_pread(struct descriptor_object *object, void *buffer, size_t size, uint64_t offset, size_t *read);
+int descriptor_object_pwrite(struct descriptor_object *object, const void *buffer, size_t size, uint64_t offset, size_t *written);
+int descriptor_object_seek(struct descriptor_object *object, long offset, int origin);
+int descriptor_object_resize(struct descriptor_object *object, uint64_t size);
+int descriptor_object_sync(struct descriptor_object *object);
+int descriptor_object_stat(struct descriptor_object *object, struct stat *result);
+int descriptor_object_terminal(struct descriptor_object *object);
+long descriptor_object_tell_output(struct descriptor_object *object, size_t pending);
+long descriptor_object_tell(struct descriptor_object *object);
+int descriptor_object_response(struct descriptor_object *object, struct pyxis_response_info *info);
+void descriptor_object_discard_input(struct descriptor_object *object);
+long descriptor_seek_position(int descriptor, long offset, int origin);
 
 #endif

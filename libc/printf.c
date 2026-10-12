@@ -5,6 +5,10 @@
 
 int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream_byte_ready(stream, true)) {
     return EOF;
   }

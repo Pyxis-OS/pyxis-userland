@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "stream.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -493,6 +494,10 @@ static int scan_format(struct scan_input *input, const char *format, va_list arg
 
 int vfscanf(FILE *restrict stream, const char *restrict format, va_list args)
 {
+  if (!stream_acquire(stream)) {
+    return EOF;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
   if (!stream) {
     errno = EBADF;
     return EOF;

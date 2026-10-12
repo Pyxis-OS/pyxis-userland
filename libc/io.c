@@ -35,9 +35,9 @@ int open(const char *path, int flags, ...)
   return descriptor_open(path, &mode, NULL);
 }
 
-static bool transfer_ready(int descriptor, size_t count, bool writing)
+static bool transfer_ready(struct descriptor_object *object, size_t count, bool writing)
 {
-  if (!descriptor_ready(descriptor, writing)) {
+  if (!descriptor_object_ready(object, writing)) {
     return false;
   }
   if (count > (size_t)SSIZE_MAX) {
@@ -49,11 +49,16 @@ static bool transfer_ready(int descriptor, size_t count, bool writing)
 
 ssize_t read(int descriptor, void *buffer, size_t count)
 {
-  if (!transfer_ready(descriptor, count, false)) {
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  if (!transfer_ready(object, count, false)) {
     return -1;
   }
   size_t transferred;
-  if (descriptor_read_complete(descriptor, buffer, count, &transferred) < 0) {
+  if (descriptor_object_read_complete(object, buffer, count, &transferred) < 0) {
     return -1;
   }
   return (ssize_t)transferred;
@@ -61,11 +66,16 @@ ssize_t read(int descriptor, void *buffer, size_t count)
 
 ssize_t write(int descriptor, const void *buffer, size_t count)
 {
-  if (!transfer_ready(descriptor, count, true)) {
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  if (!transfer_ready(object, count, true)) {
     return -1;
   }
   size_t transferred;
-  if (descriptor_write(descriptor, buffer, count, &transferred) < 0) {
+  if (descriptor_object_write(object, buffer, count, &transferred) < 0) {
     return -1;
   }
   return (ssize_t)transferred;
@@ -73,7 +83,12 @@ ssize_t write(int descriptor, const void *buffer, size_t count)
 
 ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset)
 {
-  if (!transfer_ready(descriptor, count, false)) {
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  if (!transfer_ready(object, count, false)) {
     return -1;
   }
   if (offset < 0) {
@@ -81,7 +96,7 @@ ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset)
     return -1;
   }
   size_t transferred;
-  if (descriptor_pread(descriptor, buffer, count, (uint64_t)offset, &transferred) < 0) {
+  if (descriptor_object_pread(object, buffer, count, (uint64_t)offset, &transferred) < 0) {
     return -1;
   }
   return (ssize_t)transferred;
@@ -89,7 +104,12 @@ ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset)
 
 ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset)
 {
-  if (!transfer_ready(descriptor, count, true)) {
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  if (!transfer_ready(object, count, true)) {
     return -1;
   }
   if (offset < 0) {
@@ -97,7 +117,7 @@ ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset)
     return -1;
   }
   size_t transferred;
-  if (descriptor_pwrite(descriptor, buffer, count, (uint64_t)offset, &transferred) < 0) {
+  if (descriptor_object_pwrite(object, buffer, count, (uint64_t)offset, &transferred) < 0) {
     return -1;
   }
   return (ssize_t)transferred;
@@ -110,30 +130,37 @@ int close(int descriptor)
 
 int ftruncate(int descriptor, off_t length)
 {
-  if (!descriptor_ready(descriptor, true)) {
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  if (!descriptor_object_ready(object, true)) {
     return -1;
   }
   if (length < 0) {
     errno = EINVAL;
     return -1;
   }
-  return descriptor_resize(descriptor, (uint64_t)length);
+  return descriptor_object_resize(object, (uint64_t)length);
 }
 
 off_t lseek(int descriptor, off_t offset, int origin)
 {
-  if (descriptor_seek(descriptor, offset, origin) < 0) {
-    return -1;
-  }
-  return descriptor_tell(descriptor);
+  return descriptor_seek_position(descriptor, offset, origin);
 }
 
 int fsync(int descriptor)
 {
-  if (!descriptor_ready(descriptor, true)) {
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (!object) {
     return -1;
   }
-  return descriptor_sync(descriptor);
+  if (!descriptor_object_ready(object, true)) {
+    return -1;
+  }
+  return descriptor_object_sync(object);
 }
 
 int isatty(int descriptor)
