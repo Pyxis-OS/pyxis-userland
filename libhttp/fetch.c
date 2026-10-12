@@ -1167,6 +1167,7 @@ bool http_stream_completion(struct http_stream *stream, const struct endpoint_pa
     stream->exchange_stage = stream->uri.scheme == HTTP_SCHEME_HTTPS ? EXCHANGE_TLS : EXCHANGE_REQUEST;
   }
   if (protocol == PROTOCOL_FILE) {
+    stream->result->source_status = status;
     if (!stream->headers_ready && !stream->aborting) {
       source_result(stream, status);
     }
