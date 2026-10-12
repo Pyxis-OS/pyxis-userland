@@ -537,7 +537,7 @@ static bool retryable(int code)
       code == MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS;
 }
 
-bool tls_connection_open(struct tls_runtime *runtime,
+bool tls_connection_prepare(struct tls_runtime *runtime,
     const struct tls_authority *authority, handle_t stream, const char *name,
     uint64_t deadline_ns, struct tls_connection **connection, struct tls_result *result)
 {
@@ -573,23 +573,7 @@ bool tls_connection_open(struct tls_runtime *runtime,
     goto done;
   }
   mbedtls_ssl_set_bio(&created->ssl, created, send_bytes, receive_bytes, NULL);
-  do {
-    if (!check_deadline()) {
-      success = false;
-      goto done;
-    }
-    code = mbedtls_ssl_handshake(&created->ssl);
-  } while (retryable(code) && result->error == TLS_OK);
-  result->verify_flags = mbedtls_ssl_get_verify_result(&created->ssl);
-  success = library_result(result, code, TLS_PROTOCOL_ERROR) && check_deadline() && check_utc();
-  if (success && result->verify_flags) {
-    success = fail(result, TLS_CERTIFICATE_ERROR);
-  }
-  const char *protocol = mbedtls_ssl_get_alpn_protocol(&created->ssl);
-  if (success && protocol && strcmp(protocol, "http/1.1")) {
-    success = fail(result, TLS_UNSUPPORTED);
-  }
-  created->verified = success;
+  success = check_deadline();
 
 done:
   end();
@@ -598,6 +582,89 @@ done:
     return false;
   }
   *connection = created;
+  return true;
+}
+
+static enum tls_step_result handshake_transfer(struct tls_connection *connection,
+    bool nonblocking, bool *complete, struct tls_result *result)
+{
+  *result = (struct tls_result){0};
+  *complete = false;
+  if (!connection || !owner || owner->connection != connection || connection->verified ||
+      connection->failed || connection->closed || operation.result) {
+    fail(result, TLS_BAD_STATE);
+    return TLS_STEP_FAILED;
+  }
+  enum tls_step_result step = TLS_STEP_FAILED;
+  if (!begin(&connection->authority, connection->deadline, result)) {
+    goto done;
+  }
+  operation.nonblocking = nonblocking;
+  int code = mbedtls_ssl_handshake_step(&connection->ssl);
+  if (result->error != TLS_OK || !check_deadline()) {
+    goto done;
+  }
+  if (code == MBEDTLS_ERR_SSL_WANT_READ || code == MBEDTLS_ERR_SSL_WANT_WRITE) {
+    step = code == MBEDTLS_ERR_SSL_WANT_READ ? TLS_STEP_WANT_READ : TLS_STEP_WANT_WRITE;
+    goto done;
+  }
+  if (code == MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS) {
+    step = TLS_STEP_PROGRESS;
+    goto done;
+  }
+  if (!library_result(result, code, TLS_PROTOCOL_ERROR)) {
+    result->verify_flags = mbedtls_ssl_get_verify_result(&connection->ssl);
+    goto done;
+  }
+  if (!mbedtls_ssl_is_handshake_over(&connection->ssl)) {
+    step = TLS_STEP_PROGRESS;
+    goto done;
+  }
+  result->verify_flags = mbedtls_ssl_get_verify_result(&connection->ssl);
+  if (!check_utc() || !check_deadline()) {
+    goto done;
+  }
+  if (result->verify_flags) {
+    fail(result, TLS_CERTIFICATE_ERROR);
+    goto done;
+  }
+  const char *protocol = mbedtls_ssl_get_alpn_protocol(&connection->ssl);
+  if (protocol && strcmp(protocol, "http/1.1")) {
+    fail(result, TLS_UNSUPPORTED);
+    goto done;
+  }
+  connection->verified = true;
+  *complete = true;
+  step = TLS_STEP_PROGRESS;
+
+done:
+  connection->failed = step == TLS_STEP_FAILED;
+  end();
+  return step;
+}
+
+enum tls_step_result tls_handshake_step(struct tls_connection *connection,
+    bool *complete, struct tls_result *result)
+{
+  return handshake_transfer(connection, true, complete, result);
+}
+
+bool tls_connection_open(struct tls_runtime *runtime,
+    const struct tls_authority *authority, handle_t stream, const char *name,
+    uint64_t deadline_ns, struct tls_connection **connection, struct tls_result *result)
+{
+  if (!tls_connection_prepare(runtime, authority, stream, name, deadline_ns,
+      connection, result)) {
+    return false;
+  }
+  bool complete = false;
+  while (!complete) {
+    if (handshake_transfer(*connection, false, &complete, result) == TLS_STEP_FAILED) {
+      tls_connection_free(*connection);
+      *connection = NULL;
+      return false;
+    }
+  }
   return true;
 }
 

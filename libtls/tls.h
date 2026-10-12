@@ -77,11 +77,30 @@ void tls_runtime_free(struct tls_runtime *runtime);
 /* Borrow a connected stream and explicit fetch authority until connection_free;
  * never abort, shut down or close that stream here. The caller supplies a DNS
  * reference name without a terminal dot or port, and the original absolute
- * fetch deadline. Open returns only after required chain/name/date verification.
+ * fetch deadline. Prepare allocates/configures TLS and copies the reference name
+ * without network I/O; the connection remains unverified. Open drives preparation
+ * and the handshake synchronously, returning only after required verification.
  * Free the connection before its authority, stream or runtime becomes invalid. */
+bool tls_connection_prepare(struct tls_runtime *runtime,
+    const struct tls_authority *authority, handle_t stream, const char *name,
+    uint64_t deadline_ns, struct tls_connection **connection, struct tls_result *result);
 bool tls_connection_open(struct tls_runtime *runtime,
     const struct tls_authority *authority, handle_t stream, const char *name,
     uint64_t deadline_ns, struct tls_connection **connection, struct tls_result *result);
+
+/* One library handshake state step using native TRY I/O, without a network
+ * readiness wait. PROGRESS with complete false requires another scheduled step;
+ * WANT_READ/WRITE requires the indicated stream readiness. Only PROGRESS with
+ * complete true authorizes plaintext transfers, after chain/name/date and ALPN
+ * verification. FAILED leaves complete false and permits only connection_free.
+ * Do not call again after completion. Clock queries, allocation and certificate/
+ * crypto work remain synchronous. The entropy callback may wait for native RNG
+ * under the earlier of the original deadline and its five-second bound; this
+ * API does not make that phase responsive. A state step may make several TRY
+ * calls. Free may skip close_notify without wire I/O; retain skipped shutdown as
+ * not attempted rather than a successful shutdown diagnostic. */
+enum tls_step_result tls_handshake_step(struct tls_connection *connection,
+    bool *complete, struct tls_result *result);
 
 /* Successful nonempty transfers report positive short counts. EOF is true only
  * for authenticated close_notify; raw TCP EOF fails as truncation. Plaintext is
