@@ -16,17 +16,25 @@ struct tz_rule {
 /* Calendar year is years since 1900, within int range plus neighboring years. */
 int __tz_year_for_secs(long long seconds, long long *year);
 long long __tz_rule_to_secs(const struct tz_rule *rule, long long year);
-/* Designation borrows the cache until a successful selection reload or exit;
- * default UTC borrows permanent storage. Outputs are usable only on success. */
-int timezone_offset(int64_t seconds, long *offset, int *daylight,
-    const char **designation);
-/* Every distinct UTC offset the selected zone can report, borrowed like the
- * designation. UTC has the single offset zero. */
-int timezone_offsets(const long **offsets, size_t *count);
-/* The UTC offset of the period nearest SECONDS whose daylight flag is
- * DAYLIGHT: the footer rule's own offset within the rules, otherwise the
- * closest earlier or later table period. Returns 1 when the zone has no such
- * period, as UTC has no daylight time. */
-int timezone_daylight_offset(int64_t seconds, int daylight, long *offset);
+struct timezone_data;
+struct timezone_snapshot {
+  struct timezone_data *zone;
+};
+
+/* Retain one selected zone across conversion, allocation and concurrent TZ
+ * changes. Close once. Failed selection never falls back to the cached zone. */
+int timezone_snapshot_init(struct timezone_snapshot *snapshot);
+void timezone_snapshot_close(struct timezone_snapshot *snapshot);
+/* Intern a designation until process exit, for an escaping tm_zone pointer. */
+const char *timezone_designation(const char *name);
+/* Offsets and raw designations borrow the retained snapshot. */
+int timezone_offset(const struct timezone_snapshot *snapshot, int64_t seconds,
+    long *offset, int *daylight, const char **designation);
+int timezone_offsets(const struct timezone_snapshot *snapshot,
+    const long **offsets, size_t *count);
+/* Offset in the nearest period with the requested daylight flag; 1 means no
+ * such period exists, for example daylight time in UTC. */
+int timezone_daylight_offset(const struct timezone_snapshot *snapshot,
+    int64_t seconds, int daylight, long *offset);
 
 #endif

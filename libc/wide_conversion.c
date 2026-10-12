@@ -17,7 +17,7 @@ static size_t invalid_sequence(mbstate_t *state)
 size_t mbrtowc(wchar_t *restrict output, const char *restrict text,
   size_t size, mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   if (!state) {
     state = &implicit_state;
   }
@@ -83,14 +83,14 @@ size_t mbrtowc(wchar_t *restrict output, const char *restrict text,
 size_t mbrlen(const char *restrict text, size_t size,
   mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   return mbrtowc(NULL, text, size, state ? state : &implicit_state);
 }
 
 size_t wcrtomb(char *restrict output, wchar_t value,
   mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   char reset_output[4];
   if (!state) {
     state = &implicit_state;
@@ -184,7 +184,7 @@ static size_t decode_string(wchar_t *output, const char **source,
 size_t mbsrtowcs(wchar_t *restrict output, const char **restrict source,
   size_t capacity, mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   return decode_string(output, source, SIZE_MAX, capacity,
     state ? state : &implicit_state);
 }
@@ -192,7 +192,7 @@ size_t mbsrtowcs(wchar_t *restrict output, const char **restrict source,
 size_t mbsnrtowcs(wchar_t *restrict output, const char **restrict source,
   size_t bytes, size_t capacity, mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   return decode_string(output, source, bytes, capacity,
     state ? state : &implicit_state);
 }
@@ -247,7 +247,7 @@ static size_t encode_string(char *output, const wchar_t **source,
 size_t wcsrtombs(char *restrict output, const wchar_t **restrict source,
   size_t capacity, mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   return encode_string(output, source, SIZE_MAX, capacity,
     state ? state : &implicit_state);
 }
@@ -255,7 +255,7 @@ size_t wcsrtombs(char *restrict output, const wchar_t **restrict source,
 size_t wcsnrtombs(char *restrict output, const wchar_t **restrict source,
   size_t count, size_t capacity, mbstate_t *restrict state)
 {
-  static mbstate_t implicit_state;
+  static _Thread_local mbstate_t implicit_state;
   return encode_string(output, source, count, capacity,
     state ? state : &implicit_state);
 }

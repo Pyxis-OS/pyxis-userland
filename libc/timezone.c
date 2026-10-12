@@ -6,6 +6,7 @@
 #include "errors.h"
 #include <string.h>
 #include "timezone.h"
+#include "thread_sync.h"
 
 #define TZIF_HEADER_SIZE 44
 #define TZIF_TYPE_SIZE 6
@@ -24,6 +25,7 @@ struct tz_footer {
 };
 
 struct timezone_data {
+  size_t references;
   char *name;
   unsigned char *bytes;
   const unsigned char *transitions, *indices, *types, *names;
@@ -34,9 +36,17 @@ struct timezone_data {
   size_t offset_count;
 };
 
-/* One userspace thread per process. Publish only a fully validated replacement;
- * failed selections must never use the previously cached zone as a fallback. */
-static struct timezone_data cached_zone;
+/* Cache publication never holds the guard through allocation or file I/O. */
+static struct libc_lock timezone_guard;
+static struct timezone_data *cached_zone;
+
+struct timezone_name {
+  struct timezone_name *next;
+  char text[];
+};
+
+/* tm_zone escapes its conversion; interned designations live until exit. */
+static struct timezone_name *designations;
 
 static uint32_t read_u32(const unsigned char *bytes)
 {
@@ -330,6 +340,7 @@ static void free_zone(struct timezone_data *zone)
   free(zone->name);
   free(zone->bytes);
   free(zone->offsets);
+  free(zone);
 }
 
 static void add_offset(struct timezone_data *zone, long offset)
@@ -361,7 +372,7 @@ static bool collect_offsets(struct timezone_data *zone)
   return true;
 }
 
-static int load_zone(const char *name)
+static int load_zone(const char *name, struct timezone_data **result)
 {
   if (!valid_zone_name(name)) {
     errno = EINVAL;
@@ -385,7 +396,13 @@ static int load_zone(const char *name)
     return -1;
   }
 
-  struct timezone_data zone = {0};
+  struct timezone_data *zone = calloc(1, sizeof(*zone));
+  if (!zone) {
+    int error = errno;
+    fclose(file);
+    errno = error;
+    return -1;
+  }
   if (fseek(file, 0, SEEK_END)) {
     goto fail;
   }
@@ -397,36 +414,36 @@ static int load_zone(const char *name)
     errno = EINVAL;
     goto fail;
   }
-  zone.bytes = malloc((size_t)size);
-  if (!zone.bytes) {
+  zone->bytes = malloc((size_t)size);
+  if (!zone->bytes) {
     goto fail;
   }
-  if (fread(zone.bytes, 1, (size_t)size, file) != (size_t)size) {
+  if (fread(zone->bytes, 1, (size_t)size, file) != (size_t)size) {
     if (!ferror(file)) {
       errno = EIO;
     }
     goto fail;
   }
-  if (!read_tzif(&zone, (size_t)size)) {
+  if (!read_tzif(zone, (size_t)size)) {
     errno = EINVAL;
     goto fail;
   }
-  zone.name = strdup(name);
-  if (!zone.name || !collect_offsets(&zone)) {
+  zone->name = strdup(name);
+  if (!zone->name || !collect_offsets(zone)) {
     goto fail;
   }
   if (fclose(file)) {
-    free_zone(&zone);
+    free_zone(zone);
     return -1;
   }
-  free_zone(&cached_zone);
-  cached_zone = zone;
+  zone->references = 1;
+  *result = zone;
   return 0;
 
 fail:
   int error = errno;
   fclose(file);
-  free_zone(&zone);
+  free_zone(zone);
   errno = error;
   return -1;
 }
@@ -512,46 +529,119 @@ static bool footer_has_flag(const struct tz_footer *future, int daylight, long *
   return true;
 }
 
-/* Select the zone named by the current TZ, loading it if the name changed.
- * *zone is NULL for UTC. */
-static int select_zone(const struct timezone_data **zone)
+void timezone_snapshot_close(struct timezone_snapshot *snapshot)
 {
-  const char *name;
-  enum call_status status = pyxis_environment_get("TZ", &name);
+  struct timezone_data *zone = snapshot->zone;
+  snapshot->zone = NULL;
+  if (!zone) {
+    return;
+  }
+  libc_lock_acquire(&timezone_guard);
+  bool destroy = !--zone->references;
+  libc_lock_release(&timezone_guard);
+  if (destroy) {
+    free_zone(zone);
+  }
+}
+
+int timezone_snapshot_init(struct timezone_snapshot *snapshot)
+{
+  snapshot->zone = NULL;
+  char *name;
+  enum call_status status = pyxis_environment_copy("TZ", &name);
   if (status != CALL_OK && status != CALL_NOT_FOUND) {
     errno = libc_call_errno(status);
     return -1;
   }
   if (!name || !*name) {
-    *zone = NULL;
+    free(name);
     return 0;
   }
-  if ((!cached_zone.name || strcmp(name, cached_zone.name)) && load_zone(name)) {
+  libc_lock_acquire(&timezone_guard);
+  if (cached_zone && !strcmp(name, cached_zone->name)) {
+    if (cached_zone->references == SIZE_MAX) {
+      libc_lock_release(&timezone_guard);
+      free(name);
+      errno = EOVERFLOW;
+      return -1;
+    }
+    ++cached_zone->references;
+    snapshot->zone = cached_zone;
+  }
+  libc_lock_release(&timezone_guard);
+  if (snapshot->zone) {
+    free(name);
+    return 0;
+  }
+  struct timezone_data *loaded;
+  int result = load_zone(name, &loaded);
+  free(name);
+  if (result) {
     return -1;
   }
-  *zone = &cached_zone;
+  libc_lock_acquire(&timezone_guard);
+  struct timezone_data *previous = cached_zone;
+  cached_zone = loaded;
+  ++loaded->references;
+  snapshot->zone = loaded;
+  libc_lock_release(&timezone_guard);
+  struct timezone_snapshot retired = {.zone = previous};
+  timezone_snapshot_close(&retired);
   return 0;
 }
 
-int timezone_offsets(const long **offsets, size_t *count)
+const char *timezone_designation(const char *name)
+{
+  if (!strcmp(name, "UTC")) {
+    return "UTC";
+  }
+  libc_lock_acquire(&timezone_guard);
+  for (struct timezone_name *entry = designations; entry; entry = entry->next) {
+    if (!strcmp(entry->text, name)) {
+      libc_lock_release(&timezone_guard);
+      return entry->text;
+    }
+  }
+  libc_lock_release(&timezone_guard);
+  size_t length = strlen(name);
+  if (length > SIZE_MAX - sizeof(struct timezone_name) - 1) {
+    errno = EOVERFLOW;
+    return NULL;
+  }
+  struct timezone_name *next = malloc(sizeof(*next) + length + 1);
+  if (!next) {
+    return NULL;
+  }
+  memcpy(next->text, name, length + 1);
+  libc_lock_acquire(&timezone_guard);
+  for (struct timezone_name *entry = designations; entry; entry = entry->next) {
+    if (!strcmp(entry->text, name)) {
+      libc_lock_release(&timezone_guard);
+      free(next);
+      return entry->text;
+    }
+  }
+  next->next = designations;
+  designations = next;
+  libc_lock_release(&timezone_guard);
+  return next->text;
+}
+
+int timezone_offsets(const struct timezone_snapshot *snapshot,
+    const long **offsets, size_t *count)
 {
   static const long utc_offset = 0;
-  const struct timezone_data *zone;
-  if (select_zone(&zone)) {
-    return -1;
-  }
+  const struct timezone_data *zone = snapshot->zone;
   *offsets = zone ? zone->offsets : &utc_offset;
   *count = zone ? zone->offset_count : 1;
   return 0;
 }
 
-int timezone_offset(int64_t seconds, long *offset, int *daylight,
+int timezone_offset(const struct timezone_snapshot *snapshot,
+    int64_t seconds, long *offset, int *daylight,
     const char **designation)
 {
-  const struct timezone_data *zone;
-  if (select_zone(&zone)) {
-    return -1;
-  }
+  const struct timezone_data *zone = snapshot->zone;
   if (!zone) {
     *offset = 0;
     *daylight = 0;
@@ -586,12 +676,10 @@ int timezone_offset(int64_t seconds, long *offset, int *daylight,
   return 0;
 }
 
-int timezone_daylight_offset(int64_t seconds, int daylight, long *offset)
+int timezone_daylight_offset(const struct timezone_snapshot *snapshot,
+    int64_t seconds, int daylight, long *offset)
 {
-  const struct timezone_data *zone;
-  if (select_zone(&zone)) {
-    return -1;
-  }
+  const struct timezone_data *zone = snapshot->zone;
   if (!zone) {
     return 1;
   }

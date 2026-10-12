@@ -123,11 +123,12 @@ struct tm *gmtime_r(const time_t *restrict timer, struct tm *restrict result)
 
 struct tm *gmtime(const time_t *timer)
 {
-  static struct tm result;
+  static _Thread_local struct tm result;
   return gmtime_r(timer, &result);
 }
 
-struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
+static struct tm *localtime_snapshot(const struct timezone_snapshot *zone,
+    const time_t *timer, struct tm *result)
 {
   if (!timer || !result) {
     errno = EINVAL;
@@ -137,7 +138,7 @@ struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
   long offset;
   int daylight;
   const char *designation;
-  if (timezone_offset(*timer, &offset, &daylight, &designation)) {
+  if (timezone_offset(zone, *timer, &offset, &daylight, &designation)) {
     return NULL;
   }
   int64_t local;
@@ -149,19 +150,40 @@ struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
   }
   converted.tm_isdst = daylight;
   converted.tm_gmtoff = offset;
-  converted.tm_zone = designation;
+  converted.tm_zone = timezone_designation(designation);
+  if (!converted.tm_zone) {
+    return NULL;
+  }
   *result = converted;
   errno = saved_errno;
   return result;
 }
 
+struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
+{
+  if (!timer || !result) {
+    errno = EINVAL;
+    return NULL;
+  }
+  int saved_errno = errno;
+  struct timezone_snapshot zone;
+  if (timezone_snapshot_init(&zone)) {
+    return NULL;
+  }
+  struct tm *converted = localtime_snapshot(&zone, timer, result);
+  int error = errno;
+  timezone_snapshot_close(&zone);
+  errno = converted ? saved_errno : error;
+  return converted;
+}
+
 struct tm *localtime(const time_t *timer)
 {
-  static struct tm result;
+  static _Thread_local struct tm result;
   return localtime_r(timer, &result);
 }
 
-time_t mktime(struct tm *calendar)
+static time_t make_time(const struct timezone_snapshot *zone, struct tm *calendar)
 {
   if (!calendar) {
     errno = EINVAL;
@@ -170,7 +192,7 @@ time_t mktime(struct tm *calendar)
   int saved_errno = errno;
   const long *offsets;
   size_t offset_count;
-  if (timezone_offsets(&offsets, &offset_count)) {
+  if (timezone_offsets(zone, &offsets, &offset_count)) {
     return -1;
   }
 
@@ -190,7 +212,7 @@ time_t mktime(struct tm *calendar)
       errno = EOVERFLOW;
       return -1;
     }
-    if (timezone_offset(candidate, &offset, &daylight, &designation)) {
+    if (timezone_offset(zone, candidate, &offset, &daylight, &designation)) {
       /* An instant the zone data leaves unspecified shows no wall time. */
       if (errno == ENOTSUP) {
         continue;
@@ -221,7 +243,7 @@ time_t mktime(struct tm *calendar)
   if (matches == 1 && calendar->tm_isdst >= 0 &&
       !match_daylight != !calendar->tm_isdst) {
     long requested;
-    int found = timezone_daylight_offset(match_time, calendar->tm_isdst > 0, &requested);
+    int found = timezone_daylight_offset(zone, match_time, calendar->tm_isdst > 0, &requested);
     if (found < 0) {
       return -1;
     }
@@ -232,10 +254,29 @@ time_t mktime(struct tm *calendar)
   }
 
   struct tm converted;
-  if (!localtime_r(&result, &converted)) {
+  if (!localtime_snapshot(zone, &result, &converted)) {
     return -1;
   }
   *calendar = converted;
   errno = saved_errno;
+  return result;
+}
+
+time_t mktime(struct tm *calendar)
+{
+  if (!calendar) {
+    errno = EINVAL;
+    return -1;
+  }
+  int saved_errno = errno;
+  struct timezone_snapshot zone;
+  if (timezone_snapshot_init(&zone)) {
+    return -1;
+  }
+  errno = saved_errno;
+  time_t result = make_time(&zone, calendar);
+  int error = errno;
+  timezone_snapshot_close(&zone);
+  errno = error;
   return result;
 }
