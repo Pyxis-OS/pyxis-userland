@@ -255,6 +255,31 @@ Lua 5.1's math library adds these files from the same pin:
 `__expo2` without `hidden`; the public `math.h` also declares `expm1`. Out-of-domain arguments return NaN with invalid,
 and overflow and underflow raise FP exception flags; errno is unchanged.
 
+The hosted Clang/LLD closure adds these files from the same pin, using the
+existing local source cache at `pyxis-regex/build/upstream-musl` (Git HEAD
+`0784374d561435f7c787a555aeab8ede699ed298`), without a new download:
+
+- `src/math/log2.c`, `log2_data.c`, `log2f.c` and `log2f_data.c`, unmodified;
+- `src/math/log2_data.h` and `log2f_data.h`, omitting `features.h` and `hidden`
+  like the other static coefficient tables;
+- `src/math/logb.c`, replacing only `isfinite` with `__builtin_isfinite`, and
+  its `src/math/ilogb.c` dependency, unmodified;
+- `src/math/log1p.c` and `erf.c`, unmodified; `erf.c` also implements `erfc`;
+- `src/math/exp2.c`, unmodified, reusing `exp_data` and existing error helpers;
+- `src/math/lround.c`, unmodified, reusing `round`.
+
+The additions retain the existing FP-exception-only profile, rounding-aware
+build flags and unsupported signaling-NaN limit. Logarithm zero poles raise
+divide-by-zero and negative-domain inputs raise invalid. `log1p` preserves
+accuracy near zero; `logb` and `ilogb` handle subnormal exponents. `ilogb` raises
+invalid for zero, infinity and NaN with the declared exceptional results.
+`exp2`, `erf` and `erfc` retain upstream's range and special-value handling.
+`lround` rounds halfway values away from zero independently of rounding mode;
+because it calls `round`, fractional inputs may raise inexact. Its integer
+result is unspecified for NaN, infinity or values outside `long` range; no
+Annex F or POSIX exception-profile promise is added. Errno remains unchanged,
+and all functions live in libc without a separate `-lm`.
+
 Neovim's calendar and encoding prerequisites add these files from the same pin:
 
 - `src/time/__tm_to_secs.c`, unmodified, which normalizes `tm_mon` into the

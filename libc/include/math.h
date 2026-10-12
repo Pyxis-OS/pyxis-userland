@@ -71,6 +71,9 @@ float floorf(float value);
 /* Nearest integer, ties away from zero, independent of the FP rounding mode. */
 double round(double value);
 float roundf(float value);
+/* Same rounding as round; the integer result is unspecified when it does not
+ * fit, including infinity and NaN. Fractional inputs may raise inexact. */
+long lround(double value);
 /* Integral part, rounded toward zero independently of the FP rounding mode. */
 double trunc(double value);
 double fmod(double value, double divisor);
@@ -122,12 +125,25 @@ float atan2f(float y, float x);
  * values NaN with invalid. */
 double log(double value);
 double log10(double value);
+double log2(double value);
+float log2f(float value);
+/* Binary exponent, including subnormals. logb(0) gives -inf with divide-by-zero;
+ * ilogb(0), ilogb(NaN) and ilogb(infinity) raise invalid and return FP_ILOGB0,
+ * FP_ILOGBNAN and INT_MAX respectively. */
+double logb(double value);
+int ilogb(double value);
+/* log(1 + value), accurate near zero. -1 gives -inf with divide-by-zero;
+ * values below -1 give NaN with invalid. */
+double log1p(double value);
 double exp(double value);
+double exp2(double value);
 /* exp(value) - 1, accurate near zero. */
 double expm1(double value);
 float logf(float value);
 float log10f(float value);
 float expf(float value);
+double erf(double value);
+double erfc(double value);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
 

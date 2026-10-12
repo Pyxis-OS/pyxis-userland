@@ -43,12 +43,14 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/fabsf.c \
                 third_party/musl/src/math/floor.c \
                 third_party/musl/src/math/round.c \
+                third_party/musl/src/math/lround.c \
                 third_party/musl/src/math/trunc.c \
                 third_party/musl/src/math/roundf.c \
                 third_party/musl/src/math/fmod.c \
                 third_party/musl/src/math/modf.c \
                 third_party/musl/src/math/pow.c \
                 third_party/musl/src/math/exp.c \
+                third_party/musl/src/math/exp2.c \
                 third_party/musl/src/math/expm1.c \
                 third_party/musl/src/math/__expo2.c \
                 third_party/musl/src/math/asin.c \
@@ -88,6 +90,14 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/log.c \
                 third_party/musl/src/math/log_data.c \
                 third_party/musl/src/math/log10.c \
+                third_party/musl/src/math/log2.c \
+                third_party/musl/src/math/log2_data.c \
+                third_party/musl/src/math/log2f.c \
+                third_party/musl/src/math/log2f_data.c \
+                third_party/musl/src/math/logb.c \
+                third_party/musl/src/math/ilogb.c \
+                third_party/musl/src/math/log1p.c \
+                third_party/musl/src/math/erf.c \
                 third_party/musl/src/math/__math_divzero.c \
                 third_party/musl/src/math/powf.c \
                 third_party/musl/src/math/powf_data.c \
