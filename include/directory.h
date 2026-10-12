@@ -27,9 +27,7 @@ enum call_status directory_create(handle_t directory, const char *name,
 enum call_status directory_remove(handle_t directory, const char *name, uint64_t kind);
 
 /* Atomic file/directory move/replacement within one native store instance.
- * Source needs REMOVE; destination needs CREATE. Host REPLACE always needs
- * destination REMOVE; RAM/npfs need it when
- * replacing a different entry. policy is DIRECTORY_RENAME_NO_REPLACE or
+ * Source needs REMOVE; destination needs CREATE, plus REMOVE for REPLACE. policy is DIRECTORY_RENAME_NO_REPLACE or
  * DIRECTORY_RENAME_REPLACE. kind is ANY, FILE or DIRECTORY and constrains the
  * source entry under the mutation owner; replacement requires the same kind
  * and an empty directory victim. Both names are single components. Existing
