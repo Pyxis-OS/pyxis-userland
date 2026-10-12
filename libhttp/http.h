@@ -11,6 +11,7 @@
 
 #define HTTP_STORAGE_MAX (64 * 1024 * 1024)
 #define HTTP_MEDIA_TYPE_MAX 127
+#define HTTP_READ_MAX 4096
 
 /* Borrowed explicit authorities and a numeric DNS server, all host-order.
  * UDP/random/server are only needed for names, not numeric IPv4 addresses. */
@@ -21,7 +22,7 @@ struct http_authority {
 
 /* The expected scheme is explicit; mismatching URIs never reach the network.
  * HTTPS borrows a ready runtime with immutable trust. Keep it and the authority
- * alive until fetch returns. HTTP needs no runtime and does not use one. */
+ * alive until the stream closes. HTTP needs no runtime and does not use one. */
 struct http_client {
   struct http_authority authority;
   enum http_scheme scheme;
@@ -54,7 +55,65 @@ enum http_error {
   HTTP_NETWORK_ERROR,
   HTTP_DNS_ERROR,
   HTTP_TLS_ERROR,
+  HTTP_ABORTED,
+  HTTP_BAD_ARGUMENT,
 };
+
+enum http_response_state {
+  HTTP_RESPONSE_PENDING,
+  HTTP_RESPONSE_COMPLETE,
+  HTTP_RESPONSE_FAILED,
+};
+
+struct http_response_limits {
+  uint64_t header_bytes, fields, informational;
+};
+
+/* Counts describe consumed framing and delivered bytes, never an allowance.
+ * HTTP status is independent of framing success, including 4xx/5xx. */
+struct http_response {
+  enum http_response_state state;
+  enum http_error error;
+  struct provider_http_budget consumed;
+  enum call_status network_status, close_status;
+  unsigned status, dns_rcode;
+  struct tls_result tls_failure, tls_cleanup;
+  bool length_present, invalid_location;
+  uint64_t length;
+  char media_type[HTTP_MEDIA_TYPE_MAX + 1];
+  char location[HTTP_URI_MAX + 1];
+};
+
+struct http_stream;
+
+enum http_read_result {
+  HTTP_READ_DATA,
+  HTTP_READ_COMPLETE,
+  HTTP_READ_FAILED,
+};
+
+/* One synchronous GET through headers, no redirect/replay. NULL limits select
+ * bounded ordinary metadata limits. Bodies have no total-byte allowance.
+ * One overall 30-second/earlier-caller deadline remains until task 2.
+ * RESPONSE is caller-owned and must live until close; failure initializes it
+ * and returns NULL. Borrowed handles/runtime must remain valid until close.
+ * A returned stream owns bounded scratch, not response-body storage. */
+struct http_stream *http_get_open(const struct http_client *client, const char *uri,
+    uint64_t deadline_ns, const struct http_response_limits *limits,
+    struct http_response *response);
+
+/* Positive-capacity caller buffer/count are required. DATA returns 1..HTTP_READ_MAX
+ * copied bytes and never implies completion. COMPLETE/FAILED return zero bytes
+ * with a retained final response; repeated terminal reads do no I/O. Fixed and
+ * chunked completion includes trailers/cleanup; close-delimited HTTPS requires
+ * authenticated TLS EOF. A prefix remains delivered after later failure. */
+enum http_read_result http_stream_read(struct http_stream *stream, void *bytes,
+    size_t capacity, size_t *count);
+
+/* Frees the object; an unfinished response becomes failed/aborted, not complete.
+ * Returns local native cleanup status, separate from the retained HTTP result.
+ * Completed/failed transfers have already closed their transport. */
+enum call_status http_stream_close(struct http_stream *stream);
 
 struct http_result {
   enum http_error error;
