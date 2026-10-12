@@ -82,6 +82,10 @@ enum call_status launcher_launch(handle_t launcher, const struct launch_request 
     return CALL_OUTCOME_UNKNOWN;
   }
   if (result.status != CALL_OK) {
+    /* The kernel can publish a child, then fail to copy its observer reply. */
+    if (result.status == CALL_BAD_BUFFER) {
+      return CALL_OUTCOME_UNKNOWN;
+    }
     return result.status;
   }
   if (reply == HANDLE_INVALID) {
@@ -117,7 +121,8 @@ enum call_status launcher_launch_batch(handle_t launcher, const struct launch_re
     return CALL_OUTCOME_UNKNOWN;
   }
   if (result.reply_size == 0 && result.status != CALL_OK) {
-    return result.status;
+    /* A missing observer reply does not establish that no batch ran. */
+    return result.status == CALL_BAD_BUFFER ? CALL_OUTCOME_UNKNOWN : result.status;
   }
   if (result.reply_size != sizeof(reply)) {
     return CALL_OUTCOME_UNKNOWN;
