@@ -159,7 +159,8 @@ static enum call_status response_status(const struct http_response *response)
     return response->source_status == CALL_OK ? CALL_OUTCOME_UNKNOWN : response->source_status;
   }
   struct http_result result = {.error = response->error,
-    .network_status = response->network_status, .tls_failure = response->tls_failure};
+    .network_status = response->network_status, .tls_failure = response->tls_failure,
+    .status = response->status, .dns_rcode = response->dns_rcode};
   return http_result_status(&result);
 }
 
@@ -869,7 +870,7 @@ static void legacy_open(struct loop *loop, struct endpoint_packet *packet)
   struct transaction *transaction;
   enum call_status status = reserve(loop, 1, &transaction);
   if (status != CALL_OK) {
-    legacy_error(loop, packet, status, 0);
+    legacy_error(loop, packet, status == CALL_LIMIT ? CALL_QUEUE_FULL : status, 0);
     return;
   }
   transaction->legacy = true;
@@ -902,6 +903,40 @@ static void legacy_open(struct loop *loop, struct endpoint_packet *packet)
   transaction->phase = HTTP_TRANSACTION_OPENING;
 }
 
+static bool reserve_snapshot(struct loop *loop, struct transaction *transaction,
+    size_t capacity)
+{
+  struct http_body *body = &transaction->snapshot;
+  if (capacity > transaction->context.remaining.body_bytes) {
+    transaction->failure = CALL_FILE_TOO_LARGE;
+    return false;
+  }
+  if (capacity <= body->capacity) {
+    return true;
+  }
+  if (loop->storage.reserved > HTTP_STORAGE_MAX ||
+      capacity > HTTP_STORAGE_MAX - loop->storage.reserved) {
+    transaction->failure = CALL_QUOTA;
+    return false;
+  }
+  loop->storage.reserved += capacity;
+  unsigned char *data = malloc(capacity);
+  if (!data) {
+    loop->storage.reserved -= capacity;
+    transaction->failure = CALL_NO_MEMORY;
+    return false;
+  }
+  if (body->size) {
+    memcpy(data, body->data, body->size);
+  }
+  free(body->data);
+  loop->storage.reserved -= body->capacity;
+  body->data = data;
+  body->capacity = capacity;
+  body->storage = &loop->storage;
+  return true;
+}
+
 static bool append_snapshot(struct loop *loop, struct transaction *transaction,
     const void *bytes, size_t size)
 {
@@ -914,29 +949,19 @@ static bool append_snapshot(struct loop *loop, struct transaction *transaction,
   size_t needed = body->size + size;
   if (needed > body->capacity) {
     size_t capacity = body->capacity ? body->capacity : 4096;
-    while (capacity < needed) {
-      capacity *= 2;
-    }
     if (capacity > limit) {
       capacity = limit;
     }
-    if (capacity > HTTP_STORAGE_MAX - loop->storage.reserved) {
-      transaction->failure = CALL_LIMIT;
+    while (capacity < needed) {
+      if (capacity > limit / 2) {
+        capacity = limit;
+        break;
+      }
+      capacity *= 2;
+    }
+    if (!reserve_snapshot(loop, transaction, capacity)) {
       return false;
     }
-    loop->storage.reserved += capacity;
-    unsigned char *data = malloc(capacity);
-    if (!data) {
-      loop->storage.reserved -= capacity;
-      transaction->failure = CALL_NO_MEMORY;
-      return false;
-    }
-    memcpy(data, body->data, body->size);
-    free(body->data);
-    loop->storage.reserved -= body->capacity;
-    body->data = data;
-    body->capacity = capacity;
-    body->storage = &loop->storage;
   }
   memcpy(body->data + body->size, bytes, size);
   body->size += size;
@@ -956,9 +981,16 @@ static void legacy_publish(struct loop *loop, struct transaction *transaction, b
     header.outcome = PROVIDER_OUTCOME_REDIRECT;
     header.location_size = strlen(response->location);
     header.consumed.body_bytes = http_stream_read_ahead(transaction->engine);
-    if (header.consumed.body_bytes > transaction->context.remaining.body_bytes ||
-        response->invalid_location || !header.location_size) {
+    char destination[HTTP_URI_MAX + 1];
+    if (response->invalid_location || !header.location_size) {
       status = CALL_BAD_REQUEST;
+    } else {
+      status = http_url_resolve(transaction->work->uri, response->location, destination);
+      if (status != CALL_OK) {
+        status = status == CALL_FILE_TOO_LARGE ? CALL_FILE_TOO_LARGE : CALL_BAD_REQUEST;
+      } else if (header.consumed.body_bytes > transaction->context.remaining.body_bytes) {
+        status = CALL_FILE_TOO_LARGE;
+      }
     }
     memcpy(bytes + sizeof(header), response->location, header.location_size);
     size = sizeof(header) + header.location_size;
@@ -1199,6 +1231,12 @@ static bool progress(struct loop *loop)
   if (capacity > HTTP_READ_MAX) {
     capacity = HTTP_READ_MAX;
   }
+  if (transaction->legacy && transaction->headers) {
+    size_t remaining = transaction->context.remaining.body_bytes - transaction->snapshot.size;
+    if (remaining < capacity) {
+      capacity = remaining ? remaining : 1;
+    }
+  }
   unsigned char *output = transaction->queue + (transaction->legacy ? 0 : transaction->queued);
   enum http_step_result step = http_stream_step(transaction->engine,
       output, capacity, &count, &transaction->wait);
@@ -1208,7 +1246,12 @@ static bool progress(struct loop *loop)
       if (redirect_status(transaction->response.status)) {
         legacy_publish(loop, transaction, true);
       } else if (transaction->response.status != 200 && transaction->response.status != 204) {
-        abort_transaction(loop, transaction, CALL_BAD_REQUEST);
+        struct http_result result = {.error = HTTP_REJECTED_STATUS,
+          .status = transaction->response.status};
+        abort_transaction(loop, transaction, http_result_status(&result));
+      } else if (transaction->response.length_present &&
+          !reserve_snapshot(loop, transaction, transaction->response.length)) {
+        abort_transaction(loop, transaction, transaction->failure);
       } else {
         transaction->phase = HTTP_TRANSACTION_READING;
       }
