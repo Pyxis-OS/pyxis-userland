@@ -665,8 +665,9 @@ enum call_status pyxis_pipeline_read(struct pyxis_pipeline *pipeline,
   }
   if (offset >= output->returned_size) {
     capacity = 0;
+  } else if (capacity > output->returned_size - offset) {
+    capacity = output->returned_size - offset;
   }
-  else if (capacity > output->returned_size - offset) capacity = output->returned_size - offset;
   enum call_status status = file_read(pipeline->outputs[stream - STARTUP_STDOUT].file,
       offset, bytes, capacity, read);
   return status == CALL_OK && capacity && !*read ? CALL_IO : status;
