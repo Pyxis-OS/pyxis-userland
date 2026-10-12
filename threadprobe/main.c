@@ -13,11 +13,16 @@
 #include <startup.h>
 #include <syscall.h>
 #include <thread.h>
+#include <errno.h>
+#include <pyxis/thread_runtime.h>
 #include <stdio.h>
 #include <string.h>
 
 #define PROBE_STACK_BYTES (64 * 1024)
 #define PROBE_MARKER UINT64_C(0x7468726561640000)
+#define PROBE_TLS_INITIAL UINT32_C(0x746c7307)
+#define PROBE_TLS_ALIGNMENT 8192
+#define PROBE_KEY_PASSES 4
 
 enum child_action { CHILD_HOLD, CHILD_CALL, CHILD_FAULT, CHILD_PARK };
 
@@ -42,12 +47,32 @@ struct probe_context {
 
 /* Kept in ordinary shared process storage for debugger inspection. */
 static struct probe_context contexts[2];
+struct tls_probe_context {
+  struct probe_context native;
+  struct libc_thread_context runtime;
+  uintptr_t initialized_address, zero_address, errno_address;
+  uint64_t language_order;
+  unsigned language_count, key_count;
+  int expected_errno;
+  bool valid, fault;
+};
+
+static struct tls_probe_context tls_contexts[2];
+static libc_thread_key callback_key;
+static unsigned deleted_key_callbacks;
+static _Thread_local uint32_t tls_initialized __attribute__((aligned(PROBE_TLS_ALIGNMENT))) =
+    PROBE_TLS_INITIAL;
+static _Thread_local unsigned char tls_zero[17];
 static uint64_t shared_count;
 static uint32_t parking32;
 static uint64_t parking64;
 static const uint64_t parking_readonly;
 static handle_t memory, threads, clock_service;
 extern void threadprobe_entry(void);
+extern void threadprobe_tls_entry(void);
+extern void threadprobe_tls_objects(void *context);
+void threadprobe_tls_note(void *argument, unsigned id);
+[[noreturn]] void threadprobe_tls_child(struct tls_probe_context *context);
 [[noreturn]] void threadprobe_child(struct probe_context *context);
 
 static uint64_t load(uint64_t *word)
@@ -264,6 +289,223 @@ static int lifecycle(bool inspect)
   }
   printf("threadprobe: lifecycle %s; shared count %llu; distinct stack/FS, repeated WAIT and readiness\n",
       valid ? "passed" : "failed", (unsigned long long)shared_count);
+  return valid ? 0 : 1;
+}
+
+void threadprobe_tls_note(void *argument, unsigned id)
+{
+  struct tls_probe_context *context = argument;
+  context->valid &= errno == context->expected_errno &&
+      tls_initialized == (uint32_t)context->native.marker;
+  context->language_order = context->language_order * 10 + id;
+  ++context->language_count;
+}
+
+static void tls_key_callback(void *argument)
+{
+  struct tls_probe_context *context = argument;
+  void *value = context;
+  context->valid &= context->language_count == 2 && context->language_order == 21;
+  context->valid &= libc_thread_key_get(callback_key, &value) == CALL_OK && value == NULL;
+  context->valid &= errno == context->expected_errno &&
+      tls_initialized == (uint32_t)context->native.marker;
+  ++context->key_count;
+  /* Reassign even on the last permitted pass: exit must stop after four. */
+  context->valid &= libc_thread_key_set(callback_key, context) == CALL_OK;
+}
+
+static void tls_deleted_callback(void *argument)
+{
+  (void)argument;
+  __atomic_fetch_add(&deleted_key_callbacks, 1, __ATOMIC_RELAXED);
+}
+
+[[noreturn]] void threadprobe_tls_child(struct tls_probe_context *context)
+{
+  struct probe_context *native = &context->native;
+  __asm__ volatile("mov %%fs:0, %0" : "=r"(native->observed_fs));
+  __asm__ volatile("mov %%rsp, %0" : "=r"(native->observed_rsp));
+  context->initialized_address = (uintptr_t)&tls_initialized;
+  context->zero_address = (uintptr_t)tls_zero;
+  context->errno_address = (uintptr_t)&errno;
+  context->valid = tls_initialized == PROBE_TLS_INITIAL && errno == 0 &&
+      context->initialized_address % PROBE_TLS_ALIGNMENT == 0;
+  for (size_t i = 0; i < sizeof(tls_zero); ++i) {
+    context->valid &= tls_zero[i] == 0;
+    tls_zero[i] = (unsigned char)(native->marker + i);
+  }
+  tls_initialized = (uint32_t)native->marker;
+  errno = context->expected_errno;
+  void *value = context;
+  context->valid &= libc_thread_key_get(callback_key, &value) == CALL_OK && value == NULL;
+  context->valid &= libc_thread_key_set(callback_key, context) == CALL_OK;
+  threadprobe_tls_objects(context);
+  publish(&native->ready, 1);
+  while (!load(&native->release)) {
+    __asm__ volatile("pause");
+  }
+  context->valid &= errno == context->expected_errno &&
+      tls_initialized == (uint32_t)native->marker;
+  for (size_t i = 0; i < sizeof(tls_zero); ++i) {
+    context->valid &= tls_zero[i] == (unsigned char)(native->marker + i);
+  }
+  if (context->fault) {
+    __asm__ volatile("ud2");
+  }
+  libc_thread_exit(native->threads, native->marker);
+}
+
+static bool tls_prepare_pair(void)
+{
+  if (libc_thread_key_create(tls_key_callback, &callback_key) != CALL_OK) {
+    return false;
+  }
+  for (unsigned i = 0; i < 2; ++i) {
+    struct tls_probe_context *context = &tls_contexts[i];
+    *context = (struct tls_probe_context){
+      .native = {.threads = threads, .marker = PROBE_MARKER + i + 1},
+      .expected_errno = i ? ERANGE : ENOENT,
+    };
+    if (memory_allocate_guarded(memory, PROBE_STACK_BYTES, &context->native.stack) != CALL_OK ||
+        libc_thread_context_prepare(memory, &context->runtime) != CALL_OK) {
+      for (unsigned j = 0; j <= i; ++j) {
+        libc_thread_context_release(memory, &tls_contexts[j].runtime);
+        release_context(&tls_contexts[j].native);
+      }
+      libc_thread_key_delete(callback_key);
+      return false;
+    }
+  }
+  return true;
+}
+
+static enum call_status tls_start(struct tls_probe_context *context)
+{
+  struct thread_create request = {
+    .entry = (uintptr_t)threadprobe_tls_entry, .argument = (uintptr_t)context,
+    .stack_identity = context->native.stack.identity,
+    .context_identity = context->runtime.reservation.identity,
+    .fs_base = context->runtime.fs_base,
+  };
+  return thread_create(threads, &request, &context->native.completion);
+}
+
+static bool tls_key_refusal(void)
+{
+  libc_thread_key stale = 0, replacement = 0;
+  void *value = &stale;
+  bool valid = libc_thread_key_create(NULL, NULL) == CALL_BAD_REQUEST &&
+      libc_thread_key_get(0, &value) == CALL_BAD_REQUEST && value == NULL &&
+      libc_thread_key_get(callback_key, NULL) == CALL_BAD_REQUEST &&
+      libc_thread_key_set(0, &stale) == CALL_BAD_REQUEST &&
+      libc_thread_key_delete(0) == CALL_BAD_REQUEST;
+  if (libc_thread_key_create(tls_deleted_callback, &stale) != CALL_OK) {
+    return false;
+  }
+  valid &= libc_thread_key_set(stale, &stale) == CALL_OK;
+  valid &= libc_thread_key_delete(stale) == CALL_OK;
+  value = &stale;
+  valid &= libc_thread_key_get(stale, &value) == CALL_BAD_REQUEST && value == NULL;
+  valid &= libc_thread_key_set(stale, &stale) == CALL_BAD_REQUEST &&
+      libc_thread_key_delete(stale) == CALL_BAD_REQUEST;
+  if (libc_thread_key_create(tls_deleted_callback, &replacement) != CALL_OK) {
+    return false;
+  }
+  value = &stale;
+  valid &= replacement != stale &&
+      libc_thread_key_get(replacement, &value) == CALL_OK && value == NULL;
+  valid &= libc_thread_key_set(replacement, &replacement) == CALL_OK;
+  value = &stale;
+  valid &= libc_thread_key_get(stale, &value) == CALL_BAD_REQUEST && value == NULL &&
+      libc_thread_key_set(stale, &stale) == CALL_BAD_REQUEST &&
+      libc_thread_key_delete(stale) == CALL_BAD_REQUEST;
+  valid &= libc_thread_key_get(replacement, &value) == CALL_OK && value == &replacement;
+  valid &= libc_thread_key_delete(replacement) == CALL_OK;
+  return valid && __atomic_load_n(&deleted_key_callbacks, __ATOMIC_RELAXED) == 0;
+}
+
+static int tls_lifecycle(bool inspect)
+{
+  bool valid = errno == 0 && tls_initialized == PROBE_TLS_INITIAL;
+  for (size_t i = 0; i < sizeof(tls_zero); ++i) {
+    valid &= tls_zero[i] == 0;
+  }
+  tls_initialized = UINT32_C(0x70617265);
+  tls_zero[0] = 0xa5;
+  errno = EINVAL;
+  if (!tls_prepare_pair()) {
+    fputs("threadprobe: TLS prepare failed\n", stderr);
+    return 1;
+  }
+  valid &= tls_key_refusal();
+  printf("threadprobe: TLS contexts=%p parent TLS=%p errno=%p\n", (void *)tls_contexts,
+      (void *)&tls_initialized, (void *)&errno);
+  for (unsigned i = 0; i < 2; ++i) {
+    printf("threadprobe: TLS sibling %u stack=%#llx..%#llx FS=%#llx backing=%#llx..%#llx\n", i,
+        (unsigned long long)(tls_contexts[i].native.stack.address + MEMORY_PAGE_SIZE),
+        (unsigned long long)(tls_contexts[i].native.stack.address + tls_contexts[i].native.stack.size),
+        (unsigned long long)tls_contexts[i].runtime.fs_base,
+        (unsigned long long)tls_contexts[i].runtime.reservation.address,
+        (unsigned long long)(tls_contexts[i].runtime.reservation.address +
+            tls_contexts[i].runtime.reservation.size));
+  }
+  if (inspect) {
+    puts("threadprobe: inspect shared CR3, guarded stack/TLS and errno with GDB, then Enter");
+  }
+  fflush(stdout);
+  for (unsigned i = 0; i < 2; ++i) {
+    if (tls_start(&tls_contexts[i]) != CALL_OK || !await_ready(&tls_contexts[i].native)) {
+      stop_process(1);
+    }
+  }
+  for (unsigned i = 0; i < 2; ++i) {
+    valid &= memory_release_reservation(memory, tls_contexts[i].runtime.reservation.identity) ==
+        CALL_BUSY;
+    valid &= memory_release_reservation(memory, tls_contexts[i].native.stack.identity) == CALL_BUSY;
+  }
+  if (inspect) {
+    char byte;
+    size_t size;
+    if (console_read(startup_stream(STARTUP_STDIN).handle, &byte, 1, &size) != CALL_OK || size != 1) {
+      stop_process(1);
+    }
+  }
+  for (unsigned i = 0; i < 2; ++i) {
+    struct tls_probe_context *context = &tls_contexts[i];
+    struct probe_context *native = &context->native;
+    uintptr_t expected_fs = context->runtime.fs_base;
+    publish(&native->release, 1);
+    struct thread_result result, repeat;
+    enum call_status status = libc_thread_collect(memory, native->completion, &context->runtime, &result);
+    if (status != CALL_OK) {
+      stop_process(1);
+    }
+    valid &= result.kind == THREAD_EXITED && result.value == native->marker &&
+        thread_wait(native->completion, &repeat) == CALL_OK &&
+        repeat.kind == result.kind && repeat.value == result.value;
+    valid &= !context->runtime.reservation.identity && !context->runtime.fs_base &&
+        native->observed_fs == expected_fs &&
+        native->observed_rsp >= native->stack.address + MEMORY_PAGE_SIZE &&
+        native->observed_rsp < native->stack.address + native->stack.size;
+    valid &= context->valid && context->language_count == 2 && context->language_order == 21 &&
+        context->key_count == PROBE_KEY_PASSES;
+    valid &= handle_close(native->completion) == 0;
+    native->completion = HANDLE_INVALID;
+    valid &= release_context(native);
+  }
+  valid &= tls_contexts[0].initialized_address != tls_contexts[1].initialized_address &&
+      tls_contexts[0].initialized_address != (uintptr_t)&tls_initialized &&
+      tls_contexts[1].initialized_address != (uintptr_t)&tls_initialized &&
+      tls_contexts[0].zero_address != tls_contexts[1].zero_address &&
+      tls_contexts[0].errno_address != tls_contexts[1].errno_address &&
+      tls_contexts[0].errno_address != (uintptr_t)&errno &&
+      tls_contexts[1].errno_address != (uintptr_t)&errno;
+  valid &= errno == EINVAL && tls_initialized == UINT32_C(0x70617265) && tls_zero[0] == 0xa5;
+  valid &= libc_thread_key_delete(callback_key) == CALL_OK &&
+      __atomic_load_n(&deleted_key_callbacks, __ATOMIC_RELAXED) == 0;
+  printf("threadprobe: TLS %s; alignment=%u distinct TLS/errno; C++ LIFO=21; key callbacks=%u/%u; BUSY, collect/repeated WAIT\n",
+      valid ? "passed" : "failed", PROBE_TLS_ALIGNMENT,
+      tls_contexts[0].key_count, tls_contexts[1].key_count);
   return valid ? 0 : 1;
 }
 
@@ -484,19 +726,12 @@ static int bind_initial(void)
   struct thread_fs_context second = {contexts[1].fs.identity,
       contexts[1].fs.address + MEMORY_PAGE_SIZE};
   enum call_status bind = thread_set_fs(threads, first);
-  uint64_t observed = 0;
-  if (bind == CALL_OK) {
-    __asm__ volatile("mov %%fs:0, %0" : "=r"(observed));
-  }
   enum call_status rebind = thread_set_fs(threads, second);
-  enum call_status pinned = memory_release_reservation(memory, first.identity);
-  bool valid = bind == CALL_OK && observed == contexts[0].marker &&
-      rebind == CALL_BUSY && pinned == CALL_BUSY;
-  /* The initial FS reservation remains pinned until process retirement. */
+  bool valid = bind == CALL_BUSY && rebind == CALL_BUSY;
+  valid &= release_context(&contexts[0]);
   valid &= release_context(&contexts[1]);
-  valid &= memory_release_reservation(memory, contexts[0].stack.identity) == CALL_OK;
-  printf("threadprobe: initial FS %s; bind=%u rebind=%u release=%u\n",
-      valid ? "passed" : "failed", bind, rebind, pinned);
+  printf("threadprobe: initial libc FS %s; both bind attempts BUSY (%u, %u), unbound contexts released\n",
+      valid ? "passed" : "failed", bind, rebind);
   return valid ? 0 : 1;
 }
 
@@ -636,9 +871,20 @@ static int close_race(void)
   return valid ? 0 : 1;
 }
 
-[[noreturn]] static void supervised_child(bool fault, bool parking)
+[[noreturn]] static void supervised_child(bool fault, bool parking, bool tls)
 {
-  if (!prepare_pair()) {
+  if (tls) {
+    if (!tls_prepare_pair()) {
+      stop_process(1);
+    }
+    for (unsigned i = 0; i < 2; ++i) {
+      tls_contexts[i].fault = fault && i == 0;
+      if (tls_start(&tls_contexts[i]) != CALL_OK || !await_ready(&tls_contexts[i].native) ||
+          !tls_contexts[i].valid) {
+        stop_process(1);
+      }
+    }
+  } else if (!prepare_pair()) {
     stop_process(1);
   }
   contexts[0].action = fault ? CHILD_FAULT : CHILD_HOLD;
@@ -650,9 +896,11 @@ static int close_race(void)
       contexts[i].park_rounds = 1;
     }
   }
-  for (unsigned i = 0; i < 2; ++i) {
-    if (start(&contexts[i]) != CALL_OK || !await_ready(&contexts[i])) {
-      stop_process(1);
+  if (!tls) {
+    for (unsigned i = 0; i < 2; ++i) {
+      if (start(&contexts[i]) != CALL_OK || !await_ready(&contexts[i])) {
+        stop_process(1);
+      }
     }
   }
   if (parking) {
@@ -663,22 +911,22 @@ static int close_race(void)
     }
   }
   struct endpoint_grant observers[2] = {
-    {contexts[0].completion, THREAD_COMPLETION_RIGHT_WAIT, 0},
-    {contexts[1].completion, THREAD_COMPLETION_RIGHT_WAIT, 0},
+    {tls ? tls_contexts[0].native.completion : contexts[0].completion, THREAD_COMPLETION_RIGHT_WAIT, 0},
+    {tls ? tls_contexts[1].native.completion : contexts[1].completion, THREAD_COMPLETION_RIGHT_WAIT, 0},
   };
   struct endpoint_packet reply;
   if (endpoint_request(startup_resource("bootstrap"), NULL, 0, observers, 2, 0, &reply) != CALL_OK) {
     stop_process(1);
   }
   if (fault) {
-    publish(&contexts[0].release, 1);
+    publish(tls ? &tls_contexts[0].native.release : &contexts[0].release, 1);
   }
   for (;;) {
     __asm__ volatile("pause");
   }
 }
 
-static int supervise(bool fault, bool parking)
+static int supervise(bool fault, bool parking, bool tls)
 {
   struct endpoint_create_reply endpoint;
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
@@ -700,7 +948,8 @@ static int supervise(bool fault, bool parking)
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"threads", THREADS},
     {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"bootstrap", BOOTSTRAP},
   };
-  const char *mode = parking ? "--child-park-stop" : fault ? "--child-fault" : "--child-stop";
+  const char *mode = tls ? (fault ? "--child-tls-fault" : "--child-tls-stop") :
+      parking ? "--child-park-stop" : fault ? "--child-fault" : "--child-stop";
   uint64_t arguments[] = {(uintptr_t)"threadprobe", (uintptr_t)mode};
   struct launch_request request = {
     .image = image, .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
@@ -769,7 +1018,8 @@ static int supervise(bool fault, bool parking)
   valid &= handle_close(endpoint.caller) == 0;
   valid &= handle_close(endpoint.receiver) == 0;
   printf("threadprobe: process %s %s; live sibling completions STOPPED, process reclaimed (status %u)\n",
-      parking ? "park-stop" : fault ? "fault" : "stop", valid ? "passed" : "failed", status);
+      tls ? (fault ? "tls-fault" : "tls-stop") : parking ? "park-stop" : fault ? "fault" : "stop",
+      valid ? "passed" : "failed", status);
   if (parking) {
     printf("threadprobe: process-key isolation %s; supervisor same-address WAKE count %llu\n",
         valid ? "passed" : "failed", (unsigned long long)supervisor_woken);
@@ -784,7 +1034,7 @@ int main(int argc, char **argv)
   clock_service = startup_resource("clock");
   if (argc != 2) {
     fputs("usage: session bin://threadprobe.pxe "
-        "lifecycle|inspect|bind|refusal|exhaust|stop|fault|close|"
+        "lifecycle|inspect|tls|tls-inspect|tls-stop|tls-fault|bind|refusal|exhaust|stop|fault|close|"
         "park32|park64|park-refusal|park-inspect|park-unmap|park-stop\n", stderr);
     return 1;
   }
@@ -803,11 +1053,17 @@ int main(int argc, char **argv)
     return 1;
   }
   if (!strcmp(argv[1], "--child-stop") || !strcmp(argv[1], "--child-fault") ||
-      !strcmp(argv[1], "--child-park-stop")) {
-    supervised_child(!strcmp(argv[1], "--child-fault"), !strcmp(argv[1], "--child-park-stop"));
+      !strcmp(argv[1], "--child-park-stop") || !strcmp(argv[1], "--child-tls-stop") ||
+      !strcmp(argv[1], "--child-tls-fault")) {
+    supervised_child(!strcmp(argv[1], "--child-fault") || !strcmp(argv[1], "--child-tls-fault"),
+        !strcmp(argv[1], "--child-park-stop"),
+        !strcmp(argv[1], "--child-tls-stop") || !strcmp(argv[1], "--child-tls-fault"));
   }
   if (!strcmp(argv[1], "lifecycle") || !strcmp(argv[1], "inspect")) {
     return lifecycle(!strcmp(argv[1], "inspect"));
+  }
+  if (!strcmp(argv[1], "tls") || !strcmp(argv[1], "tls-inspect")) {
+    return tls_lifecycle(!strcmp(argv[1], "tls-inspect"));
   }
   if (!strcmp(argv[1], "bind")) {
     return bind_initial();
@@ -822,7 +1078,10 @@ int main(int argc, char **argv)
     return close_race();
   }
   if (!strcmp(argv[1], "stop") || !strcmp(argv[1], "fault")) {
-    return supervise(!strcmp(argv[1], "fault"), false);
+    return supervise(!strcmp(argv[1], "fault"), false, false);
+  }
+  if (!strcmp(argv[1], "tls-stop") || !strcmp(argv[1], "tls-fault")) {
+    return supervise(!strcmp(argv[1], "tls-fault"), false, true);
   }
   if (!strcmp(argv[1], "park32") || !strcmp(argv[1], "park64") || !strcmp(argv[1], "park-inspect")) {
     return parking_contention(!strcmp(argv[1], "park32") ? THREAD_ADDRESS_WORD32_BYTES :
@@ -835,7 +1094,7 @@ int main(int argc, char **argv)
     return parking_unmap();
   }
   if (!strcmp(argv[1], "park-stop")) {
-    return supervise(false, true);
+    return supervise(false, true, false);
   }
   fputs("threadprobe: unknown mode\n", stderr);
   return 1;

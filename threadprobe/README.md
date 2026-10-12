@@ -1,6 +1,7 @@
 # Native thread qualification
 
-Build with a selected SDK exporting the native thread and guarded-memory ABI:
+Build with a selected SDK exporting native threads, guarded memory and the static
+TLS runtime, using its matching TLS-capable compiler and rebuilt C++ archives:
 
 ```sh
 make SDK=/path/to/sdk threadprobe
@@ -15,6 +16,10 @@ service for this explicit session delegation.
 ```text
 session bin://threadprobe.pxe lifecycle
 session bin://threadprobe.pxe inspect
+session bin://threadprobe.pxe tls
+session bin://threadprobe.pxe tls-inspect
+session bin://threadprobe.pxe tls-stop
+session bin://threadprobe.pxe tls-fault
 session bin://threadprobe.pxe bind
 session bin://threadprobe.pxe refusal
 session bin://threadprobe.pxe exhaust
@@ -41,11 +46,40 @@ distinct RSP/FS and guarded mappings. `contexts` and `shared_count` are ordinary
 shared globals in the debug ELF. User observations alone do not establish CR3 or
 CPU placement. Repeat the ordinary modes on one and four CPUs.
 
-`bind` binds the initial thread's FS once, checks rebind and pinned release return
-BUSY, and leaves that context for process retirement. `refusal` checks pinned
+`bind` attempts two bindings of raw FS contexts after libc startup has already
+bound the initial thread. Both must return BUSY; both unbound raw contexts are
+released. `refusal` checks pinned
 release, duplicate live stack/FS identities, stale identity and NX entry refusal;
-successful subsequent creation checks provisional pin unwind. No language TLS,
-TCB, errno or libc startup change is supplied by these raw FS contexts.
+successful subsequent creation checks provisional pin unwind. Raw sibling FS
+contexts contain only a marker, and do not support libc TLS or errno.
+
+`tls` prepares two libc contexts with independent guarded 64 KiB stacks and
+native CREATE entries. Parent and siblings require the executable's initialized
+C TLS and zero tail, then keep distinct values and addresses across the sibling
+hold. Initialized TLS requests 8192-byte alignment; errno begins at zero in each
+TCB and keeps separate parent/sibling values. The C++ helper initializes two real
+`thread_local` objects in order and records destructor order `21` at ordinary
+exit. Each runtime-key callback observes its cleared value, verifies language
+cleanup has finished and reassigns itself even on its fourth call; exactly four
+calls must occur. Invalid and deleted keys refuse; a replacement key cannot see
+or overwrite a stale generation's value. Deleting keys never calls their
+callbacks. The parent checks native BUSY for live context/stack release, then
+uses libc collection, repeats completion WAIT and releases the stacks.
+
+`tls-inspect` holds siblings until Enter. Before releasing them, use `tls_contexts`
+and the printed backing/FS addresses with the matching debug ELF to inspect
+shared CR3, distinct RSP/FS, FS:0 self pointers, negative local-exec TLS offsets,
+8192-byte alignment, errno addresses and unmapped lower guards. User observations
+alone do not establish CR3 or CPU placement. Repeat on one and four CPUs. This
+executable's over-aligned TLS cannot qualify a template whose maximum alignment
+is only four bytes; the separate compiler/runtime qualification must cover it.
+
+`tls-stop` and `tls-fault` reuse the existing supervisor with prepared libc
+contexts, initialized C++ objects and key values. They require STOPPED sibling
+completions and TERMINATED/FAULTED process completion. Use GDB breakpoints on
+`threadprobe_tls_note` and `tls_key_callback` to qualify the absence of user
+callbacks: completion kinds alone cannot establish that property. No live
+context is released before completion.
 
 `exhaust` prepares its contexts, then holds ordinary private allocations until
 real allocation failure, first in 1 MiB chunks and then individual pages. It
@@ -105,9 +139,11 @@ requires an OK result with zero registrations, checking process-key isolation.
 The isolation result prints after child/thread completion. Inspect bucket
 and timer detachment with GDB; the probe adds no timer, output or boot automation.
 
-Siblings enter a small assembly trampoline, use native wrappers, atomics and raw
-FS assembly, and EXIT explicitly. They never rerun process startup or use shared
-libc allocation, stdio or errno. Parent printing happens before sibling creation
-and after completion. These manual probes do not advertise thread-safe libc,
-pthread/C11 runtime or language TLS. Parking modes require the SDK/kernel address
+Raw siblings enter a small assembly trampoline, use native wrappers, atomics and
+raw FS assembly, and EXIT explicitly. TLS siblings instead use the prepared libc
+context, errno, runtime keys and language TLS destructor registration, finishing
+with `libc_thread_exit`. Siblings never rerun process startup or use shared libc
+allocation or stdio. Parent printing happens before sibling creation and after
+completion. These manual probes qualify the narrow TLS runtime; they do not
+advertise thread-safe libc/C++, pthreads or C11 threads. Parking modes require the SDK/kernel address
 WAIT/WAKE gate; there is no cross-process wait, requeue or lock-ownership handoff.

@@ -31,6 +31,9 @@ CPPFLAGS := $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
 LDFLAGS := $(PYXIS_LDFLAGS)
 LDLIBS := $(PYXIS_LDLIBS)
+THREADPROBE_CXX_CPPFLAGS := $(PYXIS_CXX_CPPFLAGS)
+THREADPROBE_CXXFLAGS := $(PYXIS_CXXFLAGS) -fno-exceptions -fno-rtti -ftls-model=local-exec
+export CXX THREADPROBE_CXX_CPPFLAGS THREADPROBE_CXXFLAGS
 export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX ZLIB_PREFIX LIBPNG_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
 PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/threadprobe/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
@@ -113,7 +116,13 @@ iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-
 ipcbench: $(BUILD)/ipcbench.pxe
 threadprobe: $(BUILD)/threadprobe.pxe
 
-$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/entry.o
+$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(PYXIS_CXX_LDLIBS)
+
+# This helper uses language TLS without the shared C++ standard library profile.
+$(BUILD)/threadprobe/tls_objects.o: threadprobe/tls_objects.cpp Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	@mkdir -p $(@D)
+	$(CXX) $(THREADPROBE_CXX_CPPFLAGS) $(THREADPROBE_CXXFLAGS) -c $< -o $@
 
 $(BUILD)/threadprobe/entry.o: threadprobe/entry.S Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
@@ -281,7 +290,7 @@ $(BUILD)/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
-	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$ZLIB_PREFIX" "$$LIBPNG_PREFIX" "$$CC" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
+	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$ZLIB_PREFIX" "$$LIBPNG_PREFIX" "$$CC" "$$CXX" "$$THREADPROBE_CXX_CPPFLAGS" "$$THREADPROBE_CXXFLAGS" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -294,3 +303,5 @@ clean:
 
 -include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
 -include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d) $(SCREENSHOT_OBJECTS:.o=.d)
+
+-include $(BUILD)/threadprobe/tls_objects.d
