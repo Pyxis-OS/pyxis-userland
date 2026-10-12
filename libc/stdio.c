@@ -601,9 +601,13 @@ int fclose(FILE *stream)
   }
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
   stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
+  bool cursor = descriptor_file_begin(stream->operation);
   error = flush_output(stream) < 0 ? errno : 0;
   if (descriptor_close_stream(stream, stream->operation) < 0 && !error) {
     error = errno;
+  }
+  if (cursor) {
+    descriptor_file_end(stream->operation);
   }
   descriptor_drop(stream->operation);
   stream->operation = NULL;
