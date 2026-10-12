@@ -116,7 +116,7 @@ iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-
 ipcbench: $(BUILD)/ipcbench.pxe
 threadprobe: $(BUILD)/threadprobe.pxe
 
-$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/runtime.o $(BUILD)/threadprobe/runtime_cxx.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/runtime.o $(BUILD)/threadprobe/runtime_io.o $(BUILD)/threadprobe/runtime_cxx.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(PYXIS_CXX_LDLIBS)
 
 $(BUILD)/threadprobe/runtime_cxx.o: threadprobe/runtime_cxx.cpp Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config

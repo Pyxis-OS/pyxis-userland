@@ -25,6 +25,7 @@ pthread_mutex_t threadprobe_runtime_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t threadprobe_runtime_condition = PTHREAD_COND_INITIALIZER;
 sem_t threadprobe_runtime_semaphore;
 static unsigned runtime_release, runtime_count;
+static unsigned runtime_wait_seconds = 5;
 static _Thread_local unsigned runtime_tls = 0x6178;
 static once_flag runtime_once = ONCE_FLAG_INIT;
 static unsigned runtime_once_calls;
@@ -71,7 +72,7 @@ static int runtime_worker(void *argument)
     pthread_mutex_unlock(&threadprobe_runtime_mutex);
     return 2;
   }
-  deadline.tv_sec += 5;
+  deadline.tv_sec += runtime_wait_seconds;
   while (!runtime_release) {
     if (pthread_cond_timedwait(&threadprobe_runtime_condition,
         &threadprobe_runtime_mutex, &deadline)) {
@@ -108,6 +109,7 @@ __attribute__((noinline)) void threadprobe_runtime_checkpoint(void)
 
 int threadprobe_runtime(bool inspect)
 {
+  runtime_wait_seconds = inspect ? 300 : 5;
   thrd_t workers[RUNTIME_WORKERS];
   bool valid = thrd_current() != 0 && thrd_equal(thrd_current(), pthread_self());
   errno = EINVAL;
@@ -126,7 +128,7 @@ int threadprobe_runtime(bool inspect)
   if (!future(CLOCK_REALTIME, 0, &deadline)) {
     _Exit(1);
   }
-  deadline.tv_sec += 5;
+  deadline.tv_sec += runtime_wait_seconds;
   while (!threadprobe_runtime_workers[0].entered || !threadprobe_runtime_workers[1].entered) {
     if (pthread_cond_timedwait(&threadprobe_runtime_condition,
         &threadprobe_runtime_mutex, &deadline)) {
@@ -279,5 +281,41 @@ int threadprobe_runtime_limit(void)
   threadprobe_runtime_checkpoint();
   printf("threadprobe: runtime-limit %s; %u siblings, refusal=%d, all collected and generation reused\n",
       valid ? "passed" : "failed", count, creation);
+  return valid ? 0 : 1;
+}
+
+static pthread_once_t exit_once = PTHREAD_ONCE_INIT;
+static unsigned exit_once_attempts;
+static void exit_initializer(void)
+{
+  if (++exit_once_attempts == 1) {
+    pthread_exit((void *)(uintptr_t)0x731);
+  }
+}
+
+static void *once_worker(void *argument)
+{
+  (void)argument;
+  return (void *)(uintptr_t)pthread_once(&exit_once, exit_initializer);
+}
+
+int threadprobe_runtime_once(void)
+{
+  pthread_t worker;
+  void *result;
+  bool valid = true;
+  for (unsigned round = 0; round < 2; round++) {
+    if (pthread_create(&worker, NULL, once_worker, NULL)) {
+      _Exit(1);
+    }
+    if (pthread_join(worker, &result)) {
+      _Exit(1);
+    }
+    valid &= result == (round ? NULL : (void *)(uintptr_t)0x731);
+  }
+  valid &= exit_once_attempts == 2 && exit_once.state == 2 && !exit_once.waiters;
+  threadprobe_runtime_checkpoint();
+  printf("threadprobe: runtime-once %s; initializer exit reset, second attempt published, both joined\n",
+      valid ? "passed" : "failed");
   return valid ? 0 : 1;
 }
