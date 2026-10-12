@@ -14,6 +14,7 @@
 #include <syscall.h>
 #include <thread.h>
 #include <errno.h>
+#include <threads.h>
 #include <pyxis/thread_runtime.h>
 #include <stdio.h>
 #include <string.h>
@@ -802,6 +803,12 @@ struct held_region {
   struct memory_region region;
 };
 
+static int allocation_child(void *argument)
+{
+  (void)argument;
+  return 23;
+}
+
 static int exhaustion(void)
 {
   enum call_status status = prepare(&contexts[0], 0);
@@ -825,8 +832,16 @@ static int exhaustion(void)
       bytes += region.size;
     }
   }
+  thrd_t managed;
+  int managed_status = thrd_create(&managed, allocation_child, NULL);
+  if (managed_status == thrd_success) {
+    if (thrd_join(managed, NULL) != thrd_success) {
+      stop_process(1);
+    }
+  }
   enum call_status create_status = start(&contexts[0]);
-  bool valid = allocation_status == CALL_NO_MEMORY && create_status == CALL_NO_MEMORY;
+  bool valid = allocation_status == CALL_NO_MEMORY && create_status == CALL_NO_MEMORY &&
+      managed_status == thrd_nomem;
   if (create_status == CALL_OK) {
     valid &= collect(&contexts[0], contexts[0].marker);
   } else if (create_status == CALL_OUTCOME_UNKNOWN) {
@@ -843,8 +858,14 @@ static int exhaustion(void)
   }
   valid &= collect(&contexts[0], contexts[0].marker);
   valid &= release_context(&contexts[0]);
-  printf("threadprobe: exhaustion %s; %zu regions %zu bytes, allocation=%u CREATE=%u, reuse after cleanup\n",
-      valid ? "passed" : "failed", count, bytes, allocation_status, create_status);
+  int managed_result;
+  if (thrd_create(&managed, allocation_child, NULL) != thrd_success ||
+      thrd_join(managed, &managed_result) != thrd_success) {
+    stop_process(1);
+  }
+  valid &= managed_result == 23;
+  printf("threadprobe: exhaustion %s; %zu regions %zu bytes, allocation=%u CREATE=%u libc=%d, native/libc reuse after cleanup\n",
+      valid ? "passed" : "failed", count, bytes, allocation_status, create_status, managed_status);
   return valid ? 0 : 1;
 }
 
