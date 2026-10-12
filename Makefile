@@ -17,7 +17,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect fat32-inspect installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
+INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -41,7 +41,8 @@ PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/
                    $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o $(BUILD)/tcp/main.o \
                    $(BUILD)/ttcp/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
-                   $(BUILD)/init-fat32-inspect/main.o $(BUILD)/fat32-inspect/main.o
+                   $(BUILD)/init-fat32-inspect/main.o $(BUILD)/fat32-inspect/main.o \
+                   $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/complete.o \
@@ -55,6 +56,7 @@ IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/i
 INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
+FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
 BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/config.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o
@@ -74,7 +76,7 @@ LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect fat32-inspect installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
+.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
 all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
@@ -136,6 +138,8 @@ boot-init: $(BUILD)/boot-init.pxe
 init-install: $(BUILD)/init-install.pxe
 init-fat32-inspect: $(BUILD)/init-fat32-inspect.pxe
 fat32-inspect: $(BUILD)/fat32-inspect.pxe
+init-fat32-write: $(BUILD)/init-fat32-write.pxe
+fat32-write: $(BUILD)/fat32-write.pxe
 installer: $(BUILD)/installer.pxe
 hello: $(BUILD)/hello.pxe $(BUILD)/share/hello.txt
 client: $(BUILD)/client.pxe
@@ -241,6 +245,10 @@ $(BUILD)/installer.pxe: $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(TLS_EXPORT_I
 $(BUILD)/fat32-inspect/main.o: $(SDK)/sysroot/usr/include/pyxis_fs/fat32.h
 $(BUILD)/fat32-inspect.pxe: $(BUILD)/fat32-inspect/main.o $(FAT32_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/fat32-inspect/main.o $(FAT32_LIBRARY) $(LDLIBS)
+
+$(BUILD)/fat32-write/main.o: $(SDK)/sysroot/usr/include/pyxis_fs/fat32.h $(SDK)/sysroot/usr/include/pyxis_fs/fat32_write.h
+$(BUILD)/fat32-write.pxe: $(BUILD)/fat32-write/main.o $(FAT32_WRITE_LIBRARY) $(FAT32_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/fat32-write/main.o $(FAT32_WRITE_LIBRARY) $(FAT32_LIBRARY) $(LDLIBS)
 
 $(BUILD)/cp.pxe: $(CP_OBJECT) $(UTILITY_OBJECT)
 
