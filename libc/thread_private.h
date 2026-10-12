@@ -5,6 +5,7 @@
 #include <pyxis/thread_runtime.h>
 
 struct startup_info;
+struct libc_once_frame;
 
 /* Userland implementation tuning, shared by registry and per-thread storage. */
 #ifndef LIBC_THREAD_KEY_LIMIT
@@ -37,6 +38,9 @@ struct libc_thread_record {
   struct thread_destructor_block *destructors;
   struct thread_destructor_block first_destructors;
   struct thread_key_value keys[LIBC_THREAD_KEY_LIMIT];
+  uint64_t thread_identity;
+  struct libc_once_frame *once_frames;
+  bool destroying;
 };
 
 _Static_assert(offsetof(struct libc_thread_record, self) == 0, "FS self pointer");

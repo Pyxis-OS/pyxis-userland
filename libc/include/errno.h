@@ -42,6 +42,10 @@ int *__errno_location(void);
 #define EINTR 29
 /* Lookup met a symbolic link: Pyxis follows none, with or without O_NOFOLLOW. */
 #define ELOOP 30
+#define EPERM 31
+#define EDEADLK 32
+#define ESRCH 33
+#define ECANCELED 34
 
 #ifdef __cplusplus
 }
