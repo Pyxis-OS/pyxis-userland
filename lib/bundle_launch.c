@@ -1,10 +1,25 @@
 #include <abi/directory.h>
+#include <abi/clock.h>
+#include <abi/launcher.h>
+#include <abi/pipe.h>
+#include <job_work.h>
+#include <process.h>
+#include <wait.h>
 #include <bundle_launch.h>
 #include <handle.h>
 #include <stdlib.h>
 #include <string.h>
 
+struct bundle_job_context {
+  struct bundle_job_context *next;
+  struct job_work *work;
+  handle_t observer;
+  bool admitted;
+};
+
 struct bundle_launch {
+  struct bundle_jobs *jobs;
+  struct bundle_job_context *context;
   struct launch_request request;
   struct launch_grant *grants;
   struct launch_binding *resources;
@@ -102,6 +117,11 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     const struct bundle_authority *authority, size_t authority_count)
 {
   for (size_t i = 0; i < count; ++i) {
+    /* Private context authority is created separately, never copied from a
+     * caller's client leaf, including the ordinary Lua/bundle path. */
+    if (!strcmp(requests[i].resource, "job_work")) {
+      continue;
+    }
     handle_t source = HANDLE_INVALID;
     for (size_t j = 0; j < authority_count; ++j) {
       if (authority[j].resource && !strcmp(requests[i].resource, authority[j].resource)) {
@@ -146,9 +166,74 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
   return CALL_OK;
 }
 
-enum call_status bundle_launch_prepare(const struct bundle_program *program,
+static bool has_selected(const struct bundle_launch *prepared,
+    uint64_t protocol, uint64_t rights, handle_t *source)
+{
+  for (size_t i = 0; i < prepared->request.resource_count; ++i) {
+    const struct launch_grant *grant = &prepared->grants[prepared->resources[i].grant];
+    struct handle_info info;
+    if (handle_query(grant->source, &info) == CALL_OK &&
+        info.kind == HANDLE_KIND_NATIVE && info.protocol == protocol &&
+        (grant->rights & rights) == rights && !grant->transport) {
+      if (source) {
+        *source = grant->source;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+static enum call_status prepare_job_work(struct bundle_launch *prepared,
+    const struct bundle_grant_request *requests, size_t count,
+    handle_t provisioner, struct bundle_jobs *jobs)
+{
+  bool declared = false, required = false;
+  for (size_t i = 0; i < count; ++i) {
+    if (!strcmp(requests[i].resource, "job_work")) {
+      declared = true;
+      required |= requests[i].required;
+    }
+  }
+  if (!declared) {
+    return CALL_OK;
+  }
+  handle_t clock = HANDLE_INVALID;
+  bool usable = jobs && provisioner != HANDLE_INVALID &&
+      has_selected(prepared, PROTOCOL_CLOCK, CLOCK_RIGHT_READ, &clock) &&
+      has_selected(prepared, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE, NULL) &&
+      has_selected(prepared, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH, NULL);
+  if (!usable) {
+    return required ? CALL_DENIED : CALL_OK;
+  }
+  struct bundle_job_context *context = calloc(1, sizeof(*context));
+  if (!context) {
+    return CALL_NO_MEMORY;
+  }
+  enum call_status status = job_work_create(provisioner, clock, &context->work);
+  if (status != CALL_OK) {
+    free(context);
+    return required ? status : CALL_OK;
+  }
+  prepared->context = context;
+  prepared->jobs = jobs;
+  for (size_t i = 0; i < count; ++i) {
+    if (!strcmp(requests[i].resource, "job_work")) {
+      size_t index = prepared->request.grant_count++;
+      prepared->grants[index] = (struct launch_grant){
+        job_work_directory(context->work), requests[i].rights, 0,
+      };
+      prepared->resources[prepared->request.resource_count++] =
+          (struct launch_binding){(uintptr_t)requests[i].name, index};
+    }
+  }
+  return CALL_OK;
+}
+
+static enum call_status prepare_bundle(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
-    size_t authority_count, struct bundle_launch **result)
+    size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
+    struct bundle_launch **result)
 {
   if (!result) {
     return CALL_BAD_REQUEST;
@@ -212,6 +297,9 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
   if (status == CALL_OK) {
     status = prepare_resources(prepared, resources, resource_count, authority, authority_count);
   }
+  if (status == CALL_OK) {
+    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs);
+  }
   for (size_t i = 0; status == CALL_OK && i < root_count; ++i) {
     if (prepared->request.root_count == STARTUP_ROOT_LIMIT) {
       status = CALL_LIMIT;
@@ -232,6 +320,103 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
   return CALL_OK;
 }
 
+enum call_status bundle_launch_prepare(const struct bundle_program *program,
+    const struct launch_request *source, const struct bundle_authority *authority,
+    size_t authority_count, struct bundle_launch **result)
+{
+  return prepare_bundle(program, source, authority, authority_count,
+      HANDLE_INVALID, NULL, result);
+}
+
+enum call_status bundle_launch_prepare_jobs(const struct bundle_program *program,
+    const struct launch_request *source, const struct bundle_authority *authority,
+    size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
+    struct bundle_launch **result)
+{
+  return prepare_bundle(program, source, authority, authority_count, provisioner, jobs, result);
+}
+
+void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status status,
+    handle_t process)
+{
+  if (!prepared || !prepared->context || (status != CALL_OK && status != CALL_OUTCOME_UNKNOWN)) {
+    return;
+  }
+  struct bundle_job_context *context = prepared->context;
+  context->admitted = true;
+  /* Failure to retain the observer leaves the private link quarantined. */
+  if (status == CALL_OK && process != HANDLE_INVALID) {
+    handle_copy_restricted(process, PROCESS_RIGHT_WAIT, 0, &context->observer);
+  }
+}
+
+enum call_status bundle_jobs_reap(struct bundle_jobs *jobs)
+{
+  if (!jobs) {
+    return CALL_BAD_REQUEST;
+  }
+  enum call_status result = CALL_OK;
+  struct bundle_job_context **link = &jobs->contexts;
+  while (*link) {
+    struct bundle_job_context *context = *link;
+    if (context->observer == HANDLE_INVALID) {
+      link = &context->next;
+      continue;
+    }
+    struct wait_interest interest = {.handle = context->observer, .events = WAIT_COMPLETE};
+    uint64_t events;
+    enum call_status status = wait_many(&interest, 1, 0, &events);
+    if (status != CALL_OK || !(events & WAIT_COMPLETE)) {
+      if (status != CALL_OK && result == CALL_OK) {
+        result = status;
+      }
+      link = &context->next;
+      continue;
+    }
+    struct process_result completion;
+    status = process_wait(context->observer, &completion);
+    if (status != CALL_OK) {
+      if (result == CALL_OK) {
+        result = status;
+      }
+      link = &context->next;
+      continue;
+    }
+    *link = context->next;
+    status = job_work_close(context->work, true);
+    if (handle_close(context->observer) && status == CALL_OK) {
+      status = CALL_BAD_HANDLE;
+    }
+    if (status != CALL_OK && result == CALL_OK) {
+      result = status;
+    }
+    free(context);
+  }
+  return result;
+}
+
+enum call_status bundle_jobs_close(struct bundle_jobs *jobs)
+{
+  enum call_status result = bundle_jobs_reap(jobs);
+  if (!jobs) {
+    return result;
+  }
+  while (jobs->contexts) {
+    struct bundle_job_context *context = jobs->contexts;
+    jobs->contexts = context->next;
+    enum call_status status = job_work_close(context->work, false);
+    if (context->observer != HANDLE_INVALID && handle_close(context->observer) &&
+        status == CALL_OK) {
+      status = CALL_BAD_HANDLE;
+    }
+    if (status != CALL_OK && result == CALL_OK) {
+      result = status;
+    }
+    free(context);
+  }
+  return result;
+}
+
 const struct launch_request *bundle_launch_request(const struct bundle_launch *prepared)
 {
   return prepared ? &prepared->request : NULL;
@@ -240,6 +425,15 @@ const struct launch_request *bundle_launch_request(const struct bundle_launch *p
 void bundle_launch_close(struct bundle_launch *prepared)
 {
   if (prepared) {
+    if (prepared->context) {
+      if (prepared->context->admitted) {
+        prepared->context->next = prepared->jobs->contexts;
+        prepared->jobs->contexts = prepared->context;
+      } else {
+        job_work_close(prepared->context->work, true);
+        free(prepared->context);
+      }
+    }
     free(prepared->directories);
     free(prepared->roots);
     free(prepared->resources);

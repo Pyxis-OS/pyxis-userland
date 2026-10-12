@@ -6,8 +6,10 @@
 #include <abi/echo.h>
 #include <abi/launcher.h>
 #include <abi/memory.h>
-#include <abi/thread.h>
 #include <abi/pipe.h>
+#include <abi/thread.h>
+#include <abi/keyboard.h>
+#include <abi/pointer.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -26,7 +28,7 @@
 #define BUNDLE_COUNT_LIMIT 8
 #define BUNDLE_COMMAND_LIMIT 32
 #define BUNDLE_RESOURCE_LIMIT 8
-#define BUNDLE_GRANT_LIMIT 16
+#define BUNDLE_GRANT_LIMIT 17
 #define BUNDLE_COMPONENT_LIMIT 255
 #define BUNDLE_PATH_LIMIT 1024
 #define BUNDLE_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
@@ -64,6 +66,12 @@ struct grant_right {
 static const struct grant_right grant_rights[] = {
   {"memory", "manage", PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
   {"threads", "manage", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE},
+  {"keyboard", "input", PROTOCOL_KEYBOARD, KEYBOARD_RIGHT_INPUT},
+  {"pointer", "input", PROTOCOL_POINTER, POINTER_RIGHT_INPUT},
+  {"job_work", "create", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_CREATE},
+  {"job_work", "remove", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_REMOVE},
+  {"job_work", "read-files", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_READ_FILES},
+  {"job_work", "write-files", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_WRITE_FILES},
   {"clock", "read", PROTOCOL_CLOCK, CLOCK_RIGHT_READ},
   {"clock", "sleep", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP},
   {"launcher", "launch", PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
