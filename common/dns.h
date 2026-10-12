@@ -2,6 +2,7 @@
 #define COMMON_DNS_H
 
 #include <abi/handle.h>
+#include <abi/endpoint.h>
 #include <abi/syscall.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -66,6 +67,24 @@ struct dns_exchange {
  * absolute deadline caps both attempts; zero allows three seconds per attempt. */
 void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
     const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange);
+
+enum dns_query_step { DNS_QUERY_PROGRESS, DNS_QUERY_WAIT, DNS_QUERY_DONE };
+struct dns_query_state {
+  handle_t udp, clock, random, receiver, endpoint;
+  uint64_t *next_id, deadline, attempt_deadline, pending;
+  uint32_t server;
+  struct dns_name name;
+  struct dns_exchange exchange;
+  uint16_t identity;
+  unsigned attempt, stage;
+  bool aborted;
+};
+void dns_query_begin(struct dns_query_state *query, handle_t udp, handle_t clock,
+    handle_t random, uint32_t server, const struct dns_name *name,
+    uint64_t deadline, handle_t receiver, uint64_t *next_id);
+enum dns_query_step dns_query_step(struct dns_query_state *query);
+bool dns_query_completion(struct dns_query_state *query, const struct endpoint_packet *packet);
+enum call_status dns_query_abort(struct dns_query_state *query);
 
 /* Resolve one hostname, reporting failures to stderr with the program label.
  * Uses the startup UDP/random authorities and configured DNS server. */

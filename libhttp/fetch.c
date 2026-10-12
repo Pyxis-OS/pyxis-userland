@@ -2,6 +2,8 @@
 #include "../common/dns.h"
 #include "../common/udp.h"
 #include <clock.h>
+#include <completion.h>
+#include <wait.h>
 #include <handle.h>
 #include <picohttpparser.h>
 #include <stdio.h>
@@ -10,6 +12,7 @@
 #include <tcp.h>
 
 #define HTTP_CHUNK_LINE_MAX 8192
+#define HTTP_STEP_RECEIVES_MAX 8
 
 static bool fail(struct http_stream *fetch, enum http_error error)
 {
@@ -71,7 +74,37 @@ static bool receive(struct http_stream *fetch, size_t capacity, bool *eof)
     return fail(fetch, HTTP_LIMIT);
   }
   size_t length;
-  if (fetch->tls) {
+  if (fetch->cooperative) {
+    if (fetch->receive_steps++ == HTTP_STEP_RECEIVES_MAX) {
+      fetch->yielded = true;
+      return false;
+    }
+    if (fetch->tls) {
+      enum tls_step_result step = tls_read_step(fetch->tls,
+          fetch->bytes + fetch->buffered, available, &length, &fetch->result->tls_failure);
+      if (step == TLS_STEP_FAILED) {
+        return fail(fetch, HTTP_TLS_ERROR);
+      }
+      if (step == TLS_STEP_WANT_READ || step == TLS_STEP_WANT_WRITE) {
+        fetch->wanted = step == TLS_STEP_WANT_READ ? WAIT_READABLE : WAIT_WRITABLE;
+        return false;
+      }
+      *eof = step == TLS_STEP_EOF;
+    } else {
+      struct tcp_read_reply reply;
+      enum call_status status = tcp_try_read(fetch->stream,
+          fetch->bytes + fetch->buffered, available, &reply);
+      if (status == CALL_WOULD_BLOCK) {
+        fetch->wanted = WAIT_READABLE;
+        return false;
+      }
+      if (!network(fetch, status)) {
+        return false;
+      }
+      length = reply.length;
+      *eof = length == 0;
+    }
+  } else if (fetch->tls) {
     if (!tls_read(fetch->tls, fetch->bytes + fetch->buffered, available,
         &length, eof, &fetch->result->tls_failure)) {
       return fail(fetch, HTTP_TLS_ERROR);
@@ -463,9 +496,12 @@ static bool resolve(struct http_stream *fetch, const char *host, uint32_t *addre
 
 static enum call_status close_transport(struct http_stream *fetch, bool framed)
 {
-  enum call_status status = CALL_OK;
+  if (!fetch->tls && fetch->stream == HANDLE_INVALID) {
+    return fetch->result->close_status;
+  }
+  enum call_status status = fetch->result->close_status;
   if (fetch->tls) {
-    if (framed && fetch->result->request_sent) {
+    if (framed && fetch->result->request_sent && !fetch->cooperative) {
       tls_close_notify(fetch->tls, &fetch->result->tls_cleanup);
     }
     tls_connection_free(fetch->tls);
@@ -488,6 +524,9 @@ static enum call_status close_transport(struct http_stream *fetch, bool framed)
 
 static enum http_read_result finish(struct http_stream *fetch, bool framed)
 {
+  if (!framed && fetch->result->error == HTTP_OK && (fetch->wanted || fetch->yielded)) {
+    return HTTP_READ_WAIT;
+  }
   bool success = framed && check_deadline(fetch);
   enum call_status closed = close_transport(fetch, success);
   if (success && !network(fetch, closed)) {
@@ -559,7 +598,7 @@ static struct http_stream *request_open(const struct http_client *client,
     return NULL;
   }
   struct http_outgoing outgoing;
-  if (!http_prepare_request(request, &uri, &outgoing, result)) {
+  if (!http_prepare_request(request, &uri, &outgoing, result, true)) {
     return NULL;
   }
   struct http_stream *fetch = calloc(1, sizeof(*fetch));
@@ -687,7 +726,7 @@ static bool chunk_size(struct http_stream *fetch)
   return true;
 }
 
-enum http_read_result http_stream_read(struct http_stream *fetch, void *bytes,
+static enum http_read_result read_body(struct http_stream *fetch, void *bytes,
     size_t capacity, size_t *count)
 {
   *count = 0;
@@ -763,6 +802,10 @@ enum http_read_result http_stream_read(struct http_stream *fetch, void *bytes,
       fail(fetch, HTTP_LIMIT);
       return finish(fetch, false);
     }
+    if (take && fetch->result->status == 205) {
+      fail(fetch, HTTP_BAD_RESPONSE);
+      return finish(fetch, false);
+    }
     memcpy(bytes, fetch->bytes, take);
     consume(fetch, take);
     fetch->result->consumed.body_bytes += take;
@@ -777,13 +820,29 @@ enum http_read_result http_stream_read(struct http_stream *fetch, void *bytes,
   }
 }
 
+enum http_read_result http_stream_read(struct http_stream *stream, void *bytes,
+    size_t capacity, size_t *count)
+{
+  return read_body(stream, bytes, capacity, count);
+}
+
 enum call_status http_stream_close(struct http_stream *stream)
 {
+  if (http_stream_pending(stream)) {
+    return CALL_BUSY;
+  }
+  http_release_request(&stream->outgoing);
   enum call_status status = stream->result->close_status;
   if (stream->result->state == HTTP_RESPONSE_PENDING) {
     fail(stream, HTTP_ABORTED);
     status = close_transport(stream, false);
     stream->result->state = HTTP_RESPONSE_FAILED;
+  } else if (stream->tls || stream->stream != HANDLE_INVALID) {
+    status = close_transport(stream, false);
+  }
+  volatile unsigned char *body = (volatile unsigned char *)stream->body_bytes;
+  for (size_t i = 0; i < sizeof(stream->body_bytes); ++i) {
+    body[i] = 0;
   }
   free(stream);
   return status;
@@ -882,4 +941,400 @@ enum call_status http_result_status(const struct http_result *result)
     return tls_status(&result->tls_failure);
   }
   return CALL_IO;
+}
+
+static bool source_result(struct http_stream *stream, enum call_status status)
+{
+  if (status == CALL_OK) {
+    return true;
+  }
+  stream->result->source_status = status;
+  return fail(stream, HTTP_SOURCE_ERROR);
+}
+
+bool http_submit(struct http_stream *stream, handle_t target, uint64_t protocol,
+    uint64_t operation, uint64_t maximum, const void *payload, size_t size)
+{
+  uint64_t deadline;
+  if (!stream->next_id || !*stream->next_id || *stream->next_id == UINT64_MAX) {
+    return network(stream, CALL_LIMIT);
+  }
+  if (!http_deadline(stream, maximum, &deadline)) {
+    return false;
+  }
+  enum call_status status = completion_submit(target, stream->receiver,
+      *stream->next_id, protocol, operation, deadline, payload, size);
+  if (protocol == PROTOCOL_FILE ? !source_result(stream, status) : !network(stream, status)) {
+    return false;
+  }
+  stream->pending = (*stream->next_id)++;
+  stream->pending_operation = operation;
+  return true;
+}
+
+struct http_stream *http_request_start(const struct http_client *client, const char *text,
+    const struct http_request *request, uint64_t deadline_ns,
+    const struct http_response_limits *limits, handle_t receiver,
+    uint64_t *next_id, struct http_response *result)
+{
+  if (!http_request_validate(client, text, request, result)) {
+    return NULL;
+  }
+  if (receiver == HANDLE_INVALID || !next_id || !*next_id || *next_id == UINT64_MAX) {
+    result->error = HTTP_BAD_ARGUMENT;
+    return NULL;
+  }
+  struct http_response_limits limit = {
+    .header_bytes = HTTP_HEADERS_MAX, .fields = HTTP_FIELDS_MAX,
+    .informational = HTTP_INFORMATIONAL_MAX,
+  };
+  if (limits) {
+    limit = *limits;
+    if (limit.header_bytes > HTTP_HEADERS_MAX || limit.fields > HTTP_FIELDS_MAX ||
+        limit.informational > HTTP_INFORMATIONAL_MAX) {
+      result->error = HTTP_BAD_ARGUMENT;
+      return NULL;
+    }
+  }
+  if (client->authority.tcp == HANDLE_INVALID || client->authority.clock == HANDLE_INVALID) {
+    result->error = HTTP_NETWORK_ERROR;
+    result->network_status = CALL_DENIED;
+    return NULL;
+  }
+  if (client->scheme == HTTP_SCHEME_HTTPS && !client->tls) {
+    result->error = HTTP_TLS_ERROR;
+    result->tls_failure.error = TLS_BAD_STATE;
+    return NULL;
+  }
+  uint64_t now;
+  result->network_status = clock_now(client->authority.clock, &now);
+  if (result->network_status != CALL_OK) {
+    result->error = HTTP_NETWORK_ERROR;
+    return NULL;
+  }
+  if (!deadline_ns) {
+    if (now > UINT64_MAX - HTTP_FETCH_NS) {
+      result->error = HTTP_LIMIT;
+      return NULL;
+    }
+    deadline_ns = now + HTTP_FETCH_NS;
+  }
+  if (now >= deadline_ns) {
+    result->error = HTTP_NETWORK_ERROR;
+    result->network_status = CALL_TIMED_OUT;
+    return NULL;
+  }
+  if (request->method == HTTP_METHOD_POST) {
+    struct handle_info info;
+    enum call_status status = handle_query(request->body, &info);
+    if (status == CALL_OK && (info.kind != HANDLE_KIND_NATIVE ||
+        info.protocol != PROTOCOL_FILE || info.transport)) {
+      status = CALL_BAD_OPERATION;
+    }
+    if (status == CALL_OK && !(info.rights & FILE_RIGHT_READ)) {
+      status = CALL_DENIED;
+    }
+    if (status != CALL_OK) {
+      result->source_status = status;
+      result->error = HTTP_SOURCE_ERROR;
+      return NULL;
+    }
+  }
+  struct http_stream *stream = calloc(1, sizeof(*stream));
+  if (!stream) {
+    result->error = HTTP_NO_MEMORY;
+    return NULL;
+  }
+  stream->authority = client->authority;
+  stream->runtime = client->tls;
+  stream->result = result;
+  stream->stream = HANDLE_INVALID;
+  stream->receiver = receiver;
+  stream->next_id = next_id;
+  stream->deadline = deadline_ns;
+  stream->limit = limit;
+  stream->header_receive_max = HTTP_HEADERS_MAX;
+  stream->cooperative = true;
+  http_parse_uri(text, &stream->uri);
+  if (!http_prepare_request(request, &stream->uri, &stream->outgoing, result, false)) {
+    free(stream);
+    return NULL;
+  }
+  stream->exchange_stage = request->method == HTTP_METHOD_POST ? EXCHANGE_SIZE : EXCHANGE_RESOLVE;
+  result->state = HTTP_RESPONSE_PENDING;
+  return stream;
+}
+
+uint64_t http_stream_pending(const struct http_stream *stream)
+{
+  return stream->pending ? stream->pending : stream->dns.pending;
+}
+
+enum call_status http_stream_abort(struct http_stream *stream)
+{
+  if (!stream->cooperative) {
+    return CALL_BAD_OPERATION;
+  }
+  if (!stream->aborting && stream->result->state == HTTP_RESPONSE_PENDING) {
+    fail(stream, HTTP_ABORTED);
+    stream->result->state = HTTP_RESPONSE_FAILED;
+  }
+  if (stream->result->state == HTTP_RESPONSE_COMPLETE) {
+    return CALL_OK;
+  }
+  stream->aborting = true;
+  close_transport(stream, false);
+  if (stream->dns.pending) {
+    return dns_query_abort(&stream->dns);
+  }
+  if (stream->pending) {
+    return completion_cancel(stream->receiver, stream->pending);
+  }
+  if (stream->dns.endpoint != HANDLE_INVALID) {
+    dns_query_abort(&stream->dns);
+  }
+  http_release_request(&stream->outgoing);
+  return CALL_OK;
+}
+
+bool http_stream_completion(struct http_stream *stream, const struct endpoint_packet *packet)
+{
+  if (stream->dns.pending && dns_query_completion(&stream->dns, packet)) {
+    return true;
+  }
+  if (!stream->pending || packet->kind != ENDPOINT_MESSAGE_COMPLETION ||
+      packet->correlation_id != stream->pending) {
+    return false;
+  }
+  uint64_t operation = stream->pending_operation;
+  uint64_t protocol = stream->exchange_stage == EXCHANGE_CONNECT ? PROTOCOL_TCP_SERVICE : PROTOCOL_FILE;
+  stream->pending = 0;
+  enum call_status status = packet->result;
+  handle_t connection = HANDLE_INVALID;
+  if (packet->protocol != protocol || packet->operation != operation) {
+    status = CALL_BAD_REQUEST;
+  } else if (status == CALL_OK) {
+    if (protocol == PROTOCOL_TCP_SERVICE) {
+      if (packet->size != sizeof(struct tcp_connect_reply) || packet->grant_count != 1) {
+        status = CALL_BAD_REQUEST;
+      } else {
+        connection = packet->grants[0].handle;
+      }
+    } else if (packet->grant_count) {
+      status = CALL_BAD_REQUEST;
+    } else if (operation == FILE_SIZE) {
+      struct file_size_reply reply;
+      if (packet->size != sizeof(reply)) {
+        status = CALL_BAD_REQUEST;
+      } else {
+        memcpy(&reply, packet->data, sizeof(reply));
+        if (reply.size != stream->outgoing.body_length) {
+          status = CALL_BAD_REQUEST;
+        } else {
+          stream->exchange_stage = EXCHANGE_RESOLVE;
+        }
+      }
+    } else if (operation == FILE_READ) {
+      struct file_read_reply reply;
+      if (packet->size < sizeof(reply)) {
+        status = CALL_BAD_REQUEST;
+      } else {
+        memcpy(&reply, packet->data, sizeof(reply));
+        uint64_t remaining = stream->outgoing.body_length - stream->result->upload_bytes;
+        if (!reply.read || reply.read > sizeof(stream->body_bytes) ||
+            reply.read > remaining || packet->size != sizeof(reply) + reply.read) {
+          status = CALL_BAD_REQUEST;
+        } else if (!stream->headers_ready && !stream->aborting) {
+          memcpy(stream->body_bytes, packet->data + sizeof(reply), reply.read);
+          stream->body_loaded = reply.read;
+          stream->body_sent = 0;
+        }
+      }
+    } else {
+      status = CALL_BAD_OPERATION;
+    }
+  }
+  for (size_t i = 0; i < packet->grant_count; ++i) {
+    if (packet->grants[i].handle != connection) {
+      handle_close(packet->grants[i].handle);
+    }
+  }
+  if (handle_close(packet->receipt) && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
+  if (connection != HANDLE_INVALID) {
+    stream->stream = connection;
+    stream->exchange_stage = stream->uri.scheme == HTTP_SCHEME_HTTPS ? EXCHANGE_TLS : EXCHANGE_REQUEST;
+  }
+  if (protocol == PROTOCOL_FILE) {
+    if (!stream->headers_ready && !stream->aborting) {
+      source_result(stream, status);
+    }
+  } else {
+    network(stream, status);
+  }
+  if (stream->headers_ready || stream->aborting) {
+    http_release_request(&stream->outgoing);
+  }
+  if (stream->aborting) {
+    close_transport(stream, false);
+  }
+  return true;
+}
+
+static enum http_step_result step_result(struct http_stream *stream,
+    enum http_step_result result, struct http_wait *wait)
+{
+  wait->stream = stream->stream;
+  wait->events = stream->wanted;
+  wait->correlation_id = http_stream_pending(stream);
+  wait->deadline_ns = stream->deadline;
+  return result;
+}
+
+enum http_step_result http_stream_step(struct http_stream *stream, void *bytes,
+    size_t capacity, size_t *count, struct http_wait *wait)
+{
+  *count = 0;
+  *wait = (struct http_wait){.stream = HANDLE_INVALID};
+  if (!stream->cooperative) {
+    return HTTP_STEP_FAILED;
+  }
+  stream->wanted = 0;
+  stream->yielded = false;
+  stream->receive_steps = 0;
+  if (stream->result->state == HTTP_RESPONSE_COMPLETE) {
+    return HTTP_STEP_COMPLETE;
+  }
+  if (stream->result->state == HTTP_RESPONSE_PENDING && !check_deadline(stream)) {
+    stream->result->state = HTTP_RESPONSE_FAILED;
+  }
+  if (stream->result->error != HTTP_OK || stream->result->state == HTTP_RESPONSE_FAILED) {
+    stream->result->state = HTTP_RESPONSE_FAILED;
+    http_stream_abort(stream);
+    return step_result(stream, HTTP_STEP_FAILED, wait);
+  }
+  if (stream->pending && stream->exchange_stage != EXCHANGE_REQUEST && !stream->headers_ready) {
+    return step_result(stream, HTTP_STEP_WAIT, wait);
+  }
+  switch (stream->exchange_stage) {
+  case EXCHANGE_SIZE:
+    if (!http_submit(stream, stream->outgoing.body, PROTOCOL_FILE, FILE_SIZE,
+        TCP_READ_MAX_WAIT_NS, NULL, 0)) {
+      break;
+    }
+    return step_result(stream, HTTP_STEP_WAIT, wait);
+  case EXCHANGE_RESOLVE:
+    if (udp_parse_address(stream->uri.host, &stream->address)) {
+      stream->exchange_stage = EXCHANGE_CONNECT;
+      return HTTP_STEP_PROGRESS;
+    }
+    if (!stream->dns.next_id) {
+      struct dns_name name;
+      if (!dns_name_from_text(stream->uri.host, &name)) {
+        fail(stream, HTTP_INVALID_URI);
+        break;
+      }
+      if (stream->authority.udp == HANDLE_INVALID || stream->authority.random == HANDLE_INVALID) {
+        network(stream, CALL_DENIED);
+        break;
+      }
+      dns_query_begin(&stream->dns, stream->authority.udp, stream->authority.clock,
+          stream->authority.random, stream->authority.dns_server, &name,
+          stream->deadline, stream->receiver, stream->next_id);
+    }
+    switch (dns_query_step(&stream->dns)) {
+    case DNS_QUERY_WAIT:
+      step_result(stream, HTTP_STEP_WAIT, wait);
+      wait->deadline_ns = stream->dns.attempt_deadline;
+      return HTTP_STEP_WAIT;
+    case DNS_QUERY_PROGRESS:
+      return HTTP_STEP_PROGRESS;
+    case DNS_QUERY_DONE:
+      if (!network(stream, stream->dns.exchange.status)) {
+        break;
+      }
+      stream->result->dns_rcode = stream->dns.exchange.reply.rcode;
+      if (stream->dns.exchange.response != DNS_COMPLETE || stream->result->dns_rcode ||
+          dns_select_address(&stream->dns.exchange.reply, &stream->dns.name,
+              &stream->address) != DNS_ADDRESS_FOUND) {
+        fail(stream, HTTP_DNS_ERROR);
+        break;
+      }
+      stream->exchange_stage = EXCHANGE_CONNECT;
+      return HTTP_STEP_PROGRESS;
+    }
+    break;
+  case EXCHANGE_CONNECT: {
+    struct completion_connect_request request = {.address = stream->address, .port = stream->uri.port};
+    if (!http_submit(stream, stream->authority.tcp, PROTOCOL_TCP_SERVICE, TCP_CONNECT,
+        TCP_CONNECT_MAX_WAIT_NS, &request, sizeof(request))) {
+      break;
+    }
+    return step_result(stream, HTTP_STEP_WAIT, wait);
+  }
+  case EXCHANGE_TLS: {
+    if (!stream->tls) {
+      struct tls_authority authority = {.clock = stream->authority.clock, .random = stream->authority.random};
+      if (!tls_connection_prepare(stream->runtime, &authority, stream->stream,
+          stream->uri.host, stream->deadline, &stream->tls, &stream->result->tls_failure)) {
+        fail(stream, HTTP_TLS_ERROR);
+        break;
+      }
+      return HTTP_STEP_PROGRESS;
+    }
+    bool complete;
+    enum tls_step_result result = tls_handshake_step(stream->tls, &complete,
+        &stream->result->tls_failure);
+    if (result == TLS_STEP_FAILED) {
+      fail(stream, HTTP_TLS_ERROR);
+      break;
+    }
+    if (result == TLS_STEP_WANT_READ || result == TLS_STEP_WANT_WRITE) {
+      stream->wanted = result == TLS_STEP_WANT_READ ? WAIT_READABLE : WAIT_WRITABLE;
+      return step_result(stream, HTTP_STEP_WAIT, wait);
+    }
+    if (complete) {
+      stream->exchange_stage = EXCHANGE_REQUEST;
+    }
+    return HTTP_STEP_PROGRESS;
+  }
+  case EXCHANGE_REQUEST: {
+    struct framing framing;
+    enum http_step_result result = http_exchange_step(stream, &framing);
+    if (result == HTTP_STEP_FAILED) {
+      break;
+    }
+    if (result == HTTP_STEP_HEADERS) {
+      stream->headers_ready = true;
+      stream->remaining = framing.length;
+      stream->stage = stream->result->status == 204 || stream->result->status == 304 ? BODY_FRAMED :
+          framing.chunked ? BODY_CHUNK_SIZE : framing.length_present ? BODY_FIXED : BODY_CLOSE;
+      stream->exchange_stage = EXCHANGE_BODY;
+      if (stream->pending) {
+        completion_cancel(stream->receiver, stream->pending);
+      }
+      if (!stream->pending) {
+        http_release_request(&stream->outgoing);
+      }
+    }
+    return step_result(stream, result, wait);
+  }
+  case EXCHANGE_BODY: {
+    if (!capacity) {
+      return step_result(stream, HTTP_STEP_WAIT, wait);
+    }
+    enum http_read_result result = read_body(stream, bytes, capacity, count);
+    if (result == HTTP_READ_WAIT) {
+      return step_result(stream, stream->yielded ? HTTP_STEP_PROGRESS : HTTP_STEP_WAIT, wait);
+    }
+    if (result == HTTP_READ_DATA) {
+      return HTTP_STEP_DATA;
+    }
+    return step_result(stream, result == HTTP_READ_COMPLETE ? HTTP_STEP_COMPLETE : HTTP_STEP_FAILED, wait);
+  }
+  }
+  stream->result->state = HTTP_RESPONSE_FAILED;
+  http_stream_abort(stream);
+  return step_result(stream, HTTP_STEP_FAILED, wait);
 }

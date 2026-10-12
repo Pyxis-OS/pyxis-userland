@@ -78,15 +78,23 @@ static void erase(void *data, size_t length)
   }
 }
 
+void http_release_headers(struct http_outgoing *outgoing)
+{
+  if (outgoing->headers) {
+    erase(outgoing->headers, outgoing->header_size);
+    free(outgoing->headers);
+    outgoing->headers = NULL;
+  }
+}
+
 void http_release_request(struct http_outgoing *outgoing)
 {
-  erase(outgoing->headers, outgoing->header_size);
-  free(outgoing->headers);
+  http_release_headers(outgoing);
   *outgoing = (struct http_outgoing){0};
 }
 
 bool http_prepare_request(const struct http_request *request, const struct http_uri *uri,
-    struct http_outgoing *outgoing, struct http_response *response)
+    struct http_outgoing *outgoing, struct http_response *response, bool check_source)
 {
   *outgoing = (struct http_outgoing){0};
   if (!request || (request->method != HTTP_METHOD_GET && request->method != HTTP_METHOD_POST) ||
@@ -150,7 +158,7 @@ bool http_prepare_request(const struct http_request *request, const struct http_
     }
     length += header->name_length + header->value_length + 4;
   }
-  if (post) {
+  if (post && check_source) {
     struct handle_info info;
     if (!source(response, handle_query(request->body, &info))) {
       return false;
@@ -378,4 +386,112 @@ bool http_exchange_request(struct http_stream *stream, const struct http_outgoin
   }
   erase(body, sizeof(body));
   return success;
+}
+
+
+bool http_request_validate(const struct http_client *client, const char *text,
+    const struct http_request *request, struct http_response *response)
+{
+  *response = (struct http_response){.state = HTTP_RESPONSE_FAILED};
+  if (!client || !text) {
+    return fail(response, HTTP_BAD_ARGUMENT);
+  }
+  struct http_uri uri;
+  response->error = http_parse_uri(text, &uri);
+  if (response->error != HTTP_OK) {
+    return false;
+  }
+  if (uri.scheme != client->scheme) {
+    return fail(response, HTTP_UNSUPPORTED);
+  }
+  struct http_outgoing outgoing;
+  if (!http_prepare_request(request, &uri, &outgoing, response, false)) {
+    return false;
+  }
+  http_release_request(&outgoing);
+  return true;
+}
+
+enum http_step_result http_exchange_step(struct http_stream *stream, struct framing *framing)
+{
+  uint64_t read_wanted = 0, write_wanted = 0;
+  int parsed = http_parse_response_headers(stream, framing);
+  if (parsed < 0) {
+    return HTTP_STEP_FAILED;
+  }
+  if (parsed > 0) {
+    if (stream->tls && !stream->result->request_sent &&
+        !tls_stop_write(stream->tls, &stream->result->tls_failure)) {
+      fail(stream->result, HTTP_TLS_ERROR);
+      return HTTP_STEP_FAILED;
+    }
+    erase(stream->body_bytes, sizeof(stream->body_bytes));
+    return HTTP_STEP_HEADERS;
+  }
+  if (!receive_headers_step(stream, &read_wanted)) {
+    return HTTP_STEP_FAILED;
+  }
+  if (!read_wanted) {
+    return HTTP_STEP_PROGRESS;
+  }
+  /* A pending source read does not prevent early response reception. */
+  if (read_wanted != WAIT_WRITABLE && !stream->result->request_sent && !stream->pending) {
+    bool headers = stream->header_sent < stream->outgoing.header_size;
+    const char *bytes;
+    size_t size;
+    if (headers) {
+      bytes = stream->outgoing.headers + stream->header_sent;
+      size = stream->outgoing.header_size - stream->header_sent;
+    } else {
+      if (stream->body_sent == stream->body_loaded &&
+          stream->result->upload_bytes < stream->outgoing.body_length) {
+        uint64_t remaining = stream->outgoing.body_length - stream->result->upload_bytes;
+        struct file_read_request request = {
+          .offset = stream->result->upload_bytes,
+          .capacity = remaining < sizeof(stream->body_bytes) ? remaining : sizeof(stream->body_bytes),
+        };
+        if (!http_submit(stream, stream->outgoing.body, PROTOCOL_FILE, FILE_READ,
+            TCP_READ_MAX_WAIT_NS, &request, sizeof(request))) {
+          return HTTP_STEP_FAILED;
+        }
+        stream->wanted = read_wanted;
+        return HTTP_STEP_WAIT;
+      }
+      bytes = stream->body_bytes + stream->body_sent;
+      size = stream->body_loaded - stream->body_sent;
+    }
+    if (!size) {
+      stream->result->request_sent = true;
+      return HTTP_STEP_PROGRESS;
+    }
+    if (size > TCP_WRITE_MAX_BYTES) {
+      size = TCP_WRITE_MAX_BYTES;
+    }
+    size_t accepted;
+    if (!send_step(stream, bytes, size, &accepted, &write_wanted)) {
+      return HTTP_STEP_FAILED;
+    }
+    if (accepted) {
+      if (headers) {
+        stream->header_sent += accepted;
+        if (stream->header_sent == stream->outgoing.header_size) {
+          http_release_headers(&stream->outgoing);
+        }
+      } else {
+        stream->body_sent += accepted;
+        stream->result->upload_bytes += accepted;
+        if (stream->body_sent == stream->body_loaded) {
+          erase(stream->body_bytes, sizeof(stream->body_bytes));
+        }
+      }
+      stream->result->request_sent = stream->header_sent == stream->outgoing.header_size &&
+          stream->result->upload_bytes == stream->outgoing.body_length;
+      return HTTP_STEP_PROGRESS;
+    }
+  }
+  stream->wanted = read_wanted;
+  if (!stream->result->request_sent && read_wanted != WAIT_WRITABLE && !stream->pending) {
+    stream->wanted |= write_wanted;
+  }
+  return HTTP_STEP_WAIT;
 }

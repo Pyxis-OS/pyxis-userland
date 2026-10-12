@@ -2,6 +2,7 @@
 #define USERSPACE_HTTP_H
 
 #include <abi/handle.h>
+#include <abi/endpoint.h>
 #include <abi/provider.h>
 #include <abi/syscall.h>
 #include <http_url.h>
@@ -127,10 +128,54 @@ struct http_stream *http_request_open(const struct http_client *client, const ch
     const struct http_request *request, uint64_t deadline_ns,
     const struct http_response_limits *limits, struct http_response *response);
 
+/* Local validation only: no native calls, body authority/size check or I/O.
+ * POST body fields are ignored here; GET must have no body. */
+bool http_request_validate(const struct http_client *client, const char *uri,
+    const struct http_request *request, struct http_response *response);
+
+enum http_step_result {
+  HTTP_STEP_PROGRESS,
+  HTTP_STEP_HEADERS,
+  HTTP_STEP_DATA,
+  HTTP_STEP_COMPLETE,
+  HTTP_STEP_FAILED,
+  HTTP_STEP_WAIT,
+};
+
+struct http_wait {
+  handle_t stream;
+  uint64_t events, correlation_id, deadline_ns;
+};
+
+/* Copies/validates request fields without network or storage I/O. Borrow receiver,
+ * increasing next_id counter, runtime, body and response until close. One native
+ * completion is admitted at a time; the provider must also serialize its own
+ * staging completions. Random acquisition remains synchronous and bounded.
+ * HEADERS publishes response metadata once; DATA requires positive capacity.
+ * Zero capacity pauses body consumption after headers, retaining backpressure.
+ * PROGRESS needs another scheduled step; WAIT exposes native readiness/completion
+ * and the original deadline. No step waits for network or storage progress. */
+struct http_stream *http_request_start(const struct http_client *client, const char *uri,
+    const struct http_request *request, uint64_t deadline_ns,
+    const struct http_response_limits *limits, handle_t receiver,
+    uint64_t *next_id, struct http_response *response);
+enum http_step_result http_stream_step(struct http_stream *stream, void *bytes,
+    size_t capacity, size_t *count, struct http_wait *wait);
+
+/* Matching completion transfers receipt/attachments to the engine; it copies or
+ * adopts outputs before ACK. Unrelated packets remain owned by the caller.
+ * Abort requests cancellation; pending ownership must drain before close.
+ * Close returns CALL_BUSY without freeing while pending() is nonzero. */
+bool http_stream_completion(struct http_stream *stream,
+    const struct endpoint_packet *packet);
+uint64_t http_stream_pending(const struct http_stream *stream);
+enum call_status http_stream_abort(struct http_stream *stream);
+
 enum http_read_result {
   HTTP_READ_DATA,
   HTTP_READ_COMPLETE,
   HTTP_READ_FAILED,
+  HTTP_READ_WAIT, /* Cooperative decoder yield, exposed by stream_step as WAIT. */
 };
 
 /* One synchronous GET through headers, no redirect/replay. NULL limits select
