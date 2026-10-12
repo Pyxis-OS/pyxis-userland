@@ -15,7 +15,7 @@ return {
   },
   spaces = {
     { name = "pyxis", title = "Pyxis", init = "boot://init-installed",
-      network = true, launch = true, screenshot = true, power = true,
+      network = true, launch = true, jobs = true, screenshot = true, power = true,
       clipboard_local = true, clipboard_shared = true,
       roots = { system = "read-write",
                 home = { access = "read-write", optional = true } } },

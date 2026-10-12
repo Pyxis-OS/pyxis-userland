@@ -21,6 +21,7 @@
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
+#include <job_work.h>
 #include <net_config.h>
 #include <network_environment.h>
 #include <remote/beacon.h>
@@ -162,7 +163,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 17, RESOURCE_CAPACITY = 21 };
+  enum { OPTIONAL_COUNT = 18, RESOURCE_CAPACITY = 22 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
@@ -177,6 +178,11 @@ int launch_remote_server(const struct session_config *config,
     {(uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT},
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
+  handle_t provisioner = startup_resource("job_provisioner");
+  if (provisioner != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    grants[grant_count++] = (struct launch_grant){provisioner, JOB_PROVISIONER_RIGHTS, 0};
+  }
   handle_t threads = startup_resource("threads");
   if (threads != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", grant_count};

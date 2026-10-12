@@ -196,6 +196,12 @@ static void observe_completion(struct client *client, uint64_t now)
       failed = true;
       return;
     }
+    status = job_work_close(client->shell.job_provisioner, true);
+    client->shell.job_provisioner = NULL;
+    if (status != CALL_OK) {
+      report("job provisioning cleanup", status);
+      failed = true;
+    }
     close_handle(&client->shell.group);
     client->group_complete = true;
     client->group_ready = false;
@@ -838,6 +844,12 @@ int main(int argc, char **argv)
       if (status != CALL_OK) {
         report("shutdown outer cleanup", status);
       }
+      enum call_status cleaned = job_work_close(clients[i].shell.job_provisioner,
+          status == CALL_OK);
+      clients[i].shell.job_provisioner = NULL;
+      if (cleaned != CALL_OK) {
+        report("shutdown job provisioning cleanup", cleaned);
+      }
     }
     if (clients[i].broker) {
       for (unsigned pane = 0; pane < PANE_BROKER_PANES; ++pane) {
@@ -855,6 +867,8 @@ int main(int argc, char **argv)
       remote_broker_release(clients[i].broker);
       free(clients[i].broker);
     }
+    job_work_close(clients[i].shell.job_provisioner, false);
+    clients[i].shell.job_provisioner = NULL;
     close_handle(&clients[i].shell.attachment);
     close_handle(&clients[i].shell.process);
     close_handle(&clients[i].shell.group);

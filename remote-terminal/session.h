@@ -5,11 +5,13 @@
 #include <abi/launcher.h>
 #include <terminal.h>
 #include <startup.h>
+#include <job_work.h>
 #include <network_environment.h>
 #include <pyxis/environment.h>
 #include "../common/pane_broker.h"
 
 struct remote_shell {
+  struct job_work *job_provisioner;
   handle_t attachment;
   handle_t group;
   handle_t process;
@@ -24,6 +26,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
 /* Retained authority and initial environment belong to this connection. The
  * network environment borrows strings from inherited and its own DNS buffer. */
 struct remote_context {
+  handle_t job_provisioner;
   struct launch_grant grants[REMOTE_POLICY_GRANTS];
   size_t grant_count;
   struct launch_binding resources[17], roots[STARTUP_ROOT_LIMIT];

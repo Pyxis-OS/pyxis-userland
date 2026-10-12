@@ -50,6 +50,7 @@ struct boot_space {
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
   bool launch;
+  bool jobs; /* Private contexts for clients that explicitly declare job_work. */
   bool multiplexer; /* Local terminal startup may create pane sessions. */
   bool remote_multiplexer; /* Explicit remote pane-broker opt-in. */
   bool clipboard_local; /* Explicit space-local graphics/store delegation. */

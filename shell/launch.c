@@ -33,6 +33,7 @@
 #include <abi/wait.h>
 #include <clock.h>
 #include <bundle_launch.h>
+#include <job_work.h>
 #include <console.h>
 #include <handle.h>
 #include <endpoint.h>
@@ -56,7 +57,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[33];
+  struct launch_binding resources[34];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -165,7 +166,15 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     const struct startup_stream streams[STARTUP_STREAM_COUNT], handle_t publication,
     bool read_only, const struct network_environment *environment)
 {
+  enum call_status retired = bundle_jobs_reap(&shell->jobs);
+  if (retired != CALL_OK) {
+    return retired;
+  }
   bool session = mode == SHELL_SESSION;
+  /* Only the explicit trusted init/session successor receives this ancestor;
+   * ordinary clients receive a newly declared leaf through bundle preparation. */
+  handle_t job_provisioner = session ? startup_resource("job_provisioner") : HANDLE_INVALID;
+  bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
   handle_t threads = session ? startup_resource("threads") : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
   bool pass_child_launcher = session && shell->child_launcher != HANDLE_INVALID;
@@ -221,7 +230,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 33 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 34 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -257,7 +266,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t clipboard_local_index = audio_index + (has_audio ? 1 : 0);
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
-  size_t grant_count = threads_index + (has_threads ? 1 : 0);
+  size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
+  size_t grant_count = job_provisioner_index + (has_job_provisioner ? 1 : 0);
   prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -450,10 +460,20 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[threads_index] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
   }
 
+  if (has_job_provisioner) {
+    grants[job_provisioner_index] = (struct launch_grant){
+      job_provisioner, JOB_PROVISIONER_RIGHTS, 0,
+    };
+  }
   struct launch_binding *resources = prepared->resources;
   resources[0] = (struct launch_binding){(uintptr_t)"output", CHILD_OUTPUT};
   resources[1] = (struct launch_binding){(uintptr_t)"memory", CHILD_MEMORY};
   size_t resource_count = 2;
+  if (has_job_provisioner) {
+    resources[resource_count++] = (struct launch_binding){
+      (uintptr_t)"job_provisioner", job_provisioner_index,
+    };
+  }
   if (has_threads) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", threads_index};
   }
@@ -639,6 +659,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"input", shell->terminal.input},
       {"output", shell->terminal.output},
       {"memory", shell->memory},
+      {"threads", startup_resource("threads")},
+      {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID},
+      {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID},
       {"clock", shell->clock},
       {"display", shell->display},
       {"audio", shell->audio},
@@ -652,8 +675,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"profile", shell->profile},
       {"launcher", shell->child_launcher},
     };
-    enum call_status status = bundle_launch_prepare(prepared->bundle, request, authority,
-        sizeof(authority) / sizeof(*authority), &prepared->bundle_launch);
+    enum call_status status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
+        sizeof(authority) / sizeof(*authority), startup_resource("job_provisioner"),
+        &shell->jobs, &prepared->bundle_launch);
     if (status != CALL_OK) {
       return status;
     }
@@ -976,6 +1000,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     status = program_launch_batch(shell->launcher, requests, stage_count,
         &interpreter_context, children, &failed_index);
   }
+  for (size_t i = 0; i < stage_count; ++i) {
+    bundle_launch_admitted(prepared[i].bundle_launch, status, children[i]);
+  }
   if (status != CALL_OK) {
     failed_stage = failed_index == LAUNCH_NO_STAGE ? stage_count : failed_index;
     if (failed_stage < stage_count) {
@@ -1112,6 +1139,11 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           stages[i].arguments[0], status != CALL_OK ? status : CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
+  }
+  status = bundle_jobs_reap(&shell->jobs);
+  if (status != CALL_OK) {
+    close_handle(&armed);
+    return shell_directory_error(shell, "shell: job context cleanup", "", status);
   }
   /* Disarm only after every stage finished, so no press reaches the editor. */
   if (!close_handle(&armed)) {

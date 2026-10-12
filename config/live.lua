@@ -14,7 +14,7 @@ return {
   },
   spaces = {
     { name = "development", title = "Development", init = "boot://init",
-      network = true, launch = true, screenshot = true, power = true,
+      network = true, launch = true, jobs = true, screenshot = true, power = true,
       clipboard_local = true, clipboard_shared = true,
       roots = { host = { access = "read-write", optional = true }, home = "read-write" } },
     { name = "readonly", title = "Read-only", init = "boot://init-readonly",

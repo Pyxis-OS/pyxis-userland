@@ -67,6 +67,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   }
   shell->attachment = terminal.attachment;
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
+  bool admission_attempted = false;
   struct network_environment environment = {0};
   struct pyxis_environment_snapshot inherited = {0};
   struct execution_group_create_reply group;
@@ -97,7 +98,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 17, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 18, NAMESPACE_GRANT_COUNT = 1 };
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT] = {
     /* Only the root shell may arm Ctrl+C; its commands receive READ alone. */
@@ -114,6 +115,17 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
+  handle_t provisioner = startup_resource("job_provisioner");
+  if (provisioner != HANDLE_INVALID) {
+    status = job_work_create(provisioner, startup_resource("clock"), &shell->job_provisioner);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    grants[grant_count++] = (struct launch_grant){
+      job_work_directory(shell->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
+    };
+  }
   handle_t child_launcher = startup_resource("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
     struct handle_info info;
@@ -215,9 +227,15 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   }
   request.environment = (uintptr_t)environment.variables;
   request.environment_count = environment.count;
+  admission_attempted = true;
   status = launcher_launch(bound, &request, &shell->process);
 
 done:
+  bool uncertain = admission_attempted && status == CALL_OUTCOME_UNKNOWN;
+  if (status != CALL_OK && !uncertain) {
+    job_work_close(shell->job_provisioner, true);
+    shell->job_provisioner = NULL;
+  }
   network_environment_free(&environment);
   pyxis_environment_snapshot_close(&inherited);
   if (image != HANDLE_INVALID) {
@@ -247,6 +265,7 @@ static void context_close(struct remote_context *context)
   for (size_t i = 0; i < context->grant_count; ++i) {
     owned_close(&context->grants[i].source);
   }
+  owned_close(&context->job_provisioner);
   network_environment_free(&context->environment);
   pyxis_environment_snapshot_close(&context->inherited);
   *context = (struct remote_context){0};
@@ -313,6 +332,14 @@ static enum call_status context_init(struct remote_context *context)
     }
     context->resources[context->resource_count++] =
         (struct launch_binding){(uintptr_t)remote_allowed[i].name, index};
+  }
+  handle_t provisioner = startup_resource("job_provisioner");
+  if (provisioner != HANDLE_INVALID) {
+    status = handle_copy_restricted(provisioner, JOB_PROVISIONER_RIGHTS, 0,
+        &context->job_provisioner);
+    if (status != CALL_OK) {
+      goto failed;
+    }
   }
   handle_t power = startup_resource("remote_power");
   if (power != HANDLE_INVALID) {
@@ -392,7 +419,7 @@ static enum call_status broker_launch(struct remote_context *context,
   *shell = (struct remote_shell){0};
   size_t depth = cwd ? cwd->context.count : 1;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  size_t fixed_grants = FIRST_OPTIONAL + context->grant_count + 3;
+  size_t fixed_grants = FIRST_OPTIONAL + context->grant_count + 4;
   if (depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
       depth > SIZE_MAX / sizeof(uint64_t)) {
     return CALL_LIMIT;
@@ -460,6 +487,17 @@ static enum call_status broker_launch(struct remote_context *context,
     roots[i] = (struct launch_binding){context->roots[i].name,
         context->roots[i].grant + FIRST_OPTIONAL};
   }
+  if (context->job_provisioner != HANDLE_INVALID) {
+    status = job_work_create(context->job_provisioner, startup_resource("clock"),
+        &shell->job_provisioner);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    grants[grant_count++] = (struct launch_grant){
+      job_work_directory(shell->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
+    };
+  }
   if (context->allow_launch) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
@@ -521,6 +559,10 @@ static enum call_status broker_launch(struct remote_context *context,
   }
 
 done:
+  if (status != CALL_OK && status != CALL_OUTCOME_UNKNOWN) {
+    job_work_close(shell->job_provisioner, true);
+    shell->job_provisioner = NULL;
+  }
   owned_close(&image);
   owned_close(&bound);
   owned_close(&terminal.input);
@@ -533,6 +575,8 @@ done:
 
 static void pane_dispose(struct remote_pane *pane)
 {
+  job_work_close(pane->shell.job_provisioner, false);
+  pane->shell.job_provisioner = NULL;
   owned_close(&pane->reply);
   owned_close(&pane->bootstrap);
   pyxis_working_snapshot_close(&pane->cwd);
@@ -781,6 +825,11 @@ bool remote_broker_service(struct remote_broker *broker)
     if (pane->group_ready) {
       enum call_status status = execution_group_wait(pane->shell.group);
       if (status == CALL_OK) {
+        status = job_work_close(pane->shell.job_provisioner, true);
+        pane->shell.job_provisioner = NULL;
+        if (status != CALL_OK) {
+          broker->error = status;
+        }
         pane_dispose(pane);
         progress = true;
       } else {

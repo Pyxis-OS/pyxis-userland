@@ -7,6 +7,7 @@
 #include <path.h>
 #include <term.h>
 #include <startup.h>
+#include <bundle_launch.h>
 
 #define SHELL_LINE_CAPACITY 1024
 /* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
@@ -50,6 +51,7 @@ struct shell_command_line {
 };
 
 struct shell {
+  struct bundle_jobs jobs;
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   /* Root-shell options only; never forwarded to children. */

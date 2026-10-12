@@ -254,7 +254,7 @@ static void read_roots(lua_State *state, struct boot_space *space)
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
-    "network", "launch", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
+    "network", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
     "screenshot", "power", "remote_power"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
@@ -315,6 +315,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: launch must be a boolean", space->name);
   }
   space->launch = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "jobs");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: jobs must be a boolean", space->name);
+  }
+  space->jobs = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "multiplexer");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {

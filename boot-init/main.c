@@ -24,6 +24,7 @@
 #include <handle.h>
 #include <input_policy.h>
 #include <launcher.h>
+#include <job_work.h>
 #include <machine_settings.h>
 #include <mount.h>
 #include <path.h>
@@ -494,7 +495,8 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 7];
+  struct launch_binding resources[SERVICE_COUNT + 8];
+  struct job_work *job_provisioner;
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -524,7 +526,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 7, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 8, sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -564,6 +566,19 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
     launch->roots[launch->root_count++] =
         (struct launch_binding){(uintptr_t)root->volume, launch->grant_count++};
+  }
+  if (space->jobs) {
+    enum call_status status = job_work_create(authority->ram,
+        authority->services[SERVICE_CLOCK], &launch->job_provisioner);
+    if (status != CALL_OK) {
+      snprintf(reason, size, "private job provisioning unavailable (status %u)", status);
+      return reason;
+    }
+    launch->resources[launch->resource_count++] =
+        (struct launch_binding){(uintptr_t)"job_provisioner", launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      job_work_directory(launch->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
+    };
   }
   if (space->launch) {
     /* Ordinary child launch is independent of init's administrative grant. */
@@ -651,7 +666,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     }
   }
 
-  bool started = false;
+  bool started = false, admission_attempted = false;
   enum call_status status;
   if (reason) {
     status = space_create_unstarted(authority->factory, &definition, reason);
@@ -678,6 +693,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     };
     struct path_root roots[] = {{"boot", authority->boot}};
     struct path_context interpreters = {.roots = roots, .root_count = 1};
+    admission_attempted = true;
     status = program_create_space(authority->factory, &definition, cpus,
         authority->cpu_count, &request, &interpreters, &child);
     if (status == CALL_OK) {
@@ -695,6 +711,11 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }
+  /* Successful or uncertain startup leaves the private tree with the space;
+   * local startup deliberately has no retained teardown supervisor. */
+  bool uncertain = admission_attempted && (status == CALL_OUTCOME_UNKNOWN ||
+      status == CALL_BAD_BUFFER);
+  job_work_close(launch.job_provisioner, !started && !uncertain);
   free(launch.roots);
   free(launch.grants);
   free(cpus);

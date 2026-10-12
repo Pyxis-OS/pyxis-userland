@@ -31,6 +31,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <startup.h>
+#include <wait.h>
 #include <stdlib.h>
 
 static enum call_status copy_grant(handle_t source, struct launch_grant *grant)
@@ -50,6 +51,14 @@ void mux_session_release(struct mux_session *session)
   if (session->group != HANDLE_INVALID) {
     execution_group_terminate(session->group);
   }
+  bool retired = false;
+  if (session->group != HANDLE_INVALID) {
+    struct wait_interest interest = {.handle = session->group, .events = WAIT_COMPLETE};
+    uint64_t events;
+    retired = wait_many(&interest, 1, 0, &events) == CALL_OK &&
+        (events & WAIT_COMPLETE) && execution_group_wait(session->group) == CALL_OK;
+  }
+  job_work_close(session->job_provisioner, retired);
   if (session->process != HANDLE_INVALID) {
     handle_close(session->process);
   }
@@ -96,7 +105,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 24, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 25, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
@@ -114,6 +123,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   struct pyxis_environment_snapshot environment = {0};
   struct terminal_create_reply terminal = {0};
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
+  bool admission_attempted = false;
   struct endpoint_create_reply bootstrap = {0};
   status = terminal_create(startup_resource("terminal"), columns, rows,
       &terminal);
@@ -159,6 +169,17 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     session->cwd_bootstrap = bootstrap.receiver;
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"pane_cwd", grant_count};
     grants[grant_count++] = (struct launch_grant){bootstrap.caller, 0, HANDLE_TRANSPORT_SEND};
+  }
+  handle_t provisioner = startup_resource("job_provisioner");
+  if (provisioner != HANDLE_INVALID) {
+    status = job_work_create(provisioner, startup_resource("clock"), &session->job_provisioner);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    grants[grant_count++] = (struct launch_grant){
+      job_work_directory(session->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
+    };
   }
   handle_t child_launcher = startup_resource("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
@@ -254,6 +275,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     }
   }
   request.grant_count = grant_count;
+  admission_attempted = true;
   status = launcher_launch(bound, &request, &session->process);
 
 done:
@@ -275,6 +297,11 @@ done:
   free(grants);
   free(directories);
   if (status != CALL_OK) {
+    bool uncertain = admission_attempted && status == CALL_OUTCOME_UNKNOWN;
+    if (!uncertain) {
+      job_work_close(session->job_provisioner, true);
+      session->job_provisioner = NULL;
+    }
     mux_session_release(session);
   }
   return status;

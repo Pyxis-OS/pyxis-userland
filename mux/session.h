@@ -3,9 +3,11 @@
 
 #include <abi/process.h>
 #include <terminal.h>
+#include <job_work.h>
 #include <pyxis/working_path.h>
 
 struct mux_session {
+  struct job_work *job_provisioner;
   handle_t attachment;
   handle_t group;
   handle_t process;

@@ -34,6 +34,7 @@
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
+#include <job_work.h>
 #include <network_environment.h>
 #include <limits.h>
 #include <startup.h>
@@ -76,7 +77,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 29, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 30, NAMESPACE_GRANT_COUNT = 1 };
   const struct startup_binding *selected_roots = startup_roots();
   size_t root_count = startup_root_count();
   const struct path_context *context;
@@ -148,6 +149,11 @@ static int launch_session(const struct session_config *config, const struct netw
   if (threads != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", grant_count};
     grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
+  }
+  handle_t job_provisioner = startup_resource("job_provisioner");
+  if (job_provisioner != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    grants[grant_count++] = (struct launch_grant){job_provisioner, JOB_PROVISIONER_RIGHTS, 0};
   }
   handle_t child_launcher = startup_resource("child_launcher");
   if (child_launcher != HANDLE_INVALID) {

@@ -208,6 +208,11 @@ int main(int argc, char **argv)
   }
 
   for (;;) {
+    status = bundle_jobs_reap(&shell.jobs);
+    if (status != CALL_OK) {
+      report_directory_error("shell", "job context cleanup", status);
+      break;
+    }
     struct term_line_result read = read_command(&shell, line, &cwd_service.line);
     if (read.status == TERM_LINE_EOF) {
       result = EXIT_SUCCESS;
@@ -262,6 +267,9 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (bundle_jobs_close(&shell.jobs) != CALL_OK) {
+    result = EXIT_FAILURE;
+  }
   pane_cwd_provider_close(&cwd_service.provider);
   if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
     result = EXIT_FAILURE;
