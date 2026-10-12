@@ -51,9 +51,7 @@ static char *join(const char *directory, const char *name, size_t length)
 static void report_failure(const char *source, const char *target, int error)
 {
   struct stat info;
-  if (stat(source, &info) == 0 && S_ISDIR(info.st_mode)) {
-    fprintf(stderr, "mv: %s: Directories cannot be moved\n", source);
-  } else if (error == ENOENT && stat(source, &info) != 0 && errno == ENOENT) {
+  if (error == ENOENT && stat(source, &info) != 0 && errno == ENOENT) {
     fprintf(stderr, "mv: %s: %s\n", source, strerror(ENOENT));
   } else {
     fprintf(stderr, "mv: %s -> %s: %s\n", source, target, strerror(error));

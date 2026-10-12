@@ -118,11 +118,12 @@ enum call_status path_remove(const struct path_context *context, const char *pat
 enum call_status path_create_directory(const struct path_context *context, const char *path,
     struct path_workspace *workspace);
 
-/* Resolve two parents, then rename files atomically with the native policy.
+/* Resolve two parents, then rename files/directories atomically with native policy.
  * Both workspaces must be disjoint and stay alive through the call. Roots,
- * final . or .. and trailing / are rejected; the destination is an exact file
- * path, not a directory to append the source basename to. Context is unchanged,
- * all temporary handles are closed, and no heap allocation occurs here. */
+ * final . or .. are rejected; trailing / requires a directory at the atomic
+ * edit. The destination is an exact path, not a directory to append the source
+ * basename to. Context and its held cwd chain are unchanged, all temporary
+ * handles are closed, and no heap allocation occurs here. */
 enum call_status path_rename(const struct path_context *context, const char *source,
     const char *destination, uint64_t policy, struct path_workspace *source_workspace,
     struct path_workspace *destination_workspace);

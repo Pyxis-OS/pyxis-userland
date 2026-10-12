@@ -518,16 +518,8 @@ static enum call_status rename_parent(const struct path_context *context, const 
   enum call_status status = walk(context, path, WALK_PARENT, 0,
       DIRECTORY_RIGHT_LOOKUP | rights, false, workspace, &count, &unused, NULL, false);
   if (status == CALL_OK) {
-    const char *end = path;
-    while (*end) {
-      ++end;
-    }
-    if (end[-1] == '/') {
-      status = CALL_WRONG_TYPE;
-    } else {
-      *parent = workspace->directories[--count];
-      workspace->directories[count] = HANDLE_INVALID;
-    }
+    *parent = workspace->directories[--count];
+    workspace->directories[count] = HANDLE_INVALID;
   }
   if (count) {
     close_chain(workspace->directories, count);
@@ -560,8 +552,11 @@ enum call_status path_rename(const struct path_context *context, const char *sou
         destination_workspace, &destination_parent);
   }
   if (status == CALL_OK) {
+    uint64_t kind = source[strlen(source) - 1] == '/' ||
+        destination[strlen(destination) - 1] == '/' ?
+        DIRECTORY_KIND_DIRECTORY : DIRECTORY_KIND_ANY;
     status = directory_rename(source_parent, source_workspace->component,
-        destination_parent, destination_workspace->component, policy);
+        destination_parent, destination_workspace->component, policy, kind);
     handle_close(destination_parent);
   }
   handle_close(source_parent);

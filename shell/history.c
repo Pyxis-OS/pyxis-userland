@@ -214,7 +214,7 @@ static enum call_status save_line(struct shell *shell, const char *line, char *b
   }
   if (status == CALL_OK) {
     status = directory_rename(shell->history_home, name, shell->history_home, HISTORY_NAME,
-        DIRECTORY_RENAME_REPLACE);
+        DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE);
   }
   if (status != CALL_OK) {
     directory_remove(shell->history_home, name, DIRECTORY_KIND_FILE);

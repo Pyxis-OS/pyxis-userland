@@ -52,8 +52,10 @@ int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
  * streams keep their object; roots and final . or .. are not removable. */
 int remove(const char *path);
-/* File-only atomic rename/replacement. Paths use explicit startup roots/cwd;
- * directories and cross-filesystem copy fallbacks are not supported. */
+/* Atomic file/directory rename/replacement within one native store instance.
+ * Paths use explicit startup roots/cwd; the destination is an exact name.
+ * Trailing / requires a directory. Roots and final . or .. cannot be moved.
+ * Open handles and retained cwd chains keep their existing authority. */
 int rename(const char *old_path, const char *new_path);
 /* Flush queued output, retaining its unconfirmed suffix on failure; no native
  * SYNC/durability promise. NULL flushes all outputs and reports the first error

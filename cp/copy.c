@@ -138,7 +138,8 @@ enum cp_result cp_copy_file_handle(handle_t input, const char *source, handle_t 
     goto done;
   }
 
-  status = directory_rename(parent, temporary, parent, name, DIRECTORY_RENAME_REPLACE);
+  status = directory_rename(parent, temporary, parent, name, DIRECTORY_RENAME_REPLACE,
+      DIRECTORY_KIND_FILE);
   /* Once publication was attempted, a failed reply cannot justify removing
    * either name. Another cp may already have reused a vacated temporary name. */
   reserved = false;

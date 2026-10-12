@@ -118,7 +118,8 @@ int main(int argc, char **argv)
     goto done;
   }
 
-  status = directory_rename(parent, temporary, parent, name, DIRECTORY_RENAME_REPLACE);
+  status = directory_rename(parent, temporary, parent, name, DIRECTORY_RENAME_REPLACE,
+      DIRECTORY_KIND_FILE);
   /* A failed publication reply cannot establish either name's ownership. */
   reserved = false;
   if (status != CALL_OK) {

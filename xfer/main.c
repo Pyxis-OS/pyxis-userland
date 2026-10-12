@@ -397,7 +397,8 @@ static bool publish_file(struct transfer *transfer, const char *name, bool overw
     return false;
   }
   status = directory_rename(transfer->parent, transfer->stage_name, transfer->parent,
-      name, overwrite ? DIRECTORY_RENAME_REPLACE : DIRECTORY_RENAME_NO_REPLACE);
+      name, overwrite ? DIRECTORY_RENAME_REPLACE : DIRECTORY_RENAME_NO_REPLACE,
+      DIRECTORY_KIND_FILE);
   if (status == CALL_ALREADY_EXISTS) {
     term_print(&transfer->wire.terminal, "xfer: ");
     term_print(&transfer->wire.terminal, name);

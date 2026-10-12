@@ -89,7 +89,7 @@ enum call_status directory_remove(handle_t directory, const char *name, uint64_t
 }
 
 enum call_status directory_rename(handle_t source, const char *source_name,
-    handle_t destination, const char *destination_name, uint64_t policy)
+    handle_t destination, const char *destination_name, uint64_t policy, uint64_t kind)
 {
   if (!source_name || !destination_name) {
     return CALL_BAD_REQUEST;
@@ -104,7 +104,7 @@ enum call_status directory_rename(handle_t source, const char *source_name,
   struct directory_message message = {
     .header = {PROTOCOL_DIRECTORY, DIRECTORY_RENAME},
     .body.rename = {(uintptr_t)source_name, source_length, destination,
-                   (uintptr_t)destination_name, destination_length, policy},
+                   (uintptr_t)destination_name, destination_length, policy, kind},
   };
   return call_status(syscall_call(source, &message, sizeof(message), NULL, 0), 0);
 }
