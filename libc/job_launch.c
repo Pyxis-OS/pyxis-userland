@@ -10,8 +10,10 @@
 #include <pyxis/job.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syscall.h>
 #include "descriptor.h"
 #include "job_internal.h"
+#include "job_pipeline_launch.h"
 
 struct job_preparation {
   struct launch_request request;
@@ -21,6 +23,13 @@ struct job_preparation {
   struct launch_grant *grants;
   size_t copied_grants;
   handle_t image, launcher;
+};
+
+struct libc_pipeline_launch {
+  struct job_preparation stages[LAUNCH_BATCH_MAX];
+  size_t count;
+  handle_t private_root;
+  bool attempted;
 };
 
 /* Match the kernel's capture order and eight-byte array alignment, so this
@@ -135,7 +144,7 @@ static enum call_status validate_startup_size(const struct launch_request *reque
 }
 
 static enum call_status capture_metadata(struct job_preparation *prepared,
-    const struct pyxis_job_options *options)
+    const struct pyxis_job_options *options, const bool *pipe_streams)
 {
   size_t depth = options->working ? options->working->context.count : 0;
   size_t environment_count = options->environment ? options->environment->count : 0;
@@ -171,7 +180,7 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     if (options->streams[i] < -1) {
       return CALL_BAD_REQUEST;
     }
-    if (options->streams[i] >= 0) {
+    if (options->streams[i] >= 0 || (pipe_streams && pipe_streams[i])) {
       if (grant_count == limit) {
         return CALL_BAD_REQUEST;
       }
@@ -214,8 +223,11 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     };
   }
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    if (options->streams[i] >= 0) {
+    if (options->streams[i] >= 0 || (pipe_streams && pipe_streams[i])) {
       request->streams[i].grant = next++;
+      if (pipe_streams && pipe_streams[i]) {
+        request->streams[i].protocol = PROTOCOL_PIPE;
+      }
     }
   }
   if (options->working && options->working->path) {
@@ -297,18 +309,11 @@ static enum call_status capture_stream(struct job_preparation *prepared,
   return CALL_OK;
 }
 
-static enum call_status capture_handles(struct job_preparation *prepared,
-    handle_t launcher, const struct pyxis_job_options *options, handle_t private_root)
+static enum call_status select_handles(struct job_preparation *prepared,
+    const struct pyxis_job_options *options)
 {
   struct handle_info info;
-  enum call_status status = handle_query(launcher, &info);
-  if (status != CALL_OK) {
-    return status;
-  }
-  if (info.protocol != PROTOCOL_LAUNCHER || info.kind != HANDLE_KIND_NATIVE || info.transport) {
-    return CALL_WRONG_TYPE;
-  }
-  status = handle_query(options->image, &info);
+  enum call_status status = handle_query(options->image, &info);
   if (status != CALL_OK) {
     return status;
   }
@@ -340,6 +345,56 @@ static enum call_status capture_handles(struct job_preparation *prepared,
       return CALL_WRONG_TYPE;
     }
   }
+  return CALL_OK;
+}
+
+static enum call_status validate_launcher(handle_t launcher)
+{
+  struct handle_info info;
+  enum call_status status = handle_query(launcher, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  return info.protocol == PROTOCOL_LAUNCHER && info.kind == HANDLE_KIND_NATIVE &&
+      !info.transport ? CALL_OK : CALL_WRONG_TYPE;
+}
+
+static enum call_status copy_grants(struct job_preparation *prepared, size_t count)
+{
+  for (size_t i = prepared->copied_grants; i < count; ++i) {
+    struct launch_grant *grant = &prepared->grants[i];
+    handle_t copy;
+    enum call_status status = handle_copy_restricted(grant->source,
+        grant->rights, grant->transport, &copy);
+    if (status != CALL_OK) {
+      return status;
+    }
+    grant->source = copy;
+    ++prepared->copied_grants;
+  }
+  return CALL_OK;
+}
+
+static enum call_status copy_image(struct job_preparation *prepared, handle_t image)
+{
+  enum call_status status = handle_copy_restricted(image, FILE_RIGHT_READ, 0,
+      &prepared->image);
+  if (status == CALL_OK) {
+    prepared->request.image = prepared->image;
+  }
+  return status;
+}
+
+static enum call_status capture_handles(struct job_preparation *prepared,
+    handle_t launcher, const struct pyxis_job_options *options, handle_t private_root)
+{
+  enum call_status status = validate_launcher(launcher);
+  if (status == CALL_OK) {
+    status = select_handles(prepared, options);
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     if (options->streams[i] >= 0) {
       status = capture_stream(prepared, options->streams[i], i);
@@ -366,22 +421,11 @@ static enum call_status capture_handles(struct job_preparation *prepared,
   if (status != CALL_OK) {
     return status;
   }
-  status = handle_copy_restricted(options->image, FILE_RIGHT_READ, 0, &prepared->image);
+  status = copy_image(prepared, options->image);
   if (status != CALL_OK) {
     return status;
   }
-  prepared->request.image = prepared->image;
-  for (size_t i = 0; i < prepared->request.grant_count; ++i) {
-    struct launch_grant *grant = &prepared->grants[i];
-    handle_t copy;
-    status = handle_copy_restricted(grant->source, grant->rights, grant->transport, &copy);
-    if (status != CALL_OK) {
-      return status;
-    }
-    grant->source = copy;
-    ++prepared->copied_grants;
-  }
-  return CALL_OK;
+  return copy_grants(prepared, prepared->request.grant_count);
 }
 
 static void discard_preparation(struct job_preparation *prepared)
@@ -408,7 +452,7 @@ enum call_status libc_job_launch(handle_t launcher,
   if (!prepared.metadata) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = capture_metadata(&prepared, &selected);
+  enum call_status status = capture_metadata(&prepared, &selected, NULL);
   if (status == CALL_OK) {
     status = capture_handles(&prepared, launcher, &selected, private_root);
   }
@@ -427,4 +471,178 @@ enum call_status libc_job_launch(handle_t launcher,
   discard_preparation(&prepared);
   errno = saved_errno;
   return status;
+}
+
+static enum call_status release_handle(handle_t handle)
+{
+  if (handle == HANDLE_INVALID) {
+    return CALL_OK;
+  }
+  struct syscall_result result = syscall_close(handle);
+  return result.status >= CALL_STATUS_COUNT || result.reply_size ?
+      CALL_OUTCOME_UNKNOWN : result.status;
+}
+
+enum call_status libc_pipeline_discard(struct libc_pipeline_launch *prepared)
+{
+  if (!prepared) {
+    return CALL_OK;
+  }
+  enum call_status error = CALL_OK;
+  for (size_t i = 0; i < prepared->count; ++i) {
+    struct job_preparation *stage = &prepared->stages[i];
+    for (size_t j = 0; j < stage->copied_grants; ++j) {
+      enum call_status status = release_handle(stage->grants[j].source);
+      if (error == CALL_OK) {
+        error = status;
+      }
+    }
+    enum call_status status = release_handle(stage->image);
+    if (error == CALL_OK) {
+      error = status;
+    }
+    free(stage->metadata);
+  }
+  enum call_status status = release_handle(prepared->private_root);
+  if (error == CALL_OK) {
+    error = status;
+  }
+  free(prepared);
+  return error;
+}
+
+enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
+    size_t count, handle_t private_root, bool has_input,
+    struct libc_pipeline_launch **result)
+{
+  if (result) {
+    *result = NULL;
+  }
+  if (!result || !stages || !count || count > LAUNCH_BATCH_MAX ||
+      private_root == HANDLE_INVALID) {
+    return CALL_BAD_REQUEST;
+  }
+  struct libc_pipeline_launch *prepared = calloc(1, sizeof(*prepared));
+  if (!prepared) {
+    return CALL_NO_MEMORY;
+  }
+  prepared->count = count;
+  enum call_status status = CALL_OK;
+  for (size_t i = 0; i < count; ++i) {
+    for (size_t j = 0; j < STARTUP_STREAM_COUNT; ++j) {
+      if (stages[i].streams[j] != -1) {
+        status = CALL_BAD_REQUEST;
+        break;
+      }
+    }
+    if (status != CALL_OK) {
+      break;
+    }
+    struct job_preparation *stage = &prepared->stages[i];
+    stage->metadata = malloc(LAUNCH_CAPTURE_MAX_SIZE);
+    if (!stage->metadata) {
+      status = CALL_NO_MEMORY;
+      break;
+    }
+    const bool pipe_streams[STARTUP_STREAM_COUNT] = {i != 0 || has_input, true, true};
+    status = capture_metadata(stage, &stages[i], pipe_streams);
+    if (status != CALL_OK) {
+      break;
+    }
+  }
+  if (status == CALL_OK) {
+    /* Holding the identity requires no directory content authority. */
+    status = handle_copy_restricted(private_root, 0, 0, &prepared->private_root);
+  }
+  for (size_t i = 0; i < count && status == CALL_OK; ++i) {
+    struct job_preparation *stage = &prepared->stages[i];
+    status = select_handles(stage, &stages[i]);
+    size_t stream_count = STARTUP_STREAM_COUNT - (i == 0 && !has_input);
+    size_t selected_count = stage->request.grant_count - stream_count;
+    if (status == CALL_OK) {
+      status = libc_job_validate_capture_grants(stage->grants, selected_count,
+          private_root);
+    }
+    if (status == CALL_OK) {
+      status = copy_image(stage, stages[i].image);
+    }
+    if (status == CALL_OK) {
+      status = copy_grants(stage, selected_count);
+    }
+  }
+  if (status != CALL_OK) {
+    libc_pipeline_discard(prepared);
+    return status;
+  }
+  *result = prepared;
+  return CALL_OK;
+}
+
+enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
+    handle_t launcher, const handle_t streams[][STARTUP_STREAM_COUNT],
+    handle_t *observers, uint64_t *failed_index)
+{
+  if (prepared && prepared->attempted) {
+    return CALL_BUSY;
+  }
+  if (failed_index) {
+    *failed_index = LAUNCH_NO_STAGE;
+  }
+  if (prepared && observers) {
+    for (size_t i = 0; i < prepared->count; ++i) {
+      observers[i] = HANDLE_INVALID;
+    }
+  }
+  if (!prepared || !streams || !observers || !failed_index) {
+    return CALL_BAD_REQUEST;
+  }
+  prepared->attempted = true;
+  enum call_status status = validate_launcher(launcher);
+  if (status != CALL_OK) {
+    return status;
+  }
+  for (size_t i = 0; i < prepared->count; ++i) {
+    struct job_preparation *stage = &prepared->stages[i];
+    for (size_t j = 0; j < STARTUP_STREAM_COUNT; ++j) {
+      struct launch_stream *stream = &stage->request.streams[j];
+      if (stream->protocol == STARTUP_STREAM_NONE) {
+        if (streams[i][j] != HANDLE_INVALID) {
+          status = CALL_BAD_REQUEST;
+          break;
+        }
+        continue;
+      }
+      struct handle_info info;
+      status = handle_query(streams[i][j], &info);
+      if (status != CALL_OK) {
+        break;
+      }
+      if (info.protocol != PROTOCOL_PIPE || info.kind != HANDLE_KIND_NATIVE || info.transport) {
+        status = CALL_WRONG_TYPE;
+        break;
+      }
+      stage->grants[stream->grant] = (struct launch_grant){
+        streams[i][j], j == STARTUP_STDIN ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE, 0,
+      };
+    }
+    if (status == CALL_OK) {
+      status = libc_job_validate_capture_grants(stage->grants,
+          stage->request.grant_count, prepared->private_root);
+    }
+    if (status != CALL_OK) {
+      *failed_index = i;
+      return status;
+    }
+  }
+  struct launch_request requests[LAUNCH_BATCH_MAX];
+  for (size_t i = 0; i < prepared->count; ++i) {
+    struct job_preparation *stage = &prepared->stages[i];
+    status = copy_grants(stage, stage->request.grant_count);
+    if (status != CALL_OK) {
+      *failed_index = i;
+      return status;
+    }
+    requests[i] = stage->request;
+  }
+  return launcher_launch_batch(launcher, requests, prepared->count, observers, failed_index);
 }
