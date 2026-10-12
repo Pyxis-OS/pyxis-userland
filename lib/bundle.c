@@ -6,6 +6,7 @@
 #include <abi/echo.h>
 #include <abi/launcher.h>
 #include <abi/memory.h>
+#include <abi/thread.h>
 #include <abi/pipe.h>
 #include <abi/profile.h>
 #include <abi/random.h>
@@ -62,6 +63,7 @@ struct grant_right {
 /* The manifest requests named ordinary interfaces, never numeric authority. */
 static const struct grant_right grant_rights[] = {
   {"memory", "manage", PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
+  {"threads", "manage", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE},
   {"clock", "read", PROTOCOL_CLOCK, CLOCK_RIGHT_READ},
   {"clock", "sleep", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP},
   {"launcher", "launch", PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},

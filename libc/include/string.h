@@ -55,6 +55,8 @@ char *strndup(const char *text, size_t limit);
 
 /* Static message storage; callers must not modify it. */
 char *strerror(int error);
+/* XSI form: copy the immutable C-locale message; return an error number. */
+int strerror_r(int error, char *buffer, size_t size);
 
 #ifdef __cplusplus
 }

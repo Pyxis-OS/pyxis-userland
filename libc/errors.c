@@ -65,6 +65,20 @@ int libc_path_errno(enum call_status status, const char *path, const char *other
   return libc_call_errno(status);
 }
 
+int strerror_r(int error, char *buffer, size_t size)
+{
+  if (error < 0 || error > ECANCELED) {
+    return EINVAL;
+  }
+  const char *message = strerror(error);
+  size_t length = strlen(message);
+  if (!buffer || size <= length) {
+    return ERANGE;
+  }
+  memcpy(buffer, message, length + 1);
+  return 0;
+}
+
 char *strerror(int error)
 {
   switch (error) {
