@@ -223,6 +223,7 @@ int threadprobe_runtime_time(void)
   valid &= pthread_mutexattr_settype(&mutex_attributes, PTHREAD_MUTEX_ERRORCHECK) == ENOTSUP;
   pthread_attr_t thread_attributes;
   valid &= pthread_attr_init(&thread_attributes) == 0;
+  valid &= pthread_attr_setstacksize(&thread_attributes, 1024 * 1024 + 1) == EINVAL;
   valid &= pthread_attr_setdetachstate(&thread_attributes, PTHREAD_CREATE_DETACHED) == ENOTSUP;
   valid &= pthread_detach(pthread_self()) == ENOTSUP;
   valid &= pthread_join(pthread_self(), NULL) == EDEADLK;

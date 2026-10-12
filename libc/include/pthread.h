@@ -54,6 +54,7 @@ extern "C" {
  * robust recovery and process-shared synchronization are outside this profile. */
 int pthread_attr_init(pthread_attr_t *attributes);
 int pthread_attr_destroy(pthread_attr_t *attributes);
+/* Explicit stack sizes are page-aligned and initially limited to 1–8 MiB. */
 int pthread_attr_setstacksize(pthread_attr_t *attributes, size_t size);
 int pthread_attr_getstacksize(const pthread_attr_t *attributes, size_t *size);
 int pthread_attr_setdetachstate(pthread_attr_t *attributes, int state);

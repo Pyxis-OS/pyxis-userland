@@ -209,7 +209,8 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
     void *(*pthread_start)(void *), thrd_start_t c11_start, void *argument)
 {
   if (!thread || (!pthread_start && !c11_start) ||
-      stack_size < LIBC_THREAD_STACK_MIN || stack_size > LIBC_THREAD_STACK_MAX) {
+      stack_size < LIBC_THREAD_STACK_MIN || stack_size > LIBC_THREAD_STACK_MAX ||
+      stack_size % MEMORY_PAGE_SIZE) {
     return EINVAL;
   }
   if (service == HANDLE_INVALID || memory == HANDLE_INVALID || !libc_thread_self()) {
@@ -340,7 +341,8 @@ int pthread_attr_destroy(pthread_attr_t *attributes)
 
 int pthread_attr_setstacksize(pthread_attr_t *attributes, size_t size)
 {
-  if (!attributes || size < LIBC_THREAD_STACK_MIN || size > LIBC_THREAD_STACK_MAX) {
+  if (!attributes || size < LIBC_THREAD_STACK_MIN || size > LIBC_THREAD_STACK_MAX ||
+      size % MEMORY_PAGE_SIZE) {
     return EINVAL;
   }
   attributes->stack_size = size;
