@@ -11,34 +11,6 @@
 
 #define HTTP_CHUNK_LINE_MAX 8192
 
-enum body_stage {
-  BODY_FIXED,
-  BODY_CLOSE,
-  BODY_CHUNK_SIZE,
-  BODY_CHUNK_DATA,
-  BODY_CHUNK_END,
-  BODY_TRAILERS,
-  BODY_FRAMED,
-};
-
-struct http_stream {
-  struct http_authority authority;
-  struct http_response *result;
-  handle_t stream;
-  struct tls_connection *tls;
-  uint64_t deadline, remaining;
-  struct http_response_limits limit;
-  size_t header_receive_max, buffered, header_bytes, fields;
-  enum body_stage stage;
-  char bytes[HTTP_HEADERS_MAX];
-  struct phr_header headers[HTTP_FIELDS_MAX];
-};
-
-struct framing {
-  bool length_present, chunked;
-  uint64_t length;
-};
-
 static bool fail(struct http_stream *fetch, enum http_error error)
 {
   if (fetch->result->error == HTTP_OK) {
@@ -65,6 +37,17 @@ static bool check_deadline(struct http_stream *fetch)
     return false;
   }
   return network(fetch, now >= fetch->deadline ? CALL_TIMED_OUT : CALL_OK);
+}
+
+bool http_deadline(struct http_stream *fetch, uint64_t maximum, uint64_t *deadline)
+{
+  uint64_t now;
+  if (!network(fetch, clock_now(fetch->authority.clock, &now)) ||
+      !network(fetch, now < fetch->deadline ? CALL_OK : CALL_TIMED_OUT)) {
+    return false;
+  }
+  *deadline = fetch->deadline - now > maximum ? now + maximum : fetch->deadline;
+  return true;
 }
 
 static void consume(struct http_stream *fetch, size_t count)
@@ -98,9 +81,26 @@ static bool receive(struct http_stream *fetch, size_t capacity, bool *eof)
       available = TCP_READ_MAX_BYTES;
     }
     struct tcp_read_reply reply;
-    if (!network(fetch, tcp_read(fetch->stream, fetch->bytes + fetch->buffered,
-        available, fetch->deadline, &reply))) {
-      return false;
+    for (;;) {
+      uint64_t deadline;
+      if (!http_deadline(fetch, TCP_READ_MAX_WAIT_NS, &deadline)) {
+        return false;
+      }
+      enum call_status status = tcp_read(fetch->stream, fetch->bytes + fetch->buffered,
+          available, deadline, &reply);
+      if (status == CALL_TIMED_OUT) {
+        if (!check_deadline(fetch)) {
+          return false;
+        }
+        status = tcp_try_read(fetch->stream, fetch->bytes + fetch->buffered, available, &reply);
+        if (status == CALL_WOULD_BLOCK) {
+          continue;
+        }
+      }
+      if (!network(fetch, status)) {
+        return false;
+      }
+      break;
     }
     length = reply.length;
     *eof = length == 0;
@@ -261,72 +261,76 @@ static bool parse_fields(struct http_stream *fetch, size_t count, struct framing
   return !(framing->chunked && framing->length_present) || fail(fetch, HTTP_BAD_RESPONSE);
 }
 
-static bool response_headers(struct http_stream *fetch, struct framing *framing)
+int http_parse_response_headers(struct http_stream *fetch, struct framing *framing)
 {
-  size_t previous = 0;
   for (;;) {
     if (!check_deadline(fetch)) {
-      return false;
+      return -1;
     }
     int minor, status;
     const char *message;
     size_t message_size, field_limit = fetch->limit.fields - fetch->fields;
     size_t count = field_limit;
     int parsed = phr_parse_response(fetch->bytes, fetch->buffered, &minor, &status,
-        &message, &message_size, fetch->headers, &count, previous);
+        &message, &message_size, fetch->headers, &count, fetch->header_previous);
     if (parsed == -2) {
-      previous = fetch->buffered;
-      if (!receive_headers(fetch)) {
-        return false;
-      }
-      continue;
+      fetch->header_previous = fetch->buffered;
+      return 0;
     }
     if (parsed < 0) {
-      return fail(fetch, count == field_limit ? HTTP_LIMIT : HTTP_BAD_RESPONSE);
+      fail(fetch, count == field_limit ? HTTP_LIMIT : HTTP_BAD_RESPONSE);
+      return -1;
     }
     if (status >= 200) {
       fetch->result->status = status;
     }
     if (!count_headers(fetch, parsed, count)) {
-      return false;
+      return -1;
     }
     if (minor > 1) {
-      return fail(fetch, HTTP_UNSUPPORTED);
+      fail(fetch, HTTP_UNSUPPORTED);
+      return -1;
     }
     *framing = (struct framing){0};
     bool redirect = status == 301 || status == 302 || status == 303 ||
         status == 307 || status == 308;
     if (!parse_fields(fetch, count, framing, false, redirect)) {
-      return false;
+      return -1;
     }
     consume(fetch, parsed);
     if (status >= 100 && status < 200) {
       if (status == 101) {
-        return fail(fetch, HTTP_UNSUPPORTED);
+        fail(fetch, HTTP_UNSUPPORTED);
+        return -1;
       }
       if (framing->chunked || framing->length_present) {
-        return fail(fetch, HTTP_BAD_RESPONSE);
+        fail(fetch, HTTP_BAD_RESPONSE);
+        return -1;
       }
       if (fetch->result->consumed.informational == fetch->limit.informational) {
-        return fail(fetch, HTTP_LIMIT);
+        fail(fetch, HTTP_LIMIT);
+        return -1;
       }
       ++fetch->result->consumed.informational;
       fetch->result->media_type[0] = 0;
-      previous = 0;
+      fetch->header_previous = 0;
       continue;
     }
     if (status < 200 || status > 599) {
-      return fail(fetch, HTTP_BAD_RESPONSE);
+      fail(fetch, HTTP_BAD_RESPONSE);
+      return -1;
     }
     if (minor == 0 && framing->chunked) {
-      return fail(fetch, HTTP_BAD_RESPONSE);
+      fail(fetch, HTTP_BAD_RESPONSE);
+      return -1;
     }
     if (status == 204 && (framing->length_present || framing->chunked)) {
-      return fail(fetch, HTTP_BAD_RESPONSE);
+      fail(fetch, HTTP_BAD_RESPONSE);
+      return -1;
     }
     fetch->result->length_present = framing->length_present;
     fetch->result->length = framing->length;
-    return true;
+    return 1;
   }
 }
 
@@ -457,61 +461,18 @@ static bool resolve(struct http_stream *fetch, const char *host, uint32_t *addre
   return true;
 }
 
-static bool send_bytes(struct http_stream *fetch, const char *bytes, size_t size,
-    size_t *accepted)
-{
-  if (!check_deadline(fetch)) {
-    return false;
-  }
-  if (fetch->tls) {
-    if (!tls_write(fetch->tls, bytes, size, accepted, &fetch->result->tls_failure)) {
-      return fail(fetch, HTTP_TLS_ERROR);
-    }
-  } else {
-    if (size > TCP_WRITE_MAX_BYTES) {
-      size = TCP_WRITE_MAX_BYTES;
-    }
-    struct tcp_write_reply reply;
-    if (!network(fetch, tcp_write(fetch->stream, bytes, size, fetch->deadline, &reply))) {
-      return false;
-    }
-    *accepted = reply.length;
-  }
-  return *accepted > 0 || network(fetch, CALL_IO);
-}
-
-static bool send_request(struct http_stream *fetch, const struct http_uri *uri)
-{
-  char request[HTTP_URI_MAX + 384];
-  int length = snprintf(request, sizeof(request),
-      "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nAccept-Encoding: identity\r\n\r\n",
-      uri->target, uri->authority);
-  if (length < 0 || (size_t)length >= sizeof(request)) {
-    return fail(fetch, HTTP_LIMIT);
-  }
-  size_t sent = 0;
-  while (sent < (size_t)length) {
-    size_t accepted;
-    if (!send_bytes(fetch, request + sent, length - sent, &accepted)) {
-      return false;
-    }
-    sent += accepted;
-  }
-  return true;
-}
-
 static enum call_status close_transport(struct http_stream *fetch, bool framed)
 {
   enum call_status status = CALL_OK;
   if (fetch->tls) {
-    if (framed) {
+    if (framed && fetch->result->request_sent) {
       tls_close_notify(fetch->tls, &fetch->result->tls_cleanup);
     }
     tls_connection_free(fetch->tls);
     fetch->tls = NULL;
   }
   if (fetch->stream != HANDLE_INVALID) {
-    if (!framed) {
+    if (!framed || !fetch->result->request_sent) {
       status = tcp_abort(fetch->stream);
     } else {
       tcp_shutdown_write(fetch->stream);
@@ -536,8 +497,9 @@ static enum http_read_result finish(struct http_stream *fetch, bool framed)
   return success ? HTTP_READ_COMPLETE : HTTP_READ_FAILED;
 }
 
-struct http_stream *http_get_open_prefetch(const struct http_client *client,
-    const char *uri_text, uint64_t deadline_ns, const struct http_response_limits *limits,
+static struct http_stream *request_open(const struct http_client *client,
+    const char *uri_text, const struct http_request *request, uint64_t deadline_ns,
+    const struct http_response_limits *limits,
     size_t header_receive_max, struct http_response *result)
 {
   *result = (struct http_response){.state = HTTP_RESPONSE_FAILED};
@@ -569,13 +531,18 @@ struct http_stream *http_get_open_prefetch(const struct http_client *client,
     result->error = HTTP_NETWORK_ERROR;
     return NULL;
   }
-  if (now > UINT64_MAX - HTTP_FETCH_NS) {
-    result->error = HTTP_LIMIT;
-    return NULL;
+  uint64_t deadline = deadline_ns;
+  if (!deadline) {
+    if (now > UINT64_MAX - HTTP_FETCH_NS) {
+      result->error = HTTP_LIMIT;
+      return NULL;
+    }
+    deadline = now + HTTP_FETCH_NS;
   }
-  uint64_t deadline = now + HTTP_FETCH_NS;
-  if (deadline_ns && deadline_ns < deadline) {
-    deadline = deadline_ns;
+  if (now >= deadline) {
+    result->error = HTTP_NETWORK_ERROR;
+    result->network_status = CALL_TIMED_OUT;
+    return NULL;
   }
   struct http_uri uri;
   result->error = http_parse_uri(uri_text, &uri);
@@ -591,9 +558,14 @@ struct http_stream *http_get_open_prefetch(const struct http_client *client,
     result->tls_failure.error = TLS_BAD_STATE;
     return NULL;
   }
+  struct http_outgoing outgoing;
+  if (!http_prepare_request(request, &uri, &outgoing, result)) {
+    return NULL;
+  }
   struct http_stream *fetch = calloc(1, sizeof(*fetch));
   if (!fetch) {
     result->error = HTTP_NO_MEMORY;
+    http_release_request(&outgoing);
     return NULL;
   }
   fetch->authority = *authority;
@@ -605,8 +577,10 @@ struct http_stream *http_get_open_prefetch(const struct http_client *client,
   uint32_t address;
   struct tcp_connect_reply connection;
   struct framing framing;
+  uint64_t connect_deadline;
   if (!check_deadline(fetch) || !resolve(fetch, uri.host, &address) ||
-      !network(fetch, tcp_connect(authority->tcp, address, uri.port, deadline, &connection))) {
+      !http_deadline(fetch, TCP_CONNECT_MAX_WAIT_NS, &connect_deadline) ||
+      !network(fetch, tcp_connect(authority->tcp, address, uri.port, connect_deadline, &connection))) {
     goto failed;
   }
   fetch->stream = connection.handle;
@@ -618,19 +592,36 @@ struct http_stream *http_get_open_prefetch(const struct http_client *client,
       goto failed;
     }
   }
-  if (!send_request(fetch, &uri) || !response_headers(fetch, &framing) || !check_deadline(fetch)) {
+  if (!http_exchange_request(fetch, &outgoing, &framing) || !check_deadline(fetch)) {
     goto failed;
   }
   fetch->remaining = framing.length;
   fetch->stage = result->status == 204 || result->status == 304 ? BODY_FRAMED :
       framing.chunked ? BODY_CHUNK_SIZE : framing.length_present ? BODY_FIXED : BODY_CLOSE;
   result->state = HTTP_RESPONSE_PENDING;
+  http_release_request(&outgoing);
   return fetch;
 
 failed:
+  http_release_request(&outgoing);
   close_transport(fetch, false);
   free(fetch);
   return NULL;
+}
+
+struct http_stream *http_request_open(const struct http_client *client, const char *uri,
+    const struct http_request *request, uint64_t deadline_ns,
+    const struct http_response_limits *limits, struct http_response *response)
+{
+  return request_open(client, uri, request, deadline_ns, limits, HTTP_HEADERS_MAX, response);
+}
+
+struct http_stream *http_get_open_prefetch(const struct http_client *client,
+    const char *uri, uint64_t deadline_ns, const struct http_response_limits *limits,
+    size_t header_receive_max, struct http_response *response)
+{
+  const struct http_request request = {.method = HTTP_METHOD_GET};
+  return request_open(client, uri, &request, deadline_ns, limits, header_receive_max, response);
 }
 
 struct http_stream *http_get_open(const struct http_client *client, const char *uri,
@@ -814,7 +805,8 @@ const char *http_error_name(enum http_error error)
   case HTTP_DNS_ERROR: return "DNS answer unavailable or invalid";
   case HTTP_TLS_ERROR: return "TLS operation failed";
   case HTTP_ABORTED: return "response abandoned before completion";
-  case HTTP_BAD_ARGUMENT: return "invalid HTTP stream argument";
+  case HTTP_BAD_ARGUMENT: return "invalid HTTP argument";
+  case HTTP_SOURCE_ERROR: return "request source unavailable or changed";
   default: return "invalid result";
   }
 }
@@ -861,6 +853,7 @@ enum call_status http_result_status(const struct http_result *result)
   case HTTP_BAD_ARGUMENT:
     return CALL_BAD_REQUEST;
   case HTTP_ABORTED:
+  case HTTP_SOURCE_ERROR:
   case HTTP_BAD_RESPONSE:
     return CALL_IO;
   case HTTP_REJECTED_STATUS:

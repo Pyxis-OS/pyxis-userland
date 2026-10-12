@@ -1,4 +1,5 @@
 #include "internal.h"
+#include <clock.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -174,6 +175,20 @@ void http_fetch(const struct http_client *client, struct http_storage *storage,
   size_t header_receive_max = limit.body_bytes ? limit.body_bytes : 1;
   if (header_receive_max > HTTP_HEADERS_MAX) {
     header_receive_max = HTTP_HEADERS_MAX;
+  }
+  uint64_t now;
+  result->network_status = client ? clock_now(client->authority.clock, &now) : CALL_BAD_REQUEST;
+  if (result->network_status != CALL_OK) {
+    result->error = HTTP_NETWORK_ERROR;
+    goto failed;
+  }
+  if (now > UINT64_MAX - HTTP_FETCH_NS) {
+    result->error = HTTP_LIMIT;
+    goto failed;
+  }
+  uint64_t maximum = now + HTTP_FETCH_NS;
+  if (!deadline_ns || deadline_ns > maximum) {
+    deadline_ns = maximum;
   }
   struct http_response response;
   struct http_stream *stream = http_get_open_prefetch(client, uri, deadline_ns,

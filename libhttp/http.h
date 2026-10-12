@@ -12,6 +12,8 @@
 #define HTTP_STORAGE_MAX (64 * 1024 * 1024)
 #define HTTP_MEDIA_TYPE_MAX 127
 #define HTTP_READ_MAX 4096
+#define HTTP_REQUEST_HEADERS_MAX 32768
+#define HTTP_REQUEST_FIELDS_MAX 256
 
 /* Borrowed explicit authorities and a numeric DNS server, all host-order.
  * UDP/random/server are only needed for names, not numeric IPv4 addresses. */
@@ -57,6 +59,7 @@ enum http_error {
   HTTP_TLS_ERROR,
   HTTP_ABORTED,
   HTTP_BAD_ARGUMENT,
+  HTTP_SOURCE_ERROR,
 };
 
 enum http_response_state {
@@ -80,11 +83,49 @@ struct http_response {
   struct tls_result tls_failure, tls_cleanup;
   bool length_present, invalid_location;
   uint64_t length;
+  enum call_status source_status;
+  bool request_started, request_sent;
+  uint64_t upload_bytes;
   char media_type[HTTP_MEDIA_TYPE_MAX + 1];
   char location[HTTP_URI_MAX + 1];
 };
 
 struct http_stream;
+
+enum http_method {
+  HTTP_METHOD_GET,
+  HTTP_METHOD_POST,
+};
+
+struct http_request_header {
+  const char *name, *value;
+  size_t name_length, value_length;
+};
+
+/* Headers are bounded wire fields, not C strings. POST borrows a native FILE
+ * with READ and its exact frozen size; read from offset zero without changing
+ * any shared position. The caller owns freezing and keeps it valid/unchanged
+ * through open. GET has no body. No provider authority is acquired here. */
+struct http_request {
+  enum http_method method;
+  const struct http_request_header *headers;
+  size_t header_count;
+  handle_t body;
+  uint64_t body_length;
+};
+
+/* One request, no redirect/reconnect/replay. Validate all headers and body
+ * authority/size before connecting. Copy headers privately and erase the copy
+ * after sending or failure; input fields are borrowed only through open.
+ * Zero deadline selects 30 seconds; an explicit absolute deadline may be longer.
+ * DNS/connect/upload/response share it; native waits stay bounded separately.
+ * An early final response stops upload and retains its status/body. Started
+ * means sending was attempted; sent/upload_bytes report known local acceptance,
+ * never remote execution or acknowledgment. Failure after start can be unknown
+ * even with zero reported bytes. The stream/response ownership is as below. */
+struct http_stream *http_request_open(const struct http_client *client, const char *uri,
+    const struct http_request *request, uint64_t deadline_ns,
+    const struct http_response_limits *limits, struct http_response *response);
 
 enum http_read_result {
   HTTP_READ_DATA,
@@ -94,7 +135,7 @@ enum http_read_result {
 
 /* One synchronous GET through headers, no redirect/replay. NULL limits select
  * bounded ordinary metadata limits. Bodies have no total-byte allowance.
- * One overall 30-second/earlier-caller deadline remains until task 2.
+ * Zero deadline selects 30 seconds; an explicit absolute deadline may be longer.
  * RESPONSE is caller-owned: observe without modifying it while live, and retain
  * it until close; failure initializes it
  * and returns NULL. Borrowed handles/runtime must remain valid until close.
