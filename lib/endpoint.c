@@ -302,12 +302,13 @@ enum call_status endpoint_send(handle_t caller, const void *bytes, size_t size,
   return endpoint_notify(caller, 0, 0, bytes, size, grants, grant_count);
 }
 
-enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request)
+static enum call_status receive(handle_t receiver, uint64_t operation,
+    struct endpoint_packet *request)
 {
   if (!request) {
     return CALL_BAD_REQUEST;
   }
-  struct message_header message = {PROTOCOL_ENDPOINT_RECEIVER, ENDPOINT_RECEIVE};
+  struct message_header message = {PROTOCOL_ENDPOINT_RECEIVER, operation};
   struct endpoint_packet packet = {0};
   struct syscall_result result = syscall_call(receiver, &message, sizeof(message),
       &packet, sizeof(packet));
@@ -322,6 +323,16 @@ enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *req
   }
   *request = packet;
   return CALL_OK;
+}
+
+enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request)
+{
+  return receive(receiver, ENDPOINT_RECEIVE, request);
+}
+
+enum call_status endpoint_try_receive(handle_t receiver, struct endpoint_packet *request)
+{
+  return receive(receiver, ENDPOINT_TRY_RECEIVE, request);
 }
 
 enum call_status endpoint_reply(handle_t receipt, uint64_t application_result,

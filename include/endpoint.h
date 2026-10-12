@@ -58,6 +58,12 @@ enum call_status endpoint_notify(handle_t client, uint64_t protocol,
  * grants remain independent. Failed collection leaves completion work queued
  * for retry without replaying the native operation. */
 enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request);
+
+/* Same collection/receipt/authority as RECEIVE. An empty open receiver returns
+ * WOULD_BLOCK without parking for a message, including after stale readiness.
+ * Closure returns ENDPOINT_CLOSED; failure clears request. Ordinary grant-table
+ * admission/growth remains unchanged when a real message is selected. */
+enum call_status endpoint_try_receive(handle_t receiver, struct endpoint_packet *request);
 enum call_status endpoint_reply(handle_t receipt, uint64_t application_result,
     const void *bytes, size_t size, const struct endpoint_grant *grants,
     size_t grant_count);

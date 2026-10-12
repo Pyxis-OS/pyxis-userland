@@ -1435,12 +1435,14 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
     }
     if (events[0] & WAIT_READABLE) {
       struct endpoint_packet packet = {0};
-      status = endpoint_receive(receiver, &packet);
-      if (status != CALL_OK) {
+      status = endpoint_try_receive(receiver, &packet);
+      if (status != CALL_OK && status != CALL_WOULD_BLOCK) {
         loop.fatal = status;
         break;
       }
-      receive_packet(&loop, &packet);
+      if (status == CALL_OK) {
+        receive_packet(&loop, &packet);
+      }
     } else if (events[0] & WAIT_CLOSED) {
       loop.fatal = CALL_ENDPOINT_CLOSED;
       break;
