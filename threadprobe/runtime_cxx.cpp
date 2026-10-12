@@ -4,8 +4,10 @@
 #include <condition_variable>
 #include <cstdint>
 #include <exception>
+#include <iostream>
 #include <mutex>
 #include <pthread.h>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,6 +25,7 @@ enum cxx_failure {
   CXX_KEY_CLEANUP = 1 << 9,
   CXX_NOTIFY_EXIT = 1 << 10,
   CXX_UNEXPECTED = 1 << 11,
+  CXX_STREAM = 1 << 12,
 };
 
 static constexpr unsigned cxx_worker_count = 2;
@@ -65,6 +68,7 @@ struct cxx_runtime_state {
   std::mutex completion_mutex;
   std::condition_variable completion_condition;
   unsigned finished = 0;
+  std::mutex output_mutex;
 };
 
 /* Kept in shared storage for inspection with the matching debug ELF. */
@@ -266,6 +270,34 @@ static bool qualify_allocation(unsigned owner)
   return true;
 }
 
+static void qualify_streams(unsigned owner)
+{
+  unsigned value = 1700 + owner;
+  std::ostringstream output;
+  output << "worker " << owner << " value " << value;
+  std::istringstream input(output.str());
+  std::string worker_label, value_label;
+  unsigned parsed_owner = 0, parsed_value = 0;
+  input >> worker_label >> parsed_owner >> value_label >> parsed_value;
+  if (!output || !input || worker_label != "worker" || value_label != "value" ||
+      parsed_owner != owner || parsed_value != value) {
+    fail(CXX_STREAM);
+  }
+  input >> std::ws;
+  if (!input.eof()) {
+    fail(CXX_STREAM);
+  }
+
+  /* The application serializes a complete line explicitly. Shared iostream
+   * startup, locale facets and the underlying stdout still use runtime locks. */
+  std::lock_guard<std::mutex> lock(cxx_runtime.output_mutex);
+  std::cout << "threadprobe runtime-cxx: stream worker=" << owner << " value=" << value << '\n';
+  std::cout.flush();
+  if (!std::cout) {
+    fail(CXX_STREAM);
+  }
+}
+
 static void run_worker(unsigned owner)
 {
   try {
@@ -290,6 +322,7 @@ static void run_worker(unsigned owner)
     if (!qualify_exceptions(owner) || !qualify_allocation(owner)) {
       return;
     }
+    qualify_streams(owner);
     errno = 101 + static_cast<int>(owner);
     cxx_runtime.errno_ready[owner].store(1, std::memory_order_release);
     if (!wait_for(cxx_runtime.errno_release, 1)) {
