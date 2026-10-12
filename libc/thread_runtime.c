@@ -166,6 +166,11 @@ void libc_thread_destructors(void)
   for (size_t pass = 0; pass < LIBC_THREAD_DESTRUCTOR_PASSES; pass++) {
     bool called = false;
     for (size_t index = 0; index < LIBC_THREAD_KEY_LIMIT; index++) {
+      /* Only this thread writes its values. An empty slot needs no registry
+       * inspection, including ordinary programs which never use keys. */
+      if (!record->keys[index].value) {
+        continue;
+      }
       lock_keys();
       struct thread_key_entry *entry = &key_registry[index];
       struct thread_key_value *value = &record->keys[index];
