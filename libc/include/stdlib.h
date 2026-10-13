@@ -33,7 +33,10 @@ typedef struct {
 int mbtowc(wchar_t *__restrict output, const char *__restrict text, size_t size);
 
 /* Single-threaded allocator; allocations are aligned to at least 16 bytes.
- * Zero-size allocations return NULL. realloc(p, 0) frees p and returns NULL.
+ * A zero size gives a unique minimal allocation, not NULL, and free accepts it.
+ * calloc with a zero total, and aligned_alloc, do the same. realloc(p, 0)
+ * returns a minimal allocation (p itself when p is not NULL) and does not free
+ * p; the caller still owns the result.
  * Failure sets errno to ENOMEM and leaves an existing allocation intact.
  * Pools remain mapped until process exit. */
 void *malloc(size_t size);

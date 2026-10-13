@@ -104,12 +104,17 @@ static void *allocate(size_t alignment, size_t size)
   return pointer;
 }
 
+/* A zero-size request is a one-byte request: ISO C allows NULL, but programs
+ * written against glibc and musl read NULL as exhaustion. The result is unique
+ * and free accepts it. */
+static size_t nonzero_size(size_t size)
+{
+  return size ? size : 1;
+}
+
 void *malloc(size_t size)
 {
-  if (!size) {
-    return NULL;
-  }
-  return allocate(HEAP_ALIGNMENT, size);
+  return allocate(HEAP_ALIGNMENT, nonzero_size(size));
 }
 
 void *aligned_alloc(size_t alignment, size_t size)
@@ -118,10 +123,8 @@ void *aligned_alloc(size_t alignment, size_t size)
     errno = EINVAL;
     return NULL;
   }
-  if (!size) {
-    return NULL;
-  }
-  return allocate(alignment < HEAP_ALIGNMENT ? HEAP_ALIGNMENT : alignment, size);
+  return allocate(alignment < HEAP_ALIGNMENT ? HEAP_ALIGNMENT : alignment,
+    nonzero_size(size));
 }
 
 void free(void *pointer)
@@ -147,12 +150,10 @@ void *calloc(size_t count, size_t size)
   return pointer;
 }
 
+/* realloc(p, 0) keeps a minimal allocation, like musl: it does not free p. */
 void *realloc(void *pointer, size_t size)
 {
-  if (!size) {
-    free(pointer);
-    return NULL;
-  }
+  size = nonzero_size(size);
   if (!pointer) {
     return malloc(size);
   }
