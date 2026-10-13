@@ -4,6 +4,7 @@
 #include <abi/memory.h>
 #include <abi/namespace.h>
 #include <abi/pipe.h>
+#include <abi/http_transaction.h>
 #include <errno.h>
 #include <handle.h>
 #include <pyxis/descriptor.h>
@@ -22,6 +23,7 @@ struct job_preparation {
   enum call_status error;
   struct launch_grant *grants;
   size_t copied_grants;
+  struct pyxis_descriptor_binding streams[STARTUP_STREAM_COUNT];
   handle_t image, launcher;
 };
 
@@ -185,6 +187,17 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
         return CALL_BAD_REQUEST;
       }
       ++grant_count;
+      if (options->streams[i] >= 0) {
+        if (pyxis_descriptor_borrow(options->streams[i], &prepared->streams[i]) < 0) {
+          return errno == EBADF ? CALL_BAD_HANDLE : CALL_IO;
+        }
+        if (prepared->streams[i].observation != HANDLE_INVALID) {
+          if (grant_count == limit) {
+            return CALL_BAD_REQUEST;
+          }
+          ++grant_count;
+        }
+      }
     }
   }
   struct launch_request *request = &prepared->request;
@@ -225,6 +238,9 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     if (options->streams[i] >= 0 || (pipe_streams && pipe_streams[i])) {
       request->streams[i].grant = next++;
+      if (options->streams[i] >= 0 && prepared->streams[i].observation != HANDLE_INVALID) {
+        request->streams[i].observation_grant = next++;
+      }
       if (pipe_streams && pipe_streams[i]) {
         request->streams[i].protocol = PROTOCOL_PIPE;
       }
@@ -277,13 +293,9 @@ static enum call_status validate_directory(handle_t handle, struct handle_info *
 }
 
 static enum call_status capture_stream(struct job_preparation *prepared,
-    int descriptor, enum startup_stream_index index)
+    enum startup_stream_index index)
 {
-  struct pyxis_descriptor_binding binding;
-  if (pyxis_descriptor_borrow(descriptor, &binding) < 0) {
-    /* The descriptor accessor exposes errno rather than native statuses. */
-    return errno == EBADF ? CALL_BAD_HANDLE : CALL_IO;
-  }
+  struct pyxis_descriptor_binding binding = prepared->streams[index];
   bool input = index == STARTUP_STDIN;
   if (!(binding.access & (input ? PYXIS_DESCRIPTOR_READ : PYXIS_DESCRIPTOR_WRITE))) {
     return CALL_DENIED;
@@ -296,6 +308,17 @@ static enum call_status capture_stream(struct job_preparation *prepared,
     } else if (binding.info.kind != HANDLE_KIND_NATIVE) {
       return CALL_WRONG_TYPE;
     }
+  } else if (binding.info.protocol == PROTOCOL_STREAM && input &&
+      binding.info.kind == HANDLE_KIND_EXPORTED) {
+    rights = STREAM_RIGHT_READ;
+    transport = HANDLE_TRANSPORT_CALL;
+    if (binding.observation == HANDLE_INVALID || binding.observation == binding.handle ||
+        binding.observation_info.protocol != PROTOCOL_HTTP_TRANSACTION ||
+        binding.observation_info.kind != HANDLE_KIND_EXPORTED ||
+        !(binding.observation_info.rights & HTTP_TRANSACTION_RIGHT_STATUS) ||
+        (binding.observation_info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
+      return CALL_WRONG_TYPE;
+    }
   } else if (binding.info.protocol == PROTOCOL_PIPE && binding.info.kind == HANDLE_KIND_NATIVE) {
     rights = input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE;
   } else if (binding.info.protocol == PROTOCOL_CONSOLE && binding.info.kind == HANDLE_KIND_NATIVE) {
@@ -304,6 +327,18 @@ static enum call_status capture_stream(struct job_preparation *prepared,
     return CALL_WRONG_TYPE;
   }
   struct launch_stream *stream = &prepared->request.streams[index];
+  if ((binding.info.rights & rights) != rights ||
+      (binding.info.transport & transport) != transport) {
+    return CALL_DENIED;
+  }
+  if (binding.info.protocol == PROTOCOL_STREAM) {
+    stream->observation_protocol = PROTOCOL_HTTP_TRANSACTION;
+    prepared->grants[stream->observation_grant] = (struct launch_grant){
+      binding.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
+    };
+  } else if (binding.observation != HANDLE_INVALID) {
+    return CALL_BAD_REQUEST;
+  }
   stream->protocol = binding.info.protocol;
   prepared->grants[stream->grant] = (struct launch_grant){binding.handle, rights, transport};
   return CALL_OK;
@@ -397,7 +432,7 @@ static enum call_status capture_handles(struct job_preparation *prepared,
   }
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     if (options->streams[i] >= 0) {
-      status = capture_stream(prepared, options->streams[i], i);
+      status = capture_stream(prepared, i);
       if (status != CALL_OK) {
         return status;
       }

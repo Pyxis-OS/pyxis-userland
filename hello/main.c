@@ -229,7 +229,7 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
         stream.protocol == PROTOCOL_PIPE ?
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
+    request.streams[i] = (struct launch_stream){.protocol = stream.protocol, .grant = request.grant_count};
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, 0};
   }
   handle_t child;

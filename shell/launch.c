@@ -16,6 +16,7 @@
 #include <abi/udp.h>
 #include <abi/tcp.h>
 #include <abi/pipe.h>
+#include <abi/http_transaction.h>
 #include <abi/power.h>
 #include <abi/screen_capture.h>
 #include <abi/audio.h>
@@ -230,7 +231,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 34 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 35 - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -268,7 +269,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
   size_t grant_count = job_provisioner_index + (has_job_provisioner ? 1 : 0);
-  prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT) * sizeof(*prepared->grants));
+  prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT + 1) * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
     return CALL_NO_MEMORY;
@@ -631,21 +632,30 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       continue;
     }
     bool input = i == STARTUP_STDIN;
+    bool response = stream.protocol == PROTOCOL_STREAM;
+    if ((response && (!input || stream.observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
+          stream.observation == HANDLE_INVALID || stream.observation == stream.handle)) ||
+        (!response && (stream.observation_protocol || stream.observation))) {
+      return CALL_BAD_REQUEST;
+    }
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
         (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
         stream.protocol == PROTOCOL_PIPE ?
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
+        response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request->streams[i] = (struct launch_stream){stream.protocol, request->grant_count};
+    request->streams[i] = (struct launch_stream){
+      .protocol = stream.protocol, .grant = request->grant_count,
+    };
     uint64_t transport = 0;
-    if (stream.protocol == PROTOCOL_FILE) {
+    if (stream.protocol == PROTOCOL_FILE || response) {
       struct handle_info info;
       enum call_status status = handle_query(stream.handle, &info);
       if (status != CALL_OK) {
         return status;
       }
-      if (info.protocol != PROTOCOL_FILE ||
-          (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+      if (info.protocol != stream.protocol ||
+          (info.kind != HANDLE_KIND_EXPORTED && (response || info.kind != HANDLE_KIND_NATIVE))) {
         return CALL_WRONG_TYPE;
       }
       if (info.kind == HANDLE_KIND_EXPORTED) {
@@ -653,6 +663,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       }
     }
     grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, transport};
+    if (response) {
+      request->streams[i].observation_protocol = stream.observation_protocol;
+      request->streams[i].observation_grant = request->grant_count;
+      grants[request->grant_count++] = (struct launch_grant){
+        stream.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
+      };
+    }
   }
   if (prepared->bundle) {
     const struct bundle_authority authority[] = {
@@ -890,7 +907,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         goto failed;
       }
       streams[i][redirect->stream] =
-          (struct startup_stream){PROTOCOL_FILE, prepared[i].redirected[redirect->stream]};
+          (struct startup_stream){.protocol = PROTOCOL_FILE, .handle = prepared[i].redirected[redirect->stream]};
     }
   }
 
@@ -908,7 +925,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       goto failed;
     }
     if (writer) {
-      streams[i][STARTUP_STDOUT] = (struct startup_stream){PROTOCOL_PIPE, pipes[i].writer};
+      streams[i][STARTUP_STDOUT] = (struct startup_stream){.protocol = PROTOCOL_PIPE, .handle = pipes[i].writer};
     } else if (!close_handle(&pipes[i].writer)) {
       status = CALL_BAD_HANDLE;
       cleanup_failure = true;
@@ -916,7 +933,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     if (reader) {
       streams[i + 1][STARTUP_STDIN] =
-          (struct startup_stream){PROTOCOL_PIPE, pipes[i].reader};
+          (struct startup_stream){.protocol = PROTOCOL_PIPE, .handle = pipes[i].reader};
     } else if (!close_handle(&pipes[i].reader)) {
       status = CALL_BAD_HANDLE;
       cleanup_failure = true;

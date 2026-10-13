@@ -335,7 +335,7 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
       .argv = (uintptr_t)arguments[i], .argc = 5,
     };
     requests[i].streams[i == PRODUCER ? STARTUP_STDOUT : STARTUP_STDIN] =
-        (struct launch_stream){PROTOCOL_PIPE, STREAM};
+        (struct launch_stream){.protocol = PROTOCOL_PIPE, .grant = STREAM};
   }
   uint64_t failed;
   status = launcher_launch_batch(startup_resource("launcher"), requests, WORKERS,

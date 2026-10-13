@@ -429,9 +429,9 @@ static void run_reader(handle_t boot, handle_t launcher, handle_t root,
     .working_directory_count = shell ? 1 : 0,
     .working_path = shell ? (uintptr_t)"esp://" : 0,
     .streams = {
-      [STARTUP_STDIN] = {PROTOCOL_CONSOLE, INPUT},
-      [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, OUTPUT},
-      [STARTUP_STDERR] = {PROTOCOL_CONSOLE, ERROR},
+      [STARTUP_STDIN] = {.protocol = PROTOCOL_CONSOLE, .grant = INPUT},
+      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = OUTPUT},
+      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = ERROR},
     },
   };
   if (fflush(stdout) != 0) {
@@ -773,9 +773,9 @@ static int select_scratch_write(void)
     .roots = (uintptr_t)roots, .root_count = 2,
     .argv = (uintptr_t)arguments, .argc = 3,
     .streams = {
-      [STARTUP_STDIN] = {PROTOCOL_CONSOLE, INPUT},
-      [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, OUTPUT},
-      [STARTUP_STDERR] = {PROTOCOL_CONSOLE, ERROR},
+      [STARTUP_STDIN] = {.protocol = PROTOCOL_CONSOLE, .grant = INPUT},
+      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = OUTPUT},
+      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = ERROR},
     },
   };
   status = launcher_launch(launcher, &request, &child);

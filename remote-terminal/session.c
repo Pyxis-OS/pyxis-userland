@@ -191,7 +191,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     .working_directories = (uintptr_t)&directory, .working_directory_count = 1,
     .working_path = (uintptr_t)"tmp://",
     .argv = (uintptr_t)arguments, .argc = 2,
-    .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
+    .streams = {{.protocol = PROTOCOL_CONSOLE, .grant = STDIN}, {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT}, {.protocol = PROTOCOL_CONSOLE, .grant = STDERR}},
   };
   handle_t namespace = startup_namespace();
   if (namespace != HANDLE_INVALID) {
@@ -529,7 +529,7 @@ static enum call_status broker_launch(struct remote_context *context,
     .environment = (uintptr_t)context->environment.variables,
     .environment_count = context->environment.count,
     .argv = (uintptr_t)arguments, .argc = mux ? 3 : 1,
-    .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
+    .streams = {{.protocol = PROTOCOL_CONSOLE, .grant = STDIN}, {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT}, {.protocol = PROTOCOL_CONSOLE, .grant = STDERR}},
     .namespace_grant = context->namespace_index == SIZE_MAX ? 0 : context->namespace_index + FIRST_OPTIONAL + 1,
   };
   if (deadline) {

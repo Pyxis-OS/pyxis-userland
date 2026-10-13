@@ -17,6 +17,7 @@
 #include <abi/audio.h>
 #include <abi/file.h>
 #include <abi/pipe.h>
+#include <abi/http_transaction.h>
 #include <abi/power.h>
 #include <abi/keyboard.h>
 #include <abi/pointer.h>
@@ -89,7 +90,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
   size_t depth = context->count;
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
-      STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT;
+      STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT + 1;
   if (root_count > STARTUP_ROOT_LIMIT ||
       depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants) {
     handle_close(image);
@@ -409,23 +410,33 @@ static int launch_session(const struct session_config *config, const struct netw
       continue;
     }
     bool input = i == STARTUP_STDIN;
+    bool response = stream.protocol == PROTOCOL_STREAM;
+    if ((response && (!input || stream.observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
+          stream.observation == HANDLE_INVALID || stream.observation == stream.handle)) ||
+        (!response && (stream.observation_protocol || stream.observation))) {
+      fputs("session: invalid stream observation\n", stderr);
+      goto done;
+    }
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
         (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
         stream.protocol == PROTOCOL_PIPE ?
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
+        response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request.streams[i] = (struct launch_stream){stream.protocol, request.grant_count};
+    request.streams[i] = (struct launch_stream){
+      .protocol = stream.protocol, .grant = request.grant_count,
+    };
     uint64_t transport = 0;
-    if (stream.protocol == PROTOCOL_FILE) {
+    if (stream.protocol == PROTOCOL_FILE || response) {
       struct handle_info info;
       status = handle_query(stream.handle, &info);
       if (status != CALL_OK) {
         fprintf(stderr, "session: cannot query stream (status %u)\n", status);
         goto done;
       }
-      if (info.protocol != PROTOCOL_FILE ||
-          (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
-        fputs("session: invalid file stream\n", stderr);
+      if (info.protocol != stream.protocol ||
+          (info.kind != HANDLE_KIND_EXPORTED && (response || info.kind != HANDLE_KIND_NATIVE))) {
+        fputs("session: invalid stream\n", stderr);
         goto done;
       }
       if (info.kind == HANDLE_KIND_EXPORTED) {
@@ -433,6 +444,13 @@ static int launch_session(const struct session_config *config, const struct netw
       }
     }
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
+    if (response) {
+      request.streams[i].observation_protocol = stream.observation_protocol;
+      request.streams[i].observation_grant = request.grant_count;
+      grants[request.grant_count++] = (struct launch_grant){
+        stream.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
+      };
+    }
   }
 
   if (configure_network && !network_config_apply(network, runtime)) {

@@ -90,7 +90,8 @@ static enum call_status prepare_context(struct context_grants *context,
   }
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     if (source->streams[i].protocol == STARTUP_STREAM_NONE) {
-      if (source->streams[i].grant) {
+      if (source->streams[i].grant || source->streams[i].observation_protocol ||
+          source->streams[i].observation_grant) {
         return CALL_BAD_REQUEST;
       }
       continue;
@@ -99,6 +100,15 @@ static enum call_status prepare_context(struct context_grants *context,
         &prepared->request.streams[i].grant);
     if (status != CALL_OK) {
       return status;
+    }
+    if (source->streams[i].observation_protocol) {
+      status = retain_grant(context, source->streams[i].observation_grant,
+          &prepared->request.streams[i].observation_grant);
+      if (status != CALL_OK) {
+        return status;
+      }
+    } else if (source->streams[i].observation_grant) {
+      return CALL_BAD_REQUEST;
     }
   }
   if (source->namespace_grant) {

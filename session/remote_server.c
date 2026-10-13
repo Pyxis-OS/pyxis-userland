@@ -318,8 +318,8 @@ int launch_remote_server(const struct session_config *config,
     .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = beacon ? 4 : 2,
     .streams = {
-      [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, STDOUT},
-      [STARTUP_STDERR] = {PROTOCOL_CONSOLE, STDERR},
+      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT},
+      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = STDERR},
     },
   };
   handle_t namespace_handle = startup_namespace();

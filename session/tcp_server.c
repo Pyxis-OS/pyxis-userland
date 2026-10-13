@@ -51,7 +51,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
   for (unsigned i = STARTUP_STDOUT; i <= STARTUP_STDERR; ++i) {
     struct startup_stream stream = startup_stream(i);
     if (stream.protocol == STARTUP_STREAM_NONE) {
-      stream = (struct startup_stream){PROTOCOL_CONSOLE, startup_resource("output")};
+      stream = (struct startup_stream){.protocol = PROTOCOL_CONSOLE, .handle = startup_resource("output")};
     }
     if (stream.handle == HANDLE_INVALID) {
       fputs("session: missing TCP server output stream\n", stderr);
@@ -70,7 +70,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
     }
     size_t grant = i == STARTUP_STDOUT ? OUTPUT : ERROR;
     grants[grant] = (struct launch_grant){stream.handle, rights, transport};
-    request.streams[i] = (struct launch_stream){stream.protocol, grant};
+    request.streams[i] = (struct launch_stream){.protocol = stream.protocol, .grant = grant};
   }
 
   struct tcp_listen_reply reply;

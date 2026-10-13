@@ -264,7 +264,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     .environment = (uintptr_t)environment.variables,
     .environment_count = environment.count,
     .argv = (uintptr_t)arguments, .argc = 1,
-    .streams = {{PROTOCOL_CONSOLE, STDIN}, {PROTOCOL_CONSOLE, STDOUT}, {PROTOCOL_CONSOLE, STDERR}},
+    .streams = {{.protocol = PROTOCOL_CONSOLE, .grant = STDIN}, {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT}, {.protocol = PROTOCOL_CONSOLE, .grant = STDERR}},
   };
   handle_t namespace = startup_namespace();
   if (namespace != HANDLE_INVALID) {

@@ -182,9 +182,9 @@ static int select_disk(void)
     .resources = (uintptr_t)resources, .resource_count = 2,
     .argv = (uintptr_t)arguments, .argc = 2,
     .streams = {
-      [STARTUP_STDIN] = {PROTOCOL_CONSOLE, INPUT},
-      [STARTUP_STDOUT] = {PROTOCOL_CONSOLE, OUTPUT},
-      [STARTUP_STDERR] = {PROTOCOL_CONSOLE, ERROR},
+      [STARTUP_STDIN] = {.protocol = PROTOCOL_CONSOLE, .grant = INPUT},
+      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = OUTPUT},
+      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = ERROR},
     },
   };
   status = launcher_launch(launcher, &request, &child);

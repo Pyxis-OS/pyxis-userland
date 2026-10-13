@@ -45,46 +45,61 @@ static bool valid_bindings(const struct startup_info *info, uint64_t address,
   return true;
 }
 
-static bool valid_streams(const struct startup_info *info)
+static bool stream_handle_distinct(const struct startup_info *info,
+    handle_t handle, size_t index)
 {
+  if (handle == HANDLE_INVALID || handle == info->thread_fs || handle == info->namespace_handle) {
+    return false;
+  }
+  for (size_t i = 0; i < index; ++i) {
+    if (handle == info->streams[i].handle || handle == info->streams[i].observation) {
+      return false;
+    }
+  }
   const struct startup_binding *resources = (const void *)(uintptr_t)info->resources;
   const struct startup_binding *roots = (const void *)(uintptr_t)info->roots;
   const handle_t *directories = (const void *)(uintptr_t)info->working_directories;
+  for (size_t i = 0; i < info->resource_count; ++i) {
+    if (handle == resources[i].handle) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < info->root_count; ++i) {
+    if (handle == roots[i].handle) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < info->working_directory_count; ++i) {
+    if (handle == directories[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool valid_streams(const struct startup_info *info)
+{
   for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
     const struct startup_stream *stream = &info->streams[i];
     if (stream->protocol == STARTUP_STREAM_NONE) {
-      if (stream->handle != HANDLE_INVALID) {
+      if (stream->handle || stream->observation_protocol || stream->observation) {
         return false;
       }
       continue;
     }
-    if (stream->handle == info->thread_fs ||
-        (stream->protocol != PROTOCOL_CONSOLE &&
-         stream->protocol != PROTOCOL_FILE &&
-         stream->protocol != PROTOCOL_PIPE) || stream->handle == HANDLE_INVALID) {
+    bool response = stream->protocol == PROTOCOL_STREAM;
+    if ((stream->protocol != PROTOCOL_CONSOLE && stream->protocol != PROTOCOL_FILE &&
+         stream->protocol != PROTOCOL_PIPE && !response) ||
+        !stream_handle_distinct(info, stream->handle, i)) {
       return false;
     }
-    for (size_t j = 0; j < i; ++j) {
-      if (stream->handle == info->streams[j].handle) {
+    if (response) {
+      if (i != STARTUP_STDIN || stream->observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
+          stream->observation == stream->handle ||
+          !stream_handle_distinct(info, stream->observation, i)) {
         return false;
       }
-    }
-    for (size_t j = 0; j < info->resource_count; ++j) {
-      if (stream->handle == resources[j].handle) {
-        return false;
-      }
-    }
-    for (size_t j = 0; j < info->root_count; ++j) {
-      if (stream->handle == roots[j].handle) {
-        return false;
-      }
-    }
-    for (size_t j = 0; j < info->working_directory_count; ++j) {
-      if (stream->handle == directories[j]) {
-        return false;
-      }
-    }
-    if (stream->handle == info->namespace_handle) {
+    } else if (stream->observation_protocol || stream->observation) {
       return false;
     }
   }
