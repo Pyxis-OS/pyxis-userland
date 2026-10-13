@@ -756,6 +756,22 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     }
   }
 
+  for (size_t i = 0; i < plan->volume_count; ++i) {
+    const struct boot_volume *volume = plan->volumes[i];
+    if (volume->kind != BOOT_VOLUME_FAT32) {
+      continue;
+    }
+    for (size_t j = 0; j < i; ++j) {
+      const struct boot_volume *alias = plan->volumes[j];
+      if (alias->kind == BOOT_VOLUME_FAT32 && alias->partition == volume->partition &&
+          !memcmp(alias->disk_guid, volume->disk_guid, sizeof(volume->disk_guid)) &&
+          alias->read_write != volume->read_write) {
+        return plan_fail(plan, "FAT32 volume %s conflicts with another alias's admission mode",
+            volume->name);
+      }
+    }
+  }
+
   const char *owner = NULL;
   for (size_t i = 0; i < plan->space_count; ++i) {
     const struct boot_space *space = plan->spaces[i];
