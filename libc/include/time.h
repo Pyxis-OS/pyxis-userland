@@ -68,6 +68,21 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining);
 size_t strftime(char *__restrict output, size_t capacity,
     const char *__restrict format, const struct tm *__restrict calendar);
 
+/* English C-locale parse, the inverse of strftime for the conversions below;
+ * no locale selection. Returns the first unparsed byte, or NULL if the input
+ * does not match, leaving *calendar unchanged. A space in format skips any
+ * white space; other characters must match exactly. Supported: %a %A %b %B %h
+ * (names, full or three letters, any case), %c %C %d %D %e %H %I %j %m %M %n
+ * %p (applies to %I) %r %R %S %t %T %u %U %w %W %x %X %y %Y %z %% and the E and O forms, equal
+ * to the ordinary ones. Numeric fields accept leading white space and range-
+ * check; %y reads 69-99 as 1969-1999 and 00-68 as 2000-2068, or uses %C. %z
+ * reads Z, +-hh, +-hhmm or +-hh:mm into tm_gmtoff. Only the fields read are
+ * stored: tm_wday and tm_yday are not computed from a date and nothing is
+ * normalized. %U and %W are validated and ignored. %Z and anything else are
+ * unsupported and fail. */
+char *strptime(const char *__restrict input, const char *__restrict format,
+    struct tm *__restrict calendar);
+
 /* Proleptic Gregorian UTC conversion, including negative timestamps.
  * Fail with EOVERFLOW if tm_year cannot fit in int, EINVAL for NULL inputs.
  * gmtime_r leaves the destination unchanged on failure; gmtime returns borrowed
