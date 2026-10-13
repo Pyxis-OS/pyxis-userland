@@ -204,7 +204,8 @@ bool install_programs_list(handle_t boot, struct install_programs *programs)
     install_progress_advance(0, 1);
     bool program = entry.kind == DIRECTORY_KIND_FILE && has_suffix(name, PROGRAM_SUFFIX) &&
         !listed(rescue, rescue_count, name);
-    bool bundle = entry.kind == DIRECTORY_KIND_DIRECTORY && has_suffix(name, BUNDLE_SUFFIX);
+    bool bundle = entry.kind == DIRECTORY_KIND_DIRECTORY && has_suffix(name, BUNDLE_SUFFIX) &&
+        !listed(rescue, rescue_count, name);
     if (!program && !bundle) {
       continue;
     }
