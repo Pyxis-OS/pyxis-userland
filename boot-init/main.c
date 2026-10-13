@@ -20,6 +20,7 @@
 #include <abi/terminal.h>
 #include <abi/udp.h>
 #include <bundle_launch.h>
+#include <clock.h>
 #include <directory.h>
 #include <disk.h>
 #include <file.h>
@@ -48,6 +49,8 @@
 /* The bin volume shares the system volume's pool; see the installer. */
 #define BIN_VOLUME "bin"
 #define BIN_UNKNOWN_REVISION "unknown"
+#define FAT32_SELECTION_WAIT_NS UINT64_C(10000000000)
+#define FAT32_SELECTION_POLL_NS UINT64_C(1000000)
 
 #define BOOT_ROOT_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
@@ -194,26 +197,51 @@ static enum call_status open_ram_volume(handle_t ram, const char *name, handle_t
   return status;
 }
 
-static enum call_status selected_fat32_disk(handle_t disks, const uint8_t guid[16],
+static enum call_status selected_fat32_disk(handle_t disks, handle_t clock, const uint8_t guid[16],
     uint64_t *device)
 {
   *device = 0;
-  for (uint64_t index = 0;; ++index) {
-    struct disk_info info;
-    enum call_status status = disks_enumerate(disks, index, &info);
-    if (status == CALL_NOT_FOUND) {
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK || now > UINT64_MAX - FAT32_SELECTION_WAIT_NS) {
+    return status == CALL_OK ? CALL_LIMIT : status;
+  }
+  uint64_t deadline = now + FAT32_SELECTION_WAIT_NS;
+  for (;;) {
+    bool pending = false;
+    *device = 0;
+    for (uint64_t index = 0;; ++index) {
+      struct disk_info info;
+      status = disks_enumerate(disks, index, &info);
+      if (status == CALL_NOT_FOUND) {
+        break;
+      }
+      if (status != CALL_OK) {
+        return status;
+      }
+      pending |= info.gpt_status == DISK_GPT_PENDING;
+      if (memcmp(info.gpt_guid, guid, sizeof(info.gpt_guid))) {
+        continue;
+      }
+      if (*device) {
+        return CALL_BAD_REQUEST;
+      }
+      *device = info.id;
+    }
+    if (!pending) {
       return *device ? CALL_OK : CALL_NOT_FOUND;
     }
+    status = clock_now(clock, &now);
+    if (status != CALL_OK || now >= deadline) {
+      *device = 0;
+      return status == CALL_OK ? CALL_TIMED_OUT : status;
+    }
+    uint64_t delay = deadline - now < FAT32_SELECTION_POLL_NS ?
+        deadline - now : FAT32_SELECTION_POLL_NS;
+    status = clock_sleep_until(clock, now + delay);
     if (status != CALL_OK) {
       return status;
     }
-    if (memcmp(info.gpt_guid, guid, sizeof(info.gpt_guid))) {
-      continue;
-    }
-    if (*device) {
-      return CALL_BAD_REQUEST;
-    }
-    *device = info.id;
   }
 }
 
@@ -232,7 +260,8 @@ static enum call_status mount_volume(const struct authority *authority,
         return CALL_UNAVAILABLE;
       }
       uint64_t device;
-      status = selected_fat32_disk(authority->fat_mounts, volume->disk_guid, &device);
+      status = selected_fat32_disk(authority->fat_mounts, authority->services[SERVICE_CLOCK],
+          volume->disk_guid, &device);
       if (status != CALL_OK) {
         return status;
       }
