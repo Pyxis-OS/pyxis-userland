@@ -61,13 +61,6 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   bool script = start_services || start_remote_services;
-  if (!script) {
-    handle_t staging = startup_resource(BUNDLE_SOURCE_PREFIX "http_staging");
-    if (staging != HANDLE_INVALID && handle_close(staging)) {
-      fputs("session: cannot consume private HTTP backing source\n", stderr);
-      return EXIT_FAILURE;
-    }
-  }
   handle_t mux_terminal = startup_resource("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
@@ -654,6 +647,13 @@ int main(int argc, char **argv)
       (remote_server && (start_services || tcp_server || start_remote_services)) ||
       (start_remote_services && (start_services || tcp_server))) {
     goto usage;
+  }
+  if (!start_services && !start_remote_services) {
+    handle_t staging = startup_resource(BUNDLE_SOURCE_PREFIX "http_staging");
+    if (staging != HANDLE_INVALID && handle_close(staging)) {
+      fputs("session: cannot consume private HTTP backing source\n", stderr);
+      return EXIT_FAILURE;
+    }
   }
   if (tcp_server) {
     struct network_config network;
