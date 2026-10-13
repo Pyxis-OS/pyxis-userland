@@ -234,19 +234,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     return retired;
   }
   bool session = mode == SHELL_SESSION;
-  if (session) {
-    handle_t staging = startup_resource(BUNDLE_SOURCE_PREFIX "http_staging");
-    if (staging != HANDLE_INVALID) {
-      struct handle_info info;
-      enum call_status queried = handle_query(staging, &info);
-      if (queried == CALL_OK && handle_close(staging)) {
-        return CALL_BAD_HANDLE;
-      }
-      if (queried != CALL_OK && queried != CALL_BAD_HANDLE) {
-        return queried;
-      }
-    }
-  }
   /* Only the explicit trusted init/session successor receives this ancestor;
    * ordinary clients receive a newly declared leaf through bundle preparation. */
   handle_t job_provisioner = session ? startup_resource("job_provisioner") : HANDLE_INVALID;
@@ -941,6 +928,17 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
       if (events[j]) {
         complete[stage_of[j]] = true;
         --remaining;
+        if (deadline) {
+          struct process_result result;
+          status = process_wait(children[stage_of[j]], &result);
+          if (status != CALL_OK || result.kind != PROCESS_EXITED || result.exit_status) {
+            *cancelled = true;
+            for (size_t i = 0; i < stage_count; ++i) {
+              process_terminate(children[i]);
+            }
+            return status;
+          }
+        }
       }
     }
     if (armed != HANDLE_INVALID && (events[count] & WAIT_INTERRUPT)) {
@@ -955,7 +953,9 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
     }
     if (armed != HANDLE_INVALID && (events[count] & WAIT_ERROR)) {
       *cancelled = true;
-      /* The terminal hung up; its readers fail on their own. */
+      for (size_t i = 0; i < stage_count; ++i) {
+        process_terminate(children[i]);
+      }
       return CALL_OK;
     }
   }
@@ -1195,6 +1195,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
 
+  for (size_t i = 0; i < stage_count; ++i) {
+    response_input |= streams[i][STARTUP_STDIN].protocol == PROTOCOL_STREAM;
+  }
   /* Compare held objects after pipe wiring, before the first output resize. */
   status = check_redirect_inputs(stages, prepared, streams, stage_count,
       &failed_stage, &operation, &path);
@@ -1304,6 +1307,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       close_handle(&children[i]);
     }
     close_handle(&armed);
+    if (body) {
+      shell_capability_fail(shell, body, CALL_BAD_HANDLE);
+    }
     shell_directory_error(shell, "shell: close", stages[0].arguments[0], CALL_BAD_HANDLE);
     return COMMAND_FATAL;
   }
@@ -1432,6 +1438,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   status = bundle_jobs_reap(&shell->jobs);
   if (status != CALL_OK) {
     close_handle(&armed);
+    if (body) {
+      shell_capability_fail(shell, body, status);
+    }
     return shell_directory_error(shell, "shell: job context cleanup", "", status);
   }
   /* Disarm only after every stage finished, so no press reaches the editor. */

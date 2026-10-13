@@ -61,6 +61,13 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   bool script = start_services || start_remote_services;
+  if (!script) {
+    handle_t staging = startup_resource(BUNDLE_SOURCE_PREFIX "http_staging");
+    if (staging != HANDLE_INVALID && handle_close(staging)) {
+      fputs("session: cannot consume private HTTP backing source\n", stderr);
+      return EXIT_FAILURE;
+    }
+  }
   handle_t mux_terminal = startup_resource("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
@@ -352,7 +359,22 @@ static int launch_session(const struct session_config *config, const struct netw
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
 
-  if (!start_remote_services) {
+  if (start_remote_services) {
+    /* The remote bootstrap needs its declared private source for provider setup;
+     * the remote server and its clients never receive this ancestor. */
+    handle_t staging = startup_resource(BUNDLE_SOURCE_PREFIX "http_staging");
+    if (staging != HANDLE_INVALID) {
+      struct handle_info info;
+      status = handle_query(staging, &info);
+      if (status != CALL_OK || info.kind != HANDLE_KIND_NATIVE ||
+          info.protocol != PROTOCOL_DIRECTORY || info.transport) {
+        goto done;
+      }
+      resources[resource_count++] = (struct launch_binding){
+        (uintptr_t)BUNDLE_SOURCE_PREFIX "http_staging", grant_count};
+      grants[grant_count++] = (struct launch_grant){staging, info.rights, 0};
+    }
+  } else {
     status = bundle_sources_forward_startup(grants, fixed_grants + depth, &grant_count,
         resources, sizeof(resources) / sizeof(*resources), &resource_count);
     if (status != CALL_OK) {
