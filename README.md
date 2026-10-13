@@ -494,7 +494,7 @@ initialization. Reported HTTPS setup failure leaves HTTP and local startup usabl
 To augment public roots, restart or replace the HTTPS instance:
 
 ```
-service replace --read-only https boot://httpfs.pxb --https --ca-bundle home://private-ca.pem
+service replace --read-only https bin://httpfs.pxb --https --ca-bundle home://private-ca.pem
 ```
 
 `--read-only` attenuates the launched provider's native filesystem roots and

@@ -1,6 +1,6 @@
 #!boot://shell.pxe
-service start http boot://httpfs.pxb
+service start http bin://httpfs.pxb
 namespace alias json+http http
-service start --optional --read-only https boot://httpfs.pxb --https
+service start --optional --read-only https bin://httpfs.pxb --https
 namespace alias --optional json+https https
 session boot://session.pxe --remote-server 2323
