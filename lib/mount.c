@@ -2,6 +2,8 @@
 #include <mount.h>
 #include <syscall.h>
 
+#define FAT32_DEVICE_BLOCK_SIZE UINT64_C(512)
+
 static enum call_status mount_reply_status(struct syscall_result result,
     const struct mount_reply *reply, handle_t *root)
 {
@@ -132,6 +134,28 @@ enum call_status mount_reopen_fat32(handle_t control, uint64_t rights, handle_t 
       &reply, sizeof(reply)), &reply, root);
 }
 
+static bool guid_nonzero(const uint8_t guid[16])
+{
+  for (size_t i = 0; i < 16; ++i) {
+    if (guid[i]) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool mount_identity_valid(const struct mount_state_reply *reply)
+{
+  return reply->domain && reply->device && reply->partition &&
+      reply->partition <= UINT32_MAX &&
+      reply->device_block_size == FAT32_DEVICE_BLOCK_SIZE &&
+      reply->first_block && reply->block_count &&
+      reply->first_block < reply->device_block_count &&
+      reply->block_count <= reply->device_block_count - reply->first_block &&
+      guid_nonzero(reply->disk_guid) && guid_nonzero(reply->partition_guid) &&
+      guid_nonzero(reply->partition_type);
+}
+
 enum call_status mount_observe(handle_t control, struct mount_state_reply *state)
 {
   if (!state) {
@@ -147,6 +171,9 @@ enum call_status mount_observe(handle_t control, struct mount_state_reply *state
   }
   if (result.status != CALL_OK) {
     return result.status;
+  }
+  if ((reply.flags & MOUNT_STATE_IDENTITY_VALID) && !mount_identity_valid(&reply)) {
+    return CALL_OUTCOME_UNKNOWN;
   }
   *state = reply;
   return CALL_OK;

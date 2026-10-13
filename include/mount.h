@@ -41,7 +41,11 @@ enum call_status mount_open_fat32(handle_t issuer, uint64_t rights,
 enum call_status mount_reopen_fat32(handle_t control, uint64_t rights, handle_t *root);
 
 /* Observe actual bound-instance state through OBSERVE. Failure preserves state.
- * A retired control remains an observable tombstone. */
+ * A retired control remains an observable tombstone. IDENTITY_VALID supplies
+ * retained admission GPT identity/whole-device geometry, including after failure
+ * or retirement; malformed evidence returns OUTCOME_UNKNOWN. GUIDs use GPT/EFI
+ * on-disk byte encoding. Evidence does not authenticate hardware, confer authority
+ * or attest current media contents. */
 enum call_status mount_observe(handle_t control, struct mount_state_reply *state);
 
 /* Requires RETIRE. BUSY leaves the instance active while data objects, admitted
