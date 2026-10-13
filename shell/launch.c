@@ -58,7 +58,7 @@ struct prepared_stage {
   handle_t redirected[STARTUP_STREAM_COUNT];
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[34];
+  struct launch_binding resources[34 + BUNDLE_SOURCE_LIMIT];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -231,7 +231,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 35 - STARTUP_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 35 -
+      BUNDLE_SOURCE_LIMIT - STARTUP_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -269,7 +270,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
   size_t grant_count = job_provisioner_index + (has_job_provisioner ? 1 : 0);
-  prepared->grants = malloc((grant_count + STARTUP_STREAM_COUNT + 1) * sizeof(*prepared->grants));
+  size_t grant_capacity = grant_count + STARTUP_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT;
+  prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
     return CALL_NO_MEMORY;
@@ -579,6 +581,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_clipboard_shared) {
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"clipboard_shared", clipboard_shared_index};
   }
+  if (session) {
+    enum call_status status = bundle_sources_forward_startup(grants, grant_capacity,
+        &grant_count, resources, sizeof(prepared->resources) / sizeof(*resources),
+        &resource_count);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
   struct launch_binding *roots = prepared->roots;
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
@@ -672,28 +682,41 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
   }
   if (prepared->bundle) {
-    const struct bundle_authority authority[] = {
-      {"input", shell->terminal.input},
-      {"output", shell->terminal.output},
-      {"memory", shell->memory},
-      {"threads", startup_resource("threads")},
-      {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID},
-      {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID},
-      {"clock", shell->clock},
-      {"display", shell->display},
-      {"audio", shell->audio},
-      {"screen_capture", shell->screen_capture},
-      {"system_info", shell->system_info},
-      {"echo", shell->echo},
-      {"udp", shell->udp},
-      {"tcp", shell->tcp},
-      {"pipe", mode == SHELL_FOREGROUND ? shell->pipe : HANDLE_INVALID},
-      {"random", shell->random},
-      {"profile", shell->profile},
-      {"launcher", shell->child_launcher},
+    const struct bundle_authority ordinary[] = {
+      {"input", shell->terminal.input, PROTOCOL_CONSOLE},
+      {"output", shell->terminal.output, PROTOCOL_CONSOLE},
+      {"memory", shell->memory, PROTOCOL_MEMORY},
+      {"threads", startup_resource("threads"), PROTOCOL_THREAD_SERVICE},
+      {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID, PROTOCOL_KEYBOARD},
+      {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID, PROTOCOL_POINTER},
+      {"clock", shell->clock, PROTOCOL_CLOCK},
+      {"display", shell->display, PROTOCOL_DISPLAY},
+      {"audio", shell->audio, PROTOCOL_AUDIO},
+      {"screen_capture", shell->screen_capture, PROTOCOL_SCREEN_CAPTURE},
+      {"system_info", shell->system_info, PROTOCOL_SYSTEM_INFO},
+      {"echo", shell->echo, PROTOCOL_ECHO},
+      {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
+      {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
+      {"pipe", mode == SHELL_FOREGROUND ? shell->pipe : HANDLE_INVALID, PROTOCOL_PIPE_SERVICE},
+      {"random", shell->random, PROTOCOL_RANDOM},
+      {"profile", shell->profile, PROTOCOL_PROFILE},
+      {"launcher", shell->child_launcher, PROTOCOL_LAUNCHER},
     };
-    enum call_status status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
-        sizeof(authority) / sizeof(*authority), startup_resource("job_provisioner"),
+    size_t ordinary_count = sizeof(ordinary) / sizeof(*ordinary);
+    struct bundle_authority authority[sizeof(ordinary) / sizeof(*ordinary) + BUNDLE_SOURCE_LIMIT];
+    memcpy(authority, ordinary, sizeof(ordinary));
+    size_t source_count;
+    enum call_status status = bundle_sources_from_startup(authority + ordinary_count,
+        BUNDLE_SOURCE_LIMIT, &source_count);
+    if (status == CALL_OK) {
+      status = shell_fat_authority(shell, authority + ordinary_count,
+          BUNDLE_SOURCE_LIMIT, &source_count);
+    }
+    if (status != CALL_OK) {
+      return status;
+    }
+    status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
+        ordinary_count + source_count, startup_resource("job_provisioner"),
         &shell->jobs, &prepared->bundle_launch);
     if (status != CALL_OK) {
       return status;

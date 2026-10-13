@@ -26,6 +26,7 @@
 #include <abi/tcp.h>
 #include <abi/udp.h>
 #include <console.h>
+#include <bundle_launch.h>
 #include <directory.h>
 #include <endpoint.h>
 #include <handle.h>
@@ -107,7 +108,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
   enum { OPTIONAL_RESOURCE_COUNT = 25, NAMESPACE_GRANT_COUNT = 1 };
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
-      NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT;
+      NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT + BUNDLE_SOURCE_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
       depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
       depth > SIZE_MAX / sizeof(uint64_t)) {
@@ -159,7 +160,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   grants[STDOUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[STDERR] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[EVENTS] = (struct launch_grant){terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0};
-  struct launch_binding resources[4 + OPTIONAL_RESOURCE_COUNT] = {
+  struct launch_binding resources[4 + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
   };
@@ -232,6 +233,11 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     }
     grants[grant_count].rights &= allowed[i].rights;
     resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count++};
+  }
+  status = bundle_sources_forward_startup(grants, fixed_grants + depth, &grant_count,
+      resources, sizeof(resources) / sizeof(*resources), &resource_count);
+  if (status != CALL_OK) {
+    goto done;
   }
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   const struct startup_binding *selected_roots = startup_roots();

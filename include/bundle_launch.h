@@ -7,15 +7,33 @@
 struct bundle_launch;
 struct bundle_job_context;
 
+/* Only trusted configuration and successor handoff create these bindings.
+ * A manifest selects the suffix; it never adds a source to this inventory. */
+#define BUNDLE_SOURCE_PREFIX "source."
+#define BUNDLE_SOURCE_LIMIT 8
+
 /* Zero-initialize; keep this owner alive through all preparation and close. */
 struct bundle_jobs {
   struct bundle_job_context *contexts;
 };
 
 struct bundle_authority {
+  /* Ordinary class name, or the selected external source key. */
   const char *resource;
   handle_t source;
+  uint64_t protocol;
 };
+
+/* Borrow configured named sources, with actual protocol; preparation queries
+ * and attenuates actual handle rights.
+ * Unmarked resources and closed snapshot handles are unavailable. */
+enum call_status bundle_sources_from_startup(struct bundle_authority *authority,
+    size_t capacity, size_t *count);
+/* Trusted local successor handoff only; ordinary programs receive sources
+ * solely through manifest preparation. Counts append to the caller's arrays. */
+enum call_status bundle_sources_forward_startup(struct launch_grant *grants,
+    size_t grant_capacity, size_t *grant_count, struct launch_binding *resources,
+    size_t resource_capacity, size_t *resource_count);
 
 /* The caller selects ordinary authority available to the program; a shell must
  * supply its delegated child launcher, never its own supervision launcher.

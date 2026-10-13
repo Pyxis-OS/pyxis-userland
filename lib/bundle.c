@@ -1,4 +1,7 @@
 #include <bundle.h>
+#include <bundle_launch.h>
+#include <abi/disk.h>
+#include <abi/mount.h>
 #include <abi/audio.h>
 #include <abi/clock.h>
 #include <abi/console.h>
@@ -72,6 +75,21 @@ static const struct grant_right grant_rights[] = {
   {"job_work", "remove", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_REMOVE},
   {"job_work", "read-files", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_READ_FILES},
   {"job_work", "write-files", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_WRITE_FILES},
+  {"directory", "lookup", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_LOOKUP},
+  {"directory", "enumerate", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_ENUMERATE},
+  {"directory", "read-files", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_READ_FILES},
+  {"directory", "write-files", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_WRITE_FILES},
+  {"directory", "create", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_CREATE},
+  {"directory", "remove", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_REMOVE},
+  {"directory", "filesystem-info", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_FILESYSTEM_INFO},
+  {"mount", "open-root", PROTOCOL_MOUNT, MOUNT_RIGHT_OPEN_ROOT},
+  {"mount", "observe", PROTOCOL_MOUNT, MOUNT_RIGHT_OBSERVE},
+  {"mount", "write", PROTOCOL_MOUNT, MOUNT_RIGHT_WRITE},
+  {"mount", "retire", PROTOCOL_MOUNT, MOUNT_RIGHT_RETIRE},
+  {"mount", "interval", PROTOCOL_MOUNT, MOUNT_RIGHT_INTERVAL},
+  {"disks", "enumerate", PROTOCOL_DISKS, DISKS_RIGHT_ENUMERATE},
+  {"disks", "mount-read-only", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_ONLY},
+  {"disks", "mount-read-write", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_WRITE},
   {"clock", "read", PROTOCOL_CLOCK, CLOCK_RIGHT_READ},
   {"clock", "sleep", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP},
   {"launcher", "launch", PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
@@ -353,6 +371,16 @@ static enum call_status parse_grants(struct bundle_program *program,
           return CALL_BAD_REQUEST;
         }
         request->resource = value->string;
+      } else if (!strcmp(nodes[key].string, "source")) {
+        if (value->type != BUNDLE_JSON_STRING || !valid_name(value->string)) {
+          return CALL_BAD_REQUEST;
+        }
+        request->source = value->string;
+      } else if (!strcmp(nodes[key].string, "root")) {
+        if (value->type != BUNDLE_JSON_STRING || !valid_name(value->string)) {
+          return CALL_BAD_REQUEST;
+        }
+        request->root = value->string;
       } else if (!strcmp(nodes[key].string, "rights")) {
         rights = value;
       } else if (!strcmp(nodes[key].string, "required")) {
@@ -366,7 +394,8 @@ static enum call_status parse_grants(struct bundle_program *program,
       }
     }
     if (!request->name || !request->resource || !rights || !required ||
-        !strcmp(request->name, "app")) {
+        !strcmp(request->name, "app") ||
+        !strncmp(request->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       return CALL_BAD_REQUEST;
     }
     for (size_t i = 0; i < program->grant_count; ++i) {
@@ -377,6 +406,13 @@ static enum call_status parse_grants(struct bundle_program *program,
     enum call_status status = parse_rights(program, request, rights);
     if (status != CALL_OK) {
       return status;
+    }
+    bool external = !strcmp(request->resource, "directory") ||
+        !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks");
+    if (external != (request->source != NULL) ||
+        (request->root && (strcmp(request->resource, "directory") ||
+         !(request->rights & DIRECTORY_RIGHT_LOOKUP)))) {
+      return CALL_BAD_REQUEST;
     }
     ++program->grant_count;
   }
@@ -441,7 +477,25 @@ static enum call_status parse_manifest(const struct path_context *context,
   }
   for (size_t i = 1; i < program->root_count; ++i) {
     for (size_t j = 0; j < program->grant_count; ++j) {
-      if (!strcmp((const char *)(uintptr_t)program->roots[i].name, program->grants[j].name)) {
+      const char *name = (const char *)(uintptr_t)program->roots[i].name;
+      if (!strcmp(name, program->grants[j].name) ||
+          (program->grants[j].root && !strcmp(name, program->grants[j].root))) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+  }
+  for (size_t i = 0; i < program->grant_count; ++i) {
+    const struct bundle_grant_request *request = &program->grants[i];
+    if (!request->root) {
+      continue;
+    }
+    if (root_conflict(context, request->root)) {
+      return CALL_BAD_REQUEST;
+    }
+    for (size_t j = 0; j < program->grant_count; ++j) {
+      if (!strcmp(request->root, program->grants[j].name) ||
+          (j != i && program->grants[j].root &&
+           !strcmp(request->root, program->grants[j].root))) {
         return CALL_BAD_REQUEST;
       }
     }

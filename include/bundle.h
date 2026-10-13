@@ -9,6 +9,9 @@ struct bundle_program;
 struct bundle_grant_request {
   const char *name;
   const char *resource;
+  /* Selected external inventory key and optional directory URI-root alias. */
+  const char *source;
+  const char *root;
   uint64_t protocol;
   uint64_t rights;
   bool required;

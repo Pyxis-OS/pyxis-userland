@@ -2,6 +2,8 @@
 #include <abi/clock.h>
 #include <abi/launcher.h>
 #include <abi/pipe.h>
+#include <abi/disk.h>
+#include <abi/mount.h>
 #include <job_work.h>
 #include <process.h>
 #include <wait.h>
@@ -33,6 +35,110 @@ struct context_grants {
   uint64_t *mapped;
   struct bundle_launch *prepared;
 };
+
+static enum call_status configured_source(const struct startup_binding *binding,
+    const char **name, struct handle_info *info)
+{
+  const char *binding_name = (const void *)(uintptr_t)binding->name;
+  size_t prefix_size = sizeof(BUNDLE_SOURCE_PREFIX) - 1;
+  if (strncmp(binding_name, BUNDLE_SOURCE_PREFIX, prefix_size)) {
+    return CALL_NOT_FOUND;
+  }
+  *name = binding_name + prefix_size;
+  if (!**name) {
+    return CALL_BAD_REQUEST;
+  }
+  enum call_status status = handle_query(binding->handle, info);
+  if (status != CALL_OK) {
+    return status == CALL_BAD_HANDLE ? CALL_NOT_FOUND : status;
+  }
+  if (info->kind != HANDLE_KIND_NATIVE && info->kind != HANDLE_KIND_EXPORTED) {
+    return CALL_WRONG_TYPE;
+  }
+  if (info->protocol == PROTOCOL_DIRECTORY) {
+    return CALL_OK;
+  }
+  if (info->kind != HANDLE_KIND_NATIVE) {
+    return CALL_WRONG_TYPE;
+  }
+  if (info->protocol == PROTOCOL_MOUNT) {
+    return CALL_OK;
+  }
+  if (info->protocol == PROTOCOL_DISKS) {
+    uint64_t allowed = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
+        DISKS_RIGHT_MOUNT_READ_WRITE;
+    return (info->rights & ~allowed) ? CALL_DENIED : CALL_OK;
+  }
+  return CALL_WRONG_TYPE;
+}
+
+enum call_status bundle_sources_from_startup(struct bundle_authority *authority,
+    size_t capacity, size_t *count)
+{
+  if (!count || (capacity && !authority)) {
+    return CALL_BAD_REQUEST;
+  }
+  *count = 0;
+  const struct startup_binding *bindings = startup_resources();
+  for (size_t i = 0; i < startup_resource_count(); ++i) {
+    const char *name;
+    struct handle_info info;
+    enum call_status status = configured_source(&bindings[i], &name, &info);
+    if (status == CALL_NOT_FOUND) {
+      continue;
+    }
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (*count == capacity || *count == BUNDLE_SOURCE_LIMIT) {
+      return CALL_LIMIT;
+    }
+    authority[(*count)++] = (struct bundle_authority){name, bindings[i].handle, info.protocol};
+  }
+  return CALL_OK;
+}
+
+enum call_status bundle_sources_forward_startup(struct launch_grant *grants,
+    size_t grant_capacity, size_t *grant_count, struct launch_binding *resources,
+    size_t resource_capacity, size_t *resource_count)
+{
+  if (!grant_count || !resource_count || *grant_count > grant_capacity ||
+      *resource_count > resource_capacity || (grant_capacity && !grants) ||
+      (resource_capacity && !resources)) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t source_count = 0;
+  const struct startup_binding *bindings = startup_resources();
+  for (size_t i = 0; i < startup_resource_count(); ++i) {
+    const char *name;
+    struct handle_info info;
+    enum call_status status = configured_source(&bindings[i], &name, &info);
+    if (status == CALL_NOT_FOUND) {
+      continue;
+    }
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (source_count == BUNDLE_SOURCE_LIMIT || *grant_count == grant_capacity ||
+        *resource_count == resource_capacity) {
+      return CALL_LIMIT;
+    }
+    const char *binding_name = (const void *)(uintptr_t)bindings[i].name;
+    for (size_t j = 0; j < *resource_count; ++j) {
+      if (!strcmp(binding_name, (const void *)(uintptr_t)resources[j].name)) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
+    if ((transport & info.transport) != transport) {
+      return CALL_DENIED;
+    }
+    resources[(*resource_count)++] = (struct launch_binding){bindings[i].name, *grant_count};
+    grants[(*grant_count)++] = (struct launch_grant){bindings[i].handle, info.rights, transport};
+    ++source_count;
+  }
+  return CALL_OK;
+}
 
 static enum call_status retain_grant(struct context_grants *context,
     uint64_t source_index, uint64_t *index)
@@ -66,6 +172,11 @@ static enum call_status prepare_context(struct context_grants *context,
     }
     for (size_t j = 0; j < bundle_root_count; ++j) {
       if (!strcmp(name, (const void *)(uintptr_t)bundle_roots[j].name)) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    for (size_t j = 0; j < prepared->request.root_count; ++j) {
+      if (!strcmp(name, (const void *)(uintptr_t)prepared->roots[j].name)) {
         return CALL_BAD_REQUEST;
       }
     }
@@ -127,16 +238,27 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     const struct bundle_authority *authority, size_t authority_count)
 {
   for (size_t i = 0; i < count; ++i) {
+    for (size_t j = 0; j < prepared->request.root_count; ++j) {
+      const char *name = (const void *)(uintptr_t)prepared->roots[j].name;
+      if (!strcmp(requests[i].name, name) ||
+          (requests[i].root && !strcmp(requests[i].root, name))) {
+        return CALL_BAD_REQUEST;
+      }
+    }
     /* Private context authority is created separately, never copied from a
      * caller's client leaf, including the ordinary Lua/bundle path. */
     if (!strcmp(requests[i].resource, "job_work")) {
       continue;
     }
+    const char *selection = requests[i].source ? requests[i].source : requests[i].resource;
     handle_t source = HANDLE_INVALID;
     for (size_t j = 0; j < authority_count; ++j) {
-      if (authority[j].resource && !strcmp(requests[i].resource, authority[j].resource)) {
+      if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
+          authority[j].protocol == requests[i].protocol) {
+        if (source != HANDLE_INVALID && authority[j].source != HANDLE_INVALID) {
+          return CALL_BAD_REQUEST;
+        }
         source = authority[j].source;
-        break;
       }
     }
     if (source == HANDLE_INVALID) {
@@ -172,6 +294,13 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
     prepared->resources[prepared->request.resource_count++] =
         (struct launch_binding){(uintptr_t)requests[i].name, index};
+    if (requests[i].root) {
+      if (prepared->request.root_count == STARTUP_ROOT_LIMIT) {
+        return CALL_LIMIT;
+      }
+      prepared->roots[prepared->request.root_count++] =
+          (struct launch_binding){(uintptr_t)requests[i].root, index};
+    }
   }
   return CALL_OK;
 }

@@ -33,6 +33,7 @@
 #include <abi/terminal_pointer.h>
 #include <abi/clipboard.h>
 #include <directory.h>
+#include <bundle_launch.h>
 #include <handle.h>
 #include <launcher.h>
 #include <job_work.h>
@@ -90,7 +91,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
   size_t depth = context->count;
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
-      STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT + 1;
+      STARTUP_ROOT_LIMIT + STARTUP_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT;
   if (root_count > STARTUP_ROOT_LIMIT ||
       depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants) {
     handle_close(image);
@@ -141,7 +142,7 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[LAUNCHER].rights = rights &
         (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP);
   }
-  struct launch_binding resources[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT] = {
+  struct launch_binding resources[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
     {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"launcher", LAUNCHER},
   };
@@ -349,6 +350,15 @@ static int launch_session(const struct session_config *config, const struct netw
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", grant_count};
     grants[grant_count++] = (struct launch_grant){profile,
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
+  }
+
+  if (!start_remote_services) {
+    status = bundle_sources_forward_startup(grants, fixed_grants + depth, &grant_count,
+        resources, sizeof(resources) / sizeof(*resources), &resource_count);
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot retain selected sources (status %u)\n", status);
+      goto done;
+    }
   }
 
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
