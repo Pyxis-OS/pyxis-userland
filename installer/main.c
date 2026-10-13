@@ -1,6 +1,7 @@
 #include "../common/bootstrap_environment.h"
 #include "plan.h"
 #include "coexist_ui.h"
+#include "publication_frontend.h"
 #include "../xfer/hash.h"
 
 #include <clock.h>
@@ -472,6 +473,13 @@ static bool record_matches(const struct install_plan_record *expected,
 
 int main(int argc, char **argv)
 {
+#if INSTALLER_PUBLICATION_SCRATCH
+  if (argc == 2 && !strcmp(argv[1], "--scratch-publication")) {
+    struct terminal terminal = {.input = bootstrap_stdio(ENVIRONMENT_STDIN).handle,
+      .output = bootstrap_stdio(ENVIRONMENT_STDOUT).handle};
+    return install_publication_scratch(&terminal);
+  }
+#endif
   bool print_only = false, dry_run = false, replay = false, verbose = false, coexist = false;
   const char *explicit_consent = NULL;
   for (int i = 1; i < argc; i++) {
@@ -525,6 +533,20 @@ int main(int argc, char **argv)
   if (!profile_matches(disks, coexist)) {
     goto done;
   }
+#if INSTALLER_PUBLICATION_SCRATCH
+  if (!replay && !print_only && !dry_run) {
+    char scratch[32];
+    if (!read_line(&terminal, "Scratch publication (scratch), or ordinary installer (Enter): ", "", scratch, sizeof(scratch))) {
+      goto done;
+    }
+    if (!strcmp(scratch, "scratch")) {
+      return install_publication_scratch(&terminal);
+    }
+    if (*scratch) {
+      goto done;
+    }
+  }
+#endif
   if (!replay && !choose_action(&terminal, &updating, &replay)) {
     goto done;
   }

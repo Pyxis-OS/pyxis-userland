@@ -1,3 +1,5 @@
+INSTALLER_PUBLICATION_SCRATCH ?= 0
+export INSTALLER_PUBLICATION_SCRATCH
 SDK ?= build/sdk
 LUA ?= lua
 SDK := $(abspath $(SDK))
@@ -75,6 +77,7 @@ CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o netwo
 CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o progress.o)
+INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o) $(addprefix $(BUILD)/installer/,configuration.o publication.o publication_snapshot.o publication_frontend.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
@@ -117,6 +120,7 @@ install: all
 	  install -m 644 config/live.lua "$$staging/config/live.lua"; \
 	  install -m 644 config/installed.lua "$$staging/config/installed.lua"; \
 	  install -m 644 config/packages.lua "$$staging/config/packages.lua"; \
+	  install -m 644 "$(BUILD)/config-editor/catalog.lua" "$$staging/config/catalog.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  install -m 644 examples/pointer-min/main.c "$$staging/share/examples/pointer-min.c"; \
 	  install -m 644 examples/font-min/main.c "$$staging/share/examples/font-min.c"; \
@@ -316,11 +320,11 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 	install -m 644 wifi/README.md "$(@D)/app/"
 	install -m 644 wifi/manifest.json "$@"
 
-$(CONFIG_EDITOR_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
-$(CONFIG_EDITOR_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/config.pxe: $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/config.pxe: $(BUILD)/installer/publication.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(BUILD)/installer/publication.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/config-editor/catalog.lua: scripts/config-catalog.lua config-editor/catalog-source.lua config/installed.lua config/session.lua config/network.lua FORCE
 	@mkdir -p $(@D)
@@ -340,11 +344,13 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(INSTALLER_OBJECTS): private CPPFLAGS += $(MBEDTLS_CPPFLAGS) -I$(LUA_PREFIX)/include
+$(BUILD)/installer/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+
+$(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/installer.pxe: $(INSTALLER_OBJECTS) $(INSTALLER_BOOT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_BOOT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/installer.pxe: $(INSTALLER_CONFIG_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/fat32-inspect/main.o: $(SDK)/sysroot/usr/include/pyxis_fs/fat32.h
 $(BUILD)/fat32-inspect.pxe: $(BUILD)/fat32-inspect/main.o $(FAT32_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
@@ -399,7 +405,7 @@ $(BUILD)/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 # SDK selection and compiler flags are build inputs even if files are older.
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
-	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$ZLIB_PREFIX" "$$LIBPNG_PREFIX" "$$CC" "$$CXX" "$$THREADPROBE_CXX_CPPFLAGS" "$$THREADPROBE_CXXFLAGS" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" > $@.tmp
+	@printf '%s\n' "$$SDK" "$$LUA_PREFIX" "$$PICOHTTPPARSER_PREFIX" "$$MBEDTLS_PREFIX" "$$ZLIB_PREFIX" "$$LIBPNG_PREFIX" "$$CC" "$$CXX" "$$THREADPROBE_CXX_CPPFLAGS" "$$THREADPROBE_CXXFLAGS" "$$PYXIS_COMPILER_ID" "$$CPPFLAGS" "$$CFLAGS" "$$LDFLAGS" "$$LDLIBS" "$$INSTALLER_PUBLICATION_SCRATCH" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -439,3 +445,4 @@ $(BUILD)/pkg.pxb/manifest.json: $(BUILD)/pkg.pxe pkg/manifest.json pkg/README.md
 	install -m 755 $(BUILD)/pkg.pxe $(BUILD)/pkg.pxb/app/bin/pkg.pxe
 	install -m 644 pkg/README.md $(BUILD)/pkg.pxb/app/README.md
 	install -m 644 pkg/manifest.json $@
+-include $(INSTALLER_CONFIG_OBJECTS:.o=.d)

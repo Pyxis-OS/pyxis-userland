@@ -2,6 +2,7 @@
 #include "inventory.h"
 #include "digest.h"
 #include "review.h"
+#include "publication_snapshot.h"
 
 #include <directory.h>
 #include <pyxis_fs/npfs.h>
@@ -1789,4 +1790,106 @@ done:
     prior->needs_legacy = false;
   }
   return success;
+}
+
+
+bool install_pool_boot_snapshot(const struct install_disk *disk, struct config_blob *blob)
+{
+  static const uint8_t pool_type[16] = {
+    0xa3, 0x94, 0x81, 0x1a, 0x07, 0x8a, 0xff, 0x4d,
+    0x83, 0x0e, 0x4c, 0xb4, 0xed, 0x7a, 0xac, 0x00,
+  };
+  struct gpt_copy *map = calloc(2, sizeof(*map));
+  struct pool_view *pool = calloc(1, sizeof(*pool));
+  uint8_t *block = malloc(NPFS_BLOCK_SIZE);
+  bool ok = false;
+  if (!map || !pool || !block || disk->info.block_size > NPFS_BLOCK_SIZE ||
+      disk->info.block_count < 3) {
+    goto done;
+  }
+  if (read_gpt(disk, 0, block, &map[0]) != GPT_VALID ||
+      read_gpt(disk, 1, block, &map[1]) != GPT_VALID || !gpt_agree(&map[0], &map[1])) {
+    goto done;
+  }
+  if (map[0].count < 2 || memcmp(map[0].table + map[0].entry_bytes, pool_type, 16)) {
+    config_blob_destroy(blob);
+    ok = true;
+    goto done;
+  }
+  const uint8_t *entry = map[0].table + map[0].entry_bytes;
+  uint64_t first = npfs_get_u64(entry + 32), last = npfs_get_u64(entry + 40);
+  if (last < first || last >= disk->info.block_count) {
+    goto done;
+  }
+  pool->disk = disk;
+  pool->offset = first * disk->info.block_size;
+  uint64_t size = (last - first + 1) * disk->info.block_size;
+  if (size % NPFS_BLOCK_SIZE) {
+    goto done;
+  }
+  pool->blocks = size / NPFS_BLOCK_SIZE;
+  bool degraded = false, found = false;
+  struct npfs_volume system;
+  enum inspection status = open_pool(pool, &degraded);
+  if (status != INSPECT_OK || update_catalog(pool, "system", &system, &found) != INSPECT_OK) {
+    goto done;
+  }
+  if (!found) {
+    config_blob_destroy(blob);
+    ok = true;
+    goto done;
+  }
+  struct npfs_inode directory, child;
+  if (read_inode(pool, &system, 1, &directory) != INSPECT_OK ||
+      directory.kind != NPFS_INODE_DIRECTORY) {
+    goto done;
+  }
+  uint64_t number = 0;
+  if (prior_lookup(pool, &system, 1, &directory, "config", &number, &child) != INSPECT_OK) {
+    goto done;
+  }
+  if (!number) {
+    config_blob_destroy(blob);
+    ok = true;
+    goto done;
+  }
+  if (child.kind != NPFS_INODE_DIRECTORY) {
+    goto done;
+  }
+  directory = child;
+  uint64_t parent = number;
+  if (prior_lookup(pool, &system, parent, &directory, "boot.lua", &number, &child) != INSPECT_OK) {
+    goto done;
+  }
+  if (!number) {
+    config_blob_destroy(blob);
+    ok = true;
+    goto done;
+  }
+  if (child.kind != NPFS_INODE_FILE || child.size > CONFIG_FILE_MAX_BYTES) {
+    goto done;
+  }
+  unsigned char *bytes = malloc((size_t)child.size + 1);
+  if (!bytes) {
+    goto done;
+  }
+  ok = true;
+  for (size_t offset = 0; ok && offset < child.size;) {
+    size_t count = child.size - offset < NPFS_BLOCK_SIZE ? (size_t)child.size - offset : NPFS_BLOCK_SIZE;
+    ok = prior_file_block(pool, &child, offset / NPFS_BLOCK_SIZE, block) == INSPECT_OK;
+    if (ok) {
+      memcpy(bytes + offset, block, count);
+      offset += count;
+    }
+  }
+  ok = ok && config_blob_set(blob, bytes, (size_t)child.size);
+  free(bytes);
+done:
+  free(block);
+  if (pool) {
+    free(pool->overlay);
+  }
+  free(pool);
+  free(map);
+  return ok;
 }
