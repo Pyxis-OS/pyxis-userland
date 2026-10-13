@@ -166,8 +166,21 @@ bool config_replay_read(FILE *stream, struct config_replay *replay)
   if (!bytes) {
     return false;
   }
-  size_t size = fread(bytes, 1, CONFIG_LITERAL_SOURCE_LIMIT + 1, stream);
-  bool ok = !ferror(stream) && size <= CONFIG_LITERAL_SOURCE_LIMIT &&
+  size_t size = 0;
+  bool framed = false;
+  while (size <= CONFIG_LITERAL_SOURCE_LIMIT) {
+    int byte = fgetc(stream);
+    if (byte == EOF) {
+      break;
+    }
+    bytes[size++] = (char)byte;
+    if (size >= strlen(PREFIX) + strlen(SUFFIX) &&
+        !memcmp(bytes + size - strlen(SUFFIX), SUFFIX, strlen(SUFFIX))) {
+      framed = true;
+      break;
+    }
+  }
+  bool ok = framed && !ferror(stream) && size <= CONFIG_LITERAL_SOURCE_LIMIT &&
       size >= strlen(PREFIX) + strlen(SUFFIX) && !memcmp(bytes, PREFIX, strlen(PREFIX)) &&
       !memcmp(bytes + size - strlen(SUFFIX), SUFFIX, strlen(SUFFIX));
   struct config_literal *document = NULL;
