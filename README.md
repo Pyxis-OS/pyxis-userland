@@ -484,7 +484,9 @@ Its update loop keeps running without input focus, clearing held buttons on
 focus, boundary and state changes and allowing the scroll indicators to expire.
 Keyboard and pointer controls follow their own session's focus.
 
-`httpfs` publishes read-only HTTP snapshots; `httpfs --https` selects HTTPS.
+`httpfs.pxb` publishes prepared GET/POST response streams and legacy HTTP FILE
+snapshots; `--https` selects verified HTTPS. Trusted startup declares private RAM
+staging (16 MiB by default), with isolated npfs backing opt-in for large uploads.
 Configured boot sessions use `--start-services` to publish independent `http`
 and `https` instances after selecting `DNS_SERVER`. HTTPS loads
 `boot://share/ca-certificates/cacert.pem` before publication, with bounded entropy
@@ -492,7 +494,7 @@ initialization. Reported HTTPS setup failure leaves HTTP and local startup usabl
 To augment public roots, restart or replace the HTTPS instance:
 
 ```
-service replace --read-only https boot://httpfs.pxe --https --ca-bundle home://private-ca.pem
+service replace --read-only https boot://httpfs.pxb --https --ca-bundle home://private-ca.pem
 ```
 
 `--read-only` attenuates the launched provider's native filesystem roots and
