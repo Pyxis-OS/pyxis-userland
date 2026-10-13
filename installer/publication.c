@@ -501,7 +501,13 @@ bool install_publication_publish(const struct install_publication_request *reque
         FILE_RIGHT_READ | FILE_RIGHT_WRITE, &staged.files[i]);
     ok = status == CALL_OK || fail(report, status);
     if (ok) {
-      ok = stream_source(&request->sources[i], staged.files[i], &payload(&staged.binding, i)->digest, report);
+      /* Reserve the final extent once; every byte is still overwritten and
+       * hash-verified. A failed resize stops with only this fresh artifact. */
+      status = file_resize(staged.files[i], payload(&staged.binding, i)->digest.size);
+      ok = status == CALL_OK || fail(report, status);
+      if (ok) {
+        ok = stream_source(&request->sources[i], staged.files[i], &payload(&staged.binding, i)->digest, report);
+      }
     }
     if (ok) {
       status = file_sync(staged.files[i]);

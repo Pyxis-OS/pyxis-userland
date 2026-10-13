@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define SCRATCH_NAMESPACE_RESERVE_CLUSTERS UINT64_C(32)
+
 #define READ_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES)
 #define WRITE_RIGHTS (READ_RIGHTS | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_WRITE_FILES)
 
@@ -121,7 +123,6 @@ static bool digest_source(const struct install_source *source, struct config_fil
     ok = install_source_read(source, offset, buffer, count) && install_digest_update(&digest, buffer, count);
     if (ok) {
       offset += count;
-      install_progress_advance(count, 0);
     }
   }
   ok = ok && install_digest_finish(&digest, output->sha256);
@@ -183,6 +184,37 @@ static bool payload_path(struct config_boot_payload *payload, const char *revisi
   return count > 0 && (size_t)count < sizeof(payload->path);
 }
 
+static uint64_t required_capacity(const struct install_configuration *plan,
+    const struct config_boot_binding *binding, uint64_t cluster)
+{
+  if (!cluster || cluster > UINT64_MAX / SCRATCH_NAMESPACE_RESERVE_CLUSTERS) {
+    return UINT64_MAX;
+  }
+  uint64_t required = SCRATCH_NAMESPACE_RESERVE_CLUSTERS * cluster;
+  const uint64_t payload_sizes[] = {binding->kernel.digest.size, binding->archive.digest.size,
+    binding->revision.digest.size, CONFIG_RECORD_MAX_BYTES, CONFIG_RECORD_MAX_BYTES,
+    CONFIG_RECORD_MAX_BYTES};
+  for (unsigned i = 0; i < sizeof(payload_sizes) / sizeof(payload_sizes[0]); ++i) {
+    uint64_t size = payload_sizes[i];
+    uint64_t blocks = size / cluster + (size % cluster != 0);
+    if (blocks > (UINT64_MAX - required) / cluster) {
+      return UINT64_MAX;
+    }
+    required += blocks * cluster;
+  }
+  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
+    uint64_t sizes[] = {plan->current[i].size, plan->after[i].size};
+    for (unsigned n = 0; n < 2; ++n) {
+      uint64_t blocks = sizes[n] / cluster + (sizes[n] % cluster != 0);
+      if (blocks > (UINT64_MAX - required) / cluster) {
+        return UINT64_MAX;
+      }
+      required += blocks * cluster;
+    }
+  }
+  return required;
+}
+
 static bool ready_preview(struct install_configuration *plan, const struct config_blob *record)
 {
   struct config_bytes archive[CONFIG_LUA_COUNT], esp[CONFIG_LUA_COUNT];
@@ -220,6 +252,7 @@ int install_publication_scratch(struct terminal *terminal)
   struct config_target_facts planned_facts = {0};
   struct config_file_digest legacy_digests[3] = {0};
   bool legacy_pair = false;
+  uint64_t available_bytes = 0, cluster_bytes = 0;
   int result = EXIT_FAILURE;
   bool crypto = hash_init(clock, random), claimed = false;
   char text[128], revision[65], attempt[33], revision_text[66];
@@ -305,6 +338,10 @@ int install_publication_scratch(struct terminal *terminal)
     }
   }
   config_blob_destroy(&legacy_revision);
+  if (!install_snapshot_capacity(&disk, &planned_facts, &available_bytes, &cluster_bytes)) {
+    fputs("Capacity inspection unavailable; nothing written.\n", stderr);
+    goto done;
+  }
   if (!retire(&mount) || handle_close(disk.handle) != CALL_OK) {
     goto done;
   }
@@ -323,7 +360,11 @@ int install_publication_scratch(struct terminal *terminal)
   if (system_info_get_identity(startup_resource("system_info"), &identity) != CALL_OK) {
     goto done;
   }
-  snprintf(revision, sizeof(revision), "%s", identity.build_revision[0] ? identity.build_revision : "development");
+  if (!config_revision_valid(identity.build_revision)) {
+    fputs("Actual kernel revision unavailable; readiness cannot be bound.\n", stderr);
+    goto done;
+  }
+  strcpy(revision, identity.build_revision);
   struct install_configuration_input input = {.current = current, .record = &record,
     .archive = archive, .catalog = &catalog, .pool_override = &pool,
     .kernel_revision = revision, .program_revision = revision};
@@ -376,6 +417,9 @@ int install_publication_scratch(struct terminal *terminal)
   }
   for (;;) {
     install_configuration_review(&plan, stderr);
+    uint64_t required = required_capacity(&plan, binding, cluster_bytes);
+    fprintf(stderr, "Scratch staging requires at most %llu bytes; inspected free %llu (includes namespace reserve).\n",
+        (unsigned long long)required, (unsigned long long)available_bytes);
     fprintf(stderr, "Boot payload attempt: %s; %llu bytes kernel, %llu bytes archive.\n"
         "Boot entry: %s%s.\n", attempt, (unsigned long long)binding->kernel.digest.size,
         (unsigned long long)binding->archive.digest.size, pending ? "manual adoption; activation pending" : "owned switch last",
@@ -391,8 +435,8 @@ int install_publication_scratch(struct terminal *terminal)
       goto done;
     }
     if (!strcmp(text, "confirm")) {
-      if (!plan.applicable) {
-        fputs("Plan is not applicable; required source/entry choices remain.\n", stderr);
+      if (!plan.applicable || required > available_bytes) {
+        fputs("Plan is not applicable or lacks staging capacity; nothing written.\n", stderr);
         continue;
       }
       break;
@@ -448,6 +492,12 @@ int install_publication_scratch(struct terminal *terminal)
     goto done;
   }
   config_blob_destroy(&current_pool);
+  uint64_t fresh_available, fresh_cluster;
+  if (!install_snapshot_capacity(&disk, &planned_facts, &fresh_available, &fresh_cluster) ||
+      fresh_cluster != cluster_bytes || required_capacity(&plan, binding, fresh_cluster) > fresh_available) {
+    fputs("Staging capacity changed or unavailable; nothing written.\n", stderr);
+    goto done;
+  }
   const char *legacy_paths[] = {"/boot/caelum.elf", "/boot/initrd.cpio", "/boot/revision"};
   for (unsigned i = 0; legacy_pair && i < 3; ++i) {
     if (!install_snapshot_payload_revalidate(&disk, &planned_facts, legacy_paths[i], &legacy_digests[i])) {

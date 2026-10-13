@@ -9,7 +9,8 @@ path on native media.
 Select the exact disposable disk ID and GPT ESP partition. Preparation opens a
 native read-only FAT view, freezes the config/catalog/record/menu bytes and
 issuer facts, inspects the personal pool override without mounting or replay,
-then drains and explicitly retires the view. Review shows entry choices, source
+checks full FAT free capacity through the shared reader, then drains and
+explicitly retires the view. Review shows entry choices, source
 selection, the retained override hash and the fresh boot-payload attempt. It
 uses the same literal/schema/delta planner as `config`; unsupported Lua is data,
 not executed code. `confirm` applies only that owned in-memory plan; `cancel`
@@ -18,7 +19,8 @@ writes nothing. The scratch flow installs no program revision.
 The executor reacquires the existing whole-disk claim and rechecks the frozen
 bytes with the shared FAT reader before staging. It releases that claim before
 native FAT32 write admission, repeats the snapshots, and streams fresh kernel,
-filtered rescue archive and revision files into
+filtered rescue archive and revision files (reserving each final extent once,
+then overwriting and verifying every byte) into
 `EFI/pyxis/REVISION/ATTEMPT/`. The immutable ownership record certifies their
 exact names, sizes and hashes. Files are synchronized and reread before the
 exclusive configuration interval rechecks identity/content and publishes a

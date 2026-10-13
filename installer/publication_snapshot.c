@@ -116,12 +116,13 @@ static bool read_sectors(void *context, uint64_t sector, uint32_t count, void *b
 }
 
 bool install_snapshot_capacity(const struct install_disk *disk,
-    const struct config_target_facts *facts, uint64_t *free_bytes)
+    const struct config_target_facts *facts, uint64_t *free_bytes, uint64_t *cluster_bytes)
 {
-  if (!free_bytes) {
+  if (!free_bytes || !cluster_bytes) {
     return false;
   }
   *free_bytes = 0;
+  *cluster_bytes = 0;
   if (!disk || !config_target_valid(facts) || facts->partition > UINT32_MAX ||
       disk->info.id != facts->device ||
       disk->info.block_size != facts->device_block_size ||
@@ -159,10 +160,11 @@ bool install_snapshot_capacity(const struct install_disk *disk,
     ok = fat32_check(&volume, &work, &report) == FAT32_OK;
   }
   if (ok) {
-    uint64_t cluster_bytes = (uint64_t)volume.sectors_per_cluster * volume.source.sector_bytes;
-    ok = cluster_bytes && report.free_clusters <= UINT64_MAX / cluster_bytes;
+    uint64_t unit = (uint64_t)volume.sectors_per_cluster * volume.source.sector_bytes;
+    ok = unit && report.free_clusters <= UINT64_MAX / unit;
     if (ok) {
-      *free_bytes = report.free_clusters * cluster_bytes;
+      *free_bytes = report.free_clusters * unit;
+      *cluster_bytes = unit;
     }
   }
   free(work.memory);
