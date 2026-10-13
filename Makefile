@@ -60,7 +60,7 @@ INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o co
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
-BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/config.o
+BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/network.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o $(BUILD)/httpfs/provider.o
@@ -70,7 +70,9 @@ TLS_LIBRARY := $(BUILD)/libtls.a
 TLS_OBJECT := $(BUILD)/libtls/tls.o
 TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
-CONFIG_OBJECT := $(BUILD)/libconfig/config.o
+CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o literal.o boot.o session.o network.o selection.o)
+CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o)
+CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
@@ -80,8 +82,8 @@ SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
-.PHONY: fat32ctl
-all: $(INSTALL_PROGRAMS) fat32ctl $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+.PHONY: fat32ctl config
+all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
 # removed programs/assets cannot survive from an earlier install.
@@ -95,6 +97,7 @@ install: all
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
 	  cp -a "$(BUILD)/fat32ctl.pxb" "$$staging/"; \
+	  cp -a "$(BUILD)/config.pxb" "$$staging/"; \
 	  install -m 644 init/development.sh "$$staging/init"; \
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
 	  install -m 644 init/services.sh "$$staging/init-services"; \
@@ -190,6 +193,7 @@ udp-send: $(BUILD)/udp-send.pxe
 udp-echo: $(BUILD)/udp-echo.pxe
 shell: $(BUILD)/shell.pxe
 fat32ctl: $(BUILD)/fat32ctl.pxb/manifest.json
+config: $(BUILD)/config.pxb/manifest.json
 mandelbrot: $(BUILD)/mandelbrot.pxe
 mousetest: $(BUILD)/mousetest.pxe
 screenshot: $(BUILD)/screenshot.pxe
@@ -260,6 +264,26 @@ $(BUILD)/fat32ctl.pxb/manifest.json: $(BUILD)/fat32ctl.pxe fat32ctl/manifest.jso
 	install -m 644 fat32ctl/README.md "$(@D)/app/"
 	install -m 644 fat32ctl/manifest.json "$@"
 
+$(CONFIG_EDITOR_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(CONFIG_EDITOR_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+
+$(BUILD)/config.pxe: $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+
+$(BUILD)/config-editor/catalog.lua: scripts/config-catalog.lua config-editor/catalog-source.lua config/installed.lua config/session.lua config/network.lua FORCE
+	@mkdir -p $(@D)
+	$(LUA) scripts/config-catalog.lua '$(CONFIG_REVISION)' > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(BUILD)/config.pxb/manifest.json: $(BUILD)/config.pxe $(BUILD)/config-editor/catalog.lua config-editor/manifest.json config-editor/README.md config/installed.lua config/session.lua config/network.lua
+	@rm -rf "$(@D)"
+	@mkdir -p "$(@D)/app/bin" "$(@D)/app/defaults"
+	install -m 644 $(BUILD)/config.pxe "$(@D)/app/bin/"
+	install -m 644 config/installed.lua config/session.lua config/network.lua $(BUILD)/config-editor/catalog.lua "$(@D)/app/defaults/"
+	install -m 644 config-editor/README.md "$(@D)/app/"
+	install -m 644 config-editor/manifest.json "$@"
+
 $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
@@ -322,5 +346,6 @@ clean:
 
 -include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
 -include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d) $(SCREENSHOT_OBJECTS:.o=.d)
+-include $(CONFIG_EDITOR_OBJECTS:.o=.d)
 
 -include $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d

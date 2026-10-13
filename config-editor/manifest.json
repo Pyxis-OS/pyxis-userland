@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "id": "org.pyxis.config",
+  "entry": "bin/config.pxe",
+  "commands": {"config": "bin/config.pxe"},
+  "resource_dirs": {"defaults": "defaults"},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read"], "required": false},
+    {"name": "random", "resource": "random", "rights": ["read"], "required": false},
+    {"name": "config_read", "resource": "directory", "source": "config_parent", "rights": ["lookup", "read-files"], "required": false},
+    {"name": "config_write", "resource": "directory", "source": "config_writer", "rights": ["lookup", "read-files", "write-files", "create", "remove"], "required": false},
+    {"name": "limine_read", "resource": "directory", "source": "limine_parent", "rights": ["lookup", "read-files"], "required": false},
+    {"name": "limine_write", "resource": "directory", "source": "limine_writer", "rights": ["lookup", "read-files", "write-files", "create", "remove"], "required": false},
+    {"name": "control", "resource": "mount", "source": "config_control", "rights": ["observe"], "required": false},
+    {"name": "writer", "resource": "mount", "source": "config_control", "rights": ["observe", "write", "interval"], "required": false}
+  ]
+}

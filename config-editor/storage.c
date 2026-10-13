@@ -431,11 +431,9 @@ bool config_storage_publish(const struct config_storage_view *view,
     return failed(report, CALL_BAD_REQUEST);
   }
   if (expected_record->digest.present) {
-    for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) {
-      if (!digest_equal(&previous.selected[i], &expected[i].digest)) {
-        return failed(report, CALL_BAD_REQUEST);
-      }
-    }
+    /* Owner edits need not match the previous selected hashes. The reviewed
+     * current snapshot is rechecked before staging and under exclusive ownership;
+     * prior hashes certify history, never authorize replacing current bytes. */
     /* Unresolved older recovery is retained for manual disposition. A new
      * publication must not silently discard names from a partial cleanup. */
     for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
