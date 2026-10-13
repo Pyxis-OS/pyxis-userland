@@ -580,10 +580,12 @@ static bool render_change(const struct config_plan_change *change, char **bytes,
   const struct config_literal_value *value = change->choice == CONFIG_CHOICE_ADOPT ?
       change->current.value : entry->default_value;
   struct renamed_value renamed = {0};
-  if (change->choice == CONFIG_CHOICE_APPLY && change->kind == CONFIG_CHANGE_MIGRATE) {
-    if (entry->migration.kind == CONFIG_MIGRATION_REPLACE) {
-      value = entry->migration.value;
-    } else if (entry->migration.kind == CONFIG_MIGRATION_MOVE) {
+  if (change->choice == CONFIG_CHOICE_APPLY && entry->migration.kind == CONFIG_MIGRATION_REPLACE) {
+    /* Missing-file additions use the declared replacement too; the new-file
+     * template already selects it and must not revert to the ordinary default. */
+    value = entry->migration.value;
+  } else if (change->choice == CONFIG_CHOICE_APPLY && change->kind == CONFIG_CHANGE_MIGRATE) {
+    if (entry->migration.kind == CONFIG_MIGRATION_MOVE) {
       value = change->migration_source.value;
     } else if (entry->migration.kind == CONFIG_MIGRATION_RENAME_FIELD) {
       if (!rename_field(change->current.value, entry->migration.from, entry->migration.to, &renamed)) {
