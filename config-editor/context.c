@@ -235,7 +235,7 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
     ok = all && config_selection_validate(archive, esp, &selection);
     if (!ok) {
       fputs("config: ESP triple is missing, unsupported or statically invalid\n", stderr);
-      return false;
+      goto preview;
     }
     fputs("config: ESP triple is statically valid\n", stderr);
   } else {
@@ -251,8 +251,29 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
         selection.boot.space_sources[i] == BOOT_ENTRY_OVERRIDE ? "ESP override" : "archive default",
         selection.boot.spaces[i]->init);
   }
-  fputs("config: CPUs, mounted volumes, packaged timezone data and live network availability: not checked\n", stderr);
+  for (size_t i = 0; i < selection.boot.volume_count; ++i) {
+    fprintf(stderr, "config: volume %s from %s\n", selection.boot.volumes[i]->name,
+        selection.boot.volume_sources[i] == BOOT_ENTRY_OVERRIDE ? "ESP override" : "archive default");
+  }
+  struct system_info_cpu cpu;
+  if (system_info_get_cpu(startup_resource("system_info"), &cpu) == CALL_OK && cpu.online_count) {
+    for (size_t i = 0; i < selection.boot.space_count; ++i) {
+      const struct boot_space *space = selection.boot.spaces[i];
+      for (size_t j = 0; j < space->cpu_count; ++j) {
+        if (space->cpus[j] >= cpu.online_count) {
+          fprintf(stderr, "config: space %s names absent CPU %llu\n", space->name,
+              (unsigned long long)space->cpus[j]);
+          ok = false;
+        }
+      }
+    }
+  } else {
+    fputs("config: CPU presence: not checked (read authority/inventory unavailable)\n", stderr);
+  }
+  fputs("config: mounted volumes, packaged timezone data and live network availability: not checked\n", stderr);
   config_selection_free(&selection);
+
+preview:
   if (!planned && context->view.config_parent != HANDLE_INVALID) {
     struct config_selection selected;
     const char *reason;
@@ -262,7 +283,7 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
     fprintf(stderr, "config: loader preview: %s\n", reason);
     config_selection_free(&selected);
   }
-  return true;
+  return ok;
 }
 
 bool config_editor_plan(struct config_editor_context *context)

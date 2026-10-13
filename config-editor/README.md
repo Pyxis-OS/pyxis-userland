@@ -39,7 +39,8 @@ Limine recovery is manual. The loader freezes a complete committed triple or
 uses the entire archive set, with rescue always using the archive.
 
 Files are bounded at 1 MiB, literal depth at 32 and catalog entries at 128.
-Static checks share startup validators and machine-setting rules. CPU, mounted
-volume, timezone-asset and live-network availability are reported as unchecked.
+Static checks share startup validators and machine-setting rules. CPU presence
+is checked when the declared read inventory is available. Mounted volume,
+timezone-asset and live-network availability are reported as unchecked.
 This command does not apply a configuration to Continuum or edit the separate
 machine-settings store.

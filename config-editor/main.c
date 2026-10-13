@@ -52,7 +52,6 @@ static void review(const struct config_delta_plan *plan)
 static bool print_plan(struct config_editor_context *context)
 {
   if (!context->target.valid) {
-    review(&context->plan);
     fputs("config: no issuer-bound target; cannot print a replayable plan\n", stderr);
     return false;
   }
