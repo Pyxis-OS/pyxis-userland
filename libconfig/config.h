@@ -19,6 +19,12 @@ enum config_result config_read(const char *path, lua_CFunction decode, void *out
 enum config_result config_read_bytes(const char *name, const char *bytes, size_t size,
     lua_CFunction decode, void *output);
 
+/* Untrusted declarative input: parse bounded literal return-table data without
+ * evaluating Lua. The protected decoder and partial-output ownership contract
+ * are the same as config_read_bytes. Unsupported handwritten Lua is an error. */
+enum config_result config_read_literal_bytes(const char *name, const char *bytes,
+    size_t size, lua_CFunction decode, void *output);
+
 /* Raw table access and allowed-key checks; each consumer supplies its keys. */
 void config_field(lua_State *state, int index, const char *key);
 void config_keys(lua_State *state, int index, const char *const *keys, size_t count);

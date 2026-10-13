@@ -1,4 +1,5 @@
 #include "config.h"
+#include "literal.h"
 #include <errno.h>
 #include <lauxlib.h>
 #include <lualib.h>
@@ -141,4 +142,51 @@ enum config_result config_read_bytes(const char *name, const char *bytes, size_t
     .memory = bytes, .memory_size = size, .path = name, .decode = decode, .output = output,
   };
   return evaluate(&reader) ? CONFIG_OK : CONFIG_ERROR;
+}
+
+struct literal_reader {
+  const struct config_literal *document;
+  lua_CFunction decode;
+  void *output;
+};
+
+static int decode_literal(lua_State *state)
+{
+  struct literal_reader *reader = lua_touserdata(state, 1);
+  lua_settop(state, 0);
+  lua_pushcfunction(state, reader->decode);
+  config_literal_push(state, reader->document->root);
+  lua_pushlightuserdata(state, reader->output);
+  lua_call(state, 2, 0);
+  return 0;
+}
+
+enum config_result config_read_literal_bytes(const char *name, const char *bytes,
+    size_t size, lua_CFunction decode, void *output)
+{
+  struct config_literal *document;
+  struct config_literal_diagnostic diagnostic;
+  if (!config_literal_parse(bytes, size, &document, &diagnostic)) {
+    fprintf(stderr, "config: %s:%zu:%zu: %s\n", name,
+        diagnostic.line, diagnostic.column, diagnostic.reason);
+    return CONFIG_ERROR;
+  }
+  lua_State *state = luaL_newstate();
+  if (!state) {
+    fprintf(stderr, "config: %s: cannot allocate decoder\n", name);
+    config_literal_free(document);
+    return CONFIG_ERROR;
+  }
+  struct literal_reader reader = {.document = document, .decode = decode, .output = output};
+  lua_pushcfunction(state, decode_literal);
+  lua_pushlightuserdata(state, &reader);
+  int status = lua_pcall(state, 1, 0, 0);
+  if (status != LUA_OK) {
+    const char *error = lua_type(state, -1) == LUA_TSTRING ?
+        lua_tostring(state, -1) : "non-string configuration error";
+    fprintf(stderr, "config: %s: %s\n", name, error);
+  }
+  lua_close(state);
+  config_literal_free(document);
+  return status == LUA_OK ? CONFIG_OK : CONFIG_ERROR;
 }
