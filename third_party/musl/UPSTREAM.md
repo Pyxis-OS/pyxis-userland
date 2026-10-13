@@ -316,3 +316,29 @@ local changes, each marked `Pyxis:` in the source:
 The build suppresses `-Wsign-compare` for upstream's `(size_t)-1` lookup
 comparisons. Errors are reported through errno: `E2BIG` is added for a full
 output buffer.
+
+The jq port's prerequisites add the remaining double-precision functions of
+ISO C `<math.h>` from the same pin. `src/math/acosh.c`, `asinh.c`, `atanh.c`,
+`cbrt.c`, `copysign.c`, `fdim.c`, `fmax.c`, `fmin.c`, `hypot.c`, `nearbyint.c`,
+`nextafter.c`, `nexttoward.c`, `remquo.c`, `scalbln.c` and `tgamma.c` are
+unmodified. Three files change one construct each:
+
+- `fma.c` drops `atomic.h` and calls `__builtin_clzll` where musl used its
+  `a_clz_64`;
+- `remainder.c` drops the `drem` alias and `lgamma_r.c` the `lgamma_r` alias,
+  because `weak_alias` is musl's internal macro and neither name is ISO C.
+
+`lgamma` is Pyxis's own `libc/lgamma.c`: it calls musl's `__lgamma_r` and
+discards the sign. musl's `lgamma` instead stores the sign in the `signgam`
+global shared by all threads, which Pyxis does not provide. The float and long
+double forms, the `lround` and `llround` families, `j0` to `yn`, `gamma`, `drem`,
+`significand`, `scalb`, `exp10` and `pow10` are not imported. Errors raise FP
+exception flags and leave errno unchanged, as in the rest of the subset.
+
+`fma.c` is built with `-Wno-shift-op-parentheses` to keep upstream's
+expressions. The files were read from a GitHub mirror of this commit through the
+`raw-github` repository on `repo.internal`
+(`kraj/musl/archive/0784374d561435f7c787a555aeab8ede699ed298.tar.gz`, SHA-256
+`6ad0ee58d5be7b0d8c0f1d8e9773e1d83c761f87c1f527a3e8cdf77128696964`), because the
+upstream cgit is not mirrored; a commit id fixes the tree, and five files
+already in this directory matched it byte for byte.

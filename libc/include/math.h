@@ -41,9 +41,7 @@ typedef double double_t;
 #define M_SQRT2         1.41421356237309504880  /* sqrt(2) */
 #define M_SQRT1_2       0.70710678118654752440  /* 1/sqrt(2) */
 
-/* fpclassify results. Of the C classification macros, libc provides only
- * isnan and isinf; C++ code gets std::fpclassify and the rest from libc++'s
- * <cmath>. */
+/* fpclassify results. */
 #define FP_NAN 0
 #define FP_INFINITE 1
 #define FP_ZERO 2
@@ -54,9 +52,16 @@ typedef double double_t;
 #define FP_ILOGB0 (-2147483647 - 1)
 #define FP_ILOGBNAN (-2147483647 - 1)
 
-/* Any real floating type; neither raises an FP exception. */
-#define isnan(value) __builtin_isnan(value)
+/* Classification macros accept any real floating type, evaluate the argument
+ * once and raise no FP exception. The comparison macros (isgreater and the
+ * like) are not provided. */
+#define fpclassify(value) \
+  __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, value)
+#define isfinite(value) __builtin_isfinite(value)
 #define isinf(value) __builtin_isinf(value)
+#define isnan(value) __builtin_isnan(value)
+#define isnormal(value) __builtin_isnormal(value)
+#define signbit(value) __builtin_signbit(value)
 
 #define MATH_ERRNO 1
 #define MATH_ERREXCEPT 2
@@ -146,6 +151,37 @@ double erf(double value);
 double erfc(double value);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
+
+/* The remaining double functions of ISO C math.h, from musl 1.2.5. The float
+ * and long double forms, the lround/llround/lrint families beyond those above,
+ * the exp/log/trig forms not listed here, the comparison macros and the
+ * non-ISO functions (j0, y0, gamma, drem, exp10 and similar) are absent. */
+double copysign(double magnitude, double sign);
+double fdim(double x, double y);
+/* Correctly rounded single-rounding x*y+z. */
+double fma(double x, double y, double z);
+/* A NaN argument is ignored in favor of the other. Signed zeros compare
+ * unequal: fmax(-0.0, 0.0) is +0.0 and fmin is -0.0. */
+double fmax(double x, double y);
+double fmin(double x, double y);
+double hypot(double x, double y);
+double cbrt(double value);
+double acosh(double value);
+double asinh(double value);
+double atanh(double value);
+/* Like rint but never raises inexact. */
+double nearbyint(double value);
+double nextafter(double from, double toward);
+double nexttoward(double from, long double toward);
+double remainder(double x, double y);
+/* Stores the low bits (at least three) of the integer quotient with the sign
+ * of x/y. */
+double remquo(double x, double y, int *quotient);
+double scalbln(double value, long exponent);
+/* ln |gamma(x)|. The sign of gamma(x) is not reported, and there is no
+ * signgam or lgamma_r. */
+double lgamma(double value);
+double tgamma(double value);
 
 #ifdef __cplusplus
 }

@@ -127,6 +127,24 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/x86_64/lrintf.c \
                 third_party/musl/src/math/x86_64/llrintf.c \
                 third_party/musl/src/math/x86_64/lrint.c \
+                third_party/musl/src/math/acosh.c \
+                third_party/musl/src/math/asinh.c \
+                third_party/musl/src/math/atanh.c \
+                third_party/musl/src/math/cbrt.c \
+                third_party/musl/src/math/copysign.c \
+                third_party/musl/src/math/fdim.c \
+                third_party/musl/src/math/fma.c \
+                third_party/musl/src/math/fmax.c \
+                third_party/musl/src/math/fmin.c \
+                third_party/musl/src/math/hypot.c \
+                third_party/musl/src/math/lgamma_r.c \
+                third_party/musl/src/math/nearbyint.c \
+                third_party/musl/src/math/nextafter.c \
+                third_party/musl/src/math/nexttoward.c \
+                third_party/musl/src/math/remainder.c \
+                third_party/musl/src/math/remquo.c \
+                third_party/musl/src/math/scalbln.c \
+                third_party/musl/src/math/tgamma.c \
                 third_party/musl/src/internal/floatscan.c
 MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
@@ -187,6 +205,9 @@ $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CFLAGS += -frounding-math -fexce
 
 # libm.h forces FP evaluation by writing otherwise unread volatile locals.
 $(MUSL_OBJECTS): private CFLAGS += -Wno-unused-but-set-variable
+
+# Retain upstream's shift expressions, which are parenthesized by precedence.
+$(BUILD)/third_party/musl/src/math/fma.o: private CFLAGS += -Wno-shift-op-parentheses
 
 $(BUILD)/third_party/musl/src/time/rule_to_secs.o: private CPPFLAGS += -Ilibc
 
