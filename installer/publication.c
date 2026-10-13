@@ -91,6 +91,9 @@ static bool stream_source(const struct install_source *source, handle_t target,
   if (!expected->present || size != expected->size || size > INSTALL_BOOT_PAYLOAD_MAX_BYTES) {
     return fail(report, CALL_BAD_REQUEST);
   }
+  install_progress_begin(target == HANDLE_INVALID ? "Verifying boot payload bytes" :
+      "Staging owned boot payload", INSTALL_PROGRESS_WORK, NULL);
+  install_progress_bytes_total(size);
   struct install_digest hash = {0};
   bool ok = install_digest_begin(&hash);
   unsigned char bytes[BOOT_IO_BYTES];
@@ -145,6 +148,7 @@ static bool stream_source(const struct install_source *source, handle_t target,
     }
   }
   install_digest_abort(&hash);
+  install_progress_finish();
   return ok || fail(report, status == CALL_OK ? CALL_NO_MEMORY : status);
 }
 
@@ -495,8 +499,7 @@ bool install_publication_publish(const struct install_publication_request *reque
       fail(report, CALL_NO_MEMORY)) &&
       open_attempt(staged.root, &staged.binding, true, &staged.parent, report);
   for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS; ++i) {
-    install_progress_begin("Staging owned boot payload", INSTALL_PROGRESS_WORK, NULL);
-    install_progress_bytes_total(payload(&staged.binding, i)->digest.size);
+    install_progress_begin("Reserving owned boot payload", INSTALL_PROGRESS_NONE, NULL);
     enum call_status status = directory_create(staged.parent, payload_names[i], DIRECTORY_KIND_FILE,
         FILE_RIGHT_READ | FILE_RIGHT_WRITE, &staged.files[i]);
     ok = status == CALL_OK || fail(report, status);
