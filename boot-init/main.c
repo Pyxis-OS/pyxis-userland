@@ -19,7 +19,9 @@
 #include <abi/tcp.h>
 #include <abi/terminal.h>
 #include <abi/udp.h>
+#include <bundle_launch.h>
 #include <directory.h>
+#include <disk.h>
 #include <file.h>
 #include <handle.h>
 #include <input_policy.h>
@@ -114,7 +116,7 @@ struct authority {
   handle_t bin;
   /* A private RAM directory; each ram volume is one of its subdirectories. */
   handle_t ram;
-  handle_t native_mount, host_mount;
+  handle_t native_mount, host_mount, esp_mount, fat_mounts;
   handle_t input_policy; /* Boot-only, never forwarded through services. */
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
@@ -127,7 +129,8 @@ struct authority {
 /* One configured volume, mounted at most once. */
 struct mounted_volume {
   const struct boot_volume *volume;
-  handle_t root;
+  handle_t root, control;
+  bool published;
   enum call_status status; /* Why root is absent. */
 };
 
@@ -144,6 +147,8 @@ static bool take_authority(struct authority *authority)
   authority->ram = startup_resource("ram");
   authority->native_mount = startup_resource("native_mount");
   authority->host_mount = startup_resource("host_mount");
+  authority->esp_mount = startup_resource("esp_mount");
+  authority->fat_mounts = startup_resource("fat_mounts");
   authority->screen_capture = startup_resource("screen_capture");
   authority->power = startup_resource("power");
   authority->input_policy = startup_resource("input_policy");
@@ -189,9 +194,59 @@ static enum call_status open_ram_volume(handle_t ram, const char *name, handle_t
   return status;
 }
 
-static enum call_status mount_volume(const struct authority *authority,
-    const struct boot_volume *volume, bool read_write, handle_t *root)
+static enum call_status selected_fat32_disk(handle_t disks, const uint8_t guid[16],
+    uint64_t *device)
 {
+  *device = 0;
+  for (uint64_t index = 0;; ++index) {
+    struct disk_info info;
+    enum call_status status = disks_enumerate(disks, index, &info);
+    if (status == CALL_NOT_FOUND) {
+      return *device ? CALL_OK : CALL_NOT_FOUND;
+    }
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (memcmp(info.gpt_guid, guid, sizeof(info.gpt_guid))) {
+      continue;
+    }
+    if (*device) {
+      return CALL_BAD_REQUEST;
+    }
+    *device = info.id;
+  }
+}
+
+static enum call_status mount_volume(const struct authority *authority,
+    const struct boot_volume *volume, bool read_write, struct mounted_volume *mounted)
+{
+  handle_t *root = &mounted->root;
+  if (volume->kind == BOOT_VOLUME_BOOT_ESP || volume->kind == BOOT_VOLUME_FAT32) {
+    struct mount_fat32_reply pair = {HANDLE_INVALID, HANDLE_INVALID};
+    enum call_status status;
+    if (volume->kind == BOOT_VOLUME_BOOT_ESP) {
+      status = authority->esp_mount == HANDLE_INVALID ? CALL_UNAVAILABLE :
+          mount_open_fat32(authority->esp_mount, BOOT_ROOT_RIGHTS, &pair);
+    } else {
+      if (authority->fat_mounts == HANDLE_INVALID) {
+        return CALL_UNAVAILABLE;
+      }
+      uint64_t device;
+      status = selected_fat32_disk(authority->fat_mounts, volume->disk_guid, &device);
+      if (status != CALL_OK) {
+        return status;
+      }
+      uint64_t access = volume->read_write ? MOUNT_ACCESS_READ_WRITE : MOUNT_ACCESS_READ_ONLY;
+      uint64_t rights = volume->read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS;
+      status = disks_open_fat32(authority->fat_mounts, device, volume->partition,
+          access, rights, volume->disk_guid, &pair);
+    }
+    if (status == CALL_OK) {
+      mounted->root = pair.root;
+      mounted->control = pair.control;
+    }
+    return status;
+  }
   if (volume->kind == BOOT_VOLUME_RAM) {
     return open_ram_volume(authority->ram, volume->name, root);
   }
@@ -221,8 +276,8 @@ static struct mounted_volume *find_mount(struct mounts *mounts, const char *name
   return NULL;
 }
 
-/* Mounts every volume some space uses, once, read-write if any space needs it.
- * An already mounted system volume is kept. */
+/* FAT mode is configured independently of views; other backends keep the
+ * existing aggregate requested access. An already mounted system is kept. */
 static bool mount_plan(const struct authority *authority, const struct boot_plan *plan,
     struct mounts *mounts)
 {
@@ -243,13 +298,20 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
           read_write |= space->roots[k].read_write;
         }
       }
+      for (size_t k = 0; k < space->grant_count; ++k) {
+        if (!strcmp(space->grants[k].volume, volume->name)) {
+          used = true;
+          read_write |= space->grants[k].read_write;
+        }
+      }
     }
     if (!used || find_mount(mounts, volume->name)) {
       continue;
     }
     struct mounted_volume *mounted = &mounts->entries[mounts->count++];
-    *mounted = (struct mounted_volume){.volume = volume, .root = HANDLE_INVALID};
-    mounted->status = mount_volume(authority, volume, read_write, &mounted->root);
+    *mounted = (struct mounted_volume){.volume = volume,
+      .root = HANDLE_INVALID, .control = HANDLE_INVALID};
+    mounted->status = mount_volume(authority, volume, read_write, mounted);
     if (mounted->status != CALL_OK) {
       printf("boot-init: volume %s unavailable (status %u)\n", volume->name, mounted->status);
     }
@@ -495,7 +557,8 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 8];
+  struct launch_binding resources[SERVICE_COUNT + 8 + BUNDLE_SOURCE_LIMIT];
+  char source_names[BUNDLE_SOURCE_LIMIT][sizeof(BUNDLE_SOURCE_PREFIX) + BOOT_NAME_MAX];
   struct job_work *job_provisioner;
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
@@ -526,7 +589,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 8, sizeof(*launch->grants));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 8 + BUNDLE_SOURCE_LIMIT,
+      sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
@@ -566,6 +630,50 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
     launch->roots[launch->root_count++] =
         (struct launch_binding){(uintptr_t)root->volume, launch->grant_count++};
+  }
+  size_t source_count = 0;
+  for (size_t i = 0; i < space->grant_count; ++i) {
+    const struct boot_grant *source = &space->grants[i];
+    struct mounted_volume *mounted = find_mount(mounts, source->volume);
+    handle_t handle = !mounted ? HANDLE_INVALID : source->kind == BOOT_GRANT_MOUNT ?
+        mounted->control : mounted->root;
+    if (handle == HANDLE_INVALID) {
+      if (source->optional) {
+        continue;
+      }
+      snprintf(reason, size, "source %s unavailable (status %u)", source->name,
+          mounted ? mounted->status : CALL_UNAVAILABLE);
+      return reason;
+    }
+    uint64_t rights = source->kind == BOOT_GRANT_DIRECTORY ?
+        (source->read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) :
+        (MOUNT_RIGHT_OPEN_ROOT | MOUNT_RIGHT_OBSERVE | MOUNT_RIGHT_RETIRE |
+          (source->read_write ? MOUNT_RIGHT_WRITE | MOUNT_RIGHT_INTERVAL : 0));
+    struct handle_info info;
+    enum call_status status = handle_query(handle, &info);
+    if (status != CALL_OK || (rights & ~info.rights)) {
+      snprintf(reason, size, "source %s lacks requested authority (status %u)",
+          source->name, status == CALL_OK ? CALL_DENIED : status);
+      return reason;
+    }
+    snprintf(launch->source_names[source_count], sizeof(launch->source_names[source_count]),
+        "%s%s", BUNDLE_SOURCE_PREFIX, source->name);
+    launch->resources[launch->resource_count++] = (struct launch_binding){
+      (uintptr_t)launch->source_names[source_count++], launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
+  }
+  if (space->fat32_mount) {
+    uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
+        (space->fat32_mount_write ? DISKS_RIGHT_MOUNT_READ_WRITE : 0);
+    struct handle_info info;
+    enum call_status status = handle_query(authority->fat_mounts, &info);
+    if (status != CALL_OK || (rights & ~info.rights)) {
+      return "mount-only factory requested but unavailable";
+    }
+    launch->resources[launch->resource_count++] = (struct launch_binding){
+      (uintptr_t)BUNDLE_SOURCE_PREFIX "fat_mounts", launch->grant_count};
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->fat_mounts, rights, 0};
   }
   if (space->jobs) {
     enum call_status status = job_work_create(authority->ram,
@@ -715,6 +823,20 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
    * local startup deliberately has no retained teardown supervisor. */
   bool uncertain = admission_attempted && (status == CALL_OUTCOME_UNKNOWN ||
       status == CALL_BAD_BUFFER);
+  if (started || uncertain) {
+    for (size_t i = 0; i < mounts->count; ++i) {
+      struct mounted_volume *mounted = &mounts->entries[i];
+      if (mounted->control == HANDLE_INVALID) {
+        continue;
+      }
+      for (size_t j = 0; j < launch.grant_count; ++j) {
+        if (launch.grants[j].source == mounted->root ||
+            launch.grants[j].source == mounted->control) {
+          mounted->published = true;
+        }
+      }
+    }
+  }
   job_work_close(launch.job_provisioner, !started && !uncertain);
   free(launch.roots);
   free(launch.grants);
@@ -819,8 +941,9 @@ int main(int argc, char **argv)
     mounts.entries = calloc(1, sizeof(*mounts.entries));
     if (mounts.entries) {
       struct mounted_volume *mounted = &mounts.entries[mounts.count++];
-      *mounted = (struct mounted_volume){.volume = system, .root = HANDLE_INVALID};
-      mounted->status = mount_volume(&authority, system, true, &mounted->root);
+      *mounted = (struct mounted_volume){.volume = system,
+        .root = HANDLE_INVALID, .control = HANDLE_INVALID};
+      mounted->status = mount_volume(&authority, system, true, mounted);
       if (mounted->status != CALL_OK) {
         printf("boot-init: volume %s unavailable (status %u)\n", system->name,
             mounted->status);
@@ -867,7 +990,28 @@ int main(int argc, char **argv)
   }
 
 finish:
-  /* Spaces keep their own grants to every mounted root; boot init's go with it. */
+  /* Drop every local data view before retirement. Published instances remain
+   * under their delegated controls; never revoke a space's references. */
+  for (size_t i = 0; i < mounts.count; ++i) {
+    struct mounted_volume *mounted = &mounts.entries[i];
+    if (mounted->root != HANDLE_INVALID) {
+      handle_close(mounted->root);
+    }
+  }
+  for (size_t i = 0; i < mounts.count; ++i) {
+    struct mounted_volume *mounted = &mounts.entries[i];
+    if (mounted->control == HANDLE_INVALID) {
+      continue;
+    }
+    if (!mounted->published) {
+      enum call_status status = mount_retire(mounted->control);
+      if (status != CALL_OK) {
+        printf("boot-init: unused volume %s retained (status %u)\n",
+            mounted->volume->name, status);
+      }
+    }
+    handle_close(mounted->control);
+  }
   boot_plan_free(&plan);
   boot_config_free(&override);
   boot_config_free(&defaults);

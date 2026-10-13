@@ -1,5 +1,6 @@
 #include "config.h"
 #include "../libconfig/config.h"
+#include <bundle_launch.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdio.h>
@@ -102,33 +103,103 @@ static void *allocate_array(lua_State *state, size_t count, size_t size, const c
   return array;
 }
 
+static bool take_access(lua_State *state, int index, const char *what)
+{
+  char *access = take_string(state, index, 1, 16, what);
+  bool read_write = !strcmp(access, "read-write");
+  bool valid = read_write || !strcmp(access, "read-only");
+  free(access);
+  if (!valid) {
+    luaL_error(state, "%s must be read-only or read-write", what);
+  }
+  return read_write;
+}
+
+static unsigned guid_digit(lua_State *state, char digit)
+{
+  if (digit >= '0' && digit <= '9') {
+    return (unsigned)(digit - '0');
+  }
+  if (digit >= 'a' && digit <= 'f') {
+    return (unsigned)(digit - 'a') + 10;
+  }
+  if (digit >= 'A' && digit <= 'F') {
+    return (unsigned)(digit - 'A') + 10;
+  }
+  luaL_error(state, "disk_guid must be a canonical nonzero GPT GUID");
+  return 0;
+}
+
+static void take_guid(lua_State *state, int index, uint8_t guid[16])
+{
+  size_t length = 0;
+  const char *text = lua_type(state, index) == LUA_TSTRING ?
+      lua_tolstring(state, index, &length) : NULL;
+  if (!text || length != 36 || strlen(text) != length || text[8] != '-' ||
+      text[13] != '-' || text[18] != '-' || text[23] != '-') {
+    luaL_error(state, "disk_guid must be a canonical nonzero GPT GUID");
+  }
+  /* GPT stores the first three canonical fields little-endian. */
+  static const uint8_t positions[16] = {
+    6, 4, 2, 0, 11, 9, 16, 14, 19, 21, 24, 26, 28, 30, 32, 34,
+  };
+  unsigned nonzero = 0;
+  for (size_t i = 0; i < 16; ++i) {
+    size_t position = positions[i];
+    guid[i] = (uint8_t)((guid_digit(state, text[position]) << 4) |
+        guid_digit(state, text[position + 1]));
+    nonzero |= guid[i];
+  }
+  if (!nonzero) {
+    luaL_error(state, "disk_guid must be a canonical nonzero GPT GUID");
+  }
+}
+
 static void read_volume(lua_State *state, struct boot_volume *volume)
 {
-  static const char *const keys[] = {"kind", "partition", "volume"};
+  static const char *const keys[] = {"kind", "partition", "volume", "disk_guid", "access"};
   config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
   config_field(state, -1, "kind");
   char *kind = take_string(state, -1, 1, 16, "volume kind");
   bool npfs = !strcmp(kind, "npfs"), virtio_fs = !strcmp(kind, "virtio-fs"),
-      ram = !strcmp(kind, "ram");
+      ram = !strcmp(kind, "ram"), boot_esp = !strcmp(kind, "boot-esp"),
+      fat32 = !strcmp(kind, "fat32");
   free(kind);
   lua_pop(state, 1);
-  if (!npfs && !virtio_fs && !ram) {
-    luaL_error(state, "volume %s: kind must be \"npfs\", \"virtio-fs\" or \"ram\"",
+  if (!npfs && !virtio_fs && !ram && !boot_esp && !fat32) {
+    luaL_error(state, "volume %s: kind must be npfs, virtio-fs, ram, boot-esp or fat32",
         volume->name);
   }
-  volume->kind = npfs ? BOOT_VOLUME_NPFS : virtio_fs ? BOOT_VOLUME_VIRTIO_FS : BOOT_VOLUME_RAM;
+  volume->kind = npfs ? BOOT_VOLUME_NPFS : virtio_fs ? BOOT_VOLUME_VIRTIO_FS :
+      ram ? BOOT_VOLUME_RAM : boot_esp ? BOOT_VOLUME_BOOT_ESP : BOOT_VOLUME_FAT32;
   config_field(state, -1, "partition");
-  config_field(state, -2, "volume");
-  if (!npfs) {
-    if (!lua_isnil(state, -2) || !lua_isnil(state, -1)) {
-      luaL_error(state, "volume %s: only npfs volumes have a partition or volume",
-          volume->name);
-    }
-  } else {
-    volume->partition = take_integer(state, -2, 1, UINT32_MAX, "volume partition");
-    volume->volume = take_string(state, -1, 1, MOUNT_VOLUME_NAME_MAX, "volume name");
+  if (npfs || fat32) {
+    volume->partition = take_integer(state, -1, 1, UINT32_MAX, "volume partition");
+  } else if (!lua_isnil(state, -1)) {
+    luaL_error(state, "volume %s: this kind has no partition selector", volume->name);
   }
-  lua_pop(state, 2);
+  lua_pop(state, 1);
+  config_field(state, -1, "volume");
+  if (npfs) {
+    volume->volume = take_string(state, -1, 1, MOUNT_VOLUME_NAME_MAX, "volume name");
+  } else if (!lua_isnil(state, -1)) {
+    luaL_error(state, "volume %s: only npfs has a volume name", volume->name);
+  }
+  lua_pop(state, 1);
+  config_field(state, -1, "disk_guid");
+  if (fat32) {
+    take_guid(state, -1, volume->disk_guid);
+  } else if (!lua_isnil(state, -1)) {
+    luaL_error(state, "volume %s: only fat32 has a disk_guid selector", volume->name);
+  }
+  lua_pop(state, 1);
+  config_field(state, -1, "access");
+  if (fat32) {
+    volume->read_write = take_access(state, -1, "FAT32 admission access");
+  } else if (!lua_isnil(state, -1)) {
+    luaL_error(state, "volume %s: only fat32 has admission access", volume->name);
+  }
+  lua_pop(state, 1);
 }
 
 static void read_volumes(lua_State *state, struct boot_config *config)
@@ -251,11 +322,83 @@ static void read_roots(lua_State *state, struct boot_space *space)
   }
 }
 
+static bool valid_source_name(const char *name, size_t length)
+{
+  if (!length || length > BOOT_NAME_MAX || strlen(name) != length ||
+      !strcmp(name, "fat_mounts")) {
+    return false;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    char c = name[i];
+    if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-' && c != '_') {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void read_grants(lua_State *state, struct boot_space *space)
+{
+  if (lua_type(state, -1) != LUA_TTABLE) {
+    luaL_error(state, "space %s: grants must be a table of named sources", space->name);
+  }
+  int table = lua_gettop(state);
+  size_t count = 0;
+  lua_pushnil(state);
+  while (lua_next(state, table)) {
+    ++count;
+    lua_pop(state, 1);
+  }
+  if (count > BUNDLE_SOURCE_LIMIT) {
+    luaL_error(state, "space %s: too many selected sources", space->name);
+  }
+  space->grants = allocate_array(state, count, sizeof(*space->grants), "selected sources");
+  lua_pushnil(state);
+  while (lua_next(state, table)) {
+    size_t length = 0;
+    const char *name = lua_type(state, -2) == LUA_TSTRING ?
+        lua_tolstring(state, -2, &length) : NULL;
+    if (!name || !valid_source_name(name, length)) {
+      luaL_error(state, "space %s: source names use a-z, 0-9, '-' and '_'; "
+          "fat_mounts is reserved", space->name);
+    }
+    static const char *const keys[] = {"volume", "kind", "access", "optional"};
+    config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
+    struct boot_grant *grant = &space->grants[space->grant_count++];
+    grant->name = strdup(name);
+    if (!grant->name) {
+      luaL_error(state, "cannot allocate selected source name");
+    }
+    config_field(state, -1, "volume");
+    grant->volume = take_string(state, -1, 1, BOOT_NAME_MAX, "selected source volume");
+    lua_pop(state, 1);
+    config_field(state, -1, "kind");
+    char *kind = take_string(state, -1, 1, 16, "selected source kind");
+    bool directory = !strcmp(kind, "directory"), mount = !strcmp(kind, "mount");
+    free(kind);
+    if (!directory && !mount) {
+      luaL_error(state, "selected source kind must be directory or mount");
+    }
+    grant->kind = directory ? BOOT_GRANT_DIRECTORY : BOOT_GRANT_MOUNT;
+    lua_pop(state, 1);
+    config_field(state, -1, "access");
+    grant->read_write = take_access(state, -1, "selected source access");
+    lua_pop(state, 1);
+    config_field(state, -1, "optional");
+    if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+      luaL_error(state, "selected source optional must be a boolean");
+    }
+    grant->optional = lua_toboolean(state, -1);
+    lua_pop(state, 1);
+    lua_pop(state, 1);
+  }
+}
+
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
     "network", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
-    "screenshot", "power", "remote_power"};
+    "screenshot", "power", "remote_power", "grants", "fat32_mount"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -296,6 +439,20 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     read_roots(state, space);
   }
   lua_pop(state, 1);
+  config_field(state, -1, "grants");
+  if (!lua_isnil(state, -1)) {
+    read_grants(state, space);
+  }
+  lua_pop(state, 1);
+  config_field(state, -1, "fat32_mount");
+  if (!lua_isnil(state, -1)) {
+    space->fat32_mount = true;
+    space->fat32_mount_write = take_access(state, -1, "fat32_mount");
+  }
+  lua_pop(state, 1);
+  if (space->grant_count + space->fat32_mount > BUNDLE_SOURCE_LIMIT) {
+    luaL_error(state, "space %s: too many selected sources", space->name);
+  }
   config_field(state, -1, "start");
   if (!lua_isnil(state, -1)) {
     space->start = take_string(state, -1, 1, BOOT_NAME_MAX, "start");
@@ -490,6 +647,11 @@ void boot_config_free(struct boot_config *config)
       free(space->roots[j].volume);
     }
     free(space->roots);
+    for (size_t j = 0; j < space->grant_count; ++j) {
+      free(space->grants[j].name);
+      free(space->grants[j].volume);
+    }
+    free(space->grants);
     free(space->start);
     free(space->cpus);
     free(space->init);
@@ -598,8 +760,27 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
   for (size_t i = 0; i < plan->space_count; ++i) {
     const struct boot_space *space = plan->spaces[i];
     for (size_t j = 0; j < space->root_count; ++j) {
-      if (!boot_plan_volume(plan, space->roots[j].volume)) {
+      const struct boot_volume *volume = boot_plan_volume(plan, space->roots[j].volume);
+      if (!volume) {
         return plan_fail(plan, "a root names undefined volume %s", space->roots[j].volume);
+      }
+      if (space->roots[j].read_write && (volume->kind == BOOT_VOLUME_FAT32 ||
+          volume->kind == BOOT_VOLUME_BOOT_ESP)) {
+        return plan_fail(plan, "ordinary FAT32 root %s must be read-only", volume->name);
+      }
+    }
+    for (size_t j = 0; j < space->grant_count; ++j) {
+      const struct boot_grant *grant = &space->grants[j];
+      const struct boot_volume *volume = boot_plan_volume(plan, grant->volume);
+      if (!volume) {
+        return plan_fail(plan, "a selected source names undefined volume %s", grant->volume);
+      }
+      bool fat32 = volume->kind == BOOT_VOLUME_FAT32 || volume->kind == BOOT_VOLUME_BOOT_ESP;
+      if (grant->kind == BOOT_GRANT_MOUNT && !fat32) {
+        return plan_fail(plan, "mount source %s requires a FAT32 volume", grant->name);
+      }
+      if (grant->read_write && fat32 && !volume->read_write) {
+        return plan_fail(plan, "writable source %s requires read-write FAT32 admission", grant->name);
       }
     }
     if (space->start && !boot_space_has_root(space, space->start)) {

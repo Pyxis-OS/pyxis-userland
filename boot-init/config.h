@@ -24,19 +24,35 @@ enum boot_volume_kind {
   BOOT_VOLUME_NPFS,
   BOOT_VOLUME_VIRTIO_FS,
   BOOT_VOLUME_RAM,
+  BOOT_VOLUME_BOOT_ESP,
+  BOOT_VOLUME_FAT32,
 };
 
 struct boot_volume {
   char *name;
   enum boot_volume_kind kind;
-  uint64_t partition; /* npfs only, one-based. */
+  uint64_t partition; /* npfs/FAT32 only, one-based. */
   char *volume; /* npfs only. */
+  uint8_t disk_guid[16]; /* FAT32 only, exact persistent GPT disk selection. */
+  bool read_write; /* FAT32 admission mode, independent of delegated views. */
 };
 
 struct boot_root {
   char *volume;
   bool read_write;
   bool optional;
+};
+
+enum boot_grant_kind {
+  BOOT_GRANT_DIRECTORY,
+  BOOT_GRANT_MOUNT,
+};
+
+/* Selected launch sources are resources, never inherited URI roots. */
+struct boot_grant {
+  char *name, *volume;
+  enum boot_grant_kind kind;
+  bool read_write, optional;
 };
 
 struct boot_space {
@@ -47,6 +63,9 @@ struct boot_space {
   size_t cpu_count;
   struct boot_root *roots;
   size_t root_count;
+  struct boot_grant *grants;
+  size_t grant_count;
+  bool fat32_mount, fat32_mount_write; /* Explicit mount-only factory delegation. */
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
   bool launch;
