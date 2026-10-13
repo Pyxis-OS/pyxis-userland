@@ -94,8 +94,14 @@ static bool observe_target(struct config_editor_context *context, struct config_
   memcpy(facts->partition_type, state.partition_type, 16);
   struct file_info_reply metadata;
   if (directory_info(context->view.config_parent, &metadata) != CALL_OK ||
-      !(metadata.valid & FILE_METADATA_DOMAIN) || metadata.domain != facts->domain ||
+      !(metadata.valid & FILE_INFO_DOMAIN_VALID) || metadata.domain != facts->domain ||
       !config_target_valid(facts)) {
+    memset(facts, 0, sizeof(*facts));
+    return false;
+  }
+  if (context->view.limine_parent != HANDLE_INVALID &&
+      (directory_info(context->view.limine_parent, &metadata) != CALL_OK ||
+       !(metadata.valid & FILE_INFO_DOMAIN_VALID) || metadata.domain != facts->domain)) {
     memset(facts, 0, sizeof(*facts));
     return false;
   }

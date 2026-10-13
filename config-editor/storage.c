@@ -273,10 +273,10 @@ bool config_storage_load(const struct config_storage_view *view,
   return ok;
 }
 
-static bool parent_domain(handle_t parent, uint64_t domain,
+static bool parent_domain(handle_t parent, uint64_t domain, uint64_t rights,
     struct config_storage_report *report)
 {
-  if (!grant(parent, PROTOCOL_DIRECTORY, CONFIG_PARENT_WRITE, report)) {
+  if (!grant(parent, PROTOCOL_DIRECTORY, rights, report)) {
     return false;
   }
   struct file_info_reply info;
@@ -318,8 +318,10 @@ static bool current_view(const struct config_storage_view *view,
       return failed(report, CALL_TIMED_OUT);
     }
   }
-  return parent_domain(view->config_parent, state.domain, report) &&
-      (!limine || parent_domain(view->limine_parent, state.domain, report));
+  return parent_domain(view->config_parent, state.domain, CONFIG_PARENT_WRITE, report) &&
+      (view->limine_parent == HANDLE_INVALID ? !limine :
+      parent_domain(view->limine_parent, state.domain,
+          limine ? CONFIG_PARENT_WRITE : CONFIG_PARENT_READ, report));
 }
 
 static bool expected_name(handle_t parent, const char *name,
@@ -441,7 +443,7 @@ bool config_storage_publish(const struct config_storage_view *view,
     return false;
   }
   for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if ((i < CONFIG_SET_FILES || changed[i]) &&
+    if ((i < CONFIG_SET_FILES || view->limine_parent != HANDLE_INVALID) &&
         !expected_name(parent_for(view, i), config_storage_file_name(i), &expected[i], report)) {
       return false;
     }
@@ -552,7 +554,7 @@ bool config_storage_publish(const struct config_storage_view *view,
     }
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    if (i == CONFIG_LIMINE && !changed[i]) {
+    if (i == CONFIG_LIMINE && view->limine_parent == HANDLE_INVALID) {
       continue;
     }
     ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&

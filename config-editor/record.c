@@ -79,13 +79,12 @@ static bool recovery_valid(const struct config_recovery_file *file,
 static bool revision_valid(const char *revision)
 {
   size_t count = strnlen(revision, 65);
-  if (!count || count > 64) {
+  if (!count || count > 63 || !strcmp(revision, ".") || !strcmp(revision, "..")) {
     return false;
   }
   for (size_t i = 0; i < count; ++i) {
-    char ch = revision[i];
-    if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-')) {
+    unsigned char ch = (unsigned char)revision[i];
+    if (ch < 33 || ch > 126 || ch == '/') {
       return false;
     }
   }
