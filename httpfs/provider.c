@@ -36,7 +36,7 @@ struct exported {
 };
 
 struct transaction_work {
-  struct endpoint_packet preparation, commit, mutation, read;
+  struct endpoint_packet preparation, commit, mutation, read, abort;
   char uri[HTTP_URI_MAX + 1], name[64];
   char fields[ENDPOINT_DATA_MAX];
   struct http_request_header headers_fields[REQUEST_FIELDS_MAX];
@@ -50,6 +50,8 @@ struct transaction {
   struct http_wait wait;
   struct http_body snapshot;
   struct provider_open_request context;
+  struct http_prepare_context prepare_context;
+  char uri[HTTP_URI_MAX + 1];
   enum http_transaction_phase phase;
   enum call_status failure, cleanup, mutation_failure, read_failure;
   bool legacy, headers, handed_off, aborting, linked, unlink_attempted;
@@ -185,7 +187,8 @@ static void destroy_if_retired(struct loop *loop, struct transaction *transactio
 {
   if (transaction->engine || transaction->pending || (transaction->work &&
       (transaction->work->preparation.receipt || transaction->work->commit.receipt ||
-      transaction->work->mutation.receipt || transaction->work->read.receipt))) {
+      transaction->work->mutation.receipt || transaction->work->read.receipt ||
+      transaction->work->abort.receipt))) {
     return;
   }
   for (size_t i = 0; i < transaction->slot_count; ++i) {
@@ -410,7 +413,8 @@ static void preparation_ready(struct loop *loop, struct transaction *transaction
     for (size_t i = 0; i < count; ++i) {
       grants[i] = (struct endpoint_grant){handles[i], facet_rights(facets[i]), HANDLE_TRANSPORT_CALL};
     }
-    struct http_prepare_reply response = {transaction->method};
+    struct http_prepare_reply response = {.method = transaction->method,
+      .trust_flags = loop->custom_trust ? HTTP_TRUST_ORIGIN_ONLY : 0};
     status = reply(loop, &transaction->work->preparation, CALL_OK, &response, sizeof(response), grants, count);
   } else {
     reply(loop, &transaction->work->preparation, status, NULL, 0, NULL, 0);
@@ -426,6 +430,45 @@ static void preparation_ready(struct loop *loop, struct transaction *transaction
   } else {
     transaction->phase = HTTP_TRANSACTION_STAGING;
   }
+}
+
+static enum call_status preparation_context(struct loop *loop,
+    const struct http_prepare_context *context, const char *text)
+{
+  if ((context->flags & ~HTTP_PREPARE_CONTEXT_FLAGS) ||
+      context->origin.scheme > PROVIDER_HTTPS || !context->origin.port ||
+      context->origin.port > UINT16_MAX ||
+      context->remaining.header_bytes > HTTP_HEADERS_MAX ||
+      context->remaining.fields > HTTP_FIELDS_MAX ||
+      context->remaining.informational > HTTP_INFORMATIONAL_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t length = strnlen(context->origin.host, sizeof(context->origin.host));
+  if (!length || length == sizeof(context->origin.host)) {
+    return CALL_BAD_REQUEST;
+  }
+  for (size_t i = length + 1; i < sizeof(context->origin.host); ++i) {
+    if (context->origin.host[i]) {
+      return CALL_BAD_REQUEST;
+    }
+  }
+  char origin_text[HTTP_URI_MAX + 1];
+  int size = snprintf(origin_text, sizeof(origin_text), "%s://%s:%llu/",
+      context->origin.scheme == PROVIDER_HTTPS ? "https" : "http",
+      context->origin.host, (unsigned long long)context->origin.port);
+  struct http_uri origin, uri;
+  if (size < 0 || (size_t)size >= sizeof(origin_text) ||
+      http_url_parse(origin_text, &origin) != CALL_OK ||
+      origin.scheme != context->origin.scheme || origin.port != context->origin.port ||
+      strcmp(origin.host, context->origin.host) || http_url_parse(text, &uri) != CALL_OK) {
+    return CALL_BAD_REQUEST;
+  }
+  bool crossing = context->origin.scheme != uri.scheme ||
+      context->origin.port != uri.port || strcmp(context->origin.host, uri.host);
+  if (loop->custom_trust && ((context->flags & HTTP_PREPARE_ORIGIN_CROSSED) || crossing)) {
+    return CALL_DENIED;
+  }
+  return CALL_OK;
 }
 
 static void prepare(struct loop *loop, struct endpoint_packet *packet)
@@ -463,6 +506,7 @@ static void prepare(struct loop *loop, struct endpoint_packet *packet)
   transaction->method = request.method;
   transaction->flags = request.flags;
   transaction->deadline = request.deadline_ns;
+  transaction->prepare_context = request.context;
   const char *uri = (const char *)packet->data + sizeof(request);
   size_t uri_size = request.uri_size;
   if (uri_size >= 5 && !memcmp(uri, "json+", 5)) {
@@ -475,10 +519,12 @@ static void prepare(struct loop *loop, struct endpoint_packet *packet)
     status = CALL_BAD_REQUEST;
   } else {
     memcpy(transaction->work->uri, uri, uri_size);
+    memcpy(transaction->uri, uri, uri_size);
+    status = preparation_context(loop, &request.context, transaction->work->uri);
     memcpy(transaction->work->fields, packet->data + sizeof(request) + request.uri_size, request.headers_size);
-    if (!parse_fields(transaction, request.headers_size)) {
+    if (status == CALL_OK && !parse_fields(transaction, request.headers_size)) {
       status = CALL_BAD_REQUEST;
-    } else {
+    } else if (status == CALL_OK) {
       struct http_request validation = {.method = request.method,
         .headers = transaction->work->headers_fields, .header_count = transaction->work->field_count};
       if (!http_request_validate(&loop->client, transaction->work->uri, &validation, &transaction->response)) {
@@ -533,10 +579,22 @@ static void publish_status(struct loop *loop, struct transaction *transaction,
     .deadline_ns = transaction->deadline, .tls_error = response->tls_failure.error,
     .tls_native_status = response->tls_failure.native_status,
     .tls_cleanup_attempted = response->tls_cleanup_attempted,
+    .response_flags = response->invalid_location ? HTTP_STATUS_INVALID_LOCATION : 0,
+    .charged = {response->consumed.header_bytes, response->consumed.fields,
+      response->consumed.informational},
   };
   memcpy(status.media_type, response->media_type, sizeof(status.media_type));
   memcpy(status.location, response->location, sizeof(status.location));
   reply(loop, packet, CALL_OK, &status, sizeof(status), NULL, 0);
+}
+
+static void publish_metadata(struct loop *loop, struct transaction *transaction,
+    struct endpoint_packet *packet)
+{
+  struct http_response_metadata metadata = {0};
+  memcpy(metadata.uri, transaction->uri, sizeof(metadata.uri));
+  memcpy(metadata.media_type, transaction->response.media_type, sizeof(metadata.media_type));
+  reply(loop, packet, CALL_OK, &metadata, sizeof(metadata), NULL, 0);
 }
 
 static void commit_request(struct loop *loop, struct transaction *transaction,
@@ -1083,7 +1141,9 @@ static void start_engine(struct loop *loop, struct transaction *transaction)
     .body_length = transaction->body_length, .headers = transaction->work->headers_fields,
     .header_count = transaction->work->field_count};
   struct http_response_limits limits = {
-    HTTP_HEADERS_MAX, HTTP_FIELDS_MAX, HTTP_INFORMATIONAL_MAX,
+    transaction->prepare_context.remaining.header_bytes,
+    transaction->prepare_context.remaining.fields,
+    transaction->prepare_context.remaining.informational,
   };
   if (transaction->legacy) {
     limits = (struct http_response_limits){transaction->context.remaining.header_bytes,
@@ -1185,6 +1245,9 @@ static void settle(struct loop *loop, struct transaction *transaction)
     transaction->queued = 0;
   }
   if (transaction->work) {
+    if (transaction->work->abort.receipt) {
+      reply(loop, &transaction->work->abort, transaction->cleanup, NULL, 0, NULL, 0);
+    }
     erase(transaction->work, sizeof(*transaction->work));
     free(transaction->work);
     transaction->work = NULL;
@@ -1300,6 +1363,10 @@ static void canceled(struct loop *loop, handle_t receipt)
     if (transaction->work->commit.receipt == receipt) {
       finish(loop, &transaction->work->commit);
       abort_transaction(loop, transaction, CALL_ABANDONED);
+      return;
+    }
+    if (transaction->work->abort.receipt == receipt) {
+      finish(loop, &transaction->work->abort);
       return;
     }
     if (transaction->work->mutation.receipt == receipt) {
@@ -1431,6 +1498,9 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
   } else if (entry->facet == FACET_OBSERVATION) {
     if (packet->operation == HTTP_TRANSACTION_STATUS && (packet->rights & HTTP_TRANSACTION_RIGHT_STATUS)) {
       publish_status(loop, transaction, packet);
+    } else if (packet->operation == HTTP_TRANSACTION_METADATA &&
+        (packet->rights & HTTP_TRANSACTION_RIGHT_STATUS)) {
+      publish_metadata(loop, transaction, packet);
     } else {
       reply(loop, packet, CALL_DENIED, NULL, 0, NULL, 0);
     }
@@ -1438,8 +1508,19 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
     if (packet->operation == HTTP_TRANSACTION_COMMIT && (packet->rights & HTTP_TRANSACTION_RIGHT_COMMIT)) {
       commit_request(loop, transaction, packet);
     } else if (packet->operation == HTTP_TRANSACTION_ABORT && (packet->rights & HTTP_TRANSACTION_RIGHT_ABORT)) {
-      abort_transaction(loop, transaction, CALL_ABANDONED);
-      reply(loop, packet, CALL_OK, NULL, 0, NULL, 0);
+      if (transaction->work && transaction->work->abort.receipt) {
+        reply(loop, packet, CALL_OK, NULL, 0, NULL, 0);
+      } else {
+        abort_transaction(loop, transaction, CALL_ABANDONED);
+        if (transaction->work) {
+          /* Redirect callers cannot reuse the transfer slot until cancellation
+           * and stream cleanup have relinquished every pending operation. */
+          transaction->work->abort = *packet;
+          clear_packet(packet);
+        } else {
+          reply(loop, packet, transaction->cleanup, NULL, 0, NULL, 0);
+        }
+      }
     } else {
       reply(loop, packet, CALL_DENIED, NULL, 0, NULL, 0);
     }

@@ -1,6 +1,7 @@
 #include <http_transaction.h>
 #include <endpoint.h>
 #include <handle.h>
+#include <http_url.h>
 #include <string.h>
 
 static void close_grants(struct endpoint_packet *packet)
@@ -23,9 +24,10 @@ static bool grant_valid(const struct endpoint_grant *grant, uint64_t protocol,
       info.rights == rights && info.transport == HANDLE_TRANSPORT_CALL;
 }
 
-enum call_status http_transaction_prepare(handle_t provider, const char *uri,
+enum call_status http_transaction_prepare_context(handle_t provider, const char *uri,
     uint64_t method, uint64_t flags, const char *headers, size_t headers_size,
-    uint64_t deadline_ns, struct http_prepared *prepared)
+    uint64_t deadline_ns, const struct http_prepare_context *context,
+    struct http_prepared *prepared)
 {
   if (!prepared) {
     return CALL_BAD_REQUEST;
@@ -46,6 +48,21 @@ enum call_status http_transaction_prepare(handle_t provider, const char *uri,
     .method = method, .flags = flags, .deadline_ns = deadline_ns,
     .uri_size = length, .headers_size = headers_size,
   };
+  if (context) {
+    request.context = *context;
+  } else {
+    struct http_uri parsed;
+    const char *endpoint = !strncmp(uri, "json+", 5) ? uri + 5 : uri;
+    enum call_status status = http_url_parse(endpoint, &parsed);
+    if (status != CALL_OK) {
+      return status;
+    }
+    request.context.origin.scheme = parsed.scheme;
+    request.context.origin.port = parsed.port;
+    memcpy(request.context.origin.host, parsed.host, strlen(parsed.host) + 1);
+    request.context.remaining = (struct http_framing_budget){
+      HTTP_HEADERS_MAX, HTTP_FIELDS_MAX, HTTP_INFORMATIONAL_MAX};
+  }
   memcpy(bytes, &request, sizeof(request));
   memcpy(bytes + sizeof(request), uri, length);
   if (headers_size) {
@@ -73,7 +90,7 @@ enum call_status http_transaction_prepare(handle_t provider, const char *uri,
     status = CALL_BAD_REQUEST;
   } else {
     memcpy(&response, packet.data, sizeof(response));
-    if (response.method != method ||
+    if (response.method != method || (response.trust_flags & ~HTTP_TRUST_ORIGIN_ONLY) ||
         !grant_valid(&packet.grants[0], PROTOCOL_HTTP_TRANSACTION, HTTP_TRANSACTION_CONTROL_RIGHTS) ||
         (post && !grant_valid(&packet.grants[1], PROTOCOL_FILE, FILE_RIGHT_WRITE)) ||
         !grant_valid(&packet.grants[post ? 2 : 1], PROTOCOL_HTTP_TRANSACTION,
@@ -84,11 +101,20 @@ enum call_status http_transaction_prepare(handle_t provider, const char *uri,
       prepared->body = post ? packet.grants[1].handle : HANDLE_INVALID;
       prepared->observation = packet.grants[post ? 2 : 1].handle;
       prepared->method = method;
+      prepared->trust_flags = response.trust_flags;
       return CALL_OK;
     }
   }
   close_grants(&packet);
   return status;
+}
+
+enum call_status http_transaction_prepare(handle_t provider, const char *uri,
+    uint64_t method, uint64_t flags, const char *headers, size_t headers_size,
+    uint64_t deadline_ns, struct http_prepared *prepared)
+{
+  return http_transaction_prepare_context(provider, uri, method, flags, headers,
+      headers_size, deadline_ns, NULL, prepared);
 }
 
 enum call_status http_transaction_commit(struct http_prepared *prepared,
@@ -177,11 +203,48 @@ enum call_status http_transaction_status(handle_t observation, uint64_t deadline
       response.framing > HTTP_FRAMING_FAILED || response.http_status > 999 ||
       (response.http_status && response.http_status < 100) ||
       response.tls_native_status >= CALL_STATUS_COUNT || response.tls_cleanup_attempted > 1 ||
+      (response.response_flags & ~HTTP_STATUS_INVALID_LOCATION) ||
+      response.charged.header_bytes > HTTP_HEADERS_MAX ||
+      response.charged.fields > HTTP_FIELDS_MAX ||
+      response.charged.informational > HTTP_INFORMATIONAL_MAX ||
       !memchr(response.media_type, 0, sizeof(response.media_type)) ||
       !memchr(response.location, 0, sizeof(response.location))) {
     return CALL_BAD_REQUEST;
   }
   *status = response;
+  return CALL_OK;
+}
+
+enum call_status http_transaction_metadata(handle_t observation, uint64_t deadline_ns,
+    struct http_response_metadata *metadata)
+{
+  if (!metadata) {
+    return CALL_BAD_REQUEST;
+  }
+  *metadata = (struct http_response_metadata){0};
+  struct endpoint_packet packet = {0};
+  enum call_status status = endpoint_invoke(observation, PROTOCOL_HTTP_TRANSACTION,
+      HTTP_TRANSACTION_METADATA, NULL, 0, NULL, 0, deadline_ns, &packet);
+  close_grants(&packet);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (packet.grant_count || packet.result >= CALL_STATUS_COUNT ||
+      (packet.result == CALL_OK && packet.size != sizeof(*metadata))) {
+    return CALL_BAD_REQUEST;
+  }
+  if (packet.result != CALL_OK) {
+    return packet.size ? CALL_BAD_REQUEST : packet.result;
+  }
+  struct http_response_metadata response;
+  memcpy(&response, packet.data, sizeof(response));
+  struct http_uri parsed;
+  if (!memchr(response.uri, 0, sizeof(response.uri)) ||
+      !memchr(response.media_type, 0, sizeof(response.media_type)) ||
+      http_url_parse(response.uri, &parsed) != CALL_OK) {
+    return CALL_BAD_REQUEST;
+  }
+  *metadata = response;
   return CALL_OK;
 }
 
