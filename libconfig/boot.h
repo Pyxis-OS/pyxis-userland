@@ -1,5 +1,5 @@
-#ifndef BOOT_INIT_CONFIG_H
-#define BOOT_INIT_CONFIG_H
+#ifndef LIBCONFIG_BOOT_H
+#define LIBCONFIG_BOOT_H
 
 #include <abi/mount.h>
 #include <abi/space.h>
@@ -91,12 +91,17 @@ struct boot_config {
   size_t space_count;
 };
 
+enum boot_entry_source { BOOT_ENTRY_DEFAULT, BOOT_ENTRY_OVERRIDE };
+
 /* Borrowed view of the configuration that boots: the default with an
- * override merged by name. Entries point into one or two boot_configs. */
+ * override merged by name. Entries point into one or two boot_configs that
+ * must outlive the plan. The plan owns its pointer and source arrays. */
 struct boot_plan {
   const struct boot_volume **volumes;
+  enum boot_entry_source *volume_sources;
   size_t volume_count;
   const struct boot_space **spaces;
+  enum boot_entry_source *space_sources;
   size_t space_count;
 };
 
@@ -111,6 +116,12 @@ enum boot_config_result {
  * Schema errors go to stderr. CONFIG is cleared first and must be freed. */
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config);
 enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
+    size_t size, struct boot_config *config);
+/* Trusted archive bytes include machine defaults. Literal ESP bytes use the
+ * same volumes/spaces override schema and never evaluate executable Lua. */
+enum boot_config_result boot_config_read_archive_bytes(const char *name, const char *bytes,
+    size_t size, struct boot_config *config);
+enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
 void boot_config_free(struct boot_config *config);
 

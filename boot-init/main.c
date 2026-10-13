@@ -1,4 +1,4 @@
-#include "config.h"
+#include "../libconfig/boot.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
 #include <abi/echo.h>

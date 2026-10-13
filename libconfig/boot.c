@@ -1,8 +1,9 @@
+#include "boot.h"
 #include "config.h"
-#include "../libconfig/config.h"
 #include <bundle_launch.h>
 #include <lauxlib.h>
 #include <lua.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -635,6 +636,20 @@ enum boot_config_result boot_config_read_bytes(const char *name, const char *byt
   return result_of(config_read_bytes(name, bytes, size, decode_override, config), config);
 }
 
+enum boot_config_result boot_config_read_archive_bytes(const char *name, const char *bytes,
+    size_t size, struct boot_config *config)
+{
+  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
+  return result_of(config_read_bytes(name, bytes, size, decode_archive, config), config);
+}
+
+enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
+    size_t size, struct boot_config *config)
+{
+  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
+  return result_of(config_read_literal_bytes(name, bytes, size, decode_override, config), config);
+}
+
 void boot_config_free(struct boot_config *config)
 {
   for (size_t i = 0; i < config->volume_count; ++i) {
@@ -701,14 +716,19 @@ bool boot_space_has_root(const struct boot_space *space, const char *name)
 void boot_plan_free(struct boot_plan *plan)
 {
   free(plan->volumes);
+  free(plan->volume_sources);
   free(plan->spaces);
+  free(plan->space_sources);
   *plan = (struct boot_plan){0};
 }
 
-static bool plan_fail(struct boot_plan *plan, const char *format, const char *name)
+static bool plan_fail(struct boot_plan *plan, const char *format, ...)
 {
+  va_list arguments;
+  va_start(arguments, format);
   fprintf(stderr, "boot-init: ");
-  fprintf(stderr, format, name);
+  vfprintf(stderr, format, arguments);
+  va_end(arguments);
   fputc('\n', stderr);
   boot_plan_free(plan);
   return false;
@@ -718,11 +738,19 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     struct boot_plan *plan)
 {
   *plan = (struct boot_plan){0};
+  if (override && (override->volume_count > SIZE_MAX - defaults->volume_count ||
+      override->space_count > SIZE_MAX - defaults->space_count)) {
+    return plan_fail(plan, "boot plan is too large%s", "");
+  }
   size_t volume_capacity = defaults->volume_count + (override ? override->volume_count : 0);
   size_t space_capacity = defaults->space_count + (override ? override->space_count : 0);
   plan->volumes = calloc(volume_capacity ? volume_capacity : 1, sizeof(*plan->volumes));
   plan->spaces = calloc(space_capacity ? space_capacity : 1, sizeof(*plan->spaces));
-  if (!plan->volumes || !plan->spaces) {
+  plan->volume_sources = calloc(volume_capacity ? volume_capacity : 1,
+      sizeof(*plan->volume_sources));
+  plan->space_sources = calloc(space_capacity ? space_capacity : 1,
+      sizeof(*plan->space_sources));
+  if (!plan->volumes || !plan->spaces || !plan->volume_sources || !plan->space_sources) {
     return plan_fail(plan, "cannot allocate the boot plan%s", "");
   }
   for (size_t i = 0; i < defaults->volume_count; ++i) {
@@ -743,6 +771,7 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       }
     }
     plan->volumes[index] = volume;
+    plan->volume_sources[index] = BOOT_ENTRY_OVERRIDE;
     if (index == plan->volume_count) {
       ++plan->volume_count;
     }
@@ -751,7 +780,9 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     size_t index;
     if (plan_space(plan, override->spaces[i].name, &index)) {
       plan->spaces[index] = &override->spaces[i];
+      plan->space_sources[index] = BOOT_ENTRY_OVERRIDE;
     } else {
+      plan->space_sources[plan->space_count] = BOOT_ENTRY_OVERRIDE;
       plan->spaces[plan->space_count++] = &override->spaces[i];
     }
   }
@@ -778,25 +809,30 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     for (size_t j = 0; j < space->root_count; ++j) {
       const struct boot_volume *volume = boot_plan_volume(plan, space->roots[j].volume);
       if (!volume) {
-        return plan_fail(plan, "a root names undefined volume %s", space->roots[j].volume);
+        return plan_fail(plan, "space %s: root names undefined volume %s",
+            space->name, space->roots[j].volume);
       }
       if (space->roots[j].read_write && (volume->kind == BOOT_VOLUME_FAT32 ||
           volume->kind == BOOT_VOLUME_BOOT_ESP)) {
-        return plan_fail(plan, "ordinary FAT32 root %s must be read-only", volume->name);
+        return plan_fail(plan, "space %s: ordinary FAT32 root %s must be read-only",
+            space->name, volume->name);
       }
     }
     for (size_t j = 0; j < space->grant_count; ++j) {
       const struct boot_grant *grant = &space->grants[j];
       const struct boot_volume *volume = boot_plan_volume(plan, grant->volume);
       if (!volume) {
-        return plan_fail(plan, "a selected source names undefined volume %s", grant->volume);
+        return plan_fail(plan, "space %s: source %s names undefined volume %s",
+            space->name, grant->name, grant->volume);
       }
       bool fat32 = volume->kind == BOOT_VOLUME_FAT32 || volume->kind == BOOT_VOLUME_BOOT_ESP;
       if (grant->kind == BOOT_GRANT_MOUNT && !fat32) {
-        return plan_fail(plan, "mount source %s requires a FAT32 volume", grant->name);
+        return plan_fail(plan, "space %s: mount source %s requires a FAT32 volume",
+            space->name, grant->name);
       }
       if (grant->read_write && fat32 && !volume->read_write) {
-        return plan_fail(plan, "writable source %s requires read-write FAT32 admission", grant->name);
+        return plan_fail(plan, "space %s: writable source %s requires read-write FAT32 admission",
+            space->name, grant->name);
       }
     }
     if (space->start && !boot_space_has_root(space, space->start)) {

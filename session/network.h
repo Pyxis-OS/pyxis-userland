@@ -1,26 +1,12 @@
 #ifndef SESSION_NETWORK_H
 #define SESSION_NETWORK_H
 
+#include "../libconfig/network.h"
 #include <abi/net_config.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "dhcp.h"
-
-#define NETWORK_CONFIG_PATH "boot://config/network.lua"
-
-enum network_action { NETWORK_KEEP, NETWORK_REPLACE, NETWORK_CLEAR };
-struct network_config {
-  enum network_action action;
-  bool optional;
-  bool dhcp, dns_explicit;
-  struct net_selector selector;
-  uint8_t (*preferred_macs)[6];
-  size_t preference_count;
-  uint32_t address, prefix, gateway;
-  uint32_t dns_address;
-  char dns_server[sizeof("255.255.255.255")];
-};
 
 struct network_runtime {
   struct dhcp_client dhcp;
@@ -34,8 +20,7 @@ struct network_runtime {
   bool owns_dhcp_settings;
 };
 
-/* Reading validates the Lua shape, selector and numeric syntax without side
- * effects. Free the owned MAC preference array after handoff/maintenance.
+/* Keep the owned configuration alive through handoff/maintenance.
  * Link selection considers only prepared controllers with reported carrier,
  * reuses an existing binding, and keeps waiting when none is eligible. optional
  * controls absent explicit selectors only.
@@ -47,8 +32,6 @@ struct network_runtime {
  * Runtime owns pending selection and the DHCP endpoint until stopped; the
  * trusted setup process retains UDP creation authority only until opening it.
  * Keep config and runtime alive through successor handoff and maintenance. */
-bool network_config_read(struct network_config *config);
-void network_config_free(struct network_config *config);
 bool network_config_apply(const struct network_config *config, struct network_runtime *runtime);
 /* After observing BOUND without READY, inspect preparation of that binding.
  * Prepared means wait for stable configuration; unprepared means permanent
