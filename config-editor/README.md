@@ -52,3 +52,9 @@ is checked when the declared read inventory is available. Mounted volume,
 timezone-asset and live-network availability are reported as unchecked.
 This command does not apply a configuration to Continuum or edit the separate
 machine-settings store.
+
+Task 5 extends the same record with boot binding for scratch installer
+publication. Standalone editing preserves that binding and cannot implicitly
+change archive selection into ESP selection or bind a new revision catalog to
+an old boot pair. Such changes require a complete reviewed installer
+publication. See `installer/PUBLICATION.md`; installed activation is still gated.
