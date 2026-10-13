@@ -13,8 +13,9 @@ unchanged whole-disk SHA-256 and `fsck.fat -n`. No timing claim is made.
 Builder `pyxis-llvm23.1.3-4c23a20`, LLVM 23.1.3, `make -j8 config boot-init
 session`, against the existing main SDK/ports development export. Public ABI and
 runtime match userland main `b38b0e09`; private literal/schema/editor sources are
-compiled from this branch. Compilation and diff checks passed. The default image
-and exact submitted-head CI remain to be checked in the parent integration.
+compiled from this branch. Compilation and diff checks passed. The full default image subsequently passed at Pyxis `5c3dfe3f` with published
+userland `3c5fa88` and inherited ports `c7e4bc35`, using the same builder/-j8.
+Exact-head parent CI #2174 also passed all four jobs.
 
 Source review checked literal admission without Lua execution, owned snapshots,
 shared typed decoding/boot merge, explicit marker adoption, frozen-source plans,
@@ -70,6 +71,13 @@ ambiguity. It does not guess an ordinal or return a match while another identity
 is pending. The second boot admitted the same scratch selection successfully.
 RAM/default boots do not enter this lookup.
 
+3. **Full source-build default image**, Pyxis `5c3dfe3f` / userland `3c5fa88`:
+   ordinary Development, Read-only and Remote spaces started. Bare
+   `config validate` resolved the bundle without wrappers or setup, reported no
+   selected ESP view, validated archive defaults and returned success. No scratch
+   drive was attached; no new default kernel logging was added. This is not
+   installed ESP activation or an Install/Update write run.
+
 All qualification QEMU/GDB processes above are stopped. Screenshots/logs/raw
 fixture disks remain local build artifacts, outside the repository.
 
@@ -86,6 +94,6 @@ confirmed edit/adoption and outside-byte preservation; complete committed loadin
 missing/prepared/mismatching record archive fallback; unsupported Lua/ambiguous
 markers untouched; stale input/catalog/target refusal; per-choice migrations and
 required decline; previous-set retention and verified cleanup. Report completed
-phase and retained recovery on failure. Confirm ordinary default image boot and
-exact-head CI before marking delivery complete. No native staging or installed
+phase and retained recovery on failure. Keep exact-head CI current before marking delivery complete; the full default
+image build/boot and initial submitted-head checks above already pass. No native staging or installed
 activation is authorized by this checkpoint.
