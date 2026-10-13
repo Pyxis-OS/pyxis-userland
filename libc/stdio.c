@@ -171,6 +171,7 @@ int stream_error(FILE *stream, int error)
 {
   if (stream) {
     stream->error = true;
+    stream->http_read_blocked = false;
   }
   errno = error;
   return EOF;
@@ -187,7 +188,9 @@ bool stream_ready(FILE *stream, bool writing)
     return false;
   }
   if (!descriptor_object_ready(stream->operation, writing)) {
+    bool read_blocked = !writing && errno == EBUSY && (!stream->error || stream->http_read_blocked);
     stream_error(stream, errno);
+    stream->http_read_blocked = read_blocked;
     return false;
   }
   return true;
@@ -1310,7 +1313,7 @@ FILE *pyxis_http_commit(FILE *request)
     return NULL;
   }
   struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {request};
-  if (request->closed || request->error) {
+  if (request->closed || (request->error && !request->http_read_blocked)) {
     errno = request->closed ? EBADF : EIO;
     return NULL;
   }
