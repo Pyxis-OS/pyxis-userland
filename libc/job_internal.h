@@ -2,9 +2,33 @@
 #define LIBC_JOB_INTERNAL_H
 
 #include <launcher.h>
+#include <pyxis/descriptor.h>
 
 struct pyxis_job_options;
 struct pyxis_job;
+
+struct job_preparation {
+  struct launch_request request;
+  unsigned char *metadata;
+  size_t used;
+  enum call_status error;
+  struct launch_grant *grants;
+  size_t copied_grants;
+  struct pyxis_descriptor_binding streams[STARTUP_STREAM_COUNT];
+  handle_t image, launcher;
+  bool attempted;
+};
+
+/* Zero-initialized owner storage; discard even after preparation fails. Capture
+ * the existing metadata/authority inventory and flush selected outputs before
+ * any contained-scope creation. Publication borrows the selected launcher and
+ * may be attempted only once, including after an uncertain result. */
+enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t launcher,
+    const struct pyxis_job_options *options, handle_t private_root);
+enum call_status libc_job_publish(struct job_preparation *prepared, handle_t launcher,
+    handle_t *observer);
+enum call_status libc_job_discard_preparation(struct job_preparation *prepared);
+
 enum call_status libc_job_launch(handle_t launcher,
     const struct pyxis_job_options *options, handle_t private_root, handle_t *observer);
 /* The capture owner retains private_root and supplies absent stdin and its

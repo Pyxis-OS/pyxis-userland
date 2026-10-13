@@ -16,17 +16,6 @@
 #include "job_internal.h"
 #include "job_pipeline_launch.h"
 
-struct job_preparation {
-  struct launch_request request;
-  unsigned char *metadata;
-  size_t used;
-  enum call_status error;
-  struct launch_grant *grants;
-  size_t copied_grants;
-  struct pyxis_descriptor_binding streams[STARTUP_STREAM_COUNT];
-  handle_t image, launcher;
-};
-
 struct libc_pipeline_launch {
   struct job_preparation stages[LAUNCH_BATCH_MAX];
   size_t count;
@@ -463,33 +452,52 @@ static enum call_status capture_handles(struct job_preparation *prepared,
   return copy_grants(prepared, prepared->request.grant_count);
 }
 
-static void discard_preparation(struct job_preparation *prepared)
+static enum call_status release_handle(handle_t handle)
 {
-  for (size_t i = 0; i < prepared->copied_grants; ++i) {
-    handle_close(prepared->grants[i].source);
+  if (handle == HANDLE_INVALID) {
+    return CALL_OK;
   }
-  if (prepared->image != HANDLE_INVALID) {
-    handle_close(prepared->image);
-  }
-  if (prepared->launcher != HANDLE_INVALID) {
-    handle_close(prepared->launcher);
-  }
-  free(prepared->metadata);
+  struct syscall_result result = syscall_close(handle);
+  return result.status >= CALL_STATUS_COUNT || result.reply_size ?
+      CALL_OUTCOME_UNKNOWN : result.status;
 }
 
-enum call_status libc_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer)
+enum call_status libc_job_discard_preparation(struct job_preparation *prepared)
 {
-  *observer = HANDLE_INVALID;
+  enum call_status error = CALL_OK;
+  for (size_t i = 0; i < prepared->copied_grants; ++i) {
+    enum call_status status = release_handle(prepared->grants[i].source);
+    if (error == CALL_OK) {
+      error = status;
+    }
+  }
+  enum call_status status = release_handle(prepared->image);
+  if (error == CALL_OK) {
+    error = status;
+  }
+  status = release_handle(prepared->launcher);
+  if (error == CALL_OK) {
+    error = status;
+  }
+  free(prepared->metadata);
+  prepared->metadata = NULL;
+  prepared->copied_grants = 0;
+  prepared->image = HANDLE_INVALID;
+  prepared->launcher = HANDLE_INVALID;
+  return error;
+}
+
+enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t launcher,
+    const struct pyxis_job_options *options, handle_t private_root)
+{
   struct pyxis_job_options selected = *options;
-  struct job_preparation prepared = {0};
-  prepared.metadata = malloc(LAUNCH_CAPTURE_MAX_SIZE);
-  if (!prepared.metadata) {
+  prepared->metadata = malloc(LAUNCH_CAPTURE_MAX_SIZE);
+  if (!prepared->metadata) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = capture_metadata(&prepared, &selected, NULL);
+  enum call_status status = capture_metadata(prepared, &selected, NULL);
   if (status == CALL_OK) {
-    status = capture_handles(&prepared, launcher, &selected, private_root);
+    status = capture_handles(prepared, launcher, &selected, private_root);
   }
   if (status == CALL_OK) {
     for (size_t i = STARTUP_STDOUT; i < STARTUP_STREAM_COUNT; ++i) {
@@ -499,23 +507,33 @@ enum call_status libc_job_launch(handle_t launcher,
       }
     }
   }
-  if (status == CALL_OK) {
-    status = launcher_launch(prepared.launcher, &prepared.request, observer);
-  }
-  int saved_errno = errno;
-  discard_preparation(&prepared);
-  errno = saved_errno;
   return status;
 }
 
-static enum call_status release_handle(handle_t handle)
+enum call_status libc_job_publish(struct job_preparation *prepared, handle_t launcher,
+    handle_t *observer)
 {
-  if (handle == HANDLE_INVALID) {
-    return CALL_OK;
+  *observer = HANDLE_INVALID;
+  if (prepared->attempted) {
+    return CALL_BUSY;
   }
-  struct syscall_result result = syscall_close(handle);
-  return result.status >= CALL_STATUS_COUNT || result.reply_size ?
-      CALL_OUTCOME_UNKNOWN : result.status;
+  prepared->attempted = true;
+  return launcher_launch(launcher, &prepared->request, observer);
+}
+
+enum call_status libc_job_launch(handle_t launcher,
+    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer)
+{
+  *observer = HANDLE_INVALID;
+  struct job_preparation prepared = {0};
+  enum call_status status = libc_job_prepare(&prepared, launcher, options, private_root);
+  if (status == CALL_OK) {
+    status = libc_job_publish(&prepared, prepared.launcher, observer);
+  }
+  int saved_errno = errno;
+  libc_job_discard_preparation(&prepared);
+  errno = saved_errno;
+  return status;
 }
 
 enum call_status libc_pipeline_discard(struct libc_pipeline_launch *prepared)
