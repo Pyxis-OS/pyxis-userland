@@ -42,7 +42,14 @@ The readiness reader accepts frozen bytes and actual kernel/program identities;
 it has no issuer or writer authority. It chooses a complete compatible ESP
 triple or the entire archive triple. Archive selection certifies no ESP files,
 and rescue always selects archive. The current scratch frontend previews this
-handoff without launching installed startup. No live ESP reference reaches a
+handoff without launching installed startup. The scratch-only trusted startup creates a private RAM parent. After ESP
+retirement and Review, the constructor creates and immediately unlinks three
+files, writes the frozen literal bytes, syncs them, returns exact native READ
+grants and closes every writer. The frontend rereads and compares all three
+held files before staging. Optional session_config and network_config startup
+FILE resources use these bytes without path resolution; present invalid files
+fail, while absent resources keep today's archive behavior. Installed startup
+does not supply those resources yet. No live ESP reference reaches a
 configuration consumer. Catalog identity is independent of kernel/program
 revision; the same generated catalog is packaged with trusted archive defaults
 and the editor bundle.

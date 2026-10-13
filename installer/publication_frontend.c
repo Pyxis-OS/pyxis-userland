@@ -5,6 +5,7 @@
 #include "boot_entry.h"
 #include "digest.h"
 #include "../config-editor/readiness.h"
+#include "../libconfig/handoff.h"
 #include "../xfer/hash.h"
 
 #include <clock.h>
@@ -245,6 +246,7 @@ int install_publication_scratch(struct terminal *terminal)
   struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0}, archive[CONFIG_LUA_COUNT] = {0};
   struct config_blob catalog = {0}, pool = {0};
   struct install_configuration plan = {0};
+  struct config_handoff handoff = {0};
   struct install_programs programs = {0};
   struct install_source filtered = {.handle = HANDLE_INVALID};
   struct install_publication_request request = {.esp_root = HANDLE_INVALID,
@@ -475,6 +477,24 @@ int install_publication_scratch(struct terminal *terminal)
       goto done;
     }
   }
+  enum call_status handoff_status;
+  if (!config_handoff_create(startup_resource("config_snapshot_parent"), &plan.selection,
+        &handoff, &handoff_status)) {
+    fprintf(stderr, "Private configuration FILE handoff refused (status %u); nothing written.\n", handoff_status);
+    goto done;
+  }
+  for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
+    struct config_handoff_bytes bytes = {0};
+    bool valid = config_handoff_read(handoff.files[i], &bytes, &handoff_status) &&
+        bytes.size == plan.selection.sizes[i] &&
+        !memcmp(bytes.bytes, plan.selection.bytes[i], bytes.size);
+    config_handoff_bytes_free(&bytes);
+    if (!valid) {
+      fprintf(stderr, "Frozen configuration FILE verification refused (status %u); nothing written.\n", handoff_status);
+      goto done;
+    }
+  }
+  fputs("Frozen configuration handoff: three private unlinked native READ-only FILEs verified.\n", stderr);
   request.legacy_active = adoption;
   memcpy(request.legacy_expected, legacy_digests, sizeof(legacy_digests));
   binding->source = plan.source;
@@ -569,6 +589,9 @@ int install_publication_scratch(struct terminal *terminal)
   }
   result = ok ? EXIT_SUCCESS : EXIT_FAILURE;
 done:
+  if (!config_handoff_close(&handoff)) {
+    result = EXIT_FAILURE;
+  }
   if (request.view.config_parent != HANDLE_INVALID) {
     if (handle_close(request.view.config_parent) != CALL_OK) {
       result = EXIT_FAILURE;
