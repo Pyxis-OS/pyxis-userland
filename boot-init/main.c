@@ -594,6 +594,7 @@ struct space_launch {
   size_t source_handle_count;
   struct job_work *job_provisioner;
   handle_t http_staging;
+  handle_t http_staging_parent; /* Borrowed until source handles close. */
   struct mounted_volume *http_staging_mount;
   char http_staging_name[96];
   struct launch_binding *roots;
@@ -653,6 +654,7 @@ static enum call_status create_http_staging(const struct authority *authority,
   }
   if (status == CALL_OK) {
     launch->http_staging_mount = mounted;
+    launch->http_staging_parent = directory;
   }
   return status;
 }
@@ -773,7 +775,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
       handle = narrowed;
       launch->source_handles[launch->source_handle_count] = narrowed;
       launch->source_mounts[launch->source_handle_count++] = mounted;
-}
+    }
 
     if (http_staging) {
       status = create_http_staging(authority, mounted, handle, space, launch, rights);
@@ -960,7 +962,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
       if (launch.source_mounts[i]->control != HANDLE_INVALID) {
         launch.source_mounts[i]->published = true;
       }
-}
+    }
 
     if (launch.http_staging_mount) {
       launch.http_staging_mount->published = true;
@@ -980,7 +982,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
   }
   if (launch.http_staging != HANDLE_INVALID) {
     if (!started && !uncertain && launch.http_staging_mount) {
-      enum call_status removed = directory_remove(launch.http_staging_mount->root,
+      enum call_status removed = directory_remove(launch.http_staging_parent,
           launch.http_staging_name, DIRECTORY_KIND_DIRECTORY);
       if (removed != CALL_OK) {
         printf("boot-init: space %s HTTP staging retained (status %u)\n", space->name, removed);
