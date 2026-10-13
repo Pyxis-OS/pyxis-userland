@@ -935,13 +935,30 @@ ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict 
   return length;
 }
 
+static bool pushback_ready(FILE *stream)
+{
+  if (!stream_ready(stream, false)) {
+    return false;
+  }
+  struct startup_stream binding;
+  if (descriptor_object_stream(stream->operation, &binding) < 0) {
+    stream_error(stream, errno);
+    return false;
+  }
+  if (binding.protocol == PROTOCOL_STREAM) {
+    stream_error(stream, ESPIPE);
+    return false;
+  }
+  return true;
+}
+
 int ungetc(int character, FILE *stream)
 {
   if (!stream_acquire(stream)) {
     return EOF;
   }
   struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
-  if (character == EOF || !stream_ready(stream, false) || stream->has_pushback) {
+  if (character == EOF || !pushback_ready(stream) || stream->has_pushback) {
     return EOF;
   }
   if (!select_orientation(stream, STREAM_BYTE_ORIENTED)) {
@@ -1027,7 +1044,7 @@ wint_t ungetwc(wint_t character, FILE *stream)
     return WEOF;
   }
   struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
-  if (character == WEOF || !stream_ready(stream, false) || stream->has_wide_pushback) {
+  if (character == WEOF || !pushback_ready(stream) || stream->has_wide_pushback) {
     return WEOF;
   }
   if (!select_orientation(stream, STREAM_WIDE_ORIENTED)) {
