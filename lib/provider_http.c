@@ -252,6 +252,7 @@ struct http_stream_workspace {
   struct http_uri parsed;
   struct http_prepare_context context;
   struct http_transaction_status status;
+  handle_t providers[2];
 };
 
 static bool redirect(unsigned status)
@@ -321,8 +322,16 @@ enum call_status http_transaction_open_uri(const struct path_context *context,
         goto done;
       }
     }
-    status = prepare_bound(context, workspace->current, HTTP_PREPARE_GET, flags,
-        NULL, 0, deadline_ns, &workspace->context, prepared);
+    size_t index = workspace->parsed.scheme == HTTP_SCHEME_HTTPS ? 1 : 0;
+    if (workspace->providers[index] == HANDLE_INVALID) {
+      status = binding(context, workspace->parsed.scheme, &workspace->providers[index]);
+      if (status != CALL_OK) {
+        break;
+      }
+    }
+    status = http_transaction_prepare_context(workspace->providers[index],
+        workspace->current, HTTP_PREPARE_GET, flags, NULL, 0, deadline_ns,
+        &workspace->context, prepared);
     if (status != CALL_OK) {
       break;
     }
@@ -419,6 +428,14 @@ enum call_status http_transaction_open_uri(const struct path_context *context,
     ++redirects;
   }
 done:
+  for (size_t i = 0; i < 2; ++i) {
+    if (workspace->providers[i] != HANDLE_INVALID) {
+      enum call_status closed = handle_close(workspace->providers[i]);
+      if (status == CALL_OK) {
+        status = closed;
+      }
+    }
+  }
   if (status != CALL_OK) {
     http_prepared_close(prepared);
     if (info) {

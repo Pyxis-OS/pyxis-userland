@@ -170,8 +170,9 @@ static enum call_status walk(const struct path_context *context, const char *pat
     return CALL_BAD_REQUEST;
   }
   const char *uri = path;
+  const char *http_uri = !strncmp(uri, "json+", 5) ? uri + 5 : uri;
   bool http = target == WALK_FILE && !native_only &&
-      provider_http_uri(uri);
+      provider_http_uri(http_uri);
   handle_t provider = HANDLE_INVALID;
   enum call_status status = starting_chain(context, &path, workspace, count, &provider, http);
   if (status != CALL_OK) {
