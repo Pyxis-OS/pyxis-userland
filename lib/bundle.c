@@ -294,8 +294,8 @@ static enum call_status parse_commands(struct bundle_program *program,
   return CALL_OK;
 }
 
-static enum call_status parse_resources(const struct path_context *context,
-    struct bundle_program *program, const struct bundle_json_node *object)
+static enum call_status parse_resources(struct bundle_program *program,
+    const struct bundle_json_node *object)
 {
   if (object->type != BUNDLE_JSON_OBJECT) {
     return CALL_BAD_REQUEST;
@@ -306,7 +306,7 @@ static enum call_status parse_resources(const struct path_context *context,
     if (program->root_count == BUNDLE_RESOURCE_LIMIT + 1) {
       return CALL_LIMIT;
     }
-    if (!valid_name(nodes[key].string) || root_conflict(context, nodes[key].string) ||
+    if (!valid_name(nodes[key].string) || !strcmp(nodes[key].string, "app") ||
         value->type != BUNDLE_JSON_STRING || !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
     }
@@ -469,7 +469,7 @@ static enum call_status parse_manifest(const struct path_context *context,
       program->stack_bytes = value->integer;
     } else if (!strcmp(name, "resource_dirs")) {
       resources = true;
-      status = parse_resources(context, program, value);
+      status = parse_resources(program, value);
     } else if (!strcmp(name, "grants")) {
       grants = true;
       status = parse_grants(program, value);
