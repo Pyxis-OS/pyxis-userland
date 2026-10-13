@@ -50,6 +50,14 @@ struct shell_command_line {
   struct shell_stage stages[LAUNCH_BATCH_MAX];
 };
 
+#define SHELL_FAT_MOUNT_LIMIT 4
+struct shell_fat_mount {
+  char *name, *write_name, *control_name;
+  handle_t control, write_root;
+  uint64_t domain;
+  bool bound;
+};
+
 struct shell {
   struct bundle_jobs jobs;
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
@@ -78,6 +86,8 @@ struct shell {
   bool owns_root[STARTUP_ROOT_LIMIT];
   const struct path_context *directory;
   struct path_workspace workspace;
+  /* Writable FAT grants are selected sources, never inherited URI roots. */
+  struct shell_fat_mount fat_mounts[SHELL_FAT_MOUNT_LIMIT];
 };
 
 /* Compacts in place. Arguments and redirection paths borrow line; capacity
@@ -92,6 +102,18 @@ enum call_status shell_change_directory(struct shell *shell, const char *path);
 /* Owned handle to a directory reached through the shell's own roots. */
 enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,
     handle_t *directory);
+enum call_status shell_reserve_root(struct shell *shell, const char *name,
+    size_t length, char **reserved);
+/* Consumes name and root on every path. */
+enum call_status shell_publish_root(struct shell *shell, char *name, handle_t root);
+enum command_result shell_mount_fat32(struct shell *shell, char **arguments, size_t count);
+enum command_result shell_sync_fat32(struct shell *shell, char **arguments, size_t count);
+enum command_result shell_release_fat32(struct shell *shell, char **arguments, size_t count);
+/* Appends selected dynamic sources after the common configured inventory. */
+enum call_status shell_fat_authority(struct shell *shell,
+    struct bundle_authority *authority, size_t capacity, size_t *count);
+/* Close owned data/control grants without implicit retirement. */
+void shell_fat_close(struct shell *shell);
 /* Tab completion. The word under the cursor is a command name (the first word
  * of a pipeline stage: builtins and the programs in bin:// and boot://) or a
  * path (any argument or redirection target: see complete_path.c). */

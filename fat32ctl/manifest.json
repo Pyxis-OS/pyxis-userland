@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "org.pyxis.fat32ctl",
+  "entry": "bin/fat32ctl.pxe",
+  "commands": {"fat32ctl": "bin/fat32ctl.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "inventory", "resource": "disks", "source": "fat_mounts", "rights": ["enumerate"], "required": false},
+    {"name": "control", "resource": "mount", "source": "fat32_control", "rights": ["observe", "retire"], "required": false},
+    {"name": "sync_control", "resource": "mount", "source": "fat32_control", "rights": ["write"], "required": false}
+  ]
+}

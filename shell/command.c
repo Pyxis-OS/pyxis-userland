@@ -64,7 +64,7 @@ static enum call_status root_available(struct shell *shell, const char *binding)
 
 /* Reserve shell-owned storage before acquisition. The shell runs one command
  * at a time and publishes the selected binding only after a complete open. */
-static enum call_status reserve_root(struct shell *shell, const char *name,
+enum call_status shell_reserve_root(struct shell *shell, const char *name,
     size_t length, char **reserved)
 {
   *reserved = NULL;
@@ -94,7 +94,7 @@ static enum call_status reserve_root(struct shell *shell, const char *name,
   return CALL_OK;
 }
 
-static enum call_status publish_root(struct shell *shell, char *name, handle_t root)
+enum call_status shell_publish_root(struct shell *shell, char *name, handle_t root)
 {
   /* Acquisition can wait while a provider changes the service namespace. */
   enum call_status status = root_available(shell, name);
@@ -134,7 +134,7 @@ static enum command_result mount_host(struct shell *shell, char **arguments, siz
     }
   }
   char *name;
-  enum call_status status = reserve_root(shell, "host", 4, &name);
+  enum call_status status = shell_reserve_root(shell, "host", 4, &name);
   if (status != CALL_OK) {
     return shell_directory_error(shell, "shell: mount", "host", status);
   }
@@ -149,7 +149,7 @@ static enum command_result mount_host(struct shell *shell, char **arguments, siz
     free(name);
     return shell_directory_error(shell, "shell: mount", "host", status);
   }
-  status = publish_root(shell, name, root);
+  status = shell_publish_root(shell, name, root);
   return status == CALL_OK ? COMMAND_OK :
       shell_directory_error(shell, "shell: mount", arguments[count - 1], status);
 }
@@ -207,7 +207,7 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
     goto usage;
   }
   char *name;
-  enum call_status status = reserve_root(shell, destination, length - 3, &name);
+  enum call_status status = shell_reserve_root(shell, destination, length - 3, &name);
   if (status != CALL_OK) {
     return shell_directory_error(shell, "shell: mount", destination, status);
   }
@@ -238,7 +238,7 @@ static enum command_result mount_volume(struct shell *shell, char **arguments, s
     free(name);
     return shell_directory_error(shell, "shell: mount", destination, status);
   }
-  status = publish_root(shell, name, root);
+  status = shell_publish_root(shell, name, root);
   return status == CALL_OK ? COMMAND_OK :
       shell_directory_error(shell, "shell: mount", arguments[count - 1], status);
 
@@ -360,10 +360,11 @@ static bool is_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
   return !strcmp(name, "exit") || !strcmp(name, "cd") ||
-      !strcmp(name, "mount") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
+      !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") || !strcmp(name, "namespace") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
-      (!strcmp(name, "sync") && count > 1 && !strcmp(arguments[1], "--disk"));
+      (!strcmp(name, "sync") && count > 1 &&
+       (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
 }
 
 static enum command_result builtin_command(struct shell *shell, char **arguments, size_t count)
@@ -391,9 +392,18 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
     return set_affinity(shell, arguments, count);
   }
   if (strcmp(arguments[0], "mount") == 0) {
+    if (count > 1 && !strcmp(arguments[1], "--fat32")) {
+      return shell_mount_fat32(shell, arguments, count);
+    }
     return mount_volume(shell, arguments, count);
   }
+  if (strcmp(arguments[0], "release") == 0) {
+    return shell_release_fat32(shell, arguments, count);
+  }
   if (strcmp(arguments[0], "sync") == 0) {
+    if (count > 1 && !strcmp(arguments[1], "--mount")) {
+      return shell_sync_fat32(shell, arguments, count);
+    }
     if (count != 2) {
       return shell_error(shell, "usage: sync --disk | sync path...\n");
     }

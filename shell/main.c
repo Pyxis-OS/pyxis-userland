@@ -271,6 +271,7 @@ done:
     result = EXIT_FAILURE;
   }
   pane_cwd_provider_close(&cwd_service.provider);
+  shell_fat_close(&shell);
   if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
     result = EXIT_FAILURE;
   }

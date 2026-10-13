@@ -45,9 +45,9 @@ PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/
                    $(BUILD)/ttcp/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
-                   $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o
+                   $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
-                 $(BUILD)/shell/launch.o $(BUILD)/shell/command.o \
+                 $(BUILD)/shell/launch.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/complete.o \
                  $(BUILD)/shell/complete_path.o $(BUILD)/common/pane_cwd.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
@@ -80,7 +80,8 @@ SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
-all: $(INSTALL_PROGRAMS) $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+.PHONY: fat32ctl
+all: $(INSTALL_PROGRAMS) fat32ctl $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
 # removed programs/assets cannot survive from an earlier install.
@@ -93,6 +94,7 @@ install: all
 	  for program in $(INSTALL_PROGRAMS); do \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
+	  cp -a "$(BUILD)/fat32ctl.pxb" "$$staging/"; \
 	  install -m 644 init/development.sh "$$staging/init"; \
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
 	  install -m 644 init/services.sh "$$staging/init-services"; \
@@ -187,6 +189,7 @@ ttcp: $(BUILD)/ttcp.pxe
 udp-send: $(BUILD)/udp-send.pxe
 udp-echo: $(BUILD)/udp-echo.pxe
 shell: $(BUILD)/shell.pxe
+fat32ctl: $(BUILD)/fat32ctl.pxb/manifest.json
 mandelbrot: $(BUILD)/mandelbrot.pxe
 mousetest: $(BUILD)/mousetest.pxe
 screenshot: $(BUILD)/screenshot.pxe
@@ -249,6 +252,13 @@ $(BUILD)/tcp.pxe: $(TCP_SERVE_OBJECT)
 $(BUILD)/dig.pxe $(BUILD)/ping.pxe $(BUILD)/tcp.pxe $(BUILD)/ttcp.pxe: $(DNS_OBJECTS) $(UDP_OBJECT)
 
 $(BUILD)/shell.pxe: $(SHELL_OBJECTS) $(UTILITY_OBJECT)
+
+$(BUILD)/fat32ctl.pxb/manifest.json: $(BUILD)/fat32ctl.pxe fat32ctl/manifest.json fat32ctl/README.md
+	@rm -rf "$(@D)"
+	@mkdir -p "$(@D)/app/bin"
+	install -m 644 $(BUILD)/fat32ctl.pxe "$(@D)/app/bin/"
+	install -m 644 fat32ctl/README.md "$(@D)/app/"
+	install -m 644 fat32ctl/manifest.json "$@"
 
 $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
