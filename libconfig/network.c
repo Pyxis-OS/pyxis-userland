@@ -1,5 +1,8 @@
 #include "network.h"
+#include "handoff.h"
+#include <handle.h>
 #include <lauxlib.h>
+#include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -382,6 +385,24 @@ static int decode_network(lua_State *state)
 
 bool network_config_read(struct network_config *config)
 {
+  handle_t source = startup_resource("network_config");
+  if (source != HANDLE_INVALID) {
+    *config = (struct network_config){0};
+    struct config_handoff_bytes snapshot = {0};
+    enum call_status status;
+    bool read = config_handoff_read(source, &snapshot, &status);
+    bool closed = handle_close(source) == 0;
+    if (!read || !closed) {
+      fprintf(stderr, "config: selected network FILE unavailable (status %u, closed %u)\n",
+          status, (unsigned)closed);
+      config_handoff_bytes_free(&snapshot);
+      return false;
+    }
+    enum config_result result = network_config_read_literal_bytes("selected network FILE",
+        snapshot.bytes, snapshot.size, config);
+    config_handoff_bytes_free(&snapshot);
+    return result == CONFIG_OK;
+  }
   *config = (struct network_config){0};
   if (config_read(NETWORK_CONFIG_PATH, decode_network, config) == CONFIG_ERROR) {
     network_config_free(config);

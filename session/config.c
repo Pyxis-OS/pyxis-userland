@@ -1,6 +1,8 @@
 #include "../common/launch_environment.h"
 #include "config.h"
+#include "../libconfig/handoff.h"
 #include <abi/console.h>
+#include <handle.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,8 +43,29 @@ static bool check_timezone(const char *name)
 
 bool session_config_read(struct session_config *config)
 {
-  if (session_config_read_file(SESSION_CONFIG_PATH, config) == CONFIG_ERROR) {
-    return false;
+  handle_t source = startup_resource("session_config");
+  if (source == HANDLE_INVALID) {
+    if (session_config_read_file(SESSION_CONFIG_PATH, config) == CONFIG_ERROR) {
+      return false;
+    }
+  } else {
+    *config = (struct session_config){0};
+    struct config_handoff_bytes snapshot = {0};
+    enum call_status status;
+    bool read = config_handoff_read(source, &snapshot, &status);
+    bool closed = handle_close(source) == 0;
+    if (!read || !closed) {
+      fprintf(stderr, "session: selected session FILE unavailable (status %u, closed %u)\n",
+          status, (unsigned)closed);
+      config_handoff_bytes_free(&snapshot);
+      return false;
+    }
+    enum config_result result = session_config_read_literal_bytes("selected session FILE",
+        snapshot.bytes, snapshot.size, config);
+    config_handoff_bytes_free(&snapshot);
+    if (result != CONFIG_OK) {
+      return false;
+    }
   }
   if (!check_timezone(config->timezone)) {
     fprintf(stderr, "session: unavailable or invalid timezone '%s'\n", config->timezone);
