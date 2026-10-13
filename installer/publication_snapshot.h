@@ -11,6 +11,11 @@ bool install_snapshot_file(handle_t root, const char *path, size_t limit,
 bool install_snapshot_facts(handle_t control, struct config_target_facts *facts);
 bool install_snapshot_same_target(const struct config_target_facts *left,
     const struct config_target_facts *right);
+/* Count actual free FAT clusters, never FSInfo hints. The caller keeps the
+ * source quiescent through its RO planning mount or initial raw claim. This
+ * grants no reservation; repeat against the admitted target before writes. */
+bool install_snapshot_capacity(const struct install_disk *disk,
+    const struct config_target_facts *facts, uint64_t *free_bytes);
 /* Recheck frozen inputs under the initial whole-disk claim, using the shared
  * FAT reader. Never mount or mutate while the raw claim is held. */
 bool install_snapshot_revalidate(const struct install_disk *disk,

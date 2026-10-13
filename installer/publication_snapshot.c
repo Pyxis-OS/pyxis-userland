@@ -115,6 +115,60 @@ static bool read_sectors(void *context, uint64_t sector, uint32_t count, void *b
         (size_t)count * (size_t)disk->info.block_size);
 }
 
+bool install_snapshot_capacity(const struct install_disk *disk,
+    const struct config_target_facts *facts, uint64_t *free_bytes)
+{
+  if (!free_bytes) {
+    return false;
+  }
+  *free_bytes = 0;
+  if (!disk || !config_target_valid(facts) || facts->partition > UINT32_MAX ||
+      disk->info.id != facts->device ||
+      disk->info.block_size != facts->device_block_size ||
+      disk->info.block_count != facts->device_block_count ||
+      disk->info.block_count > UINT64_MAX / disk->info.block_size ||
+      memcmp(disk->info.gpt_guid, facts->disk_guid, 16)) {
+    return false;
+  }
+  struct fat32_source source = {.read = read_sectors, .context = (void *)disk,
+    .sectors = disk->info.block_count, .sector_bytes = (uint32_t)disk->info.block_size,
+    .max_read_sectors = DISK_IO_MAX_BYTES / disk->info.block_size};
+  struct fat32_workspace work = {.bytes = fat32_open_workspace_size(),
+    .step_limit = UINT64_C(16000000), .sector_limit = UINT64_C(16000000),
+    .directory_depth_limit = 16};
+  work.memory = malloc(work.bytes);
+  struct fat32_volume volume;
+  bool ok = work.memory && fat32_open(&source, (uint32_t)facts->partition, &work, &volume) == FAT32_OK &&
+      volume.partition_first == facts->first_block && volume.partition_sectors == facts->block_count &&
+      volume.partition_attributes == facts->partition_attributes &&
+      !memcmp(volume.disk_guid, facts->disk_guid, 16) &&
+      !memcmp(volume.partition_guid, facts->partition_guid, 16) &&
+      !memcmp(volume.partition_type, facts->partition_type, 16);
+  size_t bytes;
+  if (ok) {
+    ok = fat32_workspace_size(&volume, 16, &bytes) == FAT32_OK;
+    if (ok && bytes > work.bytes) {
+      free(work.memory);
+      work.bytes = bytes;
+      work.memory = malloc(bytes);
+      ok = work.memory != NULL;
+    }
+  }
+  struct fat32_check_report report;
+  if (ok) {
+    ok = fat32_check(&volume, &work, &report) == FAT32_OK;
+  }
+  if (ok) {
+    uint64_t cluster_bytes = (uint64_t)volume.sectors_per_cluster * volume.source.sector_bytes;
+    ok = cluster_bytes && report.free_clusters <= UINT64_MAX / cluster_bytes;
+    if (ok) {
+      *free_bytes = report.free_clusters * cluster_bytes;
+    }
+  }
+  free(work.memory);
+  return ok;
+}
+
 struct compare_bytes {
   const struct config_blob *expected;
   size_t offset;
