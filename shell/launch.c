@@ -59,6 +59,7 @@ struct prepared_stage {
   struct launch_grant *grants;
   uint64_t *directories;
   struct launch_binding resources[34 + BUNDLE_SOURCE_LIMIT];
+  char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_binding roots[STARTUP_ROOT_LIMIT];
   struct launch_request request;
 };
@@ -130,6 +131,9 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
 static void free_preparation(struct prepared_stage *stages, size_t stage_count)
 {
   for (size_t i = 0; i < stage_count; ++i) {
+    for (size_t j = 0; j < BUNDLE_SOURCE_LIMIT; ++j) {
+      free(stages[i].source_names[j]);
+    }
     free(stages[i].directories);
     free(stages[i].grants);
   }
@@ -582,11 +586,53 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_binding){(uintptr_t)"clipboard_shared", clipboard_shared_index};
   }
   if (session) {
-    enum call_status status = bundle_sources_forward_startup(grants, grant_capacity,
-        &grant_count, resources, sizeof(prepared->resources) / sizeof(*resources),
-        &resource_count);
+    struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
+    size_t source_count;
+    enum call_status status = bundle_sources_from_startup(sources, BUNDLE_SOURCE_LIMIT,
+        &source_count);
+    if (status == CALL_OK) {
+      status = shell_fat_authority(shell, sources, BUNDLE_SOURCE_LIMIT, &source_count);
+    }
     if (status != CALL_OK) {
       return status;
+    }
+    if (source_count > grant_capacity - grant_count ||
+        source_count > sizeof(prepared->resources) / sizeof(*resources) - resource_count) {
+      return CALL_LIMIT;
+    }
+    for (size_t i = 0; i < source_count; ++i) {
+      struct handle_info info;
+      status = handle_query(sources[i].source, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (info.protocol != sources[i].protocol ||
+          (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+        return CALL_WRONG_TYPE;
+      }
+      uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
+      if ((transport & info.transport) != transport) {
+        return CALL_DENIED;
+      }
+      size_t prefix = sizeof(BUNDLE_SOURCE_PREFIX) - 1;
+      size_t length = strlen(sources[i].resource);
+      if (length > SIZE_MAX - prefix - 1) {
+        return CALL_LIMIT;
+      }
+      char *name = malloc(prefix + length + 1);
+      if (!name) {
+        return CALL_NO_MEMORY;
+      }
+      prepared->source_names[i] = name;
+      memcpy(name, BUNDLE_SOURCE_PREFIX, prefix);
+      memcpy(name + prefix, sources[i].resource, length + 1);
+      for (size_t j = 0; j < resource_count; ++j) {
+        if (!strcmp(name, (const char *)(uintptr_t)resources[j].name)) {
+          return CALL_BAD_REQUEST;
+        }
+      }
+      resources[resource_count++] = (struct launch_binding){(uintptr_t)name, grant_count};
+      grants[grant_count++] = (struct launch_grant){sources[i].source, info.rights, transport};
     }
   }
   struct launch_binding *roots = prepared->roots;

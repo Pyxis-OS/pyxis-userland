@@ -143,6 +143,30 @@ enum call_status shell_fat_authority(struct shell *shell,
   return CALL_OK;
 }
 
+static enum call_status selected_control(struct shell *shell, const char *name, handle_t *control)
+{
+  *control = HANDLE_INVALID;
+  struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
+  size_t count;
+  enum call_status status = bundle_sources_from_startup(sources, BUNDLE_SOURCE_LIMIT, &count);
+  if (status == CALL_OK) {
+    status = shell_fat_authority(shell, sources, BUNDLE_SOURCE_LIMIT, &count);
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (!strcmp(sources[i].resource, name)) {
+      if (sources[i].protocol != PROTOCOL_MOUNT) {
+        return CALL_WRONG_TYPE;
+      }
+      *control = sources[i].source;
+      return CALL_OK;
+    }
+  }
+  return CALL_UNAVAILABLE;
+}
+
 static enum command_result list_disks(struct shell *shell, handle_t inventory)
 {
   for (uint64_t i = 0;; ++i) {
@@ -300,8 +324,11 @@ enum command_result shell_sync_fat32(struct shell *shell, char **arguments, size
     return shell_error(shell, "usage: sync --mount NAME:// | sync --mount SOURCE\n");
   }
   struct shell_fat_mount *mount = find_mount(shell, arguments[2]);
-  handle_t control = mount ? mount->control : configured_source(arguments[2]);
-  enum call_status status = control == HANDLE_INVALID ? CALL_UNAVAILABLE : mount_sync(control);
+  handle_t control = mount ? mount->control : HANDLE_INVALID;
+  enum call_status status = mount ? CALL_OK : selected_control(shell, arguments[2], &control);
+  if (status == CALL_OK) {
+    status = mount_sync(control);
+  }
   return status == CALL_OK ? COMMAND_OK :
       shell_directory_error(shell, "shell: sync", arguments[2], status);
 }
@@ -404,6 +431,23 @@ static enum call_status collect_data(struct shell *shell, uint64_t domain,
       append_handle(handles, count, resources[i].handle);
     }
   }
+  /* libc owns copies of this initial chain. Moving its cwd does not release
+   * the original startup grants, so include them in explicit FAT drainage. */
+  const handle_t *startup_cwd = startup_working_directories();
+  for (size_t i = 0; i < startup_working_directory_count(); ++i) {
+    uint64_t selected;
+    bool valid;
+    enum call_status status = directory_domain(startup_cwd[i], &selected, &valid);
+    if (status == CALL_BAD_HANDLE) {
+      continue;
+    }
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (valid && selected == domain) {
+      append_handle(handles, count, startup_cwd[i]);
+    }
+  }
   for (size_t i = 0; i < SHELL_FAT_MOUNT_LIMIT; ++i) {
     if (shell->fat_mounts[i].domain == domain) {
       append_handle(handles, count, shell->fat_mounts[i].write_root);
@@ -468,11 +512,13 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
   }
   const char *uri = arguments[count - 1];
   struct shell_fat_mount *mount = find_mount(shell, uri);
-  handle_t control = configured ? configured_source(arguments[2]) :
-      mount ? mount->control : HANDLE_INVALID;
+  handle_t control = mount ? mount->control : HANDLE_INVALID;
+  enum call_status status = configured ? selected_control(shell, arguments[2], &control) :
+      control == HANDLE_INVALID ? CALL_UNAVAILABLE : CALL_OK;
   struct handle_info authority;
-  enum call_status status = control == HANDLE_INVALID ? CALL_UNAVAILABLE :
-      handle_query(control, &authority);
+  if (status == CALL_OK) {
+    status = handle_query(control, &authority);
+  }
   if (status == CALL_OK && (authority.protocol != PROTOCOL_MOUNT ||
       authority.kind != HANDLE_KIND_NATIVE)) {
     status = CALL_WRONG_TYPE;
@@ -530,6 +576,11 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
     mount->bound = true;
   }
   size_t capacity = startup_resource_count();
+  size_t startup_depth = startup_working_directory_count();
+  if (startup_depth > SIZE_MAX - capacity) {
+    return shell_directory_error(shell, "shell: release", uri, CALL_LIMIT);
+  }
+  capacity += startup_depth;
   if (capacity > SIZE_MAX - SHELL_FAT_MOUNT_LIMIT - 1 ||
       capacity + SHELL_FAT_MOUNT_LIMIT + 1 > SIZE_MAX / sizeof(handle_t)) {
     return shell_directory_error(shell, "shell: release", uri, CALL_LIMIT);
