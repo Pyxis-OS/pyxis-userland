@@ -581,8 +581,8 @@ static bool render_change(const struct config_plan_change *change, char **bytes,
       change->current.value : entry->default_value;
   struct renamed_value renamed = {0};
   if (change->choice == CONFIG_CHOICE_APPLY && entry->migration.kind == CONFIG_MIGRATION_REPLACE) {
-    /* Missing-file additions use the declared replacement too; the new-file
-     * template already selects it and must not revert to the ordinary default. */
+    /* An approved replacement also applies to missing-file additions instead
+     * of silently selecting the ordinary default. */
     value = entry->migration.value;
   } else if (change->choice == CONFIG_CHOICE_APPLY && change->kind == CONFIG_CHANGE_MIGRATE) {
     if (entry->migration.kind == CONFIG_MIGRATION_MOVE) {

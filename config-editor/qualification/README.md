@@ -1,99 +1,92 @@
 # Configuration editor qualification
 
-Installer task 4, 2026-10-13. This is an implementation checkpoint, not completed
-publication qualification. The editor stays scratch-only; installed boot and
-Install/Update are unchanged. Stable bound-ESP identity is an external dependency.
+Installer task 4, 2026-10-13. Scratch-only delivery: installed startup and normal
+Install/Update remain unchanged. No owner media, native ESP activation or live
+Continuum application is qualified.
 
-The prior functional baseline is Pyxis `2f2109fc`: existing native read-only FAT32
-loading of five scratch configuration/foreign files, zero scratch writes,
-unchanged whole-disk SHA-256 and `fsck.fat -n`. No timing claim is made.
+## Revisions and build
 
-## Build and inspected contract
+Functional baseline: Pyxis `2f2109fc`, read-only native FAT32 loading, unchanged
+whole scratch-disk hash and `fsck.fat -n`. Earlier default launch/build checks are
+recorded in #247 / #786. Publication qualification rebases onto Pyxis main
+`3455b3b2` (#790) and userland main `e3c6ff9` (#249). Integrated parent checkpoint
+`c611de69` uses the real public identity ABI/helper; no private header or fabricated
+issuer evidence. The inherited ports pin is `4ed452df`.
 
-Builder `pyxis-llvm23.1.3-4c23a20`, LLVM 23.1.3, `make -j8 config boot-init
-session`, against the existing main SDK/ports development export. Public ABI and
-runtime match userland main `b38b0e09`; private literal/schema/editor sources are
-compiled from this branch. Compilation and diff checks passed. The full default image subsequently passed at Pyxis `5c3dfe3f` with published
-userland `3c5fa88` and inherited ports `c7e4bc35`, using the same builder/-j8.
-Exact-head parent CI #2174 also passed all four jobs.
+Published builder `pyxis-llvm23.1.3-4c23a20`, LLVM 23.1.3, `make -j8 image
+LOG_LEVEL=info`: full source builds passed with userland `98fc5f5` and `e56dabe`.
+The latter fixes a missing-file replacement migration that incorrectly rendered
+the ordinary default instead of its explicit replacement. Final records/comments
+do not change that executable behaviour. Kernel, SDK, runtime and applications
+were rebuilt together after the mount reply changed; no stale ABI artifacts.
 
-Source review checked literal admission without Lua execution, owned snapshots,
-shared typed decoding/boot merge, explicit marker adoption, frozen-source plans,
-one-frame input, target/hash refusal, native authority/domain checks and ordered
-prepared/committed publication. Corrections found during integration: confirmation
-must follow one frame without waiting for EOF; unchanged consumed Limine bytes
-must also be rechecked; reviewed external owner edits must not be blocked by old
-selected hashes; irrelevant optional Limine must not block a Lua-only plan.
-These are inspected properties; source inspection is not write-path qualification.
+## Interactive QEMU and debugger
 
-## Interactive QEMU checkpoints
+QEMU 10.2.2, Q35, nested KVM/host CPU, four CPUs, 512 MiB, OVMF, modern VirtIO
+boot/scratch disks and RNG, no NIC/USB. The full built kernel and initrd are used;
+local initrd fixtures change only trusted scratch declarations and, for migration
+cases, literal catalog data. Synthetic GPT identities identify disposable media.
+The baseline ESP is 128 MiB on a 160 MiB disk; positive runs use a 40 MiB ESP on
+an 80 MiB disk (first sector 2048, 81920 sectors, 512-byte blocks, two mirrored
+FATs). The smaller fixture changes no lease or write-admission rule.
 
-QEMU 10.2.2, Q35, nested KVM, host CPU, four CPUs, 512 MiB, fresh OVMF variable
-store, modern VirtIO boot and scratch block devices, VirtIO RNG, no NIC/USB.
-The kernel is the separately qualified pointer-default build `0fe0258c` on
-Pyxis `6fea298a`; the ABI is unchanged by the subsequently incorporated main
-`4a09711e`. A local fixture replaces only candidate boot init, session, the
-config bundle and explicit scratch boot declarations. It is not described as
-an exact-head/default-image build.
+Trusted startup supplies scoped `EFI/pyxis/config` and `boot/limine` parents and
+bound control through declared grants; ordinary scratch roots stay RO. Commands
+are typed interactively. Plan data goes to RAM files, not to a global current-plan
+slot. Read-only GDB inspects mount evidence, mutation and interval state, without
+calling target functions. Host mtools/hash checks inspect closed scratch images.
 
-The scratch device is 160 MiB with a 128 MiB GPT ESP at blocks
-2048..264191, 512-byte sectors. All identities are generated fixture identities,
-not owner hardware. No native drive is touched. Inputs include empty boot
-overrides, UTC/tab-width-4/session TERM owner settings, DHCP networking and a
-foreign Limine entry. Trusted startup delegates scoped `EFI/pyxis/config` and
-`boot/limine` parents through declared sources; normal scratch URI access is RO.
+| Check | Observed result |
+| --- | --- |
+| Confirmed `config edit`, explicit Adopt | Complete committed set verified. Unmarked UTC, tab width 4, TERM and DHCP values retained; absent boot defaults added. |
+| `config validate` after publication | Complete committed ESP preview, shared whole-triple validation and merged provenance. |
+| `config plan > home://plan`, then apply | Native staging, prepared/committed records, selected read-back and successful lease release. |
+| Previous set and cleanup | Exact recorded hashes match retained files. Second publication removes only the three verified older recovery files; one current previous triple/catalog remains. |
+| Replay stale after publication | Refused before staging; no automatic replanning. |
+| RO print, independent RW apply | RO client prints a plan; separately granted RW client applies it. Concatenating `config\n` after the frame proves framing leaves final-confirmation input available. |
+| Target/source/catalog mismatch frames | Each refused before writes; whole-disk hash unchanged across all three. |
+| RO edit | Refused without administrative directory/control grants. |
+| Prepared/malformed/hash-mismatched records | Whole-archive loader fallback, no mixed selection. |
+| Unsupported executable Lua | Printed changes only; file untouched, no Lua execution. |
+| Duplicate ownership markers | Printed changes only; file untouched. All five RO negative fixtures leave the whole-disk hash unchanged. |
+| Required migration kept | Apply refused; unchanged whole-disk hash and unmutated mount in GDB. |
+| Explicit migrations | Entry home→work preserves owner partition 3; EXINIT→VISUAL preserves owner value and unrelated environment keys; tab width replacement becomes 4. Marker-looking string bytes remain data. |
+| Missing session file | Explicit replacement creates terminal tab width 4, rather than default 8; committed set and native clean shutdown pass. |
+| Limine change | Only owned entry changes; foreign prefix/Fedora entry/suffix remain byte-identical. Recorded previous Limine file equals the original. |
 
-1. **RW view, missing history**, application checkpoint `3e2f5b7`:
-   configured FAT admission and narrowed sources work; `config validate` reads
-   the triple, reports archive-merged spaces and missing-record archive fallback.
-   `config plan` displays six entry deltas; unknown/unmarked owner settings remain
-   Keep, absent defaults are proposed. Missing issuer facts refuse a replayable
-   frame and `config edit`. Read-only GDB shows the originating mount published,
-   writable, `CALL_OK`, with no writer mutation, dirty ownership or intervals.
-   Whole-disk SHA-256 remains
-   `8546e815826917b25bbe329acfcde4786502e730c009bda848733fa8438e0d46`;
-   extracted FAT `fsck.fat -n` passes.
-2. **RO view, manually authored complete record**, checkpoint `d0924b7`:
-   a fixture record binds the exact triple/current catalog hashes (no native
-   publication claimed). `config validate` previews complete committed ESP
-   selection. `config plan` distinguishes old defaults from owner edits, preserves
-   current UTC/tab-width/environment values, materializes the proposed boot
-   entries and successfully runs shared whole-triple validation. It still refuses
-   replay without issuer facts. GDB confirms a published RO mount and `CALL_OK`.
-   Whole-disk SHA-256 remains
-   `ad0fcfa406bb0ba28d077a656dfc8e89cf1e62c158c6eda3c74d5493fb66b4b8`.
+Selected hashes and retained previous hashes are independently checked after VM
+stop. Session and Limine bytes outside managed spans compare exactly before/after
+migration. Boot foreign prefix/suffix and unrelated space are retained; an entry
+move may insert a separator newline at its destination. Recovery is manual; no
+prefix-based deletion, rollback, repair or automatic resume is exercised.
 
-The first configured scratch boot exposed a pre-existing GPT readiness race:
-DISKS enumeration can expose a device before its GPT GUID is ready, while boot
-init previously returned NOT_FOUND immediately. The selected lookup now waits
-up to ten seconds, sleeping one millisecond between snapshots and refusing
-ambiguity. It does not guess an ordinal or return a match while another identity
-is pending. The second boot admitted the same scratch selection successfully.
-RAM/default boots do not enter this lookup.
+The RO negative image hash before/after is
+`44037b6e3b7a90de2d8256d4c609bfc72ce8f9ed3b20fa475e36610bb9ee8966`.
+The required-decline image hash before/after is
+`dcd023dbbed3ef6bb35ecc78142556fd4c73939e8c7297c642c252607ba72d9c`.
+Target/source/catalog refusals also match their immediate pre-run whole-disk hash.
+Raw disks, screenshots and session logs stay local, outside the repository.
 
-3. **Full source-build default image**, Pyxis `5c3dfe3f` / userland `3c5fa88`:
-   ordinary Development, Read-only and Remote spaces started. Bare
-   `config validate` resolved the bundle without wrappers or setup, reported no
-   selected ESP view, validated archive defaults and returned success. No scratch
-   drive was attached; no new default kernel logging was added. This is not
-   installed ESP activation or an Install/Update write run.
+## Bounded failure and limits
 
-All qualification QEMU/GDB processes above are stopped. Screenshots/logs/raw
-fixture disks remain local build artifacts, outside the repository.
+The 128 MiB run (`98fc5f5`) reaches committed-record publication, then reports
+phase 6 / TIMED_OUT at sync because the native 30-second lease expires. It stops,
+releases the interval and retains named previous files without retry. The record
+is visible and matches selected bytes, but its final flush was not confirmed;
+this is filesystem-view evidence, not a durable-success claim. The 40 MiB runs
+complete within the unchanged lease. Native-media timing and power-loss behaviour
+are unqualified; large-volume preflight cost remains debt before task 5.
 
-## Remaining admission and scratch checks
+A clone stopped with QEMU Quit retains the expected dirty bit and RW admission
+refuses it. Host `fsck.fat -a` clears only that bit on a disposable fixture before
+reuse, preserving selected bytes. The cross-grant run instead ends through the
+kernel Ctrl+Alt+Delete shutdown path: native power sealing succeeds and subsequent
+`fsck.fat -n` reports no dirty-bit repair or structural errors.
 
-Epsilon supplies retained GPT GUID/type/attributes and device geometry through
-bound MOUNT_OBSERVE, with explicit fact validity. Consume its published SDK and
-rebase this dependency onto current userland main. The absence path is delivered;
-no fabricated UUID, caller sidecar, raw DISK grant or unsafe publication bypass
-fills the gap.
-
-Then qualify the actual native write executor on scratch ESPs: authority refusal;
-confirmed edit/adoption and outside-byte preservation; complete committed loading;
-missing/prepared/mismatching record archive fallback; unsupported Lua/ambiguous
-markers untouched; stale input/catalog/target refusal; per-choice migrations and
-required decline; previous-set retention and verified cleanup. Report completed
-phase and retained recovery on failure. Keep exact-head CI current before marking delivery complete; the full default
-image build/boot and initial submitted-head checks above already pass. No native staging or installed
-activation is authorized by this checkpoint.
+Source review, rather than injected faults, covers unavailable identity validity,
+changed issuer facts at each publication check, uncertain transport completion,
+rescue bypass and cleanup-error retention. Conservative refusal remains for a new
+implicit space entry colliding with handwritten explicit array indices and for
+unsupported Limine header-renaming moves. Static machine checks do not establish
+mounted-volume, timezone-asset or live-network availability. There are no new
+self-tests, fault-injection hooks, boot automation or default kernel log lines.
