@@ -16,6 +16,16 @@ enum call_status disk_get_info(handle_t disk, struct disk_info *info);
  * Malformed replies are outcome unknown; never retry an uncertain open. */
 enum call_status disks_open(handle_t disks, uint64_t id, uint64_t access, handle_t *disk);
 
+/* Admit a selected GPT FAT partition through mount-only inventory authority,
+ * without a raw handle or claim. RW authority also permits RO admission.
+ * A nonzero expected_disk_guid pins the configured selection under the worker;
+ * NULL selects only the explicit boot-scoped ID. No guessed fallback.
+ * Success owns root/control; failure clears both. Final close does not retire.
+ * A malformed reply reports outcome unknown and must not be retried. */
+enum call_status disks_open_fat32(handle_t disks, uint64_t id, uint64_t partition,
+    uint64_t access, uint64_t rights, const uint8_t expected_disk_guid[16],
+    struct mount_fat32_reply *mount);
+
 /* One exact, nonzero transfer of at most DISK_IO_MAX_BYTES. Device alignment
  * and bounds are checked by the native operation. READ returns length bytes
  * only on success; failed reads may have touched the caller's buffer. WRITE

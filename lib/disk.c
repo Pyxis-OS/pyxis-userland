@@ -85,6 +85,41 @@ enum call_status disks_open(handle_t disks, uint64_t id, uint64_t access, handle
   return CALL_OK;
 }
 
+enum call_status disks_open_fat32(handle_t disks, uint64_t id, uint64_t partition,
+    uint64_t access, uint64_t rights, const uint8_t expected_disk_guid[16],
+    struct mount_fat32_reply *mount)
+{
+  if (!mount) {
+    return CALL_BAD_REQUEST;
+  }
+  *mount = (struct mount_fat32_reply){0};
+  if (!id || !partition || partition > UINT32_MAX ||
+      (access != MOUNT_ACCESS_READ_ONLY && access != MOUNT_ACCESS_READ_WRITE) ||
+      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~DIRECTORY_CONTENT_RIGHTS)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disks_fat32_request body;
+  } message = {{PROTOCOL_DISKS, DISKS_OPEN_FAT32}, {id, partition, access, rights, {0}}};
+  if (expected_disk_guid) {
+    memcpy(message.body.expected_disk_guid, expected_disk_guid, 16);
+  }
+  struct mount_fat32_reply reply = {0};
+  struct syscall_result result = syscall_call(disks, &message, sizeof(message),
+      &reply, sizeof(reply));
+  enum call_status status = reply_status(result, sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.root == HANDLE_INVALID || reply.control == HANDLE_INVALID ||
+      reply.root == reply.control) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *mount = reply;
+  return CALL_OK;
+}
+
 enum call_status disk_read(handle_t disk, uint64_t offset, void *bytes, size_t length)
 {
   if (!bytes || !length || length > DISK_IO_MAX_BYTES || length > UINT64_MAX - offset) {
