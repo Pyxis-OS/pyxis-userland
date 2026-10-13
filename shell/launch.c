@@ -71,6 +71,12 @@ struct prepared_stage {
   struct launch_request request;
 };
 
+static bool http_uri(const char *path)
+{
+  return provider_http_uri(path) ||
+      (!strncmp(path, "json+", 5) && provider_http_uri(path + 5));
+}
+
 static bool close_handle(handle_t *handle)
 {
   if (*handle == HANDLE_INVALID) {
@@ -997,7 +1003,7 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
       if (redirect->stream == STARTUP_STDIN) {
         continue;
       }
-      if (stages[i].http_producer && (redirect->capability || provider_http_uri(redirect->path))) {
+      if (stages[i].http_producer && (redirect->capability || http_uri(redirect->path))) {
         continue;
       }
       *failed_stage = i;
@@ -1095,7 +1101,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       path = redirect->path;
       bool input = redirect->stream == STARTUP_STDIN;
       if (!input && stages[i].http_producer &&
-          (redirect->capability || provider_http_uri(path))) {
+          (redirect->capability || http_uri(path))) {
         if (automatic) {
           status = shell_capability_prepare(shell, body, path, HTTP_PREPARE_POST, NULL, 0, 30);
           if (status != CALL_OK) {
@@ -1104,7 +1110,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         }
         continue;
       }
-      if (input && (redirect->capability || provider_http_uri(path))) {
+      if (input && (redirect->capability || http_uri(path))) {
         struct http_prepared opened = {0};
         struct shell_capability *entry = NULL;
         if (redirect->capability) {
@@ -1250,7 +1256,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       if (redirect->stream == STARTUP_STDIN) {
         continue;
       }
-      if (stages[i].http_producer && (redirect->capability || provider_http_uri(redirect->path))) {
+      if (stages[i].http_producer && (redirect->capability || http_uri(redirect->path))) {
         continue;
       }
       failed_stage = i;
@@ -1554,7 +1560,7 @@ enum command_result shell_launch_pipeline(struct shell *shell,
     for (size_t j = 0; j < stage->redirection_count; ++j) {
       const struct shell_redirection *redirect = &stage->redirections[j];
       if (redirect->stream == STARTUP_STDIN ||
-          (!redirect->capability && !provider_http_uri(redirect->path))) {
+          (!redirect->capability && !http_uri(redirect->path))) {
         continue;
       }
       if (sink || redirect->stream != STARTUP_STDOUT || i + 1 != command->stage_count) {
