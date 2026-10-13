@@ -13,12 +13,12 @@ int main(void)
     fputs("http-stage: requires declared pipe input and staging writer\n", stderr);
     return 1;
   }
-  unsigned char bytes[4096];
+  unsigned char bytes[PIPE_READ_MAX_BYTES];
   uint64_t offset = 0;
   enum call_status status = CALL_OK;
   for (;;) {
     size_t count;
-    status = pipe_read(input.handle, bytes, sizeof(bytes), &count);
+    status = pipe_read(input.handle, bytes, FILE_WRITE_MAX_BYTES, &count);
     if (status != CALL_OK || !count) {
       break;
     }

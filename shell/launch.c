@@ -1237,7 +1237,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool pager_input = mode == SHELL_FOREGROUND && i + 1 == stage_count &&
         streams[i][STARTUP_STDOUT].protocol == PROTOCOL_CONSOLE &&
         (streams[i][STARTUP_STDIN].protocol == PROTOCOL_PIPE ||
-         streams[i][STARTUP_STDIN].protocol == PROTOCOL_FILE);
+         streams[i][STARTUP_STDIN].protocol == PROTOCOL_FILE ||
+         streams[i][STARTUP_STDIN].protocol == PROTOCOL_STREAM);
     bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
         ((i == 0 && console_stdin) || pager_input);
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
