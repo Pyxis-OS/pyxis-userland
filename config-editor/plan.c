@@ -328,6 +328,17 @@ static bool add_change(struct config_delta_plan *plan,
     if (!find_target(&plan->files[source.file], &source, &change->migration_source)) {
       return false;
     }
+    if (!file->original_present && (!plan->files[source.file].original_present ||
+        !change->migration_source.present)) {
+      change->kind = CONFIG_CHANGE_ADD;
+      change->origin = CONFIG_VALUE_ABSENT;
+      change->reason = file->print_only ? file->reason :
+          "missing destination and migration source use trusted complete defaults";
+      if (change->can_apply) {
+        change->choice = CONFIG_CHOICE_APPLY;
+      }
+      return true;
+    }
     change->kind = CONFIG_CHANGE_MIGRATE;
     change->can_apply &= change->migration_source.present &&
         plan->files[source.file].original_present && !plan->files[source.file].print_only;

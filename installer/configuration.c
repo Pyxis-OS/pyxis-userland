@@ -216,6 +216,21 @@ static bool refresh(struct install_configuration *plan)
 
 static bool build_delta(struct install_configuration *plan)
 {
+  struct {
+    const struct config_catalog_entry *entry;
+    enum config_plan_choice choice;
+  } choices[CONFIG_PLAN_CHANGE_LIMIT];
+  size_t choice_count = 0;
+  for (size_t i = 0; i < plan->delta.count; ++i) {
+    const struct config_plan_change *change = &plan->delta.changes[i];
+    const struct config_catalog_entry *entry = change->entry;
+    if (entry->file != CONFIG_FILE_BOOT && !(entry->migration.kind == CONFIG_MIGRATION_MOVE &&
+        entry->migration.from_file == CONFIG_FILE_BOOT)) {
+      choices[choice_count].entry = entry;
+      choices[choice_count++].choice = change->choice;
+    }
+  }
+  plan->applicable = false;
   config_delta_plan_free(&plan->delta);
   struct config_blob boot = {0};
   if (!boot_defaults(&plan->archive[CONFIG_LUA_BOOT], &boot)) {
@@ -250,6 +265,14 @@ static bool build_delta(struct install_configuration *plan)
       change->choice = CONFIG_CHOICE_APPLY;
     } else if (pool && change->current.present) {
       change->choice = change->can_adopt ? CONFIG_CHOICE_ADOPT : CONFIG_CHOICE_KEEP;
+    }
+    /* Pool selection changes the boot snapshot and moves consuming it. All
+     * other entry snapshots and declarations remain identical across rebuilds. */
+    for (size_t j = 0; j < choice_count; ++j) {
+      if (change->entry == choices[j].entry) {
+        change->choice = choices[j].choice;
+        break;
+      }
     }
   }
   return refresh(plan);
