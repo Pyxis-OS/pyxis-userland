@@ -338,6 +338,23 @@ static bool valid_source_name(const char *name, size_t length)
   return true;
 }
 
+static bool valid_source_path(const char *path)
+{
+  size_t components = 0;
+  for (size_t start = 0;;) {
+    size_t end = start;
+    while (path[end] && path[end] != '/') ++end;
+    size_t size = end - start;
+    if (!size || (size == 1 && path[start] == '.') ||
+        (size == 2 && path[start] == '.' && path[start + 1] == '.') ||
+        ++components > BOOT_SOURCE_PATH_COMPONENTS) {
+      return false;
+    }
+    if (!path[end]) return true;
+    start = end + 1;
+  }
+}
+
 static void read_grants(lua_State *state, struct boot_space *space)
 {
   if (lua_type(state, -1) != LUA_TTABLE) {
@@ -363,7 +380,7 @@ static void read_grants(lua_State *state, struct boot_space *space)
       luaL_error(state, "space %s: source names use a-z, 0-9, '-' and '_'; "
           "fat_mounts is reserved", space->name);
     }
-    static const char *const keys[] = {"volume", "kind", "access", "optional"};
+    static const char *const keys[] = {"volume", "kind", "access", "optional", "path"};
     config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
     struct boot_grant *grant = &space->grants[space->grant_count++];
     grant->name = strdup(name);
@@ -381,6 +398,16 @@ static void read_grants(lua_State *state, struct boot_space *space)
       luaL_error(state, "selected source kind must be directory or mount");
     }
     grant->kind = directory ? BOOT_GRANT_DIRECTORY : BOOT_GRANT_MOUNT;
+    lua_pop(state, 1);
+    config_field(state, -1, "path");
+    if (!lua_isnil(state, -1)) {
+      if (!directory) luaL_error(state, "selected mount source cannot have a path");
+      grant->path = take_string(state, -1, 1, BOOT_SOURCE_PATH_MAX, "selected source path");
+      if (!valid_source_path(grant->path)) {
+        luaL_error(state, "selected source path must contain 1 to %u relative components without empty, . or ..",
+            BOOT_SOURCE_PATH_COMPONENTS);
+      }
+    }
     lua_pop(state, 1);
     config_field(state, -1, "access");
     grant->read_write = take_access(state, -1, "selected source access");
@@ -665,6 +692,7 @@ void boot_config_free(struct boot_config *config)
     for (size_t j = 0; j < space->grant_count; ++j) {
       free(space->grants[j].name);
       free(space->grants[j].volume);
+      free(space->grants[j].path);
     }
     free(space->grants);
     free(space->start);

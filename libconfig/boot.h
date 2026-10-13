@@ -13,6 +13,8 @@
 /* Inits are boot archive entries named by URI. */
 #define BOOT_INIT_PREFIX "boot://"
 #define BOOT_INIT_MAX 255
+#define BOOT_SOURCE_PATH_MAX 255
+#define BOOT_SOURCE_PATH_COMPONENTS 16
 /* The highest CPU index a configuration may name; presence is checked at boot. */
 #define BOOT_CPU_INDEX_MAX 4095
 /* The volume the pool override lives on; an override cannot redefine it. */
@@ -51,6 +53,9 @@ enum boot_grant_kind {
 /* Selected launch sources are resources, never inherited URI roots. */
 struct boot_grant {
   char *name, *volume;
+  /* Directory-only relative subtree, opened by trusted boot init before launch.
+   * NULL delegates the existing volume root; never a URI or traversal escape. */
+  char *path;
   enum boot_grant_kind kind;
   bool read_write, optional;
 };

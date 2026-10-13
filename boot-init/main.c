@@ -559,12 +559,44 @@ struct space_launch {
   struct launch_grant *grants;
   struct launch_binding resources[SERVICE_COUNT + 8 + BUNDLE_SOURCE_LIMIT];
   char source_names[BUNDLE_SOURCE_LIMIT][sizeof(BUNDLE_SOURCE_PREFIX) + BOOT_NAME_MAX];
+  handle_t source_handles[BUNDLE_SOURCE_LIMIT];
+  struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
+  size_t source_handle_count;
   struct job_work *job_provisioner;
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
   char working_path[BOOT_NAME_MAX + sizeof("://")];
 };
+
+/* Borrow the mount root and retain only the final owned subtree. Every child
+ * requests the source's existing rights, so traversal cannot widen authority. */
+static enum call_status open_source_directory(handle_t root, const char *path,
+    uint64_t rights, handle_t *handle)
+{
+  *handle = HANDLE_INVALID;
+  handle_t parent = root;
+  bool owned = false;
+  for (size_t start = 0;;) {
+    size_t end = start;
+    while (path[end] && path[end] != '/') ++end;
+    char component[BOOT_SOURCE_PATH_MAX + 1];
+    memcpy(component, path + start, end - start);
+    component[end - start] = '\0';
+    handle_t child = HANDLE_INVALID;
+    enum call_status status = directory_lookup(parent, component, DIRECTORY_KIND_DIRECTORY,
+        rights, &child);
+    if (owned) handle_close(parent);
+    if (status != CALL_OK) return status;
+    if (!path[end]) {
+      *handle = child;
+      return CALL_OK;
+    }
+    parent = child;
+    owned = true;
+    start = end + 1;
+  }
+}
 
 /* Starts SPACE in the root its start names, or home. When that root is absent,
  * as for an optional root or a space without home, it starts in tmp. */
@@ -652,9 +684,27 @@ static const char *build_launch(const struct authority *authority, struct mounts
     struct handle_info info;
     enum call_status status = handle_query(handle, &info);
     if (status != CALL_OK || (rights & ~info.rights)) {
+      if (source->path && source->optional) continue;
       snprintf(reason, size, "source %s lacks requested authority (status %u)",
           source->name, status == CALL_OK ? CALL_DENIED : status);
       return reason;
+    }
+    if (source->path) {
+      handle_t narrowed = HANDLE_INVALID;
+      status = open_source_directory(handle, source->path, rights, &narrowed);
+      if (status == CALL_OK) {
+        status = handle_query(narrowed, &info);
+        if (status == CALL_OK && (rights & ~info.rights)) status = CALL_DENIED;
+      }
+      if (status != CALL_OK) {
+        if (narrowed != HANDLE_INVALID) handle_close(narrowed);
+        if (source->optional) continue;
+        snprintf(reason, size, "source %s path unavailable (status %u)", source->name, status);
+        return reason;
+      }
+      handle = narrowed;
+      launch->source_handles[launch->source_handle_count] = narrowed;
+      launch->source_mounts[launch->source_handle_count++] = mounted;
     }
     snprintf(launch->source_names[source_count], sizeof(launch->source_names[source_count]),
         "%s%s", BUNDLE_SOURCE_PREFIX, source->name);
@@ -824,6 +874,11 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
   bool uncertain = admission_attempted && (status == CALL_OUTCOME_UNKNOWN ||
       status == CALL_BAD_BUFFER);
   if (started || uncertain) {
+    for (size_t i = 0; i < launch.source_handle_count; ++i) {
+      if (launch.source_mounts[i]->control != HANDLE_INVALID) {
+        launch.source_mounts[i]->published = true;
+      }
+    }
     for (size_t i = 0; i < mounts->count; ++i) {
       struct mounted_volume *mounted = &mounts->entries[i];
       if (mounted->control == HANDLE_INVALID) {
@@ -838,6 +893,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     }
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);
+  for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
   free(launch.roots);
   free(launch.grants);
   free(cpus);
