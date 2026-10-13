@@ -78,9 +78,6 @@ static bool observe_target(struct config_editor_context *context, struct config_
       (state.flags & (MOUNT_STATE_RETIRED | MOUNT_STATE_FAILED))) {
     return false;
   }
-  /* Until the trusted issuer supplies identity facts, ordinals cannot certify
-   * a target. Validation remains available; publication and replay refuse. */
-#ifdef MOUNT_STATE_IDENTITY_VALID
   if (!(state.flags & MOUNT_STATE_IDENTITY_VALID)) {
     return false;
   }
@@ -107,9 +104,6 @@ static bool observe_target(struct config_editor_context *context, struct config_
     return false;
   }
   return true;
-#else
-  return false;
-#endif
 }
 
 static void describe_target(struct config_editor_context *context)

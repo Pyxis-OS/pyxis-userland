@@ -303,7 +303,15 @@ static bool current_view(const struct config_storage_view *view,
   }
   if (state.domain != facts->domain || state.device != facts->device ||
       state.partition != facts->partition || state.first_block != facts->first_block ||
-      state.block_count != facts->block_count || !(state.flags & MOUNT_STATE_READ_WRITE) ||
+      state.block_count != facts->block_count ||
+      !(state.flags & MOUNT_STATE_IDENTITY_VALID) ||
+      state.device_block_size != facts->device_block_size ||
+      state.device_block_count != facts->device_block_count ||
+      state.partition_attributes != facts->partition_attributes ||
+      memcmp(state.disk_guid, facts->disk_guid, sizeof(facts->disk_guid)) ||
+      memcmp(state.partition_guid, facts->partition_guid, sizeof(facts->partition_guid)) ||
+      memcmp(state.partition_type, facts->partition_type, sizeof(facts->partition_type)) ||
+      !(state.flags & MOUNT_STATE_READ_WRITE) ||
       (state.flags & (MOUNT_STATE_RETIRED | MOUNT_STATE_FAILED | MOUNT_STATE_CLEANUP_PENDING))) {
     return failed(report, CALL_DENIED);
   }
