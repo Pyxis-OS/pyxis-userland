@@ -95,7 +95,7 @@ enum call_status disks_open_fat32(handle_t disks, uint64_t id, uint64_t partitio
   *mount = (struct mount_fat32_reply){0};
   if (!id || !partition || partition > UINT32_MAX ||
       (access != MOUNT_ACCESS_READ_ONLY && access != MOUNT_ACCESS_READ_WRITE) ||
-      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~DIRECTORY_CONTENT_RIGHTS)) {
+      (rights & ~DIRECTORY_CONTENT_RIGHTS)) {
     return CALL_BAD_REQUEST;
   }
   struct {
