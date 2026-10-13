@@ -52,20 +52,10 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
     pyxis_working_snapshot_close(&cwd);
     return CALL_NO_MEMORY;
   }
-  struct provider_http_workspace *http = NULL;
-  if (!native_only && kind == DIRECTORY_KIND_FILE && provider_http_uri(path)) {
-    http = malloc(sizeof(*http));
-    if (!http) {
-      free(component);
-      free(directories);
-      pyxis_working_snapshot_close(&cwd);
-      return CALL_NO_MEMORY;
-    }
-  }
   struct path_workspace workspace = {
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1,
-    .http = http, .response = info, .clock = startup_resource("clock"),
+    .response = info,
   };
   /* The owned cwd remains valid through blocking provider calls. */
   if (native_only) {
@@ -77,7 +67,6 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   } else {
     status = path_resolve(context, path, kind, rights, &workspace, handle);
   }
-  free(http);
   free(component);
   free(directories);
   pyxis_working_snapshot_close(&cwd);
