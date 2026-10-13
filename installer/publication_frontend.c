@@ -562,7 +562,8 @@ int install_publication_scratch(struct terminal *terminal)
   bool ok = install_publication_publish(&request, &report);
   fprintf(stderr, "Scratch publication: status %u, phase %u, readiness %s, boot %s.\n",
       report.status, report.phase, report.committed ? "committed" : "not confirmed",
-      report.boot_activated ? "entry confirmed" : "staged, boot activation pending");
+      report.boot_activated ? "entry confirmed" : report.committed ?
+      "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
   if (!ok) {
     fputs("Stopped; retain artifacts for manual disposition. No rollback, retry or reboot offer.\n", stderr);
   }
