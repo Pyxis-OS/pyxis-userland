@@ -437,6 +437,18 @@ static bool declaration_changed(const struct config_catalog_entry *old_entry,
       (!old_entry->required && entry->required) || !migration_equal(&old_entry->migration, &entry->migration);
 }
 
+static bool catalog_uses_file(const struct config_catalog *catalog, enum config_file file)
+{
+  for (size_t i = 0; catalog && i < catalog->count; ++i) {
+    const struct config_catalog_entry *entry = &catalog->entries[i];
+    if (entry->file == file || (entry->migration.kind == CONFIG_MIGRATION_MOVE &&
+        entry->migration.from_file == file)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool config_delta_plan_build(const struct config_catalog *old_catalog,
     const struct config_catalog *catalog,
     const struct config_plan_input current[CONFIG_FILE_COUNT],
@@ -453,6 +465,8 @@ bool config_delta_plan_build(const struct config_catalog *old_catalog,
     goto fail;
   }
   for (size_t i = 0; i < CONFIG_FILE_COUNT; ++i) {
+    plan->files[i].relevant = i != CONFIG_FILE_LIMINE ||
+        catalog_uses_file(catalog, i) || catalog_uses_file(old_catalog, i);
     if (!file_snapshot(&plan->files[i], (enum config_file)i, &current[i], defaults ? &defaults[i] : NULL)) {
       goto fail;
     }
@@ -901,7 +915,7 @@ bool config_delta_plan_rebuild(struct config_delta_plan *plan)
   struct plan_edits edits = {0};
   plan->applicable = true;
   for (size_t i = 0; i < CONFIG_FILE_COUNT; ++i) {
-    if (plan->files[i].print_only) {
+    if (plan->files[i].print_only && plan->files[i].relevant) {
       plan->applicable = false;
     }
   }

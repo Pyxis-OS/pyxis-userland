@@ -49,7 +49,7 @@ struct config_plan_file {
    * their editing template. original_present records which case was supplied. */
   char *before, *after;
   size_t before_size, after_size;
-  bool original_present, after_present, print_only, changed;
+  bool original_present, after_present, print_only, changed, relevant;
   struct config_literal *document;
   struct config_owned_set *ownership;
   const char *reason;
