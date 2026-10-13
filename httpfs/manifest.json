@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "id": "org.pyxis.httpfs",
+  "entry": "bin/httpfs.pxe",
+  "commands": {},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "service", "resource": "service", "rights": ["create"], "required": true},
+    {"name": "publication", "resource": "publication", "rights": ["call"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "sleep"], "required": true},
+    {"name": "tcp", "resource": "tcp", "rights": ["connect"], "required": true},
+    {"name": "udp", "resource": "udp", "rights": ["open"], "required": true},
+    {"name": "random", "resource": "random", "rights": ["read"], "required": true},
+    {"name": "staging", "resource": "directory", "source": "http_staging",
+     "rights": ["create", "remove", "read-files", "write-files", "filesystem-info"], "required": false}
+  ]
+}

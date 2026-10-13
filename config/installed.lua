@@ -12,11 +12,14 @@ return {
   volumes = {
     system = { kind = "npfs", partition = 2, volume = "system" },
     home = { kind = "npfs", partition = 2, volume = "home" },
+    ["http-work"] = { kind = "ram" },
   },
   spaces = {
     { name = "pyxis", title = "Pyxis", init = "boot://init-installed",
       network = true, launch = true, jobs = true, screenshot = true, power = true,
       clipboard_local = true, clipboard_shared = true,
+      grants = { http_staging = { volume = "http-work", kind = "directory",
+                                 access = "read-write", optional = true } },
       roots = { system = "read-write",
                 home = { access = "read-write", optional = true } } },
   },

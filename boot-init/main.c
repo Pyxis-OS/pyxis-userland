@@ -190,9 +190,10 @@ static enum call_status open_ram_volume(handle_t ram, const char *name, handle_t
     return CALL_UNAVAILABLE;
   }
   enum call_status status = directory_create(ram, name, DIRECTORY_KIND_DIRECTORY,
-      TMP_ROOT_RIGHTS, root);
+      TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, root);
   if (status == CALL_ALREADY_EXISTS) {
-    status = directory_lookup(ram, name, DIRECTORY_KIND_DIRECTORY, TMP_ROOT_RIGHTS, root);
+    status = directory_lookup(ram, name, DIRECTORY_KIND_DIRECTORY,
+        TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, root);
   }
   return status;
 }
@@ -592,6 +593,9 @@ struct space_launch {
   struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
   size_t source_handle_count;
   struct job_work *job_provisioner;
+  handle_t http_staging;
+  struct mounted_volume *http_staging_mount;
+  char http_staging_name[96];
   struct launch_binding *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -625,6 +629,32 @@ static enum call_status open_source_directory(handle_t root, const char *path,
     owned = true;
     start = end + 1;
   }
+}
+
+static enum call_status create_http_staging(const struct authority *authority,
+    struct mounted_volume *mounted, handle_t directory, const struct boot_space *space,
+    struct space_launch *launch, uint64_t rights)
+{
+  uint64_t now;
+  enum call_status status = clock_now(authority->services[SERVICE_CLOCK], &now);
+  if (status != CALL_OK) {
+    return status;
+  }
+  /* Exclusive creation prevents old persistent leaves or another provisioner
+   * from sharing a service ancestor, even when clock values repeat. */
+  for (unsigned suffix = 0; suffix < 64; ++suffix) {
+    snprintf(launch->http_staging_name, sizeof(launch->http_staging_name),
+        ".http-%s-%llx-%u", space->name, (unsigned long long)now, suffix);
+    status = directory_create(directory, launch->http_staging_name,
+        DIRECTORY_KIND_DIRECTORY, rights, &launch->http_staging);
+    if (status != CALL_ALREADY_EXISTS) {
+      break;
+    }
+  }
+  if (status == CALL_OK) {
+    launch->http_staging_mount = mounted;
+  }
+  return status;
 }
 
 /* Starts SPACE in the root its start names, or home. When that root is absent,
@@ -710,9 +740,18 @@ static const char *build_launch(const struct authority *authority, struct mounts
         (source->read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) :
         (MOUNT_RIGHT_OPEN_ROOT | MOUNT_RIGHT_OBSERVE | MOUNT_RIGHT_RETIRE |
           (source->read_write ? MOUNT_RIGHT_WRITE | MOUNT_RIGHT_INTERVAL : 0));
+    bool http_staging = !strcmp(source->name, BOOT_HTTP_STAGING_SOURCE);
+    if (http_staging) {
+      rights |= DIRECTORY_RIGHT_FILESYSTEM_INFO;
+    }
     struct handle_info info;
     enum call_status status = handle_query(handle, &info);
     if (status != CALL_OK || (rights & ~info.rights)) {
+      if (http_staging && source->optional) {
+        printf("boot-init: space %s HTTP staging refused (status %u); POST unavailable\n",
+            space->name, status == CALL_OK ? CALL_DENIED : status);
+        continue;
+      }
       if (source->path && source->optional) continue;
       snprintf(reason, size, "source %s lacks requested authority (status %u)",
           source->name, status == CALL_OK ? CALL_DENIED : status);
@@ -734,6 +773,20 @@ static const char *build_launch(const struct authority *authority, struct mounts
       handle = narrowed;
       launch->source_handles[launch->source_handle_count] = narrowed;
       launch->source_mounts[launch->source_handle_count++] = mounted;
+}
+
+    if (http_staging) {
+      status = create_http_staging(authority, mounted, handle, space, launch, rights);
+      if (status != CALL_OK) {
+        if (source->optional) {
+          printf("boot-init: space %s HTTP staging unavailable (status %u); POST unavailable\n",
+              space->name, status);
+          continue;
+        }
+        snprintf(reason, size, "HTTP staging creation failed (status %u)", status);
+        return reason;
+      }
+      handle = launch->http_staging;
     }
     snprintf(launch->source_names[source_count], sizeof(launch->source_names[source_count]),
         "%s%s", BUNDLE_SOURCE_PREFIX, source->name);
@@ -907,6 +960,10 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
       if (launch.source_mounts[i]->control != HANDLE_INVALID) {
         launch.source_mounts[i]->published = true;
       }
+}
+
+    if (launch.http_staging_mount) {
+      launch.http_staging_mount->published = true;
     }
     for (size_t i = 0; i < mounts->count; ++i) {
       struct mounted_volume *mounted = &mounts->entries[i];
@@ -919,6 +976,18 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
           mounted->published = true;
         }
       }
+    }
+  }
+  if (launch.http_staging != HANDLE_INVALID) {
+    if (!started && !uncertain && launch.http_staging_mount) {
+      enum call_status removed = directory_remove(launch.http_staging_mount->root,
+          launch.http_staging_name, DIRECTORY_KIND_DIRECTORY);
+      if (removed != CALL_OK) {
+        printf("boot-init: space %s HTTP staging retained (status %u)\n", space->name, removed);
+      }
+    }
+    if (handle_close(launch.http_staging)) {
+      printf("boot-init: space %s HTTP staging close failed\n", space->name);
     }
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);

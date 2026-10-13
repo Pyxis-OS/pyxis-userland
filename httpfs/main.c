@@ -3,11 +3,31 @@
 #include "../common/dns.h"
 #include "../common/provider_setup.h"
 #include <clock.h>
+#include <directory.h>
 #include <endpoint.h>
 #include <handle.h>
 #include <startup.h>
 #include <stdio.h>
 #include <string.h>
+
+#define DEFAULT_STAGING_CAP (UINT64_C(16) * 1024 * 1024)
+
+static bool parse_staging_cap(const char *text, uint64_t *cap)
+{
+  uint64_t value = 0;
+  if (!text[0]) {
+    return false;
+  }
+  for (size_t i = 0; text[i]; ++i) {
+    unsigned digit = (unsigned char)text[i] - '0';
+    if (digit > 9 || value > (UINT64_MAX - digit) / 10) {
+      return false;
+    }
+    value = value * 10 + digit;
+  }
+  *cap = value;
+  return value != 0;
+}
 
 static enum call_status close_handle(handle_t *handle)
 {
@@ -24,7 +44,7 @@ int main(int argc, char **argv)
   handle_t service = startup_resource("service");
   handle_t publication = startup_resource("publication");
   handle_t clock = startup_resource("clock");
-  /* The launcher explicitly provisions an isolated mounted directory. No
+  /* The launcher explicitly provisions an isolated RAM or NPFS directory. No
    * shared root/path or filename implicitly supplies staging privacy. */
   handle_t staging = startup_resource("staging");
   struct http_client client = {.scheme = HTTP_SCHEME_HTTP,
@@ -34,15 +54,26 @@ int main(int argc, char **argv)
   handle_t published = HANDLE_INVALID;
   enum call_status status = CALL_OK, cleanup = CALL_OK;
   bool publication_attempted = false;
+  bool cap_selected = false;
+  uint64_t body_cap = DEFAULT_STAGING_CAP, staging_type = 0;
   const char *custom_bundle = NULL;
-  if (argc == 2 && !strcmp(argv[1], "--https")) {
-    client.scheme = HTTP_SCHEME_HTTPS;
-  } else if (argc == 4 && !strcmp(argv[1], "--https") &&
-      !strcmp(argv[2], "--ca-bundle") && argv[3][0]) {
-    client.scheme = HTTP_SCHEME_HTTPS;
-    custom_bundle = argv[3];
-  } else if (argc != 1) {
-    fputs("usage: httpfs [--https [--ca-bundle URI]]\n", stderr);
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--https") && client.scheme != HTTP_SCHEME_HTTPS) {
+      client.scheme = HTTP_SCHEME_HTTPS;
+    } else if (!strcmp(argv[i], "--ca-bundle") && !custom_bundle &&
+        i + 1 < argc && argv[i + 1][0]) {
+      custom_bundle = argv[++i];
+    } else if (!strcmp(argv[i], "--staging-cap") && !cap_selected &&
+        i + 1 < argc && parse_staging_cap(argv[i + 1], &body_cap)) {
+      cap_selected = true;
+      ++i;
+    } else {
+      status = CALL_BAD_REQUEST;
+      break;
+    }
+  }
+  if (status != CALL_OK || (custom_bundle && client.scheme != HTTP_SCHEME_HTTPS)) {
+    fputs("usage: httpfs [--https [--ca-bundle URI]] [--staging-cap BYTES]\n", stderr);
     status = CALL_BAD_REQUEST;
     goto done;
   }
@@ -55,10 +86,17 @@ int main(int argc, char **argv)
     goto done;
   }
   if (staging != HANDLE_INVALID) {
-    status = httpfs_staging_validate(staging);
+    status = httpfs_staging_validate(staging, &staging_type);
     if (status != CALL_OK) {
-      goto done;
+      fprintf(stderr, "httpfs: staging refused (status %u); POST unavailable\n", status);
+      status = close_handle(&staging);
+      if (status != CALL_OK) {
+        goto done;
+      }
     }
+  }
+  if (staging_type != FILESYSTEM_TYPE_RAM) {
+    body_cap = 0;
   }
   if (client.scheme == HTTP_SCHEME_HTTPS) {
     struct tls_authority authority = {client.authority.random, clock};
@@ -106,7 +144,7 @@ int main(int argc, char **argv)
     status = close_handle(&publication);
   }
   if (status == CALL_OK) {
-    status = httpfs_serve(service, endpoint.receiver, &client, custom_bundle != NULL, staging);
+    status = httpfs_serve(service, endpoint.receiver, &client, custom_bundle != NULL, staging, body_cap);
   }
 
 done:

@@ -66,6 +66,7 @@ struct transaction {
 
 struct loop {
   handle_t service, receiver, staging;
+  uint64_t body_cap;
   struct http_client client;
   struct http_storage storage;
   struct exported exports[EXPORT_SLOTS];
@@ -326,8 +327,12 @@ static enum call_status unlink_backing(struct loop *loop, struct transaction *tr
   return status;
 }
 
-enum call_status httpfs_staging_validate(handle_t staging)
+enum call_status httpfs_staging_validate(handle_t staging, uint64_t *filesystem_type)
 {
+  if (!filesystem_type) {
+    return CALL_BAD_REQUEST;
+  }
+  *filesystem_type = 0;
   struct handle_info handle;
   enum call_status status = handle_query(staging, &handle);
   uint64_t required = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
@@ -346,7 +351,12 @@ enum call_status httpfs_staging_validate(handle_t staging)
   if (status != CALL_OK) {
     return status;
   }
-  return info.type == FILESYSTEM_TYPE_NPFS && !(info.flags & FILESYSTEM_FLAG_READ_ONLY) ? CALL_OK : CALL_DENIED;
+  if ((info.type != FILESYSTEM_TYPE_NPFS && info.type != FILESYSTEM_TYPE_RAM) ||
+      (info.flags & FILESYSTEM_FLAG_READ_ONLY)) {
+    return CALL_DENIED;
+  }
+  *filesystem_type = info.type;
+  return CALL_OK;
 }
 
 static bool parse_fields(struct transaction *transaction, size_t size)
@@ -684,6 +694,15 @@ static void body_request(struct loop *loop, struct transaction *transaction,
     memcpy(&request, packet->data, sizeof(request));
     transaction->mutation_size = request.size;
     kind = STAGING_RESIZE;
+  }
+  uint64_t admitted_size = kind == STAGING_WRITE ?
+      transaction->mutation_offset + transaction->mutation_size : transaction->mutation_size;
+  if (loop->body_cap && admitted_size > loop->body_cap) {
+    /* Refused growth never reaches native mutation. Remember the failure even
+     * when a writer ignores its reply, so COMMIT cannot submit a partial body. */
+    transaction->mutation_failure = CALL_LIMIT;
+    reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
+    return;
   }
   enum call_status status = submit(loop, transaction, transaction->backing,
       PROTOCOL_FILE, packet->operation, packet->data, packet->size, kind, false);
@@ -1543,10 +1562,10 @@ static bool alive(const struct loop *loop)
 }
 
 enum call_status httpfs_serve(handle_t service, handle_t receiver,
-    const struct http_client *client, bool custom_trust, handle_t staging)
+    const struct http_client *client, bool custom_trust, handle_t staging, uint64_t body_cap)
 {
   struct loop loop = {.service = service, .receiver = receiver, .client = *client, .next_id = 1,
-    .staging = staging, .published = true, .custom_trust = custom_trust};
+    .staging = staging, .body_cap = body_cap, .published = true, .custom_trust = custom_trust};
   while (loop.fatal == CALL_OK && alive(&loop)) {
     struct endpoint_packet packet = {0};
     enum call_status status = endpoint_try_receive(receiver, &packet);

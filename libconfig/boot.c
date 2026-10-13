@@ -716,6 +716,41 @@ const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const c
   return NULL;
 }
 
+static bool same_backing(const struct boot_volume *first, const struct boot_volume *second)
+{
+  return first == second || (first->kind == BOOT_VOLUME_NPFS &&
+      second->kind == BOOT_VOLUME_NPFS && first->partition == second->partition &&
+      !strcmp(first->volume, second->volume));
+}
+
+static bool private_http_backing(const struct boot_plan *plan, const struct boot_volume *backing)
+{
+  const struct boot_volume *system = boot_plan_volume(plan, BOOT_SYSTEM_VOLUME);
+  if (backing->kind == BOOT_VOLUME_NPFS && system &&
+      system->kind == BOOT_VOLUME_NPFS && backing->partition == system->partition &&
+      !strcmp(backing->volume, "bin")) {
+    return false;
+  }
+  for (size_t i = 0; i < plan->space_count; ++i) {
+    const struct boot_space *space = plan->spaces[i];
+    for (size_t j = 0; j < space->root_count; ++j) {
+      const struct boot_volume *volume = boot_plan_volume(plan, space->roots[j].volume);
+      if (volume && same_backing(backing, volume)) {
+        return false;
+      }
+    }
+    for (size_t j = 0; j < space->grant_count; ++j) {
+      const struct boot_grant *source = &space->grants[j];
+      const struct boot_volume *volume = boot_plan_volume(plan, source->volume);
+      if (volume && strcmp(source->name, BOOT_HTTP_STAGING_SOURCE) &&
+          same_backing(backing, volume)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 static const struct boot_space *plan_space(const struct boot_plan *plan, const char *name,
     size_t *index)
 {
@@ -852,6 +887,13 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       if (!volume) {
         return plan_fail(plan, "space %s: source %s names undefined volume %s",
             space->name, grant->name, grant->volume);
+      }
+      if (!strcmp(grant->name, BOOT_HTTP_STAGING_SOURCE) &&
+          (grant->kind != BOOT_GRANT_DIRECTORY || !grant->read_write ||
+           (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS) ||
+           !private_http_backing(plan, volume))) {
+        return plan_fail(plan, "source %s requires a private read-write RAM or NPFS volume",
+            grant->name);
       }
       bool fat32 = volume->kind == BOOT_VOLUME_FAT32 || volume->kind == BOOT_VOLUME_BOOT_ESP;
       if (grant->kind == BOOT_GRANT_MOUNT && !fat32) {

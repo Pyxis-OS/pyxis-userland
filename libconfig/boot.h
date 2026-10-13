@@ -21,6 +21,7 @@
 #define BOOT_SYSTEM_VOLUME "system"
 /* Spaces start in this root unless they name another with start. */
 #define BOOT_HOME_ROOT "home"
+#define BOOT_HTTP_STAGING_SOURCE "http_staging"
 
 enum boot_volume_kind {
   BOOT_VOLUME_NPFS,
