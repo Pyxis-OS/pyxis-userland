@@ -21,7 +21,7 @@ static struct working_state *working_state;
 static struct pyxis_working_snapshot working;
 static bool initialized;
 
-static size_t root_prefix(const char *path)
+size_t libc_path_root_prefix(const char *path)
 {
   const char *end = path;
   while (*end && *end != ':' && *end != '/') {
@@ -38,7 +38,7 @@ static size_t root_prefix(const char *path)
 enum call_status libc_path_description(const char *current, const char *path, char **result)
 {
   *result = NULL;
-  size_t root = root_prefix(path);
+  size_t root = libc_path_root_prefix(path);
   if (!root && !current) {
     return CALL_OK;
   }
@@ -54,7 +54,7 @@ enum call_status libc_path_description(const char *current, const char *path, ch
     return CALL_NO_MEMORY;
   }
   memcpy(display, base, length);
-  root = root_prefix(base);
+  root = libc_path_root_prefix(base);
   while (*tail) {
     if (*tail == '/') {
       ++tail;
@@ -115,7 +115,7 @@ static enum call_status initial_snapshot(struct pyxis_working_snapshot *result)
   }
   const char *path = startup_working_path();
   enum call_status status = CALL_OK;
-  if (depth && path && root_prefix(path)) {
+  if (depth && path && libc_path_root_prefix(path)) {
     status = libc_path_description(NULL, path, &initial.path);
   }
   if (status == CALL_OK) {
