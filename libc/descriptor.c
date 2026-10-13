@@ -1697,17 +1697,18 @@ int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
       }
     }
   }
-  const struct path_context *context = NULL;
+  struct pyxis_working_snapshot working = {0};
   if (status == CALL_OK) {
-    status = pyxis_working_context(&context);
+    status = pyxis_working_snapshot_init(&working, NULL);
   }
   uint64_t method = mode->writable ? HTTP_PREPARE_POST : HTTP_PREPARE_GET;
   if (status == CALL_OK) {
-    status = submit ? http_transaction_open_uri(context, path, deadline, &http->prepared, info) :
-        http_transaction_prepare_uri(context, path, method, options ? options->flags : 0,
+    status = submit ? http_transaction_open_uri(&working.context, path, deadline, &http->prepared, info) :
+        http_transaction_prepare_uri(&working.context, path, method, options ? options->flags : 0,
             options ? options->headers : NULL, options ? options->headers_size : 0,
             deadline, &http->prepared);
   }
+  pyxis_working_snapshot_close(&working);
   if (status != CALL_OK) {
     http_prepared_close(&http->prepared);
     free(object);
