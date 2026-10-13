@@ -534,8 +534,16 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
   if (status != CALL_OK) {
     return shell_directory_error(shell, "shell: release", uri, status);
   }
-  if (mount && mount->domain && state.domain != mount->domain) {
-    return shell_directory_error(shell, "shell: release", uri, CALL_DENIED);
+  if (mount) {
+    struct mount_state_reply retained;
+    status = mount_observe(mount->control, &retained);
+    if (status == CALL_OK && retained.domain != state.domain) {
+      status = CALL_DENIED;
+    }
+    if (status != CALL_OK) {
+      return shell_directory_error(shell, "shell: release", uri, status);
+    }
+    mount->domain = retained.domain;
   }
   handle_t root = HANDLE_INVALID;
   size_t length = binding_length(uri);
