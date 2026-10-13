@@ -32,7 +32,7 @@ struct config_blob {
 enum config_publish_phase {
   CONFIG_PHASE_CHECK, CONFIG_PHASE_STAGE, CONFIG_PHASE_VERIFY,
   CONFIG_PHASE_EXCLUSIVE, CONFIG_PHASE_PREPARED, CONFIG_PHASE_SWAP,
-  CONFIG_PHASE_COMMITTED, CONFIG_PHASE_CLEANUP, CONFIG_PHASE_DONE
+  CONFIG_PHASE_COMMITTED, CONFIG_PHASE_ACTIVATE, CONFIG_PHASE_CLEANUP, CONFIG_PHASE_DONE
 };
 
 struct config_storage_report {
@@ -42,7 +42,34 @@ struct config_storage_report {
   char artifact[CONFIG_ARTIFACT_NAME_BYTES];
   struct config_record record;
   bool committed;
+  bool boot_activated;
+  bool boot_activation_pending;
+  bool boot_cleanup_skipped;
 };
+
+struct install_staged_boot;
+
+bool config_storage_guard(const struct config_storage_view *view,
+    const struct config_target_facts *facts, uint64_t interval,
+    struct config_storage_report *report);
+
+/* Read-only preflight, repeated by the publisher before staging and again
+ * under its interval. Existing malformed/prepared records refuse. */
+bool config_storage_check(const struct config_storage_view *view,
+    const struct config_target_facts *facts,
+    const struct config_blob expected[CONFIG_ALL_FILES],
+    const struct config_blob *expected_record, bool limine_changed,
+    struct config_storage_report *report);
+
+/* Installer-only extension. Staged payload handles remain retained through
+ * the final checks; canonical readiness commits before the Limine name moves. */
+bool config_storage_publish_boot(const struct config_storage_view *view,
+    const struct config_target_facts *facts,
+    const struct config_blob expected[CONFIG_ALL_FILES],
+    const struct config_blob *expected_record,
+    const struct config_blob selected[CONFIG_ALL_FILES], const char *transaction,
+    const char *revision, const struct install_staged_boot *boot,
+    struct config_storage_report *report);
 
 void config_blob_destroy(struct config_blob *blob);
 bool config_blob_set(struct config_blob *blob, const void *bytes, size_t size);
