@@ -804,6 +804,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"display", shell->display, PROTOCOL_DISPLAY},
       {"audio", shell->audio, PROTOCOL_AUDIO},
       {"screen_capture", shell->screen_capture, PROTOCOL_SCREEN_CAPTURE},
+      {"clipboard_local", clipboard_local, PROTOCOL_CLIPBOARD},
+      {"clipboard_shared", clipboard_shared, PROTOCOL_CLIPBOARD},
       {"system_info", shell->system_info, PROTOCOL_SYSTEM_INFO},
       {"echo", shell->echo, PROTOCOL_ECHO},
       {"udp", shell->udp, PROTOCOL_UDP_SERVICE},

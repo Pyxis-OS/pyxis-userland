@@ -3,6 +3,7 @@
 #include <abi/disk.h>
 #include <abi/mount.h>
 #include <abi/audio.h>
+#include <abi/clipboard.h>
 #include <abi/clock.h>
 #include <abi/console.h>
 #include <abi/display.h>
@@ -106,6 +107,10 @@ static const struct grant_right grant_rights[] = {
   {"display", "draw", PROTOCOL_DISPLAY, DISPLAY_RIGHT_DRAW},
   {"audio", "create", PROTOCOL_AUDIO, AUDIO_RIGHT_PLAYBACK},
   {"screen_capture", "capture", PROTOCOL_SCREEN_CAPTURE, SCREEN_CAPTURE_RIGHT_CAPTURE},
+  {"clipboard_local", "publish", PROTOCOL_CLIPBOARD, CLIPBOARD_RIGHT_PUBLISH},
+  {"clipboard_local", "paste", PROTOCOL_CLIPBOARD, CLIPBOARD_RIGHT_PASTE},
+  {"clipboard_shared", "publish", PROTOCOL_CLIPBOARD, CLIPBOARD_RIGHT_PUBLISH},
+  {"clipboard_shared", "paste", PROTOCOL_CLIPBOARD, CLIPBOARD_RIGHT_PASTE},
   {"input", "read", PROTOCOL_CONSOLE, CONSOLE_RIGHT_READ},
   {"output", "write", PROTOCOL_CONSOLE, CONSOLE_RIGHT_WRITE},
   {"profile", "memory", PROTOCOL_PROFILE, PROFILE_RIGHT_MEMORY},
