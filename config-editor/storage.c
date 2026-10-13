@@ -534,6 +534,23 @@ bool config_storage_publish(const struct config_storage_view *view,
     ok = expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report) &&
         current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report);
   }
+  /* Staging happened before admission. Verify its bytes again now that other
+   * processes cannot mutate them, including the retained recovery copies. */
+  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
+    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report);
+    if (ok && record->previous[i].digest.present &&
+        (i < CONFIG_SET_FILES || changed[i]) && expected[i].digest.present) {
+      ok = expected_name(parent_for(view, i), record->previous[i].name, &expected[i], report);
+    }
+    if (ok && changed[i]) {
+      ok = expected_name(parent_for(view, i), staged[i], &selected[i], report);
+    }
+  }
+  if (ok) {
+    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
+        expected_name(view->config_parent, prepared_name, &prepared, report) &&
+        expected_name(view->config_parent, committed_name, &committed, report);
+  }
   if (ok) {
     report->phase = CONFIG_PHASE_PREPARED;
     ok = rename_file(view->config_parent, prepared_name, CONFIG_RECORD_NAME, report) &&
