@@ -13,5 +13,9 @@ bool config_render_value(const struct config_literal_value *value,
  * Limine defaults are exact string bytes between marker lines. */
 bool config_render_entry(const struct config_catalog_entry *entry,
     const struct config_literal_value *value, char **output, size_t *size);
+/* Materialize declared Lua defaults solely for shared schema/merge validation.
+ * REPLACEMENTS checks explicit replacement values as well as the defaults. */
+bool config_render_defaults(const struct config_catalog *catalog, enum config_file file,
+    bool replacements, char **output, size_t *size);
 
 #endif

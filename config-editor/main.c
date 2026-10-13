@@ -126,6 +126,9 @@ int main(int argc, char **argv)
   } else if (ok && config_editor_plan(&context)) {
     if (!strcmp(argv[1], "plan")) {
       review(&context.plan);
+      if (!config_editor_validate(&context, true)) {
+        fputs("config: planned selection is invalid; revise choices before apply\n", stderr);
+      }
       ok = print_plan(&context);
     } else if (!strcmp(argv[1], "edit")) {
       ok = edit(&context);

@@ -1,4 +1,5 @@
 #include "context.h"
+#include "render.h"
 #include <clock.h>
 #include <directory.h>
 #include <file.h>
@@ -291,6 +292,31 @@ bool config_editor_plan(struct config_editor_context *context)
   if (!context->catalog) {
     fputs("config: revision catalog unavailable; printed changes only\n", stderr);
     return false;
+  }
+  struct config_bytes archive[CONFIG_LUA_COUNT];
+  archive_bytes(context, archive);
+  for (unsigned replacements = 0; replacements < 2; ++replacements) {
+    char *bytes[CONFIG_LUA_COUNT] = {0};
+    struct config_bytes declared[CONFIG_LUA_COUNT] = {0};
+    bool valid = true;
+    for (unsigned i = 0; i < CONFIG_LUA_COUNT && valid; ++i) {
+      valid = config_render_defaults(context->catalog, i, replacements, &bytes[i], &declared[i].size);
+      declared[i].bytes = bytes[i];
+    }
+    struct config_selection selection;
+    if (valid) {
+      valid = config_selection_validate(archive, declared, &selection);
+      if (valid) {
+        config_selection_free(&selection);
+      }
+    }
+    for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
+      free(bytes[i]);
+    }
+    if (!valid) {
+      fputs("config: revision declarations fail shared typed/merge validation\n", stderr);
+      return false;
+    }
   }
   struct config_plan_input current[CONFIG_FILE_COUNT], defaults[CONFIG_FILE_COUNT] = {0};
   static const char empty_boot[] = "return { volumes = {}, spaces = {} }\n";

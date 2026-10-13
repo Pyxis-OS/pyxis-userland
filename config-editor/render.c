@@ -123,3 +123,36 @@ bool config_render_entry(const struct config_catalog_entry *entry,
       text(&buffer, entry->id) && text(&buffer, "\n");
   return finish(&buffer, valid, output, size);
 }
+
+bool config_render_defaults(const struct config_catalog *catalog, enum config_file file,
+    bool replacements, char **output, size_t *size)
+{
+  struct buffer buffer = {0};
+  bool ok = file != CONFIG_FILE_LIMINE && text(&buffer, "return {\n");
+  unsigned groups = file == CONFIG_FILE_BOOT ? 2 : 1;
+  for (unsigned group = 0; group < groups && ok; ++group) {
+    if (file == CONFIG_FILE_BOOT) {
+      ok = text(&buffer, group ? "spaces = {\n" : "volumes = {\n");
+    }
+    for (size_t i = 0; i < catalog->count && ok; ++i) {
+      const struct config_catalog_entry *entry = &catalog->entries[i];
+      if (entry->file != file || (file == CONFIG_FILE_BOOT &&
+          entry->kind != (group ? CONFIG_ENTRY_SPACE : CONFIG_ENTRY_VOLUME))) {
+        continue;
+      }
+      const struct config_literal_value *value = replacements &&
+          entry->migration.kind == CONFIG_MIGRATION_REPLACE ? entry->migration.value : entry->default_value;
+      char *bytes;
+      size_t count;
+      ok = config_render_entry(entry, value, &bytes, &count);
+      if (ok) {
+        ok = append(&buffer, bytes, count);
+        free(bytes);
+      }
+    }
+    if (file == CONFIG_FILE_BOOT && ok) {
+      ok = text(&buffer, "},\n");
+    }
+  }
+  return finish(&buffer, ok && text(&buffer, "}\n"), output, size);
+}
