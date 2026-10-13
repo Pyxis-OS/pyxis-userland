@@ -22,8 +22,12 @@ struct pyxis_capture_options {
    * and returned-byte caps, not hard backing quotas; output can overshoot. */
   uint64_t stdout_limit, stderr_limit;
   uint64_t poll_interval_ns;
-  /* Requires CREATE_GROUP on an unbound launcher. The library creates and
-   * retains sole CONTROL, seals after launch, and waits for group cleanup. */
+  /* With LAUNCH, an unbound launcher creates a local root for an ungrouped
+   * caller; a bound launcher creates a subgroup within its binding. The atomic
+   * reply supplies CONTROL|WAIT plus bound LAUNCH. The creator stays outside;
+   * the group fixes its space, not CPU. The library retains sole CONTROL,
+   * seals subtree admission after direct launch and waits for cleanup;
+   * the child receives no descendant launcher. */
   bool fresh_group;
 };
 

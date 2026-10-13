@@ -167,7 +167,7 @@ int launch_remote_server(const struct session_config *config,
   struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
-    [LAUNCHER] = {launcher, LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP, 0},
+    [LAUNCHER] = {launcher, LAUNCHER_RIGHT_LAUNCH, 0},
     [TERMINAL] = {terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0},
     [STDOUT] = {output, CONSOLE_RIGHT_WRITE, 0},
     [STDERR] = {output, CONSOLE_RIGHT_WRITE, 0},

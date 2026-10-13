@@ -9,29 +9,34 @@
 struct path_context;
 struct space_definition;
 
-/* CREATE_GROUP authority on an unbound launcher returns two owned, distinct
- * handles: a supervision grant with CONTROL|WAIT and a group-bound launcher
- * with LAUNCH only. Closing the final CONTROL grant requests termination.
- * Preserve *reply on failure. An untrustworthy response returns CALL_OUTCOME_UNKNOWN;
- * do not retry automatically, because the group may have been created. */
+/* LAUNCH permits scoped creation through the selected launcher. An unbound
+ * launcher requires an ungrouped caller and creates a local root; a bound
+ * launcher creates a subgroup within its binding. Members may use their own
+ * or descendant bindings. The creator stays outside the new group. The reply
+ * atomically returns two owned, distinct handles: CONTROL|WAIT supervision and
+ * a group/space-bound LAUNCH launcher, with no CPU binding. Closing the final
+ * CONTROL grant requests subtree termination. Preserve *reply on failure.
+ * An untrustworthy response returns CALL_OUTCOME_UNKNOWN; do not retry
+ * automatically, because the group may have been created. */
 enum call_status launcher_create_group(handle_t launcher,
     struct execution_group_create_reply *reply);
 
-/* Seal group admission with CONTROL authority. Sealing is idempotent; existing
- * members continue running. An untrustworthy response returns
- * CALL_OUTCOME_UNKNOWN because admission may already have been sealed. */
+/* Seal subtree admission with CONTROL authority. Sealing is idempotent;
+ * existing members and subgroups continue running. An untrustworthy response
+ * returns CALL_OUTCOME_UNKNOWN because admission may already have been sealed. */
 enum call_status execution_group_seal(handle_t supervision);
 
 /* Request termination with CONTROL authority. Seals admission and stops existing
- * members at safe kernel boundaries. Idempotent success acknowledges the request;
- * it does not report completion. An untrustworthy response returns
+ * members and subgroups at safe kernel boundaries. Idempotent success acknowledges
+ * the request; it does not report completion. An untrustworthy response returns
  * CALL_OUTCOME_UNKNOWN because termination may already have been requested. */
 enum call_status execution_group_terminate(handle_t supervision);
 
 /* Observe completion with WAIT authority. Blocks until sealed admission, member
- * reclamation and group-owned cleanup finish. Completion is repeatable, returns
- * no payload and does not describe aggregate program success. Does not consume
- * the handle or add CONTROL authority. WAIT-only observers do not supervise.
+ * reclamation, subgroup completion and attributed cleanup finish. Storage-only
+ * handles may outlive completion. Completion is repeatable, returns no payload
+ * and does not describe aggregate program success. Does not consume the handle
+ * or add CONTROL authority. WAIT-only observers do not supervise.
  * An untrustworthy response returns CALL_OUTCOME_UNKNOWN. Open empty groups
  * are not complete. */
 enum call_status execution_group_wait(handle_t observer);

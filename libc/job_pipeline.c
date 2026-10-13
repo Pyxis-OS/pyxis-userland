@@ -420,7 +420,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
   uint64_t root_rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
       DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
   enum call_status status = validate_source(launcher, PROTOCOL_LAUNCHER,
-      options->fresh_group ? LAUNCHER_RIGHT_CREATE_GROUP : LAUNCHER_RIGHT_LAUNCH);
+      LAUNCHER_RIGHT_LAUNCH);
   if (status == CALL_OK) {
     status = validate_source(options->clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ);
   }
@@ -470,8 +470,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     status = handle_copy_restricted(options->pipe_service, PIPE_SERVICE_RIGHT_CREATE, 0, &owned->pipe_service);
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(launcher,
-    options->fresh_group ? LAUNCHER_RIGHT_CREATE_GROUP : LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
+    status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
   }
   uint64_t now;
   if (status == CALL_OK) {

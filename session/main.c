@@ -139,8 +139,7 @@ static int launch_session(const struct session_config *config, const struct netw
       fprintf(stderr, "session: cannot query launcher rights (status %u)\n", status);
       goto done;
     }
-    grants[LAUNCHER].rights = rights &
-        (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP);
+    grants[LAUNCHER].rights = rights & LAUNCHER_RIGHT_LAUNCH;
   }
   struct launch_binding resources[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
     {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},

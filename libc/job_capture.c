@@ -248,7 +248,7 @@ static enum call_status validate_options(handle_t launcher,
     }
   }
   enum call_status status = validate_source(launcher, PROTOCOL_LAUNCHER,
-      options->fresh_group ? LAUNCHER_RIGHT_CREATE_GROUP : LAUNCHER_RIGHT_LAUNCH);
+      LAUNCHER_RIGHT_LAUNCH);
   if (status != CALL_OK) {
     return status;
   }
@@ -293,8 +293,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
     status = handle_copy_restricted(options->private_root, root_rights, 0, &owned->private_root);
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(launcher, options->fresh_group ?
-        LAUNCHER_RIGHT_CREATE_GROUP : LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
+    status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
   }
   uint64_t now;
   if (status == CALL_OK) {

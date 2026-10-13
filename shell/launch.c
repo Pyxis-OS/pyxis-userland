@@ -434,7 +434,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       return status;
     }
     grants[launcher_index] = (struct launch_grant){shell->launcher,
-        rights & (LAUNCHER_RIGHT_LAUNCH | LAUNCHER_RIGHT_CREATE_GROUP), 0};
+        rights & LAUNCHER_RIGHT_LAUNCH, 0};
   } else if (has_launcher) {
     grants[launcher_index] = (struct launch_grant){shell->child_launcher,
         LAUNCHER_RIGHT_LAUNCH, 0};

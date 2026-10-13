@@ -189,15 +189,20 @@ state, physical port paths through hubs, speed, numeric IDs and checked interfac
 It uses the same borrowed `system_info` READ grant and optional packaged USB ID names.
 
 [launcher.h](include/launcher.h) provides execution-group creation, sealing,
-termination and completion observation. `launcher_create_group` requires
-CREATE_GROUP authority and returns a supervision grant with CONTROL|WAIT plus a
-group-bound launcher with LAUNCH only. It preserves the caller's reply on failure.
-Closing the final CONTROL grant requests termination. `execution_group_seal`
-closes admission idempotently while existing members continue running.
+termination and completion observation. `launcher_create_group` requires LAUNCH.
+An unbound launcher creates a local root for an ungrouped caller; a bound
+launcher creates a subgroup within its binding. Members may select their own
+or descendant bindings. The creator stays outside the new group. Its atomic
+reply contains CONTROL|WAIT supervision plus a group/space-bound LAUNCH launcher,
+with no CPU binding. It preserves the caller's reply on failure.
+Closing the final CONTROL grant requests subtree termination.
+`execution_group_seal` closes admission throughout the subtree idempotently
+while existing members and subgroups continue running.
 `execution_group_terminate` requests stopping members at safe kernel boundaries;
 success acknowledges the request. `execution_group_wait` requires WAIT and returns
-when sealed admission, member reclamation and group-owned cleanup finish. Completion
-is repeatable and reports no aggregate program success. WAIT-only observers do not
+when sealed admission, member reclamation, subgroup completion and attributed
+cleanup finish. Storage-only handles may outlive completion. Completion is
+repeatable and reports no aggregate program success. WAIT-only observers do not
 retain controlling supervision; open empty groups are not complete. These helpers
 report `CALL_OUTCOME_UNKNOWN` for an untrustworthy response; creation must not be
 retried automatically. `wait_many` observes WAIT_COMPLETE on group WAIT grants and
@@ -578,14 +583,18 @@ the uncertain-publication rule.
 [pyxis/capture.h](libc/include/pyxis/capture.h) adds private unlinked RAM FILE
 stdout/stderr, an absolute deadline, polled per-stream limits and capped reads.
 The caller supplies an explicitly private work root and audits child reachability.
-It retains storage through process retirement and, optionally, a fresh group.
+It retains storage through process retirement and, optionally, a fresh root or
+subgroup selected by the supplied LAUNCH-authorized launcher. The library keeps sole CONTROL;
+the direct child receives no descendant launcher.
 Unknown direct admission stays quarantined until caller/session teardown.
 
 [pyxis/pipeline.h](libc/include/pyxis/pipeline.h) publishes an explicit native
 stage array atomically and pumps owned finite input, final stdout and combined
 stderr concurrently through directional pipes. It returns every stage result,
 input acceptance/closure and capped private captures, retaining endpoints and
-observers through cleanup. Existing shell/Lua launch behavior is unchanged.
+observers through cleanup. Its optional fresh group uses the same binding-scoped
+LAUNCH creation and sole-CONTROL policy; stages receive no descendant launcher.
+Existing shell/Lua launch behavior is unchanged.
 
 ## License
 

@@ -22,6 +22,12 @@ struct pyxis_pipeline_options {
   /* Zero selects capture.h's 1 MiB polled trigger and returned cap. Combined
    * stderr has no stage attribution; intermediate stdout only feeds its peer. */
   uint64_t stdout_limit, stderr_limit;
+  /* With LAUNCH, an unbound launcher creates a local root for an ungrouped
+   * caller; a bound launcher creates a subgroup within its binding. The atomic
+   * reply supplies CONTROL|WAIT plus bound LAUNCH. The creator stays outside;
+   * the group fixes its space, not CPU. The library retains sole CONTROL,
+   * seals subtree admission after direct batch launch and waits for cleanup;
+   * stages receive no descendant launcher. */
   bool fresh_group;
 };
 
