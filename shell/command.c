@@ -1,5 +1,6 @@
 #include <pyxis/working_path.h>
 #include "shell.h"
+#include "capabilities.h"
 #include "../common/directory.h"
 #include <mount.h>
 #include <namespace.h>
@@ -359,7 +360,7 @@ static enum command_result power_command(struct shell *shell, char **arguments, 
 static bool is_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
-  return !strcmp(name, "exit") || !strcmp(name, "cd") ||
+  return !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") || !strcmp(name, "namespace") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
@@ -369,6 +370,9 @@ static bool is_builtin(char **arguments, size_t count)
 
 static enum command_result builtin_command(struct shell *shell, char **arguments, size_t count)
 {
+  if (!strcmp(arguments[0], "request")) {
+    return shell_request_command(shell, arguments, count);
+  }
   if (strcmp(arguments[0], "exit") == 0) {
     if (count != 1) {
       return shell_error(shell, "usage: exit\n");
@@ -541,7 +545,7 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     return shell_error(shell, "shell: Empty command name\n");
   }
   bool builtin = is_builtin(arguments, count);
-  if (stage->redirection_count && (builtin || command.background)) {
+  if ((stage->redirection_count || command.capture) && (builtin || command.background)) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }
   if (command.background && builtin) {
@@ -553,7 +557,9 @@ enum command_result shell_command(struct shell *shell, char *line, char **argume
     *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED};
     return result;
   }
-  return shell_launch(shell, arguments, count,
-      command.background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
+  if (!command.background) {
+    return shell_launch_pipeline(shell, &command, outcome);
+  }
+  return shell_launch(shell, arguments, count, SHELL_BACKGROUND,
       stage->redirections, stage->redirection_count, outcome);
 }

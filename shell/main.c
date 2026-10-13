@@ -1,6 +1,7 @@
 #include <pyxis/working_path.h>
 #include <pyxis/environment.h>
 #include "shell.h"
+#include "capabilities.h"
 #include <abi/console.h>
 #include "../common/directory.h"
 #include "../common/session_wait.h"
@@ -267,6 +268,7 @@ int main(int argc, char **argv)
   }
 
 done:
+  shell_capabilities_close(&shell);
   if (bundle_jobs_close(&shell.jobs) != CALL_OK) {
     result = EXIT_FAILURE;
   }

@@ -78,8 +78,10 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
   char *read = line, *write = line;
   struct shell_redirection *pending = NULL;
   size_t used = 0;
+  bool capture_pending = false;
   command->stage_count = 0;
   command->background = false;
+  command->capture = NULL;
   if (!capacity) {
     return "Too many arguments";
   }
@@ -90,6 +92,21 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
     }
     if (!*read) {
       break;
+    }
+    if (command->capture) {
+      return "=> name must end the foreground command";
+    }
+    if (*read == '=' && read[1] == '>') {
+      if (pending || capture_pending || !command->stage_count ||
+          !command->stages[command->stage_count - 1].count) {
+        return "=> requires a completed foreground command";
+      }
+      capture_pending = true;
+      read += 2;
+      continue;
+    }
+    if (capture_pending && (*read == '&' || *read == '|' || *read == '<' || *read == '>')) {
+      return "=> requires a name";
     }
     if (*read == '&') {
       if (pending) {
@@ -151,10 +168,12 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
 
     char *word = write;
     char quote = 0;
+    bool literal = false;
     while (*read && (quote || (!separator(*read) && *read != '<' && *read != '>' &&
-        *read != '&' && *read != '|'))) {
+        *read != '&' && *read != '|' && !(*read == '=' && read[1] == '>')))) {
       char character = *read++;
       if (character == '\\' && quote != '\'') {
+        literal = true;
         if (!*read) {
           return "Unfinished escape";
         }
@@ -163,6 +182,7 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
         quote = 0;
       } else if (!quote && (character == '\'' || character == '"')) {
         quote = character;
+        literal = true;
       } else {
         *write++ = character;
       }
@@ -174,16 +194,27 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
     /* Consume the delimiter before writing NUL: uncompacted input can leave
      * read and write pointing at the same operator or separator byte. */
     char delimiter = *read;
+    bool capture_operator = delimiter == '=' && read[1] == '>';
     if (delimiter) {
       ++read;
+      if (capture_operator) {
+        ++read;
+      }
     }
     *write++ = '\0';
 
-    if (pending) {
+    if (capture_pending) {
+      if (literal || write == word + 1) {
+        return "=> requires an unquoted capability name";
+      }
+      command->capture = word;
+      capture_pending = false;
+    } else if (pending) {
       if (write == word + 1) {
         return "Redirection requires a filename";
       }
       pending->path = word;
+      pending->capability = !literal && word[0] == '@';
       pending = NULL;
     } else {
       if (used >= capacity - 1) {
@@ -197,7 +228,15 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
       ++command->stages[command->stage_count - 1].count;
     }
 
-    if (delimiter == '<' || delimiter == '>') {
+    if (command->capture && delimiter && !separator(delimiter)) {
+      return "=> name must end the foreground command";
+    }
+    if (capture_operator) {
+      if (pending || !command->stages[command->stage_count - 1].count) {
+        return "=> requires a completed foreground command";
+      }
+      capture_pending = true;
+    } else if (delimiter == '<' || delimiter == '>') {
       const char *error = begin_redirection(&command->stages[command->stage_count - 1],
           &pending,
           delimiter == '<' ? STARTUP_STDIN : STARTUP_STDOUT, read);
@@ -218,6 +257,9 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
     }
   }
 
+  if (capture_pending) {
+    return "=> requires a name";
+  }
   if (pending) {
     return "Redirection requires a filename";
   }

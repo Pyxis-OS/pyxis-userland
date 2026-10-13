@@ -31,22 +31,27 @@ enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
     SHELL_SERVICE };
 
 struct bundle_program;
+struct shell_capability_table;
 
 struct shell_redirection {
   enum startup_stream_index stream;
   const char *path;
+  bool capability;
 };
 
 struct shell_stage {
   char **arguments;
   size_t count;
   size_t redirection_count;
+  bool http_worker;
+  bool http_producer;
   struct shell_redirection redirections[STARTUP_STREAM_COUNT];
 };
 
 struct shell_command_line {
   size_t stage_count;
   bool background;
+  const char *capture;
   struct shell_stage stages[LAUNCH_BATCH_MAX];
 };
 
@@ -60,6 +65,7 @@ struct shell_fat_mount {
 
 struct shell {
   struct bundle_jobs jobs;
+  struct shell_capability_table *capabilities;
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   /* Root-shell options only; never forwarded to children. */

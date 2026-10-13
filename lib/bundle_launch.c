@@ -282,7 +282,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       }
       continue;
     }
-    uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
+    uint64_t transport = (info.kind == HANDLE_KIND_EXPORTED || info.protocol == PROTOCOL_ENDPOINT) ?
+        HANDLE_TRANSPORT_CALL : 0;
     if ((requests[i].rights & info.rights) != requests[i].rights ||
         (transport & info.transport) != transport) {
       if (requests[i].required) {

@@ -17,7 +17,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
+INSTALL_PROGRAMS := mux remote-terminal xfer httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -47,7 +47,7 @@ PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
                    $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
-                 $(BUILD)/shell/launch.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
+                 $(BUILD)/shell/launch.o $(BUILD)/shell/capabilities.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/complete.o \
                  $(BUILD)/shell/complete_path.o $(BUILD)/common/pane_cwd.o
 COUNTER_OBJECT := $(BUILD)/counter/namespace.o
@@ -83,7 +83,7 @@ UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
 .PHONY: fat32ctl config
-all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
 # removed programs/assets cannot survive from an earlier install.
@@ -96,8 +96,7 @@ install: all
 	  for program in $(INSTALL_PROGRAMS); do \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
-	  cp -a "$(BUILD)/fat32ctl.pxb" "$$staging/"; \
-	  cp -a "$(BUILD)/config.pxb" "$$staging/"; \
+	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$$staging/"; \
 	  install -m 644 init/development.sh "$$staging/init"; \
 	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
 	  install -m 644 init/services.sh "$$staging/init-services"; \
@@ -349,3 +348,16 @@ clean:
 -include $(CONFIG_EDITOR_OBJECTS:.o=.d)
 
 -include $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d
+
+http-stage: $(BUILD)/http-stage.pxe
+
+$(BUILD)/http-stage.pxe: $(BUILD)/http-stage/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(LDLIBS)
+
+$(BUILD)/httpfs.pxb: $(BUILD)/httpfs.pxe httpfs/manifest.json
+	@rm -rf "$@.tmp"
+	@mkdir -p "$@.tmp/app/bin"
+	@install -m 644 "$<" "$@.tmp/app/bin/httpfs.pxe"
+	@install -m 644 httpfs/manifest.json "$@.tmp/manifest.json"
+	@rm -rf "$@"
+	@mv "$@.tmp" "$@"

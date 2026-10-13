@@ -18,6 +18,7 @@
 #include <abi/screen_capture.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
+#include <abi/endpoint.h>
 #include <abi/udp.h>
 #include <file.h>
 #include <handle.h>
@@ -67,6 +68,8 @@ struct grant_right {
 
 /* The manifest requests named ordinary interfaces, never numeric authority. */
 static const struct grant_right grant_rights[] = {
+  {"service", "create", PROTOCOL_ENDPOINT_SERVICE, ENDPOINT_SERVICE_RIGHT_CREATE},
+  {"publication", "call", PROTOCOL_ENDPOINT, 0},
   {"memory", "manage", PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
   {"threads", "manage", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE},
   {"keyboard", "input", PROTOCOL_KEYBOARD, KEYBOARD_RIGHT_INPUT},
@@ -331,6 +334,11 @@ static enum call_status parse_rights(struct bundle_program *program,
           !strcmp(nodes[index].string, grant_rights[i].right)) {
         right = &grant_rights[i];
         break;
+      }
+    }
+    for (size_t previous = array->child; previous != index; previous = nodes[previous].next) {
+      if (!strcmp(nodes[previous].string, nodes[index].string)) {
+        return CALL_BAD_REQUEST;
       }
     }
     if (!right || (request->rights & right->rights)) {

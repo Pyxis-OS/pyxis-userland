@@ -230,6 +230,14 @@ enum call_status directory_filesystem_info(handle_t directory,
   if (status != CALL_OK) {
     return status;
   }
+  if (reply.type == FILESYSTEM_TYPE_RAM) {
+    struct directory_filesystem_info expected = {.type = FILESYSTEM_TYPE_RAM};
+    if (memcmp(&reply, &expected, sizeof(reply))) {
+      return CALL_BAD_REQUEST;
+    }
+    *info = reply;
+    return CALL_OK;
+  }
   uint64_t known_flags = FILESYSTEM_FLAG_READ_ONLY | FILESYSTEM_FLAG_GPT_DEGRADED |
       FILESYSTEM_FLAG_DEGRADED;
   if (reply.type != FILESYSTEM_TYPE_NPFS || (reply.flags & ~known_flags)) {
