@@ -13,6 +13,8 @@ enum pyxis_descriptor_access {
 struct pyxis_descriptor_binding {
   handle_t handle;
   struct handle_info info;
+  handle_t observation;
+  struct handle_info observation_info;
   unsigned int access;
   size_t buffered_read;
 };

@@ -9,6 +9,9 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <pyxis/http.h>
+
+struct descriptor_object;
 
 struct descriptor_mode {
   bool readable, writable, append, create, truncate, exclusive;
@@ -22,6 +25,13 @@ struct descriptor_mode {
 void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
+int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
+    FILE *stream, const struct pyxis_http_options *options, bool submit);
+bool descriptor_object_http_inplace(struct descriptor_object *object);
+int descriptor_object_http_commit(struct descriptor_object *object, FILE *response);
+int descriptor_object_http_status(struct descriptor_object *object,
+    struct http_transaction_status *status);
+int descriptor_object_http_abort(struct descriptor_object *object);
 /* Reserve before exclusive creation, remove the name through the held parent,
  * then publish the FILE association. Parent has CREATE/REMOVE and file rights. */
 int descriptor_tmpfile(FILE *stream, handle_t parent);

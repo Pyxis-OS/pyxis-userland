@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <startup.h>
+#include <pyxis/http.h>
 #include <pyxis/descriptor.h>
 #include <pyxis/stdio.h>
 #include <stdlib.h>
@@ -1277,4 +1278,94 @@ int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info)
     }
   }
   return descriptor_object_response(stream->operation, info);
+}
+
+FILE *pyxis_http_prepare(const char *uri, const char *mode,
+    const struct pyxis_http_options *options)
+{
+  struct descriptor_mode parsed;
+  if (!parse_mode(mode, &parsed) || parsed.append || (parsed.writable && !parsed.truncate)) {
+    errno = EINVAL;
+    return NULL;
+  }
+  FILE *stream = malloc(sizeof(*stream));
+  if (!stream) {
+    return NULL;
+  }
+  *stream = (FILE){
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .allocated = true,
+    .readable = parsed.readable, .writable = parsed.writable,
+  };
+  if (descriptor_http_open(uri, &parsed, stream, options, false) < 0) {
+    free(stream);
+    return NULL;
+  }
+  register_stream(stream);
+  return stream;
+}
+
+FILE *pyxis_http_commit(FILE *request)
+{
+  if (!stream_acquire(request)) {
+    return NULL;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {request};
+  if (request->closed || request->error) {
+    errno = request->closed ? EBADF : EIO;
+    return NULL;
+  }
+  if (flush_output(request) < 0) {
+    return NULL;
+  }
+  bool inplace = descriptor_object_http_inplace(request->operation);
+  FILE *response = NULL;
+  if (!inplace) {
+    response = malloc(sizeof(*response));
+    if (!response) {
+      return NULL;
+    }
+    *response = (FILE){
+      .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1,
+      .allocated = true, .readable = true,
+    };
+  }
+  if (descriptor_object_http_commit(request->operation, response) < 0) {
+    free(response);
+    stream_error(request, errno);
+    return NULL;
+  }
+  request->writable = false;
+  if (inplace) {
+    request->readable = true;
+    request->has_pushback = false;
+    request->has_wide_pushback = false;
+    request->eof = false;
+    request->wide_input = (mbstate_t){0};
+    return request;
+  }
+  register_stream(response);
+  return response;
+}
+
+int pyxis_http_status(FILE *stream, struct http_transaction_status *status)
+{
+  if (!status) {
+    errno = EINVAL;
+    return -1;
+  }
+  *status = (struct http_transaction_status){0};
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  return descriptor_object_http_status(stream->operation, status);
+}
+
+int pyxis_http_abort(FILE *request)
+{
+  if (!stream_acquire(request)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {request};
+  return descriptor_object_http_abort(request->operation);
 }

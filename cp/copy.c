@@ -4,6 +4,9 @@
 #include <handle.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <errno.h>
+#include <provider.h>
+#include <pyxis/http.h>
 #include <string.h>
 
 #define TEMPORARY_ATTEMPTS 64
@@ -93,9 +96,82 @@ static bool close_file(handle_t *file, const char *path)
   return true;
 }
 
+static enum cp_result copy_http(const char *source, handle_t parent, const char *name,
+    const char *destination)
+{
+  FILE *input = fopen(source, "r");
+  if (!input) {
+    fprintf(stderr, "cp: %s: %s\n", source, strerror(errno));
+    return CP_FAILED;
+  }
+  handle_t output = HANDLE_INVALID;
+  char temporary[TEMPORARY_NAME_BYTES];
+  enum cp_result result = reserve_temporary(parent, name, destination, temporary, &output);
+  bool reserved = result == CP_SUCCESS;
+  uint64_t offset = 0;
+  while (result == CP_SUCCESS) {
+    size_t count = fread_some(buffer, sizeof(buffer), input);
+    if (!count) {
+      struct http_transaction_status final;
+      if (ferror(input) || !feof(input) || pyxis_http_status(input, &final) < 0 ||
+          final.phase != HTTP_TRANSACTION_COMPLETE || final.framing != HTTP_FRAMING_COMPLETE ||
+          final.status != CALL_OK) {
+        fprintf(stderr, "cp: %s: HTTP transfer did not complete\n", source);
+        result = CP_FAILED;
+      }
+      break;
+    }
+    if (count > UINT64_MAX - offset) {
+      result = CP_FAILED;
+      break;
+    }
+    size_t written = 0;
+    while (written < count) {
+      size_t progress;
+      enum call_status status = file_write(output, offset + written, buffer + written,
+          count - written, &progress);
+      if (status != CALL_OK || !progress || progress > count - written) {
+        report_directory_error("cp", destination, status == CALL_OK ? CALL_IO : status);
+        result = status == CALL_OUTCOME_UNKNOWN ? CP_UNCERTAIN : CP_FAILED;
+        break;
+      }
+      written += progress;
+    }
+    offset += written;
+  }
+  if (fclose(input) == EOF && result == CP_SUCCESS) {
+    result = CP_FAILED;
+  }
+  if (!close_file(&output, destination) && result == CP_SUCCESS) {
+    result = CP_FAILED;
+  }
+  if (result == CP_SUCCESS) {
+    enum call_status status = directory_rename(parent, temporary, parent, name,
+        DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE);
+    reserved = false;
+    if (status != CALL_OK) {
+      report_directory_error("cp", destination, status);
+      fprintf(stderr, "cp: %s: Publication not confirmed; check %s and temporary %s\n",
+          destination, name, temporary);
+      result = CP_UNCERTAIN;
+    }
+  }
+  if (reserved) {
+    enum call_status status = directory_remove(parent, temporary, DIRECTORY_KIND_FILE);
+    if (status != CALL_OK && status != CALL_NOT_FOUND) {
+      report_directory_error("cp", destination, status);
+      result = CP_UNCERTAIN;
+    }
+  }
+  return result;
+}
+
 enum cp_result cp_copy_file(const char *source, handle_t parent, const char *name,
     const char *destination)
 {
+  if (provider_http_uri(source) || (!strncmp(source, "json+", 5) && provider_http_uri(source + 5))) {
+    return copy_http(source, parent, name, destination);
+  }
   handle_t input;
   enum call_status status = resolve_file(source, FILE_RIGHT_READ, &input);
   if (status != CALL_OK) {

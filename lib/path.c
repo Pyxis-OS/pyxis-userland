@@ -172,26 +172,6 @@ static enum call_status walk(const struct path_context *context, const char *pat
   const char *uri = path;
   bool http = target == WALK_FILE && !native_only &&
       provider_http_uri(uri);
-  uint64_t deadline = 0;
-  enum call_status clock_status = CALL_OK;
-  if (http) {
-    uint64_t now;
-    handle_t clock = workspace->clock ? workspace->clock : startup_resource("clock");
-    clock_status = clock_now(clock, &now);
-    if (clock_status == CALL_OK) {
-      if (now > UINT64_MAX - HTTP_FETCH_NS) {
-        clock_status = CALL_LIMIT;
-      } else {
-        deadline = now + HTTP_FETCH_NS;
-        if (workspace->deadline_ns && workspace->deadline_ns < deadline) {
-          deadline = workspace->deadline_ns;
-        }
-      }
-    }
-  }
-  if (clock_status != CALL_OK) {
-    return clock_status;
-  }
   handle_t provider = HANDLE_INVALID;
   enum call_status status = starting_chain(context, &path, workspace, count, &provider, http);
   if (status != CALL_OK) {
@@ -204,9 +184,7 @@ static enum call_status walk(const struct path_context *context, const char *pat
     status = native_only ? CALL_BAD_OPERATION : CALL_UNAVAILABLE;
     if (!native_only && target == WALK_FILE) {
       if (http) {
-        status = clock_status == CALL_OK ? provider_http_open(context, provider,
-            uri, rights, workspace->clock ? workspace->clock : startup_resource("clock"),
-            deadline, workspace->http, workspace->response, file) : clock_status;
+        status = CALL_BAD_OPERATION;
       } else {
         struct provider_result result;
         status = provider_open(provider, uri, rights, 0, &result, file);

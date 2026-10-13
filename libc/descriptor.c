@@ -2,6 +2,11 @@
 #include <abi/file.h>
 #include <abi/pipe.h>
 #include <console.h>
+#include <clock.h>
+#include <http_transaction.h>
+#include <provider.h>
+#include <pyxis/working_path.h>
+#include <stream.h>
 #include <directory.h>
 #include <errno.h>
 #include <file.h>
@@ -21,11 +26,18 @@
 #include "thread_sync.h"
 
 enum descriptor_state { DESCRIPTOR_FREE, DESCRIPTOR_RESERVED, DESCRIPTOR_OPEN };
-enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE };
+enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE, DESCRIPTOR_RESPONSE };
 
 /* Each descriptor owns one reference to an open object. Duplication shares its
  * native handle, access, append policy, logical position and unread read-ahead.
  * Position is the next byte delivered; backend reads start after read-ahead. */
+struct descriptor_http {
+  struct http_prepared prepared;
+  uint64_t deadline;
+  bool inplace, attempted, committed, producer_failed;
+  int failure;
+};
+
 struct descriptor_object {
   size_t references; /* Descriptor aliases, protected by table_guard. */
   size_t storage; /* Aliases and admitted operations; no native grant copies. */
@@ -34,6 +46,10 @@ struct descriptor_object {
   bool allocated;
   enum descriptor_kind kind;
   handle_t handle;
+  handle_t observation;
+  struct descriptor_http *http;
+  bool final_checked;
+  int final_error;
   uint64_t position;
   bool readable, writable, append;
   bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
@@ -182,6 +198,7 @@ void descriptor_drop(struct descriptor_object *object)
   }
   free(object->ahead);
   free(object->response);
+  free(object->http);
   if (object->allocated) {
     free(object);
   }
@@ -192,6 +209,9 @@ static int object_ready(struct descriptor_object *object, bool writing)
   if (!object || __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE) ||
       (writing ? !object->writable : !object->readable)) {
     return fail(EBADF);
+  }
+  if (!writing && object->http && !object->http->committed) {
+    return fail(object->http->failure ? object->http->failure : EBUSY);
   }
   return 0;
 }
@@ -222,8 +242,9 @@ void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream)
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1,
     .kind = binding.protocol == PROTOCOL_FILE ? DESCRIPTOR_FILE :
-            binding.protocol == PROTOCOL_PIPE ? DESCRIPTOR_PIPE : DESCRIPTOR_CONSOLE,
-    .handle = binding.handle,
+            binding.protocol == PROTOCOL_PIPE ? DESCRIPTOR_PIPE :
+            binding.protocol == PROTOCOL_STREAM ? DESCRIPTOR_RESPONSE : DESCRIPTOR_CONSOLE,
+    .handle = binding.handle, .observation = binding.observation,
     .readable = index == STARTUP_STDIN,
     .writable = index != STARTUP_STDIN,
   };
@@ -235,6 +256,9 @@ void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream)
 
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream)
 {
+  if (provider_http_uri(path) || (path && !strncmp(path, "json+", 5) && provider_http_uri(path + 5))) {
+    return descriptor_http_open(path, mode, stream, NULL, !mode->writable);
+  }
   int descriptor = reserve();
   if (descriptor < 0) {
     return -1;
@@ -348,12 +372,16 @@ int descriptor_stream(FILE *stream, struct startup_stream *binding)
   libc_lock_acquire(&table_guard);
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
   struct descriptor_object *object = lookup(descriptor);
-  int error = !object || entries[descriptor].stream != stream ? EBADF : 0;
+  int error = !object || entries[descriptor].stream != stream ? EBADF :
+      object->http && !object->http->committed && object->kind == DESCRIPTOR_RESPONSE ? EBUSY : 0;
   if (!error) {
     *binding = (struct startup_stream){
       .protocol = object->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
-          object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE : PROTOCOL_CONSOLE,
+          object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
+          object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
       .handle = object->handle,
+      .observation_protocol = object->kind == DESCRIPTOR_RESPONSE && object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
+      .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
     };
   }
   libc_lock_release(&table_guard);
@@ -377,15 +405,22 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
   }
   struct pyxis_descriptor_binding result = {
     .handle = object->handle,
-    .access = (object->readable ? PYXIS_DESCRIPTOR_READ : 0) |
+    .access = (object->readable && (!object->http || object->http->committed) ? PYXIS_DESCRIPTOR_READ : 0) |
         (object->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
     .buffered_read = object->ahead_count,
+    .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
   };
   unlock_object(&object->read_guard);
   enum call_status status = handle_query(result.handle, &result.info);
   descriptor_drop(object);
   if (status != CALL_OK) {
     return fail(libc_call_errno(status));
+  }
+  if (result.observation) {
+    status = handle_query(result.observation, &result.observation_info);
+    if (status != CALL_OK) {
+      return fail(libc_call_errno(status));
+    }
   }
   *binding = result;
   return 0;
@@ -518,7 +553,30 @@ int dup(int descriptor)
 /* Caller owns the detached alias reference; storage survives logical close. */
 static int release_alias(struct descriptor_object *object, bool final)
 {
-  int result = final ? descriptor_release_handle(object->handle) : 0;
+  int result = 0;
+  if (final) {
+    handle_t handles[6] = {object->handle, object->observation};
+    if (object->http) {
+      struct http_prepared *request = &object->http->prepared;
+      handles[2] = request->control;
+      handles[3] = request->body;
+      handles[4] = request->observation;
+      handles[5] = request->response;
+    }
+    int first_error = 0;
+    for (size_t i = 0; i < 6; ++i) {
+      bool duplicate = false;
+      for (size_t j = 0; j < i; ++j) {
+        duplicate |= handles[i] == handles[j];
+      }
+      if (handles[i] && !duplicate && descriptor_release_handle(handles[i]) < 0 && !first_error) {
+        first_error = errno;
+      }
+    }
+    if (first_error) {
+      result = fail(first_error);
+    }
+  }
   int error = errno;
   descriptor_drop(object);
   errno = error;
@@ -677,7 +735,32 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     size_t *read)
 {
   enum call_status status;
-  if (entry->kind == DESCRIPTOR_FILE) {
+  if (entry->http && !entry->http->committed && entry->readable) {
+    return fail(EBUSY);
+  }
+  if (entry->kind == DESCRIPTOR_RESPONSE) {
+    if (entry->final_checked) {
+      *read = 0;
+      return entry->final_error ? fail(entry->final_error) : 0;
+    }
+    size_t capacity = size < STREAM_READ_MAX_BYTES ? size : STREAM_READ_MAX_BYTES;
+    status = stream_read(entry->handle, buffer, capacity, 0, read);
+    if (status != CALL_OK) {
+      entry->final_checked = true;
+      entry->final_error = libc_call_errno(status);
+      return fail(entry->final_error);
+    }
+    if (status == CALL_OK && !*read) {
+      struct http_transaction_status final;
+      status = http_transaction_status(entry->observation, 0, &final);
+      entry->final_checked = true;
+      if (status != CALL_OK || final.framing != HTTP_FRAMING_COMPLETE ||
+          final.phase != HTTP_TRANSACTION_COMPLETE || final.status != CALL_OK) {
+        entry->final_error = status != CALL_OK ? libc_call_errno(status) : EIO;
+        return fail(entry->final_error);
+      }
+    }
+  } else if (entry->kind == DESCRIPTOR_FILE) {
     uint64_t offset = entry->position + entry->ahead_count;
     if (size > UINT64_MAX - offset) {
       return fail(EOVERFLOW);
@@ -723,7 +806,7 @@ static struct descriptor_object *try_entry(struct descriptor_object *entry, size
     errno = EINVAL;
     return NULL;
   }
-  if (entry->kind == DESCRIPTOR_FILE) {
+  if (entry->kind == DESCRIPTOR_FILE || entry->kind == DESCRIPTOR_RESPONSE) {
     errno = ENOTSUP;
     return NULL;
   }
@@ -933,9 +1016,15 @@ static int write_locked(struct descriptor_object *entry, const void *buffer, siz
     status = console_write(entry->handle, buffer, size, written);
   }
   if (status != CALL_OK) {
+    if (entry->http) {
+      entry->http->producer_failed = true;
+    }
     return fail(libc_call_errno(status));
   }
   if (!*written || *written > size) {
+    if (entry->http) {
+      entry->http->producer_failed = true;
+    }
     *written = 0;
     return fail(EIO);
   }
@@ -995,9 +1084,15 @@ static int pwrite_locked(struct descriptor_object *entry, const void *buffer, si
   handle_t handle = entry->handle;
   enum call_status status = file_write(handle, offset, buffer, size, written);
   if (status != CALL_OK) {
+    if (entry->http) {
+      entry->http->producer_failed = true;
+    }
     return fail(libc_call_errno(status));
   }
   if (!*written || *written > size) {
+    if (entry->http) {
+      entry->http->producer_failed = true;
+    }
     *written = 0;
     return fail(EIO);
   }
@@ -1048,6 +1143,9 @@ static int resize_locked(struct descriptor_object *entry, uint64_t size)
   discard_ahead(entry);
   enum call_status status = file_resize(entry->handle, size);
   if (status != CALL_OK) {
+    if (entry->http) {
+      entry->http->producer_failed = true;
+    }
     return fail(libc_call_errno(status));
   }
   return 0;
@@ -1076,6 +1174,9 @@ static int stat_locked(struct descriptor_object *entry, struct stat *result)
   if (entry->kind == DESCRIPTOR_CONSOLE) {
     *result = (struct stat){.st_mode = S_IFCHR};
     return 0;
+  }
+  if (entry->kind == DESCRIPTOR_RESPONSE) {
+    return fail(ENOTSUP);
   }
   if (entry->kind == DESCRIPTOR_PIPE) {
     *result = (struct stat){.st_mode = S_IFIFO};
@@ -1132,8 +1233,27 @@ static int response_locked(struct descriptor_object *entry, struct pyxis_respons
   if (!entry) {
     return -1;
   }
-  if (entry->response) {
+  if (entry->response && entry->response->flags) {
     *info = *entry->response;
+    return 0;
+  }
+  if (entry->observation && entry->kind == DESCRIPTOR_RESPONSE) {
+    struct http_response_metadata metadata;
+    struct http_transaction_status response;
+    enum call_status status = http_transaction_metadata(entry->observation, 0, &metadata);
+    if (status == CALL_OK) {
+      status = http_transaction_status(entry->observation, 0, &response);
+    }
+    if (status != CALL_OK) {
+      return fail(libc_call_errno(status));
+    }
+    info->flags = PYXIS_RESPONSE_PROVIDER | PYXIS_RESPONSE_HTTP | PYXIS_RESPONSE_URL;
+    info->status = response.http_status;
+    memcpy(info->url, metadata.uri, sizeof(info->url));
+    if (metadata.media_type[0]) {
+      info->flags |= PYXIS_RESPONSE_MEDIA_TYPE;
+      memcpy(info->media_type, metadata.media_type, sizeof(info->media_type));
+    }
   }
   return 0;
 }
@@ -1141,7 +1261,7 @@ static int response_locked(struct descriptor_object *entry, struct pyxis_respons
 /* Operation locks serialize mutable state, never native grant ownership. */
 static struct libc_mutex *object_guard(struct descriptor_object *object, bool writing)
 {
-  return writing && object->kind != DESCRIPTOR_FILE ? &object->write_guard : &object->read_guard;
+  return writing && object->kind != DESCRIPTOR_FILE && !object->http ? &object->write_guard : &object->read_guard;
 }
 
 static int object_enter(struct descriptor_object *object, bool writing)
@@ -1171,10 +1291,16 @@ int descriptor_object_stream(struct descriptor_object *object, struct startup_st
   if (!object || __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
     return fail(EBADF);
   }
+  if (object->http && !object->http->committed && object->kind == DESCRIPTOR_RESPONSE) {
+    return fail(EBUSY);
+  }
   *binding = (struct startup_stream){
     .protocol = object->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
-        object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE : PROTOCOL_CONSOLE,
+        object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
+          object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
     .handle = object->handle,
+    .observation_protocol = object->kind == DESCRIPTOR_RESPONSE && object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
+    .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
   };
   return 0;
 }
@@ -1526,7 +1652,7 @@ long descriptor_seek_position(int descriptor, long offset, int origin)
  * and console directions remain independent and are locked by each transfer. */
 bool descriptor_file_begin(struct descriptor_object *object)
 {
-  if (!object || object->kind != DESCRIPTOR_FILE ||
+  if (!object || (object->kind != DESCRIPTOR_FILE && !object->http) ||
       __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
     return false;
   }
@@ -1536,4 +1662,193 @@ bool descriptor_file_begin(struct descriptor_object *object)
 void descriptor_file_end(struct descriptor_object *object)
 {
   unlock_object(&object->read_guard);
+}
+
+int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
+    FILE *stream, const struct pyxis_http_options *options, bool submit)
+{
+  if (!path || mode->append || mode->exclusive || (mode->writable && !mode->truncate)) {
+    return fail(EINVAL);
+  }
+  int descriptor = reserve();
+  if (descriptor < 0) {
+    return -1;
+  }
+  struct descriptor_object *object = calloc(1, sizeof(*object));
+  struct descriptor_http *http = calloc(1, sizeof(*http));
+  struct pyxis_response_info *info = calloc(1, sizeof(*info));
+  if (!object || !http || !info) {
+    free(object);
+    free(http);
+    free(info);
+    publish(descriptor, (struct descriptor_entry){0});
+    return fail(ENOMEM);
+  }
+  uint64_t deadline = options ? options->deadline_ns : 0;
+  enum call_status status = CALL_OK;
+  if (!deadline) {
+    uint64_t now;
+    status = clock_now(startup_resource("clock"), &now);
+    if (status == CALL_OK) {
+      if (now > UINT64_MAX - UINT64_C(30000000000)) {
+        status = CALL_LIMIT;
+      } else {
+        deadline = now + UINT64_C(30000000000);
+      }
+    }
+  }
+  const struct path_context *context = NULL;
+  if (status == CALL_OK) {
+    status = pyxis_working_context(&context);
+  }
+  uint64_t method = mode->writable ? HTTP_PREPARE_POST : HTTP_PREPARE_GET;
+  if (status == CALL_OK) {
+    status = submit ? http_transaction_open_uri(context, path, deadline, &http->prepared, info) :
+        http_transaction_prepare_uri(context, path, method, options ? options->flags : 0,
+            options ? options->headers : NULL, options ? options->headers_size : 0,
+            deadline, &http->prepared);
+  }
+  if (status != CALL_OK) {
+    http_prepared_close(&http->prepared);
+    free(object);
+    free(http);
+    free(info);
+    publish(descriptor, (struct descriptor_entry){0});
+    return fail(libc_path_errno(status, path, NULL));
+  }
+  http->deadline = deadline;
+  http->inplace = mode->readable;
+  http->committed = submit;
+  http->attempted = submit;
+  *object = (struct descriptor_object){
+    .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+    .references = 1, .storage = 1, .allocated = true,
+    .kind = method == HTTP_PREPARE_POST ? DESCRIPTOR_FILE : DESCRIPTOR_RESPONSE,
+    .handle = submit ? http->prepared.response : http->prepared.body,
+    .observation = http->prepared.observation, .http = http, .response = info,
+    .readable = mode->readable, .writable = mode->writable,
+  };
+  publish(descriptor, (struct descriptor_entry){
+    .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
+  });
+  return descriptor;
+}
+
+bool descriptor_object_http_inplace(struct descriptor_object *object)
+{
+  return object && object->http && object->http->inplace;
+}
+
+int descriptor_object_http_status(struct descriptor_object *object,
+    struct http_transaction_status *status)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  enum call_status result = object->observation ?
+      http_transaction_status(object->observation, 0, status) : CALL_BAD_OPERATION;
+  unlock_object(&object->read_guard);
+  return result == CALL_OK ? 0 : fail(libc_call_errno(result));
+}
+
+int descriptor_object_http_abort(struct descriptor_object *object)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  enum call_status result = object->http ?
+      http_transaction_abort(object->http->prepared.control, 0) : CALL_DENIED;
+  unlock_object(&object->read_guard);
+  return result == CALL_OK ? 0 : fail(libc_call_errno(result));
+}
+
+int descriptor_object_http_commit(struct descriptor_object *object, FILE *response_stream)
+{
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  struct descriptor_http *http = object->http;
+  if (!http || http->attempted || http->producer_failed) {
+    int error = !http ? ENOTSUP : http->producer_failed ? EIO : EBUSY;
+    unlock_object(&object->read_guard);
+    return fail(error);
+  }
+  int descriptor = -1;
+  struct descriptor_object *response = NULL;
+  struct pyxis_response_info *info = NULL;
+  handle_t observation = HANDLE_INVALID;
+  enum call_status status = CALL_OK;
+  if (!http->inplace) {
+    descriptor = reserve();
+    if (descriptor < 0) {
+      unlock_object(&object->read_guard);
+      return -1;
+    }
+    response = calloc(1, sizeof(*response));
+    info = calloc(1, sizeof(*info));
+    status = !response || !info ? CALL_NO_MEMORY :
+        handle_copy_restricted(object->observation, HTTP_TRANSACTION_RIGHT_STATUS,
+            HANDLE_TRANSPORT_CALL, &observation);
+  }
+  struct http_prepared prepared = http->prepared;
+  struct http_commit_reply reply;
+  if (status == CALL_OK) {
+    /* Even a lost reply cannot lead to a second submission from this object. */
+    http->attempted = true;
+    object->writable = false;
+    status = http_transaction_commit(&prepared, http->deadline, &reply);
+    if (status == CALL_OK && !(reply.flags & HTTP_COMMIT_RESPONSE)) {
+      status = CALL_OUTCOME_UNKNOWN;
+    }
+  }
+  if (status == CALL_OK) {
+    libc_lock_acquire(&table_guard);
+    if (__atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
+      status = CALL_BAD_HANDLE;
+    } else if (http->inplace) {
+      http->committed = true;
+      http->prepared.response = prepared.response;
+      object->handle = prepared.response;
+      object->kind = DESCRIPTOR_RESPONSE;
+      object->writable = false;
+      object->readable = true;
+      discard_ahead(object);
+      object->position = 0;
+    } else {
+      http->committed = true;
+      object->writable = false;
+      *response = (struct descriptor_object){
+        .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+        .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
+        .references = 1, .storage = 1, .allocated = true, .kind = DESCRIPTOR_RESPONSE,
+        .handle = prepared.response, .observation = observation, .response = info,
+        .readable = true,
+      };
+      observation = HANDLE_INVALID;
+    }
+    libc_lock_release(&table_guard);
+  }
+  if (status != CALL_OK) {
+    if (http->attempted) {
+      http->failure = libc_call_errno(status);
+    }
+    if (prepared.response) {
+      descriptor_release_handle(prepared.response);
+    }
+    if (observation) {
+      descriptor_release_handle(observation);
+    }
+    free(info);
+    free(response);
+    if (descriptor >= 0) {
+      publish(descriptor, (struct descriptor_entry){0});
+    }
+  } else if (!http->inplace) {
+    publish(descriptor, (struct descriptor_entry){
+      .state = DESCRIPTOR_OPEN, .object = response, .stream = response_stream,
+    });
+  }
+  unlock_object(&object->read_guard);
+  return status == CALL_OK ? 0 : fail(libc_call_errno(status));
 }
