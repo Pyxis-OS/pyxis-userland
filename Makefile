@@ -97,12 +97,12 @@ install: all
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
 	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$$staging/"; \
-	  install -m 644 init/development.sh "$$staging/init"; \
-	  install -m 644 init/readonly.sh "$$staging/init-readonly"; \
-	  install -m 644 init/services.sh "$$staging/init-services"; \
-	  install -m 644 init/remote.sh "$$staging/init-remote"; \
-	  install -m 644 init/remote-services.sh "$$staging/init-remote-services"; \
-	  install -m 644 init/installed.sh "$$staging/init-installed"; \
+	  install -m 644 init/development.pxs "$$staging/init"; \
+	  install -m 644 init/readonly.pxs "$$staging/init-readonly"; \
+	  install -m 644 init/services.pxs "$$staging/init-services"; \
+	  install -m 644 init/remote.pxs "$$staging/init-remote"; \
+	  install -m 644 init/remote-services.pxs "$$staging/init-remote-services"; \
+	  install -m 644 init/installed.pxs "$$staging/init-installed"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 config/live.lua "$$staging/config/live.lua"; \
