@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "../installer/digest.h"
+#include "../installer/progress.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -17,6 +18,8 @@
 
 static bool failed(struct config_storage_report *report, enum call_status status)
 {
+  install_progress_pause();
+  install_progress_finish();
   if (report) {
     report->status = status;
   }
@@ -172,6 +175,9 @@ static bool read_name(handle_t parent, const char *name, size_t limit,
     }
     status = file_read(file, offset, bytes + offset, wanted, &count);
     ok = status == CALL_OK && count && count <= wanted;
+    if (ok) {
+      install_progress_advance(count, 0);
+    }
     if (status == CALL_OK && !ok) {
       status = CALL_OUTCOME_UNKNOWN;
     }
@@ -205,15 +211,21 @@ bool config_storage_read(const struct config_storage_view *view, enum config_sto
   if (report) {
     report->file = file;
   }
-  return read_name(parent_for(view, file), config_storage_file_name(file), CONFIG_FILE_MAX_BYTES,
+  install_progress_begin("Reading configuration file", INSTALL_PROGRESS_WORK, NULL);
+  bool ok = read_name(parent_for(view, file), config_storage_file_name(file), CONFIG_FILE_MAX_BYTES,
       blob, report);
+  install_progress_finish();
+  return ok;
 }
 
 bool config_storage_read_record(const struct config_storage_view *view,
     struct config_blob *blob, struct config_storage_report *report)
 {
-  return view ? read_name(view->config_parent, CONFIG_RECORD_NAME, CONFIG_RECORD_MAX_BYTES,
+  install_progress_begin("Reading configuration completion record", INSTALL_PROGRESS_WORK, NULL);
+  bool ok = view ? read_name(view->config_parent, CONFIG_RECORD_NAME, CONFIG_RECORD_MAX_BYTES,
       blob, report) : failed(report, CALL_BAD_REQUEST);
+  install_progress_finish();
+  return ok;
 }
 
 bool config_storage_load(const struct config_storage_view *view,
@@ -324,6 +336,8 @@ static bool expected_name(handle_t parent, const char *name,
 static bool write_new(handle_t parent, const char *name, const struct config_blob *blob,
     struct config_storage_report *report)
 {
+  install_progress_begin("Staging configuration and recovery bytes", INSTALL_PROGRESS_WORK, NULL);
+  install_progress_bytes_total(blob->size);
   if (report) {
     strcpy(report->artifact, name);
   }
@@ -341,23 +355,30 @@ static bool write_new(handle_t parent, const char *name, const struct config_blo
     }
     status = file_write(file, offset, blob->bytes + offset, wanted, &count);
     ok = status == CALL_OK && count && count <= wanted;
+    if (ok) {
+      install_progress_advance(count, 0);
+    }
     if (status == CALL_OK && !ok) {
       status = CALL_OUTCOME_UNKNOWN;
     }
     offset += count;
   }
   if (ok) {
+    install_progress_begin("Syncing staged configuration file", INSTALL_PROGRESS_NONE, NULL);
     status = file_sync(file);
     ok = status == CALL_OK;
   }
   handle_close(file);
+  install_progress_finish();
   return ok || failed(report, status);
 }
 
 static bool sync_mount(const struct config_storage_view *view,
     struct config_storage_report *report)
 {
+  install_progress_begin("Syncing configuration volume", INSTALL_PROGRESS_NONE, NULL);
   enum call_status status = mount_sync(view->control);
+  install_progress_finish();
   return status == CALL_OK || failed(report, status);
 }
 
@@ -390,6 +411,7 @@ bool config_storage_publish(const struct config_storage_view *view,
     return false;
   }
   *report = (struct config_storage_report){.phase = CONFIG_PHASE_CHECK};
+  install_progress_begin("Checking configuration publication inputs", INSTALL_PROGRESS_WORK, NULL);
   if (!view || !expected || !selected || !blob_valid(expected_record) ||
       !config_transaction_valid(transaction) || !revision || strnlen(revision, 65) > 64) {
     return failed(report, CALL_BAD_REQUEST);
@@ -483,6 +505,7 @@ bool config_storage_publish(const struct config_storage_view *view,
   config_record_artifact_name(transaction, CONFIG_CATALOG, "prepared", prepared_name);
   config_record_artifact_name(transaction, CONFIG_CATALOG, "committed", committed_name);
   report->phase = CONFIG_PHASE_STAGE;
+  install_progress_begin("Staging reviewed configuration publication", INSTALL_PROGRESS_WORK, NULL);
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     report->file = i;
     if (record->previous[i].digest.present && (i < CONFIG_SET_FILES || changed[i]) &&
@@ -501,6 +524,8 @@ bool config_storage_publish(const struct config_storage_view *view,
   }
   if (ok) {
     report->phase = CONFIG_PHASE_VERIFY;
+    install_progress_begin("Verifying staged configuration (filesystem view)",
+        INSTALL_PROGRESS_WORK, NULL);
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     if (record->previous[i].digest.present && (i < CONFIG_SET_FILES || changed[i]) &&
@@ -518,8 +543,13 @@ bool config_storage_publish(const struct config_storage_view *view,
   struct mount_interval_reply interval = {0};
   if (ok) {
     report->phase = CONFIG_PHASE_EXCLUSIVE;
+    install_progress_begin("Acquiring exclusive configuration interval", INSTALL_PROGRESS_NONE, NULL);
     enum call_status status = mount_begin(view->control, &interval);
     ok = status == CALL_OK || failed(report, status);
+    if (ok) {
+      install_progress_begin("Rechecking consumed and staged configuration under interval",
+          INSTALL_PROGRESS_WORK, NULL);
+    }
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     if (i == CONFIG_LIMINE && !changed[i]) {
@@ -551,21 +581,30 @@ bool config_storage_publish(const struct config_storage_view *view,
   }
   if (ok) {
     report->phase = CONFIG_PHASE_PREPARED;
+    install_progress_begin("Publishing prepared configuration record", INSTALL_PROGRESS_NONE, NULL);
     ok = rename_file(view->config_parent, prepared_name, CONFIG_RECORD_NAME, report) &&
         sync_mount(view, report);
   }
   if (ok) {
     report->phase = CONFIG_PHASE_SWAP;
+    install_progress_begin("Switching reviewed configuration names", INSTALL_PROGRESS_NONE, "files");
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     if (changed[i]) {
       report->file = i;
       ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
           rename_file(parent_for(view, i), staged[i], config_storage_file_name(i), report);
+      if (ok) {
+        install_progress_advance(0, 1);
+      }
     }
   }
   if (ok) {
     ok = sync_mount(view, report);
+  }
+  if (ok) {
+    install_progress_begin("Verifying selected configuration (filesystem view)",
+        INSTALL_PROGRESS_WORK, NULL);
   }
   for (unsigned i = 0; ok && i < CONFIG_SET_FILES; ++i) {
     ok = expected_name(view->config_parent, config_storage_file_name(i), &selected[i], report);
@@ -576,10 +615,14 @@ bool config_storage_publish(const struct config_storage_view *view,
   }
   if (ok) {
     report->phase = CONFIG_PHASE_COMMITTED;
+    install_progress_begin("Publishing committed configuration record", INSTALL_PROGRESS_NONE, NULL);
     ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
         rename_file(view->config_parent, committed_name, CONFIG_RECORD_NAME, report) &&
-        sync_mount(view, report) &&
-        expected_name(view->config_parent, CONFIG_RECORD_NAME, &committed, report);
+        sync_mount(view, report);
+    if (ok) {
+      install_progress_begin("Verifying committed configuration record", INSTALL_PROGRESS_WORK, NULL);
+      ok = expected_name(view->config_parent, CONFIG_RECORD_NAME, &committed, report);
+    }
     if (ok) {
       report->committed = true;
       record->committed = true;
@@ -587,6 +630,8 @@ bool config_storage_publish(const struct config_storage_view *view,
   }
   if (ok) {
     report->phase = CONFIG_PHASE_CLEANUP;
+    install_progress_begin("Verifying and removing recorded older recovery", INSTALL_PROGRESS_WORK,
+        "files");
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     const struct config_recovery_file *artifact = &record->obsolete[i];
@@ -608,11 +653,15 @@ bool config_storage_publish(const struct config_storage_view *view,
     enum call_status status = directory_remove(parent_for(view, i), artifact->name,
         DIRECTORY_KIND_FILE);
     ok = status == CALL_OK || failed(report, status);
+    if (ok) {
+      install_progress_advance(0, 1);
+    }
   }
   if (ok) {
     ok = sync_mount(view, report);
   }
   if (interval.id) {
+    install_progress_begin("Releasing configuration publication interval", INSTALL_PROGRESS_NONE, NULL);
     enum call_status status = mount_end(view->control, interval.id);
     if (ok && status != CALL_OK) {
       ok = failed(report, status);
@@ -624,5 +673,6 @@ bool config_storage_publish(const struct config_storage_view *view,
     report->phase = CONFIG_PHASE_DONE;
     report->artifact[0] = '\0';
   }
+  install_progress_finish();
   return ok;
 }
