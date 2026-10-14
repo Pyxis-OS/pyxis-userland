@@ -284,6 +284,18 @@ static int resource_errno(uint64_t outcome)
   return libc_call_errno(resource_outcome_status(outcome));
 }
 
+static bool named_path(const char *path)
+{
+  if (!path) {
+    return false;
+  }
+  const char *end = path;
+  while (*end && *end != '/' && *end != ':') {
+    ++end;
+  }
+  return *end == ':' && end[1] == '/' && end[2] == '/';
+}
+
 static enum call_status open_typed_path(const struct path_context *context,
     const char *path, uint64_t intent, uint64_t flags, struct resource_result *result)
 {
@@ -362,7 +374,8 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
     opened = old.result;
   } else {
     struct pyxis_working_snapshot working = {0};
-    status = pyxis_working_snapshot_init(&working, NULL);
+    /* Absolute names capture their environment entry, not the working chain. */
+    status = named_path(path) ? CALL_OK : pyxis_working_snapshot_init(&working, NULL);
     if (status == CALL_OK) {
       uint64_t intent = (mode->readable ? PROVIDER_INTENT_READ : 0) |
           (mode->writable ? PROVIDER_INTENT_WRITE : 0);

@@ -3,7 +3,6 @@
 #include "thread_platform.h"
 #include <clock.h>
 #include <provider_http_private.h>
-#include <pyxis/working_path.h>
 #include <string.h>
 
 bool libc_legacy_http_path(const char *path)
@@ -42,21 +41,16 @@ enum call_status libc_legacy_http_open(const char *path,
       }
     }
   }
-  struct pyxis_working_snapshot working = {0};
-  if (status == CALL_OK) {
-    status = pyxis_working_snapshot_init(&working, NULL);
-  }
   opened->submitted = !prepare_only && !mode->writable;
   uint64_t method = mode->writable ? HTTP_PREPARE_POST : HTTP_PREPARE_GET;
   if (status == CALL_OK) {
     status = opened->submitted ?
-        http_transaction_open_uri(&working.context, path, opened->deadline,
+        http_transaction_open_uri(NULL, path, opened->deadline,
             &opened->prepared, &opened->response) :
-        http_transaction_prepare_uri(&working.context, path, method,
+        http_transaction_prepare_uri(NULL, path, method,
             options ? options->flags : 0, options ? options->headers : NULL,
             options ? options->headers_size : 0, opened->deadline, &opened->prepared);
   }
-  pyxis_working_snapshot_close(&working);
   if (status == CALL_OK) {
     handle_t resource = opened->submitted ? opened->prepared.response :
         opened->prepared.control;
