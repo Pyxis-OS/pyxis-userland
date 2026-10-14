@@ -90,3 +90,42 @@ implicit space entry colliding with handwritten explicit array indices and for
 unsupported Limine header-renaming moves. Static machine checks do not establish
 mounted-volume, timezone-asset or live-network availability. There are no new
 self-tests, fault-injection hooks, boot automation or default kernel log lines.
+
+
+## 2026-10-14 128 MiB publication after retained allocation proof
+
+The earlier 128-MiB lease failure above describes the preflight implementation
+at `98fc5f5`; it is superseded by this scratch result, not removed as rationale.
+Publisher code `fb9b767d`, Pyxis `2d76c70c`, fs `c52ab584`, ports `2296a06c`,
+lwIP `a1aadb91`; ordinary `make -j8 image LOG_LEVEL=info` passes with the existing
+`pyxis-llvm23.1.3-e0801c2` compiler. No compiler-container rebuild.
+
+The pristine original 160-MiB scratch disk has a 128-MiB GPT ESP, 512-byte
+clusters, two mirrored FATs and 258,078 clusters. QEMU 10.2.2, Q35/nested
+KVM/host CPU, four CPUs, 512 MiB RAM, OVMF, modern VirtIO boot/scratch/RNG,
+no NIC/USB. The current archive uses only the existing private scratch grant
+profile override; no shipped installed profile is activated. No real ESP writes.
+
+Confirmed `config edit` applies three missing boot entries and explicitly adopts
+four existing owner values. Read-only GDB observes exactly one successful
+BEGIN → CHECK → END in the same process; CHECK starts with a delivered active
+interval and no publication mutation intervenes. Its absolute 30-second deadline
+is unchanged through END. CHECK uses 616 block admissions and 291 ms; BEGIN
+through successful END takes 4.711 s including debugger/shared-host overhead.
+All 30 observed interval operations succeed, including canonical swaps, sync,
+committed verification and cleanup. This is a profiled nested-QEMU result, not
+a native latency or power-loss guarantee.
+
+`config validate` reports the complete committed ESP selection. After clean
+physical-overlay shutdown, independent host extraction matches all four selected
+sizes/hashes to the committed record and all three retained previous files to
+pristine bytes. Limine remains byte-identical; adopted session/network values
+and foreign spans are preserved. `fsck.fat -n` is clean (17 files, 27 allocated
+clusters); both FAT copies are clean. All owned QEMU/GDB jobs stopped.
+
+CHECK failure is source-reviewed: publication stops in EXCLUSIVE, skips swaps
+and later effects, retains named staged recovery artifacts, and still attempts
+END through the existing cleanup path without replacing the original failure.
+No artificial failing CHECK or kernel allocation-failure injection was added.
+Native ESP testing awaits explicit owner approval/presence; use the parent
+FAT32 native run sheet.
