@@ -2,7 +2,9 @@
 
 `installer.pxe` runs in the trusted Install Pyxis space. It needs disk inventory,
 immutable boot kernel/archive FILEs, read-only boot assets, private memory,
-clock/randomness and SYSTEM_INFO plus its console streams. Normal shells lack
+clock/randomness and SYSTEM_INFO plus its console streams. Trusted init also
+delegates Caelum console WRITE as `installer_diagnostics` for log records;
+ordinary programs never receive it. Normal shells lack
 these installer grants. `init-install.pxe` forwards installer arguments without
 adding authority; optional RESTART authority remains narrowed.
 
@@ -47,7 +49,10 @@ plan and Review.
 
 Programs are whole selected non-rescue root `.pxe` files and complete `.pxb`
 trees. Reports compare paths, kinds, empty directories, file sizes and SHA-256
-per unit, showing new/updated/removed/unchanged roots and old/new payload sizes.
+per unit. Normal Review summarizes new/updated/removed/unchanged counts and
+payload bytes on one screen. `-v`/`--verbose`, `--plan` and Print show per-program
+old/new sizes and existing-volume labels. Selected target identity is re-shown
+before journal/legacy-scan questions and the post-scan Review.
 Removed means absent from the new revision, not deletion of the retained previous
 one. Missing/invalid prior manifests on a known tree require explicit `scan`
 consent (or its recorded legacy choice) for a raw read/hash inventory. Apply
@@ -99,12 +104,17 @@ revision cleanup keeps current and known previous; unknown previous skips it.
 Mounted verification retains the pool until reboot. Restart is offered only after
 successful interactive apply, with the existing remove-medium reminder.
 
-Shared observational records in `progress.h` report phases/counters throughout
-preparation and execution. The plain sink redraws at most 4 Hz on consoles or
-1 Hz elsewhere, coalescing clock checks at 64 KiB / 32 items. Blocking calls show
-activity without invented percentages. END closes observation, not success or
-durability. Clock/output failure disables redraws without changing a confirmed
-executor's I/O or result; a failed Review/report prevents apply.
+Shared observational records in `progress.h` feed a bounded in-place console
+bar when totals are known, or activity without an invented percentage. Major
+phases leave one final line; short checks remain silent. The observer redraws
+at most 4 Hz, coalescing clock checks at 64 KiB / 32 items. A blocking call shows
+a static marker. Non-console output leaves only final major/long lines.
+
+Phase boundaries and coalesced counters go to `installer_diagnostics`; `-v`
+prints those details locally instead of bars. Diagnostic and local-output
+failure disable only their own destination, without changing confirmed I/O.
+A failed Review/report prevents apply. END closes observation, never promises
+success or durability. Human output is stderr; stdout remains plan data only.
 
 Build with `make installer SDK=/path/to/sdk MBEDTLS_PREFIX=/path/to/mbedtls`.
 Use the configured export's headers/libraries and native npfs codec archive;
