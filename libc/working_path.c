@@ -267,9 +267,6 @@ enum call_status libc_working_snapshot_from(const struct pyxis_working_snapshot 
     goto done;
   }
   storage = NULL;
-  snapshot->context.roots = source->context.roots;
-  snapshot->context.root_count = source->context.root_count;
-  snapshot->context.namespace_handle = source->context.namespace_handle;
   if (cwd_override) {
     status = path_change(&snapshot->context, cwd_override, &workspace);
   }
@@ -301,8 +298,7 @@ enum call_status pyxis_working_snapshot_init(struct pyxis_working_snapshot *snap
   return status;
 }
 
-static enum call_status working_replace(const char *path, const struct path_root *roots,
-    size_t count, handle_t namespace_handle, bool bindings)
+static enum call_status working_replace(const char *path)
 {
   for (;;) {
     struct working_state *previous;
@@ -319,11 +315,6 @@ static enum call_status working_replace(const char *path, const struct path_root
     const struct pyxis_working_snapshot empty = {0};
     status = libc_working_snapshot_from(previous ? &previous->snapshot : &empty,
         &next->snapshot, path);
-    if (status == CALL_OK && bindings) {
-      next->snapshot.context.roots = roots;
-      next->snapshot.context.root_count = count;
-      next->snapshot.context.namespace_handle = namespace_handle;
-    }
     if (status != CALL_OK) {
       working_release(next);
       working_release(previous);
@@ -351,16 +342,7 @@ enum call_status pyxis_working_change(const char *path)
   if (!path || !*path) {
     return CALL_BAD_REQUEST;
   }
-  return working_replace(path, NULL, 0, HANDLE_INVALID, false);
-}
-
-enum call_status pyxis_working_bindings(const struct path_root *roots,
-    size_t count, handle_t namespace_handle)
-{
-  if (count && !roots) {
-    return CALL_BAD_REQUEST;
-  }
-  return working_replace(NULL, roots, count, namespace_handle, true);
+  return working_replace(path);
 }
 
 void pyxis_working_clear(void)

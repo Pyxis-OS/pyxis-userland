@@ -9,27 +9,18 @@ extern "C" {
 
 /* One retained native cwd, seeded lazily from startup. The view address stays
  * stable, but its contents and borrowed description change on successful cd.
- * Exclude change, bindings and clear from lookup through the last use of a
+ * Exclude change and clear from lookup through the last use of a
  * borrowed view. Internal file lookup uses owned snapshots instead. Unknown
  * initial spelling does not prevent relative capability lookup. */
 enum call_status pyxis_working_context(const struct path_context **context);
 const char *pyxis_working_path(void);
 enum call_status pyxis_working_change(const char *path);
 
-/* Borrow a complete binding set and namespace override, with no copies or
- * additional authority. Names and grants remain caller-owned: keep them alive
- * through every borrowed view and snapshot using them, including after a
- * replacement; do not mutate them during use. Replacing bindings does not
- * close or retain their grants.
- * NULL roots and an invalid namespace select the immutable startup bindings. */
-enum call_status pyxis_working_bindings(const struct path_root *roots,
-    size_t count, handle_t namespace_handle);
-
 /* Release the cwd and description once, then keep an initialized empty state.
  * Session bootstrap teardown must never resurrect its closed startup chain. */
 void pyxis_working_clear(void);
 
-/* Owns the directory chain and description; roots/namespace remain borrowed.
+/* Owns the directory chain and description.
  * Fresh output only, never shallow-copy. NULL override snapshots current cwd;
  * an explicit override resolves in isolation. Parent mutation preserves this
  * chain/path. Close once; uncertain native releases are never retried. */
