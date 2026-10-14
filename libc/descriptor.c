@@ -447,14 +447,15 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
     if (status == CALL_OK && mode->truncate) {
       status = file_resize(transaction->prepared.body, 0);
     }
-    error = status == CALL_OK ? 0 : libc_call_errno(status);
+    error = status == CALL_OK ? 0 : status == CALL_TIMED_OUT ||
+        status == CALL_ENDPOINT_CLOSED ? EIO : libc_call_errno(status);
   }
   if (!error && !transactional && !legacy && kind == DESCRIPTOR_FILE && mode->append && !mode->readable) {
     status = file_size(opened.resource, &position);
     error = status == CALL_OK ? 0 : libc_call_errno(status);
   }
   if (error) {
-    if (status == CALL_OK && failure) {
+    if ((status == CALL_OK || opened.resource != HANDLE_INVALID) && failure) {
       failure->available = true;
       failure->resource = opened;
       opened = (struct resource_result){0};
