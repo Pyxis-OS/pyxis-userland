@@ -5,6 +5,7 @@
 #include <endpoint.h>
 #include <handle.h>
 #include <forwarder.h>
+#include <resource.h>
 #include <startup.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,6 +26,7 @@ struct file_export {
   handle_t controller;
   const char *bytes;
   size_t size;
+  uint64_t outcome;
   /* A slot remains reserved until its export's RETIRE is acknowledged. */
   bool live;
 };
@@ -164,8 +166,9 @@ static enum call_status open_file(struct provider *provider,
     return reply(packet, CALL_READ_ONLY, NULL, 0, NULL);
   }
   const uint8_t *target = packet->data + sizeof(request);
-  const char *bytes;
-  size_t size;
+  const char *bytes = NULL;
+  size_t size = 0;
+  uint64_t outcome = RESOURCE_OK;
   if (target_name(target, request.target_size, "welcome")) {
     bytes = provider->welcome;
     size = strlen(bytes);
@@ -173,7 +176,7 @@ static enum call_status open_file(struct provider *provider,
     bytes = guide;
     size = sizeof(guide) - 1;
   } else {
-    return reply(packet, CALL_NOT_FOUND, NULL, 0, NULL);
+    outcome = RESOURCE_NOT_FOUND;
   }
   size_t slot = 0;
   while (slot < FILE_SLOTS && provider->files[slot].live) {
@@ -194,21 +197,34 @@ static enum call_status open_file(struct provider *provider,
     return reply(packet, status, NULL, 0, NULL);
   }
   provider->files[slot] = (struct file_export){
-    .controller = controller, .bytes = bytes, .size = size, .live = true,
+    .controller = controller, .bytes = bytes, .size = size, .outcome = outcome,
+    .live = true,
   };
   static const char media_type[] = "text/plain; charset=utf-8";
   struct provider_open_reply response = {
     .protocol = PROTOCOL_FILE,
     .description = {
-      .outcome = RESOURCE_OK,
-      .flags = RESOURCE_LENGTH_KNOWN | RESOURCE_REREADABLE | RESOURCE_COMPLETE,
-      .length = size,
-      .media_type_size = sizeof(media_type) - 1,
+      .outcome = outcome,
     },
   };
-  memcpy(response.description.media_type, media_type, sizeof(media_type) - 1);
+  static const char not_found_detail[] = "Not found";
+  static const char not_found_body[] = "The text resource was not found.\n";
+  const char *error_body = NULL;
+  size_t error_body_size = 0;
+  if (outcome == RESOURCE_OK) {
+    response.description.flags = RESOURCE_LENGTH_KNOWN | RESOURCE_REREADABLE | RESOURCE_COMPLETE;
+    response.description.length = size;
+    response.description.media_type_size = sizeof(media_type) - 1;
+    memcpy(response.description.media_type, media_type, sizeof(media_type) - 1);
+  } else {
+    response.description.flags = RESOURCE_ERROR_BODY;
+    response.description.detail_size = sizeof(not_found_detail) - 1;
+    memcpy(response.description.detail, not_found_detail, sizeof(not_found_detail) - 1);
+    error_body = not_found_body;
+    error_body_size = sizeof(not_found_body) - 1;
+  }
   status = endpoint_describe_publish(provider->receiver, FILE_FIRST_ID + slot,
-      &response.description, NULL, 0);
+      &response.description, error_body, error_body_size);
   if (status != CALL_OK) {
     enum call_status cut = forwarder_cut(provider->files[slot].controller);
     enum call_status closed = close_handle(&client);
@@ -256,6 +272,9 @@ static enum call_status serve_file(struct file_export *file,
   }
   if (!(packet->rights & FILE_RIGHT_READ)) {
     return reply(packet, CALL_DENIED, NULL, 0, NULL);
+  }
+  if (file->outcome != RESOURCE_OK) {
+    return reply(packet, resource_outcome_status(file->outcome), NULL, 0, NULL);
   }
   if (packet->operation == FILE_SIZE || packet->operation == FILE_INFO) {
     if (packet->size != 0) {
