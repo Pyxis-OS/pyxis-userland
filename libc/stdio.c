@@ -556,6 +556,42 @@ int libc_stdio_flush_descriptor(int descriptor)
   return result;
 }
 
+int libc_stdio_stage_close_descriptor(int descriptor, struct descriptor_object *expected)
+{
+  FILE *stream = NULL;
+  libc_lock_acquire(&stream_guard);
+  for (FILE *current = streams; current; current = current->next) {
+    if (__atomic_load_n(&current->descriptor, __ATOMIC_ACQUIRE) == descriptor &&
+        !current->closing && current->references != UINT32_MAX) {
+      ++current->references;
+      stream = current;
+      break;
+    }
+  }
+  libc_lock_release(&stream_guard);
+  if (!stream) {
+    return 0;
+  }
+  if (!stream_acquire_retained(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  if (stream->operation != expected) {
+    errno = EBADF;
+    return -1;
+  }
+  int error = stream->output_count && flush_output(stream) < 0 ? errno : 0;
+  if (stream->error && !error) {
+    error = EIO;
+  }
+  if (error) {
+    descriptor_object_abandon(expected, EIO);
+    errno = error;
+    return -1;
+  }
+  return 0;
+}
+
 int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
 {
   if (!stream_acquire(stream)) {
