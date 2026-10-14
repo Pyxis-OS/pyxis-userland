@@ -48,10 +48,10 @@ enum call_status path_context_init(struct path_context *context,
 void path_context_close(struct path_context *context);
 
 /* Exact name:// prefixes capture the caller's current environment value.
- * Directory values start native traversal; provider values open the full URI.
+ * Directory values start native traversal; other values open the opaque remainder.
+ * TEXT values capture an immutable native READ FILE.
  * Captures own their authority through the operation, outside table guards. Directory
- * operations on providers return UNAVAILABLE while live, or ENDPOINT_CLOSED
- * once closed. Other paths use cwd.
+ * operations on non-directory values are unsupported. Other paths use cwd.
  * Native paths reject leading / and empty input. Repeated / and . are accepted;
  * .. walks the
  * retained chain, failing at its boundary. A trailing / requires a directory.
@@ -71,7 +71,7 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
     uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
 
 /* Same owned-handle lookup, but provider routes return BAD_OPERATION without
- * issuing OPEN. Binding discovery, ambiguity and traversal errors are unchanged. */
+ * issuing OPEN. Native held FILE values are accepted; actual exported values are refused. */
 enum call_status path_resolve_native(const struct path_context *context, const char *path,
     uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
 

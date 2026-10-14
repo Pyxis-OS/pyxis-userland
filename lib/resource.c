@@ -1,5 +1,8 @@
 #include <resource.h>
 #include <endpoint.h>
+#include <environment.h>
+#include <path.h>
+#include <startup.h>
 #include <directory.h>
 #include <file.h>
 #include <handle.h>
@@ -185,15 +188,17 @@ static enum call_status finish_file(handle_t resource, uint64_t intent, uint64_t
   return CALL_OK;
 }
 
-static enum call_status open_directory(handle_t target, const char *remainder,
+static enum call_status open_directory(const handle_t *initial, size_t initial_count,
+    const char *remainder,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
     struct resource_result *result)
 {
   size_t length = strlen(remainder);
-  if (length == SIZE_MAX || length + 1 > SIZE_MAX / sizeof(handle_t)) {
+  if (!initial_count || length == SIZE_MAX || initial_count > SIZE_MAX - length ||
+      initial_count + length > SIZE_MAX / sizeof(handle_t)) {
     return CALL_LIMIT;
   }
-  handle_t *chain = malloc((length + 1) * sizeof(*chain));
+  handle_t *chain = malloc((initial_count + length) * sizeof(*chain));
   char *component = malloc(length + 1);
   if (!chain || !component) {
     free(component);
@@ -201,11 +206,14 @@ static enum call_status open_directory(handle_t target, const char *remainder,
     return CALL_NO_MEMORY;
   }
   size_t count = 0;
-  enum call_status status = handle_copy(target, &chain[0]);
-  if (status != CALL_OK) {
-    goto done;
+  enum call_status status = CALL_OK;
+  while (count < initial_count) {
+    status = handle_copy(initial[count], &chain[count]);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    ++count;
   }
-  count = 1;
   const char *path = remainder;
   uint64_t file_rights = ((intent & PROVIDER_INTENT_READ) ? FILE_RIGHT_READ : 0) |
       ((intent & PROVIDER_INTENT_WRITE) ? FILE_RIGHT_WRITE : 0);
@@ -339,7 +347,7 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
   }
   if (info.protocol == PROTOCOL_DIRECTORY) {
     return info.kind == HANDLE_KIND_NATIVE && !info.transport ?
-        open_directory(target, remainder, intent, flags, deadline_ns, result) :
+        open_directory(&target, 1, remainder, intent, flags, deadline_ns, result) :
         CALL_BAD_OPERATION;
   }
   if (info.protocol != PROTOCOL_FILE) {
@@ -360,4 +368,48 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
     return status;
   }
   return finish_file(resource, intent, flags, deadline_ns, result);
+}
+
+enum call_status resource_open_path(const struct path_context *context, const char *path,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+    struct resource_result *result)
+{
+  if (!result) {
+    return CALL_BAD_REQUEST;
+  }
+  *result = (struct resource_result){0};
+  if (!path || !*path || *path == '/' || !intent || (intent & ~PROVIDER_INTENTS) ||
+      (flags & ~PROVIDER_OPEN_FLAGS) ||
+      ((flags & PROVIDER_OPEN_EXCLUSIVE) && !(flags & PROVIDER_OPEN_CREATE)) ||
+      ((flags & (PROVIDER_OPEN_TRUNCATE | PROVIDER_OPEN_APPEND)) &&
+      !(intent & PROVIDER_INTENT_WRITE))) {
+    return CALL_BAD_REQUEST;
+  }
+  const char *end = path;
+  while (*end && *end != '/' && *end != ':') {
+    ++end;
+  }
+  if (*end == ':' && end[1] == '/' && end[2] == '/') {
+    size_t length = end - path;
+    if (!length || length > ENVIRONMENT_NAME_MAX) {
+      return CALL_BAD_REQUEST;
+    }
+    char name[ENVIRONMENT_NAME_MAX + 1];
+    memcpy(name, path, length);
+    name[length] = 0;
+    handle_t target = HANDLE_INVALID;
+    enum call_status status = environment_lookup_file(startup_environment_handle(),
+        name, &target);
+    if (status != CALL_OK) {
+      return status;
+    }
+    status = resource_open_held(target, end + 3, intent, flags, deadline_ns, result);
+    handle_close(target);
+    return status;
+  }
+  if (!context || !context->count) {
+    return CALL_UNAVAILABLE;
+  }
+  return open_directory(context->directories, context->count, path, intent, flags,
+      deadline_ns, result);
 }

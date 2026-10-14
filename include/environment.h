@@ -28,6 +28,9 @@ extern "C" {
 bool environment_name(char target[ENVIRONMENT_NAME_MAX + 1], const char *name);
 enum call_status environment_lookup(handle_t table, const char *name,
     struct environment_entry_reply *entry, char *text, size_t capacity);
+/* Captures a CAP unchanged or a TEXT value as an owned immutable native READ
+ * FILE from the same publication. No borrowed table storage or second lookup. */
+enum call_status environment_lookup_file(handle_t table, const char *name, handle_t *handle);
 enum call_status environment_enumerate(handle_t snapshot, size_t index,
     struct environment_entry_reply *entry, char *text, size_t capacity);
 enum call_status environment_set_batch(handle_t table,

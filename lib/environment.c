@@ -72,6 +72,30 @@ enum call_status environment_lookup(handle_t table, const char *name,
   return read_entry(table, &request, sizeof(request), entry);
 }
 
+enum call_status environment_lookup_file(handle_t table, const char *name, handle_t *handle)
+{
+  if (!handle) {
+    return CALL_BAD_REQUEST;
+  }
+  *handle = HANDLE_INVALID;
+  struct environment_lookup_message request = {
+    .header = {PROTOCOL_ENVIRONMENT, ENVIRONMENT_LOOKUP_FILE},
+  };
+  if (!environment_name(request.name, name)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct environment_entry_reply entry;
+  enum call_status status = read_entry(table, &request, sizeof(request), &entry);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (!entry.handle) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *handle = entry.handle;
+  return CALL_OK;
+}
+
 enum call_status environment_enumerate(handle_t snapshot, size_t index,
     struct environment_entry_reply *entry, char *text, size_t capacity)
 {

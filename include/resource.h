@@ -39,4 +39,13 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
     struct resource_result *result);
 
+struct path_context;
+/* Exact name:// lookup captures one CAP or sealed TEXT FILE from the caller's
+ * environment. Relative paths copy the complete retained cwd chain, so .. can
+ * traverse its ancestors but never escape its boundary. No URI expansion or
+ * legacy HTTP fallback. Returned ownership and outcomes match held OPEN. */
+enum call_status resource_open_path(const struct path_context *context, const char *path,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+    struct resource_result *result);
+
 #endif

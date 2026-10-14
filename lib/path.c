@@ -3,6 +3,7 @@
 #include <clock.h>
 #include <environment.h>
 #include <path.h>
+#include <resource.h>
 #include <provider.h>
 #include <provider_http_private.h>
 #include <startup.h>
@@ -84,7 +85,7 @@ static enum call_status starting_chain(const struct path_context *context,
       return status;
     }
     handle_t root = HANDLE_INVALID;
-    status = environment_capability(startup_environment_handle(), workspace->component, &root);
+    status = environment_lookup_file(startup_environment_handle(), workspace->component, &root);
     if (status != CALL_OK) {
       return status;
     }
@@ -94,6 +95,7 @@ static enum call_status starting_chain(const struct path_context *context,
       handle_close(root);
       return status;
     }
+    *path = end + 3;
     if (info.protocol != PROTOCOL_DIRECTORY) {
       *provider = root;
       return CALL_OK;
@@ -152,28 +154,41 @@ static enum call_status walk(const struct path_context *context, const char *pat
     if (provider_route) {
       *provider_route = true;
     }
-    status = native_only ? CALL_BAD_OPERATION : CALL_UNAVAILABLE;
-    if (!native_only && target == WALK_FILE) {
-      if (http) {
-        status = CALL_BAD_OPERATION;
-      } else {
-        struct provider_result result;
-        uint64_t intent = ((rights & FILE_RIGHT_READ) ? PROVIDER_INTENT_READ : 0) |
-            ((rights & FILE_RIGHT_WRITE) ? PROVIDER_INTENT_WRITE : 0);
-        status = provider_open(provider, path, intent, 0, workspace->deadline_ns,
-            &result, file);
-        if (status == CALL_OK) {
-          status = result.status;
+    struct handle_info binding;
+    status = handle_query(provider, &binding);
+    if (status == CALL_OK && native_only && binding.kind != HANDLE_KIND_NATIVE) {
+      status = CALL_BAD_OPERATION;
+    }
+    if (status == CALL_OK && target != WALK_FILE) {
+      status = CALL_BAD_OPERATION;
+    }
+    if (status == CALL_OK && http && binding.protocol == PROTOCOL_PROVIDER) {
+      status = provider_http_open(context, provider, uri, rights, workspace->clock,
+          workspace->deadline_ns, workspace->http, workspace->response, file);
+    } else if (status == CALL_OK) {
+      struct resource_result result;
+      uint64_t intent = ((rights & FILE_RIGHT_READ) ? PROVIDER_INTENT_READ : 0) |
+          ((rights & FILE_RIGHT_WRITE) ? PROVIDER_INTENT_WRITE : 0);
+      status = resource_open_held(provider, path, intent, 0, workspace->deadline_ns, &result);
+      if (status == CALL_OK) {
+        status = resource_outcome_status(result.info.description.outcome);
+        if (status == CALL_OK && result.info.protocol != PROTOCOL_FILE) {
+          status = CALL_BAD_OPERATION;
         }
-        if (status == CALL_OK && workspace->response) {
-          struct pyxis_response_info *info = workspace->response;
-          info->flags = PYXIS_RESPONSE_PROVIDER;
-          if (result.metadata.media_type_size) {
-            info->flags |= PYXIS_RESPONSE_MEDIA_TYPE;
-            memcpy(info->media_type, result.metadata.media_type,
-                result.metadata.media_type_size + 1);
+        if (status == CALL_OK) {
+          *file = result.resource;
+          result.resource = HANDLE_INVALID;
+          if (workspace->response) {
+            struct pyxis_response_info *info = workspace->response;
+            info->flags = binding.kind == HANDLE_KIND_EXPORTED ? PYXIS_RESPONSE_PROVIDER : 0;
+            if (result.info.description.media_type_size) {
+              info->flags |= PYXIS_RESPONSE_MEDIA_TYPE;
+              memcpy(info->media_type, result.info.description.media_type,
+                  result.info.description.media_type_size + 1);
+            }
           }
         }
+        resource_result_close(&result);
       }
     }
     enum call_status closed = handle_close(provider);
