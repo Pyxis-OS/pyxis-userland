@@ -2,7 +2,7 @@
 #define USERSPACE_BUNDLE_H
 
 #include <path.h>
-#include <startup.h>
+#include <environment.h>
 
 struct bundle_program;
 
@@ -36,7 +36,7 @@ enum call_status bundle_open(const struct path_context *context,
 void bundle_program_close(struct bundle_program *program);
 handle_t bundle_program_image(const struct bundle_program *program);
 uint64_t bundle_program_stack_bytes(const struct bundle_program *program);
-const struct startup_binding *bundle_program_roots(const struct bundle_program *program,
+const struct environment_value *bundle_program_entries(const struct bundle_program *program,
     size_t *count);
 const struct bundle_grant_request *bundle_program_grants(const struct bundle_program *program,
     size_t *count);

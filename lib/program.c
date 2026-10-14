@@ -68,7 +68,7 @@ static enum call_status open_interpreter(const struct path_context *context,
 struct script_scratch {
   char *prefix;
   struct launch_grant *grants;
-  struct launch_binding *resources;
+  struct launch_environment_entry *entries;
   const char **arguments;
   handle_t image;
 };
@@ -79,7 +79,7 @@ static void release_script(struct script_scratch *scratch)
     handle_close(scratch->image);
   }
   free(scratch->arguments);
-  free(scratch->resources);
+  free(scratch->entries);
   free(scratch->grants);
   free(scratch->prefix);
 }
@@ -90,25 +90,25 @@ static enum call_status prepare_script(const struct launch_request *source,
 {
   if (!source->argc || !source->argv ||
       (source->grant_count && !source->grants) ||
-      (source->resource_count && !source->resources)) {
+      (source->entry_count && !source->entries)) {
     return CALL_BAD_REQUEST;
   }
   if (source->argc >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(char *) - 1 ||
       source->grant_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) ||
-      source->resource_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_binding)) {
+      source->entry_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry)) {
     return CALL_LIMIT;
   }
-  const struct launch_binding *original_resources = (const void *)(uintptr_t)source->resources;
-  for (size_t i = 0; i < source->resource_count; ++i) {
-    if (!strcmp((const char *)(uintptr_t)original_resources[i].name, "script")) {
+  const struct launch_environment_entry *original_entries = (const void *)(uintptr_t)source->entries;
+  for (size_t i = 0; i < source->entry_count; ++i) {
+    if (!strcmp((const char *)(uintptr_t)original_entries[i].name, "script")) {
       return CALL_BAD_REQUEST;
     }
   }
 
   scratch->grants = malloc((source->grant_count + 1) * sizeof(*scratch->grants));
-  scratch->resources = malloc((source->resource_count + 1) * sizeof(*scratch->resources));
+  scratch->entries = malloc((source->entry_count + 1) * sizeof(*scratch->entries));
   scratch->arguments = malloc((source->argc + 2) * sizeof(*scratch->arguments));
-  if (!scratch->grants || !scratch->resources || !scratch->arguments) {
+  if (!scratch->grants || !scratch->entries || !scratch->arguments) {
     return CALL_NO_MEMORY;
   }
   enum call_status status = open_interpreter(interpreter_context, interpreter,
@@ -132,12 +132,14 @@ static enum call_status prepare_script(const struct launch_request *source,
   uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
   scratch->grants[source->grant_count] =
       (struct launch_grant){source->image, FILE_RIGHT_READ, transport};
-  if (source->resource_count) {
-    memcpy(scratch->resources, original_resources,
-        source->resource_count * sizeof(*scratch->resources));
+  if (source->entry_count) {
+    memcpy(scratch->entries, original_entries,
+        source->entry_count * sizeof(*scratch->entries));
   }
-  scratch->resources[source->resource_count] =
-      (struct launch_binding){(uintptr_t)"script", source->grant_count};
+  scratch->entries[source->entry_count] =
+      (struct launch_environment_entry){
+      .name = (uintptr_t)"script", .kind = ENVIRONMENT_CAP,
+      .flags = ENVIRONMENT_EXPORTED, .value = source->grant_count};
   scratch->arguments[0] = interpreter;
   memcpy(scratch->arguments + 1, (const void *)(uintptr_t)source->argv,
       source->argc * sizeof(*scratch->arguments));
@@ -146,8 +148,8 @@ static enum call_status prepare_script(const struct launch_request *source,
   request->image = scratch->image;
   request->grants = (uintptr_t)scratch->grants;
   request->grant_count++;
-  request->resources = (uintptr_t)scratch->resources;
-  request->resource_count++;
+  request->entries = (uintptr_t)scratch->entries;
+  request->entry_count++;
   request->argv = (uintptr_t)scratch->arguments;
   request->argc++;
   /* The low-level launcher accepts only PXE, so another script cannot recurse.

@@ -1,7 +1,7 @@
 #include <abi/file.h>
 #include <handle.h>
 #include <clock.h>
-#include <namespace.h>
+#include <environment.h>
 #include <path.h>
 #include <provider.h>
 #include <startup.h>
@@ -63,20 +63,17 @@ static enum call_status copy_component(struct path_workspace *workspace,
   return CALL_OK;
 }
 
-/* Only a leading scheme:// selects a root; colons elsewhere are ordinary name
- * bytes. Startup scheme names exclude ':' and '/', so the prefix is unambiguous. */
+/* Lookup captures one owned value; neither context nor scratch retains live
+ * table pointers. Relative paths instead copy the independently held cwd chain. */
 static enum call_status starting_chain(const struct path_context *context,
     const char **path, struct path_workspace *workspace, size_t *count,
-    handle_t *provider, bool http)
+    handle_t *provider)
 {
   const char *start = *path;
   const char *end = start;
   while (*end && *end != '/' && *end != ':') {
     ++end;
   }
-  handle_t root;
-  const handle_t *source;
-  size_t source_count;
   if (*end == ':' && end[1] == '/' && end[2] == '/') {
     if (end == start) {
       return CALL_BAD_REQUEST;
@@ -85,66 +82,38 @@ static enum call_status starting_chain(const struct path_context *context,
     if (status != CALL_OK) {
       return status;
     }
-    if (http) {
-      const char *name = end - start == 5 ? "https" : "http";
-      if (strlen(name) >= workspace->component_capacity) {
-        return CALL_LIMIT;
-      }
-      memcpy(workspace->component, name, strlen(name) + 1);
+    handle_t root = HANDLE_INVALID;
+    status = environment_capability(startup_environment_handle(), workspace->component, &root);
+    if (status != CALL_OK) {
+      return status;
     }
-    root = HANDLE_INVALID;
-    if (context && context->roots) {
-      for (size_t i = 0; i < context->root_count; ++i) {
-        if (!strcmp(context->roots[i].name, workspace->component)) {
-          root = context->roots[i].handle;
-          break;
-        }
-      }
-    } else {
-      root = startup_root(workspace->component);
+    struct handle_info info;
+    status = handle_query(root, &info);
+    if (status != CALL_OK) {
+      handle_close(root);
+      return status;
     }
-    if (http && root != HANDLE_INVALID) {
-      return CALL_BAD_REQUEST;
+    if (info.protocol != PROTOCOL_DIRECTORY) {
+      *provider = root;
+      return CALL_OK;
     }
-    handle_t namespace_handle = context && context->namespace_handle != HANDLE_INVALID ?
-        context->namespace_handle : startup_namespace();
-    if (namespace_handle != HANDLE_INVALID) {
-      handle_t binding = HANDLE_INVALID;
-      enum call_status lookup = namespace_lookup(namespace_handle,
-          workspace->component, &binding);
-      if (lookup == CALL_OK || lookup == CALL_ENDPOINT_CLOSED) {
-        if (root != HANDLE_INVALID) {
-          if (binding != HANDLE_INVALID) {
-            handle_close(binding);
-          }
-          return CALL_BAD_REQUEST;
-        }
-        *provider = binding;
-        return lookup;
-      }
-      if (lookup != CALL_NOT_FOUND && lookup != CALL_BAD_REQUEST) {
-        return lookup;
-      }
+    if (!workspace->directory_capacity) {
+      handle_close(root);
+      return CALL_LIMIT;
     }
-    if (root == HANDLE_INVALID) {
-      return CALL_NOT_FOUND;
-    }
-    source = &root;
-    source_count = 1;
+    workspace->directories[(*count)++] = root;
     *path = end + 3;
-  } else {
-    if (!context || !context->count) {
-      return CALL_UNAVAILABLE;
-    }
-    source = context->directories;
-    source_count = context->count;
+    return CALL_OK;
   }
-  if (source_count > workspace->directory_capacity) {
+  if (!context || !context->count) {
+    return CALL_UNAVAILABLE;
+  }
+  if (context->count > workspace->directory_capacity) {
     return CALL_LIMIT;
   }
-  while (*count < source_count) {
-    handle_t *destination = &workspace->directories[*count];
-    enum call_status status = handle_copy(source[*count], destination);
+  while (*count < context->count) {
+    enum call_status status = handle_copy(context->directories[*count],
+        &workspace->directories[*count]);
     if (status != CALL_OK) {
       return status;
     }
@@ -173,11 +142,8 @@ static enum call_status walk(const struct path_context *context, const char *pat
   const char *http_uri = !strncmp(uri, "json+", 5) ? uri + 5 : uri;
   bool http = target == WALK_FILE && !native_only &&
       provider_http_uri(http_uri);
-  if (http) {
-    path = http_uri;
-  }
   handle_t provider = HANDLE_INVALID;
-  enum call_status status = starting_chain(context, &path, workspace, count, &provider, http);
+  enum call_status status = starting_chain(context, &path, workspace, count, &provider);
   if (status != CALL_OK) {
     return status;
   }

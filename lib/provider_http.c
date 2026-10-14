@@ -2,7 +2,7 @@
 #include <handle.h>
 #include <http_transaction.h>
 #include <stdlib.h>
-#include <namespace.h>
+#include <environment.h>
 #include <path.h>
 #include <provider.h>
 #include <startup.h>
@@ -37,27 +37,9 @@ static bool same_origin(const struct provider_http_origin *origin,
 static enum call_status binding(const struct path_context *context,
     enum http_scheme scheme, handle_t *provider)
 {
+  (void)context;
   const char *name = scheme == HTTP_SCHEME_HTTPS ? "https" : "http";
-  handle_t root = HANDLE_INVALID;
-  if (context && context->roots) {
-    for (size_t i = 0; i < context->root_count; ++i) {
-      if (!strcmp(context->roots[i].name, name)) {
-        root = context->roots[i].handle;
-        break;
-      }
-    }
-  } else {
-    root = startup_root(name);
-  }
-  if (root != HANDLE_INVALID) {
-    return CALL_BAD_REQUEST;
-  }
-  handle_t namespace = context && context->namespace_handle != HANDLE_INVALID ?
-      context->namespace_handle : startup_namespace();
-  if (namespace == HANDLE_INVALID) {
-    return CALL_NOT_FOUND;
-  }
-  return namespace_lookup(namespace, name, provider);
+  return environment_capability(startup_environment_handle(), name, provider);
 }
 
 static void consume(struct provider_http_budget *remaining,

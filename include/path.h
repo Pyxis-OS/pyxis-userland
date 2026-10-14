@@ -3,11 +3,6 @@
 
 #include <directory.h>
 
-struct path_root {
-  const char *name;
-  handle_t handle;
-};
-
 /* Owns count handles in caller-owned storage, boundary first and current last.
  * Each handle retains its own rights; changing directory requests the parent
  * grant for each child. Do not close entries separately or copy this owning struct.
@@ -16,14 +11,7 @@ struct path_context {
   handle_t *directories;
   size_t count;
   size_t capacity;
-  /* Optional caller-owned complete binding set, with borrowed names/handles.
-   * NULL selects immutable startup roots. Keep it alive through path calls;
-   * changes affect explicit URI resolution, not the retained cwd chain. */
-  const struct path_root *roots;
-  size_t root_count;
-  /* Optional borrowed namespace override with LOOKUP. Zero selects
-   * startup_namespace(). Shells can update this after creating a namespace. */
-  handle_t namespace_handle;
+
 };
 
 /* Scratch storage must be disjoint from the context, inputs and outputs.
@@ -52,17 +40,16 @@ extern "C" {
 /* Initialize a fresh/closed context by copying a borrowed directory chain.
  * Use startup_working_directories()/count() for the initial chain, or one
  * directory for a standalone subtree. Inputs must be directory capabilities.
- * Context, storage and input chain must be disjoint. Set optional root bindings
- * after initialization; closing the context does not close their handles.
+ * Context, storage and input chain must be disjoint. Exact names resolve
+ * through the caller-bound environment; no alternate naming map is attached.
  * Failure leaves an empty context and preserves every input handle. */
 enum call_status path_context_init(struct path_context *context,
     handle_t *storage, size_t capacity, const handle_t *directories, size_t count);
 void path_context_close(struct path_context *context);
 
-/* Exact scheme:// prefixes select context bindings (or startup roots).
- * A name bound as both root and namespace service is ambiguous and fails with
- * BAD_REQUEST, including if its provider has closed. Namespace-only names
- * open files through their provider using the full URI unchanged. Directory
+/* Exact name:// prefixes capture the caller's current environment value.
+ * Directory values start native traversal; provider values open the full URI.
+ * Captures own their authority through the operation, outside table guards. Directory
  * operations on providers return UNAVAILABLE while live, or ENDPOINT_CLOSED
  * once closed. Other paths use cwd.
  * Native paths reject leading / and empty input. Repeated / and . are accepted;

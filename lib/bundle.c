@@ -1,4 +1,5 @@
 #include <bundle.h>
+#include <startup.h>
 #include <bundle_launch.h>
 #include <abi/disk.h>
 #include <abi/mount.h>
@@ -51,9 +52,9 @@ struct bundle_program {
   uint64_t stack_bytes;
   handle_t revision;
   handle_t image;
-  struct startup_binding roots[BUNDLE_RESOURCE_LIMIT + 1];
+  struct environment_value entries[BUNDLE_RESOURCE_LIMIT + 1];
   const char *resource_paths[BUNDLE_RESOURCE_LIMIT];
-  size_t root_count;
+  size_t entry_count;
   struct bundle_command commands[BUNDLE_COMMAND_LIMIT];
   size_t command_count;
   struct bundle_grant_request grants[BUNDLE_GRANT_LIMIT];
@@ -257,24 +258,17 @@ static enum call_status read_json(handle_t file, struct bundle_json *json)
 
 static bool root_conflict(const struct path_context *context, const char *name)
 {
+  (void)context;
   if (!strcmp(name, "app")) {
     return true;
   }
-  if (context && context->roots) {
-    for (size_t i = 0; i < context->root_count; ++i) {
-      if (!strcmp(context->roots[i].name, name)) {
-        return true;
-      }
-    }
-  } else {
-    const struct startup_binding *roots = startup_roots();
-    for (size_t i = 0; i < startup_root_count(); ++i) {
-      if (!strcmp((const char *)(uintptr_t)roots[i].name, name)) {
-        return true;
-      }
-    }
+  struct environment_entry_reply reply;
+  enum call_status status = environment_lookup(startup_environment_handle(), name,
+      &reply, NULL, 0);
+  if (status == CALL_OK && reply.handle) {
+    handle_close(reply.handle);
   }
-  return startup_resource(name) != HANDLE_INVALID;
+  return status != CALL_NOT_FOUND;
 }
 
 static enum call_status parse_commands(struct bundle_program *program,
@@ -308,15 +302,19 @@ static enum call_status parse_resources(struct bundle_program *program,
   const struct bundle_json_node *nodes = program->manifest.nodes;
   for (size_t key = object->child; key; key = nodes[nodes[key].next].next) {
     const struct bundle_json_node *value = &nodes[nodes[key].next];
-    if (program->root_count == BUNDLE_RESOURCE_LIMIT + 1) {
+    if (program->entry_count == BUNDLE_RESOURCE_LIMIT + 1) {
       return CALL_LIMIT;
     }
     if (!valid_name(nodes[key].string) || !strcmp(nodes[key].string, "app") ||
         value->type != BUNDLE_JSON_STRING || !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
     }
-    size_t index = program->root_count++;
-    program->roots[index].name = (uintptr_t)nodes[key].string;
+    size_t index = program->entry_count++;
+    if (!environment_name(program->entries[index].name, nodes[key].string)) {
+      return CALL_BAD_REQUEST;
+    }
+    program->entries[index].kind = ENVIRONMENT_CAP;
+    program->entries[index].flags = ENVIRONMENT_EXPORTED;
     program->resource_paths[index - 1] = value->string;
   }
   return CALL_OK;
@@ -440,8 +438,10 @@ static enum call_status parse_manifest(const struct path_context *context,
     return CALL_BAD_REQUEST;
   }
   bool format = false, commands = false, resources = false, grants = false;
-  program->roots[0].name = (uintptr_t)"app";
-  program->root_count = 1;
+  memcpy(program->entries[0].name, "app", sizeof("app"));
+  program->entries[0].kind = ENVIRONMENT_CAP;
+  program->entries[0].flags = ENVIRONMENT_EXPORTED;
+  program->entry_count = 1;
   for (size_t key = nodes[1].child; key; key = nodes[nodes[key].next].next) {
     const struct bundle_json_node *value = &nodes[nodes[key].next];
     const char *name = nodes[key].string;
@@ -488,9 +488,9 @@ static enum call_status parse_manifest(const struct path_context *context,
   if (!format || !program->id || !program->entry || !commands || !resources || !grants) {
     return CALL_BAD_REQUEST;
   }
-  for (size_t i = 1; i < program->root_count; ++i) {
+  for (size_t i = 1; i < program->entry_count; ++i) {
     for (size_t j = 0; j < program->grant_count; ++j) {
-      const char *name = (const char *)(uintptr_t)program->roots[i].name;
+      const char *name = program->entries[i].name;
       if (!strcmp(name, program->grants[j].name) ||
           (program->grants[j].root && !strcmp(name, program->grants[j].root))) {
         return CALL_BAD_REQUEST;
@@ -519,7 +519,7 @@ static enum call_status parse_manifest(const struct path_context *context,
 static enum call_status open_entry(struct bundle_program *program, const char *path,
     handle_t *image)
 {
-  enum call_status status = resolve_inside(program->roots[0].handle, path,
+  enum call_status status = resolve_inside(program->entries[0].handle, path,
       DIRECTORY_KIND_FILE, FILE_RIGHT_READ, image);
   if (status != CALL_OK) {
     return status;
@@ -555,9 +555,9 @@ void bundle_program_close(struct bundle_program *program)
   if (program->image != HANDLE_INVALID) {
     handle_close(program->image);
   }
-  for (size_t i = 0; i < program->root_count; ++i) {
-    if (program->roots[i].handle != HANDLE_INVALID) {
-      handle_close(program->roots[i].handle);
+  for (size_t i = 0; i < program->entry_count; ++i) {
+    if (program->entries[i].handle != HANDLE_INVALID) {
+      handle_close(program->entries[i].handle);
     }
   }
   if (program->revision != HANDLE_INVALID) {
@@ -602,16 +602,16 @@ static enum call_status open_bundle(const struct path_context *context, const ch
   }
   if (status == CALL_OK) {
     status = directory_lookup(program->revision, "app", DIRECTORY_KIND_DIRECTORY,
-        BUNDLE_DIRECTORY_RIGHTS, &program->roots[0].handle);
+        BUNDLE_DIRECTORY_RIGHTS, &program->entries[0].handle);
   }
   if (status == CALL_OK) {
-    status = require_native(program->roots[0].handle, PROTOCOL_DIRECTORY);
+    status = require_native(program->entries[0].handle, PROTOCOL_DIRECTORY);
   }
-  for (size_t i = 1; status == CALL_OK && i < program->root_count; ++i) {
-    status = resolve_inside(program->roots[0].handle, program->resource_paths[i - 1],
-        DIRECTORY_KIND_DIRECTORY, BUNDLE_DIRECTORY_RIGHTS, &program->roots[i].handle);
+  for (size_t i = 1; status == CALL_OK && i < program->entry_count; ++i) {
+    status = resolve_inside(program->entries[0].handle, program->resource_paths[i - 1],
+        DIRECTORY_KIND_DIRECTORY, BUNDLE_DIRECTORY_RIGHTS, &program->entries[i].handle);
     if (status == CALL_OK) {
-      status = require_native(program->roots[i].handle, PROTOCOL_DIRECTORY);
+      status = require_native(program->entries[i].handle, PROTOCOL_DIRECTORY);
     }
   }
   if (status == CALL_OK) {
@@ -816,13 +816,13 @@ uint64_t bundle_program_stack_bytes(const struct bundle_program *program)
   return program ? program->stack_bytes : 0;
 }
 
-const struct startup_binding *bundle_program_roots(const struct bundle_program *program,
+const struct environment_value *bundle_program_entries(const struct bundle_program *program,
     size_t *count)
 {
   if (count) {
-    *count = program ? program->root_count : 0;
+    *count = program ? program->entry_count : 0;
   }
-  return program ? program->roots : NULL;
+  return program ? program->entries : NULL;
 }
 
 const struct bundle_grant_request *bundle_program_grants(const struct bundle_program *program,

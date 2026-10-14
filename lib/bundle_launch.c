@@ -24,8 +24,7 @@ struct bundle_launch {
   struct bundle_job_context *context;
   struct launch_request request;
   struct launch_grant *grants;
-  struct launch_binding *resources;
-  struct launch_binding *roots;
+  struct launch_environment_entry *entries;
   uint64_t *directories;
 };
 
@@ -36,12 +35,13 @@ struct context_grants {
   struct bundle_launch *prepared;
 };
 
-static enum call_status configured_source(const struct startup_binding *binding,
+static enum call_status configured_source(const struct environment_value *binding,
     const char **name, struct handle_info *info)
 {
-  const char *binding_name = (const void *)(uintptr_t)binding->name;
+  const char *binding_name = binding->name;
   size_t prefix_size = sizeof(BUNDLE_SOURCE_PREFIX) - 1;
-  if (strncmp(binding_name, BUNDLE_SOURCE_PREFIX, prefix_size)) {
+  if (binding->kind != ENVIRONMENT_CAP ||
+      strncmp(binding_name, BUNDLE_SOURCE_PREFIX, prefix_size)) {
     return CALL_NOT_FOUND;
   }
   *name = binding_name + prefix_size;
@@ -72,18 +72,17 @@ static enum call_status configured_source(const struct startup_binding *binding,
   return CALL_WRONG_TYPE;
 }
 
-enum call_status bundle_sources_from_startup(struct bundle_authority *authority,
-    size_t capacity, size_t *count)
+enum call_status bundle_sources_from_capture(const struct environment_capture *capture,
+    struct bundle_authority *authority, size_t capacity, size_t *count)
 {
-  if (!count || (capacity && !authority)) {
+  if (!capture || !count || (capacity && !authority)) {
     return CALL_BAD_REQUEST;
   }
   *count = 0;
-  const struct startup_binding *bindings = startup_resources();
-  for (size_t i = 0; i < startup_resource_count(); ++i) {
+  for (size_t i = 0; i < capture->count; ++i) {
     const char *name;
     struct handle_info info;
-    enum call_status status = configured_source(&bindings[i], &name, &info);
+    enum call_status status = configured_source(&capture->values[i], &name, &info);
     if (status == CALL_NOT_FOUND) {
       continue;
     }
@@ -93,26 +92,26 @@ enum call_status bundle_sources_from_startup(struct bundle_authority *authority,
     if (*count == capacity || *count == BUNDLE_SOURCE_LIMIT) {
       return CALL_LIMIT;
     }
-    authority[(*count)++] = (struct bundle_authority){name, bindings[i].handle, info.protocol};
+    authority[(*count)++] = (struct bundle_authority){name, capture->values[i].handle, info.protocol};
   }
   return CALL_OK;
 }
 
-enum call_status bundle_sources_forward_startup(struct launch_grant *grants,
-    size_t grant_capacity, size_t *grant_count, struct launch_binding *resources,
-    size_t resource_capacity, size_t *resource_count)
+enum call_status bundle_sources_forward_capture(const struct environment_capture *capture,
+    struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
+    struct launch_environment_entry *entries, size_t entry_capacity, size_t *entry_count)
 {
-  if (!grant_count || !resource_count || *grant_count > grant_capacity ||
-      *resource_count > resource_capacity || (grant_capacity && !grants) ||
-      (resource_capacity && !resources)) {
+  if (!capture || !grant_count || !entry_count || *grant_count > grant_capacity ||
+      *entry_count > entry_capacity || (grant_capacity && !grants) ||
+      (entry_capacity && !entries)) {
     return CALL_BAD_REQUEST;
   }
   size_t source_count = 0;
-  const struct startup_binding *bindings = startup_resources();
-  for (size_t i = 0; i < startup_resource_count(); ++i) {
+  for (size_t i = 0; i < capture->count; ++i) {
+    const struct environment_value *binding = &capture->values[i];
     const char *name;
     struct handle_info info;
-    enum call_status status = configured_source(&bindings[i], &name, &info);
+    enum call_status status = configured_source(binding, &name, &info);
     if (status == CALL_NOT_FOUND) {
       continue;
     }
@@ -120,21 +119,18 @@ enum call_status bundle_sources_forward_startup(struct launch_grant *grants,
       return status;
     }
     if (source_count == BUNDLE_SOURCE_LIMIT || *grant_count == grant_capacity ||
-        *resource_count == resource_capacity) {
+        *entry_count == entry_capacity) {
       return CALL_LIMIT;
     }
-    const char *binding_name = (const void *)(uintptr_t)bindings[i].name;
-    for (size_t j = 0; j < *resource_count; ++j) {
-      if (!strcmp(binding_name, (const void *)(uintptr_t)resources[j].name)) {
+    for (size_t j = 0; j < *entry_count; ++j) {
+      if (!strcmp(binding->name, (const char *)(uintptr_t)entries[j].name)) {
         return CALL_BAD_REQUEST;
       }
     }
-    uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
-    if ((transport & info.transport) != transport) {
-      return CALL_DENIED;
-    }
-    resources[(*resource_count)++] = (struct launch_binding){bindings[i].name, *grant_count};
-    grants[(*grant_count)++] = (struct launch_grant){bindings[i].handle, info.rights, transport};
+    entries[(*entry_count)++] = (struct launch_environment_entry){
+      .name = (uintptr_t)binding->name, .kind = ENVIRONMENT_CAP, .value = *grant_count,
+    };
+    grants[(*grant_count)++] = (struct launch_grant){binding->handle, info.rights, info.transport};
     ++source_count;
   }
   return CALL_OK;
@@ -156,79 +152,72 @@ static enum call_status retain_grant(struct context_grants *context,
   return CALL_OK;
 }
 
+static bool has_entry(const struct bundle_launch *prepared, const char *name)
+{
+  for (size_t i = 0; i < prepared->request.entry_count; ++i) {
+    if (!strcmp(name, (const char *)(uintptr_t)prepared->entries[i].name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static enum call_status prepare_context(struct context_grants *context,
-    const struct launch_request *source, const struct startup_binding *bundle_roots,
-    size_t bundle_root_count)
+    const struct launch_request *source, const struct environment_value *bundle_entries,
+    size_t bundle_entry_count)
 {
   struct bundle_launch *prepared = context->prepared;
-  const struct launch_binding *roots = (const void *)(uintptr_t)source->roots;
-  for (size_t i = 0; i < source->root_count; ++i) {
-    const char *name = (const void *)(uintptr_t)roots[i].name;
+  const struct launch_environment_entry *entries = (const void *)(uintptr_t)source->entries;
+  for (size_t i = 0; i < source->entry_count; ++i) {
+    const struct launch_environment_entry *entry = &entries[i];
+    const char *name = (const char *)(uintptr_t)entry->name;
     if (!name || !*name) {
       return CALL_BAD_REQUEST;
     }
-    if (!strcmp(name, "app")) {
+    if (!strcmp(name, "app") || !strcmp(name, "job_work") ||
+        !strncmp(name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       continue;
     }
-    for (size_t j = 0; j < bundle_root_count; ++j) {
-      if (!strcmp(name, (const void *)(uintptr_t)bundle_roots[j].name)) {
+    struct launch_environment_entry binding = *entry;
+    if (entry->kind == ENVIRONMENT_CAP) {
+      if (entry->value >= context->source_count) {
+        return CALL_BAD_REQUEST;
+      }
+      struct handle_info info;
+      enum call_status status = handle_query(context->source[entry->value].source, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      bool stream = !strcmp(name, "stdin") || !strcmp(name, "stdin.status") ||
+          !strcmp(name, "stdout") || !strcmp(name, "stderr");
+      bool directory = info.protocol == PROTOCOL_DIRECTORY && (entry->flags & ENVIRONMENT_EXPORTED);
+      bool provider = info.kind == HANDLE_KIND_EXPORTED && (entry->flags & ENVIRONMENT_EXPORTED);
+      if (!stream && !directory && !provider) {
+        continue;
+      }
+      status = retain_grant(context, entry->value, &binding.value);
+      if (status != CALL_OK) {
+        return status;
+      }
+    } else if (entry->kind != ENVIRONMENT_TEXT) {
+      return CALL_BAD_REQUEST;
+    }
+    for (size_t j = 0; j < bundle_entry_count; ++j) {
+      if (!strcmp(name, bundle_entries[j].name)) {
         return CALL_BAD_REQUEST;
       }
     }
-    for (size_t j = 0; j < prepared->request.root_count; ++j) {
-      if (!strcmp(name, (const void *)(uintptr_t)prepared->roots[j].name)) {
-        return CALL_BAD_REQUEST;
-      }
+    if (has_entry(prepared, name)) {
+      return CALL_BAD_REQUEST;
     }
-    if (prepared->request.root_count == STARTUP_ROOT_LIMIT) {
-      return CALL_LIMIT;
-    }
-    struct launch_binding *binding = &prepared->roots[prepared->request.root_count];
-    binding->name = roots[i].name;
-    enum call_status status = retain_grant(context, roots[i].grant, &binding->grant);
-    if (status != CALL_OK) {
-      return status;
-    }
-    ++prepared->request.root_count;
+    prepared->entries[prepared->request.entry_count++] = binding;
   }
-
   const uint64_t *directories = (const void *)(uintptr_t)source->working_directories;
   for (size_t i = 0; i < source->working_directory_count; ++i) {
     enum call_status status = retain_grant(context, directories[i], &prepared->directories[i]);
     if (status != CALL_OK) {
       return status;
     }
-  }
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    if (source->streams[i].protocol == STARTUP_STREAM_NONE) {
-      if (source->streams[i].grant || source->streams[i].observation_protocol ||
-          source->streams[i].observation_grant) {
-        return CALL_BAD_REQUEST;
-      }
-      continue;
-    }
-    enum call_status status = retain_grant(context, source->streams[i].grant,
-        &prepared->request.streams[i].grant);
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (source->streams[i].observation_protocol) {
-      status = retain_grant(context, source->streams[i].observation_grant,
-          &prepared->request.streams[i].observation_grant);
-      if (status != CALL_OK) {
-        return status;
-      }
-    } else if (source->streams[i].observation_grant) {
-      return CALL_BAD_REQUEST;
-    }
-  }
-  if (source->namespace_grant) {
-    uint64_t index;
-    enum call_status status = retain_grant(context, source->namespace_grant - 1, &index);
-    if (status != CALL_OK) {
-      return status;
-    }
-    prepared->request.namespace_grant = index + 1;
   }
   return CALL_OK;
 }
@@ -238,12 +227,10 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     const struct bundle_authority *authority, size_t authority_count)
 {
   for (size_t i = 0; i < count; ++i) {
-    for (size_t j = 0; j < prepared->request.root_count; ++j) {
-      const char *name = (const void *)(uintptr_t)prepared->roots[j].name;
-      if (!strcmp(requests[i].name, name) ||
-          (requests[i].root && !strcmp(requests[i].root, name))) {
-        return CALL_BAD_REQUEST;
-      }
+    if (has_entry(prepared, requests[i].name) ||
+        (requests[i].root && strcmp(requests[i].root, requests[i].name) &&
+          has_entry(prepared, requests[i].root))) {
+      return CALL_BAD_REQUEST;
     }
     /* Private context authority is created separately, never copied from a
      * caller's client leaf, including the ordinary Lua/bundle path. */
@@ -293,14 +280,15 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     size_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
-    prepared->resources[prepared->request.resource_count++] =
-        (struct launch_binding){(uintptr_t)requests[i].name, index};
-    if (requests[i].root) {
-      if (prepared->request.root_count == STARTUP_ROOT_LIMIT) {
-        return CALL_LIMIT;
-      }
-      prepared->roots[prepared->request.root_count++] =
-          (struct launch_binding){(uintptr_t)requests[i].root, index};
+    prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
+      .name = (uintptr_t)requests[i].name, .kind = ENVIRONMENT_CAP,
+      .flags = ENVIRONMENT_EXPORTED, .value = index,
+    };
+    if (requests[i].root && strcmp(requests[i].root, requests[i].name)) {
+      prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
+        .name = (uintptr_t)requests[i].root, .kind = ENVIRONMENT_CAP,
+        .flags = ENVIRONMENT_EXPORTED, .value = index,
+      };
     }
   }
   return CALL_OK;
@@ -309,8 +297,11 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
 static bool has_selected(const struct bundle_launch *prepared,
     uint64_t protocol, uint64_t rights, handle_t *source)
 {
-  for (size_t i = 0; i < prepared->request.resource_count; ++i) {
-    const struct launch_grant *grant = &prepared->grants[prepared->resources[i].grant];
+  for (size_t i = 0; i < prepared->request.entry_count; ++i) {
+    if (prepared->entries[i].kind != ENVIRONMENT_CAP) {
+      continue;
+    }
+    const struct launch_grant *grant = &prepared->grants[prepared->entries[i].value];
     struct handle_info info;
     if (handle_query(grant->source, &info) == CALL_OK &&
         info.kind == HANDLE_KIND_NATIVE && info.protocol == protocol &&
@@ -363,8 +354,9 @@ static enum call_status prepare_job_work(struct bundle_launch *prepared,
       prepared->grants[index] = (struct launch_grant){
         job_work_directory(context->work), requests[i].rights, 0,
       };
-      prepared->resources[prepared->request.resource_count++] =
-          (struct launch_binding){(uintptr_t)requests[i].name, index};
+      prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
+        .name = (uintptr_t)requests[i].name, .kind = ENVIRONMENT_CAP, .value = index,
+      };
     }
   }
   return CALL_OK;
@@ -381,22 +373,25 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   *result = NULL;
   if (!program || !source || (authority_count && !authority) ||
       (source->grant_count && !source->grants) ||
-      (source->root_count && !source->roots) ||
+      (source->entry_count && !source->entries) ||
       (source->working_directory_count && !source->working_directories)) {
     return CALL_BAD_REQUEST;
   }
-  size_t root_count, resource_count;
-  const struct startup_binding *roots = bundle_program_roots(program, &root_count);
+  size_t bundle_count, resource_count;
+  const struct environment_value *bundle_entries = bundle_program_entries(program, &bundle_count);
   const struct bundle_grant_request *resources = bundle_program_grants(program, &resource_count);
   const size_t grant_limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
-  if (source->grant_count > grant_limit || root_count > grant_limit ||
-      resource_count > grant_limit - root_count ||
-      source->grant_count > grant_limit - root_count - resource_count ||
-      source->root_count > STARTUP_ROOT_LIMIT ||
+  const size_t entry_limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry);
+  if (source->grant_count > grant_limit || bundle_count > grant_limit ||
+      resource_count > grant_limit - bundle_count ||
+      source->grant_count > grant_limit - bundle_count - resource_count ||
+      bundle_count > entry_limit || resource_count > (entry_limit - bundle_count) / 2 ||
+      source->entry_count > entry_limit - bundle_count - 2 * resource_count ||
       source->working_directory_count > LAUNCH_CAPTURE_MAX_SIZE / sizeof(uint64_t)) {
     return CALL_LIMIT;
   }
-  size_t grant_capacity = source->grant_count + root_count + resource_count;
+  size_t grant_capacity = source->grant_count + bundle_count + resource_count;
+  size_t entry_capacity = source->entry_count + bundle_count + 2 * resource_count;
   struct bundle_launch *prepared = calloc(1, sizeof(*prepared));
   uint64_t *mapped = source->grant_count ? malloc(source->grant_count * sizeof(*mapped)) : NULL;
   if (!prepared || (source->grant_count && !mapped)) {
@@ -404,12 +399,11 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
     free(mapped);
     return CALL_NO_MEMORY;
   }
-  prepared->grants = calloc(grant_capacity, sizeof(*prepared->grants));
-  prepared->resources = resource_count ? calloc(resource_count, sizeof(*prepared->resources)) : NULL;
-  prepared->roots = calloc(STARTUP_ROOT_LIMIT, sizeof(*prepared->roots));
+  prepared->grants = grant_capacity ? calloc(grant_capacity, sizeof(*prepared->grants)) : NULL;
+  prepared->entries = entry_capacity ? calloc(entry_capacity, sizeof(*prepared->entries)) : NULL;
   prepared->directories = source->working_directory_count ?
       malloc(source->working_directory_count * sizeof(*prepared->directories)) : NULL;
-  if (!prepared->grants || (resource_count && !prepared->resources) || !prepared->roots ||
+  if ((grant_capacity && !prepared->grants) || (entry_capacity && !prepared->entries) ||
       (source->working_directory_count && !prepared->directories)) {
     free(mapped);
     bundle_launch_close(prepared);
@@ -423,33 +417,32 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   prepared->request.initial_stack_bytes = bundle_program_stack_bytes(program);
   prepared->request.grants = (uintptr_t)prepared->grants;
   prepared->request.grant_count = 0;
-  prepared->request.resources = (uintptr_t)prepared->resources;
-  prepared->request.resource_count = 0;
-  prepared->request.roots = (uintptr_t)prepared->roots;
-  prepared->request.root_count = 0;
+  prepared->request.entries = (uintptr_t)prepared->entries;
+  prepared->request.entry_count = 0;
   prepared->request.working_directories = (uintptr_t)prepared->directories;
-  prepared->request.namespace_grant = 0;
   struct context_grants context = {
     .source = (const void *)(uintptr_t)source->grants,
     .source_count = source->grant_count, .mapped = mapped, .prepared = prepared,
   };
-  enum call_status status = prepare_context(&context, source, roots, root_count);
+  enum call_status status = prepare_context(&context, source, bundle_entries, bundle_count);
   if (status == CALL_OK) {
     status = prepare_resources(prepared, resources, resource_count, authority, authority_count);
   }
   if (status == CALL_OK) {
     status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs);
   }
-  for (size_t i = 0; status == CALL_OK && i < root_count; ++i) {
-    if (prepared->request.root_count == STARTUP_ROOT_LIMIT) {
-      status = CALL_LIMIT;
+  for (size_t i = 0; status == CALL_OK && i < bundle_count; ++i) {
+    if (has_entry(prepared, bundle_entries[i].name)) {
+      status = CALL_BAD_REQUEST;
       break;
     }
     size_t index = prepared->request.grant_count++;
-    prepared->grants[index] = (struct launch_grant){roots[i].handle,
+    prepared->grants[index] = (struct launch_grant){bundle_entries[i].handle,
         DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES, 0};
-    prepared->roots[prepared->request.root_count++] =
-        (struct launch_binding){roots[i].name, index};
+    prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
+      .name = (uintptr_t)bundle_entries[i].name, .kind = ENVIRONMENT_CAP,
+      .flags = ENVIRONMENT_EXPORTED, .value = index,
+    };
   }
   free(mapped);
   if (status != CALL_OK) {
@@ -575,8 +568,7 @@ void bundle_launch_close(struct bundle_launch *prepared)
       }
     }
     free(prepared->directories);
-    free(prepared->roots);
-    free(prepared->resources);
+    free(prepared->entries);
     free(prepared->grants);
     free(prepared);
   }

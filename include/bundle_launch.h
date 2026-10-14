@@ -24,20 +24,22 @@ struct bundle_authority {
   uint64_t protocol;
 };
 
-/* Borrow configured named sources, with actual protocol; preparation queries
+/* Borrow configured named sources from an owned immutable capture; preparation queries
  * and attenuates actual handle rights.
- * Unmarked resources and closed snapshot handles are unavailable. */
-enum call_status bundle_sources_from_startup(struct bundle_authority *authority,
+ * Keep the capture live through admission; source names/handles borrow it. */
+enum call_status bundle_sources_from_capture(const struct environment_capture *capture,
+    struct bundle_authority *authority,
     size_t capacity, size_t *count);
 /* Trusted local successor handoff only; ordinary programs receive sources
  * solely through manifest preparation. Counts append to the caller's arrays. */
-enum call_status bundle_sources_forward_startup(struct launch_grant *grants,
-    size_t grant_capacity, size_t *grant_count, struct launch_binding *resources,
-    size_t resource_capacity, size_t *resource_count);
+enum call_status bundle_sources_forward_capture(const struct environment_capture *capture,
+    struct launch_grant *grants,
+    size_t grant_capacity, size_t *grant_count, struct launch_environment_entry *entries,
+    size_t entry_capacity, size_t *entry_count);
 
 /* The caller selects ordinary authority available to the program; a shell must
  * supply its delegated child launcher, never its own supervision launcher.
- * Preserve explicit streams/cwd/environment/namespace and directory roots,
+ * Preserve explicit stdio/cwd/text/provider and directory entries,
  * replacing app with this bundle's view. Named resources come only from the
  * manifest: unused source resource grants are not installed in the child.
  * Required requests fail as a whole; unavailable optional requests are absent.
