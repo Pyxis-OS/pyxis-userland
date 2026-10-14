@@ -15,7 +15,7 @@ struct pyxis_capture_options {
   struct pyxis_job_options command;
   /* Trusted startup must supply a private RAM root, not shared tmp. Neither
    * metadata nor a path proves privacy/backing. Exclude this tree, credentials
-   * and bypass providers from every child binding and namespace for its lifetime. */
+   * and bypass providers from every child binding for its lifetime. */
   handle_t private_root;
   handle_t clock;
   uint64_t deadline_ns; /* Required, absolute monotonic; never refreshed. */

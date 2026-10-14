@@ -1,5 +1,6 @@
 #include <environment.h>
 #include "thread_private.h"
+#include "thread_platform.h"
 #include <abi/file.h>
 #include <clock.h>
 #include <errno.h>
@@ -140,8 +141,9 @@ enum call_status file_temporary_name(char *suffix)
 {
   handle_t clock = libc_thread_clock();
   handle_t random;
-  if (environment_capability(startup_environment_handle(), "random", &random) != CALL_OK) {
-    return CALL_UNAVAILABLE;
+  enum call_status captured = environment_capability(startup_environment_handle(), "random", &random);
+  if (captured != CALL_OK) {
+    return captured == CALL_NOT_FOUND ? CALL_UNAVAILABLE : captured;
   }
   uint64_t now;
   enum call_status status = clock_now(clock, &now);

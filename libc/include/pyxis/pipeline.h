@@ -56,7 +56,7 @@ extern "C" {
 /* Single owner; valid borrowed C inputs and separate output until return.
  * Preflight all metadata/attachments and own the input before effectful setup,
  * then publish exactly one batch. Preserves stage sources/snapshots. Trusted
- * caller audits private-tree, credential and namespace/provider reachability.
+ * caller audits private-tree, credential and provider reachability.
  *
  * A failure may return an owned record: finish its cleanup, never replay launch.
  * Unknown admission without observers quarantines captures until caller/session

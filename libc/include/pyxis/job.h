@@ -38,8 +38,8 @@ extern "C" {
  * a flush failure returns IO and can have committed bytes, with errno retained.
  * No lookup, bundle/shebang expansion, implicit grants or descendant launcher.
  * All final grants are checked, including unnamed entries. The trusted caller
- * audits namespace/provider behavior throughout the job; copying does not
- * freeze namespaces, directories or image bytes. CALL_OUTCOME_UNKNOWN must
+ * audits provider behavior throughout the job; copying does not
+ * freeze directories or image bytes. CALL_OUTCOME_UNKNOWN must
  * never be retried automatically. Failure clears *job. Single-owner API. */
 enum call_status pyxis_job_launch(handle_t launcher,
     const struct pyxis_job_options *options, struct pyxis_job **job);
@@ -49,7 +49,7 @@ enum call_status pyxis_job_launch(handle_t launcher,
  * retains sole, non-forwarded CONTROL. No launcher is added to child grants.
  * Preflight and selected-output flushing precede group creation. After one
  * launch, seal subtree admission; caller exit/fault closes CONTROL and stops
- * the subtree. Sources survive; no namespace/provider sandbox is implied.
+ * the subtree. Sources survive; no provider sandbox is implied.
  *
  * Failure may return an owned record when scope cleanup remains: terminate,
  * wait, then close it, never replay admission. Unknown construction without

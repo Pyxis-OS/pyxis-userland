@@ -26,6 +26,7 @@
 #include "stream.h"
 #include "thread_sync.h"
 #include "thread_private.h"
+#include "thread_platform.h"
 
 enum descriptor_state { DESCRIPTOR_FREE, DESCRIPTOR_RESERVED, DESCRIPTOR_OPEN };
 enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE, DESCRIPTOR_RESPONSE };

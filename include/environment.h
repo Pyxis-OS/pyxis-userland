@@ -18,6 +18,10 @@ struct pyxis_stdio_binding {
   handle_t observation;
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* LOOKUP and ENUMERATE allocate no memory and use no libc or TLS state. CAP
  * replies own a grant. TEXT lengths exclude NUL; BUFFER_TOO_SMALL returns the
  * metadata, with no grant or text publication. */
@@ -71,5 +75,9 @@ const struct environment_value *environment_capture_find(
 enum call_status environment_capability(handle_t table, const char *name, handle_t *handle);
 enum call_status environment_stdio(handle_t snapshot, enum environment_stream_index index,
     struct pyxis_stdio_binding *binding, uint64_t *identity, uint64_t *observation_identity);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

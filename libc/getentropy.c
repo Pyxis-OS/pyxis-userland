@@ -5,6 +5,7 @@
 #include <environment.h>
 #include <handle.h>
 #include "thread_private.h"
+#include "thread_platform.h"
 #include <sys/random.h>
 #include "errors.h"
 
@@ -22,7 +23,7 @@ int getentropy(void *buffer, size_t length)
   handle_t random;
   enum call_status captured = environment_capability(startup_environment_handle(), "random", &random);
   if (captured != CALL_OK) {
-    errno = ENODEV;
+    errno = captured == CALL_NOT_FOUND ? ENODEV : libc_call_errno(captured);
     return -1;
   }
   uint64_t now;

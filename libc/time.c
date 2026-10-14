@@ -6,6 +6,7 @@
 #include "time_impl.h"
 #include "timezone.h"
 #include "thread_private.h"
+#include "thread_platform.h"
 
 #define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
 

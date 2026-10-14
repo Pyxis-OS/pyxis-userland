@@ -19,7 +19,7 @@ extern "C" {
 
 /* Preparation performs no network submission. Zero deadline selects one
  * 30-second budget; supplied deadlines are absolute monotonic times. Grants
- * come only from the declared namespace and clock. Close/flush never submit. */
+ * come only from the selected environment entries and clock. Close/flush never submit. */
 FILE *pyxis_http_prepare(const char *uri, const char *mode,
     const struct pyxis_http_options *options);
 /* Flush successful staging, freeze and submit once. r/w+ adopt the response;
