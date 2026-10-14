@@ -425,7 +425,7 @@ static void read_grants(lua_State *state, struct boot_space *space)
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
-    "network", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
+    "network", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
     "screenshot", "power", "remote_power", "grants", "fat32_mount"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
@@ -494,6 +494,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: network must be a boolean", space->name);
   }
   space->network = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "focus");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: focus must be a boolean", space->name);
+  }
+  space->focus = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "launch");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
@@ -798,9 +804,12 @@ static bool plan_fail(struct boot_plan *plan, const char *format, ...)
 }
 
 bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan)
+    struct boot_plan *plan, enum boot_plan_error *error)
 {
   *plan = (struct boot_plan){0};
+  if (error) {
+    *error = BOOT_PLAN_INVALID;
+  }
   if (override && (override->volume_count > SIZE_MAX - defaults->volume_count ||
       override->space_count > SIZE_MAX - defaults->space_count)) {
     return plan_fail(plan, "boot plan is too large%s", "");
@@ -824,9 +833,6 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
   }
   for (size_t i = 0; override && i < override->volume_count; ++i) {
     const struct boot_volume *volume = &override->volumes[i];
-    if (!strcmp(volume->name, BOOT_SYSTEM_VOLUME)) {
-      return plan_fail(plan, "the override cannot redefine the %s volume", BOOT_SYSTEM_VOLUME);
-    }
     size_t index;
     for (index = 0; index < plan->volume_count; ++index) {
       if (!strcmp(plan->volumes[index]->name, volume->name)) {
@@ -847,6 +853,27 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     } else {
       plan->space_sources[plan->space_count] = BOOT_ENTRY_OVERRIDE;
       plan->spaces[plan->space_count++] = &override->spaces[i];
+    }
+  }
+
+  const char *focus = NULL;
+  for (size_t i = 0; i < plan->space_count; ++i) {
+    const struct boot_space *space = plan->spaces[i];
+    if (!space->focus) {
+      continue;
+    }
+    if (focus) {
+      if (error) {
+        *error = BOOT_PLAN_DUPLICATE_FOCUS;
+      }
+      return plan_fail(plan, "more than one space sets focus = true, including %s and %s",
+          focus, space->name);
+    }
+    focus = space->name;
+  }
+  for (size_t i = 0; override && i < override->volume_count; ++i) {
+    if (!strcmp(override->volumes[i].name, BOOT_SYSTEM_VOLUME)) {
+      return plan_fail(plan, "the override cannot redefine the %s volume", BOOT_SYSTEM_VOLUME);
     }
   }
 
@@ -915,6 +942,9 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     if (space->network) {
       owner = space->name;
     }
+  }
+  if (error) {
+    *error = BOOT_PLAN_OK;
   }
   return true;
 }

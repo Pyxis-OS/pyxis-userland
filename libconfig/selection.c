@@ -49,7 +49,7 @@ static bool decode(const struct config_bytes archive[CONFIG_LUA_COUNT],
     goto failure;
   }
   if (!boot_plan_build(&selection->defaults, from_esp ? &selection->override : NULL,
-      &selection->boot)) {
+      &selection->boot, NULL)) {
     goto failure;
   }
   enum config_result session_result = from_esp ?

@@ -74,6 +74,7 @@ struct boot_space {
   bool fat32_mount, fat32_mount_write; /* Explicit mount-only factory delegation. */
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
+  bool focus; /* One boot-only selection request after successful startup. */
   bool launch;
   bool jobs; /* Private contexts for clients that explicitly declare job_work. */
   bool multiplexer; /* Local terminal startup may create pane sessions. */
@@ -117,6 +118,12 @@ enum boot_config_result {
   BOOT_CONFIG_INVALID,
 };
 
+enum boot_plan_error {
+  BOOT_PLAN_OK,
+  BOOT_PLAN_INVALID,
+  BOOT_PLAN_DUPLICATE_FOCUS,
+};
+
 /* Reads archive defaults through libc, including hostname/input policy, or a pool
  * boot override from SIZE bytes. The override accepts only volumes and spaces.
  * Schema errors go to stderr. CONFIG is cleared first and must be freed. */
@@ -135,9 +142,11 @@ void boot_config_free(struct boot_config *config);
  * replaces a default of the same name whole; new names follow the defaults.
  * Then checks what spans entries: the override cannot redefine the system
  * volume, roots must name defined volumes, start must name one of its space's
- * roots and at most one space may own the network. False reports the reason on stderr and leaves PLAN empty. */
+ * roots and at most one space may own the network or request boot focus.
+ * False reports the reason on stderr and leaves PLAN empty. Optional ERROR
+ * distinguishes duplicate focus so boot can suppress it even after fallback. */
 bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan);
+    struct boot_plan *plan, enum boot_plan_error *error);
 void boot_plan_free(struct boot_plan *plan);
 const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const char *name);
 /* True for the boot, tmp and bin roots and the space's configured roots. */

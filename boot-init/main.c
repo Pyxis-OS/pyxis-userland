@@ -874,7 +874,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
 }
 
 static bool start_space(const struct authority *authority, struct mounts *mounts,
-    const struct boot_space *space)
+    const struct boot_space *space, bool suppress_boot_focus)
 {
   struct space_definition definition = {
     .name = space->name, .title = space->title,
@@ -916,6 +916,9 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
       fprintf(stderr, "boot-init: cannot create space %s (status %u)\n", space->name, status);
     }
   } else {
+    if (space->focus && !suppress_boot_focus) {
+      definition.flags |= SPACE_CREATE_BOOT_FOCUS;
+    }
     const char *arguments[] = {space->init};
     bool reverse = authority->remote_beacon && !strcmp(space->name, "remote");
     const struct startup_variable environment[] = {
@@ -1043,7 +1046,7 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
     .clipboard_local = true, .clipboard_shared = true,
   };
   puts("boot-init: no configured space started; starting the rescue space");
-  start_space(authority, mounts, &rescue);
+  start_space(authority, mounts, &rescue, true);
 }
 
 int main(int argc, char **argv)
@@ -1078,6 +1081,8 @@ int main(int argc, char **argv)
 
   struct boot_config defaults, override = {0};
   struct boot_plan plan = {0};
+  enum boot_plan_error plan_error;
+  bool suppress_boot_focus = false;
   struct mounts mounts = {0};
   int exit_status = EXIT_SUCCESS;
   const char *path = installed ? INSTALLED_CONFIG : LIVE_CONFIG;
@@ -1086,7 +1091,8 @@ int main(int argc, char **argv)
   if (result != BOOT_CONFIG_OK) {
     fprintf(stderr, "boot-init: %s %s\n", path,
         result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");
-  } else if (!boot_plan_build(&defaults, NULL, &plan)) {
+  } else if (!boot_plan_build(&defaults, NULL, &plan, &plan_error)) {
+    suppress_boot_focus = plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
     fprintf(stderr, "boot-init: %s is invalid\n", path);
   }
 
@@ -1111,11 +1117,12 @@ int main(int argc, char **argv)
           puts("boot-init: no " OVERRIDE_NAME "; using the default");
         } else if (result == BOOT_CONFIG_OK) {
           struct boot_plan merged;
-          if (boot_plan_build(&defaults, &override, &merged)) {
+          if (boot_plan_build(&defaults, &override, &merged, &plan_error)) {
             boot_plan_free(&plan);
             plan = merged;
             puts("boot-init: applied " OVERRIDE_NAME);
           } else {
+            suppress_boot_focus |= plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
             result = BOOT_CONFIG_INVALID;
           }
         }
@@ -1135,10 +1142,13 @@ int main(int argc, char **argv)
     goto finish;
   }
   bind_bin(&authority, &plan, installed);
+  if (suppress_boot_focus) {
+    puts("boot-init: duplicate focus request; automatic focus disabled for this boot");
+  }
   size_t started = 0;
   if (mount_plan(&authority, &plan, &mounts)) {
     for (size_t i = 0; i < plan.space_count; ++i) {
-      started += start_space(&authority, &mounts, plan.spaces[i]);
+      started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
     }
   }
   if (!started) {
