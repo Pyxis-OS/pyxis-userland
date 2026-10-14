@@ -2032,7 +2032,8 @@ static int drain_reply(struct descriptor_transaction *transaction, const struct 
             handle_close(final.error_body);
           }
         }
-        return fail(status == CALL_DENIED ? EACCES : EIO);
+        return fail(status == CALL_TIMED_OUT || status == CALL_ENDPOINT_CLOSED ?
+            EIO : libc_call_errno(status));
       }
       if (!count) {
         struct describe_reply final;
@@ -2088,7 +2089,7 @@ static int commit_locked(struct descriptor_object *object)
   enum call_status status = transaction_commit(transaction->prepared.control,
       transaction->deadline, &result);
   int error = status == CALL_OK ? resource_errno(result.info.description.outcome) :
-      status == CALL_DENIED ? EACCES : status == CALL_ABANDONED ? ECANCELED : EIO;
+      status == CALL_TIMED_OUT || status == CALL_ENDPOINT_CLOSED ? EIO : libc_call_errno(status);
   if (status == CALL_OK) {
     /* A returned outcome is definitive; later flushes do not submit again even
      * when the outcome reports failure. Reader operations retain that failure. */
@@ -2118,6 +2119,9 @@ static int commit_locked(struct descriptor_object *object)
     __atomic_store_n(&transaction->failure, error, __ATOMIC_RELEASE);
     transaction->failure_outcome = status == CALL_OUTCOME_UNKNOWN ? RESOURCE_UNCERTAIN :
         status == CALL_ABANDONED ? RESOURCE_ABORTED :
+        status == CALL_DENIED ? RESOURCE_DENIED :
+        status == CALL_NOT_FOUND ? RESOURCE_NOT_FOUND :
+        status == CALL_FILE_TOO_LARGE ? RESOURCE_TOO_LARGE :
         status == CALL_OK && outcome != RESOURCE_OK ? outcome : RESOURCE_IO_ERROR;
   }
   return error ? fail(error) : 0;
