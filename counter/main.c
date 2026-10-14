@@ -510,6 +510,14 @@ int main(int argc, char **argv)
     extern int counter_forwarders_main(const char *, const char *, const char *);
     return counter_forwarders_main(argv[2], argv[3], argv[4]);
   }
+  if (argc == 5 && !strcmp(argv[1], "--provider-forwarders")) {
+    extern int counter_provider_forwarders_main(const char *, const char *, const char *);
+    return counter_provider_forwarders_main(argv[2], argv[3], argv[4]);
+  }
+  if (argc == 4 && !strcmp(argv[1], "--completion-cut")) {
+    extern int counter_completion_cut_main(const char *, const char *);
+    return counter_completion_cut_main(argv[2], argv[3]);
+  }
   if (argc > 1 && (!strcmp(argv[1], "--provide") ||
       !strcmp(argv[1], "--provide-once") || !strcmp(argv[1], "--lookup") ||
       !strcmp(argv[1], "--add") || !strcmp(argv[1], "--restrict") ||
