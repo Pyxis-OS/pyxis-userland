@@ -24,11 +24,14 @@ struct network_runtime {
  * Link selection considers only prepared controllers with reported carrier,
  * reuses an existing binding, and keeps waiting when none is eligible. optional
  * controls absent explicit selectors only.
+ * Exact MAC selection retries that same selector while discovery is pending;
+ * ambiguity and a different existing binding fail without fallback. VirtIO
+ * selection does not wait for unrelated controller discovery.
  * A prepared binding whose configuration is temporarily unstable stays pending;
  * permanent transport failure stops setup without selecting another controller.
  * dns_server owns canonical dotted decimal, defaulting to 1.1.1.1.
  * Applying selects DNS in userspace and publishes it through NET_CONFIG;
- * Link selection and initial acquisition share one bounded foreground deadline.
+ * Link/MAC selection and initial acquisition share one foreground deadline.
  * Runtime owns pending selection and the DHCP endpoint until stopped; the
  * trusted setup process retains UDP creation authority only until opening it.
  * Keep config and runtime alive through successor handoff and maintenance. */

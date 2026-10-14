@@ -109,7 +109,7 @@ static bool prefer_controller(const struct network_config *config,
   return candidate->controller_id < current->controller_id;
 }
 
-enum link_selection { LINK_WAIT, LINK_BOUND, LINK_FAILED };
+enum link_selection { LINK_WAIT, LINK_BOUND, LINK_SKIPPED, LINK_FAILED };
 
 bool network_config_binding_pending(handle_t authority, bool *pending)
 {
@@ -161,9 +161,48 @@ static enum link_selection bound_readiness(struct network_runtime *runtime,
   return pending ? LINK_WAIT : LINK_BOUND;
 }
 
+static enum link_selection select_explicit(const struct network_config *config,
+    struct network_runtime *runtime, struct net_config_reply *snapshot)
+{
+  /* Retry the authored selector, even when a binding already exists. Inspecting
+   * an arbitrary bound controller here would ignore the configured selector. */
+  enum call_status status = net_config_bind(runtime->authority, &config->selector, snapshot);
+  if (status == CALL_OK) {
+    return bound_readiness(runtime, snapshot);
+  }
+  if (status == CALL_QUEUE_FULL ||
+      (status == CALL_UNAVAILABLE && config->selector.kind == NET_SELECT_MAC)) {
+    return LINK_WAIT;
+  }
+  if (status == CALL_NOT_FOUND) {
+    if (config->optional) {
+      return LINK_SKIPPED;
+    }
+    fputs("session: required net0 is absent\n", stderr);
+    return LINK_FAILED;
+  }
+  if (status == CALL_BUSY) {
+    fputs("session: net0 selector is ambiguous or a different controller is already bound\n", stderr);
+    return LINK_FAILED;
+  }
+  if (status == CALL_BAD_REQUEST) {
+    fputs("session: invalid net0 selector\n", stderr);
+    return LINK_FAILED;
+  }
+  if (status == CALL_UNAVAILABLE) {
+    fputs("session: net0 discovery or identity unavailable; continuing without network setup\n", stderr);
+  } else {
+    fprintf(stderr, "session: network setup failed (status %u); continuing session\n", status);
+  }
+  return LINK_SKIPPED;
+}
+
 static enum link_selection select_link(const struct network_config *config,
     struct network_runtime *runtime, struct net_config_reply *snapshot)
 {
+  if (config->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
+    return select_explicit(config, runtime, snapshot);
+  }
   enum call_status status = net_config_query(runtime->authority, snapshot);
   if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
     return LINK_WAIT;
@@ -174,10 +213,6 @@ static enum link_selection select_link(const struct network_config *config,
   }
   if (snapshot->flags & NET_CONFIG_BOUND) {
     return bound_readiness(runtime, snapshot);
-  }
-  if (config->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
-    fputs("session: selected net0 binding unavailable\n", stderr);
-    return LINK_FAILED;
   }
   struct net_controller_reply selected = {0};
   uint32_t after_id = 0;
@@ -334,6 +369,10 @@ static bool wait_link(const struct network_config *config, struct network_runtim
       runtime->waiting_link = false;
       return false;
     }
+    if (result == LINK_SKIPPED) {
+      runtime->waiting_link = false;
+      return true;
+    }
     if (result == LINK_BOUND) {
       return apply_binding(config, runtime, &snapshot, deadline, published_dns);
     }
@@ -364,7 +403,8 @@ static bool apply_ipv4(const struct network_config *config, struct network_runti
     }
     return status != CALL_BAD_REQUEST;
   }
-  if (config->selector.kind == NET_SELECT_LINKED_CONTROLLER) {
+  if (config->selector.kind == NET_SELECT_LINKED_CONTROLLER ||
+      config->selector.kind == NET_SELECT_MAC) {
     runtime->waiting_link = true;
     bool applied = wait_link(config, runtime, deadline, published_dns);
     if (applied && runtime->waiting_link) {
@@ -373,31 +413,10 @@ static bool apply_ipv4(const struct network_config *config, struct network_runti
     return applied;
   }
   struct net_config_reply snapshot;
-  enum call_status status = net_config_bind(runtime->authority, &config->selector, &snapshot);
-  if (status == CALL_NOT_FOUND) {
-    if (config->optional) {
-      return true;
-    }
-    fputs("session: required net0 is absent\n", stderr);
-    return false;
-  }
-  if (status == CALL_BUSY) {
-    fputs("session: net0 selector is ambiguous or a different controller is already bound\n", stderr);
-    return false;
-  }
-  if (status == CALL_UNAVAILABLE) {
-    fputs("session: net0 discovery or identity unavailable; continuing without network setup\n", stderr);
+  enum link_selection readiness = select_explicit(config, runtime, &snapshot);
+  if (readiness == LINK_SKIPPED) {
     return true;
   }
-  if (status == CALL_BAD_REQUEST) {
-    fputs("session: invalid net0 selector\n", stderr);
-    return false;
-  }
-  if (status != CALL_OK) {
-    fprintf(stderr, "session: network setup failed (status %u); continuing session\n", status);
-    return true;
-  }
-  enum link_selection readiness = bound_readiness(runtime, &snapshot);
   if (readiness == LINK_FAILED) {
     return false;
   }
@@ -432,7 +451,8 @@ bool network_config_apply(const struct network_config *config, struct network_ru
   }
   uint64_t deadline = 0;
   if (config->action == NETWORK_REPLACE &&
-      config->selector.kind == NET_SELECT_LINKED_CONTROLLER) {
+      (config->selector.kind == NET_SELECT_LINKED_CONTROLLER ||
+       config->selector.kind == NET_SELECT_MAC)) {
     uint64_t now;
     if (clock_now(runtime->dhcp.clock, &now) != CALL_OK ||
         now > UINT64_MAX - INITIAL_ACQUIRE_NS) {
