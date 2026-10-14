@@ -62,6 +62,7 @@ struct prepared_stage {
   handle_t image;
   struct bundle_program *bundle;
   struct bundle_launch *bundle_launch;
+  struct pyxis_stdio_binding default_streams[ENVIRONMENT_STREAM_COUNT];
   handle_t redirected[ENVIRONMENT_STREAM_COUNT];
   handle_t observation[ENVIRONMENT_STREAM_COUNT];
   handle_t staging_leaf;
@@ -181,6 +182,12 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
       closed = false;
     }
     for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
+      if (!close_handle(&stages[i].default_streams[stream].observation)) {
+        closed = false;
+      }
+      if (!close_handle(&stages[i].default_streams[stream].handle)) {
+        closed = false;
+      }
       if (!close_handle(&stages[i].observation[stream])) {
         closed = false;
       }
@@ -1130,6 +1137,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   enum call_status status = CALL_OK;
   handle_t children[LAUNCH_BATCH_MAX] = {0};
   handle_t armed = HANDLE_INVALID;
+  handle_t default_environment = HANDLE_INVALID;
   uint64_t failed_index = LAUNCH_NO_STAGE;
   bool cleanup_failure = false;
   bool cancelled = false, response_input = false;
@@ -1145,6 +1153,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
 
+  operation = "shell: snapshot stdio";
+  status = environment_snapshot(shell->environment, 0, &default_environment, NULL);
+  if (status != CALL_OK) {
+    goto failed;
+  }
+
   /* Open every image before opening or creating any redirect target. */
   for (size_t i = 0; i < stage_count; ++i) {
     failed_stage = i;
@@ -1156,7 +1170,26 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
   for (size_t i = 0; i < stage_count; ++i) {
     for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
-      streams[i][stream] = bootstrap_stdio(stream);
+      bool override = (stream == ENVIRONMENT_STDIN &&
+          (i || mode == SHELL_BACKGROUND || mode == SHELL_SERVICE)) ||
+          (stream == ENVIRONMENT_STDOUT && (i + 1 < stage_count || stages[i].http_worker));
+      for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+        override |= stages[i].redirections[j].stream == stream;
+      }
+      if (override) {
+        continue;
+      }
+      failed_stage = i;
+      operation = "shell: capture stdio";
+      status = environment_stdio(default_environment, stream,
+          &prepared[i].default_streams[stream], NULL, NULL);
+      if (status == CALL_NOT_FOUND) {
+        status = CALL_OK;
+      }
+      if (status != CALL_OK) {
+        goto failed;
+      }
+      streams[i][stream] = prepared[i].default_streams[stream];
     }
     if (mode == SHELL_BACKGROUND || mode == SHELL_SERVICE) {
       streams[i][ENVIRONMENT_STDIN] = (struct pyxis_stdio_binding){0};
@@ -1225,6 +1258,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         goto failed;
       }
     }
+  }
+
+  if (!close_handle(&default_environment)) {
+    status = CALL_BAD_HANDLE;
+    cleanup_failure = true;
+    goto failed;
   }
 
   if (body) {
@@ -1580,6 +1619,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   return result;
 
 failed:
+  if (!close_handle(&default_environment)) {
+    cleanup_failure = true;
+  }
   if (body) {
     shell_capability_fail(shell, body, status);
   }
