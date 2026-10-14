@@ -19,12 +19,10 @@ extern "C" {
 
 /* Preparation performs no network submission. Zero deadline selects one
  * 30-second budget; supplied deadlines are absolute monotonic times. Grants
- * come only from the selected environment entries and clock. Close/flush never submit. */
+ * come only from the selected environment entries and clock. Exact-stream flush
+ * and final owning close submit through the generic transaction interface. */
 FILE *pyxis_http_prepare(const char *uri, const char *mode,
     const struct pyxis_http_options *options);
-/* Flush successful staging, freeze and submit once. r/w+ adopt the response;
- * w returns a separate read FILE. Failure never retries a lost submission. */
-FILE *pyxis_http_commit(FILE *request);
 int pyxis_http_status(FILE *stream, struct http_transaction_status *status);
 int pyxis_http_abort(FILE *request);
 

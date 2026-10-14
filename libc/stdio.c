@@ -1,5 +1,6 @@
 #include <environment.h>
 #include <abi/directory.h>
+#include <abi/file.h>
 #include <errno.h>
 #include <handle.h>
 #include <limits.h>
@@ -9,6 +10,7 @@
 #include <pyxis/http.h>
 #include <pyxis/descriptor.h>
 #include <pyxis/stdio.h>
+#include <pyxis/resource.h>
 #include <stdlib.h>
 #include <string.h>
 #include "descriptor.h"
@@ -287,8 +289,16 @@ static bool parse_mode(const char *text, struct descriptor_mode *mode)
   return true;
 }
 
-FILE *fopen(const char *restrict path, const char *restrict mode)
+FILE *pyxis_fopen(const char *path, const char *mode, struct pyxis_open_result *result)
 {
+  if (result) {
+    if (result->available || result->resource.resource != HANDLE_INVALID ||
+        result->resource.info.error_body != HANDLE_INVALID) {
+      errno = EBUSY;
+      return NULL;
+    }
+    *result = (struct pyxis_open_result){0};
+  }
   struct descriptor_mode options;
   if (!parse_mode(mode, &options)) {
     errno = EINVAL;
@@ -302,12 +312,103 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
     .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .allocated = true,
     .readable = options.readable, .writable = options.writable,
   };
-  if (descriptor_open(path, &options, stream) < 0) {
+  if (descriptor_open_result(path, &options, stream, result) < 0) {
     free(stream);
     return NULL;
   }
   register_stream(stream);
   return stream;
+}
+
+FILE *fopen(const char *restrict path, const char *restrict mode)
+{
+  return pyxis_fopen(path, mode, NULL);
+}
+
+int pyxis_open_result_close(struct pyxis_open_result *result)
+{
+  if (!result) {
+    errno = EINVAL;
+    return -1;
+  }
+  enum call_status status = resource_result_close(&result->resource);
+  *result = (struct pyxis_open_result){0};
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  return 0;
+}
+
+/* Consumes an independent body handle, including failure unwinding. */
+static FILE *open_error_body(handle_t body)
+{
+  if (body == HANDLE_INVALID) {
+    errno = ENOENT;
+    return NULL;
+  }
+  int descriptor = pyxis_descriptor_adopt(&body, PYXIS_DESCRIPTOR_READ);
+  if (descriptor < 0) {
+    int error = errno;
+    handle_close(body);
+    errno = error;
+    return NULL;
+  }
+  FILE *stream = fdopen(descriptor, "r");
+  if (!stream) {
+    int error = errno;
+    descriptor_close(descriptor);
+    errno = error;
+  }
+  return stream;
+}
+
+FILE *pyxis_open_error_body(const struct pyxis_open_result *result)
+{
+  if (!result) {
+    errno = EINVAL;
+    return NULL;
+  }
+  if (!result->available || result->resource.info.error_body == HANDLE_INVALID) {
+    errno = ENOENT;
+    return NULL;
+  }
+  handle_t body;
+  enum call_status status = handle_copy_restricted(result->resource.info.error_body,
+      FILE_RIGHT_READ, 0, &body);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return NULL;
+  }
+  return open_error_body(body);
+}
+
+int pyxis_describe(FILE *stream, struct describe_reply *description)
+{
+  if (!description) {
+    errno = EINVAL;
+    return -1;
+  }
+  *description = (struct describe_reply){0};
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  return descriptor_object_describe(stream->operation, 0, description);
+}
+
+FILE *pyxis_error_body(FILE *stream)
+{
+  if (!stream_acquire(stream)) {
+    return NULL;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  struct describe_reply description;
+  if (descriptor_object_describe(stream->operation, DESCRIBE_INCLUDE_ERROR_BODY,
+      &description) < 0) {
+    return NULL;
+  }
+  return open_error_body(description.error_body);
 }
 
 FILE *fdopen(int descriptor, const char *mode)
@@ -566,6 +667,10 @@ int fflush(FILE *stream)
   if (stream->closed) {
     return stream_error(stream, EBADF);
   }
+  bool transaction = descriptor_object_transaction(stream->operation);
+  if (transaction && !descriptor_object_transaction_pending(stream->operation)) {
+    return 0;
+  }
   struct pyxis_stdio_binding binding;
   if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return stream_error(stream, errno);
@@ -573,6 +678,18 @@ int fflush(FILE *stream)
   stream->io_started = true;
   if (flush_output(stream) < 0) {
     return EOF;
+  }
+  if (transaction && stream->error) {
+    errno = EIO;
+    return EOF;
+  }
+  if (descriptor_object_commit(stream->operation) < 0) {
+    return stream_error(stream, errno);
+  }
+  if (transaction) {
+    stream->writable = false;
+    stream->eof = false;
+    stream->wide_input = (mbstate_t){0};
   }
   discard_pushback(stream);
   if (binding.protocol == PROTOCOL_FILE) {
@@ -622,6 +739,14 @@ int fclose(FILE *stream)
   stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
   bool cursor = descriptor_file_begin(stream->operation);
   error = flush_output(stream) < 0 ? errno : 0;
+  if (descriptor_object_transaction(stream->operation) && stream->error) {
+    if (!error) {
+      error = EIO;
+    }
+    if (descriptor_object_transaction_pending(stream->operation)) {
+      descriptor_object_abandon(stream->operation, error);
+    }
+  }
   if (descriptor_close_stream(stream, stream->operation) < 0 && !error) {
     error = errno;
   }
@@ -646,10 +771,40 @@ int fclose(FILE *stream)
   return error ? EOF : 0;
 }
 
-void stdio_finish(void)
+int stdio_finish(void)
 {
-  fflush(NULL);
-  descriptor_finish();
+  /* Normal exit has joined workers and closed thread admission. Drain every
+   * producer before closing any alias; no allocation is needed to walk FILEs. */
+  int error = 0;
+  for (FILE *stream = streams; stream; stream = stream->next) {
+    if (stream_acquire(stream)) {
+      if (stream->writable && flush_output(stream) < 0 && !error) {
+        error = errno;
+      }
+      stream_end(stream);
+    } else if (!error) {
+      error = errno;
+    }
+  }
+  for (FILE *stream = streams; stream; stream = stream->next) {
+    if (stream_acquire(stream)) {
+      if (descriptor_object_transaction_pending(stream->operation) && stream->error) {
+        if (!error) {
+          error = EIO;
+        }
+        descriptor_object_abandon(stream->operation, EIO);
+      }
+      stream_end(stream);
+    } else if (!error) {
+      error = errno;
+    }
+  }
+  if (error) {
+    descriptor_report_finalize_error();
+  }
+  if (descriptor_finish() < 0 && !error) {
+    error = errno;
+  }
   while (streams) {
     FILE *stream = streams;
     streams = stream->next;
@@ -658,6 +813,10 @@ void stdio_finish(void)
       free(stream);
     }
   }
+  if (error) {
+    errno = error;
+  }
+  return error ? EOF : 0;
 }
 
 /* Buffered reads may fetch ahead of the request; exact reads never do. */
@@ -1335,49 +1494,6 @@ FILE *pyxis_http_prepare(const char *uri, const char *mode,
   }
   register_stream(stream);
   return stream;
-}
-
-FILE *pyxis_http_commit(FILE *request)
-{
-  if (!stream_acquire(request)) {
-    return NULL;
-  }
-  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {request};
-  if (request->closed || (request->error && !request->http_read_blocked)) {
-    errno = request->closed ? EBADF : EIO;
-    return NULL;
-  }
-  if (flush_output(request) < 0) {
-    return NULL;
-  }
-  bool inplace = descriptor_object_http_inplace(request->operation);
-  FILE *response = NULL;
-  if (!inplace) {
-    response = malloc(sizeof(*response));
-    if (!response) {
-      return NULL;
-    }
-    *response = (FILE){
-      .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1,
-      .allocated = true, .readable = true,
-    };
-  }
-  if (descriptor_object_http_commit(request->operation, response) < 0) {
-    free(response);
-    stream_error(request, errno);
-    return NULL;
-  }
-  request->writable = false;
-  if (inplace) {
-    request->readable = true;
-    request->has_pushback = false;
-    request->has_wide_pushback = false;
-    request->eof = false;
-    request->wide_input = (mbstate_t){0};
-    return request;
-  }
-  register_stream(response);
-  return response;
 }
 
 int pyxis_http_status(FILE *stream, struct http_transaction_status *status)

@@ -129,7 +129,9 @@ static void run_fini_array(void)
   libc_once_thread_cleanup();
   run_exit_handlers();
   run_fini_array();
-  stdio_finish();
+  if (stdio_finish() < 0 && status == EXIT_SUCCESS) {
+    status = EXIT_FAILURE;
+  }
   _Exit(status);
 }
 

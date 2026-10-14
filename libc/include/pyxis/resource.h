@@ -14,8 +14,8 @@ struct pyxis_open_result {
 extern "C" {
 #endif
 
-/* Use a fresh/closed output. Failure can retain an owned typed failure and its
- * immutable error body; no hidden last-error state or fresh OPEN is used. */
+/* Use a zero-initialized/closed output. Failure can retain an owned typed failure
+ * and its immutable error body; no hidden last-error state or fresh OPEN is used. */
 FILE *pyxis_fopen(const char *path, const char *mode, struct pyxis_open_result *result);
 int pyxis_open_result_close(struct pyxis_open_result *result);
 FILE *pyxis_open_error_body(const struct pyxis_open_result *result);
