@@ -2,6 +2,7 @@
 #include <abi/completion.h>
 #include <abi/directory.h>
 #include <abi/http_transaction.h>
+#include <abi/transaction.h>
 #include <clock.h>
 #include <completion.h>
 #include <directory.h>
@@ -57,10 +58,11 @@ struct transaction {
   enum http_transaction_phase phase;
   enum call_status failure, cleanup, mutation_failure, read_failure;
   bool legacy, headers, handed_off, aborting, linked, unlink_attempted;
+  bool terminal_description_published;
   uint64_t method, flags, deadline, body_length, consumed;
   uint64_t mutation_offset, mutation_size, pending;
   enum staging_operation staging_operation;
-  handle_t backing;
+  handle_t backing, body_source;
   size_t slots[5], slot_count;
   size_t queued;
   unsigned char *queue;
@@ -119,7 +121,8 @@ static uint64_t object_id(size_t slot)
 static uint64_t facet_protocol(enum facet facet)
 {
   return facet == FACET_BODY || facet == FACET_SNAPSHOT ? PROTOCOL_FILE :
-      facet == FACET_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_HTTP_TRANSACTION;
+      facet == FACET_RESPONSE ? PROTOCOL_STREAM :
+      facet == FACET_CONTROL ? PROTOCOL_TRANSACTION : PROTOCOL_HTTP_TRANSACTION;
 }
 
 static uint64_t facet_rights(enum facet facet)
@@ -128,7 +131,7 @@ static uint64_t facet_rights(enum facet facet)
   case FACET_BODY: return FILE_RIGHT_WRITE;
   case FACET_SNAPSHOT: return FILE_RIGHT_READ;
   case FACET_RESPONSE: return STREAM_RIGHT_READ;
-  case FACET_CONTROL: return HTTP_TRANSACTION_CONTROL_RIGHTS;
+  case FACET_CONTROL: return TRANSACTION_RIGHTS;
   case FACET_OBSERVATION: return HTTP_TRANSACTION_RIGHT_STATUS;
   default: return 0;
   }
@@ -172,6 +175,74 @@ static enum call_status response_status(const struct http_response *response)
     .network_status = response->network_status, .tls_failure = response->tls_failure,
     .status = response->status, .dns_rcode = response->dns_rcode};
   return http_result_status(&result);
+}
+
+static struct resource_description transaction_description(const struct transaction *transaction)
+{
+  struct resource_description description = {0};
+  switch (transaction->failure) {
+  case CALL_OK: description.outcome = RESOURCE_OK; break;
+  case CALL_NOT_FOUND: description.outcome = RESOURCE_NOT_FOUND; break;
+  case CALL_DENIED: description.outcome = RESOURCE_DENIED; break;
+  case CALL_FILE_TOO_LARGE: description.outcome = RESOURCE_TOO_LARGE; break;
+  case CALL_ABANDONED: description.outcome = RESOURCE_ABORTED; break;
+  case CALL_OUTCOME_UNKNOWN: description.outcome = RESOURCE_UNCERTAIN; break;
+  default: description.outcome = RESOURCE_IO_ERROR; break;
+  }
+  if (transaction->phase == HTTP_TRANSACTION_COMPLETE) {
+    description.flags |= RESOURCE_COMPLETE;
+  }
+  if (transaction->headers && transaction->response.length_present) {
+    description.flags |= RESOURCE_LENGTH_KNOWN;
+    description.length = transaction->response.length;
+  }
+  if (transaction->headers) {
+    size_t length = strnlen(transaction->response.media_type,
+        sizeof(transaction->response.media_type));
+    bool ascii = true;
+    for (size_t i = 0; i < length; ++i) {
+      ascii &= (unsigned char)transaction->response.media_type[i] < 0x80;
+    }
+    if (length <= RESOURCE_MEDIA_TYPE_MAX_BYTES && ascii) {
+      memcpy(description.media_type, transaction->response.media_type, length);
+      description.media_type_size = length;
+    }
+  }
+  if (description.outcome != RESOURCE_OK) {
+    const char *detail = description.outcome == RESOURCE_ABORTED ? "Transaction abandoned" :
+        description.outcome == RESOURCE_UNCERTAIN ? "Submission outcome unknown" :
+        "Transaction failed";
+    description.detail_size = strlen(detail);
+    memcpy(description.detail, detail, description.detail_size);
+  }
+  return description;
+}
+
+static enum call_status publish_description(struct loop *loop,
+    struct transaction *transaction)
+{
+  struct resource_description description = transaction_description(transaction);
+  for (size_t i = 0; i < transaction->slot_count; ++i) {
+    size_t slot = transaction->slots[i];
+    struct exported *entry = &loop->exports[slot];
+    if (!entry->live || (entry->facet != FACET_CONTROL && entry->facet != FACET_RESPONSE)) {
+      continue;
+    }
+    enum call_status status = endpoint_describe_publish(loop->receiver, object_id(slot),
+        &description, NULL, 0);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
+  return CALL_OK;
+}
+
+static void release_body_source(struct loop *loop, struct transaction *transaction)
+{
+  if (transaction->body_source && handle_close(transaction->body_source)) {
+    loop->fatal = CALL_BAD_HANDLE;
+  }
+  transaction->body_source = HANDLE_INVALID;
 }
 
 static void cut_exports(struct loop *loop, struct transaction *transaction)
@@ -226,6 +297,7 @@ static void abort_transaction(struct loop *loop, struct transaction *transaction
     return;
   }
   if (!transaction->aborting) {
+    release_body_source(loop, transaction);
     transaction->aborting = true;
     transaction->failure = failure;
     transaction->phase = failure == CALL_ABANDONED ? HTTP_TRANSACTION_ABORTED : HTTP_TRANSACTION_FAILED;
@@ -422,6 +494,9 @@ static void preparation_ready(struct loop *loop, struct transaction *transaction
     status = export(loop, transaction, i, facets[i], &handles[i]);
   }
   if (status == CALL_OK) {
+    status = publish_description(loop, transaction);
+  }
+  if (status == CALL_OK) {
     struct endpoint_grant grants[3];
     for (size_t i = 0; i < count; ++i) {
       grants[i] = (struct endpoint_grant){handles[i], facet_rights(facets[i]), HANDLE_TRANSPORT_CALL};
@@ -431,6 +506,12 @@ static void preparation_ready(struct loop *loop, struct transaction *transaction
     status = reply(loop, &transaction->work->preparation, CALL_OK, &response, sizeof(response), grants, count);
   } else {
     reply(loop, &transaction->work->preparation, status, NULL, 0, NULL, 0);
+  }
+  if (status == CALL_OK && post) {
+    /* STAGE copies this deliberate staging source. Freeze/abort/control RETIRE
+     * releases it before waiting for body RETIRE, so it cannot retain itself. */
+    transaction->body_source = handles[1];
+    handles[1] = HANDLE_INVALID;
   }
   for (size_t i = 0; i < count; ++i) {
     if (handles[i] && handle_close(handles[i])) {
@@ -615,8 +696,7 @@ static void commit_request(struct loop *loop, struct transaction *transaction,
 {
   if (transaction->handed_off ||
       (transaction->work && transaction->work->commit.receipt)) {
-    struct http_commit_reply response = {.http_status = transaction->response.status};
-    reply(loop, packet, CALL_OK, &response, sizeof(response), NULL, 0);
+    reply(loop, packet, CALL_BAD_OPERATION, NULL, 0, NULL, 0);
   } else if (!transaction->work) {
     reply(loop, packet, transaction->failure == CALL_OK ? CALL_BAD_OPERATION : transaction->failure,
         NULL, 0, NULL, 0);
@@ -630,8 +710,27 @@ static void commit_request(struct loop *loop, struct transaction *transaction,
     /* Freeze admission before observing another queued body operation. A
      * mutation already admitted remains owned until its completion is ACKed. */
     transaction->phase = HTTP_TRANSACTION_OPENING;
+    release_body_source(loop, transaction);
     transaction->work->commit = *packet;
     clear_packet(packet);
+  }
+}
+
+static void stage_request(struct loop *loop, struct transaction *transaction,
+    struct endpoint_packet *packet)
+{
+  if (transaction->phase != HTTP_TRANSACTION_STAGING || !transaction->body_source) {
+    reply(loop, packet, CALL_BAD_OPERATION, NULL, 0, NULL, 0);
+    return;
+  }
+  handle_t body = HANDLE_INVALID;
+  enum call_status status = handle_copy_restricted(transaction->body_source,
+      FILE_RIGHT_WRITE, HANDLE_TRANSPORT_CALL, &body);
+  struct endpoint_grant grant = {body, FILE_RIGHT_WRITE, HANDLE_TRANSPORT_CALL};
+  reply(loop, packet, status, NULL, 0, status == CALL_OK ? &grant : NULL,
+      status == CALL_OK ? 1 : 0);
+  if (body && handle_close(body)) {
+    loop->fatal = CALL_BAD_HANDLE;
   }
 }
 
@@ -1121,24 +1220,24 @@ static void legacy_publish(struct loop *loop, struct transaction *transaction, b
 
 static void publish_reader(struct loop *loop, struct transaction *transaction)
 {
-  handle_t reader = HANDLE_INVALID, observation = HANDLE_INVALID;
+  handle_t reader = HANDLE_INVALID;
   enum call_status status = export(loop, transaction, transaction->slot_count - 1,
       FACET_RESPONSE, &reader);
+  struct provider_open_reply response = {.protocol = PROTOCOL_STREAM};
+  response.description = transaction_description(transaction);
   if (status == CALL_OK) {
-    status = export(loop, transaction, transaction->slot_count - 2,
-        FACET_OBSERVATION, &observation);
+    status = endpoint_describe_publish(loop->receiver,
+        object_id(transaction->slots[transaction->slot_count - 1]),
+        &response.description, NULL, 0);
   }
   if (status == CALL_OK) {
-    struct endpoint_grant grants[] = {
-      {reader, STREAM_RIGHT_READ, HANDLE_TRANSPORT_CALL},
-      {observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL},
-    };
-    struct http_commit_reply response = {HTTP_COMMIT_RESPONSE, transaction->response.status};
-    status = reply(loop, &transaction->work->commit, CALL_OK, &response, sizeof(response), grants, 2);
+    struct endpoint_grant grant = {reader, STREAM_RIGHT_READ, HANDLE_TRANSPORT_CALL};
+    status = reply(loop, &transaction->work->commit, CALL_OK, &response,
+        sizeof(response), &grant, 1);
   } else {
     reply(loop, &transaction->work->commit, status, NULL, 0, NULL, 0);
   }
-  if ((reader && handle_close(reader)) || (observation && handle_close(observation))) {
+  if (reader && handle_close(reader)) {
     loop->fatal = CALL_BAD_HANDLE;
   }
   if (status == CALL_OK) {
@@ -1225,6 +1324,15 @@ static void settle(struct loop *loop, struct transaction *transaction)
   if (transaction->phase != HTTP_TRANSACTION_COMPLETE && !transaction->aborting) {
     return;
   }
+  if (!transaction->legacy && !transaction->terminal_description_published) {
+    enum call_status status = publish_description(loop, transaction);
+    if (status != CALL_OK) {
+      /* A terminal reader may not report EOF with an unpublished completion. */
+      loop->fatal = status;
+      return;
+    }
+    transaction->terminal_description_published = true;
+  }
   if (transaction->pending || (transaction->engine && http_stream_pending(transaction->engine))) {
     return;
   }
@@ -1256,7 +1364,10 @@ static void settle(struct loop *loop, struct transaction *transaction)
     }
   }
   if (transaction->work && transaction->work->commit.receipt) {
-    reply(loop, &transaction->work->commit, transaction->failure, NULL, 0, NULL, 0);
+    struct provider_open_reply response = {
+      .description = transaction_description(transaction),
+    };
+    reply(loop, &transaction->work->commit, CALL_OK, &response, sizeof(response), NULL, 0);
   }
   if (transaction->work && transaction->work->mutation.receipt) {
     reply(loop, &transaction->work->mutation, transaction->failure, NULL, 0, NULL, 0);
@@ -1388,7 +1499,8 @@ static void canceled(struct loop *loop, handle_t receipt)
     }
     if (transaction->work->commit.receipt == receipt) {
       finish(loop, &transaction->work->commit);
-      abort_transaction(loop, transaction, CALL_ABANDONED);
+      abort_transaction(loop, transaction, transaction->response.request_started ?
+          CALL_OUTCOME_UNKNOWN : CALL_ABANDONED);
       return;
     }
     if (transaction->work->abort.receipt == receipt) {
@@ -1438,6 +1550,9 @@ static void retired(struct loop *loop, const struct endpoint_packet *packet)
     return;
   }
   enum facet facet = entry->facet;
+  if (facet == FACET_CONTROL) {
+    release_body_source(loop, transaction);
+  }
   enum call_status status = endpoint_retire_ack(loop->receiver, packet->object_id);
   if (status != CALL_OK) {
     loop->fatal = status;
@@ -1541,9 +1656,11 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
       reply(loop, packet, CALL_DENIED, NULL, 0, NULL, 0);
     }
   } else if (entry->facet == FACET_CONTROL) {
-    if (packet->operation == HTTP_TRANSACTION_COMMIT && (packet->rights & HTTP_TRANSACTION_RIGHT_COMMIT)) {
+    if (packet->operation == TRANSACTION_STAGE && (packet->rights & TRANSACTION_RIGHT_STAGE)) {
+      stage_request(loop, transaction, packet);
+    } else if (packet->operation == TRANSACTION_COMMIT && (packet->rights & TRANSACTION_RIGHT_COMMIT)) {
       commit_request(loop, transaction, packet);
-    } else if (packet->operation == HTTP_TRANSACTION_ABORT && (packet->rights & HTTP_TRANSACTION_RIGHT_ABORT)) {
+    } else if (packet->operation == TRANSACTION_ABORT && (packet->rights & TRANSACTION_RIGHT_ABORT)) {
       if (transaction->work && transaction->work->abort.receipt) {
         reply(loop, packet, CALL_OK, NULL, 0, NULL, 0);
       } else {

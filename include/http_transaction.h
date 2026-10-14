@@ -4,6 +4,7 @@
 #include <abi/http_transaction.h>
 #include <abi/syscall.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <pyxis/response.h>
 
 /* An explicitly owned native value. Copies/delegation use narrower grant copies,
@@ -12,6 +13,7 @@
 struct http_prepared {
   handle_t control, body, observation, response;
   uint64_t method, delivery, trust_flags;
+  bool commit_attempted;
 };
 
 enum call_status http_transaction_prepare(handle_t provider, const char *uri,

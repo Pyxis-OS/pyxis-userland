@@ -1,4 +1,5 @@
 #include <http_transaction.h>
+#include <transaction.h>
 #include <endpoint.h>
 #include <handle.h>
 #include <http_url.h>
@@ -91,7 +92,7 @@ enum call_status http_transaction_prepare_context(handle_t provider, const char 
   } else {
     memcpy(&response, packet.data, sizeof(response));
     if (response.method != method || (response.trust_flags & ~HTTP_TRUST_ORIGIN_ONLY) ||
-        !grant_valid(&packet.grants[0], PROTOCOL_HTTP_TRANSACTION, HTTP_TRANSACTION_CONTROL_RIGHTS) ||
+        !grant_valid(&packet.grants[0], PROTOCOL_TRANSACTION, TRANSACTION_RIGHTS) ||
         (post && !grant_valid(&packet.grants[1], PROTOCOL_FILE, FILE_RIGHT_WRITE)) ||
         !grant_valid(&packet.grants[post ? 2 : 1], PROTOCOL_HTTP_TRANSACTION,
             HTTP_TRANSACTION_RIGHT_STATUS)) {
@@ -124,55 +125,33 @@ enum call_status http_transaction_commit(struct http_prepared *prepared,
     return CALL_BAD_REQUEST;
   }
   *reply = (struct http_commit_reply){0};
-  struct endpoint_packet packet = {0};
-  enum call_status status = endpoint_invoke(prepared->control, PROTOCOL_HTTP_TRANSACTION,
-      HTTP_TRANSACTION_COMMIT, NULL, 0, NULL, 0, deadline_ns, &packet);
-  prepared->delivery = packet.delivery;
-  if (status != CALL_OK) {
-    close_grants(&packet);
-    return status;
+  if (prepared->commit_attempted) {
+    return CALL_BAD_OPERATION;
   }
-  struct http_commit_reply response;
-  if (packet.result >= CALL_STATUS_COUNT) {
-    status = CALL_OUTCOME_UNKNOWN;
-  } else if (packet.result != CALL_OK) {
-    status = packet.grant_count || packet.size ? CALL_OUTCOME_UNKNOWN : packet.result;
-  } else if (packet.size != sizeof(response)) {
-    status = CALL_OUTCOME_UNKNOWN;
-  } else {
-    memcpy(&response, packet.data, sizeof(response));
-    bool reader = response.flags == HTTP_COMMIT_RESPONSE;
-    if ((response.flags && !reader) || packet.grant_count != (reader ? 2u : 0u) ||
-        (reader && (!grant_valid(&packet.grants[0], PROTOCOL_STREAM, STREAM_RIGHT_READ) ||
-        !grant_valid(&packet.grants[1], PROTOCOL_HTTP_TRANSACTION, HTTP_TRANSACTION_RIGHT_STATUS)))) {
-      status = CALL_OUTCOME_UNKNOWN;
-    } else if (reader && prepared->response != HANDLE_INVALID) {
-      status = CALL_OUTCOME_UNKNOWN;
-    } else {
-      if (reader) {
-        prepared->response = packet.grants[0].handle;
-        if (prepared->observation == HANDLE_INVALID) {
-          prepared->observation = packet.grants[1].handle;
-        } else {
-          handle_close(packet.grants[1].handle);
-        }
-      }
-      *reply = response;
-      return CALL_OK;
+  prepared->commit_attempted = true;
+  struct resource_result result = {0};
+  enum call_status status = transaction_commit(prepared->control, deadline_ns, &result);
+  prepared->delivery = result.delivery;
+  if (status == CALL_OK) {
+    status = resource_outcome_status(result.info.description.outcome);
+  }
+  if (status == CALL_OK) {
+    prepared->response = result.resource;
+    result.resource = HANDLE_INVALID;
+    reply->flags = HTTP_COMMIT_RESPONSE;
+    struct http_transaction_status observation;
+    status = http_transaction_status(prepared->observation, deadline_ns, &observation);
+    if (status == CALL_OK) {
+      reply->http_status = observation.http_status;
     }
   }
-  close_grants(&packet);
+  resource_result_close(&result);
   return status;
 }
 
 enum call_status http_transaction_abort(handle_t control, uint64_t deadline_ns)
 {
-  struct endpoint_packet packet = {0};
-  enum call_status status = endpoint_invoke(control, PROTOCOL_HTTP_TRANSACTION,
-      HTTP_TRANSACTION_ABORT, NULL, 0, NULL, 0, deadline_ns, &packet);
-  close_grants(&packet);
-  return status != CALL_OK ? status : packet.grant_count || packet.size ||
-      packet.result >= CALL_STATUS_COUNT ? CALL_BAD_REQUEST : packet.result;
+  return transaction_abort(control, deadline_ns);
 }
 
 enum call_status http_transaction_status(handle_t observation, uint64_t deadline_ns,
