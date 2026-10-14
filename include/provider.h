@@ -9,9 +9,8 @@
 
 struct provider_metadata {
   uint64_t protocol;
-  uint64_t representation;
   size_t media_type_size;
-  char media_type[PROVIDER_MEDIA_TYPE_MAX_BYTES + 1];
+  char media_type[RESOURCE_MEDIA_TYPE_MAX_BYTES + 1];
 };
 
 struct provider_result {

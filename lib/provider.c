@@ -165,7 +165,6 @@ enum call_status provider_open(handle_t provider, const char *target, uint64_t i
       *file = typed.resource;
       typed.resource = HANDLE_INVALID;
       result->metadata.protocol = typed.info.protocol;
-      result->metadata.representation = PROVIDER_REPRESENTATION_BYTES;
       result->metadata.media_type_size = typed.info.description.media_type_size;
       memcpy(result->metadata.media_type, typed.info.description.media_type,
           typed.info.description.media_type_size + 1);
