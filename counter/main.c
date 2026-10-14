@@ -518,6 +518,10 @@ int main(int argc, char **argv)
     extern int counter_completion_cut_main(const char *, const char *);
     return counter_completion_cut_main(argv[2], argv[3]);
   }
+  if (argc == 2 && !strcmp(argv[1], "--authority-close")) {
+    extern int counter_authority_close_main(void);
+    return counter_authority_close_main();
+  }
   if (argc > 1 && (!strcmp(argv[1], "--provide") ||
       !strcmp(argv[1], "--provide-once") || !strcmp(argv[1], "--lookup") ||
       !strcmp(argv[1], "--add") || !strcmp(argv[1], "--restrict") ||

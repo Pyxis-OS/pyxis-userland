@@ -5,6 +5,7 @@
 #include <file.h>
 #include <forwarder.h>
 #include <handle.h>
+#include <launcher.h>
 #include <namespace.h>
 #include <provider.h>
 #include <startup.h>
@@ -518,6 +519,79 @@ cleanup:
     fputs("completion cut: UDP denied before start; started FILE read retained after CUT\n", stdout);
   } else {
     fprintf(stderr, "completion cut: qualification failed at %s (status %u)\n", phase, status);
+  }
+  return ok ? 0 : 1;
+}
+
+/* Keep only observation and private wrapper control while the last native
+ * group CONTROL grants close. Neither may prolong group supervision. */
+int counter_authority_close_main(void)
+{
+  handle_t launcher = startup_resource("launcher");
+  handle_t clock = startup_resource("clock");
+  handle_t observer = HANDLE_INVALID;
+  struct execution_group_create_reply group = {0};
+  struct forwarder_reply wrapper = {0};
+  const char *phase = "held launcher and clock";
+  enum call_status status = CALL_UNAVAILABLE;
+  bool ok = false;
+  if (launcher == HANDLE_INVALID || clock == HANDLE_INVALID) {
+    goto cleanup;
+  }
+  phase = "empty scoped group creation";
+  status = launcher_create_group(launcher, &group);
+  if (status != CALL_OK) {
+    goto cleanup;
+  }
+  phase = "private group wrapper and WAIT-only observer";
+  status = forwarder_revocable(group.supervision,
+      EXECUTION_GROUP_RIGHT_CONTROL | EXECUTION_GROUP_RIGHT_WAIT, 0, 0, &wrapper);
+  if (status != CALL_OK) {
+    goto cleanup;
+  }
+  status = handle_copy_restricted(wrapper.holder, EXECUTION_GROUP_RIGHT_WAIT, 0, &observer);
+  if (status != CALL_OK) {
+    goto cleanup;
+  }
+  struct handle_info info;
+  status = handle_query(observer, &info);
+  if (status != CALL_OK || info.kind != HANDLE_KIND_NATIVE ||
+      info.protocol != PROTOCOL_EXECUTION_GROUP || info.rights != EXECUTION_GROUP_RIGHT_WAIT ||
+      info.transport != 0) {
+    goto cleanup;
+  }
+  phase = "last native group CONTROL release";
+  if (!close_owned(&group.supervision) || !close_owned(&wrapper.holder)) {
+    status = CALL_BAD_HANDLE;
+    goto cleanup;
+  }
+  phase = "WAIT-only observer reports group cleanup";
+  uint64_t now;
+  status = clock_now(clock, &now);
+  if (status != CALL_OK) {
+    goto cleanup;
+  }
+  if (now > UINT64_MAX - MANUAL_COMPLETION_WAIT_NS) {
+    status = CALL_LIMIT;
+    goto cleanup;
+  }
+  struct wait_interest interest = {.handle = observer, .events = WAIT_COMPLETE};
+  uint64_t events = 0;
+  status = wait_many(&interest, 1, now + MANUAL_COMPLETION_WAIT_NS, &events);
+  ok = status == CALL_OK && (events & WAIT_COMPLETE);
+cleanup:
+  bool cleanup = close_owned(&group.supervision);
+  cleanup = close_owned(&group.launcher) && cleanup;
+  cleanup = close_owned(&observer) && cleanup;
+  cleanup = close_pair(&wrapper) && cleanup;
+  if (!cleanup && ok) {
+    phase = "owned handle cleanup";
+  }
+  ok = ok && cleanup;
+  if (ok) {
+    fputs("authority close: WAIT-only observer retained no group CONTROL\n", stdout);
+  } else {
+    fprintf(stderr, "authority close: qualification failed at %s (status %u)\n", phase, status);
   }
   return ok ? 0 : 1;
 }
