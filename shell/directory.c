@@ -50,6 +50,14 @@ enum call_status shell_directory_init(struct shell *shell)
     }
     memcpy(shell->initial_directories, startup_working_directories(),
         initial_count * sizeof(*shell->initial_directories));
+    for (size_t i = 0; i < initial_count; ++i) {
+      for (size_t j = 0; j < i; ++j) {
+        if (shell->initial_directories[i] == shell->initial_directories[j]) {
+          shell->initial_directories[i] = HANDLE_INVALID;
+          break;
+        }
+      }
+    }
     shell->initial_directory_count = initial_count;
   }
   if (status == CALL_OK && !shell->directory->count) {

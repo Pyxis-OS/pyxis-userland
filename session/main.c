@@ -573,7 +573,11 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
   bool success = status == CALL_OK &&
       bootstrap_release_except(retained, sizeof(retained) / sizeof(*retained));
   for (size_t i = 0; i < startup_working_directory_count(); ++i) {
-    if (handle_close(startup_working_directory(i)) != 0) {
+    bool duplicate = false;
+    for (size_t j = 0; j < i; ++j) {
+      duplicate |= startup_working_directory(i) == startup_working_directory(j);
+    }
+    if (!duplicate && handle_close(startup_working_directory(i)) != 0) {
       success = false;
     }
   }
