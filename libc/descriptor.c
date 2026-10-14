@@ -417,26 +417,26 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
     } else if (!transactional) {
       error = protocol == PROTOCOL_DIRECTORY ? EISDIR : ENOTSUP;
     }
-    if (!transactional) {
+    if (!error && !transactional) {
+      if ((kind == DESCRIPTOR_RESPONSE && mode->writable) ||
+          (kind != DESCRIPTOR_FILE && mode->append)) {
+        error = ENOTSUP;
+      }
       uint64_t read_right = kind == DESCRIPTOR_PIPE ? PIPE_RIGHT_READ :
           kind == DESCRIPTOR_CONSOLE ? CONSOLE_RIGHT_READ :
           kind == DESCRIPTOR_RESPONSE ? STREAM_RIGHT_READ : FILE_RIGHT_READ;
       uint64_t write_right = kind == DESCRIPTOR_PIPE ? PIPE_RIGHT_WRITE :
           kind == DESCRIPTOR_CONSOLE ? CONSOLE_RIGHT_WRITE : FILE_RIGHT_WRITE;
       uint64_t needed = (mode->readable ? read_right : 0) | (mode->writable ? write_right : 0);
-      if ((opened.info.rights & needed) != needed) {
+      if (!error && (opened.info.rights & needed) != needed) {
         error = EACCES;
-      } else if (kind == DESCRIPTOR_RESPONSE && mode->writable) {
-        error = ENOTSUP;
-      } else if (kind != DESCRIPTOR_FILE && mode->append) {
-        error = ENOTSUP;
       }
-    } else if (opened.info.kind != HANDLE_KIND_EXPORTED ||
+    } else if (!error && (opened.info.kind != HANDLE_KIND_EXPORTED ||
         !(opened.info.transport & HANDLE_TRANSPORT_CALL) || mode->append || mode->exclusive ||
-        (!legacy && !mode->writable)) {
+        (!legacy && !mode->writable))) {
       error = ENOTSUP;
-    } else if (!(opened.info.rights & TRANSACTION_RIGHT_COMMIT) ||
-        (mode->writable && !(opened.info.rights & TRANSACTION_RIGHT_STAGE))) {
+    } else if (!error && (!(opened.info.rights & TRANSACTION_RIGHT_COMMIT) ||
+        (mode->writable && !(opened.info.rights & TRANSACTION_RIGHT_STAGE)))) {
       error = EACCES;
     }
   }
@@ -2167,8 +2167,9 @@ int descriptor_object_abandon(struct descriptor_object *object, int failure)
   enum call_status status = CALL_BAD_OPERATION;
   if (transaction) {
     transaction->producer_failed = true;
-    /* Another alias may fault while draining after intentional abandonment. */
-    if (transaction->failure_outcome != RESOURCE_ABORTED) {
+    /* Cleanup cannot replace an earlier failure or make an uncertain COMMIT
+     * outcome appear canceled: ABORT cannot undo possible remote effects. */
+    if (!transaction->failure) {
       __atomic_store_n(&transaction->failure, failure ? failure : ECANCELED, __ATOMIC_RELEASE);
       transaction->failure_outcome = failure == ECANCELED ? RESOURCE_ABORTED : RESOURCE_IO_ERROR;
     }
