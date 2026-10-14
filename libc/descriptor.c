@@ -2222,7 +2222,9 @@ int descriptor_object_describe(struct descriptor_object *object, uint64_t flags,
     }
   }
   if (status == CALL_OK && transaction && transaction->failure &&
-      reply->description.outcome == RESOURCE_OK) {
+      (reply->description.outcome == RESOURCE_OK ||
+          (transaction->failure_outcome == RESOURCE_UNCERTAIN &&
+              reply->description.outcome != RESOURCE_DENIED))) {
     /* Local producer failure or uncertain delivery cannot be repaired by a
      * stale issuer snapshot. No length/completion is fabricated. */
     uint64_t body = reply->description.flags & RESOURCE_ERROR_BODY;
