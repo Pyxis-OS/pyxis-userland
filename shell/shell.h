@@ -89,6 +89,10 @@ struct shell {
       keyboard, pointer, terminal_service,
       boot, tmp, host_mount, native_mount, power, screen_capture, audio;
   const struct path_context *directory;
+  /* Own the original startup chain after libc retains its independent cwd.
+   * Clear released slots so handle-number reuse cannot revive stale owners. */
+  handle_t *initial_directories;
+  size_t initial_directory_count;
   struct path_workspace workspace;
   /* Writable FAT grants are selected sources, never inherited URI roots. */
   struct shell_fat_mount fat_mounts[SHELL_FAT_MOUNT_LIMIT];

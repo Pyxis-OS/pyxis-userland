@@ -156,6 +156,11 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
 
+  uint32_t address;
+  if (!wait_for_address(authority, clock, network, &address)) {
+    return EXIT_FAILURE;
+  }
+
   struct environment_capture captured = {0};
   enum call_status status = environment_capture_init(startup_environment_handle(), 0, &captured);
   struct profile_directory selected_roots[PROFILE_DIRECTORY_LIMIT];
@@ -343,10 +348,6 @@ int launch_remote_server(const struct session_config *config,
     goto done;
   }
   request.image = image;
-  uint32_t address;
-  if (!wait_for_address(authority, clock, network, &address)) {
-    goto done;
-  }
   status = network_environment_read(&refreshed_environment, authority,
       environment, environment_count, network->dns_server);
   if (status != CALL_OK) {
@@ -392,6 +393,9 @@ int launch_remote_server(const struct session_config *config,
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  if (!bootstrap_release_except(NULL, 0)) {
+    result = EXIT_FAILURE;
+  }
   free(entries);
   free(grants);
   environment_capture_close(&captured);

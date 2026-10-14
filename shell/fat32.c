@@ -148,9 +148,10 @@ static enum call_status publish_mount(struct shell *shell, struct shell_fat_moun
   }
   if (status == CALL_OK) {
     status = environment_set_batch(shell->environment, entries, count);
+    mount->bound = status == CALL_OK || status == CALL_OUTCOME_UNKNOWN;
   }
   if (handle_close(root) != 0 && status == CALL_OK) {
-    status = CALL_BAD_HANDLE;
+    status = CALL_OUTCOME_UNKNOWN;
   }
   return status;
 }
@@ -312,7 +313,9 @@ enum command_result shell_mount_fat32(struct shell *shell, char **arguments, siz
   free(binding);
   status = publish_mount(shell, mount, root);
   if (status != CALL_OK) {
-    abandon_open(shell, mount);
+    if (!mount->bound) {
+      abandon_open(shell, mount);
+    }
     return shell_directory_error(shell, "shell: mount", uri, status);
   }
   mount->bound = true;
@@ -429,18 +432,24 @@ static enum call_status unpublish_data(struct shell *shell, uint64_t domain)
   if (status != CALL_OK) {
     return status;
   }
-  for (size_t i = 0; i < startup_working_directory_count(); ++i) {
+  for (size_t i = 0; i < shell->initial_directory_count; ++i) {
+    if (shell->initial_directories[i] == HANDLE_INVALID) {
+      continue;
+    }
     uint64_t selected;
     bool valid;
-    enum call_status queried = directory_domain(startup_working_directory(i), &selected, &valid);
+    enum call_status queried = directory_domain(shell->initial_directories[i], &selected, &valid);
     if (queried == CALL_BAD_HANDLE) {
       continue;
     }
     if (queried != CALL_OK) {
       return queried;
     }
-    if (valid && selected == domain && handle_close(startup_working_directory(i)) != 0) {
-      return CALL_OUTCOME_UNKNOWN;
+    if (valid && selected == domain) {
+      if (handle_close(shell->initial_directories[i]) != 0) {
+        return CALL_OUTCOME_UNKNOWN;
+      }
+      shell->initial_directories[i] = HANDLE_INVALID;
     }
   }
   if (shell->history_home != HANDLE_INVALID) {

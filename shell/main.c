@@ -183,7 +183,7 @@ int main(int argc, char **argv)
   if (!quiet_input) {
     shell_history_load(&shell);
   }
-  handle_t cwd_bootstrap = bootstrap_capability("pane_cwd");
+  handle_t cwd_bootstrap = bootstrap_take_capability("pane_cwd");
   if (cwd_bootstrap != HANDLE_INVALID) {
     pane_cwd_provider_init(&cwd_service.provider, shell.service, cwd_bootstrap, shell.clock);
     handle_close(cwd_bootstrap);

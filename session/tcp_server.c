@@ -101,6 +101,9 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  if (!bootstrap_release_except(NULL, 0)) {
+    result = EXIT_FAILURE;
+  }
   if (listener != HANDLE_INVALID && handle_close(listener) != 0) {
     result = EXIT_FAILURE;
   }

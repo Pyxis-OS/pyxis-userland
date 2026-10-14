@@ -62,6 +62,17 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   bool script = start_services || start_remote_services;
+  if (configure_network && !network_config_apply(network, runtime)) {
+    return EXIT_FAILURE;
+  }
+  if (!configure_network && script) {
+    enum call_status status = network_environment_wait(bootstrap_capability("net_config"), bootstrap_capability("clock"));
+    if (status != CALL_OK && status != CALL_TIMED_OUT) {
+      fprintf(stderr, "session: cannot wait for network setup (status %u)\n", status);
+      return EXIT_FAILURE;
+    }
+  }
+
   handle_t mux_terminal = bootstrap_capability("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
@@ -474,16 +485,6 @@ static int launch_session(const struct session_config *config, const struct netw
     }
   }
 
-  if (configure_network && !network_config_apply(network, runtime)) {
-    goto done;
-  }
-  if (!configure_network && script) {
-    status = network_environment_wait(net_config, bootstrap_capability("clock"));
-    if (status != CALL_OK && status != CALL_TIMED_OUT) {
-      fprintf(stderr, "session: cannot wait for network setup (status %u)\n", status);
-      goto done;
-    }
-  }
   status = network_environment_read(&refreshed_environment, net_config,
       environment, environment_count, network->dns_server);
   if (status != CALL_OK) {
@@ -555,7 +556,6 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
     for (size_t j = 0; j < sizeof(retained_names) / sizeof(*retained_names); ++j) {
       keep |= !strcmp(entry->name, retained_names[j]);
     }
-    keep |= runtime->waiting_link && !strcmp(entry->name, "udp");
     if (!keep) {
       environment_name(removed[count].name, entry->name);
       removed[count++].identity = entry->identity;
@@ -651,7 +651,7 @@ int main(int argc, char **argv)
     goto usage;
   }
   if (!start_services && !start_remote_services) {
-    handle_t staging = bootstrap_capability(BUNDLE_SOURCE_PREFIX "http_staging");
+    handle_t staging = bootstrap_take_capability(BUNDLE_SOURCE_PREFIX "http_staging");
     if (staging != HANDLE_INVALID && handle_close(staging)) {
       fputs("session: cannot consume private HTTP backing source\n", stderr);
       return EXIT_FAILURE;

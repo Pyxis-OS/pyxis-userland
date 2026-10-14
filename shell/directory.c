@@ -39,6 +39,19 @@ static enum call_status prepare_workspace(struct shell *shell, size_t length)
 enum call_status shell_directory_init(struct shell *shell)
 {
   enum call_status status = pyxis_working_context(&shell->directory);
+  size_t initial_count = startup_working_directory_count();
+  if (status == CALL_OK && initial_count) {
+    if (initial_count > SIZE_MAX / sizeof(*shell->initial_directories)) {
+      return CALL_LIMIT;
+    }
+    shell->initial_directories = malloc(initial_count * sizeof(*shell->initial_directories));
+    if (!shell->initial_directories) {
+      return CALL_NO_MEMORY;
+    }
+    memcpy(shell->initial_directories, startup_working_directories(),
+        initial_count * sizeof(*shell->initial_directories));
+    shell->initial_directory_count = initial_count;
+  }
   if (status == CALL_OK && !shell->directory->count) {
     status = pyxis_working_change("tmp://");
   }
@@ -52,6 +65,14 @@ void shell_directory_close(struct shell *shell)
     handle_close(shell->history_home);
     shell->history_home = HANDLE_INVALID;
   }
+  for (size_t i = 0; i < shell->initial_directory_count; ++i) {
+    if (shell->initial_directories[i] != HANDLE_INVALID) {
+      handle_close(shell->initial_directories[i]);
+    }
+  }
+  free(shell->initial_directories);
+  shell->initial_directories = NULL;
+  shell->initial_directory_count = 0;
   free(shell->workspace.directories);
   free(shell->workspace.component);
   free(shell->workspace.http);

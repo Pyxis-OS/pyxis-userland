@@ -91,17 +91,22 @@ static inline bool bootstrap_only_capabilities(const char *const *names, size_t 
 static inline bool bootstrap_release_except(const handle_t *retained, size_t count)
 {
   bool success = true;
-  for (struct bootstrap_capture *capture = bootstrap_captures; capture; capture = capture->next) {
-    bool keep = capture->handle == HANDLE_INVALID;
+  struct bootstrap_capture **next = &bootstrap_captures;
+  while (*next) {
+    struct bootstrap_capture *capture = *next;
+    bool keep = false;
     for (size_t i = 0; i < count; ++i) {
       keep |= capture->handle == retained[i];
     }
-    if (!keep) {
-      if (handle_close(capture->handle) != 0) {
-        success = false;
-      }
-      capture->handle = HANDLE_INVALID;
+    if (keep) {
+      next = &capture->next;
+      continue;
     }
+    if (capture->handle != HANDLE_INVALID && handle_close(capture->handle) != 0) {
+      success = false;
+    }
+    *next = capture->next;
+    free(capture);
   }
   return success;
 }
