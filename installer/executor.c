@@ -52,6 +52,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   enum call_status status = disks_open(plan->disks, disk->info.id,
       DISK_ACCESS_READ_WRITE, &disk->handle);
   if (status != CALL_OK) {
+    install_progress_pause();
     fprintf(stderr, "installer: cannot claim disk (status %u); nothing was written\n", status);
     goto done;
   }
@@ -79,7 +80,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     if (!install_gpt_write(disk, layout)) {
       goto done;
     }
-    install_progress_begin("Flushing pool and GPT", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin_major("Flushing pool and GPT", INSTALL_PROGRESS_NONE, NULL);
     status = disk_flush(disk->handle);
     if (status != CALL_OK) {
       install_progress_pause();
@@ -108,13 +109,12 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   status = disk_create_volume(disk->handle, INSTALL_POOL_PARTITION, INSTALL_HOME_VOLUME);
   install_progress_finish();
   if (status == CALL_OK) {
-    puts("Created the home volume.");
+    install_progress_detail("Created the home volume.");
   } else if (status != CALL_ALREADY_EXISTS) {
     install_progress_pause();
     fprintf(stderr, "installer: cannot create the home volume (status %u)\n", status);
     goto done;
   }
-  printf("Writing %zu programs to bin://%s...\n", plan->programs.count, revision);
   if (!install_programs_write(disk, plan->boot, &plan->programs, revision,
         &plan->manifest, plan->manifest_text, plan->manifest_bytes)) {
     goto done;
@@ -131,7 +131,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   if (!install_esp_write(plan->esp)) {
     goto done;
   }
-  install_progress_begin("Flushing EFI boot files", INSTALL_PROGRESS_NONE, NULL);
+  install_progress_begin_major("Flushing EFI boot files", INSTALL_PROGRESS_NONE, NULL);
   status = disk_flush(disk->handle);
   if (status != CALL_OK) {
     install_progress_pause();
@@ -163,7 +163,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   install_progress_finish();
   const char *previous = updating ? plan->record.previous : NULL;
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
-    puts("Older program directories were kept: the previous revision is unknown.");
+    fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
   } else {
     if (!install_programs_cleanup(disk, revision, previous)) {
       install_progress_pause();
@@ -211,10 +211,10 @@ done:
   }
   if (result == EXIT_SUCCESS) {
     if (updating) {
-      puts("updated\nBoot from this disk after removing the live medium.");
+      fputs("updated\nBoot from this disk after removing the live medium.\n", stderr);
     } else {
-      puts("installed\nBoot from this disk after removing the install medium.\n"
-          "Deleting system://SAFE_TO_WIPE marks this installation as final.");
+      fputs("installed\nBoot from this disk after removing the install medium.\n"
+          "Deleting system://SAFE_TO_WIPE marks this installation as final.\n", stderr);
     }
   }
   return result == EXIT_SUCCESS;

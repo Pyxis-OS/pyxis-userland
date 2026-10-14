@@ -383,12 +383,12 @@ bool install_esp_write(const struct install_esp *esp)
     install_progress_finish();
     return false;
   }
-  install_progress_begin("Flushing invalid EFI boot geometry", INSTALL_PROGRESS_NONE, NULL);
+  install_progress_begin_major("Flushing invalid EFI boot geometry", INSTALL_PROGRESS_NONE, NULL);
   if (!esp_flush(esp)) {
     install_progress_finish();
     return false;
   }
-  install_progress_begin("Writing EFI replacement tree", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  install_progress_begin_major("Writing EFI replacement tree", INSTALL_PROGRESS_RAW_WRITE, NULL);
   uint64_t tree_bytes = 4u * esp->sector_bytes + ESP_FAT_COUNT * esp->fat_bytes;
   for (unsigned i = 0; i < ESP_NODE_COUNT; ++i) {
     tree_bytes += (uint64_t)esp->nodes[i].clusters * ESP_CLUSTER_BYTES;
@@ -449,12 +449,12 @@ bool install_esp_write(const struct install_esp *esp)
   }
   /* Publish boot geometry only after the complete replacement tree is durable.
    * The caller's final sync also covers both boot sectors. */
-  install_progress_begin("Flushing EFI replacement tree", INSTALL_PROGRESS_NONE, NULL);
+  install_progress_begin_major("Flushing EFI replacement tree", INSTALL_PROGRESS_NONE, NULL);
   if (!esp_flush(esp)) {
     install_progress_finish();
     return false;
   }
-  install_progress_begin("Publishing EFI boot sectors", INSTALL_PROGRESS_RAW_WRITE, NULL);
+  install_progress_begin_major("Publishing EFI boot sectors", INSTALL_PROGRESS_RAW_WRITE, NULL);
   install_progress_bytes_total(2u * esp->sector_bytes);
   make_boot(esp, bytes);
   bool ok = esp_write(esp, 0, bytes, esp->sector_bytes) &&
@@ -718,7 +718,7 @@ bool install_esp_verify(const struct install_esp *esp)
   install_progress_begin("Reading back EFI metadata and FAT copies", INSTALL_PROGRESS_RAW_READ, NULL);
   bool success = read_metadata(&reader);
   if (success) {
-    install_progress_begin("Reading back EFI boot paths and file bytes", INSTALL_PROGRESS_RAW_READ,
+    install_progress_begin_major("Reading back EFI boot paths and file bytes", INSTALL_PROGRESS_RAW_READ,
         "files checked");
     install_progress_items_total(ESP_NODE_COUNT - ESP_EFI_FILE);
   }

@@ -708,7 +708,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
     fprintf(stderr, "installer: cannot prepare bin://%s (status %u)\n", revision, status);
   }
   if (ok) {
-    install_progress_begin("Copying programs to bin", INSTALL_PROGRESS_WORK, "files");
+    install_progress_begin_major("Copying programs to bin", INSTALL_PROGRESS_WORK, "files");
     if (programs->totals_known) {
       install_progress_items_total(programs->files);
       install_progress_bytes_total(programs->bytes);
@@ -717,7 +717,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
     install_progress_finish();
   }
   if (ok) {
-    install_progress_begin("Flushing program pool", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin_major("Flushing program pool", INSTALL_PROGRESS_NONE, NULL);
     status = directory_sync(directory);
     ok = status == CALL_OK;
     if (!ok) {
@@ -726,7 +726,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
     }
   }
   if (ok) {
-    install_progress_begin("Verifying copied programs (filesystem view; may be cached)",
+    install_progress_begin_major("Verifying programs (may be cached)",
         INSTALL_PROGRESS_WORK, "files");
     if (programs->totals_known) {
       install_progress_items_total(programs->files);
@@ -752,7 +752,7 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
     }
     if (ok) {
       install_progress_advance(0, 1);
-      install_progress_begin("Syncing revision manifest", INSTALL_PROGRESS_NONE, NULL);
+      install_progress_begin_major("Syncing revision manifest", INSTALL_PROGRESS_NONE, NULL);
       ok = directory_sync(directory) == CALL_OK;
     }
     if (ok) {
@@ -806,7 +806,7 @@ bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
   bool ok = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION,
       INSTALL_BIN_VOLUME, BIN_RIGHTS, &root) == CALL_OK;
   if (ok) {
-    install_progress_begin("Removing older program revision entries",
+    install_progress_begin_major("Removing older program revision entries",
         INSTALL_PROGRESS_NONE, "entries");
   }
   struct directory_cursor cursor = {0};
@@ -836,13 +836,12 @@ bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
     if (ok) {
       changed = true;
       install_progress_advance(0, 1);
-      install_progress_pause();
-      printf("Removed old programs bin://%s\n", name);
+      install_progress_detail("Removed old programs bin://%s", name);
       cursor = (struct directory_cursor){0};
     }
   }
   if (ok && changed) {
-    install_progress_begin("Flushing program cleanup", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin_major("Flushing program cleanup", INSTALL_PROGRESS_NONE, NULL);
     ok = directory_sync(root) == CALL_OK;
   }
   install_progress_finish();

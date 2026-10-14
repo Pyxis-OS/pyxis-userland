@@ -1300,7 +1300,7 @@ static enum inspection prior_tree(struct pool_view *pool, const struct npfs_volu
   unsigned depth = 0;
   size_t entries = 0;
   enum inspection status = INSPECT_OK;
-  install_progress_begin("Reading and hashing previous program inventory", INSTALL_PROGRESS_WORK, "entries");
+  install_progress_begin_major("Reading and hashing previous program inventory", INSTALL_PROGRESS_WORK, "entries");
   for (;;) {
     struct prior_directory *level = &levels[depth];
     struct npfs_dirent entry;

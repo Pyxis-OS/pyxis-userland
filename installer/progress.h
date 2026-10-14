@@ -26,7 +26,7 @@ struct install_progress_record {
   enum install_progress_measure measure;
   const char *phase, *item_unit;
   uint64_t bytes, items, total_bytes, total_items;
-  bool total_bytes_known, total_items_known;
+  bool total_bytes_known, total_items_known, major;
 };
 
 /* One synchronous observer for the single-threaded executor. Labels are static;
@@ -34,10 +34,15 @@ struct install_progress_record {
  * Events describe observed work, never operation success or durability. */
 typedef void (*install_progress_sink)(void *context, const struct install_progress_record *record);
 void install_progress_bind(install_progress_sink sink, void *context);
-void install_progress_plain(handle_t clock);
-void install_progress_plain_stream(handle_t clock, FILE *output);
+/* Handles and stream are borrowed for the binding's lifetime. Diagnostics and
+ * local output failures disable only that destination; neither affects I/O. */
+void install_progress_plain_stream(handle_t clock, FILE *output, handle_t diagnostics,
+    bool verbose);
 void install_progress_begin(const char *phase, enum install_progress_measure measure,
     const char *item_unit);
+void install_progress_begin_major(const char *phase, enum install_progress_measure measure,
+    const char *item_unit);
+void install_progress_detail(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void install_progress_bytes_total(uint64_t total);
 void install_progress_items_total(uint64_t total);
 void install_progress_advance(uint64_t bytes, uint64_t items);
