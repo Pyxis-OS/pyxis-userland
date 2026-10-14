@@ -1,6 +1,6 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
-#include <pyxis/environment.h>
+#include <environment.h>
 #include <pyxis/working_path.h>
 #include "session.h"
 #include "../common/pane_broker.h"
@@ -16,7 +16,6 @@
 #include <abi/thread.h>
 #include <abi/keyboard.h>
 #include <abi/net_config.h>
-#include <abi/namespace.h>
 #include <abi/pipe.h>
 #include <abi/pointer.h>
 #include <abi/power.h>
@@ -97,7 +96,6 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     session->cwd_bootstrap = bootstrap.receiver;
     return CALL_OK;
   }
-  size_t root_count = startup_root_count();
   const struct path_context *context;
   enum call_status status = pyxis_working_context(&context);
   if (status != CALL_OK) {
@@ -108,22 +106,32 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 25, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 25 };
+  struct environment_capture capture = {0};
+  status = environment_capture_init(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
+  if (status != CALL_OK) {
+    return status;
+  }
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
-      NAMESPACE_GRANT_COUNT + STARTUP_ROOT_LIMIT + BUNDLE_SOURCE_LIMIT;
-  if (root_count > STARTUP_ROOT_LIMIT ||
-      depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
+      capture.count + BUNDLE_SOURCE_LIMIT;
+  size_t entry_capacity = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
+      capture.count + BUNDLE_SOURCE_LIMIT;
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
       depth > SIZE_MAX / sizeof(uint64_t)) {
+    environment_capture_close(&capture);
     return CALL_LIMIT;
   }
   struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
-  if (!grants || (depth && !directories)) {
+  struct launch_environment_entry *entries = calloc(entry_capacity, sizeof(*entries));
+  if (!grants || (depth && !directories) || !entries) {
+    environment_capture_close(&capture);
+    free(entries);
     free(grants);
     free(directories);
     return CALL_NO_MEMORY;
   }
-  struct pyxis_environment_snapshot environment = {0};
   struct terminal_create_reply terminal = {0};
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
   bool admission_attempted = false;
@@ -145,7 +153,9 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   session->group = group.supervision;
   bound = group.launcher;
-  handle_t boot = bootstrap_capability("boot");
+  const struct environment_value *boot_entry = environment_capture_find(&capture, "boot");
+  handle_t boot = boot_entry && boot_entry->kind == ENVIRONMENT_CAP ?
+      boot_entry->handle : HANDLE_INVALID;
   if (boot == HANDLE_INVALID) {
     status = CALL_NOT_FOUND;
     goto done;
@@ -162,15 +172,18 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   grants[STDOUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[STDERR] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[EVENTS] = (struct launch_grant){terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0};
-  struct launch_environment_entry resources[4 + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
-    PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
-    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal_events", EVENTS),
-  };
-  size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
+  entries[0] = (struct launch_environment_entry)PROFILE_CAP("input", INPUT);
+  entries[1] = (struct launch_environment_entry)PROFILE_CAP("output", OUTPUT);
+  entries[2] = (struct launch_environment_entry)PROFILE_CAP("launcher", LAUNCHER);
+  entries[3] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("terminal_events", EVENTS);
+  entries[4] = profile_stdio_entry(ENVIRONMENT_STDIN, STDIN);
+  entries[5] = profile_stdio_entry(ENVIRONMENT_STDOUT, STDOUT);
+  entries[6] = profile_stdio_entry(ENVIRONMENT_STDERR, STDERR);
+  size_t grant_count = FIRST_OPTIONAL, entry_count = 7;
   if (bootstrap_capability("service") != HANDLE_INVALID &&
       endpoint_create(bootstrap_capability("service"), &bootstrap) == CALL_OK) {
     session->cwd_bootstrap = bootstrap.receiver;
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pane_cwd", grant_count);
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("pane_cwd", grant_count);
     grants[grant_count++] = (struct launch_grant){bootstrap.caller, 0, HANDLE_TRANSPORT_SEND};
   }
   handle_t provisioner = bootstrap_capability("job_provisioner");
@@ -179,7 +192,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     if (status != CALL_OK) {
       goto done;
     }
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){
       job_work_directory(session->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };
@@ -200,7 +213,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
     /* The opt-in controls delegation; only this group's launcher may enter it. */
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP("child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
   }
   static const struct {
@@ -218,14 +231,14 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     /* Store grants permit owned graphics actions, never terminal CONTROL. */
     {"clipboard_local", CLIPBOARD_RIGHTS}, {"clipboard_shared", CLIPBOARD_RIGHTS},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
-    {"namespace_service", NAMESPACE_SERVICE_RIGHT_CREATE},
     {"tcp", TCP_SERVICE_RIGHTS}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
     {"net_config", NET_CONFIG_RIGHT_READ},
   };
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
-    handle_t source = bootstrap_capability(allowed[i].name);
+    const struct environment_value *value = environment_capture_find(&capture, allowed[i].name);
+    handle_t source = value && value->kind == ENVIRONMENT_CAP ? value->handle : HANDLE_INVALID;
     if (source == HANDLE_INVALID) {
       continue;
     }
@@ -234,20 +247,58 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
     grants[grant_count].rights &= allowed[i].rights;
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)allowed[i].name, grant_count++);
+    entries[entry_count++] = (struct launch_environment_entry){
+      .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
+      .flags = !strcmp(allowed[i].name, "service") ? 0 : ENVIRONMENT_EXPORTED,
+      .value = grant_count++,
+    };
   }
-  status = bundle_sources_forward_startup(grants, fixed_grants + depth, &grant_count,
-      resources, sizeof(resources) / sizeof(*resources), &resource_count);
+  status = bundle_sources_forward_capture(&capture, grants, fixed_grants + depth, &grant_count,
+      entries, entry_capacity, &entry_count);
   if (status != CALL_OK) {
     goto done;
   }
-  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
-  const struct startup_binding *selected_roots = startup_roots();
-  for (size_t i = 0; i < root_count; ++i) {
-    roots[i] = (struct launch_environment_entry)PROFILE_CAP(selected_roots[i].name, grant_count);
-    status = copy_grant(selected_roots[i].handle, &grants[grant_count++]);
+  struct profile_directory selected_directories[PROFILE_DIRECTORY_LIMIT];
+  size_t directory_count;
+  status = profile_directories(&capture, selected_directories,
+      PROFILE_DIRECTORY_LIMIT, &directory_count);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  for (size_t i = 0; i < directory_count; ++i) {
+    bool selected = false;
+    for (size_t j = 0; j < entry_count; ++j) {
+      selected |= !strcmp(selected_directories[i].name, (const char *)(uintptr_t)entries[j].name);
+    }
+    if (selected) {
+      continue;
+    }
+    entries[entry_count++] = (struct launch_environment_entry)
+        PROFILE_CAP(selected_directories[i].name, grant_count);
+    status = copy_grant(selected_directories[i].handle, &grants[grant_count++]);
     if (status != CALL_OK) {
       goto done;
+    }
+  }
+  status = profile_inherit_services(&capture, true, grants, fixed_grants + depth, &grant_count,
+      entries, entry_capacity, &entry_count);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  for (size_t i = 0; i < capture.count; ++i) {
+    const struct environment_value *value = &capture.values[i];
+    if (value->kind != ENVIRONMENT_TEXT) {
+      continue;
+    }
+    bool selected = false;
+    for (size_t j = 0; j < entry_count; ++j) {
+      selected |= !strcmp(value->name, (const char *)(uintptr_t)entries[j].name);
+    }
+    if (!selected) {
+      entries[entry_count++] = (struct launch_environment_entry){
+        .name = (uintptr_t)value->name, .kind = ENVIRONMENT_TEXT, .flags = value->flags,
+        .value = (uintptr_t)value->text, .length = value->length,
+      };
     }
   }
   for (size_t i = 0; i < depth; ++i) {
@@ -257,32 +308,15 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
   }
-  status = pyxis_environment_snapshot_init(&environment);
-  if (status != CALL_OK) {
-    goto done;
-  }
   const char *arguments[] = {"boot://shell.pxe"};
   struct launch_request request = {
     .image = image,
-    .grants = (uintptr_t)grants,
-    .resources = (uintptr_t)resources, .resource_count = resource_count,
-    .roots = (uintptr_t)roots, .root_count = root_count,
+    .grants = (uintptr_t)grants, .grant_count = grant_count,
+    .entries = (uintptr_t)entries, .entry_count = entry_count,
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
     .working_path = (uintptr_t)(cwd ? cwd->path : pyxis_working_path()),
-    .environment = (uintptr_t)environment.variables,
-    .environment_count = environment.count,
     .argv = (uintptr_t)arguments, .argc = 1,
-    .streams = {{.protocol = PROTOCOL_CONSOLE, .grant = STDIN}, {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT}, {.protocol = PROTOCOL_CONSOLE, .grant = STDERR}},
   };
-  handle_t namespace = startup_namespace();
-  if (namespace != HANDLE_INVALID) {
-    request.namespace_grant = grant_count + 1;
-    status = copy_grant(namespace, &grants[grant_count++]);
-    if (status != CALL_OK) {
-      goto done;
-    }
-  }
-  request.grant_count = grant_count;
   admission_attempted = true;
   status = launcher_launch(bound, &request, &session->process);
 
@@ -290,7 +324,7 @@ done:
   if (bootstrap.caller != HANDLE_INVALID) {
     handle_close(bootstrap.caller);
   }
-  pyxis_environment_snapshot_close(&environment);
+  environment_capture_close(&capture);
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }
@@ -304,6 +338,7 @@ done:
   }
   free(grants);
   free(directories);
+  free(entries);
   if (status != CALL_OK) {
     bool uncertain = admission_attempted && status == CALL_OUTCOME_UNKNOWN;
     if (!uncertain) {

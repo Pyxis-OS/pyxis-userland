@@ -35,7 +35,8 @@ ASCII policy.
 Controls and lifetime behavior are documented in Pyxis
 [`docs/userland/multiplexer.md`](https://git.internal/PyxisOS/pyxis-os/src/branch/main/docs/userland/multiplexer.md).
 
-`session.c` copies selected roots, cwd, environment and explicit local resources;
+`session.c` stages selected directory, text and capability entries, private
+service controllers for trusted handoff, child standard streams and owned cwd;
 its returned attachment, group supervisor and root observer are owned by the
 pane. `emulator.c` owns live cells and a bounded history ring; output parsing
 allocates nothing. `layout.c` owns the eight-leaf split tree independently of

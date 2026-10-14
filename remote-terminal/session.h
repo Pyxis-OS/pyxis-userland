@@ -8,7 +8,7 @@
 #include <startup.h>
 #include <job_work.h>
 #include <network_environment.h>
-#include <pyxis/environment.h>
+#include <environment.h>
 #include "../common/pane_broker.h"
 
 struct remote_shell {
@@ -22,19 +22,16 @@ struct remote_shell {
 enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_width,
     bool no_echo, struct remote_shell *shell);
 
-#define REMOTE_POLICY_GRANTS (17 + STARTUP_ROOT_LIMIT + 1)
-
 /* Retained authority and initial environment belong to this connection. The
  * network environment borrows strings from inherited and its own DNS buffer. */
 struct remote_context {
   handle_t job_provisioner;
-  struct launch_grant grants[REMOTE_POLICY_GRANTS];
-  size_t grant_count;
-  struct launch_environment_entry resources[17], roots[STARTUP_ROOT_LIMIT];
-  size_t resource_count, root_count;
-  size_t directory, namespace_index;
-  bool allow_launch;
-  struct pyxis_environment_snapshot inherited;
+  struct launch_grant *grants; /* Owned restricted CAP copies. */
+  struct launch_environment_entry *entries; /* Owned names, indices into grants. */
+  size_t grant_count, entry_count, capacity;
+  size_t directory;
+  bool allow_launch, multiplexer;
+  struct environment_capture inherited;
   struct network_environment environment;
 };
 
