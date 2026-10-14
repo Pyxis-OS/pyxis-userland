@@ -2,7 +2,7 @@
 #define SESSION_CONFIG_H
 
 #include "../libconfig/session.h"
-#include <abi/startup.h>
+#include <abi/launcher.h>
 #include <pyxis/environment.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,7 +15,7 @@ bool session_config_read(struct session_config *config);
  * then TZ and DNS_SERVER, each replacing an inherited variable of that name.
  * The caller frees the array; its strings borrow the supplied snapshot, config and
  * dns_server. NULL reports a diagnostic. */
-struct startup_variable *session_environment(const struct session_config *config,
+struct launch_environment_entry *session_environment(const struct session_config *config,
     const char *dns_server, const struct pyxis_environment_snapshot *inherited,
     size_t *count);
 

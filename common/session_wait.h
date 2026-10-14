@@ -2,6 +2,7 @@
 #define COMMON_SESSION_WAIT_H
 
 #include <network_environment.h>
+#include "launch_environment.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -26,15 +27,13 @@ static inline enum call_status session_wait_environment(
   if (count >= SIZE_MAX / sizeof(*environment->variables)) {
     return CALL_LIMIT;
   }
-  struct startup_variable *variables = realloc(environment->variables,
+  struct launch_environment_entry *variables = realloc(environment->variables,
       (count + 1) * sizeof(*variables));
   if (!variables) {
     return CALL_NO_MEMORY;
   }
   environment->variables = variables;
-  environment->variables[count] = (struct startup_variable){
-    (uintptr_t)SESSION_WAIT_ENV, (uintptr_t)"1",
-  };
+  environment->variables[count] = (struct launch_environment_entry)PROFILE_TEXT(SESSION_WAIT_ENV, "1");
   environment->count = count + 1;
   return CALL_OK;
 }

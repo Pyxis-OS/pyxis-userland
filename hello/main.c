@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <file.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -189,47 +191,51 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
   }
 
   enum { UTILITY_OUTPUT, UTILITY_MEMORY, UTILITY_BOOT, UTILITY_HOME, UTILITY_GRANTS };
-  struct launch_grant grants[UTILITY_GRANTS + STARTUP_STREAM_COUNT] = {
+  struct launch_grant grants[UTILITY_GRANTS + ENVIRONMENT_STREAM_COUNT] = {
     {output, CONSOLE_RIGHT_WRITE, 0},
     {memory, MEMORY_RIGHT_MANAGE, 0},
     {boot, boot_rights, 0},
     {home, home_rights, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"output", UTILITY_OUTPUT},
-    {(uintptr_t)"memory", UTILITY_MEMORY},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"output", UTILITY_OUTPUT),
+    PROFILE_CAP((uintptr_t)"memory", UTILITY_MEMORY),
   };
-  struct launch_binding roots[] = {
-    {(uintptr_t)"boot", UTILITY_BOOT},
-    {(uintptr_t)"home", UTILITY_HOME},
+  struct launch_environment_entry roots[] = {
+    PROFILE_CAP((uintptr_t)"boot", UTILITY_BOOT),
+    PROFILE_CAP((uintptr_t)"home", UTILITY_HOME),
   };
   uint64_t working_directory = UTILITY_HOME;
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (sizeof(resources) / sizeof(resources[0])) * sizeof(*entries));
+  entry_count += sizeof(resources) / sizeof(resources[0]);
+  memcpy(entries + entry_count, roots, (sizeof(roots) / sizeof(roots[0])) * sizeof(*entries));
+  entry_count += sizeof(roots) / sizeof(roots[0]);
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
     .grant_count = UTILITY_GRANTS,
-    .resources = (uintptr_t)resources,
-    .resource_count = sizeof(resources) / sizeof(resources[0]),
-    .roots = (uintptr_t)roots,
-    .root_count = sizeof(roots) / sizeof(roots[0]),
     .working_directories = (uintptr_t)&working_directory,
     .working_directory_count = 1,
     .working_path = (uintptr_t)"home://",
     .argv = (uintptr_t)arguments,
     .argc = count,
   };
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    struct startup_stream stream = startup_stream(i);
-    if (stream.protocol == STARTUP_STREAM_NONE || i == STARTUP_STDIN) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
+    struct pyxis_stdio_binding stream = bootstrap_stdio(i);
+    if (stream.protocol == 0 || i == ENVIRONMENT_STDIN) {
       continue;
     }
-    bool input = i == STARTUP_STDIN;
+    bool input = i == ENVIRONMENT_STDIN;
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
         (input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE) :
         stream.protocol == PROTOCOL_PIPE ?
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request.streams[i] = (struct launch_stream){.protocol = stream.protocol, .grant = request.grant_count};
+    entries[request.entry_count++] = profile_stdio_entry(i, request.grant_count);
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, 0};
   }
   handle_t child;
@@ -333,13 +339,13 @@ static int receive_input(handle_t input, handle_t output)
 
 int main(int argc, char **argv)
 {
-  handle_t input = startup_resource("input");
-  handle_t output = startup_resource("output");
-  handle_t root = startup_root("boot");
-  handle_t home = startup_root("home");
-  handle_t memory = startup_resource("memory");
-  handle_t client = startup_resource("client_process");
-  handle_t launcher = startup_resource("launcher");
+  handle_t input = bootstrap_capability("input");
+  handle_t output = bootstrap_capability("output");
+  handle_t root = bootstrap_capability("boot");
+  handle_t home = bootstrap_capability("home");
+  handle_t memory = bootstrap_capability("memory");
+  handle_t client = bootstrap_capability("client_process");
+  handle_t launcher = bootstrap_capability("launcher");
   if (input == HANDLE_INVALID || output == HANDLE_INVALID || root == HANDLE_INVALID ||
       home == HANDLE_INVALID || memory == HANDLE_INVALID || client == HANDLE_INVALID ||
       launcher == HANDLE_INVALID) {

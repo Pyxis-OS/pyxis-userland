@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/endpoint.h>
 #include <abi/file.h>
@@ -63,9 +65,9 @@ static bool invoke_value(handle_t client, uint64_t object_id,
 
 static int client_basic(void)
 {
-  handle_t first = startup_resource("first");
-  handle_t second = startup_resource("second");
-  handle_t output = startup_resource("output");
+  handle_t first = bootstrap_capability("first");
+  handle_t second = bootstrap_capability("second");
+  handle_t output = bootstrap_capability("output");
   handle_t read_copy = HANDLE_INVALID, send_copy = HANDLE_INVALID;
   bool ok = first != HANDLE_INVALID && second != HANDLE_INVALID &&
       authority(first, COUNTER_RIGHT_READ, HANDLE_TRANSPORT_CALL) &&
@@ -131,8 +133,8 @@ static int client_basic(void)
 
 static int client_cut(void)
 {
-  handle_t client = startup_resource("second");
-  handle_t output = startup_resource("output");
+  handle_t client = bootstrap_capability("second");
+  handle_t output = bootstrap_capability("output");
   uint64_t increment = 3;
   struct endpoint_packet reply;
   bool ok = client != HANDLE_INVALID &&
@@ -151,7 +153,7 @@ static int client_cut(void)
 
 static int client_exit(void)
 {
-  handle_t client = startup_resource("second");
+  handle_t client = bootstrap_capability("second");
   uint64_t increment = 3;
   struct endpoint_packet reply;
   bool ok = client != HANDLE_INVALID &&
@@ -163,8 +165,8 @@ static int client_exit(void)
 
 static int client_reuse(void)
 {
-  handle_t client = startup_resource("second");
-  handle_t output = startup_resource("output");
+  handle_t client = bootstrap_capability("second");
+  handle_t output = bootstrap_capability("output");
   bool ok = client != HANDLE_INVALID &&
       invoke_value(client, COUNTER_SECOND_ID,
           COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE, COUNTER_GET, 0, 9);
@@ -177,8 +179,8 @@ static int client_reuse(void)
 
 static int client_queued(void)
 {
-  handle_t client = startup_resource("second");
-  handle_t output = startup_resource("output");
+  handle_t client = bootstrap_capability("second");
+  handle_t output = bootstrap_capability("output");
   uint64_t zero = 0, increment = 3;
   struct endpoint_packet reply;
   bool ok = client != HANDLE_INVALID &&
@@ -206,21 +208,21 @@ static enum call_status launch_client(handle_t launcher, handle_t image,
     [SECOND] = {second, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
         HANDLE_TRANSPORT_CALL},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"output", OUTPUT},
-    {(uintptr_t)"first", FIRST}, {(uintptr_t)"second", SECOND},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"output", OUTPUT),
+    PROFILE_CAP((uintptr_t)"first", FIRST), PROFILE_CAP((uintptr_t)"second", SECOND),
   };
   if (first == HANDLE_INVALID) {
     grants[FIRST] = grants[SECOND];
-    resources[2] = (struct launch_binding){(uintptr_t)"second", FIRST};
+    resources[2] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"second", FIRST);
   }
   const char *arguments[] = {"counter.pxe", role};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
     .grant_count = first == HANDLE_INVALID ? 3 : 4,
-    .resources = (uintptr_t)resources,
-    .resource_count = first == HANDLE_INVALID ? 3 : 4,
+    .entries = (uintptr_t)resources,
+    .entry_count = first == HANDLE_INVALID ? 3 : 4,
     .argv = (uintptr_t)arguments,
     .argc = 2,
   };
@@ -530,8 +532,8 @@ int main(int argc, char **argv)
       !strcmp(argv[1], "--provide-once") || !strcmp(argv[1], "--lookup") ||
       !strcmp(argv[1], "--add") || !strcmp(argv[1], "--restrict") ||
       !strcmp(argv[1], "--hold"))) {
-    extern int counter_namespace_main(int argc, char **argv);
-    return counter_namespace_main(argc, argv);
+    extern int counter_environment_main(int argc, char **argv);
+    return counter_environment_main(argc, argv);
   }
   if (argc == 2 && !strcmp(argv[1], "client-basic")) {
     return client_basic();
@@ -562,19 +564,19 @@ int main(int argc, char **argv)
       return 1;
     }
   }
-  receiver_wait.input = startup_resource("input");
-  receiver_wait.output = startup_resource("output");
-  receiver_wait.clock = startup_resource("clock");
+  receiver_wait.input = bootstrap_capability("input");
+  receiver_wait.output = bootstrap_capability("output");
+  receiver_wait.clock = bootstrap_capability("clock");
   if (receiver_wait.enabled && (receiver_wait.input == HANDLE_INVALID ||
       receiver_wait.clock == HANDLE_INVALID)) {
     return 1;
   }
-  handle_t service = startup_resource("service");
-  handle_t launcher = startup_resource("launcher");
-  handle_t memory = startup_resource("memory");
-  handle_t output = startup_resource("output");
-  handle_t clock = startup_resource("clock");
-  handle_t bin = startup_root("bin");
+  handle_t service = bootstrap_capability("service");
+  handle_t launcher = bootstrap_capability("launcher");
+  handle_t memory = bootstrap_capability("memory");
+  handle_t output = bootstrap_capability("output");
+  handle_t clock = bootstrap_capability("clock");
+  handle_t bin = bootstrap_capability("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (!strcmp(mode, "queued-cut") &&

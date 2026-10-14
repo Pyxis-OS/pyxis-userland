@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include "../libconfig/boot.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
@@ -8,7 +10,6 @@
 #include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/thread.h>
-#include <abi/namespace.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
@@ -75,7 +76,6 @@ enum service {
   SERVICE_PROFILE,
   SERVICE_PIPE,
   SERVICE_ENDPOINT,
-  SERVICE_NAMESPACE,
   SERVICE_TERMINAL,
   SERVICE_COUNT,
 };
@@ -99,7 +99,6 @@ static const struct {
   [SERVICE_PROFILE] = {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST, 0},
   [SERVICE_PIPE] = {"pipe", PIPE_SERVICE_RIGHT_CREATE, 0},
   [SERVICE_ENDPOINT] = {"service", ENDPOINT_SERVICE_RIGHT_CREATE, 0},
-  [SERVICE_NAMESPACE] = {"namespace_service", NAMESPACE_SERVICE_RIGHT_CREATE, 0},
   [SERVICE_TERMINAL] = {"terminal", TERMINAL_SERVICE_RIGHT_CREATE, 0},
 };
 
@@ -144,22 +143,22 @@ struct mounts {
 
 static bool take_authority(struct authority *authority)
 {
-  authority->factory = startup_resource("space_factory");
-  authority->boot = startup_root("boot");
-  authority->tmp = startup_root("tmp");
-  authority->ram = startup_resource("ram");
-  authority->native_mount = startup_resource("native_mount");
-  authority->host_mount = startup_resource("host_mount");
-  authority->esp_mount = startup_resource("esp_mount");
-  authority->fat_mounts = startup_resource("fat_mounts");
-  authority->screen_capture = startup_resource("screen_capture");
-  authority->power = startup_resource("power");
-  authority->input_policy = startup_resource("input_policy");
+  authority->factory = bootstrap_capability("space_factory");
+  authority->boot = bootstrap_capability("boot");
+  authority->tmp = bootstrap_capability("tmp");
+  authority->ram = bootstrap_capability("ram");
+  authority->native_mount = bootstrap_capability("native_mount");
+  authority->host_mount = bootstrap_capability("host_mount");
+  authority->esp_mount = bootstrap_capability("esp_mount");
+  authority->fat_mounts = bootstrap_capability("fat_mounts");
+  authority->screen_capture = bootstrap_capability("screen_capture");
+  authority->power = bootstrap_capability("power");
+  authority->input_policy = bootstrap_capability("input_policy");
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID &&
       authority->input_policy != HANDLE_INVALID;
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
-    authority->services[i] = startup_resource(services[i].name);
+    authority->services[i] = bootstrap_capability(services[i].name);
     if (authority->services[i] == HANDLE_INVALID) {
       fprintf(stderr, "boot-init: missing resource %s\n", services[i].name);
       complete = false;
@@ -587,7 +586,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_binding resources[SERVICE_COUNT + 8 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[SERVICE_COUNT + 8 + BUNDLE_SOURCE_LIMIT];
   char source_names[BUNDLE_SOURCE_LIMIT][sizeof(BUNDLE_SOURCE_PREFIX) + BOOT_NAME_MAX];
   handle_t source_handles[BUNDLE_SOURCE_LIMIT];
   struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
@@ -597,7 +596,7 @@ struct space_launch {
   handle_t http_staging_parent; /* Borrowed until source handles close. */
   struct mounted_volume *http_staging_mount;
   char http_staging_name[96];
-  struct launch_binding *roots;
+  struct launch_environment_entry *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
   char working_path[BOOT_NAME_MAX + sizeof("://")];
@@ -666,7 +665,7 @@ static void select_start(const struct boot_space *space, struct space_launch *la
   const char *start = space->start ? space->start : BOOT_HOME_ROOT;
   for (size_t i = 0; i < launch->root_count; ++i) {
     if (!strcmp((const char *)(uintptr_t)launch->roots[i].name, start)) {
-      launch->working_directory = launch->roots[i].grant;
+      launch->working_directory = launch->roots[i].value;
       snprintf(launch->working_path, sizeof(launch->working_path), "%s://", start);
       return;
     }
@@ -691,14 +690,14 @@ static const char *build_launch(const struct authority *authority, struct mounts
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
     uint64_t rights = services[i].rights | (space->network ? services[i].owner_rights : 0);
     launch->grants[i] = (struct launch_grant){authority->services[i], rights, 0};
-    launch->resources[i] = (struct launch_binding){(uintptr_t)services[i].name, i};
+    launch->resources[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)services[i].name, i);
   }
   launch->grants[GRANT_BOOT] = (struct launch_grant){authority->boot, BOOT_ROOT_RIGHTS, 0};
   launch->grants[GRANT_TMP] = (struct launch_grant){authority->tmp, TMP_ROOT_RIGHTS, 0};
-  launch->roots[0] = (struct launch_binding){(uintptr_t)"boot", GRANT_BOOT};
-  launch->roots[1] = (struct launch_binding){(uintptr_t)"tmp", GRANT_TMP};
+  launch->roots[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"boot", GRANT_BOOT);
+  launch->roots[1] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tmp", GRANT_TMP);
   launch->grants[GRANT_BIN] = (struct launch_grant){authority->bin, BOOT_ROOT_RIGHTS, 0};
-  launch->roots[2] = (struct launch_binding){(uintptr_t)"bin", GRANT_BIN};
+  launch->roots[2] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"bin", GRANT_BIN);
   launch->grant_count = GRANT_FIRST_VOLUME;
   launch->resource_count = SERVICE_COUNT;
   launch->root_count = 3;
@@ -722,7 +721,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     uint64_t rights = info.rights & (root->read_write ? DIRECTORY_RIGHTS : READ_ONLY_ROOT_RIGHTS);
     launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
     launch->roots[launch->root_count++] =
-        (struct launch_binding){(uintptr_t)root->volume, launch->grant_count++};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->volume, launch->grant_count++);
   }
   size_t source_count = 0;
   for (size_t i = 0; i < space->grant_count; ++i) {
@@ -792,8 +791,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     }
     snprintf(launch->source_names[source_count], sizeof(launch->source_names[source_count]),
         "%s%s", BUNDLE_SOURCE_PREFIX, source->name);
-    launch->resources[launch->resource_count++] = (struct launch_binding){
-      (uintptr_t)launch->source_names[source_count++], launch->grant_count};
+    launch->resources[launch->resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[source_count++], launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
   }
   if (space->fat32_mount) {
@@ -804,8 +802,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     if (status != CALL_OK || (rights & ~info.rights)) {
       return "mount-only factory requested but unavailable";
     }
-    launch->resources[launch->resource_count++] = (struct launch_binding){
-      (uintptr_t)BUNDLE_SOURCE_PREFIX "fat_mounts", launch->grant_count};
+    launch->resources[launch->resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)BUNDLE_SOURCE_PREFIX "fat_mounts", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->fat_mounts, rights, 0};
   }
@@ -817,7 +814,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
       return reason;
     }
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"job_provisioner", launch->grant_count};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       job_work_directory(launch->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };
@@ -825,7 +822,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->launch) {
     /* Ordinary child launch is independent of init's administrative grant. */
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"child_launcher", launch->grant_count};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
     };
@@ -833,21 +830,21 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->multiplexer) {
     /* The distinct name records opt-in, separate from trusted init authority. */
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"mux_terminal", launch->grant_count};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"mux_terminal", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0
     };
   }
   if (space->remote_multiplexer) {
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"remote_mux_terminal", launch->grant_count};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0
     };
   }
   if (space->screenshot) {
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"screen_capture", launch->grant_count};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->screen_capture, SCREEN_CAPTURE_RIGHT_CAPTURE, 0
     };
@@ -855,16 +852,16 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->power && authority->power != HANDLE_INVALID) {
     launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"power", launch->grant_count++};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", launch->grant_count++);
   }
   if (space->remote_power && authority->power != HANDLE_INVALID) {
     launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"remote_power", launch->grant_count++};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", launch->grant_count++);
   }
   if (authority->remote_beacon && !strcmp(space->name, "remote")) {
     launch->resources[launch->resource_count++] =
-        (struct launch_binding){(uintptr_t)"udp_beacons", launch->grant_count};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_UDP], UDP_SERVICE_RIGHT_BROADCAST, 0
     };
@@ -892,8 +889,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     reason = build_launch(authority, mounts, space, &launch, text, sizeof(text));
   }
   if (!reason) {
-    struct path_root roots[] = {{"boot", authority->boot}};
-    struct path_context context = {.roots = roots, .root_count = 1};
+    struct path_context context = {0};
     handle_t directories[8];
     char component[BOOT_INIT_MAX + 1];
     struct path_workspace workspace = {
@@ -921,26 +917,34 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     }
     const char *arguments[] = {space->init};
     bool reverse = authority->remote_beacon && !strcmp(space->name, "remote");
-    const struct startup_variable environment[] = {
-      {(uintptr_t)"OS_NAME", (uintptr_t)"Pyxis OS"},
-      {(uintptr_t)"PYXIS_REMOTE_BEACON", (uintptr_t)authority->remote_beacon},
-    };
+    size_t entry_count = launch.resource_count + launch.root_count + (reverse ? 2 : 1);
+    struct launch_environment_entry *entries = calloc(entry_count, sizeof(*entries));
+    if (!entries) {
+      status = CALL_NO_MEMORY;
+      goto cleanup;
+    }
+    memcpy(entries, launch.resources, launch.resource_count * sizeof(*entries));
+    memcpy(entries + launch.resource_count, launch.roots, launch.root_count * sizeof(*entries));
+    entries[launch.resource_count + launch.root_count] =
+        (struct launch_environment_entry)PROFILE_TEXT("OS_NAME", "Pyxis OS");
+    if (reverse) {
+      entries[entry_count - 1] = (struct launch_environment_entry)
+          PROFILE_TEXT("PYXIS_REMOTE_BEACON", authority->remote_beacon);
+    }
     struct launch_request request = {
       .image = image,
       .grants = (uintptr_t)launch.grants, .grant_count = launch.grant_count,
-      .resources = (uintptr_t)launch.resources, .resource_count = launch.resource_count,
-      .roots = (uintptr_t)launch.roots, .root_count = launch.root_count,
+      .entries = (uintptr_t)entries, .entry_count = entry_count,
       .working_directories = (uintptr_t)&launch.working_directory,
       .working_directory_count = 1,
       .working_path = (uintptr_t)launch.working_path,
-      .environment = (uintptr_t)environment, .environment_count = reverse ? 2 : 1,
       .argv = (uintptr_t)arguments, .argc = 1,
     };
-    struct path_root roots[] = {{"boot", authority->boot}};
-    struct path_context interpreters = {.roots = roots, .root_count = 1};
+    struct path_context interpreters = {0};
     admission_attempted = true;
     status = program_create_space(authority->factory, &definition, cpus,
         authority->cpu_count, &request, &interpreters, &child);
+    free(entries);
     if (status == CALL_OK) {
       printf("boot-init: space %s started: %s%s\n", space->name, space->init,
           space->network ? " (network owner)" : "");
@@ -950,6 +954,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
           space->init, status);
     }
   }
+cleanup:
   if (child != HANDLE_INVALID) {
     handle_close(child);
   }

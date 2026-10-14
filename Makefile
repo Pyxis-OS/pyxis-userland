@@ -50,7 +50,7 @@ SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/capabilities.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/complete.o \
                  $(BUILD)/shell/complete_path.o $(BUILD)/common/pane_cwd.o
-COUNTER_OBJECT := $(BUILD)/counter/namespace.o $(BUILD)/counter/forwarders.o
+COUNTER_OBJECT := $(BUILD)/counter/environment.o $(BUILD)/counter/forwarders.o
 MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o $(BUILD)/mux/pointer.o $(BUILD)/mux/clipboard.o $(BUILD)/common/pane_cwd.o $(BUILD)/common/pane_broker.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.o
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o

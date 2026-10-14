@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/file.h>
 #include <abi/memory.h>
@@ -80,13 +82,13 @@ static int wait_child(handle_t child)
 
 static int select_disk(void)
 {
-  handle_t disks = startup_resource("disks"), boot = startup_root("boot");
-  handle_t launcher = startup_resource("launcher"), memory = startup_resource("memory");
+  handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
+  handle_t launcher = bootstrap_capability("launcher"), memory = bootstrap_capability("memory");
   handle_t opened = HANDLE_INVALID, selected = HANDLE_INVALID;
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
-  struct startup_stream input = startup_stream(STARTUP_STDIN);
-  struct startup_stream output = startup_stream(STARTUP_STDOUT);
-  struct startup_stream error = startup_stream(STARTUP_STDERR);
+  struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
+  struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
+  struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
   struct terminal terminal = {.input = input.handle, .output = output.handle};
   int result = EXIT_FAILURE;
   enum call_status status = CALL_OK;
@@ -158,18 +160,24 @@ static int select_disk(void)
     [OUTPUT] = {output.handle, CONSOLE_RIGHT_WRITE, 0},
     [ERROR] = {error.handle, CONSOLE_RIGHT_WRITE, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"disk", DISK}, {(uintptr_t)"memory", MEMORY},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"disk", DISK), PROFILE_CAP((uintptr_t)"memory", MEMORY),
   };
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (2) * sizeof(*entries));
+  entry_count += 2;
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDIN, INPUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDOUT, OUTPUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDERR, ERROR);
   struct launch_request request = {
-    .image = image, .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
-    .resources = (uintptr_t)resources, .resource_count = 2,
-    .argv = (uintptr_t)arguments, .argc = 2,
-    .streams = {
-      [STARTUP_STDIN] = {.protocol = PROTOCOL_CONSOLE, .grant = INPUT},
-      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = OUTPUT},
-      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = ERROR},
-    },
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
+    .grant_count = GRANT_COUNT,
+    .argv = (uintptr_t)arguments,
+    .argc = 2,
   };
   status = launcher_launch(launcher, &request, &child);
   if (status != CALL_OK) {
@@ -199,8 +207,8 @@ static int create_selector(void)
 {
   enum { DISKS, MEMORY, LAUNCHER, BOOT, SYSTEM, FACTORY, SOURCE_COUNT };
   handle_t sources[SOURCE_COUNT] = {
-    startup_resource("disks"), startup_resource("memory"), startup_resource("launcher"),
-    startup_root("boot"), startup_resource("system_info"), startup_resource("space_factory"),
+    bootstrap_capability("disks"), bootstrap_capability("memory"), bootstrap_capability("launcher"),
+    bootstrap_capability("boot"), bootstrap_capability("system_info"), bootstrap_capability("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
@@ -238,17 +246,26 @@ static int create_selector(void)
     {sources[LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0},
     {sources[BOOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"disks", DISKS}, {(uintptr_t)"memory", MEMORY},
-    {(uintptr_t)"launcher", LAUNCHER},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"disks", DISKS), PROFILE_CAP((uintptr_t)"memory", MEMORY),
+    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER),
   };
-  struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT}};
+  struct launch_environment_entry roots[] = {PROFILE_CAP((uintptr_t)"boot", BOOT)};
   const char *arguments[] = {"boot://init-fat32-inspect.pxe", "--select"};
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (3) * sizeof(*entries));
+  entry_count += 3;
+  memcpy(entries + entry_count, roots, (1) * sizeof(*entries));
+  entry_count += 1;
   struct launch_request request = {
-    .image = image, .grants = (uintptr_t)grants, .grant_count = 4,
-    .resources = (uintptr_t)resources, .resource_count = 3,
-    .roots = (uintptr_t)roots, .root_count = 1,
-    .argv = (uintptr_t)arguments, .argc = 2,
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
+    .grant_count = 4,
+    .argv = (uintptr_t)arguments,
+    .argc = 2,
   };
   struct space_definition space = {.name = "install", .title = "FAT32 Inspector"};
   status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,

@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <clock.h>
 #include <completion.h>
 #include <directory.h>
@@ -7,7 +8,7 @@
 #include <handle.h>
 #include <http_transaction.h>
 #include <launcher.h>
-#include <namespace.h>
+#include <environment.h>
 #include <provider.h>
 #include <startup.h>
 #include <stream.h>
@@ -211,12 +212,11 @@ static bool http_lineage_method(handle_t provider, handle_t clock, const char *u
 
 int counter_http_lineage_main(const char *scheme, const char *uri)
 {
-  handle_t namespace_handle = startup_namespace();
-  handle_t clock = startup_resource("clock");
+  handle_t clock = bootstrap_capability("clock");
   handle_t provider = HANDLE_INVALID;
   struct handle_info info;
-  bool ok = namespace_handle != HANDLE_INVALID && clock != HANDLE_INVALID &&
-      namespace_lookup(namespace_handle, scheme, &provider) == CALL_OK &&
+  bool ok = clock != HANDLE_INVALID &&
+      environment_capability(startup_environment_handle(), scheme, &provider) == CALL_OK &&
       handle_query(provider, &info) == CALL_OK && info.kind == HANDLE_KIND_EXPORTED &&
       info.protocol == PROTOCOL_PROVIDER && (info.rights & PROVIDER_RIGHT_OPEN_READ) &&
       (info.transport & HANDLE_TRANSPORT_CALL);
@@ -251,7 +251,7 @@ static bool size_matches(handle_t file, uint64_t expected)
  * fixture and changes neither file; callers select the root and components. */
 int counter_forwarders_main(const char *scheme, const char *name, const char *replacement)
 {
-  handle_t root = startup_root(scheme);
+  handle_t root = bootstrap_capability(scheme);
   handle_t first = HANDLE_INVALID, second = HANDLE_INVALID;
   handle_t child = HANDLE_INVALID, child_copy = HANDLE_INVALID;
   handle_t holder_copy = HANDLE_INVALID, supervisor = HANDLE_INVALID;
@@ -381,8 +381,7 @@ static bool provider_file_revoked(handle_t file)
 int counter_provider_forwarders_main(const char *provider_name,
     const char *scheme, const char *name)
 {
-  handle_t namespace_handle = startup_namespace();
-  handle_t root = startup_root(scheme);
+  handle_t root = bootstrap_capability(scheme);
   handle_t provider = HANDLE_INVALID, native = HANDLE_INVALID;
   handle_t guide = HANDLE_INVALID, welcome = HANDLE_INVALID;
   handle_t child = HANDLE_INVALID, child_copy = HANDLE_INVALID;
@@ -398,11 +397,11 @@ int counter_provider_forwarders_main(const char *provider_name,
   const char *phase = "selected namespace and native file";
   int guide_size = snprintf(guide_uri, sizeof(guide_uri), "%s://guide", provider_name);
   int welcome_size = snprintf(welcome_uri, sizeof(welcome_uri), "%s://welcome", provider_name);
-  bool ok = namespace_handle != HANDLE_INVALID && root != HANDLE_INVALID &&
+  bool ok = root != HANDLE_INVALID &&
       guide_size > 0 && (size_t)guide_size < sizeof(guide_uri) &&
       welcome_size > 0 && (size_t)welcome_size < sizeof(welcome_uri);
   if (ok) {
-    enum call_status status = namespace_lookup(namespace_handle, provider_name, &provider);
+    enum call_status status = environment_capability(startup_environment_handle(), provider_name, &provider);
     ok = status == CALL_OK;
     if (!ok) {
       fprintf(stderr, "provider forwarders: lookup %s failed (status %u)\n",
@@ -576,10 +575,10 @@ static bool acknowledge_manual_completion(struct endpoint_packet *packet)
  * empty loopback binding; no datagram or file mutation is submitted. */
 int counter_completion_cut_main(const char *scheme, const char *name)
 {
-  handle_t service = startup_resource("service");
-  handle_t udp = startup_resource("udp");
-  handle_t clock = startup_resource("clock");
-  handle_t root = startup_root(scheme);
+  handle_t service = bootstrap_capability("service");
+  handle_t udp = bootstrap_capability("udp");
+  handle_t clock = bootstrap_capability("clock");
+  handle_t root = bootstrap_capability(scheme);
   handle_t file = HANDLE_INVALID;
   struct endpoint_create_reply endpoint = {0};
   struct udp_open_reply socket = {0};
@@ -729,8 +728,8 @@ cleanup:
  * group CONTROL grants close. Neither may prolong group supervision. */
 int counter_authority_close_main(void)
 {
-  handle_t launcher = startup_resource("launcher");
-  handle_t clock = startup_resource("clock");
+  handle_t launcher = bootstrap_capability("launcher");
+  handle_t clock = bootstrap_capability("clock");
   handle_t observer = HANDLE_INVALID;
   struct execution_group_create_reply group = {0};
   struct forwarder_reply wrapper = {0};

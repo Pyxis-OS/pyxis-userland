@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <abi/clock.h>
 #include <abi/disk.h>
 #include <abi/file.h>
@@ -43,10 +45,10 @@ int main(int argc, char **argv)
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
     "clock", "random", "system_info", "log", "boot", "power", "space_factory"};
   handle_t sources[SOURCE_COUNT] = {
-    startup_resource("disks"), startup_resource("boot_kernel"), startup_resource("boot_archive"),
-    startup_resource("memory"), startup_resource("clock"), startup_resource("random"),
-    startup_resource("system_info"), startup_resource("log"), startup_root("boot"),
-    startup_resource("power"), startup_resource("space_factory"),
+    bootstrap_capability("disks"), bootstrap_capability("boot_kernel"), bootstrap_capability("boot_archive"),
+    bootstrap_capability("memory"), bootstrap_capability("clock"), bootstrap_capability("random"),
+    bootstrap_capability("system_info"), bootstrap_capability("log"), bootstrap_capability("boot"),
+    bootstrap_capability("power"), bootstrap_capability("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
@@ -94,15 +96,15 @@ int main(int argc, char **argv)
       DIRECTORY_RIGHT_READ_FILES, 0},
     [POWER] = {sources[POWER], POWER_RIGHT_RESTART, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"disks", DISKS}, {(uintptr_t)"boot_kernel", KERNEL},
-    {(uintptr_t)"boot_archive", ARCHIVE}, {(uintptr_t)"memory", MEMORY},
-    {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"random", RANDOM},
-    {(uintptr_t)"system_info", SYSTEM_INFO}, {(uintptr_t)"log", LOG},
-    {(uintptr_t)"power", POWER},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"disks", DISKS), PROFILE_CAP((uintptr_t)"boot_kernel", KERNEL),
+    PROFILE_CAP((uintptr_t)"boot_archive", ARCHIVE), PROFILE_CAP((uintptr_t)"memory", MEMORY),
+    PROFILE_CAP((uintptr_t)"clock", CLOCK), PROFILE_CAP((uintptr_t)"random", RANDOM),
+    PROFILE_CAP((uintptr_t)"system_info", SYSTEM_INFO), PROFILE_CAP((uintptr_t)"log", LOG),
+    PROFILE_CAP((uintptr_t)"power", POWER),
   };
   bool has_power = sources[POWER] != HANDLE_INVALID;
-  struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT_ROOT}};
+  struct launch_environment_entry roots[] = {PROFILE_CAP((uintptr_t)"boot", BOOT_ROOT)};
   arguments = argc > 0 ? calloc((size_t)argc, sizeof(*arguments)) : NULL;
   if (!arguments) {
     fputs("init-install: cannot prepare installer arguments\n", stderr);
@@ -112,13 +114,20 @@ int main(int argc, char **argv)
   for (int i = 1; i < argc; i++) {
     arguments[i] = argv[i];
   }
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (sizeof(resources) / sizeof(resources[0]) - !has_power) * sizeof(*entries));
+  entry_count += sizeof(resources) / sizeof(resources[0]) - !has_power;
+  memcpy(entries + entry_count, roots, (sizeof(roots) / sizeof(roots[0])) * sizeof(*entries));
+  entry_count += sizeof(roots) / sizeof(roots[0]);
   struct launch_request request = {
     .image = image,
-    .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT - !has_power,
-    .resources = (uintptr_t)resources,
-    .resource_count = sizeof(resources) / sizeof(resources[0]) - !has_power,
-    .roots = (uintptr_t)roots, .root_count = sizeof(roots) / sizeof(roots[0]),
-    .argv = (uintptr_t)arguments, .argc = (uint64_t)argc,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
+    .grant_count = GRANT_COUNT - !has_power,
+    .argv = (uintptr_t)arguments,
+    .argc = (uint64_t)argc,
   };
   struct space_definition space = {.name = "install", .title = "Install"};
   status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,

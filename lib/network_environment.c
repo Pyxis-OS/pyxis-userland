@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #include <network_environment.h>
 #include <net_config.h>
 #include <clock.h>
@@ -39,7 +40,7 @@ enum call_status network_environment_wait(handle_t authority, handle_t clock)
 }
 
 enum call_status network_environment_read(struct network_environment *environment,
-    handle_t authority, const struct startup_variable *source, size_t count,
+    handle_t authority, const struct launch_environment_entry *source, size_t count,
     const char *fallback)
 {
   *environment = (struct network_environment){0};
@@ -73,11 +74,31 @@ enum call_status network_environment_read(struct network_environment *environmen
     dns_server = environment->dns_server;
   }
   if (dns_server) {
-    environment->variables[environment->count++] = (struct startup_variable){
-      (uintptr_t)"DNS_SERVER", (uintptr_t)dns_server,
-    };
+    environment->variables[environment->count++] = (struct launch_environment_entry)PROFILE_TEXT("DNS_SERVER", dns_server);
   }
   return CALL_OK;
+}
+
+enum call_status network_environment_from_capture(struct network_environment *environment,
+    handle_t authority, const struct environment_capture *source, const char *fallback)
+{
+  if (source->count > SIZE_MAX / sizeof(struct launch_environment_entry)) {
+    return CALL_LIMIT;
+  }
+  struct launch_environment_entry *entries = malloc(source->count * sizeof(*entries));
+  if (source->count && !entries) {
+    return CALL_NO_MEMORY;
+  }
+  size_t count = 0;
+  for (size_t i = 0; i < source->count; ++i) {
+    const struct environment_value *value = &source->values[i];
+    if (value->kind == ENVIRONMENT_TEXT) {
+      entries[count++] = (struct launch_environment_entry)PROFILE_TEXT(value->name, value->text);
+    }
+  }
+  enum call_status status = network_environment_read(environment, authority, entries, count, fallback);
+  free(entries);
+  return status;
 }
 
 void network_environment_free(struct network_environment *environment)

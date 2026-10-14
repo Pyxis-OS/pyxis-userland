@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include "iobench.h"
 #include "../common/directory.h"
@@ -311,9 +312,9 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
   }
   enum { MEMORY, CLOCK, COORDINATOR, STREAM, SERVICE, GRANTS };
   struct launch_grant grants[WORKERS][GRANTS];
-  struct launch_binding resources[] = {
-    {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"clock", CLOCK},
-    {(uintptr_t)"coordinator", COORDINATOR}, {(uintptr_t)"service", SERVICE},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),
+    PROFILE_CAP((uintptr_t)"coordinator", COORDINATOR), PROFILE_CAP((uintptr_t)"service", SERVICE),
   };
   char buffer[24];
   snprintf(buffer, sizeof(buffer), "%zu", options->buffer);
@@ -321,6 +322,7 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
     {"iobench.pxe", "--pipe-worker", "producer", buffer, timed ? "timed" : "warmup"},
     {"iobench.pxe", "--pipe-worker", "consumer", buffer, timed ? "timed" : "warmup"},
   };
+  struct launch_environment_entry entries[WORKERS][5];
   struct launch_request requests[WORKERS] = {0};
   for (size_t i = 0; i < WORKERS; ++i) {
     grants[i][MEMORY] = (struct launch_grant){bootstrap_capability("memory"), MEMORY_RIGHT_MANAGE, 0};
@@ -329,14 +331,16 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
     grants[i][STREAM] = (struct launch_grant){i == PRODUCER ? pipe.writer : pipe.reader,
         i == PRODUCER ? PIPE_RIGHT_WRITE : PIPE_RIGHT_READ, 0};
     grants[i][SERVICE] = (struct launch_grant){bootstrap_capability("service"), ENDPOINT_SERVICE_RIGHT_CREATE, 0};
+    size_t entry_count = i == CONSUMER ? 4 : 3;
+    memcpy(entries[i], resources, entry_count * sizeof(*entries[i]));
+    entries[i][entry_count++] = profile_stdio_entry(
+        i == PRODUCER ? ENVIRONMENT_STDOUT : ENVIRONMENT_STDIN, STREAM);
     requests[i] = (struct launch_request){
       .image = image, .grants = (uintptr_t)grants[i],
       .grant_count = i == CONSUMER ? GRANTS : GRANTS - 1,
-      .resources = (uintptr_t)resources, .resource_count = i == CONSUMER ? 4 : 3,
+      .entries = (uintptr_t)entries[i], .entry_count = entry_count,
       .argv = (uintptr_t)arguments[i], .argc = 5,
     };
-    requests[i].streams[i == PRODUCER ? ENVIRONMENT_STDOUT : ENVIRONMENT_STDIN] =
-        (struct launch_stream){.protocol = PROTOCOL_PIPE, .grant = STREAM};
   }
   uint64_t failed;
   status = launcher_launch_batch(bootstrap_capability("launcher"), requests, WORKERS,

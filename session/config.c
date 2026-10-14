@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #include "config.h"
 #include <abi/console.h>
 #include <stdio.h>
@@ -61,17 +62,17 @@ static bool configured_variable(const struct session_config *config, const char 
   return false;
 }
 
-struct startup_variable *session_environment(const struct session_config *config,
+struct launch_environment_entry *session_environment(const struct session_config *config,
     const char *dns_server, const struct pyxis_environment_snapshot *snapshot,
     size_t *count)
 {
-  size_t inherited = snapshot->count;
-  size_t limit = SIZE_MAX / sizeof(struct startup_variable);
+  size_t inherited = snapshot->capture.count;
+  size_t limit = SIZE_MAX / sizeof(struct launch_environment_entry);
   if (inherited > limit - 2 || config->environment_count > limit - 2 - inherited) {
     fputs("session: environment too large\n", stderr);
     return NULL;
   }
-  struct startup_variable *environment =
+  struct launch_environment_entry *environment =
       malloc((inherited + config->environment_count + 2) * sizeof(*environment));
   if (!environment) {
     fputs("session: cannot allocate environment\n", stderr);
@@ -79,26 +80,20 @@ struct startup_variable *session_environment(const struct session_config *config
   }
 
   size_t used = 0;
-  const struct startup_variable *source = snapshot->variables;
+  const struct environment_value *source = snapshot->capture.values;
   for (size_t i = 0; i < inherited; ++i) {
-    const char *name = (const char *)source[i].name;
+    const char *name = source[i].name;
     /* The boot-carried discovery name cannot be shadowed by configuration. */
     if (!strcmp(name, "PYXIS_REMOTE_BEACON") ||
         (!session_variable_reserved(name) && !configured_variable(config, name))) {
-      environment[used++] = source[i];
+      environment[used++] = (struct launch_environment_entry)PROFILE_TEXT(name, source[i].text);
     }
   }
   for (size_t i = 0; i < config->environment_count; ++i) {
-    environment[used++] = (struct startup_variable){
-      (uintptr_t)config->environment[i].name, (uintptr_t)config->environment[i].value,
-    };
+    environment[used++] = (struct launch_environment_entry)PROFILE_TEXT(config->environment[i].name, config->environment[i].value);
   }
-  environment[used++] = (struct startup_variable){
-    (uintptr_t)"TZ", (uintptr_t)config->timezone,
-  };
-  environment[used++] = (struct startup_variable){
-    (uintptr_t)"DNS_SERVER", (uintptr_t)dns_server,
-  };
+  environment[used++] = (struct launch_environment_entry)PROFILE_TEXT("TZ", config->timezone);
+  environment[used++] = (struct launch_environment_entry)PROFILE_TEXT("DNS_SERVER", dns_server);
   *count = used;
   return environment;
 }

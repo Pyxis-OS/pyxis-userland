@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/file.h>
 #include <abi/memory.h>
@@ -394,45 +396,51 @@ static void run_reader(handle_t boot, handle_t launcher, handle_t root,
   }
   enum { ROOT, MEMORY, INPUT, OUTPUT, ERROR, READER_GRANTS, BOOT = READER_GRANTS,
     TMP, LAUNCHER, TERM_INPUT, TERM_OUTPUT, SHELL_GRANTS };
-  struct startup_stream streams[] = {
-    startup_stream(STARTUP_STDIN), startup_stream(STARTUP_STDOUT), startup_stream(STARTUP_STDERR),
+  struct pyxis_stdio_binding streams[] = {
+    bootstrap_stdio(ENVIRONMENT_STDIN), bootstrap_stdio(ENVIRONMENT_STDOUT), bootstrap_stdio(ENVIRONMENT_STDERR),
   };
   struct launch_grant grants[] = {
-    {root, ROOT_RIGHTS, 0}, {startup_resource("memory"), MEMORY_RIGHT_MANAGE, 0},
+    {root, ROOT_RIGHTS, 0}, {bootstrap_capability("memory"), MEMORY_RIGHT_MANAGE, 0},
     {streams[0].handle, CONSOLE_RIGHT_READ, 0},
     {streams[1].handle, CONSOLE_RIGHT_WRITE, 0},
     {streams[2].handle, CONSOLE_RIGHT_WRITE, 0},
-    {boot, ROOT_RIGHTS, 0}, {startup_root("tmp"), ROOT_RIGHTS, 0},
+    {boot, ROOT_RIGHTS, 0}, {bootstrap_capability("tmp"), ROOT_RIGHTS, 0},
     {launcher, LAUNCHER_RIGHT_LAUNCH, 0},
     {streams[0].handle, CONSOLE_RIGHT_READ, 0},
     {streams[1].handle, CONSOLE_RIGHT_WRITE, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"input", TERM_INPUT},
-    {(uintptr_t)"output", TERM_OUTPUT}, {(uintptr_t)"launcher", LAUNCHER},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"input", TERM_INPUT),
+    PROFILE_CAP((uintptr_t)"output", TERM_OUTPUT), PROFILE_CAP((uintptr_t)"launcher", LAUNCHER),
   };
-  struct launch_binding roots[] = {
-    {(uintptr_t)"esp", ROOT}, {(uintptr_t)"boot", BOOT}, {(uintptr_t)"tmp", TMP},
+  struct launch_environment_entry roots[] = {
+    PROFILE_CAP((uintptr_t)"esp", ROOT), PROFILE_CAP((uintptr_t)"boot", BOOT), PROFILE_CAP((uintptr_t)"tmp", TMP),
   };
   const char *arguments[] = {program, "--", uri};
   if (!strcmp(program, "cat.pxe")) {
     arguments[1] = uri;
   }
   uint64_t working_directory = ROOT;
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (shell ? 4 : 1) * sizeof(*entries));
+  entry_count += shell ? 4 : 1;
+  memcpy(entries + entry_count, roots, (shell ? 3 : 1) * sizeof(*entries));
+  entry_count += shell ? 3 : 1;
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDIN, INPUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDOUT, OUTPUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDERR, ERROR);
   struct launch_request request = {
-    .image = image, .grants = (uintptr_t)grants,
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
     .grant_count = shell ? SHELL_GRANTS : READER_GRANTS,
-    .resources = (uintptr_t)resources, .resource_count = shell ? 4 : 1,
-    .roots = (uintptr_t)roots, .root_count = shell ? 3 : 1,
-    .argv = (uintptr_t)arguments, .argc = shell ? 1 : !strcmp(program, "cat.pxe") ? 2 : 3,
+    .argv = (uintptr_t)arguments,
+    .argc = shell ? 1 : !strcmp(program, "cat.pxe") ? 2 : 3,
     .working_directories = shell ? (uintptr_t)&working_directory : 0,
     .working_directory_count = shell ? 1 : 0,
     .working_path = shell ? (uintptr_t)"esp://" : 0,
-    .streams = {
-      [STARTUP_STDIN] = {.protocol = PROTOCOL_CONSOLE, .grant = INPUT},
-      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = OUTPUT},
-      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = ERROR},
-    },
   };
   if (fflush(stdout) != 0) {
     fputs("fat32 mount: output failed\n", stderr);
@@ -476,14 +484,14 @@ static void show_state(handle_t control)
 
 static int browse(bool boot_selected, bool writable, uint64_t selected_partition)
 {
-  handle_t boot = startup_root("boot"), launcher = startup_resource("launcher");
+  handle_t boot = bootstrap_capability("boot"), launcher = bootstrap_capability("launcher");
   handle_t authority = writable ? HANDLE_INVALID :
-      startup_resource(boot_selected ? "esp_mount" : "disks");
-  handle_t disk = writable ? startup_resource("disk") : HANDLE_INVALID;
+      bootstrap_capability(boot_selected ? "esp_mount" : "disks");
+  handle_t disk = writable ? bootstrap_capability("disk") : HANDLE_INVALID;
   struct mount_fat32_reply mounted = {HANDLE_INVALID, HANDLE_INVALID};
-  struct startup_stream input = startup_stream(STARTUP_STDIN);
-  struct startup_stream output = startup_stream(STARTUP_STDOUT);
-  struct startup_stream error = startup_stream(STARTUP_STDERR);
+  struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
+  struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
+  struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
   struct terminal terminal = {.input = input.handle, .output = output.handle};
   uint64_t partition = selected_partition;
   uint64_t root_rights = writable ? DIRECTORY_CONTENT_RIGHTS : ROOT_RIGHTS;
@@ -493,7 +501,7 @@ static int browse(bool boot_selected, bool writable, uint64_t selected_partition
   int result = EXIT_FAILURE;
   if (boot == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       (writable ? disk == HANDLE_INVALID : authority == HANDLE_INVALID) ||
-      startup_resource("memory") == HANDLE_INVALID || input.protocol != PROTOCOL_CONSOLE ||
+      bootstrap_capability("memory") == HANDLE_INVALID || input.protocol != PROTOCOL_CONSOLE ||
       output.protocol != PROTOCOL_CONSOLE || error.protocol != PROTOCOL_CONSOLE) {
     fputs("fat32 mount: required trusted authority or console unavailable\n", stderr);
     goto done;
@@ -671,13 +679,13 @@ done:
 
 static int select_scratch_write(void)
 {
-  handle_t disks = startup_resource("disks"), boot = startup_root("boot");
-  handle_t launcher = startup_resource("launcher"), memory = startup_resource("memory");
+  handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
+  handle_t launcher = bootstrap_capability("launcher"), memory = bootstrap_capability("memory");
   handle_t opened = HANDLE_INVALID, selected = HANDLE_INVALID;
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
-  struct startup_stream input = startup_stream(STARTUP_STDIN);
-  struct startup_stream output = startup_stream(STARTUP_STDOUT);
-  struct startup_stream error = startup_stream(STARTUP_STDERR);
+  struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
+  struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
+  struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
   struct terminal terminal = {.input = input.handle, .output = output.handle};
   int result = EXIT_FAILURE;
   enum call_status status = CALL_OK;
@@ -765,24 +773,31 @@ static int select_scratch_write(void)
     [OUTPUT] = {output.handle, CONSOLE_RIGHT_WRITE, 0},
     [ERROR] = {error.handle, CONSOLE_RIGHT_WRITE, 0},
     [BOOT] = {boot, ROOT_RIGHTS, 0},
-    [TMP] = {startup_root("tmp"), ROOT_RIGHTS, 0},
+    [TMP] = {bootstrap_capability("tmp"), ROOT_RIGHTS, 0},
     [LAUNCHER] = {launcher, LAUNCHER_RIGHT_LAUNCH, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"disk", DISK}, {(uintptr_t)"memory", MEMORY},
-    {(uintptr_t)"launcher", LAUNCHER},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"disk", DISK), PROFILE_CAP((uintptr_t)"memory", MEMORY),
+    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER),
   };
-  struct launch_binding roots[] = {{(uintptr_t)"boot", BOOT}, {(uintptr_t)"tmp", TMP}};
+  struct launch_environment_entry roots[] = {PROFILE_CAP((uintptr_t)"boot", BOOT), PROFILE_CAP((uintptr_t)"tmp", TMP)};
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (3) * sizeof(*entries));
+  entry_count += 3;
+  memcpy(entries + entry_count, roots, (2) * sizeof(*entries));
+  entry_count += 2;
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDIN, INPUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDOUT, OUTPUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDERR, ERROR);
   struct launch_request request = {
-    .image = image, .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
-    .resources = (uintptr_t)resources, .resource_count = 3,
-    .roots = (uintptr_t)roots, .root_count = 2,
-    .argv = (uintptr_t)arguments, .argc = 3,
-    .streams = {
-      [STARTUP_STDIN] = {.protocol = PROTOCOL_CONSOLE, .grant = INPUT},
-      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = OUTPUT},
-      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = ERROR},
-    },
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
+    .grant_count = GRANT_COUNT,
+    .argv = (uintptr_t)arguments,
+    .argc = 3,
   };
   status = launcher_launch(launcher, &request, &child);
   if (status != CALL_OK) {
@@ -813,10 +828,10 @@ static int create_browser(bool boot_selected, bool writable)
 {
   enum { AUTHORITY, MEMORY, LAUNCHER, BOOT, SYSTEM, FACTORY, TMP, SOURCE_COUNT };
   handle_t sources[SOURCE_COUNT] = {
-    startup_resource(boot_selected ? "esp_mount" : "disks"),
-    startup_resource("memory"), startup_resource("launcher"),
-    startup_root("boot"), startup_resource("system_info"), startup_resource("space_factory"),
-    writable ? startup_root("tmp") : HANDLE_INVALID,
+    bootstrap_capability(boot_selected ? "esp_mount" : "disks"),
+    bootstrap_capability("memory"), bootstrap_capability("launcher"),
+    bootstrap_capability("boot"), bootstrap_capability("system_info"), bootstrap_capability("space_factory"),
+    writable ? bootstrap_capability("tmp") : HANDLE_INVALID,
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
@@ -858,23 +873,32 @@ static int create_browser(bool boot_selected, bool writable)
         DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, 0},
     [GRANT_TMP] = {sources[TMP], ROOT_RIGHTS, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)(boot_selected ? "esp_mount" : "disks"), GRANT_AUTHORITY},
-    {(uintptr_t)"memory", GRANT_MEMORY},
-    {(uintptr_t)"launcher", GRANT_LAUNCHER},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)(boot_selected ? "esp_mount" : "disks"), GRANT_AUTHORITY),
+    PROFILE_CAP((uintptr_t)"memory", GRANT_MEMORY),
+    PROFILE_CAP((uintptr_t)"launcher", GRANT_LAUNCHER),
   };
-  struct launch_binding roots[] = {
-    {(uintptr_t)"boot", GRANT_BOOT}, {(uintptr_t)"tmp", GRANT_TMP},
+  struct launch_environment_entry roots[] = {
+    PROFILE_CAP((uintptr_t)"boot", GRANT_BOOT), PROFILE_CAP((uintptr_t)"tmp", GRANT_TMP),
   };
   const char *arguments[] = {
     "boot://init-fat32-mount.pxe", writable ? "--select-scratch-write" :
         boot_selected ? "--browse-boot" : "--browse-scratch",
   };
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (3) * sizeof(*entries));
+  entry_count += 3;
+  memcpy(entries + entry_count, roots, (writable ? 2 : 1) * sizeof(*entries));
+  entry_count += writable ? 2 : 1;
   struct launch_request request = {
-    .image = image, .grants = (uintptr_t)grants, .grant_count = writable ? GRANT_COUNT : GRANT_TMP,
-    .resources = (uintptr_t)resources, .resource_count = 3,
-    .roots = (uintptr_t)roots, .root_count = writable ? 2 : 1,
-    .argv = (uintptr_t)arguments, .argc = 2,
+    .image = image,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
+    .grant_count = writable ? GRANT_COUNT : GRANT_TMP,
+    .argv = (uintptr_t)arguments,
+    .argc = 2,
   };
   struct space_definition space = {
     .name = "install", .title = writable ? "Mounted FAT32 Scratch Writer" :
@@ -931,7 +955,7 @@ int main(int argc, char **argv)
     }
     return browse(false, true, partition);
   }
-  bool boot_selected = startup_resource("disks") == HANDLE_INVALID;
+  bool boot_selected = bootstrap_capability("disks") == HANDLE_INVALID;
   bool writable = !strcmp(argv[0], "boot://init-fat32-mount-write.pxe") ||
       !strcmp(argv[0], "init-fat32-mount-write.pxe");
   for (int i = 1; i < argc; ++i) {

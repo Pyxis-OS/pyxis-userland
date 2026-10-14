@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include "tcp_server.h"
 #include <abi/clock.h>
 #include <abi/console.h>
@@ -14,9 +16,9 @@
 
 int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
 {
-  handle_t launcher = startup_resource("launcher"), memory = startup_resource("memory");
-  handle_t clock = startup_resource("clock"), tcp = startup_resource("tcp");
-  handle_t bin = startup_root("bin");
+  handle_t launcher = bootstrap_capability("launcher"), memory = bootstrap_capability("memory");
+  handle_t clock = bootstrap_capability("clock"), tcp = bootstrap_capability("tcp");
+  handle_t bin = bootstrap_capability("bin");
   if (launcher == HANDLE_INVALID || memory == HANDLE_INVALID ||
       clock == HANDLE_INVALID || tcp == HANDLE_INVALID || bin == HANDLE_INVALID) {
     fputs("session: missing TCP server launch authority\n", stderr);
@@ -35,23 +37,30 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"clock", CLOCK},
-    {(uintptr_t)"tcp_listener", LISTENER},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),
+    PROFILE_CAP((uintptr_t)"tcp_listener", LISTENER),
   };
   const char *arguments[] = {"bin://tcp.pxe", "--serve", count};
+    struct launch_environment_entry entries[128];
+  size_t entry_count = 0;
+  memcpy(entries + entry_count, resources, (sizeof(resources) / sizeof(resources[0])) * sizeof(*entries));
+  entry_count += sizeof(resources) / sizeof(resources[0]);
   struct launch_request request = {
     .image = image,
-    .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
-    .resources = (uintptr_t)resources, .resource_count = sizeof(resources) / sizeof(resources[0]),
-    .argv = (uintptr_t)arguments, .argc = count ? 3 : 2,
+    .grants = (uintptr_t)grants,
+    .entries = (uintptr_t)entries,
+    .entry_count = entry_count,
+    .grant_count = GRANT_COUNT,
+    .argv = (uintptr_t)arguments,
+    .argc = count ? 3 : 2,
   };
   int result = EXIT_FAILURE;
   handle_t listener = HANDLE_INVALID;
-  for (unsigned i = STARTUP_STDOUT; i <= STARTUP_STDERR; ++i) {
-    struct startup_stream stream = startup_stream(i);
-    if (stream.protocol == STARTUP_STREAM_NONE) {
-      stream = (struct startup_stream){.protocol = PROTOCOL_CONSOLE, .handle = startup_resource("output")};
+  for (unsigned i = ENVIRONMENT_STDOUT; i <= ENVIRONMENT_STDERR; ++i) {
+    struct pyxis_stdio_binding stream = bootstrap_stdio(i);
+    if (stream.protocol == 0) {
+      stream = (struct pyxis_stdio_binding){.protocol = PROTOCOL_CONSOLE, .handle = bootstrap_capability("output")};
     }
     if (stream.handle == HANDLE_INVALID) {
       fputs("session: missing TCP server output stream\n", stderr);
@@ -68,9 +77,9 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
       }
       transport &= HANDLE_TRANSPORT_CALL;
     }
-    size_t grant = i == STARTUP_STDOUT ? OUTPUT : ERROR;
+    size_t grant = i == ENVIRONMENT_STDOUT ? OUTPUT : ERROR;
     grants[grant] = (struct launch_grant){stream.handle, rights, transport};
-    request.streams[i] = (struct launch_stream){.protocol = stream.protocol, .grant = grant};
+    entries[request.entry_count++] = profile_stdio_entry(i, grant);
   }
 
   struct tcp_listen_reply reply;

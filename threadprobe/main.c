@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/directory.h>
@@ -973,16 +974,16 @@ static int supervise(bool fault, bool parking, bool tls)
     [CLOCK] = {clock_service, CLOCK_RIGHTS, 0},
     [BOOTSTRAP] = {endpoint.caller, 0, HANDLE_TRANSPORT_SEND | HANDLE_TRANSPORT_RECEIVE},
   };
-  struct launch_binding resources[GRANT_COUNT] = {
-    {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"threads", THREADS},
-    {(uintptr_t)"clock", CLOCK}, {(uintptr_t)"bootstrap", BOOTSTRAP},
+  struct launch_environment_entry resources[GRANT_COUNT] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"threads", THREADS),
+    PROFILE_CAP((uintptr_t)"clock", CLOCK), PROFILE_CAP((uintptr_t)"bootstrap", BOOTSTRAP),
   };
   const char *mode = tls ? (fault ? "--child-tls-fault" : "--child-tls-stop") :
       parking ? "--child-park-stop" : fault ? "--child-fault" : "--child-stop";
   uint64_t arguments[] = {(uintptr_t)"threadprobe", (uintptr_t)mode};
   struct launch_request request = {
     .image = image, .grants = (uintptr_t)grants, .grant_count = GRANT_COUNT,
-    .resources = (uintptr_t)resources, .resource_count = GRANT_COUNT,
+    .entries = (uintptr_t)resources, .entry_count = GRANT_COUNT,
     .argv = (uintptr_t)arguments, .argc = 2,
   };
   if (status == CALL_OK) {

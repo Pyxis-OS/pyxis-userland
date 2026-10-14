@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/clock.h>
@@ -70,20 +71,20 @@ static enum call_status launch_client(handle_t launcher, handle_t image,
     [CONTENT] = {content, FILE_RIGHT_READ, 0},
     [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
   };
-  struct launch_binding resources[] = {
-    {(uintptr_t)"output", OUTPUT},
-    {(uintptr_t)"memory", MEMORY},
-    {(uintptr_t)"endpoint", CALLER},
-    {(uintptr_t)"content", CONTENT},
-    {(uintptr_t)"clock", CLOCK},
+  struct launch_environment_entry resources[] = {
+    PROFILE_CAP((uintptr_t)"output", OUTPUT),
+    PROFILE_CAP((uintptr_t)"memory", MEMORY),
+    PROFILE_CAP((uintptr_t)"endpoint", CALLER),
+    PROFILE_CAP((uintptr_t)"content", CONTENT),
+    PROFILE_CAP((uintptr_t)"clock", CLOCK),
   };
   const char *arguments[] = {"client.pxe", mode, id};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
     .grant_count = needs_clock ? GRANT_COUNT : GRANT_COUNT - 1,
-    .resources = (uintptr_t)resources,
-    .resource_count = needs_clock ? GRANT_COUNT : GRANT_COUNT - 1,
+    .entries = (uintptr_t)resources,
+    .entry_count = needs_clock ? GRANT_COUNT : GRANT_COUNT - 1,
     .argv = (uintptr_t)arguments,
     .argc = sizeof(arguments) / sizeof(arguments[0]),
   };

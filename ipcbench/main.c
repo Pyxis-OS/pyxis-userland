@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
@@ -438,19 +439,19 @@ static enum call_status launch_receiver(handle_t launcher, handle_t image,
     [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
     [BOOTSTRAP] = {bootstrap, 0, HANDLE_TRANSPORT_CALL},
   };
-  struct launch_binding resources[GRANT_COUNT] = {
-    {(uintptr_t)"memory", MEMORY},
-    {(uintptr_t)"service", SERVICE},
-    {(uintptr_t)"clock", CLOCK},
-    {(uintptr_t)"bootstrap", BOOTSTRAP},
+  struct launch_environment_entry resources[GRANT_COUNT] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY),
+    PROFILE_CAP((uintptr_t)"service", SERVICE),
+    PROFILE_CAP((uintptr_t)"clock", CLOCK),
+    PROFILE_CAP((uintptr_t)"bootstrap", BOOTSTRAP),
   };
   const char *arguments[] = {"ipcbench.pxe", "--receiver", mode == MODE_CALL ? "call" : "send"};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants,
     .grant_count = GRANT_COUNT,
-    .resources = (uintptr_t)resources,
-    .resource_count = GRANT_COUNT,
+    .entries = (uintptr_t)resources,
+    .entry_count = GRANT_COUNT,
     .argv = (uintptr_t)arguments,
     .argc = sizeof(arguments) / sizeof(arguments[0]),
   };

@@ -1,8 +1,9 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/endpoint.h>
 #include <clock.h>
 #include <endpoint.h>
 #include <handle.h>
-#include <namespace.h>
+#include <environment.h>
 #include <startup.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,9 +13,9 @@
 
 static int provide(bool once)
 {
-  handle_t service = startup_resource("service");
-  handle_t publication = startup_resource("publication");
-  handle_t clock = startup_resource("clock");
+  handle_t service = bootstrap_capability("service");
+  handle_t publication = bootstrap_capability("publication");
+  handle_t clock = bootstrap_capability("clock");
   struct endpoint_create_reply endpoint = {0};
   handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = CALL_OK;
@@ -141,16 +142,8 @@ done:
 
 static int lookup(const char *name, bool restrict_grant, bool hold, bool add)
 {
-  handle_t namespace_handle = startup_namespace();
-  if (restrict_grant && namespace_remove(namespace_handle, name) != CALL_DENIED) {
-    fputs("counter: namespace management unexpectedly available\n", stderr);
-    return 1;
-  }
-  if (restrict_grant) {
-    fputs("counter: namespace REMOVE denied\n", stdout);
-  }
   handle_t client = HANDLE_INVALID;
-  enum call_status status = namespace_lookup(namespace_handle, name, &client);
+  enum call_status status = environment_capability(startup_environment_handle(), name, &client);
   if (status != CALL_OK) {
     fprintf(stderr, "counter: lookup %s failed (status %u)\n", name, status);
     return 1;
@@ -166,7 +159,7 @@ static int lookup(const char *name, bool restrict_grant, bool hold, bool add)
     }
     client = restricted;
   }
-  handle_t clock = startup_resource("clock");
+  handle_t clock = bootstrap_capability("clock");
   if (hold) {
     printf("counter: retained %s; waiting\n", name);
     fflush(stdout);
@@ -202,7 +195,7 @@ static int lookup(const char *name, bool restrict_grant, bool hold, bool add)
   return status == CALL_OK ? 0 : 1;
 }
 
-int counter_namespace_main(int argc, char **argv)
+int counter_environment_main(int argc, char **argv)
 {
   if (argc == 2 && !strcmp(argv[1], "--provide")) {
     return provide(false);
