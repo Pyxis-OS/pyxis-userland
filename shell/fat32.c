@@ -275,6 +275,21 @@ enum command_result shell_mount_fat32(struct shell *shell, char **arguments, siz
       configured_source_present(shell, mount->control_name)) {
     status = CALL_ALREADY_EXISTS;
   }
+  if (status == CALL_OK) {
+    struct environment_capture capture = {0};
+    struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
+    size_t source_count = 0;
+    status = environment_capture_init(shell->environment,
+        ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
+    if (status == CALL_OK) {
+      status = bundle_sources_from_capture(&capture, sources, BUNDLE_SOURCE_LIMIT, &source_count);
+    }
+    size_t added = access == MOUNT_ACCESS_READ_WRITE ? 2 : 1;
+    if (status == CALL_OK && added > BUNDLE_SOURCE_LIMIT - source_count) {
+      status = CALL_LIMIT;
+    }
+    environment_capture_close(&capture);
+  }
   if (status != CALL_OK) {
     free(binding);
     forget_mount(mount);
