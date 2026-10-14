@@ -330,7 +330,7 @@ session bin://counter.pxe --wait --retire-full
 ```
 
 CUT reports CALL and RETIRE; the full-queue mode reports RETIRE
-before draining sixteen SENDs. Namespace provider/client modes do not accept
+before draining sixteen SENDs. Environment provider/client modes do not accept
 this option.
 
 `boot://init-install.pxe` is the install entry's boot init. It requires the
@@ -489,6 +489,12 @@ Keyboard and pointer controls follow their own session's focus.
 `httpfs.pxb` publishes prepared GET/POST response streams and legacy HTTP FILE
 snapshots; `--https` selects verified HTTPS. Trusted startup declares private RAM
 staging (16 MiB by default), with isolated npfs backing opt-in for large uploads.
+Prepared request, response and status owners retain the existing private shell
+HTTP registry and `@NAME` selectors during task 2. Reservation checks TEXT names
+and can reuse a capability entry's name. Task A5 owns their environment naming
+and assignment migration; the current registry holds HTTP operation state and
+independently owned facets. `env copy` operates on process environment entries.
+
 Configured boot sessions use `--start-services` to publish independent `http`
 and `https` instances after selecting `DNS_SERVER`. HTTPS loads
 `boot://share/ca-certificates/cacert.pem` before publication, with bounded entropy
@@ -501,7 +507,7 @@ service replace --read-only https boot://httpfs.pxb --https --ca-bundle home://p
 
 `--read-only` attenuates the launched provider's native filesystem roots and
 working directories. HTTPS accepts only this read-only native trust authority
-and receives no namespace. `service start --optional --read-only` continues only
+and receives only its declared environment grants. `service start --optional --read-only` continues only
 after an acknowledged setup failure with successful cleanup. Unexpected crashes
 before reporting can still leave service startup waiting.
 
@@ -572,7 +578,7 @@ an unavailable required grant prevents launch.
 [pyxis/job.h](libc/include/pyxis/job.h) owns a single direct native child through
 the caller's existing launcher. It uses explicit resource/stream selections and
 owned cwd/environment snapshots, checks every final grant, and retains a
-WAIT/TERMINATE observer through stage retirement. Namespace/provider auditing
+WAIT/TERMINATE observer through stage retirement. Environment/provider auditing
 belongs to the trusted caller; no descendant launch, bundle expansion, capture,
 deadline or implicit inheritance is added. See the header for ownership and
 the uncertain-publication rule.
