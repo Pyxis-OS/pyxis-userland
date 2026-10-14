@@ -661,7 +661,8 @@ int main(int argc, char **argv)
     }
     tab_width = (unsigned)width;
   }
-  handle_t listener = bootstrap_capability("tcp_listener"), clock = bootstrap_capability("clock");
+  handle_t listener = bootstrap_take_capability("tcp_listener");
+  handle_t clock = bootstrap_capability("clock");
   handle_t udp_beacons = bootstrap_capability("udp_beacons"), tcp = bootstrap_capability("tcp");
   if ((beacon ? udp_beacons == HANDLE_INVALID || tcp == HANDLE_INVALID :
       listener == HANDLE_INVALID) || clock == HANDLE_INVALID ||
