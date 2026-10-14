@@ -19,7 +19,7 @@
 
 static const char default_welcome[] =
     "Welcome to Pyxis. This immutable file comes from a userspace provider.\n"
-    "Read text://guide for file, namespace and service commands.\n";
+    "Read text://guide for file, environment and service commands.\n";
 
 struct file_export {
   handle_t controller;

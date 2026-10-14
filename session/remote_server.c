@@ -43,7 +43,8 @@ static bool wait_for_address(handle_t authority, handle_t clock,
   bool binding_observed = false;
   for (;;) {
     struct net_config_reply snapshot;
-      bool link_selection = network->action == NETWORK_REPLACE &&
+    enum call_status status;
+    bool link_selection = network->action == NETWORK_REPLACE &&
         network->selector.kind == NET_SELECT_LINKED_CONTROLLER;
     if (network->action == NETWORK_REPLACE && !link_selection) {
       status = net_config_lookup(authority, &network->selector, &snapshot);

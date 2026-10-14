@@ -12,7 +12,7 @@ static enum call_status sync_path(const char *path)
   bool is_file = status == CALL_OK;
   if (status == CALL_WRONG_TYPE || status == CALL_DENIED) {
     /* A directory can deny WRITE_FILES before checking the leaf's type.
-     * These fresh lookups may observe an external namespace change. */
+     * These fresh lookups may observe an process environment change. */
     enum call_status file_status = status;
     status = resolve_directory(path, DIRECTORY_RIGHT_CREATE, &object);
     if (status == CALL_DENIED) {

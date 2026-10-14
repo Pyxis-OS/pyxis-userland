@@ -343,7 +343,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_log = !provider && shell->log != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
   enum call_status captured = environment_capture_init(shell->environment,
-      session ? ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE : 0, &prepared->captured);
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &prepared->captured);
   if (captured != CALL_OK) {
     return captured;
   }
@@ -683,7 +683,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (session) {
     struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
     size_t source_count;
-    enum call_status status = bundle_sources_from_startup(sources, BUNDLE_SOURCE_LIMIT,
+    enum call_status status = bundle_sources_from_capture(&prepared->captured, sources, BUNDLE_SOURCE_LIMIT,
         &source_count);
     if (status != CALL_OK) {
       return status;
@@ -890,7 +890,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     struct bundle_authority authority[sizeof(ordinary) / sizeof(*ordinary) + BUNDLE_SOURCE_LIMIT];
     memcpy(authority, ordinary, sizeof(ordinary));
     size_t source_count;
-    enum call_status status = bundle_sources_from_startup(authority + ordinary_count,
+    enum call_status status = bundle_sources_from_capture(&prepared->captured, authority + ordinary_count,
         BUNDLE_SOURCE_LIMIT, &source_count);
     if (status != CALL_OK) {
       return status;

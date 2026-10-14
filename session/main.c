@@ -80,7 +80,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 30, NAMESPACE_GRANT_COUNT = 1 };
+  enum { OPTIONAL_RESOURCE_COUNT = 30 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -104,7 +104,7 @@ static int launch_session(const struct session_config *config, const struct netw
     return EXIT_FAILURE;
   }
   size_t depth = context->count;
-  size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
+  size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT +
       PROFILE_DIRECTORY_LIMIT + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT;
   if (root_count > PROFILE_DIRECTORY_LIMIT ||
       depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants) {
@@ -372,7 +372,7 @@ static int launch_session(const struct session_config *config, const struct netw
       grants[grant_count++] = (struct launch_grant){staging, info.rights, 0};
     }
   } else {
-    status = bundle_sources_forward_startup(grants, fixed_grants + depth, &grant_count,
+    status = bundle_sources_forward_capture(&captured, grants, grant_capacity, &grant_count,
         resources, sizeof(resources) / sizeof(*resources), &resource_count);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot retain selected sources (status %u)\n", status);

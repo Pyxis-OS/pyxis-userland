@@ -24,7 +24,7 @@ void pane_cwd_provider_serve(void *context);
 bool pane_cwd_receive_service(handle_t bootstrap_receiver, handle_t *caller);
 
 /* Fresh output only. Owns a complete chain and optional NUL description on
- * success; failure leaves it empty. Roots and namespace are not transferred.
+ * success; failure leaves it empty. Environment entries are not transferred.
  * One absolute second covers BEGIN, all READ chunks and DONE. No retry after
  * an uncertain send; receiver close releases queued replies and attachments. */
 enum call_status pane_cwd_snapshot(handle_t service, handle_t caller,
