@@ -116,13 +116,16 @@ enum call_status provider_open_context(handle_t provider, const char *uri,
           reply.representation != PROVIDER_REPRESENTATION_BYTES ||
           reply.media_type_size > PROVIDER_MEDIA_TYPE_MAX_BYTES ||
           packet.size != sizeof(reply) + reply.media_type_size ||
-          grant->rights != rights || grant->transport != HANDLE_TRANSPORT_CALL ||
-          handle_query(grant->handle, &info) != CALL_OK ||
-          info.kind != HANDLE_KIND_EXPORTED || info.protocol != reply.protocol ||
-          info.rights != rights || info.transport != HANDLE_TRANSPORT_CALL) {
+          grant->rights != rights || grant->transport != HANDLE_TRANSPORT_CALL) {
         status = CALL_BAD_REQUEST;
       } else {
-        for (size_t i = 0; i < reply.media_type_size; ++i) {
+        status = handle_query(grant->handle, &info);
+        if (status == CALL_OK && (info.kind != HANDLE_KIND_EXPORTED ||
+            info.protocol != reply.protocol || info.rights != rights ||
+            info.transport != HANDLE_TRANSPORT_CALL)) {
+          status = CALL_BAD_REQUEST;
+        }
+        for (size_t i = 0; status == CALL_OK && i < reply.media_type_size; ++i) {
           unsigned char byte = packet.data[sizeof(reply) + i];
           if (byte < 0x20 || byte > 0x7e) {
             status = CALL_BAD_REQUEST;
