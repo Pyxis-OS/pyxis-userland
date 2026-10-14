@@ -793,7 +793,7 @@ static void dispose_stream(FILE *stream)
   stream->output_count = 0;
 }
 
-int fclose(FILE *stream)
+static int close_stream(FILE *stream, bool abandon)
 {
   libc_lock_acquire(&stream_guard);
   FILE **link = &streams;
@@ -822,17 +822,25 @@ int fclose(FILE *stream)
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
   stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
   bool cursor = descriptor_file_begin(stream->operation);
-  error = flush_output(stream) < 0 ? errno : 0;
-  if (descriptor_object_transaction(stream->operation) && stream->error) {
-    if (!error) {
-      error = EIO;
+  if (abandon && descriptor_object_transaction_pending(stream->operation)) {
+    stream->output_count = 0;
+    error = descriptor_object_abandon(stream->operation, ECANCELED) < 0 ? errno : 0;
+    if (descriptor_close_stream_abandon(stream, stream->operation) < 0 && !error) {
+      error = errno;
     }
-    if (descriptor_object_transaction_pending(stream->operation)) {
-      descriptor_object_abandon(stream->operation, error);
+  } else {
+    error = flush_output(stream) < 0 ? errno : 0;
+    if (descriptor_object_transaction(stream->operation) && stream->error) {
+      if (!error) {
+        error = EIO;
+      }
+      if (descriptor_object_transaction_pending(stream->operation)) {
+        descriptor_object_abandon(stream->operation, error);
+      }
     }
-  }
-  if (descriptor_close_stream(stream, stream->operation) < 0 && !error) {
-    error = errno;
+    if (descriptor_close_stream(stream, stream->operation) < 0 && !error) {
+      error = errno;
+    }
   }
   if (cursor) {
     descriptor_file_end(stream->operation);
@@ -853,6 +861,16 @@ int fclose(FILE *stream)
     errno = error;
   }
   return error ? EOF : 0;
+}
+
+int fclose(FILE *stream)
+{
+  return close_stream(stream, false);
+}
+
+int pyxis_fclose_abandon(FILE *stream)
+{
+  return close_stream(stream, true);
 }
 
 int stdio_finish(void)

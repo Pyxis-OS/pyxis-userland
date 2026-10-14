@@ -126,6 +126,9 @@ static inline void descriptor_scope_end(struct descriptor_object **object)
   descriptor_drop(*object);
 }
 int descriptor_close_stream(FILE *stream, struct descriptor_object *object);
+/* Caller has intentionally aborted under FILE exclusion. Skip submission and
+ * the recorded producer failure; native grant-release failures still report. */
+int descriptor_close_stream_abandon(FILE *stream, struct descriptor_object *object);
 int descriptor_close_expected(int descriptor, struct descriptor_object *expected,
     uint64_t generation);
 bool descriptor_object_ready(struct descriptor_object *object, bool writing);

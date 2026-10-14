@@ -762,12 +762,12 @@ int dup(int descriptor)
 }
 
 /* Caller owns the detached alias reference; storage survives logical close. */
-static int release_alias(struct descriptor_object *object, bool final)
+static int release_alias(struct descriptor_object *object, bool final, bool abandon)
 {
   int result = 0;
   if (final) {
     int first_error = 0;
-    if (descriptor_object_transaction_pending(object)) {
+    if (!abandon && descriptor_object_transaction_pending(object)) {
       int locked = libc_mutex_lock(&object->read_guard);
       if (locked) {
         first_error = locked;
@@ -778,7 +778,7 @@ static int release_alias(struct descriptor_object *object, bool final)
         unlock_object(&object->read_guard);
       }
     }
-    if (!first_error && object->transaction) {
+    if (!abandon && !first_error && object->transaction) {
       first_error = __atomic_load_n(&object->transaction->failure, __ATOMIC_ACQUIRE);
     }
     handle_t handles[7] = {object->handle, object->observation};
@@ -827,7 +827,7 @@ static int remove_original(struct descriptor_entry entry)
 }
 
 static int close_entry(int descriptor, FILE *stream, struct descriptor_object *expected,
-    uint64_t generation)
+    uint64_t generation, bool abandon)
 {
   libc_lock_acquire(&table_guard);
   struct descriptor_object *object = lookup(descriptor);
@@ -851,7 +851,7 @@ static int close_entry(int descriptor, FILE *stream, struct descriptor_object *e
    * transaction finalization drains under the shared cursor guard. */
   int cleanup = remove_original(original);
   int error = errno;
-  int released = release_alias(object, final);
+  int released = release_alias(object, final, abandon);
   return cleanup < 0 ? fail(error) : released;
 }
 
@@ -867,7 +867,7 @@ int descriptor_close(int descriptor)
   libc_lock_release(&table_guard);
   int closed = !matches ? fail(EBADF) : descriptor_object_transaction_pending(object) ?
       libc_stdio_close_descriptor(descriptor, object, generation) :
-      close_entry(descriptor, NULL, object, generation);
+      close_entry(descriptor, NULL, object, generation, false);
   int error = errno;
   descriptor_drop(object);
   errno = error;
@@ -876,13 +876,19 @@ int descriptor_close(int descriptor)
 
 int descriptor_close_expected(int descriptor, struct descriptor_object *object, uint64_t generation)
 {
-  return close_entry(descriptor, NULL, object, generation);
+  return close_entry(descriptor, NULL, object, generation, false);
 }
 
 int descriptor_close_stream(FILE *stream, struct descriptor_object *object)
 {
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
-  return close_entry(descriptor, stream, object, UINT64_MAX);
+  return close_entry(descriptor, stream, object, UINT64_MAX, false);
+}
+
+int descriptor_close_stream_abandon(FILE *stream, struct descriptor_object *object)
+{
+  int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
+  return close_entry(descriptor, stream, object, UINT64_MAX, true);
 }
 
 int dup2(int source, int target)
@@ -973,7 +979,7 @@ int dup2(int source, int target)
   if (!error && previous) {
     int cleanup = remove_original(original);
     int cleanup_error = errno;
-    int released = release_alias(previous, final);
+    int released = release_alias(previous, final, false);
     if (cleanup < 0 || released < 0) {
       error = cleanup < 0 ? cleanup_error : errno;
     }
@@ -995,7 +1001,7 @@ int dup2(int source, int target)
       __atomic_store_n(&object->closed, true, __ATOMIC_RELEASE);
     }
     libc_lock_release(&table_guard);
-    release_alias(object, last);
+    release_alias(object, last, false);
   }
   if (stream) {
     stream_unlock(stream);
@@ -2148,8 +2154,11 @@ int descriptor_object_abandon(struct descriptor_object *object, int failure)
   enum call_status status = CALL_BAD_OPERATION;
   if (transaction) {
     transaction->producer_failed = true;
-    __atomic_store_n(&transaction->failure, failure ? failure : ECANCELED, __ATOMIC_RELEASE);
-    transaction->failure_outcome = failure == ECANCELED ? RESOURCE_ABORTED : RESOURCE_IO_ERROR;
+    /* Another alias may fault while draining after intentional abandonment. */
+    if (transaction->failure_outcome != RESOURCE_ABORTED) {
+      __atomic_store_n(&transaction->failure, failure ? failure : ECANCELED, __ATOMIC_RELEASE);
+      transaction->failure_outcome = failure == ECANCELED ? RESOURCE_ABORTED : RESOURCE_IO_ERROR;
+    }
     libc_lock_acquire(&table_guard);
     __atomic_store_n(&object->writable, false, __ATOMIC_RELEASE);
     libc_lock_release(&table_guard);
