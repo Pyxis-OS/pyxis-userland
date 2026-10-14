@@ -341,16 +341,20 @@ int counter_forwarders_main(const char *scheme, const char *name, const char *re
 
 static bool open_provider_file(handle_t provider, const char *uri, handle_t *file)
 {
+  const char *separator = strstr(uri, "://");
+  if (!separator) {
+    return false;
+  }
   struct provider_result result;
-  enum call_status status = provider_open(provider, uri, FILE_RIGHT_READ, 0,
+  enum call_status status = provider_open(provider, separator + 3, PROVIDER_INTENT_READ, 0, 0,
       &result, file);
   if (status != CALL_OK) {
     fprintf(stderr, "provider forwarders: OPEN %s failed (call status %u)\n", uri, status);
     return false;
   }
   if (result.status != CALL_OK || *file == HANDLE_INVALID) {
-    fprintf(stderr, "provider forwarders: OPEN %s failed (status %u, provider %ju)\n",
-        uri, result.status, (uintmax_t)result.provider_status);
+    fprintf(stderr, "provider forwarders: OPEN %s failed (status %u)\n",
+        uri, result.status);
     return false;
   }
   return true;
@@ -469,7 +473,7 @@ int counter_provider_forwarders_main(const char *provider_name,
     phase = "provider slot current target last controller release";
     struct provider_result result;
     ok = close_owned(&provider_target.controller) && provider_file_revoked(old_child) &&
-        provider_open(provider_slot.holder, guide_uri, FILE_RIGHT_READ, 0,
+        provider_open(provider_slot.holder, "guide", PROVIDER_INTENT_READ, 0, 0,
         &result, &denied_open) == CALL_DENIED && denied_open == HANDLE_INVALID;
   }
   if (ok) {
