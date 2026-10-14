@@ -412,12 +412,19 @@ selecting fewer roots must omit inherited cwd or select a safe cwd from that
 subset. Display paths confer no authority. Mount resources remain in trusted
 init and are excluded from child handoffs.
 
-The init script creates a namespace before handing off to the interactive
-session. The shell keeps management authority; ordinary children receive
-LOOKUP only. A provider launched through `service start` gets an endpoint
-creation grant and a one-use publication CALL endpoint, without a namespace
-grant. The shell publishes its attached export and replies before the provider
-starts serving. For example:
+Each process owns one environment of named capabilities and text. Launchers stage
+explicit entries and queried grant masks; ordinary programs retain their existing
+allowlists. Trusted successors explicitly capture private configured sources and
+service controllers. Other children receive exported service slots, selected
+filesystem directories and text, with per-child stdio overrides. Relative paths
+retain the independently owned cwd chain.
+
+A provider launched through `service start` receives private endpoint creation
+and a one-use publication CALL endpoint. The shell atomically publishes an
+exported `NAME` slot and private `NAME.control`, then acknowledges startup.
+Either name colliding with any existing entry rejects the complete publication.
+Replacement retargets the same slot through its held controller; it does not
+replace already opened FILE objects. For example:
 
 ```sh
 service start clicks bin://counter.pxe --provide
@@ -427,43 +434,25 @@ counter --restrict clicks
 counter --hold clicks &
 service replace clicks bin://counter.pxe --provide
 counter --lookup clicks
-service replace clicks bin://counter.pxe --provide-once
-counter --lookup clicks
-counter --lookup clicks
-namespace remove clicks
+env copy other clicks
+counter --lookup other
+env unset clicks
+env unset clicks.control
 counter --lookup clicks
 ```
 
-The first lookup prints 4, ADD prints 7, and `--restrict` reports denied
-namespace removal and denied ADD. The held client later prints 7 from the old
-provider; a fresh lookup after replacement prints 4. `--provide-once` answers
-one lookup and exits. The following lookup reports ENDPOINT_CLOSED, and after
-removal it reports NOT_FOUND.
+`--restrict` delegates READ alone and checks that ADD is denied. A held service
+slot follows replacement, while a held FILE continues to describe its original
+bytes. `env copy NAME SOURCE` copies a captured capability or text with the same
+flags, masks and lineage; it does not install an alias watcher. `env unset NAME`
+removes this process's publication. Future jobs omit that entry; already launched
+children keep their own entries. Closing a slot controller leaves its target
+retained until the remaining slot holders release it.
 
-`service start` requires an absent binding; `service replace` requires an
-existing one, including a dead binding. Both reject names that also select a
-filesystem root. The provider's publication CALL expires after ten seconds,
-but the shell can remain waiting if a provider exits before sending its CALL:
-RECEIVE cannot wait on provider exit at the same time. `namespace create`
-selects a fresh namespace, also when the shell already has one. In a trusted
-interactive shell, the following creates a separately populated namespace;
-new ordinary children cannot see `first`, while the old namespace remains
-held by the previous session until its owners exit:
-
-```sh
-service start first bin://counter.pxe --provide
-namespace create
-counter --lookup first
-service start second bin://counter.pxe --provide
-counter --lookup second
-```
-
-The first lookup reports NOT_FOUND; the second prints 4.
-Script interpreter paths also resolve against the shell's current namespace
-after a switch, so a name bound as both service and filesystem root is rejected.
-
-`namespace remove NAME` releases a binding without closing client grants
-already looked up elsewhere.
+The provider's publication CALL expires after ten seconds, but the shell can
+remain waiting if a provider exits before sending it: RECEIVE cannot wait on
+provider exit at the same time. A failed provider setup is reported independently
+from publication or cleanup errors.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point runtime
 helpers (compiler-rt builtins). `mandelbrot` draws through a mapped display buffer using double
