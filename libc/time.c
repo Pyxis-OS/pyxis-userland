@@ -12,7 +12,7 @@
 static int monotonic_get(struct timespec *result)
 {
   uint64_t nanoseconds;
-  enum call_status status = clock_now(startup_resource("clock"), &nanoseconds);
+  enum call_status status = clock_now(libc_thread_clock(), &nanoseconds);
   if (status != CALL_OK) {
     errno = libc_call_errno(status);
     return 0;
@@ -34,7 +34,7 @@ int timespec_get(struct timespec *result, int base)
     return 0;
   }
   struct clock_wall_reading reading;
-  enum call_status status = clock_wall_now(startup_resource("clock"), &reading);
+  enum call_status status = clock_wall_now(libc_thread_clock(), &reading);
   if (status != CALL_OK) {
     errno = libc_call_errno(status);
     return 0;
@@ -62,7 +62,7 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining)
     errno = EINVAL;
     return -1;
   }
-  handle_t clock = startup_resource("clock");
+  handle_t clock = libc_thread_clock();
   uint64_t now;
   enum call_status status = clock_now(clock, &now);
   if (status != CALL_OK) {
@@ -78,7 +78,7 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining)
       deadline = now + span + (uint64_t)duration->tv_nsec;
     }
   }
-  status = clock_sleep_until(clock, deadline);
+  status = clock_sleep_until(libc_thread_sleep_clock(), deadline);
   if (status != CALL_OK) {
     errno = libc_call_errno(status);
     return -1;

@@ -1,3 +1,5 @@
+#include <environment.h>
+#include "thread_private.h"
 #include <abi/file.h>
 #include <clock.h>
 #include <errno.h>
@@ -136,22 +138,25 @@ int access(const char *path, int mode)
 
 enum call_status file_temporary_name(char *suffix)
 {
-  handle_t clock = startup_resource("clock");
-  handle_t random = startup_resource("random");
-  if (clock == HANDLE_INVALID || random == HANDLE_INVALID) {
+  handle_t clock = libc_thread_clock();
+  handle_t random;
+  if (environment_capability(startup_environment_handle(), "random", &random) != CALL_OK) {
     return CALL_UNAVAILABLE;
   }
   uint64_t now;
   enum call_status status = clock_now(clock, &now);
   if (status != CALL_OK) {
+    handle_close(random);
     return status;
   }
   if (now > UINT64_MAX - RANDOM_MAX_WAIT_NS) {
+    handle_close(random);
     return CALL_LIMIT;
   }
   unsigned char bytes[TEMPORARY_NAME_LENGTH];
   status = random_read(random, bytes, sizeof(bytes), now + RANDOM_MAX_WAIT_NS);
   if (status != CALL_OK) {
+    handle_close(random);
     return status;
   }
   static const char alphabet[] =
@@ -159,7 +164,7 @@ enum call_status file_temporary_name(char *suffix)
   for (size_t i = 0; i < sizeof(bytes); ++i) {
     suffix[i] = alphabet[bytes[i] & TEMPORARY_ALPHABET_MASK];
   }
-  return CALL_OK;
+  return handle_close(random) ? CALL_OUTCOME_UNKNOWN : CALL_OK;
 }
 
 int mkstemp(char *template)

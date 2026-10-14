@@ -1,5 +1,6 @@
 #include "memory_operations.h"
 #include <handle.h>
+#include <environment.h>
 #include <startup.h>
 #include <stdlib.h>
 #include <thread.h>
@@ -145,7 +146,14 @@ enum call_status libc_thread_collect(handle_t memory, handle_t completion,
 void libc_thread_bootstrap(const struct startup_info *info)
 {
   struct libc_thread_context context;
-  if (libc_thread_context_prepare(startup_resource("memory"), &context) != CALL_OK) {
+  struct environment_entry_reply entry;
+  if (environment_lookup(info->environment_handle, "memory", &entry, NULL, 0) != CALL_OK ||
+      entry.kind != ENVIRONMENT_CAP) {
+    _Exit(EXIT_FAILURE);
+  }
+  enum call_status prepared = libc_thread_context_prepare(entry.handle, &context);
+  int released = handle_close(entry.handle);
+  if (prepared != CALL_OK || released) {
     _Exit(EXIT_FAILURE);
   }
   enum call_status status = thread_set_fs(info->thread_fs,

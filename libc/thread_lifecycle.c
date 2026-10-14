@@ -6,6 +6,7 @@
 #include <memory.h>
 #include <pthread.h>
 #include <startup.h>
+#include <environment.h>
 #include <stdlib.h>
 #include <thread.h>
 #include <threads.h>
@@ -60,7 +61,10 @@ static uint64_t identity(struct lifecycle_record *record)
 
 static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rights)
 {
-  handle_t source = startup_resource(name);
+  handle_t source;
+  if (environment_capability(startup_environment_handle(), name, &source) != CALL_OK) {
+    return HANDLE_INVALID;
+  }
   struct handle_info info;
   handle_t retained = HANDLE_INVALID;
   if (source != HANDLE_INVALID && handle_query(source, &info) == CALL_OK &&
@@ -70,6 +74,9 @@ static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rig
     if (status == CALL_OUTCOME_UNKNOWN) {
       _Exit(EXIT_FAILURE);
     }
+  }
+  if (handle_close(source)) {
+    _Exit(EXIT_FAILURE);
   }
   return retained;
 }

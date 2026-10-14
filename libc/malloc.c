@@ -2,6 +2,7 @@
 #include <handle.h>
 #include <memory.h>
 #include <startup.h>
+#include <environment.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +33,11 @@ void malloc_init(void)
 
   /* Keep allocator authority even if main closes its original startup grant.
    * Missing authority does not prevent a program without a heap from running. */
-  handle_copy_restricted(startup_resource("memory"), MEMORY_RIGHT_MANAGE, 0, &memory);
+  handle_t source;
+  if (environment_capability(startup_environment_handle(), "memory", &source) == CALL_OK) {
+    handle_copy_restricted(source, MEMORY_RIGHT_MANAGE, 0, &memory);
+    handle_close(source);
+  }
 }
 
 static enum call_status allocate_pool(size_t request, struct memory_region *region)

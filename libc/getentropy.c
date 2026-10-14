@@ -2,6 +2,9 @@
 #include <errno.h>
 #include <random.h>
 #include <startup.h>
+#include <environment.h>
+#include <handle.h>
+#include "thread_private.h"
 #include <sys/random.h>
 #include "errors.h"
 
@@ -15,25 +18,29 @@ int getentropy(void *buffer, size_t length)
     errno = EFAULT;
     return -1;
   }
-  handle_t clock = startup_resource("clock");
-  handle_t random = startup_resource("random");
-  if (clock == HANDLE_INVALID || random == HANDLE_INVALID) {
+  handle_t clock = libc_thread_clock();
+  handle_t random;
+  enum call_status captured = environment_capability(startup_environment_handle(), "random", &random);
+  if (captured != CALL_OK) {
     errno = ENODEV;
     return -1;
   }
   uint64_t now;
   enum call_status status = clock_now(clock, &now);
   if (status != CALL_OK) {
+    handle_close(random);
     errno = libc_call_errno(status);
     return -1;
   }
   if (now > UINT64_MAX - RANDOM_MAX_WAIT_NS) {
+    handle_close(random);
     errno = EOVERFLOW;
     return -1;
   }
   status = random_read(random, buffer, length, now + RANDOM_MAX_WAIT_NS);
-  if (status != CALL_OK) {
-    errno = libc_call_errno(status);
+  int released = handle_close(random);
+  if (status != CALL_OK || released) {
+    errno = status != CALL_OK ? libc_call_errno(status) : EIO;
     return -1;
   }
   return 0;
