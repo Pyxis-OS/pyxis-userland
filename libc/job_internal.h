@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_JOB_INTERNAL_H
 #define LIBC_JOB_INTERNAL_H
 
@@ -7,6 +8,10 @@
 struct pyxis_job_options;
 struct pyxis_job;
 
+struct job_stream_selection {
+  uint64_t protocol, grant, observation_protocol, observation_grant;
+};
+
 struct job_preparation {
   struct launch_request request;
   unsigned char *metadata;
@@ -14,7 +19,9 @@ struct job_preparation {
   enum call_status error;
   struct launch_grant *grants;
   size_t copied_grants;
-  struct pyxis_descriptor_binding streams[STARTUP_STREAM_COUNT];
+  struct pyxis_descriptor_binding streams[ENVIRONMENT_STREAM_COUNT];
+  struct job_stream_selection selected_streams[ENVIRONMENT_STREAM_COUNT];
+  struct launch_environment_entry *entries;
   handle_t image, launcher;
   bool attempted;
 };

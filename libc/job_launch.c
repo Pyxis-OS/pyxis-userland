@@ -1,8 +1,8 @@
+#include <environment.h>
 #include <abi/console.h>
 #include <abi/directory.h>
 #include <abi/file.h>
 #include <abi/memory.h>
-#include <abi/namespace.h>
 #include <abi/pipe.h>
 #include <abi/http_transaction.h>
 #include <errno.h>
@@ -69,84 +69,57 @@ static char *capture_string(struct job_preparation *prepared, const char *source
   return result;
 }
 
-static struct launch_binding *capture_bindings(struct job_preparation *prepared,
-    const struct launch_binding *source, size_t count, size_t grant_count,
-    bool roots)
+static bool stream_name(const char *name)
 {
-  struct launch_binding *bindings = capture_array(prepared, source, count,
-      sizeof(*bindings));
-  for (size_t i = 0; i < count && prepared->error == CALL_OK; ++i) {
-    if (bindings[i].grant >= grant_count) {
-      prepared->error = CALL_BAD_REQUEST;
-      break;
-    }
-    const char *name = capture_string(prepared, (const char *)(uintptr_t)bindings[i].name);
-    if (!name) {
-      break;
-    }
-    bindings[i].name = (uintptr_t)name;
-    if (!*name || (roots && (strchr(name, ':') || strchr(name, '/')))) {
-      prepared->error = CALL_BAD_REQUEST;
-      break;
-    }
-    for (size_t j = 0; j < i; ++j) {
-      if (!strcmp(name, (const char *)(uintptr_t)bindings[j].name)) {
-        prepared->error = CALL_BAD_REQUEST;
-        break;
-      }
-    }
-  }
-  return bindings;
+  return !strcmp(name, "stdin") || !strcmp(name, "stdout") ||
+      !strcmp(name, "stderr") || !strcmp(name, "stdin.status");
 }
 
 static enum call_status validate_startup_size(const struct launch_request *request)
 {
-  size_t metadata = sizeof(struct startup_info) +
-      request->resource_count * sizeof(struct startup_binding) +
-      request->root_count * sizeof(struct startup_binding) +
-      request->working_directory_count * sizeof(handle_t) +
-      request->environment_count * sizeof(struct startup_variable);
-  const struct launch_binding *resources = (const void *)(uintptr_t)request->resources;
-  for (size_t i = 0; i < request->resource_count; ++i) {
-    metadata += strlen((const char *)(uintptr_t)resources[i].name) + 1;
-  }
-  const struct launch_binding *roots = (const void *)(uintptr_t)request->roots;
-  for (size_t i = 0; i < request->root_count; ++i) {
-    metadata += strlen((const char *)(uintptr_t)roots[i].name) + 1;
-  }
+  size_t metadata = sizeof(struct startup_info) + request->working_directory_count * sizeof(handle_t);
   if (request->working_path) {
     metadata += strlen((const char *)(uintptr_t)request->working_path) + 1;
-  }
-  const struct startup_variable *environment = (const void *)(uintptr_t)request->environment;
-  for (size_t i = 0; i < request->environment_count; ++i) {
-    metadata += strlen((const char *)(uintptr_t)environment[i].name) + 1;
-    metadata += strlen((const char *)(uintptr_t)environment[i].value) + 1;
   }
   size_t arguments = (request->argc + 1) * sizeof(uint64_t);
   const char *const *argv = (const void *)(uintptr_t)request->argv;
   for (size_t i = 0; i < request->argc; ++i) {
     arguments += strlen(argv[i]) + 1;
   }
-  /* Child metadata and writable argv occupy separately padded page ranges. */
   metadata = (metadata + MEMORY_PAGE_SIZE - 1) & ~(size_t)(MEMORY_PAGE_SIZE - 1);
   arguments = (arguments + MEMORY_PAGE_SIZE - 1) & ~(size_t)(MEMORY_PAGE_SIZE - 1);
-  return metadata <= STARTUP_MAX_SIZE && arguments <= STARTUP_MAX_SIZE - metadata ?
-      CALL_OK : CALL_BAD_REQUEST;
+  return metadata <= STARTUP_MAX_SIZE && arguments <= STARTUP_MAX_SIZE - metadata ? CALL_OK : CALL_BAD_REQUEST;
+}
+
+static void stage_streams(struct job_preparation *prepared)
+{
+  static const char *const names[ENVIRONMENT_STREAM_COUNT] = {"stdin", "stdout", "stderr"};
+  struct launch_request *request = &prepared->request;
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
+    struct job_stream_selection *stream = &prepared->selected_streams[i];
+    if (stream->protocol) {
+      prepared->entries[request->entry_count++] = (struct launch_environment_entry){
+        .name = (uintptr_t)names[i], .kind = ENVIRONMENT_CAP,
+        .flags = ENVIRONMENT_EXPORTED, .value = stream->grant,
+      };
+      if (stream->observation_protocol) {
+        prepared->entries[request->entry_count++] = (struct launch_environment_entry){
+          .name = (uintptr_t)"stdin.status", .kind = ENVIRONMENT_CAP,
+          .flags = ENVIRONMENT_EXPORTED, .value = stream->observation_grant,
+        };
+      }
+    }
+  }
 }
 
 static enum call_status capture_metadata(struct job_preparation *prepared,
     const struct pyxis_job_options *options, const bool *pipe_streams)
 {
   size_t depth = options->working ? options->working->context.count : 0;
-  size_t environment_count = options->environment ? options->environment->count : 0;
-  const struct startup_variable *environment = options->environment ?
-      options->environment->variables : NULL;
   if ((options->grant_count && !options->grants) ||
-      (options->resource_count && !options->resources) ||
-      (options->root_count && !options->roots) ||
+      (options->entry_count && !options->entries) ||
       (options->argc && !options->argv) ||
       (depth && !options->working->context.directories) ||
-      (environment_count && !environment) ||
       (options->working && options->working->path && !depth)) {
     return CALL_BAD_REQUEST;
   }
@@ -157,17 +130,11 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
   }
   size_t limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
   size_t grant_count = options->grant_count;
-  if (grant_count > limit || depth > limit - grant_count) {
+  if (grant_count > limit || depth > limit - grant_count || options->entry_count > limit - 4) {
     return CALL_BAD_REQUEST;
   }
   grant_count += depth;
-  if (options->namespace_handle != HANDLE_INVALID) {
-    if (grant_count == limit) {
-      return CALL_BAD_REQUEST;
-    }
-    ++grant_count;
-  }
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     if (options->streams[i] < -1) {
       return CALL_BAD_REQUEST;
     }
@@ -190,23 +157,48 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     }
   }
   struct launch_request *request = &prepared->request;
-  prepared->grants = capture_array(prepared, NULL, grant_count,
-      sizeof(*prepared->grants));
+  prepared->grants = capture_array(prepared, NULL, grant_count, sizeof(*prepared->grants));
+  prepared->entries = capture_array(prepared, NULL, options->entry_count + 4, sizeof(*prepared->entries));
   if (prepared->error != CALL_OK) {
     return prepared->error;
   }
   if (options->grant_count) {
-    memcpy(prepared->grants, options->grants,
-        options->grant_count * sizeof(*prepared->grants));
+    memcpy(prepared->grants, options->grants, options->grant_count * sizeof(*prepared->grants));
   }
   request->grants = (uintptr_t)prepared->grants;
   request->grant_count = grant_count;
-  request->resource_count = options->resource_count;
-  request->resources = (uintptr_t)capture_bindings(prepared, options->resources,
-      options->resource_count, options->grant_count, false);
-  request->root_count = options->root_count;
-  request->roots = (uintptr_t)capture_bindings(prepared, options->roots,
-      options->root_count, options->grant_count, true);
+  request->entries = (uintptr_t)prepared->entries;
+  for (size_t i = 0; i < options->entry_count; ++i) {
+    struct launch_environment_entry entry = options->entries[i];
+    const char *name = capture_string(prepared, (const char *)(uintptr_t)entry.name);
+    char checked[ENVIRONMENT_NAME_MAX + 1];
+    if (!name || !environment_name(checked, name)) {
+      return CALL_BAD_REQUEST;
+    }
+    if (stream_name(name)) {
+      continue;
+    }
+    for (size_t j = 0; j < request->entry_count; ++j) {
+      if (!strcmp(name, (const char *)(uintptr_t)prepared->entries[j].name)) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    entry.name = (uintptr_t)name;
+    if (entry.kind == ENVIRONMENT_CAP) {
+      if (entry.value >= options->grant_count || entry.length) {
+        return CALL_BAD_REQUEST;
+      }
+    } else if (entry.kind == ENVIRONMENT_TEXT) {
+      const char *text = capture_string(prepared, (const char *)(uintptr_t)entry.value);
+      if (!text || strlen(text) != entry.length) {
+        return CALL_BAD_REQUEST;
+      }
+      entry.value = (uintptr_t)text;
+    } else {
+      return CALL_BAD_REQUEST;
+    }
+    prepared->entries[request->entry_count++] = entry;
+  }
   uint64_t *directories = capture_array(prepared, NULL, depth, sizeof(*directories));
   request->working_directories = (uintptr_t)directories;
   request->working_directory_count = depth;
@@ -218,48 +210,20 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     directories[i] = next;
     prepared->grants[next++].source = options->working->context.directories[i];
   }
-  if (options->namespace_handle != HANDLE_INVALID) {
-    request->namespace_grant = next + 1;
-    prepared->grants[next++] = (struct launch_grant){
-      options->namespace_handle, NAMESPACE_RIGHT_LOOKUP, 0,
-    };
-  }
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
+    struct job_stream_selection *stream = &prepared->selected_streams[i];
     if (options->streams[i] >= 0 || (pipe_streams && pipe_streams[i])) {
-      request->streams[i].grant = next++;
+      stream->grant = next++;
       if (options->streams[i] >= 0 && prepared->streams[i].observation != HANDLE_INVALID) {
-        request->streams[i].observation_grant = next++;
+        stream->observation_grant = next++;
       }
       if (pipe_streams && pipe_streams[i]) {
-        request->streams[i].protocol = PROTOCOL_PIPE;
+        stream->protocol = PROTOCOL_PIPE;
       }
     }
   }
   if (options->working && options->working->path) {
     request->working_path = (uintptr_t)capture_string(prepared, options->working->path);
-  }
-  struct startup_variable *variables = capture_array(prepared, environment,
-      environment_count, sizeof(*variables));
-  request->environment = (uintptr_t)variables;
-  request->environment_count = environment_count;
-  for (size_t i = 0; i < environment_count && prepared->error == CALL_OK; ++i) {
-    const char *name = capture_string(prepared, (const char *)(uintptr_t)variables[i].name);
-    variables[i].name = (uintptr_t)name;
-    variables[i].value = (uintptr_t)capture_string(prepared,
-        (const char *)(uintptr_t)variables[i].value);
-    if (prepared->error != CALL_OK) {
-      break;
-    }
-    if (!*name || strchr(name, '=')) {
-      prepared->error = CALL_BAD_REQUEST;
-      break;
-    }
-    for (size_t j = 0; j < i; ++j) {
-      if (!strcmp(name, (const char *)(uintptr_t)variables[j].name)) {
-        prepared->error = CALL_BAD_REQUEST;
-        break;
-      }
-    }
   }
   const char **argv = capture_array(prepared, options->argv, options->argc, sizeof(*argv));
   request->argv = (uintptr_t)argv;
@@ -282,10 +246,10 @@ static enum call_status validate_directory(handle_t handle, struct handle_info *
 }
 
 static enum call_status capture_stream(struct job_preparation *prepared,
-    enum startup_stream_index index)
+    enum environment_stream_index index)
 {
   struct pyxis_descriptor_binding binding = prepared->streams[index];
-  bool input = index == STARTUP_STDIN;
+  bool input = index == ENVIRONMENT_STDIN;
   if (!(binding.access & (input ? PYXIS_DESCRIPTOR_READ : PYXIS_DESCRIPTOR_WRITE))) {
     return CALL_DENIED;
   }
@@ -315,7 +279,7 @@ static enum call_status capture_stream(struct job_preparation *prepared,
   } else {
     return CALL_WRONG_TYPE;
   }
-  struct launch_stream *stream = &prepared->request.streams[index];
+  struct job_stream_selection *stream = &prepared->selected_streams[index];
   if ((binding.info.rights & rights) != rights ||
       (binding.info.transport & transport) != transport) {
     return CALL_DENIED;
@@ -344,13 +308,6 @@ static enum call_status select_handles(struct job_preparation *prepared,
   if (info.protocol != PROTOCOL_FILE || info.kind != HANDLE_KIND_NATIVE || info.transport) {
     return CALL_WRONG_TYPE;
   }
-  struct launch_binding *roots = (void *)(uintptr_t)prepared->request.roots;
-  for (size_t i = 0; i < prepared->request.root_count; ++i) {
-    status = validate_directory(prepared->grants[roots[i].grant].source, &info);
-    if (status != CALL_OK) {
-      return status;
-    }
-  }
   for (size_t i = 0; i < prepared->request.working_directory_count; ++i) {
     struct launch_grant *grant = &prepared->grants[options->grant_count + i];
     status = validate_directory(grant->source, &info);
@@ -359,15 +316,6 @@ static enum call_status select_handles(struct job_preparation *prepared,
     }
     grant->rights = info.rights;
     grant->transport = info.transport;
-  }
-  if (prepared->request.namespace_grant) {
-    status = handle_query(prepared->grants[prepared->request.namespace_grant - 1].source, &info);
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (info.protocol != PROTOCOL_NAMESPACE || info.kind != HANDLE_KIND_NATIVE || info.transport) {
-      return CALL_WRONG_TYPE;
-    }
   }
   return CALL_OK;
 }
@@ -419,7 +367,7 @@ static enum call_status capture_handles(struct job_preparation *prepared,
   if (status != CALL_OK) {
     return status;
   }
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     if (options->streams[i] >= 0) {
       status = capture_stream(prepared, i);
       if (status != CALL_OK) {
@@ -427,10 +375,11 @@ static enum call_status capture_handles(struct job_preparation *prepared,
       }
     }
   }
+  stage_streams(prepared);
   if (private_root != HANDLE_INVALID) {
-    if (prepared->request.streams[STARTUP_STDIN].protocol != STARTUP_STREAM_NONE ||
-        prepared->request.streams[STARTUP_STDOUT].protocol != PROTOCOL_FILE ||
-        prepared->request.streams[STARTUP_STDERR].protocol != PROTOCOL_FILE) {
+    if (prepared->selected_streams[ENVIRONMENT_STDIN].protocol != 0 ||
+        prepared->selected_streams[ENVIRONMENT_STDOUT].protocol != PROTOCOL_FILE ||
+        prepared->selected_streams[ENVIRONMENT_STDERR].protocol != PROTOCOL_FILE) {
       return CALL_DENIED;
     }
     status = libc_job_validate_capture_grants(prepared->grants,
@@ -500,7 +449,7 @@ enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t lau
     status = capture_handles(prepared, launcher, &selected, private_root);
   }
   if (status == CALL_OK) {
-    for (size_t i = STARTUP_STDOUT; i < STARTUP_STREAM_COUNT; ++i) {
+    for (size_t i = ENVIRONMENT_STDOUT; i < ENVIRONMENT_STREAM_COUNT; ++i) {
       if (selected.streams[i] >= 0 && libc_stdio_flush_descriptor(selected.streams[i]) < 0) {
         status = CALL_IO;
         break;
@@ -582,7 +531,7 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
   prepared->count = count;
   enum call_status status = CALL_OK;
   for (size_t i = 0; i < count; ++i) {
-    for (size_t j = 0; j < STARTUP_STREAM_COUNT; ++j) {
+    for (size_t j = 0; j < ENVIRONMENT_STREAM_COUNT; ++j) {
       if (stages[i].streams[j] != -1) {
         status = CALL_BAD_REQUEST;
         break;
@@ -597,8 +546,11 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
       status = CALL_NO_MEMORY;
       break;
     }
-    const bool pipe_streams[STARTUP_STREAM_COUNT] = {i != 0 || has_input, true, true};
+    const bool pipe_streams[ENVIRONMENT_STREAM_COUNT] = {i != 0 || has_input, true, true};
     status = capture_metadata(stage, &stages[i], pipe_streams);
+    if (status == CALL_OK) {
+      stage_streams(stage);
+    }
     if (status != CALL_OK) {
       break;
     }
@@ -610,7 +562,7 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
   for (size_t i = 0; i < count && status == CALL_OK; ++i) {
     struct job_preparation *stage = &prepared->stages[i];
     status = select_handles(stage, &stages[i]);
-    size_t stream_count = STARTUP_STREAM_COUNT - (i == 0 && !has_input);
+    size_t stream_count = ENVIRONMENT_STREAM_COUNT - (i == 0 && !has_input);
     size_t selected_count = stage->request.grant_count - stream_count;
     if (status == CALL_OK) {
       status = libc_job_validate_capture_grants(stage->grants, selected_count,
@@ -632,7 +584,7 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
 }
 
 enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
-    handle_t launcher, const handle_t streams[][STARTUP_STREAM_COUNT],
+    handle_t launcher, const handle_t streams[][ENVIRONMENT_STREAM_COUNT],
     handle_t *observers, uint64_t *failed_index)
 {
   if (prepared && prepared->attempted) {
@@ -656,9 +608,9 @@ enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
   }
   for (size_t i = 0; i < prepared->count; ++i) {
     struct job_preparation *stage = &prepared->stages[i];
-    for (size_t j = 0; j < STARTUP_STREAM_COUNT; ++j) {
-      struct launch_stream *stream = &stage->request.streams[j];
-      if (stream->protocol == STARTUP_STREAM_NONE) {
+    for (size_t j = 0; j < ENVIRONMENT_STREAM_COUNT; ++j) {
+      struct job_stream_selection *stream = &stage->selected_streams[j];
+      if (stream->protocol == 0) {
         if (streams[i][j] != HANDLE_INVALID) {
           status = CALL_BAD_REQUEST;
           break;
@@ -675,7 +627,7 @@ enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
         break;
       }
       stage->grants[stream->grant] = (struct launch_grant){
-        streams[i][j], j == STARTUP_STDIN ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE, 0,
+        streams[i][j], j == ENVIRONMENT_STDIN ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE, 0,
       };
     }
     if (status == CALL_OK) {

@@ -1,3 +1,4 @@
+#include <environment.h>
 #include <pyxis/pipeline.h>
 #include <abi/directory.h>
 #include <clock.h>
@@ -507,12 +508,12 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     }
   }
   if (status == CALL_OK) {
-    handle_t streams[LAUNCH_BATCH_MAX][STARTUP_STREAM_COUNT] = {0};
+    handle_t streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT] = {0};
     for (size_t i = 0; i < options->stage_count; ++i) {
-      streams[i][STARTUP_STDIN] = i ? sources[i - 1].reader :
+      streams[i][ENVIRONMENT_STDIN] = i ? sources[i - 1].reader :
           options->has_input ? sources[middle_count + 2].reader : HANDLE_INVALID;
-      streams[i][STARTUP_STDOUT] = sources[i < middle_count ? i : middle_count].writer;
-      streams[i][STARTUP_STDERR] = sources[middle_count + 1].writer;
+      streams[i][ENVIRONMENT_STDOUT] = sources[i < middle_count ? i : middle_count].writer;
+      streams[i][ENVIRONMENT_STDERR] = sources[middle_count + 1].writer;
     }
     status = libc_pipeline_launch(prepared, owned->launcher, streams,
         owned->observers, &owned->result.failed_stage);
@@ -643,21 +644,21 @@ enum call_status pyxis_pipeline_cancel(struct pyxis_pipeline *pipeline)
 }
 
 enum call_status pyxis_pipeline_read(struct pyxis_pipeline *pipeline,
-    enum startup_stream_index stream, uint64_t offset, void *bytes,
+    enum environment_stream_index stream, uint64_t offset, void *bytes,
     size_t capacity, size_t *read)
 {
   if (!read) {
     return CALL_BAD_REQUEST;
   }
   *read = 0;
-  if (!pipeline || (stream != STARTUP_STDOUT && stream != STARTUP_STDERR) ||
+  if (!pipeline || (stream != ENVIRONMENT_STDOUT && stream != ENVIRONMENT_STDERR) ||
       (capacity && !bytes)) {
     return CALL_BAD_REQUEST;
   }
   if (!pipeline->result.complete) {
     return CALL_BUSY;
   }
-  struct pyxis_capture_output *output = stream == STARTUP_STDOUT ?
+  struct pyxis_capture_output *output = stream == ENVIRONMENT_STDOUT ?
       &pipeline->result.stdout_output : &pipeline->result.stderr_output;
   if (!output->valid) {
     return CALL_UNAVAILABLE;
@@ -667,7 +668,7 @@ enum call_status pyxis_pipeline_read(struct pyxis_pipeline *pipeline,
   } else if (capacity > output->returned_size - offset) {
     capacity = output->returned_size - offset;
   }
-  enum call_status status = file_read(pipeline->outputs[stream - STARTUP_STDOUT].file,
+  enum call_status status = file_read(pipeline->outputs[stream - ENVIRONMENT_STDOUT].file,
       offset, bytes, capacity, read);
   return status == CALL_OK && capacity && !*read ? CALL_IO : status;
 }

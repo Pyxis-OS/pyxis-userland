@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_PYXIS_JOB_H
 #define LIBC_PYXIS_JOB_H
 
@@ -14,18 +15,15 @@ struct pyxis_job_options {
   size_t argc;
   const struct launch_grant *grants;
   size_t grant_count;
-  const struct launch_binding *resources;
-  size_t resource_count;
-  const struct launch_binding *roots;
-  size_t root_count;
-  /* NULL selects no cwd/empty environment, never ambient inheritance. Only
-   * the working chain and spelling are used; roots/namespace below are exact. */
+  /* Explicit selected entries; caller captures and stages its chosen values.
+   * Descriptor selection overrides stdin/stdout/stderr and stdin.status only
+   * for this child. No implicit environment inheritance. */
+  const struct launch_environment_entry *entries;
+  size_t entry_count;
   const struct pyxis_working_snapshot *working;
-  const struct pyxis_environment_snapshot *environment;
-  handle_t namespace_handle;
   /* Live descriptors, stdin/stdout/stderr order. -1 deliberately omits a
    * stream. FILE cursors and private input read-ahead are not transferred. */
-  int streams[STARTUP_STREAM_COUNT];
+  int streams[ENVIRONMENT_STREAM_COUNT];
   uint64_t initial_stack_bytes;
 };
 

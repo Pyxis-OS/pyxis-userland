@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_PYXIS_CAPTURE_H
 #define LIBC_PYXIS_CAPTURE_H
 
@@ -99,7 +100,7 @@ enum call_status pyxis_capture_cancel(struct pyxis_capture *capture);
  * no chronology between streams. One native read may be short; zero at the cap
  * is EOF. Does not expose a full-backing capability or allocate a byte array. */
 enum call_status pyxis_capture_read(struct pyxis_capture *capture,
-    enum startup_stream_index stream, uint64_t offset, void *bytes,
+    enum environment_stream_index stream, uint64_t offset, void *bytes,
     size_t capacity, size_t *read);
 
 /* BUSY until confirmed process/group retirement, permanently for quarantined

@@ -1,3 +1,4 @@
+#include <environment.h>
 #include <pyxis/capture.h>
 #include <abi/directory.h>
 #include <abi/clock.h>
@@ -242,7 +243,7 @@ static enum call_status validate_options(handle_t launcher,
       (options->command.grant_count && !options->command.grants)) {
     return CALL_BAD_REQUEST;
   }
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     if (options->command.streams[i] != -1) {
       return CALL_BAD_REQUEST;
     }
@@ -319,8 +320,8 @@ enum call_status pyxis_capture_start(handle_t launcher,
   }
   if (status == CALL_OK) {
     struct pyxis_job_options command = options->command;
-    command.streams[STARTUP_STDOUT] = writers[0];
-    command.streams[STARTUP_STDERR] = writers[1];
+    command.streams[ENVIRONMENT_STDOUT] = writers[0];
+    command.streams[ENVIRONMENT_STDERR] = writers[1];
     status = libc_job_launch_captured(owned->launcher, &command, owned->private_root, &owned->job);
     if (status == CALL_OUTCOME_UNKNOWN) {
       owned->uncertain = true;
@@ -440,21 +441,21 @@ enum call_status pyxis_capture_cancel(struct pyxis_capture *capture)
 }
 
 enum call_status pyxis_capture_read(struct pyxis_capture *capture,
-    enum startup_stream_index stream, uint64_t offset, void *bytes,
+    enum environment_stream_index stream, uint64_t offset, void *bytes,
     size_t capacity, size_t *read)
 {
   if (!read) {
     return CALL_BAD_REQUEST;
   }
   *read = 0;
-  if (!capture || (stream != STARTUP_STDOUT && stream != STARTUP_STDERR) ||
+  if (!capture || (stream != ENVIRONMENT_STDOUT && stream != ENVIRONMENT_STDERR) ||
       (capacity && !bytes)) {
     return CALL_BAD_REQUEST;
   }
   if (!capture->result.complete) {
     return CALL_BUSY;
   }
-  struct pyxis_capture_output *output = stream == STARTUP_STDOUT ?
+  struct pyxis_capture_output *output = stream == ENVIRONMENT_STDOUT ?
       &capture->result.stdout_output : &capture->result.stderr_output;
   if (!output->valid) {
     return CALL_UNAVAILABLE;
@@ -464,7 +465,7 @@ enum call_status pyxis_capture_read(struct pyxis_capture *capture,
   } else if (capacity > output->returned_size - offset) {
     capacity = output->returned_size - offset;
   }
-  enum call_status status = file_read(capture->files[stream - STARTUP_STDOUT],
+  enum call_status status = file_read(capture->files[stream - ENVIRONMENT_STDOUT],
       offset, bytes, capacity, read);
   return status == CALL_OK && capacity && !*read ? CALL_IO : status;
 }

@@ -16,7 +16,6 @@
 #include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/mount.h>
-#include <abi/namespace.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
 #include <abi/pointer.h>
@@ -138,9 +137,6 @@ static enum call_status validate_authority(const struct handle_info *info,
   case PROTOCOL_ENDPOINT:
     allowed_rights = 0;
     break;
-  case PROTOCOL_NAMESPACE:
-    allowed_rights = NAMESPACE_RIGHT_LOOKUP;
-    break;
   case PROTOCOL_PROVIDER:
     allowed_rights = PROVIDER_RIGHTS;
     break;
@@ -155,7 +151,6 @@ static enum call_status validate_authority(const struct handle_info *info,
   case PROTOCOL_POWER:
   case PROTOCOL_INPUT_POLICY:
   case PROTOCOL_BLUETOOTH_HCI:
-  case PROTOCOL_NAMESPACE_SERVICE:
   case PROTOCOL_TERMINAL_SERVICE:
   case PROTOCOL_TERMINAL_ATTACHMENT:
   case PROTOCOL_TERMINAL_EVENTS:

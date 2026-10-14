@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_PYXIS_PIPELINE_H
 #define LIBC_PYXIS_PIPELINE_H
 
@@ -83,7 +84,7 @@ enum call_status pyxis_pipeline_cancel(struct pyxis_pipeline *pipeline);
 /* After confirmed cleanup, explicit STDOUT/STDERR and offset, capped short
  * native reads; no backing capability or chronology between streams. */
 enum call_status pyxis_pipeline_read(struct pyxis_pipeline *pipeline,
-    enum startup_stream_index stream, uint64_t offset, void *bytes,
+    enum environment_stream_index stream, uint64_t offset, void *bytes,
     size_t capacity, size_t *read);
 
 /* BUSY until cleanup, permanently for quarantined direct uncertainty. Once

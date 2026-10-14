@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_JOB_PIPELINE_LAUNCH_H
 #define LIBC_JOB_PIPELINE_LAUNCH_H
 
@@ -20,7 +21,7 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
  * observers always belong to the caller, including after discard failures.
  * CALL_OUTCOME_UNKNOWN must never be replayed. Discard after every attempt. */
 enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
-    handle_t launcher, const handle_t streams[][STARTUP_STREAM_COUNT],
+    handle_t launcher, const handle_t streams[][ENVIRONMENT_STREAM_COUNT],
     handle_t *observers, uint64_t *failed_index);
 
 /* Consumes the preparation, including on failure. Closes every owned handle
