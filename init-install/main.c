@@ -49,7 +49,7 @@ int main(int argc, char **argv)
     bootstrap_capability("disks"), bootstrap_capability("boot_kernel"), bootstrap_capability("boot_archive"),
     bootstrap_capability("memory"), bootstrap_capability("clock"), bootstrap_capability("random"),
     bootstrap_capability("system_info"), bootstrap_capability("log"), bootstrap_capability("boot"),
-    HANDLE_INVALID, bootstrap_capability("power"), bootstrap_capability("space_factory"),
+    HANDLE_INVALID, bootstrap_capability("power"), bootstrap_take_capability("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
