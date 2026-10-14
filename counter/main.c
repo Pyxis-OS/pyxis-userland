@@ -506,6 +506,10 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
 
 int main(int argc, char **argv)
 {
+  if (argc == 4 && !strcmp(argv[1], "--http-lineage")) {
+    extern int counter_http_lineage_main(const char *, const char *);
+    return counter_http_lineage_main(argv[2], argv[3]);
+  }
   if (argc == 5 && !strcmp(argv[1], "--forwarders")) {
     extern int counter_forwarders_main(const char *, const char *, const char *);
     return counter_forwarders_main(argv[2], argv[3], argv[4]);
