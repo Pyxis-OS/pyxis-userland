@@ -1,3 +1,4 @@
+#include <environment.h>
 #include <abi/console.h>
 #include <abi/file.h>
 #include <abi/pipe.h>
@@ -24,6 +25,7 @@
 #include "errors.h"
 #include "stream.h"
 #include "thread_sync.h"
+#include "thread_private.h"
 
 enum descriptor_state { DESCRIPTOR_FREE, DESCRIPTOR_RESERVED, DESCRIPTOR_OPEN };
 enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE, DESCRIPTOR_RESPONSE };
@@ -63,12 +65,14 @@ struct descriptor_entry {
   enum descriptor_state state;
   struct descriptor_object *object;
   FILE *stream; /* Non-owning; only one FILE can associate with this slot. */
+  uint64_t environment_identity, observation_identity;
+  enum environment_stream_index original_stream;
 };
 
-static struct descriptor_object startup_objects[STARTUP_STREAM_COUNT];
-static struct descriptor_entry startup_entries[STARTUP_STREAM_COUNT];
+static struct descriptor_object startup_objects[ENVIRONMENT_STREAM_COUNT];
+static struct descriptor_entry startup_entries[ENVIRONMENT_STREAM_COUNT];
 static struct descriptor_entry *entries = startup_entries;
-static size_t capacity = STARTUP_STREAM_COUNT;
+static size_t capacity = ENVIRONMENT_STREAM_COUNT;
 static struct libc_lock table_guard;
 
 static int fail(int error)
@@ -228,14 +232,14 @@ int descriptor_release_handle(handle_t handle)
   return 0;
 }
 
-void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream)
+void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream,
+    struct pyxis_stdio_binding binding, uint64_t identity, uint64_t observation_identity)
 {
-  struct startup_stream binding = startup_stream(index);
-  if (binding.protocol == STARTUP_STREAM_NONE) {
+  if (binding.protocol == 0) {
     return;
   }
-  /* Startup already validated distinct handles, protocols and stream rights.
-   * Adopt without allocation or a copy that would prolong endpoint lifetime. */
+  /* Adopt the owned lookup grants; the initialization snapshot is released
+   * before constructors or main can observe endpoint lifetime. */
   struct descriptor_object *object = &startup_objects[index];
   *object = (struct descriptor_object){
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
@@ -245,11 +249,13 @@ void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream)
             binding.protocol == PROTOCOL_PIPE ? DESCRIPTOR_PIPE :
             binding.protocol == PROTOCOL_STREAM ? DESCRIPTOR_RESPONSE : DESCRIPTOR_CONSOLE,
     .handle = binding.handle, .observation = binding.observation,
-    .readable = index == STARTUP_STDIN,
-    .writable = index != STARTUP_STDIN,
+    .readable = index == ENVIRONMENT_STDIN,
+    .writable = index != ENVIRONMENT_STDIN,
   };
   entries[index] = (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
+    .environment_identity = identity, .observation_identity = observation_identity,
+    .original_stream = index,
   };
   stream->descriptor = (int)index;
 }
@@ -367,7 +373,7 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
   return descriptor;
 }
 
-int descriptor_stream(FILE *stream, struct startup_stream *binding)
+int descriptor_stream(FILE *stream, struct pyxis_stdio_binding *binding)
 {
   libc_lock_acquire(&table_guard);
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
@@ -375,7 +381,7 @@ int descriptor_stream(FILE *stream, struct startup_stream *binding)
   int error = !object || entries[descriptor].stream != stream ? EBADF :
       object->http && !object->http->committed && object->kind == DESCRIPTOR_RESPONSE ? EBUSY : 0;
   if (!error) {
-    *binding = (struct startup_stream){
+    *binding = (struct pyxis_stdio_binding){
       .protocol = object->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
           object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
@@ -583,6 +589,23 @@ static int release_alias(struct descriptor_object *object, bool final)
   return result;
 }
 
+static int remove_original(struct descriptor_entry entry)
+{
+  static const char *const names[ENVIRONMENT_STREAM_COUNT] = {"stdin", "stdout", "stderr"};
+  struct environment_unset_entry removed[2] = {0};
+  size_t count = 0;
+  if (entry.environment_identity) {
+    environment_name(removed[count].name, names[entry.original_stream]);
+    removed[count++].identity = entry.environment_identity;
+  }
+  if (entry.observation_identity) {
+    environment_name(removed[count].name, "stdin.status");
+    removed[count++].identity = entry.observation_identity;
+  }
+  enum call_status status = count ? environment_unset_batch(startup_environment_handle(), removed, count) : CALL_OK;
+  return status == CALL_OK ? 0 : fail(libc_call_errno(status));
+}
+
 static int close_entry(int descriptor, FILE *stream, struct descriptor_object *expected)
 {
   libc_lock_acquire(&table_guard);
@@ -594,6 +617,7 @@ static int close_entry(int descriptor, FILE *stream, struct descriptor_object *e
   if (entries[descriptor].stream) {
     __atomic_store_n(&entries[descriptor].stream->descriptor, -1, __ATOMIC_RELEASE);
   }
+  struct descriptor_entry original = entries[descriptor];
   install_locked(descriptor, (struct descriptor_entry){0});
   bool final = --object->references == 0;
   if (final) {
@@ -601,7 +625,10 @@ static int close_entry(int descriptor, FILE *stream, struct descriptor_object *e
   }
   libc_lock_release(&table_guard);
   /* Never wait on cursor/FILE locks before releasing native grant authority. */
-  return release_alias(object, final);
+  int cleanup = remove_original(original);
+  int error = errno;
+  int released = release_alias(object, final);
+  return cleanup < 0 ? fail(error) : released;
 }
 
 int descriptor_close(int descriptor)
@@ -665,11 +692,13 @@ int dup2(int source, int target)
       entries[target].state == DESCRIPTOR_RESERVED || entries[target].stream != stream || (stream && stream->output_count) ? EBUSY :
       __atomic_load_n(&object->storage, __ATOMIC_RELAXED) == SIZE_MAX ? EMFILE : 0;
   struct descriptor_object *previous = NULL;
+  struct descriptor_entry original = {0};
   bool final = false;
   if (!error) {
     ++object->references;
     __atomic_add_fetch(&object->storage, 1, __ATOMIC_RELAXED);
     if (entries[target].state == DESCRIPTOR_OPEN) {
+      original = entries[target];
       previous = entries[target].object;
       final = --previous->references == 0;
       if (final) {
@@ -684,8 +713,13 @@ int dup2(int source, int target)
     }
   }
   libc_lock_release(&table_guard);
-  if (!error && previous && release_alias(previous, final) < 0) {
-    error = errno;
+  if (!error && previous) {
+    int cleanup = remove_original(original);
+    int cleanup_error = errno;
+    int released = release_alias(previous, final);
+    if (cleanup < 0 || released < 0) {
+      error = cleanup < 0 ? cleanup_error : errno;
+    }
   }
   if (!error) {
     publish(target, (struct descriptor_entry){
@@ -726,7 +760,7 @@ void descriptor_finish(void)
     free(entries);
   }
   entries = startup_entries;
-  capacity = STARTUP_STREAM_COUNT;
+  capacity = ENVIRONMENT_STREAM_COUNT;
   memset(startup_entries, 0, sizeof(startup_entries));
 }
 
@@ -1286,7 +1320,7 @@ bool descriptor_object_ready(struct descriptor_object *object, bool writing)
   return object_ready(object, writing) == 0;
 }
 
-int descriptor_object_stream(struct descriptor_object *object, struct startup_stream *binding)
+int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdio_binding *binding)
 {
   if (!object || __atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
     return fail(EBADF);
@@ -1294,7 +1328,7 @@ int descriptor_object_stream(struct descriptor_object *object, struct startup_st
   if (object->http && !object->http->committed && object->kind == DESCRIPTOR_RESPONSE) {
     return fail(EBUSY);
   }
-  *binding = (struct startup_stream){
+  *binding = (struct pyxis_stdio_binding){
     .protocol = object->kind == DESCRIPTOR_FILE ? PROTOCOL_FILE :
         object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
@@ -1688,7 +1722,7 @@ int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
   enum call_status status = CALL_OK;
   if (!deadline) {
     uint64_t now;
-    status = clock_now(startup_resource("clock"), &now);
+    status = clock_now(libc_thread_clock(), &now);
     if (status == CALL_OK) {
       if (now > UINT64_MAX - UINT64_C(30000000000)) {
         status = CALL_LIMIT;

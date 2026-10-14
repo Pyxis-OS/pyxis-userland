@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_DESCRIPTOR_H
 #define LIBC_DESCRIPTOR_H
 
@@ -22,7 +23,8 @@ struct descriptor_mode {
  * No entry pointer escapes this module; open objects stay stable on growth.
  * Admitted operations retain storage only. Final alias CLOSE releases native
  * authority immediately, outside exclusion; storage outlives admitted calls. */
-void descriptor_adopt_standard(enum startup_stream_index index, FILE *stream);
+void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream,
+    struct pyxis_stdio_binding binding, uint64_t identity, uint64_t observation_identity);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
 int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
@@ -36,7 +38,7 @@ int descriptor_object_http_abort(struct descriptor_object *object);
  * then publish the FILE association. Parent has CREATE/REMOVE and file rights. */
 int descriptor_tmpfile(FILE *stream, handle_t parent);
 /* Borrow the actual associated handle; never changes input, position or flags. */
-int descriptor_stream(FILE *stream, struct startup_stream *binding);
+int descriptor_stream(FILE *stream, struct pyxis_stdio_binding *binding);
 /* Validate mode/access and reject an existing association before changing any
  * state. Success takes ownership for fclose and retains cursor/read-ahead. */
 int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FILE *stream);
@@ -123,7 +125,7 @@ static inline void descriptor_scope_end(struct descriptor_object **object)
 }
 int descriptor_close_stream(FILE *stream, struct descriptor_object *object);
 bool descriptor_object_ready(struct descriptor_object *object, bool writing);
-int descriptor_object_stream(struct descriptor_object *object, struct startup_stream *binding);
+int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdio_binding *binding);
 int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
 int descriptor_object_read_complete(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
 int descriptor_object_read_buffered(struct descriptor_object *object, void *buffer, size_t size, size_t *read);

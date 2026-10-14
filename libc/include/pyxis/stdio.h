@@ -1,3 +1,4 @@
+#include <environment.h>
 #ifndef LIBC_PYXIS_STDIO_H
 #define LIBC_PYXIS_STDIO_H
 
@@ -19,7 +20,7 @@ extern "C" {
  * retain it past fclose/close/dup2 replacement. Delegation does not transfer the process's private
  * file cursor, read-ahead or pushback. File-backed children start at offset zero;
  * pipe children cannot receive bytes already fetched into this process. */
-int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding);
+int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding);
 
 /* Copy response metadata without changing indicators or position. Valid local
  * and inherited streams report absent metadata. EINVAL for NULL, EBADF for a

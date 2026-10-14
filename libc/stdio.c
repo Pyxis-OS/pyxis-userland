@@ -1,3 +1,4 @@
+#include <environment.h>
 #include <abi/directory.h>
 #include <errno.h>
 #include <handle.h>
@@ -231,21 +232,35 @@ static void register_stream(FILE *stream)
   libc_lock_release(&stream_guard);
 }
 
-static void standard_stream(FILE *stream, enum startup_stream_index index)
+static void standard_stream(FILE *stream, enum environment_stream_index index, handle_t snapshot)
 {
   *stream = (FILE){
-    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .readable = index == STARTUP_STDIN,
-    .writable = index != STARTUP_STDIN,
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .readable = index == ENVIRONMENT_STDIN,
+    .writable = index != ENVIRONMENT_STDIN,
   };
-  descriptor_adopt_standard(index, stream);
+  struct pyxis_stdio_binding binding = {0};
+  uint64_t identity = 0, observation_identity = 0;
+  enum call_status status = environment_stdio(snapshot, index, &binding, &identity, &observation_identity);
+  if (status != CALL_OK && status != CALL_NOT_FOUND) {
+    _Exit(EXIT_FAILURE);
+  }
+  descriptor_adopt_standard(index, stream, binding, identity, observation_identity);
   register_stream(stream);
 }
 
 void stdio_init(void)
 {
-  standard_stream(stdin, STARTUP_STDIN);
-  standard_stream(stdout, STARTUP_STDOUT);
-  standard_stream(stderr, STARTUP_STDERR);
+  handle_t snapshot;
+  if (environment_snapshot(startup_environment_handle(), ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE,
+      &snapshot, NULL) != CALL_OK) {
+    _Exit(EXIT_FAILURE);
+  }
+  standard_stream(stdin, ENVIRONMENT_STDIN, snapshot);
+  standard_stream(stdout, ENVIRONMENT_STDOUT, snapshot);
+  standard_stream(stderr, ENVIRONMENT_STDERR, snapshot);
+  if (handle_close(snapshot)) {
+    _Exit(EXIT_FAILURE);
+  }
 }
 
 static bool parse_mode(const char *text, struct descriptor_mode *mode)
@@ -353,14 +368,14 @@ FILE *tmpfile(void)
   return stream;
 }
 
-int pyxis_stdio_stream(FILE *stream, struct startup_stream *binding)
+int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding)
 {
   if (!binding) {
     errno = EINVAL;
     return -1;
   }
-  *binding = (struct startup_stream){
-    .protocol = STARTUP_STREAM_NONE, .handle = HANDLE_INVALID,
+  *binding = (struct pyxis_stdio_binding){
+    .protocol = 0, .handle = HANDLE_INVALID,
   };
   if (!stream) {
     errno = EINVAL;
@@ -450,7 +465,7 @@ int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
     errno = EBADF;
     return -1;
   }
-  struct startup_stream binding;
+  struct pyxis_stdio_binding binding;
   if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return -1;
   }
@@ -551,7 +566,7 @@ int fflush(FILE *stream)
   if (stream->closed) {
     return stream_error(stream, EBADF);
   }
-  struct startup_stream binding;
+  struct pyxis_stdio_binding binding;
   if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return stream_error(stream, errno);
   }
@@ -940,7 +955,7 @@ static bool pushback_ready(FILE *stream)
   if (!stream_ready(stream, false)) {
     return false;
   }
-  struct startup_stream binding;
+  struct pyxis_stdio_binding binding;
   if (descriptor_object_stream(stream->operation, &binding) < 0) {
     stream_error(stream, errno);
     return false;
@@ -981,7 +996,7 @@ int fwide(FILE *stream, int mode)
     errno = EBADF;
     return 0;
   }
-  struct startup_stream binding;
+  struct pyxis_stdio_binding binding;
   if (descriptor_object_stream(stream->operation, &binding) < 0) {
     return 0;
   }
@@ -1289,11 +1304,9 @@ int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info)
     return -1;
   }
   if (__atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0) {
-    enum startup_stream_index index = stream == &standard_input ? STARTUP_STDIN :
-        stream == &standard_output ? STARTUP_STDOUT : STARTUP_STDERR;
     bool standard = stream == &standard_input || stream == &standard_output ||
         stream == &standard_error;
-    if (standard && startup_stream(index).protocol == STARTUP_STREAM_NONE) {
+    if (standard) {
       return 0;
     }
   }
