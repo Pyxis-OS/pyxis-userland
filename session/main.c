@@ -561,7 +561,11 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
       removed[count++].identity = entry->identity;
     }
   }
-  status = environment_unset_batch(startup_environment_handle(), removed, count);
+  /* Cleanup does not require an all-table transaction. Keep the immutable
+   * selection alive while removing each exact publication within admission. */
+  for (size_t i = 0; status == CALL_OK && i < count; ++i) {
+    status = environment_unset_batch(startup_environment_handle(), &removed[i], 1);
+  }
   free(removed);
   environment_capture_close(&capture);
   const handle_t retained[] = {

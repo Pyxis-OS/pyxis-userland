@@ -439,8 +439,10 @@ static enum call_status unpublish_data(struct shell *shell, uint64_t domain)
       entries[count++].identity = entry->identity;
     }
   }
-  if (status == CALL_OK) {
-    status = environment_unset_batch(shell->environment, entries, count);
+  /* No cleanup step needs an all-domain transaction. Every removal matches
+   * the captured publication, and the capture pins data until all attempts end. */
+  for (size_t i = 0; status == CALL_OK && i < count; ++i) {
+    status = environment_unset_batch(shell->environment, &entries[i], 1);
   }
   free(entries);
   environment_capture_close(&capture);
@@ -535,7 +537,7 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
   memcpy(name, uri, length);
   name[length] = 0;
   status = environment_capability(shell->environment, name, &root);
-  if (status == CALL_NOT_FOUND && mount && !mount->bound) {
+  if (status == CALL_NOT_FOUND && mount) {
     status = CALL_OK;
   }
   if (status != CALL_OK) {
