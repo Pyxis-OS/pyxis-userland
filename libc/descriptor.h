@@ -9,6 +9,7 @@
 #include <abi/syscall.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <abi/describe.h>
 #include <sys/stat.h>
 #include <pyxis/http.h>
 
@@ -47,7 +48,7 @@ int descriptor_close(int descriptor);
 /* One CLOSE attempt for an owned temporary handle; same reply/error validation
  * as descriptor close. Never retries uncertain release; teardown owns recovery. */
 int descriptor_release_handle(handle_t handle);
-void descriptor_finish(void);
+int descriptor_finish(void);
 
 /* No FILE indicators or fill/retry loops. A zero read is EOF; a nonempty zero
  * write is an error. Failure sets errno.
@@ -142,5 +143,17 @@ long descriptor_object_tell(struct descriptor_object *object);
 int descriptor_object_response(struct descriptor_object *object, struct pyxis_response_info *info);
 void descriptor_object_discard_input(struct descriptor_object *object);
 long descriptor_seek_position(int descriptor, long offset, int origin);
+
+/* Shared typed transaction state; ordinary streams return success from commit.
+ * Abandon records a producer failure and never submits. */
+struct pyxis_open_result;
+int descriptor_open_result(const char *path, const struct descriptor_mode *mode,
+    FILE *stream, struct pyxis_open_result *failure);
+bool descriptor_object_transaction(struct descriptor_object *object);
+int descriptor_object_commit(struct descriptor_object *object);
+int descriptor_object_abandon(struct descriptor_object *object, int failure);
+int descriptor_object_describe(struct descriptor_object *object, uint64_t flags,
+    struct describe_reply *reply);
+void descriptor_report_finalize_error(void);
 
 #endif
