@@ -78,8 +78,9 @@ static enum call_status environment_acquire(struct environment_state **result)
   next->references = 2;
   libc_lock_acquire(&environment_guard);
   struct environment_state *previous = environment;
-  /* A slower reader must not replace a newer cache publication. */
-  if (previous && previous->capture.generation > next->capture.generation) {
+  /* Readers reuse an equal publication too: replacing it could invalidate a
+   * borrowed value even though the native environment has not changed. */
+  if (previous && previous->capture.generation >= next->capture.generation) {
     if (previous->references == SIZE_MAX) {
       status = CALL_LIMIT;
     } else {
