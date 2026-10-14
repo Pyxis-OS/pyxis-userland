@@ -14,7 +14,7 @@
 static int provide(bool once)
 {
   handle_t service = bootstrap_capability("service");
-  handle_t publication = bootstrap_capability("publication");
+  handle_t publication = bootstrap_take_capability("publication");
   handle_t clock = bootstrap_capability("clock");
   struct endpoint_create_reply endpoint = {0};
   handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;

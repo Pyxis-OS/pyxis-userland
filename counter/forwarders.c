@@ -251,7 +251,8 @@ static bool size_matches(handle_t file, uint64_t expected)
  * fixture and changes neither file; callers select the root and components. */
 int counter_forwarders_main(const char *scheme, const char *name, const char *replacement)
 {
-  handle_t root = bootstrap_capability(scheme);
+  handle_t root = HANDLE_INVALID;
+  environment_capability(startup_environment_handle(), scheme, &root);
   handle_t first = HANDLE_INVALID, second = HANDLE_INVALID;
   handle_t child = HANDLE_INVALID, child_copy = HANDLE_INVALID;
   handle_t holder_copy = HANDLE_INVALID, supervisor = HANDLE_INVALID;
@@ -324,6 +325,7 @@ int counter_forwarders_main(const char *scheme, const char *name, const char *re
   cleanup = close_owned(&supervisor) && cleanup;
   cleanup = close_owned(&weak) && cleanup;
   cleanup = close_owned(&first) && cleanup;
+  cleanup = close_owned(&root) && cleanup;
   cleanup = close_owned(&second) && cleanup;
   if (!cleanup && ok) {
     phase = "owned handle cleanup";
@@ -376,12 +378,13 @@ static bool provider_file_revoked(handle_t file)
       read == 0;
 }
 
-/* Only private wrappers are controlled here. Namespace bindings and the
+/* Only private wrappers are controlled here. Environment bindings and the
  * published provider's controller remain outside this manual qualification. */
 int counter_provider_forwarders_main(const char *provider_name,
     const char *scheme, const char *name)
 {
-  handle_t root = bootstrap_capability(scheme);
+  handle_t root = HANDLE_INVALID;
+  environment_capability(startup_environment_handle(), scheme, &root);
   handle_t provider = HANDLE_INVALID, native = HANDLE_INVALID;
   handle_t guide = HANDLE_INVALID, welcome = HANDLE_INVALID;
   handle_t child = HANDLE_INVALID, child_copy = HANDLE_INVALID;
@@ -392,9 +395,9 @@ int counter_provider_forwarders_main(const char *provider_name,
   struct forwarder_reply provider_copy = {0}, automatic = {0};
   struct forwarder_reply provider_target = {0}, provider_slot = {0};
   uint64_t welcome_file_size = 0;
-  char guide_uri[NAMESPACE_NAME_MAX + sizeof("://guide")];
-  char welcome_uri[NAMESPACE_NAME_MAX + sizeof("://welcome")];
-  const char *phase = "selected namespace and native file";
+  char guide_uri[ENVIRONMENT_NAME_MAX + sizeof("://guide")];
+  char welcome_uri[ENVIRONMENT_NAME_MAX + sizeof("://welcome")];
+  const char *phase = "selected environment and native file";
   int guide_size = snprintf(guide_uri, sizeof(guide_uri), "%s://guide", provider_name);
   int welcome_size = snprintf(welcome_uri, sizeof(welcome_uri), "%s://welcome", provider_name);
   bool ok = root != HANDLE_INVALID &&
@@ -508,6 +511,7 @@ int counter_provider_forwarders_main(const char *provider_name,
   cleanup = close_owned(&welcome) && cleanup;
   cleanup = close_owned(&native) && cleanup;
   cleanup = close_owned(&provider) && cleanup;
+  cleanup = close_owned(&root) && cleanup;
   if (!cleanup && ok) {
     phase = "owned handle cleanup";
   }
@@ -578,7 +582,8 @@ int counter_completion_cut_main(const char *scheme, const char *name)
   handle_t service = bootstrap_capability("service");
   handle_t udp = bootstrap_capability("udp");
   handle_t clock = bootstrap_capability("clock");
-  handle_t root = bootstrap_capability(scheme);
+  handle_t root = HANDLE_INVALID;
+  environment_capability(startup_environment_handle(), scheme, &root);
   handle_t file = HANDLE_INVALID;
   struct endpoint_create_reply endpoint = {0};
   struct udp_open_reply socket = {0};
@@ -712,6 +717,7 @@ cleanup:
   cleanup = close_pair(&file_copy) && cleanup;
   cleanup = close_owned(&socket.handle) && cleanup;
   cleanup = close_owned(&file) && cleanup;
+  cleanup = close_owned(&root) && cleanup;
   if (!cleanup && ok) {
     phase = "owned handle cleanup";
   }

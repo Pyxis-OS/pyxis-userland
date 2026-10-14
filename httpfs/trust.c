@@ -5,6 +5,7 @@
 #include <handle.h>
 #include <path.h>
 #include <startup.h>
+#include <environment.h>
 #include <pyxis/working_path.h>
 #include <string.h>
 
@@ -24,6 +25,42 @@ static enum call_status readonly_directory(handle_t handle)
   return CALL_OK;
 }
 
+static enum call_status open_trust_file(const struct path_context *cwd, const char *uri,
+    struct path_workspace *workspace, handle_t *file)
+{
+  const char *separator = strstr(uri, "://");
+  handle_t root = HANDLE_INVALID;
+  struct path_context context = *cwd;
+  const char *path = uri;
+  enum call_status status = CALL_OK;
+  if (separator) {
+    size_t length = separator - uri;
+    if (!length || length > ENVIRONMENT_NAME_MAX) {
+      return CALL_BAD_REQUEST;
+    }
+    char name[ENVIRONMENT_NAME_MAX + 1];
+    memcpy(name, uri, length);
+    name[length] = 0;
+    status = environment_capability(startup_environment_handle(), name, &root);
+    if (status == CALL_OK) {
+      status = readonly_directory(root);
+    }
+    context = (struct path_context){.directories = &root, .count = 1};
+    path = separator[3] ? separator + 3 : ".";
+  } else {
+    for (size_t i = 0; status == CALL_OK && i < cwd->count; ++i) {
+      status = readonly_directory(cwd->directories[i]);
+    }
+  }
+  if (status == CALL_OK) {
+    status = path_resolve_native(&context, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ, workspace, file);
+  }
+  if (root != HANDLE_INVALID && handle_close(root) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
+  return status;
+}
+
 static enum call_status tls_status(const struct tls_result *result)
 {
   struct http_result failure = {.error = HTTP_TLS_ERROR, .tls_failure = *result};
@@ -40,34 +77,6 @@ enum call_status httpfs_trust_load(struct tls_runtime *runtime, const char *uri,
     goto failed;
   }
   size_t depth = current->count;
-  const handle_t *cwd = current->directories;
-  struct path_root roots[STARTUP_ROOT_LIMIT];
-  const struct startup_binding *selected_roots = startup_roots();
-  size_t root_count = current->roots ? current->root_count : startup_root_count();
-  if (startup_namespace() != HANDLE_INVALID ||
-      current->namespace_handle != HANDLE_INVALID) {
-    status = CALL_DENIED;
-    goto failed;
-  }
-  if (root_count > STARTUP_ROOT_LIMIT) {
-    status = CALL_LIMIT;
-    goto failed;
-  }
-  for (size_t i = 0; i < root_count; ++i) {
-    handle_t handle = current->roots ? current->roots[i].handle : selected_roots[i].handle;
-    status = readonly_directory(handle);
-    if (status != CALL_OK) {
-      goto failed;
-    }
-    roots[i] = (struct path_root){current->roots ? current->roots[i].name :
-        (const char *)selected_roots[i].name, handle};
-  }
-  for (size_t i = 0; i < depth; ++i) {
-    status = readonly_directory(cwd[i]);
-    if (status != CALL_OK) {
-      goto failed;
-    }
-  }
   size_t length = strlen(uri);
   if (length == 0 || length > TLS_ALLOCATION_MAX / sizeof(handle_t) - 1 ||
       depth > TLS_ALLOCATION_MAX / sizeof(handle_t) - length - 1) {
@@ -88,13 +97,8 @@ enum call_status httpfs_trust_load(struct tls_runtime *runtime, const char *uri,
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1,
   };
-  struct path_context context = {
-    .directories = (handle_t *)cwd, .count = depth,
-    .roots = roots, .root_count = root_count,
-  };
   handle_t file = HANDLE_INVALID;
-  status = path_resolve(&context, uri, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
-      &workspace, &file);
+  status = open_trust_file(current, uri, &workspace, &file);
   tls_deallocate(component);
   tls_deallocate(directories);
   if (status != CALL_OK) {

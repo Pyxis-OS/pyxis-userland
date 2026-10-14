@@ -326,7 +326,7 @@ static enum call_status serve(struct provider *provider)
 int main(int argc, char **argv)
 {
   handle_t service = bootstrap_capability("service");
-  handle_t publication = bootstrap_capability("publication");
+  handle_t publication = bootstrap_take_capability("publication");
   handle_t clock = bootstrap_capability("clock");
   struct endpoint_create_reply endpoint = {0};
   handle_t client = HANDLE_INVALID;

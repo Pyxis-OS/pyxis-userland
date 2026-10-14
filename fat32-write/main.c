@@ -322,8 +322,8 @@ int main(int argc, char **argv)
   uint32_t entry;
   uint64_t rights, transport;
   if (argc != 2 || !decimal_entry(argv[1], &entry) || disk == HANDLE_INVALID ||
-      startup_resource_count() != 2 || bootstrap_capability("memory") == HANDLE_INVALID ||
-      startup_root_count() || startup_namespace() != HANDLE_INVALID ||
+      !bootstrap_only_capabilities((const char *const[]){"disk", "memory", "stdin", "stdout", "stderr"}, 5) ||
+      bootstrap_capability("memory") == HANDLE_INVALID ||
       startup_working_directory_count() || input.protocol != PROTOCOL_CONSOLE ||
       output.protocol != PROTOCOL_CONSOLE || error.protocol != PROTOCOL_CONSOLE) {
     fputs("fat32-write: requires a selected disk, GPT entry and explicit console profile\n", stderr);

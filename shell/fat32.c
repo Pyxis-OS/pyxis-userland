@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "shell.h"
 #include <pyxis/working_path.h>
 #include <disk.h>
@@ -10,7 +11,8 @@
 #define FAT_ROOT_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
 /* Leaves room for the longest selected-source suffix in a bundle component. */
-#define FAT_BINDING_NAME_MAX (255 - sizeof("_mount") + 1)
+#define FAT_BINDING_NAME_MAX (ENVIRONMENT_NAME_MAX - (sizeof(BUNDLE_SOURCE_PREFIX) - 1) - \
+    (sizeof("_mount") - 1))
 
 static bool number(const char *text, uint64_t *value)
 {
@@ -101,70 +103,85 @@ void shell_fat_close(struct shell *shell)
   }
 }
 
-static handle_t configured_source(const char *name)
+static bool configured_source_present(struct shell *shell, const char *name)
 {
-  const struct startup_binding *resources = startup_resources();
-  size_t prefix = sizeof(BUNDLE_SOURCE_PREFIX) - 1;
-  for (size_t i = 0; i < startup_resource_count(); ++i) {
-    const char *binding = (const char *)(uintptr_t)resources[i].name;
-    if (!strncmp(binding, BUNDLE_SOURCE_PREFIX, prefix) && !strcmp(binding + prefix, name)) {
-      struct handle_info info;
-      if (handle_query(resources[i].handle, &info) != CALL_BAD_HANDLE) {
-        return resources[i].handle;
-      }
-    }
+  char binding[ENVIRONMENT_NAME_MAX + 1];
+  if (strlen(name) > ENVIRONMENT_NAME_MAX - (sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
+    return false;
   }
-  return HANDLE_INVALID;
+  snprintf(binding, sizeof(binding), "%s%s", BUNDLE_SOURCE_PREFIX, name);
+  struct environment_entry_reply entry;
+  enum call_status status = environment_lookup(shell->environment, binding, &entry, NULL, 0);
+  if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
+    handle_close(entry.handle);
+  }
+  return status == CALL_OK || status == CALL_BUFFER_TOO_SMALL;
 }
 
-enum call_status shell_fat_authority(struct shell *shell,
-    struct bundle_authority *authority, size_t capacity, size_t *count)
+static enum call_status publish_mount(struct shell *shell, struct shell_fat_mount *mount,
+    handle_t root)
 {
-  for (size_t i = 0; i < SHELL_FAT_MOUNT_LIMIT; ++i) {
-    struct shell_fat_mount *mount = &shell->fat_mounts[i];
-    const char *names[] = {mount->write_name, mount->control_name};
-    handle_t handles[] = {mount->write_root, mount->control};
-    uint64_t protocols[] = {PROTOCOL_DIRECTORY, PROTOCOL_MOUNT};
-    for (size_t j = 0; j < 2; ++j) {
-      if (!names[j] || handles[j] == HANDLE_INVALID) {
-        continue;
-      }
-      for (size_t k = 0; k < *count; ++k) {
-        if (!strcmp(authority[k].resource, names[j])) {
-          return CALL_ALREADY_EXISTS;
-        }
-      }
-      if (*count == capacity) {
-        return CALL_LIMIT;
-      }
-      authority[(*count)++] = (struct bundle_authority){names[j], handles[j], protocols[j]};
+  struct environment_set_entry entries[3] = {0};
+  char write[ENVIRONMENT_NAME_MAX + 1], control[ENVIRONMENT_NAME_MAX + 1];
+  snprintf(write, sizeof(write), "%s%s", BUNDLE_SOURCE_PREFIX, mount->write_name);
+  snprintf(control, sizeof(control), "%s%s", BUNDLE_SOURCE_PREFIX, mount->control_name);
+  const char *names[] = {mount->name, write, control};
+  handle_t handles[] = {root, mount->write_root, mount->control};
+  size_t count = 0;
+  enum call_status status = CALL_OK;
+  for (size_t i = 0; i < 3 && status == CALL_OK; ++i) {
+    if (handles[i] == HANDLE_INVALID) {
+      continue;
     }
+    struct handle_info info;
+    status = handle_query(handles[i], &info);
+    if (status != CALL_OK || !environment_name(entries[count].name, names[i])) {
+      status = status == CALL_OK ? CALL_BAD_REQUEST : status;
+      break;
+    }
+    entries[count].kind = ENVIRONMENT_CAP;
+    entries[count].flags = i == 0 ? ENVIRONMENT_EXPORTED : 0;
+    entries[count].set_flags = ENVIRONMENT_SET_REQUIRE_ABSENT;
+    entries[count].handle = handles[i];
+    entries[count].rights = info.rights;
+    entries[count++].transport = info.transport;
   }
-  return CALL_OK;
+  if (status == CALL_OK) {
+    status = environment_set_batch(shell->environment, entries, count);
+  }
+  if (handle_close(root) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
+  return status;
 }
 
 static enum call_status selected_control(struct shell *shell, const char *name, handle_t *control)
 {
   *control = HANDLE_INVALID;
-  struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
-  size_t count;
-  enum call_status status = bundle_sources_from_startup(sources, BUNDLE_SOURCE_LIMIT, &count);
-  if (status == CALL_OK) {
-    status = shell_fat_authority(shell, sources, BUNDLE_SOURCE_LIMIT, &count);
-  }
-  if (status != CALL_OK) {
-    return status;
-  }
-  for (size_t i = 0; i < count; ++i) {
-    if (!strcmp(sources[i].resource, name)) {
-      if (sources[i].protocol != PROTOCOL_MOUNT) {
-        return CALL_WRONG_TYPE;
-      }
-      *control = sources[i].source;
-      return CALL_OK;
+  for (size_t i = 0; i < SHELL_FAT_MOUNT_LIMIT; ++i) {
+    struct shell_fat_mount *mount = &shell->fat_mounts[i];
+    if (mount->control_name && !strcmp(mount->control_name, name)) {
+      return handle_copy(mount->control, control);
     }
   }
-  return CALL_UNAVAILABLE;
+  if (strlen(name) > ENVIRONMENT_NAME_MAX - (sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
+    return CALL_BAD_REQUEST;
+  }
+  char binding[ENVIRONMENT_NAME_MAX + 1];
+  snprintf(binding, sizeof(binding), "%s%s", BUNDLE_SOURCE_PREFIX, name);
+  enum call_status status = environment_capability(shell->environment, binding, control);
+  if (status == CALL_OK) {
+    struct handle_info info;
+    status = handle_query(*control, &info);
+    if (status == CALL_OK && info.protocol != PROTOCOL_MOUNT) {
+      status = CALL_WRONG_TYPE;
+    }
+    if (status != CALL_OK) {
+      handle_close(*control);
+      *control = HANDLE_INVALID;
+    }
+  }
+  return status;
 }
 
 static enum command_result list_disks(struct shell *shell, handle_t inventory)
@@ -207,7 +224,7 @@ static void abandon_open(struct shell *shell, struct shell_fat_mount *mount)
 
 enum command_result shell_mount_fat32(struct shell *shell, char **arguments, size_t count)
 {
-  handle_t inventory = configured_source("fat_mounts");
+  handle_t inventory = bootstrap_capability(BUNDLE_SOURCE_PREFIX "fat_mounts");
   if (count == 3 && !strcmp(arguments[2], "--list")) {
     return list_disks(shell, inventory);
   }
@@ -253,21 +270,9 @@ enum command_result shell_mount_fat32(struct shell *shell, char **arguments, siz
   mount->control_name = copy_name(uri, length, "_mount");
   if (!mount->name || !mount->write_name || !mount->control_name) {
     status = CALL_NO_MEMORY;
-  } else if (configured_source(mount->write_name) != HANDLE_INVALID ||
-      configured_source(mount->control_name) != HANDLE_INVALID) {
+  } else if (configured_source_present(shell, mount->write_name) ||
+      configured_source_present(shell, mount->control_name)) {
     status = CALL_ALREADY_EXISTS;
-  }
-  if (status == CALL_OK) {
-    struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
-    size_t source_count;
-    status = bundle_sources_from_startup(sources, BUNDLE_SOURCE_LIMIT, &source_count);
-    if (status == CALL_OK) {
-      status = shell_fat_authority(shell, sources, BUNDLE_SOURCE_LIMIT, &source_count);
-    }
-    size_t added = access == MOUNT_ACCESS_READ_WRITE ? 2 : 1;
-    if (status == CALL_OK && added > BUNDLE_SOURCE_LIMIT - source_count) {
-      status = CALL_LIMIT;
-    }
   }
   if (status != CALL_OK) {
     free(binding);
@@ -304,7 +309,8 @@ enum command_result shell_mount_fat32(struct shell *shell, char **arguments, siz
     abandon_open(shell, mount);
     return shell_directory_error(shell, "shell: mount", uri, status);
   }
-  status = shell_publish_root(shell, binding, root);
+  free(binding);
+  status = publish_mount(shell, mount, root);
   if (status != CALL_OK) {
     abandon_open(shell, mount);
     return shell_directory_error(shell, "shell: mount", uri, status);
@@ -328,6 +334,9 @@ enum command_result shell_sync_fat32(struct shell *shell, char **arguments, size
   enum call_status status = mount ? CALL_OK : selected_control(shell, arguments[2], &control);
   if (status == CALL_OK) {
     status = mount_sync(control);
+  }
+  if (!mount && control != HANDLE_INVALID && handle_close(control) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
   }
   return status == CALL_OK ? COMMAND_OK :
       shell_directory_error(shell, "shell: sync", arguments[2], status);
@@ -378,127 +387,82 @@ static enum call_status leave_mount(struct shell *shell, uint64_t domain)
   return status;
 }
 
-static bool contains(const handle_t *handles, size_t count, handle_t handle)
+/* Unpublish selected data entries while the capture still pins their domain.
+ * Release every captured grant before retirement; controller entries survive. */
+static enum call_status unpublish_data(struct shell *shell, uint64_t domain)
 {
-  for (size_t i = 0; i < count; ++i) {
-    if (handles[i] == handle) {
-      return true;
-    }
+  struct environment_capture capture = {0};
+  enum call_status status = environment_capture_init(shell->environment,
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
+  if (status != CALL_OK) {
+    return status;
   }
-  return false;
-}
-
-static void append_handle(handle_t *handles, size_t *count, handle_t handle)
-{
-  if (handle != HANDLE_INVALID && !contains(handles, *count, handle)) {
-    handles[(*count)++] = handle;
+  struct environment_unset_entry *entries = calloc(capture.count, sizeof(*entries));
+  if (capture.count && !entries) {
+    environment_capture_close(&capture);
+    return CALL_NO_MEMORY;
   }
-}
-
-/* Identify every selected data source while a root still pins the domain.
- * Closing startup grants leaves stale snapshot names; the common grant collector
- * ignores BAD_HANDLE rather than resurrecting those capabilities. */
-static enum call_status collect_data(struct shell *shell, uint64_t domain,
-    handle_t root, handle_t *handles, size_t *count)
-{
-  *count = 0;
-  append_handle(handles, count, root);
-  const struct startup_binding *resources = startup_resources();
-  size_t prefix = sizeof(BUNDLE_SOURCE_PREFIX) - 1;
-  for (size_t i = 0; i < startup_resource_count(); ++i) {
-    const char *name = (const char *)(uintptr_t)resources[i].name;
-    if (strncmp(name, BUNDLE_SOURCE_PREFIX, prefix)) {
+  size_t count = 0;
+  for (size_t i = 0; i < capture.count && status == CALL_OK; ++i) {
+    const struct environment_value *entry = &capture.values[i];
+    if (entry->kind != ENVIRONMENT_CAP) {
       continue;
     }
     struct handle_info info;
-    enum call_status status = handle_query(resources[i].handle, &info);
-    if (status == CALL_BAD_HANDLE) {
-      continue;
-    }
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (info.protocol != PROTOCOL_DIRECTORY) {
+    status = handle_query(entry->handle, &info);
+    if (status != CALL_OK || info.protocol != PROTOCOL_DIRECTORY) {
       continue;
     }
     uint64_t selected;
     bool valid;
-    status = directory_domain(resources[i].handle, &selected, &valid);
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (valid && selected == domain) {
-      append_handle(handles, count, resources[i].handle);
+    status = directory_domain(entry->handle, &selected, &valid);
+    if (status == CALL_OK && valid && selected == domain) {
+      environment_name(entries[count].name, entry->name);
+      entries[count++].identity = entry->identity;
     }
   }
-  /* libc owns copies of this initial chain. Moving its cwd does not release
-   * the original startup grants, so include them in explicit FAT drainage. */
-  const handle_t *startup_cwd = startup_working_directories();
+  if (status == CALL_OK) {
+    status = environment_unset_batch(shell->environment, entries, count);
+  }
+  free(entries);
+  environment_capture_close(&capture);
+  if (status != CALL_OK) {
+    return status;
+  }
   for (size_t i = 0; i < startup_working_directory_count(); ++i) {
     uint64_t selected;
     bool valid;
-    enum call_status status = directory_domain(startup_cwd[i], &selected, &valid);
-    if (status == CALL_BAD_HANDLE) {
+    enum call_status queried = directory_domain(startup_working_directory(i), &selected, &valid);
+    if (queried == CALL_BAD_HANDLE) {
       continue;
     }
-    if (status != CALL_OK) {
-      return status;
+    if (queried != CALL_OK) {
+      return queried;
     }
-    if (valid && selected == domain) {
-      append_handle(handles, count, startup_cwd[i]);
-    }
-  }
-  for (size_t i = 0; i < SHELL_FAT_MOUNT_LIMIT; ++i) {
-    if (shell->fat_mounts[i].domain == domain) {
-      append_handle(handles, count, shell->fat_mounts[i].write_root);
+    if (valid && selected == domain && handle_close(startup_working_directory(i)) != 0) {
+      return CALL_OUTCOME_UNKNOWN;
     }
   }
-  return CALL_OK;
-}
-
-static enum call_status unbind_data(struct shell *shell, const handle_t *handles, size_t count)
-{
-  struct path_root previous[PROFILE_DIRECTORY_LIMIT];
-  bool owned[PROFILE_DIRECTORY_LIMIT];
-  size_t old_count = shell->directory->root_count, retained = 0;
-  memcpy(previous, shell->roots, old_count * sizeof(*previous));
-  memcpy(owned, shell->owns_root, old_count * sizeof(*owned));
-  for (size_t i = 0; i < old_count; ++i) {
-    if (!contains(handles, count, previous[i].handle)) {
-      shell->roots[retained] = previous[i];
-      shell->owns_root[retained++] = owned[i];
+  if (shell->history_home != HANDLE_INVALID) {
+    uint64_t selected;
+    bool valid;
+    status = directory_domain(shell->history_home, &selected, &valid);
+    if (status == CALL_OK && valid && selected == domain) {
+      handle_close(shell->history_home);
+      shell->history_home = HANDLE_INVALID;
+      shell->history_saving = false;
     }
-  }
-  enum call_status status = pyxis_working_bindings(shell->roots, retained, shell->namespace);
-  if (status != CALL_OK) {
-    memcpy(shell->roots, previous, old_count * sizeof(*previous));
-    memcpy(shell->owns_root, owned, old_count * sizeof(*owned));
-    return status;
-  }
-  for (size_t i = 0; i < old_count; ++i) {
-    if (owned[i] && contains(handles, count, previous[i].handle)) {
-      free((void *)previous[i].name);
-    }
-  }
-  for (size_t i = retained; i < old_count; ++i) {
-    shell->roots[i] = (struct path_root){0};
-    shell->owns_root[i] = false;
   }
   for (size_t i = 0; i < SHELL_FAT_MOUNT_LIMIT; ++i) {
     struct shell_fat_mount *mount = &shell->fat_mounts[i];
-    if (contains(handles, count, mount->write_root)) {
-      mount->write_root = HANDLE_INVALID;
-    }
-    if (mount->bound) {
+    if (mount->domain == domain) {
       mount->bound = false;
-      for (size_t j = 0; j < retained; ++j) {
-        mount->bound |= !strcmp(mount->name, shell->roots[j].name);
+      if (mount->write_root != HANDLE_INVALID) {
+        if (handle_close(mount->write_root) != 0) {
+          status = CALL_OUTCOME_UNKNOWN;
+        }
+        mount->write_root = HANDLE_INVALID;
       }
-    }
-  }
-  for (size_t i = 0; i < count; ++i) {
-    if (handle_close(handles[i]) != 0) {
-      status = CALL_OUTCOME_UNKNOWN;
     }
   }
   return status;
@@ -512,9 +476,9 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
   }
   const char *uri = arguments[count - 1];
   struct shell_fat_mount *mount = find_mount(shell, uri);
-  handle_t control = mount ? mount->control : HANDLE_INVALID;
+  handle_t control = HANDLE_INVALID, root = HANDLE_INVALID;
   enum call_status status = configured ? selected_control(shell, arguments[2], &control) :
-      control == HANDLE_INVALID ? CALL_UNAVAILABLE : CALL_OK;
+      mount ? handle_copy(mount->control, &control) : CALL_UNAVAILABLE;
   struct handle_info authority;
   if (status == CALL_OK) {
     status = handle_query(control, &authority);
@@ -532,28 +496,26 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
     status = mount_observe(control, &state);
   }
   if (status != CALL_OK) {
-    return shell_directory_error(shell, "shell: release", uri, status);
+    goto done;
   }
-  if (mount) {
-    struct mount_state_reply retained;
-    status = mount_observe(mount->control, &retained);
-    if (status == CALL_OK && retained.domain != state.domain) {
-      status = CALL_DENIED;
-    }
-    if (status != CALL_OK) {
-      return shell_directory_error(shell, "shell: release", uri, status);
-    }
-    mount->domain = retained.domain;
+  if (mount && mount->domain != state.domain) {
+    status = CALL_DENIED;
+    goto done;
   }
-  handle_t root = HANDLE_INVALID;
   size_t length = binding_length(uri);
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    if (strlen(shell->roots[i].name) == length && !memcmp(shell->roots[i].name, uri, length)) {
-      root = shell->roots[i].handle;
-    }
+  char name[ENVIRONMENT_NAME_MAX + 1];
+  if (length > ENVIRONMENT_NAME_MAX) {
+    status = CALL_BAD_REQUEST;
+    goto done;
   }
-  if (root == HANDLE_INVALID && (!mount || mount->bound)) {
-    return shell_directory_error(shell, "shell: release", uri, CALL_NOT_FOUND);
+  memcpy(name, uri, length);
+  name[length] = 0;
+  status = environment_capability(shell->environment, name, &root);
+  if (status == CALL_NOT_FOUND && mount && !mount->bound) {
+    status = CALL_OK;
+  }
+  if (status != CALL_OK) {
+    goto done;
   }
   if (root != HANDLE_INVALID) {
     uint64_t domain;
@@ -563,57 +525,62 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
       status = CALL_DENIED;
     }
     if (status != CALL_OK) {
-      return shell_directory_error(shell, "shell: release", uri, status);
+      goto done;
     }
   }
   if (!mount) {
     mount = empty_mount(shell);
     if (!mount) {
-      return shell_directory_error(shell, "shell: release", uri, CALL_LIMIT);
+      status = CALL_LIMIT;
+      goto done;
     }
     mount->name = copy_name(uri, length, "");
-    if (!mount->name) {
-      return shell_directory_error(shell, "shell: release", uri, CALL_NO_MEMORY);
-    }
-    status = handle_copy(control, &mount->control);
+    status = mount->name ? handle_copy(control, &mount->control) : CALL_NO_MEMORY;
     if (status != CALL_OK) {
       forget_mount(mount);
-      return shell_directory_error(shell, "shell: release", uri, status);
+      mount = NULL;
+      goto done;
     }
     mount->domain = state.domain;
     mount->bound = true;
   }
-  size_t capacity = startup_resource_count();
-  size_t startup_depth = startup_working_directory_count();
-  if (startup_depth > SIZE_MAX - capacity) {
-    return shell_directory_error(shell, "shell: release", uri, CALL_LIMIT);
-  }
-  capacity += startup_depth;
-  if (capacity > SIZE_MAX - SHELL_FAT_MOUNT_LIMIT - 1 ||
-      capacity + SHELL_FAT_MOUNT_LIMIT + 1 > SIZE_MAX / sizeof(handle_t)) {
-    return shell_directory_error(shell, "shell: release", uri, CALL_LIMIT);
-  }
-  capacity += SHELL_FAT_MOUNT_LIMIT + 1;
-  handle_t *handles = malloc(capacity * sizeof(*handles));
-  if (!handles) {
-    return shell_directory_error(shell, "shell: release", uri, CALL_NO_MEMORY);
-  }
-  size_t data_count;
-  status = collect_data(shell, state.domain, root, handles, &data_count);
+  status = leave_mount(shell, state.domain);
   if (status == CALL_OK) {
-    status = leave_mount(shell, state.domain);
+    status = unpublish_data(shell, state.domain);
   }
-  if (status == CALL_OK) {
-    status = unbind_data(shell, handles, data_count);
+  if (root != HANDLE_INVALID) {
+    if (handle_close(root) != 0 && status == CALL_OK) {
+      status = CALL_OUTCOME_UNKNOWN;
+    }
+    root = HANDLE_INVALID;
   }
-  free(handles);
   if (status == CALL_OK) {
     status = mount_retire(mount->control);
   }
   if (status == CALL_OK) {
-    forget_mount(mount);
+    if (mount->control_name) {
+      char control_name[ENVIRONMENT_NAME_MAX + 1];
+      snprintf(control_name, sizeof(control_name), "%s%s", BUNDLE_SOURCE_PREFIX, mount->control_name);
+      status = environment_unset(shell->environment, control_name);
+    }
+    if (status == CALL_OK) {
+      forget_mount(mount);
+    }
+  }
+
+done:
+  if (root != HANDLE_INVALID) {
+    handle_close(root);
+  }
+  if (control != HANDLE_INVALID) {
+    handle_close(control);
+  }
+  if (status == CALL_OK) {
     return COMMAND_OK;
   }
-  return shell_error(shell, "shell: release %s failed (status %u); controller retained%s\n",
-      uri, status, mount->bound ? "" : ", binding removed; retry release after references drain");
+  if (mount) {
+    return shell_error(shell, "shell: release %s failed (status %u); controller retained%s\n",
+        uri, status, mount->bound ? "" : ", binding removed; retry after references drain");
+  }
+  return shell_directory_error(shell, "shell: release", uri, status);
 }

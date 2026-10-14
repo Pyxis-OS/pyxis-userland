@@ -109,8 +109,7 @@ static enum call_status lookup(handle_t root, const char *path, uint64_t kind,
 {
   char uri[COMMAND_BYTES], component[COMPONENT_BYTES];
   handle_t directories[PATH_HANDLES];
-  struct path_root binding = {"esp", root};
-  struct path_context context = {.roots = &binding, .root_count = 1};
+  struct path_context context = {.directories = &root, .count = 1};
   struct path_workspace workspace = {
     .directories = directories, .directory_capacity = PATH_HANDLES,
     .component = component, .component_capacity = sizeof(component),
@@ -119,7 +118,7 @@ static enum call_status lookup(handle_t root, const char *path, uint64_t kind,
   if (!volume_path(path, uri, sizeof(uri))) {
     return CALL_BAD_REQUEST;
   }
-  return path_resolve_native(&context, uri, kind, rights, &workspace, object);
+  return path_resolve_native(&context, uri + sizeof("esp://") - 1, kind, rights, &workspace, object);
 }
 
 static enum call_status object_info(handle_t root, const char *path, handle_t *object,
@@ -248,8 +247,7 @@ static enum call_status change_name(handle_t root, char *paths, uint64_t operati
   char source[COMMAND_BYTES], destination[COMMAND_BYTES];
   char component[COMPONENT_BYTES], other_component[COMPONENT_BYTES];
   handle_t directories[PATH_HANDLES], other_directories[PATH_HANDLES];
-  struct path_root binding = {"esp", root};
-  struct path_context context = {.roots = &binding, .root_count = 1};
+  struct path_context context = {.directories = &root, .count = 1};
   struct path_workspace workspace = {
     .directories = directories, .directory_capacity = PATH_HANDLES,
     .component = component, .component_capacity = sizeof(component),
@@ -270,10 +268,10 @@ static enum call_status change_name(handle_t root, char *paths, uint64_t operati
   }
   if (operation == DIRECTORY_CREATE) {
     if (kind == DIRECTORY_KIND_DIRECTORY) {
-      return path_create_directory(&context, source, &workspace);
+      return path_create_directory(&context, source + sizeof("esp://") - 1, &workspace);
     }
     handle_t file = HANDLE_INVALID;
-    enum call_status status = path_create_file(&context, source, FILE_RIGHTS,
+    enum call_status status = path_create_file(&context, source + sizeof("esp://") - 1, FILE_RIGHTS,
         &workspace, &file);
     if (!close_handle(&file) && status == CALL_OK) {
       return CALL_OUTCOME_UNKNOWN;
@@ -281,13 +279,13 @@ static enum call_status change_name(handle_t root, char *paths, uint64_t operati
     return status;
   }
   if (operation == DIRECTORY_REMOVE) {
-    return path_remove(&context, source, kind, &workspace);
+    return path_remove(&context, source + sizeof("esp://") - 1, kind, &workspace);
   }
   struct path_workspace other_workspace = {
     .directories = other_directories, .directory_capacity = PATH_HANDLES,
     .component = other_component, .component_capacity = sizeof(other_component),
   };
-  return path_rename(&context, source, destination, policy, &workspace, &other_workspace);
+  return path_rename(&context, source + sizeof("esp://") - 1, destination + sizeof("esp://") - 1, policy, &workspace, &other_workspace);
 }
 
 static bool held_command(handle_t root, handle_t *files, char *line)

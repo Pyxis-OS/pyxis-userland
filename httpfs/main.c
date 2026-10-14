@@ -43,7 +43,7 @@ static enum call_status close_handle(handle_t *handle)
 int main(int argc, char **argv)
 {
   handle_t service = bootstrap_capability("service");
-  handle_t publication = bootstrap_capability("publication");
+  handle_t publication = bootstrap_take_capability("publication");
   handle_t clock = bootstrap_capability("clock");
   /* The launcher explicitly provisions an isolated RAM or NPFS directory. No
    * shared root/path or filename implicitly supplies staging privacy. */

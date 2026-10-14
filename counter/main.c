@@ -65,8 +65,8 @@ static bool invoke_value(handle_t client, uint64_t object_id,
 
 static int client_basic(void)
 {
-  handle_t first = bootstrap_capability("first");
-  handle_t second = bootstrap_capability("second");
+  handle_t first = bootstrap_take_capability("first");
+  handle_t second = bootstrap_take_capability("second");
   handle_t output = bootstrap_capability("output");
   handle_t read_copy = HANDLE_INVALID, send_copy = HANDLE_INVALID;
   bool ok = first != HANDLE_INVALID && second != HANDLE_INVALID &&
@@ -133,7 +133,7 @@ static int client_basic(void)
 
 static int client_cut(void)
 {
-  handle_t client = bootstrap_capability("second");
+  handle_t client = bootstrap_take_capability("second");
   handle_t output = bootstrap_capability("output");
   uint64_t increment = 3;
   struct endpoint_packet reply;
@@ -153,7 +153,7 @@ static int client_cut(void)
 
 static int client_exit(void)
 {
-  handle_t client = bootstrap_capability("second");
+  handle_t client = bootstrap_take_capability("second");
   uint64_t increment = 3;
   struct endpoint_packet reply;
   bool ok = client != HANDLE_INVALID &&
@@ -165,7 +165,7 @@ static int client_exit(void)
 
 static int client_reuse(void)
 {
-  handle_t client = bootstrap_capability("second");
+  handle_t client = bootstrap_take_capability("second");
   handle_t output = bootstrap_capability("output");
   bool ok = client != HANDLE_INVALID &&
       invoke_value(client, COUNTER_SECOND_ID,
@@ -179,7 +179,7 @@ static int client_reuse(void)
 
 static int client_queued(void)
 {
-  handle_t client = bootstrap_capability("second");
+  handle_t client = bootstrap_take_capability("second");
   handle_t output = bootstrap_capability("output");
   uint64_t zero = 0, increment = 3;
   struct endpoint_packet reply;

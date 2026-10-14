@@ -113,9 +113,6 @@ enum call_status shell_publish_root(struct shell *shell, char *name, handle_t ro
 enum command_result shell_mount_fat32(struct shell *shell, char **arguments, size_t count);
 enum command_result shell_sync_fat32(struct shell *shell, char **arguments, size_t count);
 enum command_result shell_release_fat32(struct shell *shell, char **arguments, size_t count);
-/* Appends selected dynamic sources after the common configured inventory. */
-enum call_status shell_fat_authority(struct shell *shell,
-    struct bundle_authority *authority, size_t capacity, size_t *count);
 /* Close owned data/control grants without implicit retirement. */
 void shell_fat_close(struct shell *shell);
 /* Tab completion. The word under the cursor is a command name (the first word

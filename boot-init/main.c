@@ -352,8 +352,7 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
 static enum boot_config_result read_override(handle_t system, struct boot_config *override)
 {
   *override = (struct boot_config){0};
-  struct path_root root = {"system", system};
-  struct path_context context = {.roots = &root, .root_count = 1};
+  struct path_context context = {.directories = &system, .count = 1};
   handle_t directories[8];
   char component[256];
   struct path_workspace workspace = {
@@ -361,7 +360,7 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
     .component = component, .component_capacity = sizeof(component),
   };
   handle_t file;
-  enum call_status status = path_resolve(&context, OVERRIDE_NAME, DIRECTORY_KIND_FILE,
+  enum call_status status = path_resolve(&context, OVERRIDE_PATH, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &workspace, &file);
   if (status == CALL_NOT_FOUND) {
     return BOOT_CONFIG_MISSING;
@@ -404,8 +403,7 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
  * never a truncated name. Short native reads continue until EOF. */
 static enum call_status read_hostname(handle_t system, struct system_info_hostname *hostname)
 {
-  struct path_root root = {"system", system};
-  struct path_context context = {.roots = &root, .root_count = 1};
+  struct path_context context = {.directories = &system, .count = 1};
   handle_t directories[8];
   char component[256];
   struct path_workspace workspace = {
@@ -413,7 +411,7 @@ static enum call_status read_hostname(handle_t system, struct system_info_hostna
     .component = component, .component_capacity = sizeof(component),
   };
   handle_t file;
-  enum call_status status = path_resolve_native(&context, HOSTNAME_NAME, DIRECTORY_KIND_FILE,
+  enum call_status status = path_resolve_native(&context, MACHINE_HOSTNAME_PATH, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &workspace, &file);
   if (status != CALL_OK) {
     return status;
@@ -487,8 +485,7 @@ static bool set_hostname(const struct authority *authority, const struct boot_co
 /* Probe past the longest value and optional LF; never accept a truncated key. */
 static enum call_status read_scroll_direction(handle_t system, const char *path, bool *natural)
 {
-  struct path_root root = {"system", system};
-  struct path_context context = {.roots = &root, .root_count = 1};
+  struct path_context context = {.directories = &system, .count = 1};
   handle_t directories[8];
   char component[256];
   struct path_workspace workspace = {
@@ -496,7 +493,7 @@ static enum call_status read_scroll_direction(handle_t system, const char *path,
     .component = component, .component_capacity = sizeof(component),
   };
   handle_t file;
-  enum call_status status = path_resolve_native(&context, path, DIRECTORY_KIND_FILE,
+  enum call_status status = path_resolve_native(&context, path + sizeof("system://") - 1, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &workspace, &file);
   if (status != CALL_OK) {
     return status;
@@ -691,6 +688,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
     uint64_t rights = services[i].rights | (space->network ? services[i].owner_rights : 0);
     launch->grants[i] = (struct launch_grant){authority->services[i], rights, 0};
     launch->resources[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)services[i].name, i);
+    if (i == SERVICE_ENDPOINT) {
+      launch->resources[i].flags = 0;
+    }
   }
   launch->grants[GRANT_BOOT] = (struct launch_grant){authority->boot, BOOT_ROOT_RIGHTS, 0};
   launch->grants[GRANT_TMP] = (struct launch_grant){authority->tmp, TMP_ROOT_RIGHTS, 0};
@@ -814,7 +814,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
       return reason;
     }
     launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", launch->grant_count);
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       job_work_directory(launch->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };

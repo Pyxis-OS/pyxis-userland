@@ -3,6 +3,7 @@
 
 #include <abi/launcher.h>
 #include <environment.h>
+#include <bundle_launch.h>
 #include <string.h>
 #include <handle.h>
 #include <abi/directory.h>
@@ -40,7 +41,9 @@ static inline enum call_status profile_directories(const struct environment_capt
   for (size_t i = 0; i < capture->count; ++i) {
     const struct environment_value *entry = &capture->values[i];
     if (entry->kind != ENVIRONMENT_CAP || !(entry->flags & ENVIRONMENT_EXPORTED) ||
-        !strncmp(entry->name, "bundle.source.", sizeof("bundle.source.") - 1)) {
+        !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
+        !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
+        !strcmp(entry->name, "staging")) {
       continue;
     }
     struct handle_info info;
@@ -69,7 +72,7 @@ static inline enum call_status profile_inherit_services(
   for (size_t i = 0; i < capture->count; ++i) {
     const struct environment_value *value = &capture->values[i];
     if (value->kind != ENVIRONMENT_CAP ||
-        !strncmp(value->name, "bundle.source.", sizeof("bundle.source.") - 1) ||
+        !strncmp(value->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
         !strcmp(value->name, "stdin") || !strcmp(value->name, "stdin.status") ||
         !strcmp(value->name, "stdout") || !strcmp(value->name, "stderr")) {
       continue;

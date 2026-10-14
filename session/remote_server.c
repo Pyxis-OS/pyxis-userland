@@ -9,7 +9,6 @@
 #include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/thread.h>
-#include <abi/namespace.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
 #include <abi/profile.h>
@@ -44,8 +43,7 @@ static bool wait_for_address(handle_t authority, handle_t clock,
   bool binding_observed = false;
   for (;;) {
     struct net_config_reply snapshot;
-    enum call_status status;
-    bool link_selection = network->action == NETWORK_REPLACE &&
+      bool link_selection = network->action == NETWORK_REPLACE &&
         network->selector.kind == NET_SELECT_LINKED_CONTROLLER;
     if (network->action == NETWORK_REPLACE && !link_selection) {
       status = net_config_lookup(authority, &network->selector, &snapshot);
@@ -157,23 +155,33 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
 
-  const struct startup_binding *selected_roots = startup_roots();
-  size_t root_count = startup_root_count();
-  if (root_count > STARTUP_ROOT_LIMIT) {
-    fputs("session: too many filesystem roots\n", stderr);
+  struct environment_capture captured = {0};
+  enum call_status status = environment_capture_init(startup_environment_handle(), 0, &captured);
+  struct profile_directory selected_roots[PROFILE_DIRECTORY_LIMIT];
+  size_t root_count = 0;
+  if (status == CALL_OK) {
+    status = profile_directories(&captured, selected_roots, PROFILE_DIRECTORY_LIMIT, &root_count);
+  }
+  if (status != CALL_OK) {
+    environment_capture_close(&captured);
     return EXIT_FAILURE;
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
   enum { OPTIONAL_COUNT = 18, RESOURCE_CAPACITY = 22 };
-  struct launch_grant grants[FIRST_OPTIONAL + OPTIONAL_COUNT + STARTUP_ROOT_LIMIT] = {
-    [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
-    [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
-    [LAUNCHER] = {launcher, LAUNCHER_RIGHT_LAUNCH, 0},
-    [TERMINAL] = {terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0},
-    [STDOUT] = {output, CONSOLE_RIGHT_WRITE, 0},
-    [STDERR] = {output, CONSOLE_RIGHT_WRITE, 0},
-  };
+  size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
+  struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
+  struct launch_environment_entry *entries = NULL;
+  if (!grants) {
+    environment_capture_close(&captured);
+    return EXIT_FAILURE;
+  }
+  grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
+  grants[CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0};
+  grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  grants[TERMINAL] = (struct launch_grant){terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0};
+  grants[STDOUT] = (struct launch_grant){output, CONSOLE_RIGHT_WRITE, 0};
+  grants[STDERR] = (struct launch_grant){output, CONSOLE_RIGHT_WRITE, 0};
   struct launch_environment_entry resources[RESOURCE_CAPACITY] = {
     PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),
     PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal", TERMINAL),
@@ -182,7 +190,7 @@ int launch_remote_server(const struct session_config *config,
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
   handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){provisioner, JOB_PROVISIONER_RIGHTS, 0};
   }
   handle_t threads = bootstrap_capability("threads");
@@ -201,17 +209,17 @@ int launch_remote_server(const struct session_config *config,
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", grant_count);
     grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
-  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t working_directory = SIZE_MAX;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
-  struct startup_variable *environment = NULL;
+  struct launch_environment_entry *environment = NULL;
   struct pyxis_environment_snapshot inherited = {0};
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
   for (size_t i = 0; i < root_count; ++i) {
     const char *name = (const char *)selected_roots[i].name;
-    roots[i] = (struct launch_environment_entry)PROFILE_CAP(selected_roots[i].name, grant_count);
+    roots[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)selected_roots[i].name, grant_count);
     if (!directory_grant(selected_roots[i].handle, !strcmp(name, "boot"),
         &grants[grant_count])) {
       goto done;
@@ -268,7 +276,7 @@ int launch_remote_server(const struct session_config *config,
   }
   handle_t service = bootstrap_capability("service");
   if (service != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"service", grant_count);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"service", grant_count);
     grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t echo = bootstrap_capability("echo");
@@ -282,7 +290,6 @@ int launch_remote_server(const struct session_config *config,
     grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   handle_t profile = bootstrap_capability("profile");
-  enum call_status status;
   if (profile != HANDLE_INVALID) {
     uint64_t rights;
     status = handle_rights(profile, &rights, NULL);
@@ -309,32 +316,25 @@ int launch_remote_server(const struct session_config *config,
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
   const char *arguments[] = {"bin://remote-terminal.pxe", tab_width, "--beacon", beacon};
+  size_t entry_capacity = resource_count + root_count + environment_count + captured.count + 3;
+  entries = calloc(entry_capacity, sizeof(*entries));
+  if (!entries) {
+    goto done;
+  }
+  size_t entry_count = resource_count;
+  memcpy(entries, resources, resource_count * sizeof(*entries));
+  memcpy(entries + entry_count, roots, root_count * sizeof(*entries));
+  entry_count += root_count;
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDOUT, STDOUT);
+  entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDERR, STDERR);
   struct launch_request request = {
     .grants = (uintptr_t)grants, .grant_count = grant_count,
-    .resources = (uintptr_t)resources, .resource_count = resource_count,
-    .roots = (uintptr_t)roots, .root_count = root_count,
+    .entries = (uintptr_t)entries, .entry_count = entry_count,
     .working_directories = (uintptr_t)&working_directory, .working_directory_count = 1,
     .working_path = (uintptr_t)"tmp://",
-    .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = beacon ? 4 : 2,
-    .streams = {
-      [ENVIRONMENT_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT},
-      [ENVIRONMENT_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = STDERR},
-    },
+
   };
-  handle_t namespace_handle = startup_namespace();
-  if (namespace_handle != HANDLE_INVALID) {
-    uint64_t rights, transport;
-    status = handle_rights(namespace_handle, &rights, &transport);
-    if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot query remote namespace rights (status %u)\n", status);
-      goto done;
-    }
-    request.namespace_grant = grant_count + 1;
-    grants[grant_count++] = (struct launch_grant){namespace_handle,
-        rights & NAMESPACE_RIGHT_LOOKUP, transport};
-    request.grant_count = grant_count;
-  }
   status = directory_lookup(bin, "remote-terminal.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
@@ -352,8 +352,17 @@ int launch_remote_server(const struct session_config *config,
     fprintf(stderr, "session: cannot read remote network environment (status %u)\n", status);
     goto done;
   }
-  request.environment = (uintptr_t)refreshed_environment.variables;
-  request.environment_count = refreshed_environment.count;
+  memcpy(entries + request.entry_count, refreshed_environment.variables,
+      refreshed_environment.count * sizeof(*entries));
+  request.entry_count += refreshed_environment.count;
+  size_t prepared_grants = request.grant_count, prepared_entries = request.entry_count;
+  status = profile_inherit_services(&captured, false, grants, grant_capacity,
+      &prepared_grants, entries, entry_capacity, &prepared_entries);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  request.grant_count = prepared_grants;
+  request.entry_count = prepared_entries;
   if (beacon) {
     grants[NETWORK_ENDPOINT] = (struct launch_grant){udp_beacons, UDP_SERVICE_RIGHT_BROADCAST, 0};
   } else {
@@ -382,6 +391,9 @@ int launch_remote_server(const struct session_config *config,
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  free(entries);
+  free(grants);
+  environment_capture_close(&captured);
   network_environment_free(&refreshed_environment);
   free(environment);
   pyxis_environment_snapshot_close(&inherited);

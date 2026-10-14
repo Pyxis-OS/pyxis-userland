@@ -29,7 +29,6 @@
 #include <abi/memory.h>
 #include <abi/thread.h>
 #include <abi/endpoint.h>
-#include <abi/namespace.h>
 #include <abi/net_config.h>
 #include <abi/terminal.h>
 #include <abi/terminal_pointer.h>
@@ -82,29 +81,45 @@ static int launch_session(const struct session_config *config, const struct netw
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
   enum { OPTIONAL_RESOURCE_COUNT = 30, NAMESPACE_GRANT_COUNT = 1 };
-  const struct startup_binding *selected_roots = startup_roots();
-  size_t root_count = startup_root_count();
+  struct environment_capture captured = {0};
+  status = environment_capture_init(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
+  struct profile_directory selected_roots[PROFILE_DIRECTORY_LIMIT];
+  size_t root_count = 0;
+  if (status == CALL_OK) {
+    status = profile_directories(&captured, selected_roots, PROFILE_DIRECTORY_LIMIT, &root_count);
+  }
+  if (status != CALL_OK) {
+    environment_capture_close(&captured);
+    handle_close(image);
+    fprintf(stderr, "session: cannot capture selected directories (status %u)\n", status);
+    return EXIT_FAILURE;
+  }
   const struct path_context *context;
   status = pyxis_working_context(&context);
   if (status != CALL_OK) {
+    environment_capture_close(&captured);
     handle_close(image);
     fprintf(stderr, "session: cannot retain working directory (status %u)\n", status);
     return EXIT_FAILURE;
   }
   size_t depth = context->count;
   size_t fixed_grants = FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + NAMESPACE_GRANT_COUNT +
-      STARTUP_ROOT_LIMIT + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT;
-  if (root_count > STARTUP_ROOT_LIMIT ||
+      PROFILE_DIRECTORY_LIMIT + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT;
+  if (root_count > PROFILE_DIRECTORY_LIMIT ||
       depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants) {
+    environment_capture_close(&captured);
     handle_close(image);
     fputs("session: startup metadata too large\n", stderr);
     return EXIT_FAILURE;
   }
-  struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
+  size_t grant_capacity = fixed_grants + depth + captured.count;
+  struct launch_grant *grants = malloc(grant_capacity * sizeof(*grants));
+  struct launch_environment_entry *entries = NULL;
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   size_t environment_count = 0;
   struct pyxis_environment_snapshot inherited = {0};
-  struct startup_variable *environment = NULL;
+  struct launch_environment_entry *environment = NULL;
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
   status = pyxis_environment_snapshot_init(&inherited);
@@ -155,7 +170,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
   handle_t job_provisioner = bootstrap_capability("job_provisioner");
   if (job_provisioner != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){job_provisioner, JOB_PROVISIONER_RIGHTS, 0};
   }
   handle_t child_launcher = bootstrap_capability("child_launcher");
@@ -286,14 +301,8 @@ static int launch_session(const struct session_config *config, const struct netw
   }
   handle_t service = bootstrap_capability("service");
   if (service != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"service", grant_count);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"service", grant_count);
     grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
-  }
-  handle_t namespace_service = bootstrap_capability("namespace_service");
-  if (namespace_service != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"namespace_service", grant_count);
-    grants[grant_count++] = (struct launch_grant){namespace_service,
-        NAMESPACE_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t random = bootstrap_capability("random");
   if (random != HANDLE_INVALID) {
@@ -371,9 +380,9 @@ static int launch_session(const struct session_config *config, const struct netw
     }
   }
 
-  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   for (size_t i = 0; i < root_count; ++i) {
-    roots[i] = (struct launch_environment_entry)PROFILE_CAP(selected_roots[i].name, grant_count);
+    roots[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)selected_roots[i].name, grant_count);
     struct launch_grant *grant = &grants[grant_count++];
     *grant = (struct launch_grant){.source = selected_roots[i].handle};
     status = handle_rights(grant->source, &grant->rights, &grant->transport);
@@ -400,30 +409,24 @@ static int launch_session(const struct session_config *config, const struct netw
   char tab_width[3];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
   const char *arguments[] = {image_uri, "--tab-width", tab_width};
+  size_t entry_capacity = resource_count + root_count + environment_count +
+      captured.count + ENVIRONMENT_STREAM_COUNT + 2;
+  entries = calloc(entry_capacity, sizeof(*entries));
+  if (!entries) {
+    goto done;
+  }
+  size_t entry_count = resource_count;
+  memcpy(entries, resources, resource_count * sizeof(*entries));
+  memcpy(entries + entry_count, roots, root_count * sizeof(*entries));
+  entry_count += root_count;
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = grant_count,
-    .resources = (uintptr_t)resources, .resource_count = resource_count,
-    .roots = (uintptr_t)roots, .root_count = root_count,
+    .entries = (uintptr_t)entries, .entry_count = entry_count,
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
     .working_path = (uintptr_t)working_path,
-    .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = multiplex ? 3 : 1,
   };
-  handle_t namespace_handle = startup_namespace();
-  if (namespace_handle != HANDLE_INVALID) {
-    uint64_t rights, transport;
-    status = handle_rights(namespace_handle, &rights, &transport);
-    if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot query namespace rights (status %u)\n", status);
-      goto done;
-    }
-    request.namespace_grant = grant_count + 1;
-    grants[grant_count++] = (struct launch_grant){namespace_handle,
-        rights, transport};
-    request.grant_count = grant_count;
-  }
-
   for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     struct pyxis_stdio_binding stream = bootstrap_stdio(i);
     if (stream.protocol == 0) {
@@ -443,9 +446,7 @@ static int launch_session(const struct session_config *config, const struct netw
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request.streams[i] = (struct launch_stream){
-      .protocol = stream.protocol, .grant = request.grant_count,
-    };
+    entries[request.entry_count++] = profile_stdio_entry(i, request.grant_count);
     uint64_t transport = 0;
     if (stream.protocol == PROTOCOL_FILE || response) {
       struct handle_info info;
@@ -465,8 +466,8 @@ static int launch_session(const struct session_config *config, const struct netw
     }
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
     if (response) {
-      request.streams[i].observation_protocol = stream.observation_protocol;
-      request.streams[i].observation_grant = request.grant_count;
+      entries[request.entry_count++] = (struct launch_environment_entry)
+          PROFILE_CAP("stdin.status", request.grant_count);
       grants[request.grant_count++] = (struct launch_grant){
         stream.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
       };
@@ -489,8 +490,18 @@ static int launch_session(const struct session_config *config, const struct netw
     fprintf(stderr, "session: cannot read network environment (status %u)\n", status);
     goto done;
   }
-  request.environment = (uintptr_t)refreshed_environment.variables;
-  request.environment_count = refreshed_environment.count;
+  memcpy(entries + request.entry_count, refreshed_environment.variables,
+      refreshed_environment.count * sizeof(*entries));
+  request.entry_count += refreshed_environment.count;
+  size_t prepared_grants = request.grant_count;
+  size_t prepared_entries = request.entry_count;
+  status = profile_inherit_services(&captured, true, grants, grant_capacity,
+      &prepared_grants, entries, entry_capacity, &prepared_entries);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  request.grant_count = prepared_grants;
+  request.entry_count = prepared_entries;
   status = term_set_tab_width(&terminal, config->tab_width);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot set tab width (status %u)\n", status);
@@ -508,6 +519,8 @@ static int launch_session(const struct session_config *config, const struct netw
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  free(entries);
+  environment_capture_close(&captured);
   network_environment_free(&refreshed_environment);
   free(environment);
   pyxis_environment_snapshot_close(&inherited);
@@ -522,54 +535,48 @@ done:
 static bool release_bootstrap_grants(struct network_runtime *runtime)
 {
   pyxis_working_clear();
-  size_t named_count = startup_resource_count();
-  size_t roots = startup_root_count();
-  size_t depth = startup_working_directory_count();
-  if (named_count == SIZE_MAX || roots > SIZE_MAX - named_count - 1 ||
-      depth > SIZE_MAX - named_count - roots - 1 ||
-      named_count + roots + depth + 1 > SIZE_MAX / sizeof(handle_t)) {
-    fputs("session: too many bootstrap grants to release\n", stderr);
+  struct environment_capture capture = {0};
+  enum call_status status = environment_capture_init(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
+  if (status != CALL_OK) {
     return false;
   }
-  size_t count = named_count + roots + depth + 1;
-  handle_t *handles = malloc(count * sizeof(*handles));
-  if (!handles) {
-    fputs("session: cannot allocate bootstrap grant cleanup\n", stderr);
+  struct environment_unset_entry *removed = calloc(capture.count, sizeof(*removed));
+  if (capture.count && !removed) {
+    environment_capture_close(&capture);
     return false;
   }
-  for (size_t i = 0; i < named_count; ++i) {
-    handles[i] = startup_resources()[i].handle;
+  const char *retained_names[] = {"memory", "output", "clock", "random", "net_config",
+      "stdout", "stderr"};
+  size_t count = 0;
+  for (size_t i = 0; i < capture.count; ++i) {
+    const struct environment_value *entry = &capture.values[i];
+    bool keep = entry->kind != ENVIRONMENT_CAP;
+    for (size_t j = 0; j < sizeof(retained_names) / sizeof(*retained_names); ++j) {
+      keep |= !strcmp(entry->name, retained_names[j]);
+    }
+    keep |= runtime->waiting_link && !strcmp(entry->name, "udp");
+    if (!keep) {
+      environment_name(removed[count].name, entry->name);
+      removed[count++].identity = entry->identity;
+    }
   }
-  for (size_t i = 0; i < roots; ++i) {
-    handles[named_count + i] = startup_roots()[i].handle;
-  }
-  for (size_t i = 0; i < depth; ++i) {
-    handles[named_count + roots + i] = startup_working_directory(i);
-  }
-  handles[count - 1] = startup_namespace();
+  status = environment_unset_batch(startup_environment_handle(), removed, count);
+  free(removed);
+  environment_capture_close(&capture);
   const handle_t retained[] = {
     runtime->dhcp.endpoint, runtime->dhcp.clock, runtime->dhcp.random,
     runtime->authority, runtime->waiting_link ? runtime->udp : HANDLE_INVALID,
     bootstrap_capability("memory"), bootstrap_capability("output"),
     bootstrap_stdio(ENVIRONMENT_STDOUT).handle, bootstrap_stdio(ENVIRONMENT_STDERR).handle,
   };
-  bool success = true;
-  for (size_t i = 0; i < count; ++i) {
-    handle_t handle = handles[i];
-    bool keep = handle == HANDLE_INVALID;
-    for (size_t j = 0; j < sizeof(retained) / sizeof(retained[0]); ++j) {
-      keep |= handle == retained[j];
-    }
-    for (size_t j = 0; j < i; ++j) {
-      keep |= handle == handles[j];
-    }
-    if (!keep && handle_close(handle) != 0) {
+  bool success = status == CALL_OK &&
+      bootstrap_release_except(retained, sizeof(retained) / sizeof(*retained));
+  for (size_t i = 0; i < startup_working_directory_count(); ++i) {
+    if (handle_close(startup_working_directory(i)) != 0) {
       success = false;
     }
   }
-  free(handles);
-  /* Libc owns the dedicated stream handles. No path operation or bootstrap
-   * resource lookup follows this handoff; their snapshots now contain stale handles. */
   if (bootstrap_stdio(ENVIRONMENT_STDIN).protocol != 0 && fclose(stdin) != 0) {
     success = false;
   }

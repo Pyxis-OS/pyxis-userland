@@ -583,7 +583,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   resources[1] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
   size_t resource_count = 2;
   if (has_job_provisioner) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", job_provisioner_index);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", job_provisioner_index);
   }
   if (has_threads) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", threads_index);
@@ -639,7 +639,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", pipe_index);
   }
   if (has_service) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"service", service_index);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"service", service_index);
   }
   if (has_space) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"space", space_index);
@@ -648,7 +648,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"profile", profile_index);
   }
   if (provider) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"publication", publication_index);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"publication", publication_index);
   }
   if (has_terminal) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal", terminal_index);
@@ -685,9 +685,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     size_t source_count;
     enum call_status status = bundle_sources_from_startup(sources, BUNDLE_SOURCE_LIMIT,
         &source_count);
-    if (status == CALL_OK) {
-      status = shell_fat_authority(shell, sources, BUNDLE_SOURCE_LIMIT, &source_count);
-    }
     if (status != CALL_OK) {
       return status;
     }
@@ -895,10 +892,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     size_t source_count;
     enum call_status status = bundle_sources_from_startup(authority + ordinary_count,
         BUNDLE_SOURCE_LIMIT, &source_count);
-    if (status == CALL_OK) {
-      status = shell_fat_authority(shell, authority + ordinary_count,
-          BUNDLE_SOURCE_LIMIT, &source_count);
-    }
     if (status != CALL_OK) {
       return status;
     }

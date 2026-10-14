@@ -43,6 +43,69 @@ static inline handle_t bootstrap_capability(const char *name)
   return capture->handle;
 }
 
+/* One-shot bootstrap messages relinquish the table's original publication
+ * after capturing it, so closing the local owner can finish the handoff. */
+static inline handle_t bootstrap_take_capability(const char *name)
+{
+  struct environment_entry_reply entry;
+  enum call_status status = environment_lookup(startup_environment_handle(), name, &entry, NULL, 0);
+  if (status != CALL_OK || entry.kind != ENVIRONMENT_CAP) {
+    return HANDLE_INVALID;
+  }
+  struct environment_unset_entry removed = {.identity = entry.identity};
+  environment_name(removed.name, name);
+  status = environment_unset_batch(startup_environment_handle(), &removed, 1);
+  if (status != CALL_OK) {
+    handle_close(entry.handle);
+    return HANDLE_INVALID;
+  }
+  return entry.handle;
+}
+
+/* Qualification programs with fixed grant profiles reject extra capability
+ * entries. Text contributes no authority and does not alter this selection. */
+static inline bool bootstrap_only_capabilities(const char *const *names, size_t count)
+{
+  struct environment_capture capture = {0};
+  if (environment_capture_init(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture) != CALL_OK) {
+    return false;
+  }
+  bool valid = true;
+  size_t selected = 0;
+  for (size_t i = 0; valid && i < capture.count; ++i) {
+    if (capture.values[i].kind != ENVIRONMENT_CAP) {
+      continue;
+    }
+    bool found = false;
+    for (size_t j = 0; j < count; ++j) {
+      found |= !strcmp(capture.values[i].name, names[j]);
+    }
+    valid = found;
+    ++selected;
+  }
+  environment_capture_close(&capture);
+  return valid && selected == count;
+}
+
+static inline bool bootstrap_release_except(const handle_t *retained, size_t count)
+{
+  bool success = true;
+  for (struct bootstrap_capture *capture = bootstrap_captures; capture; capture = capture->next) {
+    bool keep = capture->handle == HANDLE_INVALID;
+    for (size_t i = 0; i < count; ++i) {
+      keep |= capture->handle == retained[i];
+    }
+    if (!keep) {
+      if (handle_close(capture->handle) != 0) {
+        success = false;
+      }
+      capture->handle = HANDLE_INVALID;
+    }
+  }
+  return success;
+}
+
 static inline struct pyxis_stdio_binding bootstrap_stdio(enum environment_stream_index index)
 {
   struct pyxis_stdio_binding binding = {0};
