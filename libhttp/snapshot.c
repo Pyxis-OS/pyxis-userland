@@ -149,7 +149,7 @@ static bool collect_body(struct snapshot *snapshot, struct http_stream *stream,
 
 void http_fetch(const struct http_client *client, struct http_storage *storage,
     const char *uri, uint64_t deadline_ns,
-    const struct provider_open_request *request, struct http_result *result)
+    const struct provider_legacy_http_open_request *request, struct http_result *result)
 {
   *result = (struct http_result){0};
   struct provider_http_budget limit = {
@@ -157,8 +157,8 @@ void http_fetch(const struct http_client *client, struct http_storage *storage,
     .fields = HTTP_FIELDS_MAX, .informational = HTTP_INFORMATIONAL_MAX,
   };
   if (request) {
-    if (request->flags != PROVIDER_OPEN_HTTP &&
-        request->flags != (PROVIDER_OPEN_HTTP | PROVIDER_OPEN_ORIGIN_CROSSED)) {
+    if (request->flags != PROVIDER_LEGACY_HTTP_CONTEXT &&
+        request->flags != (PROVIDER_LEGACY_HTTP_CONTEXT | PROVIDER_LEGACY_HTTP_ORIGIN_CROSSED)) {
       result->error = HTTP_INVALID_URI;
       return;
     }
@@ -239,10 +239,10 @@ void http_fetch(const struct http_client *client, struct http_storage *storage,
   }
   if (success) {
     if (redirect) {
-      result->outcome = PROVIDER_OUTCOME_REDIRECT;
+      result->outcome = PROVIDER_LEGACY_HTTP_OUTCOME_REDIRECT;
       result->media_type[0] = 0;
     } else {
-      result->outcome = PROVIDER_OUTCOME_BYTES;
+      result->outcome = PROVIDER_LEGACY_HTTP_OUTCOME_BYTES;
       result->body = snapshot.body;
     }
     return;
@@ -252,5 +252,5 @@ void http_fetch(const struct http_client *client, struct http_storage *storage,
 failed:
   result->media_type[0] = 0;
   result->location[0] = 0;
-  result->outcome = PROVIDER_OUTCOME_ERROR;
+  result->outcome = PROVIDER_LEGACY_HTTP_OUTCOME_ERROR;
 }

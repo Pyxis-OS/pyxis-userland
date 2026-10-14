@@ -3,7 +3,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <path.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <pxe/shebang.h>
 #include <space.h>
 #include <stdlib.h>

@@ -57,6 +57,8 @@ void path_context_close(struct path_context *context);
  * retained chain, failing at its boundary. A trailing / requires a directory.
  * Names are case-sensitive literal bytes, with no URL decoding or expansion.
  * Provider URI tails retain every separator and dot component unchanged.
+ * Generic OPEN carries workspace->deadline_ns as its copied and delivery
+ * deadline; zero waits without a deadline.
  * Components are walked in order: missing/.. still fails at missing.
  *
  * Success returns a new owned handle of kind with exactly rights. context may

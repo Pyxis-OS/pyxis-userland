@@ -51,7 +51,7 @@ struct transaction {
   struct http_stream *engine;
   struct http_wait wait;
   struct http_body snapshot;
-  struct provider_open_request context;
+  struct provider_legacy_http_open_request context;
   struct http_prepare_context prepare_context;
   char uri[HTTP_URI_MAX + 1];
   enum http_transaction_phase phase;
@@ -867,12 +867,12 @@ static bool redirect_status(unsigned status)
 }
 
 static enum call_status legacy_context(struct loop *loop,
-    struct provider_open_request *request, const char *text)
+    struct provider_legacy_http_open_request *request, const char *text)
 {
   struct provider_http_origin zero_origin = {0};
   struct provider_http_budget zero_budget = {0};
-  if ((request->flags & ~PROVIDER_OPEN_FLAGS) ||
-      ((request->flags & PROVIDER_OPEN_ORIGIN_CROSSED) && !(request->flags & PROVIDER_OPEN_HTTP))) {
+  if ((request->flags & ~PROVIDER_LEGACY_HTTP_FLAGS) ||
+      ((request->flags & PROVIDER_LEGACY_HTTP_ORIGIN_CROSSED) && !(request->flags & PROVIDER_LEGACY_HTTP_CONTEXT))) {
     return CALL_BAD_REQUEST;
   }
   struct http_uri uri;
@@ -880,12 +880,12 @@ static enum call_status legacy_context(struct loop *loop,
   if (status != CALL_OK || uri.scheme != loop->client.scheme) {
     return status == CALL_OK ? CALL_BAD_OPERATION : status;
   }
-  if (!(request->flags & PROVIDER_OPEN_HTTP)) {
+  if (!(request->flags & PROVIDER_LEGACY_HTTP_CONTEXT)) {
     if (memcmp(&request->origin, &zero_origin, sizeof(zero_origin)) ||
         memcmp(&request->remaining, &zero_budget, sizeof(zero_budget))) {
       return CALL_BAD_REQUEST;
     }
-    request->flags = PROVIDER_OPEN_HTTP;
+    request->flags = PROVIDER_LEGACY_HTTP_CONTEXT;
     request->origin.scheme = uri.scheme;
     request->origin.port = uri.port;
     memcpy(request->origin.host, uri.host, strlen(uri.host) + 1);
@@ -917,7 +917,7 @@ static enum call_status legacy_context(struct loop *loop,
       return CALL_BAD_REQUEST;
     }
   }
-  if (loop->custom_trust && ((request->flags & PROVIDER_OPEN_ORIGIN_CROSSED) ||
+  if (loop->custom_trust && ((request->flags & PROVIDER_LEGACY_HTTP_ORIGIN_CROSSED) ||
       request->origin.scheme != uri.scheme || request->origin.port != uri.port ||
       strcmp(request->origin.host, uri.host))) {
     return CALL_DENIED;
@@ -928,13 +928,13 @@ static enum call_status legacy_context(struct loop *loop,
 static void legacy_error(struct loop *loop, struct endpoint_packet *packet,
     enum call_status status, unsigned http_status)
 {
-  struct provider_open_reply response = {.provider_status = http_status};
+  struct provider_legacy_http_open_reply response = {.provider_status = http_status};
   reply(loop, packet, status, &response, sizeof(response), NULL, 0);
 }
 
 static void legacy_open(struct loop *loop, struct endpoint_packet *packet)
 {
-  struct provider_open_request request;
+  struct provider_legacy_http_open_request request;
   if (packet->size < sizeof(request)) {
     legacy_error(loop, packet, CALL_BAD_REQUEST, 0);
     return;
@@ -1054,14 +1054,14 @@ static bool append_snapshot(struct loop *loop, struct transaction *transaction,
 static void legacy_publish(struct loop *loop, struct transaction *transaction, bool redirect)
 {
   struct http_response *response = &transaction->response;
-  struct provider_open_reply header = {.provider_status = response->status,
+  struct provider_legacy_http_open_reply header = {.provider_status = response->status,
     .consumed = response->consumed};
   unsigned char bytes[sizeof(header) + HTTP_URI_MAX];
   handle_t client = HANDLE_INVALID;
   enum call_status status = CALL_OK;
   size_t size;
   if (redirect) {
-    header.outcome = PROVIDER_OUTCOME_REDIRECT;
+    header.outcome = PROVIDER_LEGACY_HTTP_OUTCOME_REDIRECT;
     header.location_size = strlen(response->location);
     header.consumed.body_bytes = http_stream_read_ahead(transaction->engine);
     char destination[HTTP_URI_MAX + 1];
@@ -1094,7 +1094,7 @@ static void legacy_publish(struct loop *loop, struct transaction *transaction, b
     status = export(loop, transaction, 0, FACET_SNAPSHOT, &client);
     header.protocol = PROTOCOL_FILE;
     header.representation = PROVIDER_REPRESENTATION_BYTES;
-    header.outcome = PROVIDER_OUTCOME_BYTES;
+    header.outcome = PROVIDER_LEGACY_HTTP_OUTCOME_BYTES;
     header.media_type_size = strlen(response->media_type);
     memcpy(bytes + sizeof(header), response->media_type, header.media_type_size);
     size = sizeof(header) + header.media_type_size;
@@ -1508,7 +1508,7 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
   if (packet->object_id == SERVICE_ID && packet->protocol == PROTOCOL_PROVIDER && loop->published) {
     if (packet->operation == PROVIDER_PREPARE) {
       prepare(loop, packet);
-    } else if (packet->operation == PROVIDER_OPEN) {
+    } else if (packet->operation == PROVIDER_LEGACY_HTTP_OPEN) {
       legacy_open(loop, packet);
     } else {
       reply(loop, packet, CALL_BAD_OPERATION, NULL, 0, NULL, 0);

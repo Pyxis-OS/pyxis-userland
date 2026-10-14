@@ -3,7 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/endpoint.h>
-#include <abi/provider.h>
+#include <abi/provider_http_private.h>
 #include <abi/syscall.h>
 #include <http_url.h>
 #include <stddef.h>
@@ -206,7 +206,7 @@ enum call_status http_stream_close(struct http_stream *stream);
 
 struct http_result {
   enum http_error error;
-  uint64_t outcome; /* PROVIDER_OUTCOME_BYTES or REDIRECT only on success. */
+  uint64_t outcome; /* PROVIDER_LEGACY_HTTP_OUTCOME_BYTES or REDIRECT only on success. */
   struct provider_http_budget consumed;
   enum call_status network_status;
   unsigned status; /* Final HTTP status, or zero if none was received. */
@@ -231,7 +231,7 @@ struct http_result {
  * success; local TLS notification failure is retained as a diagnostic only. */
 void http_fetch(const struct http_client *client, struct http_storage *storage,
     const char *uri, uint64_t deadline_ns,
-    const struct provider_open_request *request, struct http_result *result);
+    const struct provider_legacy_http_open_request *request, struct http_result *result);
 void http_body_release(struct http_body *body);
 const char *http_error_name(enum http_error error);
 enum call_status http_result_status(const struct http_result *result);

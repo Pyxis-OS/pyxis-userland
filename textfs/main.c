@@ -84,29 +84,10 @@ static enum call_status reply(struct endpoint_packet *packet, uint64_t result,
   return status;
 }
 
-static bool scheme_letter(uint8_t byte)
+static bool target_name(const uint8_t *target, size_t size, const char *name)
 {
-  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
-}
-
-static bool uri_name(const uint8_t *uri, size_t size, const char *name)
-{
-  if (size == 0 || !scheme_letter(uri[0])) {
-    return false;
-  }
-  size_t separator = 1;
-  while (separator < size && uri[separator] != ':') {
-    uint8_t byte = uri[separator];
-    if (!scheme_letter(byte) && !(byte >= '0' && byte <= '9') &&
-        byte != '+' && byte != '-' && byte != '.') {
-      return false;
-    }
-    ++separator;
-  }
   size_t name_size = strlen(name);
-  return separator < size && size - separator == 3 + name_size &&
-      uri[separator + 1] == '/' && uri[separator + 2] == '/' &&
-      memcmp(uri + separator + 3, name, name_size) == 0;
+  return size == name_size && memcmp(target, name, name_size) == 0;
 }
 
 static enum call_status open_file(struct provider *provider,
@@ -120,30 +101,35 @@ static enum call_status open_file(struct provider *provider,
   }
   struct provider_open_request request;
   memcpy(&request, packet->data, sizeof(request));
-  if (request.flags || request.origin.scheme || request.origin.port ||
-      request.origin.host[0] || request.remaining.body_bytes ||
-      request.remaining.header_bytes || request.remaining.fields ||
-      request.remaining.informational || request.rights == 0 || (request.rights & ~FILE_RIGHTS) ||
-      request.uri_size == 0 || request.uri_size > PROVIDER_URI_MAX_BYTES ||
-      packet->size - sizeof(request) != request.uri_size) {
+  if (!request.intent || (request.intent & ~PROVIDER_INTENTS) ||
+      (request.flags & ~PROVIDER_OPEN_FLAGS) ||
+      ((request.flags & PROVIDER_OPEN_EXCLUSIVE) && !(request.flags & PROVIDER_OPEN_CREATE)) ||
+      ((request.flags & (PROVIDER_OPEN_TRUNCATE | PROVIDER_OPEN_APPEND)) &&
+      !(request.intent & PROVIDER_INTENT_WRITE)) ||
+      request.target_size > PROVIDER_TARGET_MAX_BYTES ||
+      packet->size - sizeof(request) != request.target_size ||
+      request.deadline_ns != packet->deadline_ns) {
     return reply(packet, CALL_BAD_REQUEST, NULL, 0, NULL);
   }
-  if (((request.rights & FILE_RIGHT_READ) &&
+  if (((request.intent & PROVIDER_INTENT_READ) &&
       !(packet->rights & PROVIDER_RIGHT_OPEN_READ)) ||
-      ((request.rights & FILE_RIGHT_WRITE) &&
+      (((request.intent & PROVIDER_INTENT_WRITE) || (request.flags & PROVIDER_OPEN_CREATE)) &&
       !(packet->rights & PROVIDER_RIGHT_OPEN_WRITE))) {
     return reply(packet, CALL_DENIED, NULL, 0, NULL);
   }
-  if (request.rights & FILE_RIGHT_WRITE) {
+  if (request.flags) {
+    return reply(packet, CALL_BAD_OPERATION, NULL, 0, NULL);
+  }
+  if (request.intent & PROVIDER_INTENT_WRITE) {
     return reply(packet, CALL_READ_ONLY, NULL, 0, NULL);
   }
-  const uint8_t *uri = packet->data + sizeof(request);
+  const uint8_t *target = packet->data + sizeof(request);
   const char *bytes;
   size_t size;
-  if (uri_name(uri, request.uri_size, "welcome")) {
+  if (target_name(target, request.target_size, "welcome")) {
     bytes = provider->welcome;
     size = strlen(bytes);
-  } else if (uri_name(uri, request.uri_size, "guide")) {
+  } else if (target_name(target, request.target_size, "guide")) {
     bytes = guide;
     size = sizeof(guide) - 1;
   } else {
@@ -172,7 +158,6 @@ static enum call_status open_file(struct provider *provider,
   };
   static const char media_type[] = "text/plain; charset=utf-8";
   struct provider_open_reply header = {
-    .outcome = PROVIDER_OUTCOME_BYTES,
     .protocol = PROTOCOL_FILE,
     .representation = PROVIDER_REPRESENTATION_BYTES,
     .media_type_size = sizeof(media_type) - 1,
@@ -180,7 +165,7 @@ static enum call_status open_file(struct provider *provider,
   uint8_t response[sizeof(header) + sizeof(media_type) - 1];
   memcpy(response, &header, sizeof(header));
   memcpy(response + sizeof(header), media_type, sizeof(media_type) - 1);
-  struct endpoint_grant grant = {client, request.rights, HANDLE_TRANSPORT_CALL};
+  struct endpoint_grant grant = {client, FILE_RIGHT_READ, HANDLE_TRANSPORT_CALL};
   status = endpoint_reply(packet->receipt, CALL_OK, response, sizeof(response),
       &grant, 1);
   /* The export state survives until RETIRE, including when reply transfer fails. */

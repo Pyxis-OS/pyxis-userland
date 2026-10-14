@@ -5,7 +5,7 @@
 #include <console.h>
 #include <clock.h>
 #include <http_transaction.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <pyxis/working_path.h>
 #include <stream.h>
 #include <directory.h>

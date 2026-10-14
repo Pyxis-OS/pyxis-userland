@@ -48,7 +48,7 @@
 #include <pipe.h>
 #include <directory.h>
 #include <http_transaction.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <process.h>
 #include <startup.h>
 #include <wait.h>

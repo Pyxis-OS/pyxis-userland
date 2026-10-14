@@ -1,7 +1,7 @@
 #ifndef LIBC_PYXIS_RESPONSE_H
 #define LIBC_PYXIS_RESPONSE_H
 
-#include <abi/provider.h>
+#include <abi/provider_http_private.h>
 #include <stdint.h>
 
 #define PYXIS_RESPONSE_PROVIDER UINT64_C(1)

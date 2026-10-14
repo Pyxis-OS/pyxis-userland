@@ -5,7 +5,7 @@
 #include <program.h>
 #include <startup.h>
 #include <handle.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <stdlib.h>
 #include <string.h>
 

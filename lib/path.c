@@ -4,6 +4,7 @@
 #include <environment.h>
 #include <path.h>
 #include <provider.h>
+#include <provider_http_private.h>
 #include <startup.h>
 #include <string.h>
 
@@ -157,17 +158,16 @@ static enum call_status walk(const struct path_context *context, const char *pat
         status = CALL_BAD_OPERATION;
       } else {
         struct provider_result result;
-        status = provider_open(provider, uri, rights, 0, &result, file);
+        uint64_t intent = ((rights & FILE_RIGHT_READ) ? PROVIDER_INTENT_READ : 0) |
+            ((rights & FILE_RIGHT_WRITE) ? PROVIDER_INTENT_WRITE : 0);
+        status = provider_open(provider, path, intent, 0, workspace->deadline_ns,
+            &result, file);
         if (status == CALL_OK) {
           status = result.status;
-          if (status == CALL_OK && result.outcome != PROVIDER_OUTCOME_BYTES) {
-            status = CALL_BAD_OPERATION;
-          }
         }
         if (status == CALL_OK && workspace->response) {
           struct pyxis_response_info *info = workspace->response;
           info->flags = PYXIS_RESPONSE_PROVIDER;
-          info->status = result.provider_status;
           if (result.metadata.media_type_size) {
             info->flags |= PYXIS_RESPONSE_MEDIA_TYPE;
             memcpy(info->media_type, result.metadata.media_type,

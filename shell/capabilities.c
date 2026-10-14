@@ -2,7 +2,7 @@
 #include <clock.h>
 #include <file.h>
 #include <handle.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

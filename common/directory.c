@@ -1,6 +1,6 @@
 #include "directory.h"
 #include <path.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <pyxis/working_path.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -5,7 +5,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <errno.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <pyxis/http.h>
 #include <string.h>
 

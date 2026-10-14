@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <environment.h>
 #include <path.h>
-#include <provider.h>
+#include <provider_http_private.h>
 #include <startup.h>
 #include <string.h>
 
@@ -70,15 +70,15 @@ enum call_status provider_http_open(const struct path_context *context,
   if (!workspace || !deadline_ns || rights != FILE_RIGHT_READ) {
     return rights != FILE_RIGHT_READ ? CALL_DENIED : CALL_LIMIT;
   }
-  workspace->hop = (struct provider_result){0};
+  workspace->hop = (struct provider_legacy_http_result){0};
   enum call_status status = http_url_parse(uri, &workspace->parsed);
   if (status != CALL_OK) {
     return status;
   }
   memcpy(workspace->current, uri, strlen(uri) + 1);
-  struct provider_open_request *request = &workspace->request;
-  *request = (struct provider_open_request){
-    .flags = PROVIDER_OPEN_HTTP,
+  struct provider_legacy_http_open_request *request = &workspace->request;
+  *request = (struct provider_legacy_http_open_request){
+    .flags = PROVIDER_LEGACY_HTTP_CONTEXT,
     .origin = {.scheme = workspace->parsed.scheme, .port = workspace->parsed.port},
     .remaining = {HTTP_BODY_MAX, HTTP_HEADERS_MAX, HTTP_FIELDS_MAX, HTTP_INFORMATIONAL_MAX},
   };
@@ -105,7 +105,7 @@ enum call_status provider_http_open(const struct path_context *context,
         break;
       }
     }
-    status = provider_open_context(providers[scheme], workspace->current, rights,
+    status = provider_legacy_http_open(providers[scheme], workspace->current, rights,
         deadline_ns, request, &workspace->hop, file);
     if (status != CALL_OK) {
       break;
@@ -115,7 +115,7 @@ enum call_status provider_http_open(const struct path_context *context,
       break;
     }
     consume(&request->remaining, &workspace->hop.consumed);
-    if (workspace->hop.outcome == PROVIDER_OUTCOME_BYTES) {
+    if (workspace->hop.outcome == PROVIDER_LEGACY_HTTP_OUTCOME_BYTES) {
       if (workspace->hop.provider_status != 200 && workspace->hop.provider_status != 204) {
         status = CALL_BAD_REQUEST;
         break;
@@ -152,7 +152,7 @@ enum call_status provider_http_open(const struct path_context *context,
       break;
     }
     if (!same_origin(&request->origin, &workspace->parsed)) {
-      request->flags |= PROVIDER_OPEN_ORIGIN_CROSSED;
+      request->flags |= PROVIDER_LEGACY_HTTP_ORIGIN_CROSSED;
     }
     memcpy(workspace->current, workspace->next, strlen(workspace->next) + 1);
     ++redirects;
