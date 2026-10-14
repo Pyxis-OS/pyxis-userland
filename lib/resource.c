@@ -1,4 +1,8 @@
 #include <resource.h>
+#include <abi/transaction.h>
+#include <abi/stream.h>
+#include <abi/pipe.h>
+#include <abi/console.h>
 #include <endpoint.h>
 #include <environment.h>
 #include <path.h>
@@ -351,7 +355,47 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
         CALL_BAD_OPERATION;
   }
   if (info.protocol != PROTOCOL_FILE) {
-    return CALL_BAD_OPERATION;
+    if (*remainder || flags) {
+      return CALL_BAD_OPERATION;
+    }
+    uint64_t rights = 0;
+    if (info.protocol == PROTOCOL_TRANSACTION && info.kind == HANDLE_KIND_EXPORTED) {
+      if (!(intent & PROVIDER_INTENT_WRITE)) {
+        return CALL_BAD_OPERATION;
+      }
+      rights = TRANSACTION_RIGHT_STAGE | TRANSACTION_RIGHT_COMMIT;
+      if ((info.rights & rights) != rights) {
+        return CALL_DENIED;
+      }
+      /* ABORT is independently delegated; preserve only authority already held. */
+      rights = info.rights;
+    } else if (info.protocol == PROTOCOL_STREAM && info.kind == HANDLE_KIND_EXPORTED) {
+      if (intent & PROVIDER_INTENT_WRITE) {
+        return CALL_BAD_OPERATION;
+      }
+      rights = STREAM_RIGHT_READ;
+    } else if ((info.protocol == PROTOCOL_PIPE || info.protocol == PROTOCOL_CONSOLE) &&
+        info.kind == HANDLE_KIND_NATIVE) {
+      uint64_t read = info.protocol == PROTOCOL_PIPE ? PIPE_RIGHT_READ : CONSOLE_RIGHT_READ;
+      uint64_t write = info.protocol == PROTOCOL_PIPE ? PIPE_RIGHT_WRITE : CONSOLE_RIGHT_WRITE;
+      rights = ((intent & PROVIDER_INTENT_READ) ? read : 0) |
+          ((intent & PROVIDER_INTENT_WRITE) ? write : 0);
+    } else {
+      return CALL_BAD_OPERATION;
+    }
+    uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
+    if ((info.rights & rights) != rights || (info.transport & transport) != transport) {
+      return CALL_DENIED;
+    }
+    handle_t resource = HANDLE_INVALID;
+    status = handle_copy_restricted(target, rights, transport, &resource);
+    if (status == CALL_OK) {
+      status = resource_result_adopt(resource, result);
+      if (status != CALL_OK) {
+        handle_close(resource);
+      }
+    }
+    return status;
   }
   if (*remainder || (flags & (PROVIDER_OPEN_CREATE | PROVIDER_OPEN_EXCLUSIVE))) {
     return CALL_BAD_OPERATION;

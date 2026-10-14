@@ -30,8 +30,6 @@ void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
 int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
     FILE *stream, const struct pyxis_http_options *options, bool submit);
-bool descriptor_object_http_inplace(struct descriptor_object *object);
-int descriptor_object_http_commit(struct descriptor_object *object, FILE *response);
 int descriptor_object_http_status(struct descriptor_object *object,
     struct http_transaction_status *status);
 int descriptor_object_http_abort(struct descriptor_object *object);
@@ -97,6 +95,9 @@ void descriptor_discard_input(int descriptor);
 /* Validate WRITE access and flush only this descriptor's associated FILE output.
  * Preserve input and leave streams without pending output unchanged. */
 int libc_stdio_flush_descriptor(int descriptor);
+int libc_stdio_stage_close_descriptor(int descriptor, struct descriptor_object *expected);
+int libc_stdio_close_descriptor(int descriptor, struct descriptor_object *expected,
+    uint64_t generation);
 
 int descriptor_response(int descriptor, struct pyxis_response_info *info);
 
@@ -125,6 +126,8 @@ static inline void descriptor_scope_end(struct descriptor_object **object)
   descriptor_drop(*object);
 }
 int descriptor_close_stream(FILE *stream, struct descriptor_object *object);
+int descriptor_close_expected(int descriptor, struct descriptor_object *expected,
+    uint64_t generation);
 bool descriptor_object_ready(struct descriptor_object *object, bool writing);
 int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdio_binding *binding);
 int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
@@ -150,6 +153,7 @@ struct pyxis_open_result;
 int descriptor_open_result(const char *path, const struct descriptor_mode *mode,
     FILE *stream, struct pyxis_open_result *failure);
 bool descriptor_object_transaction(struct descriptor_object *object);
+bool descriptor_object_transaction_pending(struct descriptor_object *object);
 int descriptor_object_commit(struct descriptor_object *object);
 int descriptor_object_abandon(struct descriptor_object *object, int failure);
 int descriptor_object_describe(struct descriptor_object *object, uint64_t flags,

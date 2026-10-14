@@ -2,6 +2,7 @@
 #define USERSPACE_HTTP_TRANSACTION_H
 
 #include <abi/http_transaction.h>
+#include <transaction.h>
 #include <abi/syscall.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -10,6 +11,10 @@
 /* An explicitly owned native value. Copies/delegation use narrower grant copies,
  * not serialization or ambient inheritance. Close releases only these refs;
  * ABORT is an explicit operation. No close/flush commits a transaction. */
+/* Private redirect/observation adapter result, not a transaction wire reply. */
+#define HTTP_COMMIT_RESPONSE UINT64_C(1)
+struct http_commit_reply { uint64_t flags, http_status; };
+
 struct http_prepared {
   handle_t control, body, observation, response;
   uint64_t method, delivery, trust_flags;

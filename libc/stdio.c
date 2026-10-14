@@ -556,30 +556,50 @@ int libc_stdio_flush_descriptor(int descriptor)
   return result;
 }
 
-int libc_stdio_stage_close_descriptor(int descriptor, struct descriptor_object *expected)
+static int acquire_close_stream(int descriptor, struct descriptor_object *expected, FILE **result)
 {
+  *result = NULL;
   FILE *stream = NULL;
+  int error = 0;
   libc_lock_acquire(&stream_guard);
   for (FILE *current = streams; current; current = current->next) {
-    if (__atomic_load_n(&current->descriptor, __ATOMIC_ACQUIRE) == descriptor &&
-        !current->closing && current->references != UINT32_MAX) {
+    if (__atomic_load_n(&current->descriptor, __ATOMIC_ACQUIRE) != descriptor) {
+      continue;
+    }
+    if (current->closing) {
+      error = EBUSY;
+    } else if (current->references == UINT32_MAX) {
+      error = EOVERFLOW;
+    } else {
       ++current->references;
       stream = current;
-      break;
     }
+    break;
   }
   libc_lock_release(&stream_guard);
+  if (error) {
+    errno = error;
+    return -1;
+  }
   if (!stream) {
     return 0;
   }
   if (!stream_acquire_retained(stream)) {
     return -1;
   }
-  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
-  if (stream->operation != expected) {
-    errno = EBADF;
+  if (stream->closing || stream->operation != expected ||
+      __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) != descriptor) {
+    error = stream->closing ? EBUSY : EBADF;
+    stream_end(stream);
+    errno = error;
     return -1;
   }
+  *result = stream;
+  return 0;
+}
+
+static int stage_close_stream(FILE *stream, struct descriptor_object *expected)
+{
   int error = stream->output_count && flush_output(stream) < 0 ? errno : 0;
   if (stream->error && !error) {
     error = EIO;
@@ -590,6 +610,34 @@ int libc_stdio_stage_close_descriptor(int descriptor, struct descriptor_object *
     return -1;
   }
   return 0;
+}
+
+int libc_stdio_stage_close_descriptor(int descriptor, struct descriptor_object *expected)
+{
+  FILE *stream;
+  if (acquire_close_stream(descriptor, expected, &stream) < 0) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  return stream ? stage_close_stream(stream, expected) : 0;
+}
+
+int libc_stdio_close_descriptor(int descriptor, struct descriptor_object *expected,
+    uint64_t generation)
+{
+  FILE *stream;
+  if (acquire_close_stream(descriptor, expected, &stream) < 0) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  int error = stream && stage_close_stream(stream, expected) < 0 ? errno : 0;
+  /* Keep FILE exclusion until the checked close invalidates its association. */
+  int result = descriptor_close_expected(descriptor, expected, generation);
+  if (error) {
+    errno = error;
+    return -1;
+  }
+  return result;
 }
 
 int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)

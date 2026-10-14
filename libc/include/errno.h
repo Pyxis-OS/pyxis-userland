@@ -46,6 +46,7 @@ int *__errno_location(void);
 #define EDEADLK 32
 #define ESRCH 33
 #define ECANCELED 34
+#define EISDIR 35
 
 #ifdef __cplusplus
 }

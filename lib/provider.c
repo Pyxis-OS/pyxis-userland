@@ -108,7 +108,9 @@ enum call_status provider_open_typed(handle_t provider, const char *target,
       &request, sizeof(request.body) + target_size, NULL, 0, deadline_ns, &packet);
   result->delivery = packet.delivery;
   if (status != CALL_OK) {
-    return status;
+    return packet.delivery == ENDPOINT_DELIVERED &&
+        ((intent & PROVIDER_INTENT_WRITE) || (flags & PROVIDER_OPEN_CREATE)) ?
+        CALL_OUTCOME_UNKNOWN : status;
   }
   if (packet.result >= CALL_STATUS_COUNT) {
     status = CALL_BAD_REQUEST;

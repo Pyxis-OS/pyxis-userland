@@ -33,6 +33,7 @@ int libc_call_errno(enum call_status status)
   case CALL_IO:
   case CALL_OUTCOME_UNKNOWN: return EIO;
   case CALL_TIMED_OUT: return ETIMEDOUT;
+  case CALL_ABANDONED: return ECANCELED;
   case CALL_NOT_EMPTY: return ENOTEMPTY;
   case CALL_LINK_NOT_FOLLOWED: return ELOOP;
   case CALL_NAME_TOO_LONG: return ENAMETOOLONG;
@@ -67,7 +68,7 @@ int libc_path_errno(enum call_status status, const char *path, const char *other
 
 int strerror_r(int error, char *buffer, size_t size)
 {
-  if (error < 0 || error > ECANCELED) {
+  if (error < 0 || error > EISDIR) {
     return EINVAL;
   }
   const char *message = strerror(error);
@@ -92,7 +93,7 @@ char *strerror(int error)
   case EPERM: return "Operation not permitted";
   case EDEADLK: return "Operation would deadlock";
   case ESRCH: return "No such thread";
-  case ECANCELED: return "Thread stopped without a result";
+  case ECANCELED: return "Operation canceled";
   case EINTR: return "Interrupted operation";
   case EOVERFLOW: return "Value too large";
   case ERANGE: return "Result out of range";
@@ -113,6 +114,7 @@ char *strerror(int error)
   case ETIMEDOUT: return "Operation timed out";
   case ENOTEMPTY: return "Directory not empty";
   case ENOTDIR: return "Not a directory";
+  case EISDIR: return "Is a directory";
   case ENOTTY: return "Not a terminal";
   case ENAMETOOLONG: return "Name too long";
   case E2BIG: return "Output buffer too small";

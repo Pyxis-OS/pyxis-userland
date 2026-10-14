@@ -265,7 +265,7 @@ static enum call_status copy_entry(struct shell *shell, const char *name,
   destination->value.method = source->value.method;
   destination->value.trust_flags = source->value.trust_flags;
   if (type == SHELL_CAPABILITY_REQUEST) {
-    status = copy_facet(source->value.control, HTTP_TRANSACTION_CONTROL_RIGHTS,
+    status = copy_facet(source->value.control, TRANSACTION_RIGHTS,
         &destination->value.control);
     if (status == CALL_OK) {
       status = copy_facet(source->value.body, FILE_RIGHT_WRITE, &destination->value.body);
