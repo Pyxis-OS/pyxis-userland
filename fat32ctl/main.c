@@ -70,7 +70,7 @@ int main(int argc, char **argv)
     struct mount_state_reply observed;
     status = mount_observe(control, &observed);
     if (status == CALL_OK && printf("domain %llu, disk %llu, GPT entry %llu, "
-        "blocks [%llu, %llu), %s%s%s%s\n"
+        "blocks [%llu, %llu), %s%s%s%s%s\n"
         "failure status %llu, phase %llu, sector %llu; detached objects %llu\n",
         (unsigned long long)observed.domain, (unsigned long long)observed.device,
         (unsigned long long)observed.partition, (unsigned long long)observed.first_block,
@@ -79,6 +79,8 @@ int main(int argc, char **argv)
         observed.flags & MOUNT_STATE_RETIRED ? ", retired" : ", active",
         observed.flags & MOUNT_STATE_DIRTY_OWNED ? ", dirty owned" : "",
         observed.flags & MOUNT_STATE_FAILED ? ", failed" : "",
+        (observed.flags & MOUNT_STATE_READ_WRITE) &&
+        (observed.flags & MOUNT_STATE_ALLOCATION_INVALID) ? ", allocation proof invalid" : "",
         (unsigned long long)observed.failure_status,
         (unsigned long long)observed.failure_phase,
         (unsigned long long)observed.failed_sector,

@@ -27,6 +27,13 @@ enum call_status mount_open_volume(handle_t mount, uint64_t partition,
  * outcome unknown, with no automatic retry. */
 enum call_status mount_sync(handle_t mount);
 
+/* Full-check the bound RW FAT32 instance and atomically rebuild its allocation
+ * proof on success. Requires WRITE|INTERVAL and this process's active delivered,
+ * unexpired publication interval. Borrows control; does not renew the interval
+ * or clear an uncertain stopped writer. A failed full check leaves proof invalid;
+ * malformed replies are outcome unknown, with no automatic retry. */
+enum call_status mount_check(handle_t control);
+
 /* Borrow the fixed boot-ESP issuer. No device/partition selector is accepted.
  * Rights are exact LOOKUP/ENUMERATE/READ_FILES bits. Success owns a root/control
  * pair; failure clears both. No URI binding or implicit mount is performed.

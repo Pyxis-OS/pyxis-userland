@@ -102,6 +102,14 @@ The writable browser adds these native commands:
   its identifier/absolute deadline. `end ID` ends or acknowledges that exact
   interval. A child process does not inherit interval ownership. Other owners'
   mutations and sync return BUSY while ordinary reads remain available.
+- `check` performs an explicit full mounted-volume check and rebuilds allocation
+  proof on success. It requires the browser's active, delivered, unexpired interval
+  and controller WRITE|INTERVAL authority; use it immediately after `begin` and
+  before publication effects. It does not extend the lease. `state` reports invalid
+  RW allocation proof. Invalid proof blocks mutations, reclamation and
+  clean-mark clearing; a successful check can recover known pre-effect invalidation,
+  but cannot reset an uncertain stopped writer. No check runs implicitly at BEGIN
+  or SYNC, and the browser never retries it automatically.
 - `shell` launches the ordinary native shell with only read-only esp/boot/tmp
   roots, memory, streams and its existing launcher. Its working directory is
   esp://. It and its descendants receive no DISK, DISKS, MOUNT, controller or

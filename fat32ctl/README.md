@@ -6,6 +6,7 @@ the optional `fat_mounts` inventory source with enumeration alone. `state` and
 separately requests WRITE from that source. Missing grants and native refusals
 are reported. The runtime also requires its ordinary MEMORY grant. The utility
 prints the actual received controller rights.
+`state` also reports invalid RW allocation proof separately from a failed writer.
 
 ```text
 fat32ctl list

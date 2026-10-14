@@ -78,6 +78,16 @@ enum call_status mount_sync(handle_t mount)
   return result.status;
 }
 
+enum call_status mount_check(handle_t control)
+{
+  struct message_header message = {PROTOCOL_MOUNT, MOUNT_CHECK};
+  struct syscall_result result = syscall_call(control, &message, sizeof(message), NULL, 0);
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size != 0) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return result.status;
+}
+
 static bool fat32_rights(uint64_t rights)
 {
   return !(rights & ~(DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |

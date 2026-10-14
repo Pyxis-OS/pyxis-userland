@@ -460,6 +460,10 @@ static void show_state(handle_t control)
       (unsigned long long)state.domain, (unsigned long long)state.device,
       (unsigned long long)state.partition, (unsigned long long)state.first_block,
       (unsigned long long)state.block_count, (unsigned long long)state.flags);
+  if ((state.flags & MOUNT_STATE_READ_WRITE) &&
+      (state.flags & MOUNT_STATE_ALLOCATION_INVALID)) {
+    puts("allocation proof invalid");
+  }
   printf("interval=%llu deadline_ns=%llu detached=%llu failure=%llu phase=%llu sector=%llu\n",
       (unsigned long long)state.interval_id, (unsigned long long)state.interval_deadline_ns,
       (unsigned long long)state.detached_objects, (unsigned long long)state.failure_status,
@@ -551,7 +555,7 @@ static int browse(bool boot_selected, bool writable, uint64_t selected_partition
     puts("rename /FROM | /TO; replace /FROM | /TO");
     puts("hold SLOT ro|rw /PATH; hread SLOT OFFSET LENGTH; hwrite SLOT OFFSET = LITERAL");
     puts("resize SLOT SIZE; hinfo SLOT; hsync SLOT; drop SLOT (slots 1–8)");
-    puts("sync; begin; end ID; shell (read-only roots). No automatic mutation retry.");
+    puts("sync; begin; check; end ID; shell (read-only roots). No automatic mutation retry.");
   }
   char line[COMMAND_BYTES];
   while (prompt(&terminal, "fat32-mount> ", line, sizeof(line))) {
@@ -562,6 +566,8 @@ static int browse(bool boot_selected, bool writable, uint64_t selected_partition
       show_state(mounted.control);
     } else if (writable && !strcmp(line, "sync")) {
       printf("SYNC status %u\n", mount_sync(mounted.control));
+    } else if (writable && !strcmp(line, "check")) {
+      printf("CHECK status %u\n", mount_check(mounted.control));
     } else if (writable && !strcmp(line, "begin")) {
       status = mount_begin(mounted.control, &interval);
       printf("BEGIN status %u", status);
