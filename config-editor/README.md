@@ -30,6 +30,10 @@ it does not invent Limine paths or migrations.
 
 Publication stages, synchronizes and read-verifies one complete Lua triple and
 catalog; an exclusive bounded interval rechecks all consumed/staged bytes. A
+successful BEGIN is followed immediately by one native full-volume CHECK in the
+publisher process, before publication effects. A check failure stops publication
+and releases the interval through the existing failure path; it does not retry
+or renew the lease. A
 prepared record is flushed before canonical swaps, then a committed record
 names the exact selected hashes. One previous set and changed Limine recovery
 are retained. FAT32 has no journal or multi-file atomic switch: any failure or

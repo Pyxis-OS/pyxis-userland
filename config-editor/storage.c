@@ -557,6 +557,11 @@ bool config_storage_publish(const struct config_storage_view *view,
     enum call_status status = mount_begin(view->control, &interval);
     ok = status == CALL_OK || failed(report, status);
     if (ok) {
+      install_progress_begin("Checking configuration volume under interval", INSTALL_PROGRESS_NONE, NULL);
+      status = mount_check(view->control);
+      ok = status == CALL_OK || failed(report, status);
+    }
+    if (ok) {
       install_progress_begin("Rechecking consumed and staged configuration under interval",
           INSTALL_PROGRESS_WORK, NULL);
     }
