@@ -6,12 +6,12 @@
 #include <pyxis_fs/npfs.h>
 
 /* Owned preparation, immutable after Review. Native source handles and BOOT
- * are borrowed except EFI/TEMPLATE; no target mount or write occurs here. */
+ * are borrowed except EFI; no target mount or write occurs here. */
 struct install_plan {
   struct install_plan_record record;
   struct install_disk disk;
   handle_t disks, boot, clock;
-  struct install_source kernel, archive, efi, template, rescue;
+  struct install_source kernel, archive, efi, rescue;
   struct install_programs programs;
   struct install_manifest manifest;
   struct install_prior prior;

@@ -31,101 +31,45 @@ static bool source_open(const char *path, struct install_source *source)
   return true;
 }
 
-static char *boot_configuration(const struct install_source *source, const uint8_t guid[16],
-    size_t *bytes)
+static char *boot_configuration(const uint8_t guid[16], size_t *bytes)
 {
-  if (source->bytes > SIZE_MAX - 512) {
-    return NULL;
-  }
-  size_t size = (size_t)source->bytes;
-  install_progress_begin("Reading boot configuration template", INSTALL_PROGRESS_SOURCE_READ, NULL);
-  install_progress_bytes_total(size);
-  char *input = malloc(size + 1), *output = malloc(size + 512);
-  if (!input || !output || !install_source_read(source, 0, input, size)) {
-    free(input);
-    free(output);
-    return NULL;
-  }
-  input[size] = '\0';
-  if (memchr(input, '\0', size)) {
-    free(input);
-    free(output);
-    return NULL;
-  }
-  char disk_guid[37], normal[256], rescue[256], menu_timeout[32];
+  /* Installed entries are an allowlist, independent of live-media tools. */
+  static const char format[] =
+    "timeout: %d\n"
+    "serial: yes\n"
+    "\n"
+    "/Pyxis OS (Caelum)\n"
+    "  protocol: limine\n"
+    "  path: boot():/boot/caelum.elf\n"
+    "  module_path: boot():/boot/initrd.cpio\n"
+    "  paging_mode: 4level\n"
+    "  kaslr: no\n"
+    "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s\n"
+    "\n"
+    "/Pyxis OS (rescue)\n"
+    "  protocol: limine\n"
+    "  path: boot():/boot/caelum.elf\n"
+    "  module_path: boot():/boot/initrd.cpio\n"
+    "  paging_mode: 4level\n"
+    "  kaslr: no\n"
+    "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s " INSTALL_RESCUE_OPTION "\n";
+  char disk_guid[37];
   install_guid_text(guid, disk_guid);
-  snprintf(normal, sizeof(normal),
-      "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s\n", disk_guid);
-  snprintf(rescue, sizeof(rescue),
-      "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s " INSTALL_RESCUE_OPTION "\n",
-      disk_guid);
-  snprintf(menu_timeout, sizeof(menu_timeout), "timeout: %d\n", INSTALL_MENU_TIMEOUT_SECONDS);
-  bool skip = false, timeout = false, command = false, rescue_command = false;
-  bool install_entry = false;
-  size_t used = 0;
-  char *line = input;
-  while (*line) {
-    char *end = strchr(line, '\n');
-    size_t length = end ? (size_t)(end - line) : strlen(line);
-    if (length == strlen("/Install Pyxis") && !memcmp(line, "/Install Pyxis", length)) {
-      skip = true;
-      install_entry = true;
-    } else if (length && line[0] == '/') {
-      skip = false;
-    }
-    bool default_entry = length >= strlen("default_entry:") &&
-      !memcmp(line, "default_entry:", strlen("default_entry:"));
-    if (!skip && !default_entry) {
-      const char *replacement = NULL;
-      if (length == strlen("# PYXIS_BOOT_MENU_TIMEOUT") &&
-          !memcmp(line, "# PYXIS_BOOT_MENU_TIMEOUT", length)) {
-        if (timeout) {
-          goto invalid;
-        }
-        timeout = true;
-        replacement = menu_timeout;
-      } else if (length == strlen("# PYXIS_NORMAL_COMMAND_LINE") &&
-          !memcmp(line, "# PYXIS_NORMAL_COMMAND_LINE", length)) {
-        if (command) {
-          goto invalid;
-        }
-        command = true;
-        replacement = normal;
-      } else if (length == strlen("# PYXIS_RESCUE_COMMAND_LINE") &&
-          !memcmp(line, "# PYXIS_RESCUE_COMMAND_LINE", length)) {
-        if (rescue_command) {
-          goto invalid;
-        }
-        rescue_command = true;
-        replacement = rescue;
-      }
-      size_t copy = replacement ? strlen(replacement) : length;
-      if (copy + 1 > size + 512 - used) {
-        goto invalid;
-      }
-      memcpy(output + used, replacement ? replacement : line, copy);
-      used += copy;
-      if (!replacement) {
-        output[used++] = '\n';
-      }
-    }
-    if (!end) {
-      break;
-    }
-    line = end + 1;
+  int length = snprintf(NULL, 0, format, INSTALL_MENU_TIMEOUT_SECONDS, disk_guid, disk_guid);
+  if (length < 0) {
+    return NULL;
   }
-  if (!timeout || !command || !rescue_command || !install_entry) {
-    goto invalid;
+  char *output = malloc((size_t)length + 1);
+  if (!output) {
+    return NULL;
   }
-  output[used] = '\0';
-  *bytes = used;
-  free(input);
+  if (snprintf(output, (size_t)length + 1, format, INSTALL_MENU_TIMEOUT_SECONDS,
+        disk_guid, disk_guid) != length) {
+    free(output);
+    return NULL;
+  }
+  *bytes = (size_t)length;
   return output;
-
-invalid:
-  free(input);
-  free(output);
-  return NULL;
 }
 
 static bool inspect_target(const struct install_plan *plan, struct install_disk *disk,
@@ -211,7 +155,7 @@ static bool source_fingerprint(const struct install_plan *plan, char output[65])
   install_progress_begin("Hashing immutable install sources", INSTALL_PROGRESS_WORK, NULL);
   bool ok = install_digest_begin(&digest) && hash_choices(&digest, &plan->record) &&
       hash_source(&digest, &plan->kernel) && hash_source(&digest, &plan->archive) &&
-      hash_source(&digest, &plan->efi) && hash_source(&digest, &plan->template) &&
+      hash_source(&digest, &plan->efi) &&
       hash_source(&digest, &plan->rescue) &&
       install_digest_update(&digest, plan->manifest_text, plan->manifest_bytes) &&
       install_digest_update(&digest, plan->configuration, plan->configuration_bytes) &&
@@ -227,7 +171,7 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
   *plan = (struct install_plan){.disks = disks, .boot = boot, .clock = clock,
     .disk.handle = HANDLE_INVALID,
     .kernel.handle = kernel, .archive.handle = archive,
-    .efi.handle = HANDLE_INVALID, .template.handle = HANDLE_INVALID,
+    .efi.handle = HANDLE_INVALID,
     .rescue.handle = HANDLE_INVALID};
   install_progress_begin("Reading source revision", INSTALL_PROGRESS_NONE, NULL);
   struct system_info_identity identity;
@@ -241,7 +185,6 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
   }
   strcpy(plan->record.revision, revision);
   bool ok = source_open("boot://share/installer/BOOTX64.EFI", &plan->efi) &&
-      source_open("boot://share/installer/limine.conf.template", &plan->template) &&
       file_size(kernel, &plan->kernel.bytes) == CALL_OK && plan->kernel.bytes &&
       file_size(archive, &plan->archive.bytes) == CALL_OK && plan->archive.bytes &&
       install_programs_list(boot, &plan->programs) &&
@@ -319,7 +262,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   if (!ok || !closed || plan->prior.needs_legacy) {
     return false;
   }
-  plan->configuration = boot_configuration(&plan->template, plan->record.layout.disk_guid,
+  plan->configuration = boot_configuration(plan->record.layout.disk_guid,
       &plan->configuration_bytes);
   if (!plan->configuration || !source_fingerprint(plan, plan->record.source_hash) || !space_budget(plan) ||
       !install_plan_record_valid(&plan->record)) {
@@ -473,8 +416,5 @@ void install_plan_destroy(struct install_plan *plan)
   free(plan->rescue.memory);
   if (plan->efi.handle != HANDLE_INVALID) {
     handle_close(plan->efi.handle);
-  }
-  if (plan->template.handle != HANDLE_INVALID) {
-    handle_close(plan->template.handle);
   }
 }

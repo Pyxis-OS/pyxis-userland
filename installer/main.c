@@ -432,7 +432,7 @@ int main(int argc, char **argv)
   handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
   handle_t kernel = bootstrap_capability("boot_kernel"), archive = bootstrap_capability("boot_archive");
   struct install_plan plan = {.disk.handle = HANDLE_INVALID,
-    .efi.handle = HANDLE_INVALID, .template.handle = HANDLE_INVALID};
+    .efi.handle = HANDLE_INVALID};
   struct install_plan_record expected = {0};
   struct target *targets = NULL;
   size_t count = 0;

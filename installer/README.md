@@ -96,7 +96,10 @@ Program/manifest verification uses ordinary filesystem reads and may return
 cached pages. It is not guaranteed fresh device read-back. EFI verification uses
 raw disk reads after flush/release, without a physical-media/power-loss claim.
 
-The current whole-ESP replacement and generated configuration remain unchanged.
+The shared whole-ESP writer generates exactly the installed normal and rescue
+menu entries, with a three-second timeout and the selected disk binding. Live
+installer and FAT32 tool entries are never imported. Update regenerates the menu
+even for the same revision, removing extra entries from older installations.
 This task provides no FAT mount or config editor. Failed writes are not retried
 or rolled back; same/unknown-revision interruption can damage the previously used
 program tree. Failures direct the owner to live-media recovery. Best-effort old
