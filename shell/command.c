@@ -3,7 +3,7 @@
 #include "capabilities.h"
 #include "../common/directory.h"
 #include <mount.h>
-#include <namespace.h>
+#include <environment.h>
 #include <power.h>
 #include <handle.h>
 #include <space.h>
@@ -41,26 +41,15 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
 
 static enum call_status root_available(struct shell *shell, const char *binding)
 {
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    if (!strcmp(shell->roots[i].name, binding)) {
-      return CALL_ALREADY_EXISTS;
-    }
+  struct environment_entry_reply entry;
+  enum call_status status = environment_lookup(shell->environment, binding, &entry, NULL, 0);
+  if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
+    handle_close(entry.handle);
   }
-  if (shell->namespace != HANDLE_INVALID) {
-    handle_t existing;
-    enum call_status status = namespace_lookup(shell->namespace, binding, &existing);
-    if (existing != HANDLE_INVALID) {
-      handle_close(existing);
-    }
-    if (status == CALL_OK || status == CALL_ENDPOINT_CLOSED) {
-      return CALL_ALREADY_EXISTS;
-    }
-    /* Startup root names allow bytes outside the service namespace alphabet. */
-    if (status != CALL_NOT_FOUND && status != CALL_BAD_REQUEST) {
-      return status;
-    }
+  if (status == CALL_OK || status == CALL_BUFFER_TOO_SMALL) {
+    return CALL_ALREADY_EXISTS;
   }
-  return CALL_OK;
+  return status == CALL_NOT_FOUND ? CALL_OK : status;
 }
 
 /* Reserve shell-owned storage before acquisition. The shell runs one command
@@ -77,7 +66,7 @@ enum call_status shell_reserve_root(struct shell *shell, const char *name,
       return CALL_BAD_REQUEST;
     }
   }
-  if (length >= STARTUP_MAX_SIZE || shell->directory->root_count == STARTUP_ROOT_LIMIT) {
+  if (length > ENVIRONMENT_NAME_MAX) {
     return CALL_LIMIT;
   }
   char *binding = malloc(length + 1);
@@ -97,24 +86,26 @@ enum call_status shell_reserve_root(struct shell *shell, const char *name,
 
 enum call_status shell_publish_root(struct shell *shell, char *name, handle_t root)
 {
-  /* Acquisition can wait while a provider changes the service namespace. */
-  enum call_status status = root_available(shell, name);
-  if (status != CALL_OK) {
-    handle_close(root);
-    free(name);
-    return status;
+  struct handle_info info;
+  enum call_status status = handle_query(root, &info);
+  struct environment_set_entry entry = {0};
+  if (status == CALL_OK && !environment_name(entry.name, name)) {
+    status = CALL_BAD_REQUEST;
   }
-  size_t index = shell->directory->root_count;
-  shell->roots[index] = (struct path_root){name, root};
-  status = pyxis_working_bindings(shell->roots, index + 1, shell->namespace);
-  if (status != CALL_OK) {
-    shell->roots[index] = (struct path_root){0};
-    handle_close(root);
-    free(name);
-    return status;
+  if (status == CALL_OK) {
+    entry.kind = ENVIRONMENT_CAP;
+    entry.flags = ENVIRONMENT_EXPORTED;
+    entry.set_flags = ENVIRONMENT_SET_REQUIRE_ABSENT;
+    entry.handle = root;
+    entry.rights = info.rights;
+    entry.transport = info.transport;
+    status = environment_set_batch(shell->environment, &entry, 1);
   }
-  shell->owns_root[index] = true;
-  return CALL_OK;
+  if (handle_close(root) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
+  free(name);
+  return status;
 }
 
 static enum command_result mount_host(struct shell *shell, char **arguments, size_t count)
@@ -362,7 +353,7 @@ static bool is_builtin(char **arguments, size_t count)
   const char *name = arguments[0];
   return !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
-      !strcmp(name, "session") || !strcmp(name, "namespace") ||
+      !strcmp(name, "session") || !strcmp(name, "env") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
       (!strcmp(name, "sync") && count > 1 &&
        (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
@@ -425,64 +416,47 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
     }
     return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION, NULL, 0, NULL);
   }
-  if (strcmp(arguments[0], "namespace") == 0) {
-    if (count == 2 && !strcmp(arguments[1], "create")) {
-      handle_t namespace_handle;
-      enum call_status status = namespace_create(shell->namespace_service,
-          &namespace_handle);
-      if (status != CALL_OK) {
-        return shell_error(shell, "namespace: create failed (status %u)\n", status);
-      }
-      if (shell->owns_namespace && handle_close(shell->namespace) != 0) {
-        handle_close(namespace_handle);
-        return shell_error(shell, "namespace: close previous namespace failed\n");
-      }
-      shell->namespace = namespace_handle;
-      shell->owns_namespace = true;
-      status = pyxis_working_bindings(shell->roots, shell->directory->root_count,
-          namespace_handle);
-      if (status != CALL_OK) {
-        return shell_error(shell, "namespace: update working bindings failed (status %u)\n", status);
-      }
-      return COMMAND_OK;
-    }
-    if (count == 3 && !strcmp(arguments[1], "remove")) {
-      enum call_status status = namespace_remove(shell->namespace, arguments[2]);
-      if (status != CALL_OK) {
-        return shell_error(shell, "namespace: remove %s failed (status %u)\n",
-            arguments[2], status);
-      }
-      return COMMAND_OK;
-    }
-    bool optional_alias = count == 5 && !strcmp(arguments[2], "--optional");
-    if ((count == 4 || optional_alias) && !strcmp(arguments[1], "alias")) {
-      const char *name = arguments[optional_alias ? 3 : 2];
-      const char *source = arguments[optional_alias ? 4 : 3];
-      for (size_t i = 0; i < shell->directory->root_count; ++i) {
-        if (!strcmp(shell->roots[i].name, name)) {
-          return shell_error(shell, "namespace: %s conflicts with a filesystem root\n", name);
-        }
-      }
-      handle_t client = HANDLE_INVALID;
-      enum call_status status = namespace_lookup(shell->namespace, source, &client);
-      if (optional_alias && status == CALL_NOT_FOUND) {
-        return COMMAND_OK;
-      }
-      if (status == CALL_OK) {
-        uint64_t rights, transport;
-        status = handle_rights(client, &rights, &transport);
-        if (status == CALL_OK) {
-          status = namespace_publish(shell->namespace, name, client, rights, transport);
-        }
-      }
-      if (client != HANDLE_INVALID && handle_close(client) && status == CALL_OK) {
-        status = CALL_BAD_HANDLE;
-      }
+  if (!strcmp(arguments[0], "env")) {
+    if (count == 3 && !strcmp(arguments[1], "unset")) {
+      enum call_status status = environment_unset(shell->environment, arguments[2]);
       return status == CALL_OK ? COMMAND_OK :
-          shell_error(shell, "namespace: alias %s failed (status %u)\n", name, status);
+          shell_directory_error(shell, "env: unset", arguments[2], status);
     }
-    return shell_error(shell,
-        "usage: namespace create | namespace remove NAME | namespace alias [--optional] NAME SOURCE\n");
+    bool optional = count == 5 && !strcmp(arguments[2], "--optional");
+    if ((count != 4 && !optional) || strcmp(arguments[1], "copy")) {
+      return shell_error(shell, "usage: env copy [--optional] NAME SOURCE | env unset NAME\n");
+    }
+    const char *name = arguments[optional ? 3 : 2];
+    const char *source = arguments[optional ? 4 : 3];
+    struct environment_entry_reply entry;
+    char *text = NULL;
+    enum call_status status = environment_lookup(shell->environment, source, &entry, NULL, 0);
+    if (optional && status == CALL_NOT_FOUND) {
+      return COMMAND_OK;
+    }
+    if (status == CALL_BUFFER_TOO_SMALL) {
+      if (entry.text_length == SIZE_MAX) {
+        status = CALL_LIMIT;
+      } else {
+        text = malloc(entry.text_length + 1);
+        status = text ? environment_lookup(shell->environment, source, &entry,
+            text, entry.text_length + 1) : CALL_NO_MEMORY;
+      }
+    }
+    if (status == CALL_OK) {
+      if (entry.kind == ENVIRONMENT_CAP) {
+        status = environment_set_capability(shell->environment, name, entry.handle,
+            entry.rights, entry.transport, entry.flags);
+        if (handle_close(entry.handle) != 0 && status == CALL_OK) {
+          status = CALL_BAD_HANDLE;
+        }
+      } else {
+        status = environment_set_text(shell->environment, name, text, entry.flags, 0);
+      }
+    }
+    free(text);
+    return status == CALL_OK ? COMMAND_OK :
+        shell_directory_error(shell, "env: copy", name, status);
   }
   /* is_builtin leaves only service. */
   bool replace = count > 1 && !strcmp(arguments[1], "replace");

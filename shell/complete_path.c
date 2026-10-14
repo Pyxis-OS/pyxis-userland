@@ -255,9 +255,18 @@ static bool list_directory(struct shell *shell, const char *directory, const cha
 static bool add_roots(struct shell *shell, const char *value, char quote,
     struct entries *entries)
 {
+  struct environment_capture capture = {0};
+  if (environment_capture_init(shell->environment, 0, &capture) != CALL_OK) {
+    return false;
+  }
+  struct profile_directory directories[PROFILE_DIRECTORY_LIMIT];
+  size_t count;
+  enum call_status status = profile_directories(&capture, directories,
+      PROFILE_DIRECTORY_LIMIT, &count);
+  bool success = status == CALL_OK;
   size_t length = strlen(value);
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    const char *name = shell->roots[i].name;
+  for (size_t i = 0; success && i < count; ++i) {
+    const char *name = directories[i].name;
     size_t name_length = strlen(name);
     size_t common = length < name_length ? length : name_length;
     if (length >= name_length + 3 || memcmp(name, value, common) ||
@@ -265,11 +274,10 @@ static bool add_roots(struct shell *shell, const char *value, char quote,
         !offerable(name, quote)) {
       continue;
     }
-    if (!entries_add(entries, "", 0, name, "://", true)) {
-      return false;
-    }
+    success = entries_add(entries, "", 0, name, "://", true);
   }
-  return true;
+  environment_capture_close(&capture);
+  return success;
 }
 
 static int compare_entries(const void *left, const void *right)

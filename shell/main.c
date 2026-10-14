@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <pyxis/working_path.h>
 #include <pyxis/environment.h>
 #include "shell.h"
@@ -92,9 +93,9 @@ static bool report_completion(struct shell *shell, handle_t events,
 
 int main(int argc, char **argv)
 {
-  handle_t script = startup_resource("script");
+  handle_t script = bootstrap_capability("script");
   /* Kept outside launch state: only this interactive shell can report events. */
-  handle_t events = script == HANDLE_INVALID ? startup_resource("terminal_events") :
+  handle_t events = script == HANDLE_INVALID ? bootstrap_capability("terminal_events") :
       HANDLE_INVALID;
   if (script != HANDLE_INVALID && argc < 2) {
     fputs("shell: Missing script diagnostic name\n", stderr);
@@ -111,36 +112,35 @@ int main(int argc, char **argv)
     .script_line = 1,
     .quiet_input = quiet_input,
     .remote_prompt = remote_prompt,
-    .terminal = {startup_resource("input"), startup_resource("output")},
-    .launcher = startup_resource("launcher"),
-    .child_launcher = startup_resource("child_launcher"),
-    .terminal_service = startup_resource("terminal"),
-    .memory = startup_resource("memory"),
-    .display = startup_resource("display"),
-    .clock = startup_resource("clock"),
-    .system_info = startup_resource("system_info"),
-    .log = startup_resource("log"),
-    .echo = startup_resource("echo"),
-    .udp = startup_resource("udp"),
-    .udp_beacons = startup_resource("udp_beacons"),
-    .tcp = startup_resource("tcp"),
-    .pipe = startup_resource("pipe"),
-    .service = startup_resource("service"),
-    .namespace_service = startup_resource("namespace_service"),
-    .namespace = startup_namespace(),
-    .random = startup_resource("random"),
-    .net_config = startup_resource("net_config"),
-    .keyboard = startup_resource("keyboard"),
-    .pointer = startup_resource("pointer"),
-    .space = startup_resource("space"),
-    .profile = startup_resource("profile"),
-    .boot = startup_root("boot"),
-    .tmp = startup_root("tmp"),
-    .host_mount = startup_resource("host_mount"),
-    .native_mount = startup_resource("native_mount"),
-    .power = startup_resource("power"),
-    .screen_capture = startup_resource("screen_capture"),
-    .audio = startup_resource("audio"),
+    .terminal = {bootstrap_capability("input"), bootstrap_capability("output")},
+    .launcher = bootstrap_capability("launcher"),
+    .child_launcher = bootstrap_capability("child_launcher"),
+    .terminal_service = bootstrap_capability("terminal"),
+    .memory = bootstrap_capability("memory"),
+    .display = bootstrap_capability("display"),
+    .clock = bootstrap_capability("clock"),
+    .system_info = bootstrap_capability("system_info"),
+    .log = bootstrap_capability("log"),
+    .echo = bootstrap_capability("echo"),
+    .udp = bootstrap_capability("udp"),
+    .udp_beacons = bootstrap_capability("udp_beacons"),
+    .tcp = bootstrap_capability("tcp"),
+    .pipe = bootstrap_capability("pipe"),
+    .service = bootstrap_capability("service"),
+    .environment = startup_environment_handle(),
+    .random = bootstrap_capability("random"),
+    .net_config = bootstrap_capability("net_config"),
+    .keyboard = bootstrap_capability("keyboard"),
+    .pointer = bootstrap_capability("pointer"),
+    .space = bootstrap_capability("space"),
+    .profile = bootstrap_capability("profile"),
+    .boot = bootstrap_capability("boot"),
+    .tmp = bootstrap_capability("tmp"),
+    .host_mount = bootstrap_capability("host_mount"),
+    .native_mount = bootstrap_capability("native_mount"),
+    .power = bootstrap_capability("power"),
+    .screen_capture = bootstrap_capability("screen_capture"),
+    .audio = bootstrap_capability("audio"),
   };
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
@@ -170,25 +170,9 @@ int main(int argc, char **argv)
     shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
   }
-  size_t root_count = startup_root_count();
-  if (root_count > STARTUP_ROOT_LIMIT) {
-    shell_directory_error(&shell, "shell", "selected roots", CALL_LIMIT);
-    goto done;
-  }
-  const struct startup_binding *roots = startup_roots();
-  for (size_t i = 0; i < root_count; ++i) {
-    shell.roots[i] = (struct path_root){(const char *)(uintptr_t)roots[i].name,
-        roots[i].handle};
-  }
   enum call_status status = shell_directory_init(&shell);
   if (status != CALL_OK) {
     shell_directory_error(&shell, "shell", "working directory", status);
-    goto done;
-  }
-
-  status = pyxis_working_bindings(shell.roots, root_count, shell.namespace);
-  if (status != CALL_OK) {
-    shell_directory_error(&shell, "shell", "working bindings", status);
     goto done;
   }
 
@@ -199,7 +183,7 @@ int main(int argc, char **argv)
   if (!quiet_input) {
     shell_history_load(&shell);
   }
-  handle_t cwd_bootstrap = startup_resource("pane_cwd");
+  handle_t cwd_bootstrap = bootstrap_capability("pane_cwd");
   if (cwd_bootstrap != HANDLE_INVALID) {
     pane_cwd_provider_init(&cwd_service.provider, shell.service, cwd_bootstrap, shell.clock);
     handle_close(cwd_bootstrap);
@@ -274,17 +258,6 @@ done:
   }
   pane_cwd_provider_close(&cwd_service.provider);
   shell_fat_close(&shell);
-  if (shell.owns_namespace && handle_close(shell.namespace) != 0) {
-    result = EXIT_FAILURE;
-  }
-  for (size_t i = 0; shell.directory && i < shell.directory->root_count; ++i) {
-    if (shell.owns_root[i]) {
-      if (handle_close(shell.roots[i].handle) != 0) {
-        result = EXIT_FAILURE;
-      }
-      free((void *)shell.roots[i].name);
-    }
-  }
   shell_directory_close(&shell);
   term_history_free(&shell.history);
   free(arguments);

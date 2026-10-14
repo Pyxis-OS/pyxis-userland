@@ -7,6 +7,7 @@
 #include <path.h>
 #include <term.h>
 #include <startup.h>
+#include "../common/launch_environment.h"
 #include <bundle_launch.h>
 
 #define SHELL_LINE_CAPACITY 1024
@@ -34,7 +35,7 @@ struct bundle_program;
 struct shell_capability_table;
 
 struct shell_redirection {
-  enum startup_stream_index stream;
+  enum environment_stream_index stream;
   const char *path;
   bool capability;
 };
@@ -45,7 +46,7 @@ struct shell_stage {
   size_t redirection_count;
   bool http_worker;
   bool http_producer;
-  struct shell_redirection redirections[STARTUP_STREAM_COUNT];
+  struct shell_redirection redirections[ENVIRONMENT_STREAM_COUNT];
 };
 
 struct shell_command_line {
@@ -80,16 +81,13 @@ struct shell {
   struct terminal terminal;
   /* Interactive lines for Up/Down recall; the quiet editor keeps none. */
   struct term_history history;
-  /* Borrowed home:// root holding .history; saving stops after one failure. */
+  /* Owned home:// capture holding .history; saving stops after one failure. */
   handle_t history_home;
   bool history_saving;
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
-      echo, udp, udp_beacons, tcp, pipe, service, namespace_service, namespace, random, net_config,
+      echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_config,
       keyboard, pointer, terminal_service,
       boot, tmp, host_mount, native_mount, power, screen_capture, audio;
-  bool owns_namespace;
-  struct path_root roots[STARTUP_ROOT_LIMIT];
-  bool owns_root[STARTUP_ROOT_LIMIT];
   const struct path_context *directory;
   struct path_workspace workspace;
   /* Writable FAT grants are selected sources, never inherited URI roots. */

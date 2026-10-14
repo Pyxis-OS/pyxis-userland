@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <pyxis/environment.h>
 #include "remote_server.h"
 #include <abi/console.h>
@@ -138,16 +140,16 @@ int launch_remote_server(const struct session_config *config,
     const struct network_config *network, uint16_t port)
 {
   const char *beacon = getenv("PYXIS_REMOTE_BEACON");
-  handle_t udp_beacons = startup_resource("udp_beacons");
+  handle_t udp_beacons = bootstrap_capability("udp_beacons");
   if (beacon && (!remote_beacon_name_length(beacon) || udp_beacons == HANDLE_INVALID)) {
     fputs("session: invalid reverse remote bootstrap\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t memory = startup_resource("memory"), clock = startup_resource("clock");
-  handle_t launcher = startup_resource("launcher"), tcp = startup_resource("tcp");
-  handle_t terminal = startup_resource("terminal"), output = startup_resource("output");
-  handle_t authority = startup_resource("net_config");
-  handle_t bin = startup_root("bin"), tmp = startup_root("tmp");
+  handle_t memory = bootstrap_capability("memory"), clock = bootstrap_capability("clock");
+  handle_t launcher = bootstrap_capability("launcher"), tcp = bootstrap_capability("tcp");
+  handle_t terminal = bootstrap_capability("terminal"), output = bootstrap_capability("output");
+  handle_t authority = bootstrap_capability("net_config");
+  handle_t bin = bootstrap_capability("bin"), tmp = bootstrap_capability("tmp");
   if (memory == HANDLE_INVALID || clock == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       tcp == HANDLE_INVALID || terminal == HANDLE_INVALID || output == HANDLE_INVALID ||
       authority == HANDLE_INVALID || bin == HANDLE_INVALID || tmp == HANDLE_INVALID) {
@@ -172,35 +174,34 @@ int launch_remote_server(const struct session_config *config,
     [STDOUT] = {output, CONSOLE_RIGHT_WRITE, 0},
     [STDERR] = {output, CONSOLE_RIGHT_WRITE, 0},
   };
-  struct launch_binding resources[RESOURCE_CAPACITY] = {
-    {(uintptr_t)"memory", MEMORY}, {(uintptr_t)"clock", CLOCK},
-    {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal", TERMINAL},
-    {(uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT},
+  struct launch_environment_entry resources[RESOURCE_CAPACITY] = {
+    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),
+    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal", TERMINAL),
+    PROFILE_CAP((uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT),
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
-  handle_t provisioner = startup_resource("job_provisioner");
+  handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){provisioner, JOB_PROVISIONER_RIGHTS, 0};
   }
-  handle_t threads = startup_resource("threads");
+  handle_t threads = bootstrap_capability("threads");
   if (threads != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", grant_count);
     grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
   }
-  handle_t remote_mux_terminal = startup_resource("remote_mux_terminal");
+  handle_t remote_mux_terminal = bootstrap_capability("remote_mux_terminal");
   if (remote_mux_terminal != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"remote_mux_terminal", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", grant_count);
     grants[grant_count++] = (struct launch_grant){remote_mux_terminal,
         TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
-  handle_t remote_power = startup_resource("remote_power");
+  handle_t remote_power = bootstrap_capability("remote_power");
   if (remote_power != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"remote_power", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", grant_count);
     grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
-  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
   /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t working_directory = SIZE_MAX;
   handle_t image = HANDLE_INVALID, listener = HANDLE_INVALID;
@@ -210,7 +211,7 @@ int launch_remote_server(const struct session_config *config,
   int result = EXIT_FAILURE;
   for (size_t i = 0; i < root_count; ++i) {
     const char *name = (const char *)selected_roots[i].name;
-    roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
+    roots[i] = (struct launch_environment_entry)PROFILE_CAP(selected_roots[i].name, grant_count);
     if (!directory_grant(selected_roots[i].handle, !strcmp(name, "boot"),
         &grants[grant_count])) {
       goto done;
@@ -225,63 +226,62 @@ int launch_remote_server(const struct session_config *config,
     goto done;
   }
 
-  handle_t child_launcher = startup_resource("child_launcher");
+  handle_t child_launcher = bootstrap_capability("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   }
-  handle_t system_info = startup_resource("system_info");
+  handle_t system_info = bootstrap_capability("system_info");
   if (system_info != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"system_info", grant_count);
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
   }
-  handle_t audio = startup_resource("audio");
+  handle_t audio = bootstrap_capability("audio");
   if (audio != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"audio", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"audio", grant_count);
     grants[grant_count++] = (struct launch_grant){audio, AUDIO_RIGHT_PLAYBACK, 0};
   }
-  handle_t screen_capture = startup_resource("screen_capture");
+  handle_t screen_capture = bootstrap_capability("screen_capture");
   if (screen_capture != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"screen_capture", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", grant_count);
     grants[grant_count++] = (struct launch_grant){screen_capture,
         SCREEN_CAPTURE_RIGHT_CAPTURE, 0};
   }
-  handle_t log = startup_resource("log");
+  handle_t log = bootstrap_capability("log");
   if (log != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"log", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"log", grant_count);
     grants[grant_count++] = (struct launch_grant){log, LOG_RIGHT_READ, 0};
   }
-  handle_t pipe = startup_resource("pipe");
+  handle_t pipe = bootstrap_capability("pipe");
   if (pipe != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", grant_count);
     grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
   }
-  resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", grant_count};
+  resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_config", grant_count);
   grants[grant_count++] = (struct launch_grant){authority, NET_CONFIG_RIGHT_READ, 0};
-  resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", grant_count};
+  resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", grant_count);
   grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
-  handle_t random = startup_resource("random");
+  handle_t random = bootstrap_capability("random");
   if (random != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"random", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"random", grant_count);
     grants[grant_count++] = (struct launch_grant){random, RANDOM_RIGHT_READ, 0};
   }
-  handle_t service = startup_resource("service");
+  handle_t service = bootstrap_capability("service");
   if (service != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"service", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"service", grant_count);
     grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
   }
-  handle_t echo = startup_resource("echo");
+  handle_t echo = bootstrap_capability("echo");
   if (echo != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"echo", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"echo", grant_count);
     grants[grant_count++] = (struct launch_grant){echo, ECHO_RIGHT_SEND, 0};
   }
-  handle_t udp = startup_resource("udp");
+  handle_t udp = bootstrap_capability("udp");
   if (udp != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp", grant_count);
     grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
-  handle_t profile = startup_resource("profile");
+  handle_t profile = bootstrap_capability("profile");
   enum call_status status;
   if (profile != HANDLE_INVALID) {
     uint64_t rights;
@@ -290,7 +290,7 @@ int launch_remote_server(const struct session_config *config,
       fprintf(stderr, "session: cannot query remote profile rights (status %u)\n", status);
       goto done;
     }
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"profile", grant_count);
     grants[grant_count++] = (struct launch_grant){profile,
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
@@ -318,8 +318,8 @@ int launch_remote_server(const struct session_config *config,
     .environment = (uintptr_t)environment, .environment_count = environment_count,
     .argv = (uintptr_t)arguments, .argc = beacon ? 4 : 2,
     .streams = {
-      [STARTUP_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT},
-      [STARTUP_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = STDERR},
+      [ENVIRONMENT_STDOUT] = {.protocol = PROTOCOL_CONSOLE, .grant = STDOUT},
+      [ENVIRONMENT_STDERR] = {.protocol = PROTOCOL_CONSOLE, .grant = STDERR},
     },
   };
   handle_t namespace_handle = startup_namespace();

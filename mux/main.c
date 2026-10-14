@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "mux.h"
 #include "../common/pane_cwd.h"
 #include <clock.h>
@@ -118,7 +119,7 @@ static void split(struct mux *mux, enum mux_axis axis)
       pane_cwd_receive_service(session->cwd_bootstrap, &session->cwd_caller);
     }
     if (session->cwd_caller != HANDLE_INVALID) {
-      inherited = pane_cwd_snapshot(startup_resource("service"), session->cwd_caller,
+      inherited = pane_cwd_snapshot(bootstrap_capability("service"), session->cwd_caller,
           mux->clock, &cwd) == CALL_OK;
     }
   }
@@ -661,11 +662,11 @@ static enum call_status run(struct mux *mux)
 int main(int argc, char **argv)
 {
   struct mux mux = {
-    .terminal = {startup_resource("input"), startup_resource("output")},
-    .clock = startup_resource("clock"), .tab_width = 8,
-    .pointer = startup_resource("terminal_pointer"),
-    .clipboard_local = startup_resource("clipboard_local"),
-    .clipboard_shared = startup_resource("clipboard_shared"),
+    .terminal = {bootstrap_capability("input"), bootstrap_capability("output")},
+    .clock = bootstrap_capability("clock"), .tab_width = 8,
+    .pointer = bootstrap_capability("terminal_pointer"),
+    .clipboard_local = bootstrap_capability("clipboard_local"),
+    .clipboard_shared = bootstrap_capability("clipboard_shared"),
   };
   if (argc == 3 && !strcmp(argv[1], "--tab-width")) {
     char *end;
@@ -681,9 +682,9 @@ int main(int argc, char **argv)
   }
   if (mux.terminal.input == HANDLE_INVALID || mux.terminal.output == HANDLE_INVALID ||
       mux.clock == HANDLE_INVALID ||
-      (startup_resource("terminal") == HANDLE_INVALID &&
-          startup_resource("pane_broker") == HANDLE_INVALID) ||
-      startup_resource("launcher") == HANDLE_INVALID) {
+      (bootstrap_capability("terminal") == HANDLE_INVALID &&
+          bootstrap_capability("pane_broker") == HANDLE_INVALID) ||
+      bootstrap_capability("launcher") == HANDLE_INVALID) {
     fputs("mux: missing terminal, clock, session creation or launcher authority\n", stderr);
     return 1;
   }

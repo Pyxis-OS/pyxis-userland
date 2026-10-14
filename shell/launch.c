@@ -1,3 +1,5 @@
+#include "../common/bootstrap_environment.h"
+#include "../common/launch_environment.h"
 #include <pyxis/environment.h>
 #include <pyxis/working_path.h>
 #include "shell.h"
@@ -22,7 +24,6 @@
 #include <abi/screen_capture.h>
 #include <abi/audio.h>
 #include <abi/endpoint.h>
-#include <abi/namespace.h>
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
@@ -41,7 +42,8 @@
 #include <endpoint.h>
 #include <file.h>
 #include <launcher.h>
-#include <namespace.h>
+#include <environment.h>
+#include <forwarder.h>
 #include <network_environment.h>
 #include <pipe.h>
 #include <directory.h>
@@ -60,16 +62,67 @@ struct prepared_stage {
   handle_t image;
   struct bundle_program *bundle;
   struct bundle_launch *bundle_launch;
-  handle_t redirected[STARTUP_STREAM_COUNT];
-  handle_t observation[STARTUP_STREAM_COUNT];
+  handle_t redirected[ENVIRONMENT_STREAM_COUNT];
+  handle_t observation[ENVIRONMENT_STREAM_COUNT];
   handle_t staging_leaf;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_binding resources[34 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[34 + BUNDLE_SOURCE_LIMIT];
   char *source_names[BUNDLE_SOURCE_LIMIT];
-  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
+  struct environment_capture captured;
+  struct launch_environment_entry *entries;
   struct launch_request request;
 };
+
+static enum call_status publish_service(struct shell *shell, const char *name,
+    bool replace, handle_t target, uint64_t rights, uint64_t transport)
+{
+  size_t length = strlen(name);
+  if (length > ENVIRONMENT_NAME_MAX - (sizeof(".control") - 1)) {
+    return CALL_BAD_REQUEST;
+  }
+  char control_name[ENVIRONMENT_NAME_MAX + 1];
+  snprintf(control_name, sizeof(control_name), "%s.control", name);
+  if (replace) {
+    handle_t control = HANDLE_INVALID;
+    enum call_status status = environment_capability(shell->environment, control_name, &control);
+    if (status == CALL_OK) {
+      status = forwarder_retarget(control, target);
+      if (handle_close(control) != 0 && status == CALL_OK) {
+        status = CALL_BAD_HANDLE;
+      }
+    }
+    return status;
+  }
+  struct forwarder_reply slot = {0};
+  enum call_status status = forwarder_slot(target, rights, transport, 0, &slot);
+  if (status != CALL_OK) {
+    return status;
+  }
+  struct environment_set_entry entries[2] = {0};
+  if (!environment_name(entries[0].name, name) ||
+      !environment_name(entries[1].name, control_name)) {
+    status = CALL_BAD_REQUEST;
+  } else {
+    entries[0].kind = entries[1].kind = ENVIRONMENT_CAP;
+    entries[0].flags = ENVIRONMENT_EXPORTED;
+    entries[0].set_flags = entries[1].set_flags = ENVIRONMENT_SET_REQUIRE_ABSENT;
+    entries[0].handle = slot.holder;
+    entries[0].rights = rights;
+    entries[0].transport = transport;
+    entries[1].handle = slot.controller;
+    entries[1].rights = FORWARDER_RIGHTS;
+    status = environment_set_batch(shell->environment, entries, 2);
+  }
+  if (handle_close(slot.holder) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
+  if (handle_close(slot.controller) != 0 && status == CALL_OK) {
+    status = CALL_BAD_HANDLE;
+  }
+  return status;
+}
 
 static bool http_uri(const char *path)
 {
@@ -127,7 +180,7 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
     } else if (!close_handle(&stages[i].image)) {
       closed = false;
     }
-    for (size_t stream = 0; stream < STARTUP_STREAM_COUNT; ++stream) {
+    for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
       if (!close_handle(&stages[i].observation[stream])) {
         closed = false;
       }
@@ -155,6 +208,8 @@ static void free_preparation(struct prepared_stage *stages, size_t stage_count)
     }
     free(stages[i].directories);
     free(stages[i].grants);
+    free(stages[i].entries);
+    environment_capture_close(&stages[i].captured);
   }
   free(stages);
 }
@@ -188,22 +243,22 @@ static enum command_result launch_error(struct shell *shell, const struct shell_
 /* The internal worker's declared profile has only memory and copied streams. */
 static enum call_status prepare_http_worker(struct shell *shell,
     struct prepared_stage *prepared, const struct shell_stage *stage,
-    const struct startup_stream streams[STARTUP_STREAM_COUNT])
+    const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT])
 {
-  prepared->grants = calloc(1 + STARTUP_STREAM_COUNT, sizeof(*prepared->grants));
+  prepared->grants = calloc(1 + ENVIRONMENT_STREAM_COUNT, sizeof(*prepared->grants));
   if (!prepared->grants) {
     return CALL_NO_MEMORY;
   }
   prepared->grants[0] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
-  prepared->resources[0] = (struct launch_binding){(uintptr_t)"memory", 0};
+  prepared->resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", 0);
   prepared->request = (struct launch_request){
     .image = prepared->image, .grants = (uintptr_t)prepared->grants, .grant_count = 1,
-    .resources = (uintptr_t)prepared->resources, .resource_count = 1,
+    .entries = (uintptr_t)prepared->resources, .entry_count = 1,
     .argv = (uintptr_t)stage->arguments, .argc = stage->count,
   };
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    const struct startup_stream *stream = &streams[i];
-    if (stream->protocol == STARTUP_STREAM_NONE) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
+    const struct pyxis_stdio_binding *stream = &streams[i];
+    if (stream->protocol == 0) {
       continue;
     }
     struct handle_info info;
@@ -212,24 +267,24 @@ static enum call_status prepare_http_worker(struct shell *shell,
       return status != CALL_OK ? status : CALL_WRONG_TYPE;
     }
     uint64_t rights = stream->protocol == PROTOCOL_FILE ? FILE_RIGHT_WRITE :
-        stream->protocol == PROTOCOL_PIPE ? (i == STARTUP_STDIN ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
+        stream->protocol == PROTOCOL_PIPE ? (i == ENVIRONMENT_STDIN ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         stream->protocol == PROTOCOL_CONSOLE ? CONSOLE_RIGHT_WRITE : 0;
-    if (!rights || (i == STARTUP_STDIN && stream->protocol != PROTOCOL_PIPE) ||
-        (i == STARTUP_STDOUT && stream->protocol != PROTOCOL_FILE) ||
+    if (!rights || (i == ENVIRONMENT_STDIN && stream->protocol != PROTOCOL_PIPE) ||
+        (i == ENVIRONMENT_STDOUT && stream->protocol != PROTOCOL_FILE) ||
         stream->observation || stream->observation_protocol) {
       return CALL_BAD_REQUEST;
     }
     uint64_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){stream->handle, rights,
       info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0};
-    prepared->request.streams[i] = (struct launch_stream){.protocol = stream->protocol, .grant = index};
+    prepared->resources[prepared->request.entry_count++] = profile_stdio_entry(i, index);
   }
   return CALL_OK;
 }
 
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
-    const struct startup_stream streams[STARTUP_STREAM_COUNT], handle_t publication,
+    const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], handle_t publication,
     bool read_only, const struct network_environment *environment)
 {
   if (stage->http_worker) {
@@ -242,35 +297,35 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool session = mode == SHELL_SESSION;
   /* Only the explicit trusted init/session successor receives this ancestor;
    * ordinary clients receive a newly declared leaf through bundle preparation. */
-  handle_t job_provisioner = session ? startup_resource("job_provisioner") : HANDLE_INVALID;
+  handle_t job_provisioner = session ? bootstrap_capability("job_provisioner") : HANDLE_INVALID;
   bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
-  handle_t threads = session ? startup_resource("threads") : HANDLE_INVALID;
+  handle_t threads = session ? bootstrap_capability("threads") : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
   bool pass_child_launcher = session && shell->child_launcher != HANDLE_INVALID;
   bool has_launcher = session ||
       (mode == SHELL_FOREGROUND && !stage->http_producer &&
        shell->child_launcher != HANDLE_INVALID);
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
-  handle_t mux_terminal = session ? startup_resource("mux_terminal") : HANDLE_INVALID;
+  handle_t mux_terminal = session ? bootstrap_capability("mux_terminal") : HANDLE_INVALID;
   bool has_mux_terminal = mux_terminal != HANDLE_INVALID;
-  handle_t remote_mux_terminal = session ? startup_resource("remote_mux_terminal") : HANDLE_INVALID;
+  handle_t remote_mux_terminal = session ? bootstrap_capability("remote_mux_terminal") : HANDLE_INVALID;
   bool has_remote_mux_terminal = remote_mux_terminal != HANDLE_INVALID;
-  handle_t terminal_pointer = has_mux_terminal ? startup_resource("terminal_pointer") : HANDLE_INVALID;
+  handle_t terminal_pointer = has_mux_terminal ? bootstrap_capability("terminal_pointer") : HANDLE_INVALID;
   bool has_terminal_pointer = terminal_pointer != HANDLE_INVALID;
   bool pass_clipboard = session || mode == SHELL_FOREGROUND;
-  handle_t clipboard_local = pass_clipboard ? startup_resource("clipboard_local") : HANDLE_INVALID;
-  handle_t clipboard_shared = pass_clipboard ? startup_resource("clipboard_shared") : HANDLE_INVALID;
+  handle_t clipboard_local = pass_clipboard ? bootstrap_capability("clipboard_local") : HANDLE_INVALID;
+  handle_t clipboard_shared = pass_clipboard ? bootstrap_capability("clipboard_shared") : HANDLE_INVALID;
   bool has_clipboard_local = clipboard_local != HANDLE_INVALID;
   bool has_clipboard_shared = clipboard_shared != HANDLE_INVALID;
   /* Only a session successor inherits power; the shell's own programs never do. */
   bool has_power = session && shell->power != HANDLE_INVALID;
-  handle_t remote_power = session ? startup_resource("remote_power") : HANDLE_INVALID;
+  handle_t remote_power = session ? bootstrap_capability("remote_power") : HANDLE_INVALID;
   bool has_remote_power = remote_power != HANDLE_INVALID;
   bool has_screen_capture = shell->screen_capture != HANDLE_INVALID;
   bool has_audio = shell->audio != HANDLE_INVALID;
   bool provider = mode == SHELL_SERVICE;
   bool device_input = named_input &&
-      streams[STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
+      streams[ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
   bool has_keyboard = device_input && shell->keyboard != HANDLE_INVALID;
   bool has_pointer = device_input && shell->pointer != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
@@ -280,8 +335,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
   bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
-  bool has_namespace_service = session && shell->namespace_service != HANDLE_INVALID;
-  bool has_namespace = !provider && shell->namespace != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_udp_beacons = session && shell->udp_beacons != HANDLE_INVALID;
   bool has_echo = shell->echo != HANDLE_INVALID;
@@ -289,19 +342,29 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_system_info = !provider && shell->system_info != HANDLE_INVALID;
   bool has_log = !provider && shell->log != HANDLE_INVALID;
   bool has_display = shell->display != HANDLE_INVALID;
-  if (shell->directory->root_count > STARTUP_ROOT_LIMIT) {
-    return CALL_LIMIT;
+  enum call_status captured = environment_capture_init(shell->environment,
+      session ? ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE : 0, &prepared->captured);
+  if (captured != CALL_OK) {
+    return captured;
   }
-  size_t root_count = 0;
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    if (strcmp(shell->roots[i].name, "app")) {
-      ++root_count;
+  struct profile_directory selected_roots[PROFILE_DIRECTORY_LIMIT];
+  size_t root_count;
+  captured = profile_directories(&prepared->captured, selected_roots,
+      PROFILE_DIRECTORY_LIMIT, &root_count);
+  if (captured != CALL_OK) {
+    return captured;
+  }
+  size_t retained = 0;
+  for (size_t i = 0; i < root_count; ++i) {
+    if (strcmp(selected_roots[i].name, "app")) {
+      selected_roots[retained++] = selected_roots[i];
     }
   }
+  root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
   if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 35 -
-      BUNDLE_SOURCE_LIMIT - STARTUP_STREAM_COUNT) {
+      BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -323,10 +386,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t space_index = service_index + (has_service ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
   size_t input_index = profile_index + (has_profile ? 1 : 0);
-  size_t namespace_index = input_index + (named_input ? 1 : 0);
-  size_t publication_index = namespace_index + (has_namespace ? 1 : 0);
-  size_t namespace_service_index = publication_index + (provider ? 1 : 0);
-  size_t terminal_index = namespace_service_index + (has_namespace_service ? 1 : 0);
+  size_t publication_index = input_index + (named_input ? 1 : 0);
+  size_t terminal_index = publication_index + (provider ? 1 : 0);
   size_t mux_terminal_index = terminal_index + (has_terminal ? 1 : 0);
   size_t remote_mux_terminal_index = mux_terminal_index + (has_mux_terminal ? 1 : 0);
   size_t terminal_pointer_index = remote_mux_terminal_index + (has_remote_mux_terminal ? 1 : 0);
@@ -339,7 +400,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
   size_t grant_count = job_provisioner_index + (has_job_provisioner ? 1 : 0);
-  size_t grant_capacity = grant_count + STARTUP_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT;
+  size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -362,16 +423,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
-  size_t root_index = 0;
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    /* app belongs to one program; never inherit even an unused grant for it. */
-    if (!strcmp(shell->roots[i].name, "app")) {
-      continue;
-    }
-    grants[CHILD_ROOT + root_index] = (struct launch_grant){shell->roots[i].handle, 0, 0};
-    prepared->roots[root_index] = (struct launch_binding){(uintptr_t)shell->roots[i].name,
-        CHILD_ROOT + root_index};
-    ++root_index;
+  for (size_t i = 0; i < root_count; ++i) {
+    grants[CHILD_ROOT + i] = (struct launch_grant){selected_roots[i].handle, 0, 0};
+    prepared->roots[i] = (struct launch_environment_entry)
+        PROFILE_CAP(selected_roots[i].name, CHILD_ROOT + i);
   }
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = directory_index + i;
@@ -503,24 +558,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[profile_index] = (struct launch_grant){shell->profile,
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
-  if (has_namespace) {
-    uint64_t rights, transport;
-    enum call_status status = handle_rights(shell->namespace, &rights, &transport);
-    if (status != CALL_OK) {
-      return status;
-    }
-    grants[namespace_index] = (struct launch_grant){shell->namespace,
-        session ? rights : NAMESPACE_RIGHT_LOOKUP, transport};
-  }
   if (provider) {
     grants[publication_index] = (struct launch_grant){publication,
         0, HANDLE_TRANSPORT_CALL};
   }
-  if (has_namespace_service) {
-    grants[namespace_service_index] = (struct launch_grant){shell->namespace_service,
-        NAMESPACE_SERVICE_RIGHT_CREATE, 0};
-  }
-
   if (has_clipboard_local) {
     grants[clipboard_local_index] = (struct launch_grant){clipboard_local, CLIPBOARD_RIGHTS, 0};
   }
@@ -537,118 +578,107 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       job_provisioner, JOB_PROVISIONER_RIGHTS, 0,
     };
   }
-  struct launch_binding *resources = prepared->resources;
-  resources[0] = (struct launch_binding){(uintptr_t)"output", CHILD_OUTPUT};
-  resources[1] = (struct launch_binding){(uintptr_t)"memory", CHILD_MEMORY};
+  struct launch_environment_entry *resources = prepared->resources;
+  resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", CHILD_OUTPUT);
+  resources[1] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
   size_t resource_count = 2;
   if (has_job_provisioner) {
-    resources[resource_count++] = (struct launch_binding){
-      (uintptr_t)"job_provisioner", job_provisioner_index,
-    };
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", job_provisioner_index);
   }
   if (has_threads) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"threads", threads_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", threads_index);
   }
   if (named_input) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"input", input_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"input", input_index);
   }
   if (has_display) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"display", display_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"display", display_index);
   }
   if (has_clock) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"clock", clock_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clock", clock_index);
   }
   if (has_system_info) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"system_info", system_info_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"system_info", system_info_index);
   }
   if (has_log) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"log", log_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"log", log_index);
   }
   if (has_echo) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"echo", echo_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"echo", echo_index);
   }
   if (has_udp) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"udp", udp_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp", udp_index);
   }
   if (has_udp_beacons) {
     resources[resource_count++] =
-        (struct launch_binding){(uintptr_t)"udp_beacons", udp_beacons_index};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", udp_beacons_index);
   }
   if (has_tcp) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"tcp", tcp_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", tcp_index);
   }
   if (has_random) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"random", random_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"random", random_index);
   }
   if (has_keyboard) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"keyboard", keyboard_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"keyboard", keyboard_index);
   }
   if (has_pointer) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pointer", pointer_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pointer", pointer_index);
   }
   if (has_launcher) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"launcher", launcher_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"launcher", launcher_index);
   }
   if (pass_child_launcher) {
     resources[resource_count++] =
-        (struct launch_binding){(uintptr_t)"child_launcher", child_launcher_index};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", child_launcher_index);
   }
   if (has_net_config) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"net_config", net_config_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_config", net_config_index);
   }
   if (has_pipe) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pipe", pipe_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", pipe_index);
   }
   if (has_service) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"service", service_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"service", service_index);
   }
   if (has_space) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"space", space_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"space", space_index);
   }
   if (has_profile) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"profile", profile_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"profile", profile_index);
   }
   if (provider) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"publication", publication_index};
-  }
-  if (has_namespace_service) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"namespace_service", namespace_service_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"publication", publication_index);
   }
   if (has_terminal) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"terminal", terminal_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal", terminal_index);
   }
   if (has_mux_terminal) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"mux_terminal", mux_terminal_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"mux_terminal", mux_terminal_index);
   }
   if (has_remote_mux_terminal) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"remote_mux_terminal", remote_mux_terminal_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", remote_mux_terminal_index);
   }
   if (has_terminal_pointer) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"terminal_pointer", terminal_pointer_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal_pointer", terminal_pointer_index);
   }
   if (has_power) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", power_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", power_index);
   }
   if (has_remote_power) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"remote_power", remote_power_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", remote_power_index);
   }
   if (has_screen_capture) {
-    resources[resource_count++] = (struct launch_binding){
-        (uintptr_t)"screen_capture", screen_capture_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", screen_capture_index);
   }
   if (has_audio) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"audio", audio_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"audio", audio_index);
   }
   if (has_clipboard_local) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"clipboard_local", clipboard_local_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clipboard_local", clipboard_local_index);
   }
   if (has_clipboard_shared) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"clipboard_shared", clipboard_shared_index};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clipboard_shared", clipboard_shared_index);
   }
   if (session) {
     struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
@@ -696,14 +726,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           return CALL_BAD_REQUEST;
         }
       }
-      resources[resource_count++] = (struct launch_binding){(uintptr_t)name, grant_count};
+      resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)name, grant_count);
       grants[grant_count++] = (struct launch_grant){sources[i].source, info.rights, transport};
     }
   }
-  struct launch_binding *roots = prepared->roots;
+  struct launch_environment_entry *roots = prepared->roots;
   /* Root names and display paths do not determine delegated authority. */
   for (size_t i = 0; i < root_count; ++i) {
-    struct launch_grant *grant = &grants[roots[i].grant];
+    struct launch_grant *grant = &grants[roots[i].value];
     enum call_status status = handle_rights(grant->source, &grant->rights,
         &grant->transport);
     if (status != CALL_OK) {
@@ -729,30 +759,74 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
   }
 
+  size_t entry_capacity = resource_count + root_count + environment->count +
+      prepared->captured.count + ENVIRONMENT_STREAM_COUNT + 1;
+  prepared->entries = calloc(entry_capacity, sizeof(*prepared->entries));
+  if (!prepared->entries) {
+    return CALL_NO_MEMORY;
+  }
+  size_t entry_count = resource_count;
+  memcpy(prepared->entries, resources, resource_count * sizeof(*prepared->entries));
+  memcpy(prepared->entries + entry_count, roots, root_count * sizeof(*prepared->entries));
+  entry_count += root_count;
+  memcpy(prepared->entries + entry_count, environment->variables,
+      environment->count * sizeof(*prepared->entries));
+  entry_count += environment->count;
+  if (!provider) {
+    for (size_t i = 0; i < prepared->captured.count; ++i) {
+      const struct environment_value *entry = &prepared->captured.values[i];
+      if (entry->kind != ENVIRONMENT_CAP ||
+          !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
+          !strcmp(entry->name, "stdin") || !strcmp(entry->name, "stdin.status") ||
+          !strcmp(entry->name, "stdout") || !strcmp(entry->name, "stderr")) {
+        continue;
+      }
+      bool selected = false;
+      for (size_t j = 0; j < entry_count; ++j) {
+        selected |= !strcmp(entry->name, (const char *)(uintptr_t)prepared->entries[j].name);
+      }
+      if (selected) {
+        continue;
+      }
+      struct handle_info info;
+      enum call_status status = handle_query(entry->handle, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      size_t length = strlen(entry->name);
+      bool controller = session && !(entry->flags & ENVIRONMENT_EXPORTED) &&
+          length > sizeof(".control") - 1 &&
+          !strcmp(entry->name + length - (sizeof(".control") - 1), ".control") &&
+          info.protocol == PROTOCOL_FORWARDER;
+      if (!controller && (!(entry->flags & ENVIRONMENT_EXPORTED) ||
+          info.kind != HANDLE_KIND_EXPORTED)) {
+        continue;
+      }
+      prepared->entries[entry_count++] = (struct launch_environment_entry){
+        .name = (uintptr_t)entry->name, .kind = ENVIRONMENT_CAP,
+        .flags = controller ? 0 : ENVIRONMENT_EXPORTED, .value = grant_count,
+      };
+      grants[grant_count++] = (struct launch_grant){entry->handle, info.rights, info.transport};
+    }
+  }
   struct launch_request *request = &prepared->request;
   *request = (struct launch_request){
     .image = prepared->image,
     .grants = (uintptr_t)grants,
     .grant_count = grant_count,
-    .resources = (uintptr_t)resources,
-    .resource_count = resource_count,
-    .roots = (uintptr_t)roots,
-    .root_count = root_count,
+    .entries = (uintptr_t)prepared->entries, .entry_count = entry_count,
     .working_directories = (uintptr_t)directories,
     .working_directory_count = depth,
     .working_path = (uintptr_t)pyxis_working_path(),
-    .environment = (uintptr_t)environment->variables,
-    .environment_count = environment->count,
     .argv = (uintptr_t)stage->arguments,
     .argc = stage->count,
-    .namespace_grant = has_namespace ? namespace_index + 1 : 0,
   };
-  for (size_t i = 0; i < STARTUP_STREAM_COUNT; ++i) {
-    struct startup_stream stream = streams[i];
-    if (stream.protocol == STARTUP_STREAM_NONE) {
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
+    struct pyxis_stdio_binding stream = streams[i];
+    if (stream.protocol == 0) {
       continue;
     }
-    bool input = i == STARTUP_STDIN;
+    bool input = i == ENVIRONMENT_STDIN;
     bool response = stream.protocol == PROTOCOL_STREAM;
     if ((response && (!input || stream.observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
           stream.observation == HANDLE_INVALID || stream.observation == stream.handle)) ||
@@ -765,9 +839,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
-    request->streams[i] = (struct launch_stream){
-      .protocol = stream.protocol, .grant = request->grant_count,
-    };
+    prepared->entries[request->entry_count++] = profile_stdio_entry(i, request->grant_count);
     uint64_t transport = 0;
     if (stream.protocol == PROTOCOL_FILE || response) {
       struct handle_info info;
@@ -785,8 +857,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, transport};
     if (response) {
-      request->streams[i].observation_protocol = stream.observation_protocol;
-      request->streams[i].observation_grant = request->grant_count;
+      prepared->entries[request->entry_count++] = (struct launch_environment_entry)
+          PROFILE_CAP("stdin.status", request->grant_count);
       grants[request->grant_count++] = (struct launch_grant){
         stream.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
       };
@@ -797,7 +869,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"input", shell->terminal.input, PROTOCOL_CONSOLE},
       {"output", shell->terminal.output, PROTOCOL_CONSOLE},
       {"memory", shell->memory, PROTOCOL_MEMORY},
-      {"threads", startup_resource("threads"), PROTOCOL_THREAD_SERVICE},
+      {"threads", bootstrap_capability("threads"), PROTOCOL_THREAD_SERVICE},
       {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID, PROTOCOL_KEYBOARD},
       {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID, PROTOCOL_POINTER},
       {"clock", shell->clock, PROTOCOL_CLOCK},
@@ -857,7 +929,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       }
     }
     status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
-        ordinary_count + source_count, startup_resource("job_provisioner"),
+        ordinary_count + source_count, bootstrap_capability("job_provisioner"),
         &shell->jobs, &prepared->bundle_launch);
     if (status != CALL_OK) {
       return status;
@@ -972,14 +1044,14 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
 
 static enum call_status check_redirect_inputs(const struct shell_stage *stages,
     const struct prepared_stage *prepared,
-    const struct startup_stream streams[LAUNCH_BATCH_MAX][STARTUP_STREAM_COUNT],
+    const struct pyxis_stdio_binding streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT],
     size_t stage_count, size_t *failed_stage, const char **operation, const char **path)
 {
   bool has_input = false, has_output = false;
   for (size_t i = 0; i < stage_count; ++i) {
-    has_input |= streams[i][STARTUP_STDIN].protocol == PROTOCOL_FILE;
-    has_output |= prepared[i].redirected[STARTUP_STDOUT] != HANDLE_INVALID ||
-                  prepared[i].redirected[STARTUP_STDERR] != HANDLE_INVALID;
+    has_input |= streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_FILE;
+    has_output |= prepared[i].redirected[ENVIRONMENT_STDOUT] != HANDLE_INVALID ||
+                  prepared[i].redirected[ENVIRONMENT_STDERR] != HANDLE_INVALID;
   }
   if (!has_input || !has_output) {
     return CALL_OK;
@@ -987,13 +1059,13 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
 
   struct file_info_reply inputs[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < stage_count; ++i) {
-    if (streams[i][STARTUP_STDIN].protocol != PROTOCOL_FILE) {
+    if (streams[i][ENVIRONMENT_STDIN].protocol != PROTOCOL_FILE) {
       continue;
     }
     *failed_stage = i;
     *operation = "shell: query stdin";
     *path = stages[i].arguments[0];
-    enum call_status status = file_info(streams[i][STARTUP_STDIN].handle, &inputs[i]);
+    enum call_status status = file_info(streams[i][ENVIRONMENT_STDIN].handle, &inputs[i]);
     if (status != CALL_OK) {
       return status;
     }
@@ -1002,7 +1074,7 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
   for (size_t i = 0; i < stage_count; ++i) {
     for (size_t j = 0; j < stages[i].redirection_count; ++j) {
       const struct shell_redirection *redirect = &stages[i].redirections[j];
-      if (redirect->stream == STARTUP_STDIN) {
+      if (redirect->stream == ENVIRONMENT_STDIN) {
         continue;
       }
       if (stages[i].http_producer && (redirect->capability || http_uri(redirect->path))) {
@@ -1017,7 +1089,7 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
         return status;
       }
       for (size_t input = 0; input < stage_count; ++input) {
-        if (streams[input][STARTUP_STDIN].protocol != PROTOCOL_FILE) {
+        if (streams[input][ENVIRONMENT_STDIN].protocol != PROTOCOL_FILE) {
           continue;
         }
         const struct file_info_reply *source = &inputs[input];
@@ -1058,7 +1130,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     return shell_directory_error(shell, "shell", stages[0].arguments[0], CALL_NO_MEMORY);
   }
   struct pipe_create_reply pipes[LAUNCH_BATCH_MAX - 1] = {0};
-  struct startup_stream streams[LAUNCH_BATCH_MAX][STARTUP_STREAM_COUNT] = {0};
+  struct pyxis_stdio_binding streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT] = {0};
   const char *operation = "shell: open";
   const char *path = stages[0].arguments[0];
   size_t failed_stage = 0;
@@ -1090,18 +1162,18 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
   for (size_t i = 0; i < stage_count; ++i) {
-    for (size_t stream = 0; stream < STARTUP_STREAM_COUNT; ++stream) {
-      streams[i][stream] = startup_stream(stream);
+    for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
+      streams[i][stream] = bootstrap_stdio(stream);
     }
     if (mode == SHELL_BACKGROUND || mode == SHELL_SERVICE) {
-      streams[i][STARTUP_STDIN] = (struct startup_stream){0};
+      streams[i][ENVIRONMENT_STDIN] = (struct pyxis_stdio_binding){0};
     }
     for (size_t j = 0; j < stages[i].redirection_count; ++j) {
       const struct shell_redirection *redirect = &stages[i].redirections[j];
       failed_stage = i;
       operation = "shell: redirect";
       path = redirect->path;
-      bool input = redirect->stream == STARTUP_STDIN;
+      bool input = redirect->stream == ENVIRONMENT_STDIN;
       if (!input && stages[i].http_producer &&
           (redirect->capability || http_uri(path))) {
         if (automatic) {
@@ -1145,7 +1217,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         }
         prepared[i].redirected[redirect->stream] = opened.response;
         prepared[i].observation[redirect->stream] = opened.observation;
-        streams[i][redirect->stream] = (struct startup_stream){.protocol = PROTOCOL_STREAM,
+        streams[i][redirect->stream] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_STREAM,
           .handle = opened.response, .observation_protocol = PROTOCOL_HTTP_TRANSACTION,
           .observation = opened.observation};
         opened.response = opened.observation = HANDLE_INVALID;
@@ -1153,7 +1225,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         response_input = true;
       } else {
         status = shell_open_redirect(shell, path, input, &prepared[i].redirected[redirect->stream]);
-        streams[i][redirect->stream] = (struct startup_stream){.protocol = PROTOCOL_FILE,
+        streams[i][redirect->stream] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
           .handle = prepared[i].redirected[redirect->stream]};
       }
       if (status != CALL_OK) {
@@ -1165,17 +1237,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (body) {
     size_t worker = stage_count - 1;
     status = handle_copy_restricted(shell_capability_body(body), FILE_RIGHT_WRITE,
-        HANDLE_TRANSPORT_CALL, &prepared[worker].redirected[STARTUP_STDOUT]);
+        HANDLE_TRANSPORT_CALL, &prepared[worker].redirected[ENVIRONMENT_STDOUT]);
     if (status != CALL_OK) {
       goto failed;
     }
-    streams[worker][STARTUP_STDIN] = (struct startup_stream){0};
-    streams[worker][STARTUP_STDOUT] = (struct startup_stream){.protocol = PROTOCOL_FILE,
-      .handle = prepared[worker].redirected[STARTUP_STDOUT]};
+    streams[worker][ENVIRONMENT_STDIN] = (struct pyxis_stdio_binding){0};
+    streams[worker][ENVIRONMENT_STDOUT] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
+      .handle = prepared[worker].redirected[ENVIRONMENT_STDOUT]};
   }
   for (size_t i = 0; i + 1 < stage_count; ++i) {
-    bool writer = prepared[i].redirected[STARTUP_STDOUT] == HANDLE_INVALID;
-    bool reader = prepared[i + 1].redirected[STARTUP_STDIN] == HANDLE_INVALID;
+    bool writer = prepared[i].redirected[ENVIRONMENT_STDOUT] == HANDLE_INVALID;
+    bool reader = prepared[i + 1].redirected[ENVIRONMENT_STDIN] == HANDLE_INVALID;
     if (!writer && !reader) {
       continue;
     }
@@ -1187,15 +1259,15 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       goto failed;
     }
     if (writer) {
-      streams[i][STARTUP_STDOUT] = (struct startup_stream){.protocol = PROTOCOL_PIPE, .handle = pipes[i].writer};
+      streams[i][ENVIRONMENT_STDOUT] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_PIPE, .handle = pipes[i].writer};
     } else if (!close_handle(&pipes[i].writer)) {
       status = CALL_BAD_HANDLE;
       cleanup_failure = true;
       goto failed;
     }
     if (reader) {
-      streams[i + 1][STARTUP_STDIN] =
-          (struct startup_stream){.protocol = PROTOCOL_PIPE, .handle = pipes[i].reader};
+      streams[i + 1][ENVIRONMENT_STDIN] =
+          (struct pyxis_stdio_binding){.protocol = PROTOCOL_PIPE, .handle = pipes[i].reader};
     } else if (!close_handle(&pipes[i].reader)) {
       status = CALL_BAD_HANDLE;
       cleanup_failure = true;
@@ -1204,7 +1276,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
 
   for (size_t i = 0; i < stage_count; ++i) {
-    response_input |= streams[i][STARTUP_STDIN].protocol == PROTOCOL_STREAM;
+    response_input |= streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_STREAM;
   }
   /* Compare held objects after pipe wiring, before the first output resize. */
   status = check_redirect_inputs(stages, prepared, streams, stage_count,
@@ -1219,8 +1291,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (status != CALL_OK) {
     goto failed;
   }
-  status = network_environment_read(&environment, shell->net_config,
-      inherited.variables, inherited.count, NULL);
+  status = network_environment_from_capture(&environment, shell->net_config,
+      &inherited.capture, NULL);
   if (status != CALL_OK) {
     goto failed;
   }
@@ -1235,12 +1307,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     failed_stage = i;
     operation = "shell: prepare";
     path = stages[i].arguments[0];
-    bool console_stdin = streams[i][STARTUP_STDIN].protocol == PROTOCOL_CONSOLE;
+    bool console_stdin = streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
     bool pager_input = mode == SHELL_FOREGROUND && i + 1 == stage_count &&
-        streams[i][STARTUP_STDOUT].protocol == PROTOCOL_CONSOLE &&
-        (streams[i][STARTUP_STDIN].protocol == PROTOCOL_PIPE ||
-         streams[i][STARTUP_STDIN].protocol == PROTOCOL_FILE ||
-         streams[i][STARTUP_STDIN].protocol == PROTOCOL_STREAM);
+        streams[i][ENVIRONMENT_STDOUT].protocol == PROTOCOL_CONSOLE &&
+        (streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_PIPE ||
+         streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_FILE ||
+         streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_STREAM);
     bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
         ((i == 0 && console_stdin) || pager_input);
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
@@ -1256,7 +1328,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   for (size_t i = 0; i < stage_count; ++i) {
     for (size_t j = 0; j < stages[i].redirection_count; ++j) {
       const struct shell_redirection *redirect = &stages[i].redirections[j];
-      if (redirect->stream == STARTUP_STDIN) {
+      if (redirect->stream == ENVIRONMENT_STDIN) {
         continue;
       }
       if (stages[i].http_producer && (redirect->capability || http_uri(redirect->path))) {
@@ -1285,7 +1357,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (mode == SHELL_FOREGROUND) {
     armed = arm_interrupt(shell);
   }
-  struct path_context interpreter_context = {.namespace_handle = shell->namespace};
+  struct path_context interpreter_context = {0};
   if (stage_count == 1) {
     status = program_launch(shell->launcher, &requests[0], &interpreter_context,
         &children[0]);
@@ -1347,10 +1419,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           if (queried == CALL_OK && info.kind == HANDLE_KIND_EXPORTED &&
               grant->transport == HANDLE_TRANSPORT_CALL &&
               info.rights == grant->rights && info.transport == grant->transport) {
-            published = replace ? namespace_replace(shell->namespace, service_name,
-                grant->handle, grant->rights, grant->transport) :
-                namespace_publish(shell->namespace, service_name, grant->handle,
-                grant->rights, grant->transport);
+            published = publish_service(shell, service_name, replace,
+                grant->handle, grant->rights, grant->transport);
           }
         } else if (setup.status != CALL_OK && packet.grant_count == 0) {
           reported_failure = true;
@@ -1562,11 +1632,11 @@ enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_stage *stage = &command->stages[i];
     for (size_t j = 0; j < stage->redirection_count; ++j) {
       const struct shell_redirection *redirect = &stage->redirections[j];
-      if (redirect->stream == STARTUP_STDIN ||
+      if (redirect->stream == ENVIRONMENT_STDIN ||
           (!redirect->capability && !http_uri(redirect->path))) {
         continue;
       }
-      if (sink || redirect->stream != STARTUP_STDOUT || i + 1 != command->stage_count) {
+      if (sink || redirect->stream != ENVIRONMENT_STDOUT || i + 1 != command->stage_count) {
         return shell_error(shell, "shell: HTTP body sink must be the final stdout\n");
       }
       sink = redirect;
@@ -1610,37 +1680,38 @@ enum command_result shell_launch_pipeline(struct shell *shell,
 enum command_result shell_launch_service(struct shell *shell, const char *name,
     bool replace, bool optional, bool read_only, char **arguments, size_t count)
 {
-  if (shell->namespace == HANDLE_INVALID || shell->service == HANDLE_INVALID ||
-      shell->clock == HANDLE_INVALID) {
-    return shell_error(shell,
-        "service: namespace, endpoint or clock authority unavailable\n");
+  if (shell->service == HANDLE_INVALID || shell->clock == HANDLE_INVALID) {
+    return shell_error(shell, "service: endpoint or clock authority unavailable\n");
   }
-  uint64_t rights, transport;
-  enum call_status status = handle_rights(shell->namespace, &rights, &transport);
-  if (status != CALL_OK || (rights & NAMESPACE_RIGHTS) != NAMESPACE_RIGHTS) {
-    return shell_error(shell, "service: namespace lookup or management denied\n");
-  }
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    if (!strcmp(shell->directory->roots[i].name, name)) {
-      return shell_error(shell, "service: %s conflicts with a filesystem root\n", name);
-    }
-  }
-  handle_t existing = HANDLE_INVALID;
-  status = namespace_lookup(shell->namespace, name, &existing);
-  if (existing != HANDLE_INVALID) {
-    handle_close(existing);
-  }
-  if (status == CALL_BAD_REQUEST) {
+  char control_name[ENVIRONMENT_NAME_MAX + 1];
+  size_t length = strlen(name);
+  if (!length || length > ENVIRONMENT_NAME_MAX - (sizeof(".control") - 1)) {
     return shell_error(shell, "service: invalid name %s\n", name);
   }
-  bool present = status == CALL_OK || status == CALL_ENDPOINT_CLOSED;
-  if (present != replace) {
-    return shell_error(shell, "service: %s %s failed (status %u)\n",
-        replace ? "replace" : "start", name,
-        replace ? CALL_NOT_FOUND : CALL_ALREADY_EXISTS);
-  }
-  if (!present && status != CALL_NOT_FOUND) {
-    return shell_error(shell, "service: lookup %s failed (status %u)\n", name, status);
+  snprintf(control_name, sizeof(control_name), "%s.control", name);
+  const char *names[] = {name, control_name};
+  for (size_t i = 0; i < 2; ++i) {
+    struct environment_entry_reply entry;
+    enum call_status status = environment_lookup(shell->environment, names[i], &entry, NULL, 0);
+    bool present = status == CALL_OK || status == CALL_BUFFER_TOO_SMALL;
+    if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
+      if (replace && i == 1) {
+        struct handle_info info;
+        status = handle_query(entry.handle, &info);
+        if (status == CALL_OK && (info.protocol != PROTOCOL_FORWARDER ||
+            !(info.rights & FORWARDER_RIGHT_RETARGET))) {
+          status = CALL_DENIED;
+        }
+      }
+      handle_close(entry.handle);
+    }
+    if (present != replace || (replace && i == 1 && entry.kind != ENVIRONMENT_CAP)) {
+      return shell_directory_error(shell, "service", names[i],
+          replace ? CALL_NOT_FOUND : CALL_ALREADY_EXISTS);
+    }
+    if (status != CALL_OK && status != CALL_BUFFER_TOO_SMALL && status != CALL_NOT_FOUND) {
+      return shell_directory_error(shell, "service", names[i], status);
+    }
   }
   struct shell_stage stage = {.arguments = arguments, .count = count};
   return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace, optional, read_only,

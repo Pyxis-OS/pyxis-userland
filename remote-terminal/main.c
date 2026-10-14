@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "session.h"
 #include <clock.h>
 #include <handle.h>
@@ -238,8 +239,8 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
     }
     if (options & REMOTE_OPTION_MULTIPLEXER) {
       if ((options & REMOTE_OPTION_NO_SHELL_ECHO) || mux_connections >= MUX_CONNECTION_LIMIT ||
-          startup_resource("remote_mux_terminal") == HANDLE_INVALID ||
-          startup_resource("service") == HANDLE_INVALID) {
+          bootstrap_capability("remote_mux_terminal") == HANDLE_INVALID ||
+          bootstrap_capability("service") == HANDLE_INVALID) {
         reject(client, REMOTE_ERROR_RESOURCE, now);
         return true;
       }
@@ -660,13 +661,13 @@ int main(int argc, char **argv)
     }
     tab_width = (unsigned)width;
   }
-  handle_t listener = startup_resource("tcp_listener"), clock = startup_resource("clock");
-  handle_t udp_beacons = startup_resource("udp_beacons"), tcp = startup_resource("tcp");
+  handle_t listener = bootstrap_capability("tcp_listener"), clock = bootstrap_capability("clock");
+  handle_t udp_beacons = bootstrap_capability("udp_beacons"), tcp = bootstrap_capability("tcp");
   if ((beacon ? udp_beacons == HANDLE_INVALID || tcp == HANDLE_INVALID :
       listener == HANDLE_INVALID) || clock == HANDLE_INVALID ||
-      startup_resource("terminal") == HANDLE_INVALID || startup_resource("launcher") == HANDLE_INVALID ||
-      startup_resource("memory") == HANDLE_INVALID || startup_root("boot") == HANDLE_INVALID ||
-      startup_root("tmp") == HANDLE_INVALID) {
+      bootstrap_capability("terminal") == HANDLE_INVALID || bootstrap_capability("launcher") == HANDLE_INVALID ||
+      bootstrap_capability("memory") == HANDLE_INVALID || bootstrap_capability("boot") == HANDLE_INVALID ||
+      bootstrap_capability("tmp") == HANDLE_INVALID) {
     fputs("remote-terminal: missing startup authority\n", stderr);
     return EXIT_FAILURE;
   }

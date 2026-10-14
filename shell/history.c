@@ -113,19 +113,10 @@ static size_t trim_entries(char *buffer, size_t size, size_t lines)
   return size - start;
 }
 
-static handle_t find_home(const struct shell *shell)
-{
-  for (size_t i = 0; i < shell->directory->root_count; ++i) {
-    if (!strcmp(shell->roots[i].name, "home")) {
-      return shell->roots[i].handle;
-    }
-  }
-  return HANDLE_INVALID;
-}
-
 void shell_history_load(struct shell *shell)
 {
-  handle_t home = find_home(shell);
+  handle_t home = HANDLE_INVALID;
+  environment_capability(shell->environment, "home", &home);
   if (home == HANDLE_INVALID) {
     return;
   }

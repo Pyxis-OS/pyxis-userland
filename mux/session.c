@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <pyxis/environment.h>
 #include <pyxis/working_path.h>
 #include "session.h"
@@ -76,9 +78,9 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     const struct pyxis_working_snapshot *cwd, struct mux_session *session)
 {
   *session = (struct mux_session){0};
-  if (startup_resource("pane_broker") != HANDLE_INVALID) {
+  if (bootstrap_capability("pane_broker") != HANDLE_INVALID) {
     struct endpoint_create_reply bootstrap = {0};
-    enum call_status status = endpoint_create(startup_resource("service"), &bootstrap);
+    enum call_status status = endpoint_create(bootstrap_capability("service"), &bootstrap);
     if (status != CALL_OK) {
       return status;
     }
@@ -126,7 +128,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
   bool admission_attempted = false;
   struct endpoint_create_reply bootstrap = {0};
-  status = terminal_create(startup_resource("terminal"), columns, rows,
+  status = terminal_create(bootstrap_capability("terminal"), columns, rows,
       &terminal);
   if (status != CALL_OK) {
     goto done;
@@ -137,13 +139,13 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     goto done;
   }
   struct execution_group_create_reply group;
-  status = launcher_create_group(startup_resource("launcher"), &group);
+  status = launcher_create_group(bootstrap_capability("launcher"), &group);
   if (status != CALL_OK) {
     goto done;
   }
   session->group = group.supervision;
   bound = group.launcher;
-  handle_t boot = startup_root("boot");
+  handle_t boot = bootstrap_capability("boot");
   if (boot == HANDLE_INVALID) {
     status = CALL_NOT_FOUND;
     goto done;
@@ -160,29 +162,29 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   grants[STDOUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[STDERR] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[EVENTS] = (struct launch_grant){terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0};
-  struct launch_binding resources[4 + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
-    {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
-    {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
+  struct launch_environment_entry resources[4 + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
+    PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
+    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal_events", EVENTS),
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
-  if (startup_resource("service") != HANDLE_INVALID &&
-      endpoint_create(startup_resource("service"), &bootstrap) == CALL_OK) {
+  if (bootstrap_capability("service") != HANDLE_INVALID &&
+      endpoint_create(bootstrap_capability("service"), &bootstrap) == CALL_OK) {
     session->cwd_bootstrap = bootstrap.receiver;
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"pane_cwd", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pane_cwd", grant_count);
     grants[grant_count++] = (struct launch_grant){bootstrap.caller, 0, HANDLE_TRANSPORT_SEND};
   }
-  handle_t provisioner = startup_resource("job_provisioner");
+  handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
-    status = job_work_create(provisioner, startup_resource("clock"), &session->job_provisioner);
+    status = job_work_create(provisioner, bootstrap_capability("clock"), &session->job_provisioner);
     if (status != CALL_OK) {
       goto done;
     }
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){
       job_work_directory(session->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };
   }
-  handle_t child_launcher = startup_resource("child_launcher");
+  handle_t child_launcher = bootstrap_capability("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
     struct handle_info info;
     status = handle_query(child_launcher, &info);
@@ -198,7 +200,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
     /* The opt-in controls delegation; only this group's launcher may enter it. */
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
   }
   static const struct {
@@ -223,7 +225,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"net_config", NET_CONFIG_RIGHT_READ},
   };
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
-    handle_t source = startup_resource(allowed[i].name);
+    handle_t source = bootstrap_capability(allowed[i].name);
     if (source == HANDLE_INVALID) {
       continue;
     }
@@ -232,17 +234,17 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
     grants[grant_count].rights &= allowed[i].rights;
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)allowed[i].name, grant_count++};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)allowed[i].name, grant_count++);
   }
   status = bundle_sources_forward_startup(grants, fixed_grants + depth, &grant_count,
       resources, sizeof(resources) / sizeof(*resources), &resource_count);
   if (status != CALL_OK) {
     goto done;
   }
-  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
   const struct startup_binding *selected_roots = startup_roots();
   for (size_t i = 0; i < root_count; ++i) {
-    roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
+    roots[i] = (struct launch_environment_entry)PROFILE_CAP(selected_roots[i].name, grant_count);
     status = copy_grant(selected_roots[i].handle, &grants[grant_count++]);
     if (status != CALL_OK) {
       goto done;

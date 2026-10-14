@@ -48,6 +48,10 @@ enum call_status shell_directory_init(struct shell *shell)
 void shell_directory_close(struct shell *shell)
 {
   pyxis_working_clear();
+  if (shell->history_home != HANDLE_INVALID) {
+    handle_close(shell->history_home);
+    shell->history_home = HANDLE_INVALID;
+  }
   free(shell->workspace.directories);
   free(shell->workspace.component);
   free(shell->workspace.http);

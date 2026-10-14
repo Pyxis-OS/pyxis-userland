@@ -1,3 +1,5 @@
+#include "../common/launch_environment.h"
+#include "../common/bootstrap_environment.h"
 #include <pyxis/environment.h>
 #include "session.h"
 #include "../common/session_wait.h"
@@ -61,7 +63,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
 {
   *shell = (struct remote_shell){0};
   struct terminal_create_reply terminal;
-  enum call_status status = terminal_create(startup_resource("terminal"), columns, rows, &terminal);
+  enum call_status status = terminal_create(bootstrap_capability("terminal"), columns, rows, &terminal);
   if (status != CALL_OK) {
     return status;
   }
@@ -71,7 +73,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   struct network_environment environment = {0};
   struct pyxis_environment_snapshot inherited = {0};
   struct execution_group_create_reply group;
-  status = launcher_create_group(startup_resource("launcher"), &group);
+  status = launcher_create_group(bootstrap_capability("launcher"), &group);
   if (status != CALL_OK) {
     goto done;
   }
@@ -81,7 +83,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   if (status != CALL_OK) {
     goto done;
   }
-  handle_t boot = startup_root("boot"), tmp = startup_root("tmp");
+  handle_t boot = bootstrap_capability("boot"), tmp = bootstrap_capability("tmp");
   if (boot == HANDLE_INVALID || tmp == HANDLE_INVALID) {
     status = CALL_NOT_FOUND;
     goto done;
@@ -110,23 +112,23 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     [STDERR] = {terminal.output, CONSOLE_RIGHT_WRITE, 0},
     [EVENTS] = {terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0},
   };
-  struct launch_binding resources[4 + OPTIONAL_RESOURCE_COUNT] = {
-    {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
-    {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
+  struct launch_environment_entry resources[4 + OPTIONAL_RESOURCE_COUNT] = {
+    PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
+    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal_events", EVENTS),
   };
   size_t grant_count = FIRST_OPTIONAL, resource_count = 4;
-  handle_t provisioner = startup_resource("job_provisioner");
+  handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
-    status = job_work_create(provisioner, startup_resource("clock"), &shell->job_provisioner);
+    status = job_work_create(provisioner, bootstrap_capability("clock"), &shell->job_provisioner);
     if (status != CALL_OK) {
       goto done;
     }
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){
       job_work_directory(shell->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };
   }
-  handle_t child_launcher = startup_resource("child_launcher");
+  handle_t child_launcher = bootstrap_capability("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
     struct handle_info info;
     status = handle_query(child_launcher, &info);
@@ -142,14 +144,14 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
       goto done;
     }
     /* Session members can receive only launchers bound to this group. */
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
   }
-  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
   /* Reuse the selected tmp grant for cwd, including any withheld rights. */
   uint64_t directory = SIZE_MAX;
   for (size_t i = 0; i < root_count; ++i) {
-    roots[i] = (struct launch_binding){selected_roots[i].name, grant_count};
+    roots[i] = (struct launch_environment_entry)PROFILE_CAP(selected_roots[i].name, grant_count);
     status = directory_grant(selected_roots[i].handle, &grants[grant_count]);
     if (status != CALL_OK) {
       goto done;
@@ -164,7 +166,7 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     goto done;
   }
   for (size_t i = 0; i < sizeof(remote_allowed) / sizeof(remote_allowed[0]); ++i) {
-    handle_t source = startup_resource(remote_allowed[i].name);
+    handle_t source = bootstrap_capability(remote_allowed[i].name);
     if (source == HANDLE_INVALID) {
       continue;
     }
@@ -173,13 +175,13 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
     if (status != CALL_OK) {
       goto done;
     }
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)remote_allowed[i].name, grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)remote_allowed[i].name, grant_count);
     grants[grant_count++] = (struct launch_grant){source, rights & remote_allowed[i].rights, 0};
   }
   /* Only the explicit remote opt-in becomes power in a remote root shell. */
-  handle_t remote_power = startup_resource("remote_power");
+  handle_t remote_power = bootstrap_capability("remote_power");
   if (remote_power != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"power", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", grant_count);
     grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
   const char *arguments[] = {"boot://shell.pxe", no_echo ? "--no-echo" : "--remote-prompt"};
@@ -208,8 +210,8 @@ enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_w
   if (status != CALL_OK) {
     goto done;
   }
-  status = network_environment_read(&environment, startup_resource("net_config"),
-      inherited.variables, inherited.count, NULL);
+  status = network_environment_from_capture(&environment, bootstrap_capability("net_config"),
+      &inherited.capture, NULL);
   if (status != CALL_OK) {
     goto done;
   }
@@ -307,7 +309,7 @@ static enum call_status context_init(struct remote_context *context)
     if (status != CALL_OK) {
       goto failed;
     }
-    context->roots[context->root_count++] = (struct launch_binding){roots[i].name, index};
+    context->roots[context->root_count++] = (struct launch_environment_entry)PROFILE_CAP(roots[i].name, index);
     if (!strcmp((const char *)roots[i].name, "tmp")) {
       context->directory = index;
     }
@@ -317,7 +319,7 @@ static enum call_status context_init(struct remote_context *context)
     goto failed;
   }
   for (size_t i = 0; i < sizeof(remote_allowed) / sizeof(remote_allowed[0]); ++i) {
-    handle_t source = startup_resource(remote_allowed[i].name);
+    handle_t source = bootstrap_capability(remote_allowed[i].name);
     if (source == HANDLE_INVALID) {
       continue;
     }
@@ -331,9 +333,9 @@ static enum call_status context_init(struct remote_context *context)
       goto failed;
     }
     context->resources[context->resource_count++] =
-        (struct launch_binding){(uintptr_t)remote_allowed[i].name, index};
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)remote_allowed[i].name, index);
   }
-  handle_t provisioner = startup_resource("job_provisioner");
+  handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
     status = handle_copy_restricted(provisioner, JOB_PROVISIONER_RIGHTS, 0,
         &context->job_provisioner);
@@ -341,14 +343,14 @@ static enum call_status context_init(struct remote_context *context)
       goto failed;
     }
   }
-  handle_t power = startup_resource("remote_power");
+  handle_t power = bootstrap_capability("remote_power");
   if (power != HANDLE_INVALID) {
     size_t index;
     status = context_add(context, power, POWER_RIGHTS, 0, &index);
     if (status != CALL_OK) {
       goto failed;
     }
-    context->resources[context->resource_count++] = (struct launch_binding){(uintptr_t)"power", index};
+    context->resources[context->resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", index);
   }
   handle_t namespace = startup_namespace();
   if (namespace != HANDLE_INVALID) {
@@ -362,7 +364,7 @@ static enum call_status context_init(struct remote_context *context)
       goto failed;
     }
   }
-  handle_t child_launcher = startup_resource("child_launcher");
+  handle_t child_launcher = bootstrap_capability("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
     struct handle_info info;
     status = handle_query(child_launcher, &info);
@@ -377,7 +379,7 @@ static enum call_status context_init(struct remote_context *context)
   }
   status = pyxis_environment_snapshot_init(&context->inherited);
   if (status == CALL_OK) {
-    status = network_environment_read(&context->environment, startup_resource("net_config"),
+    status = network_environment_read(&context->environment, bootstrap_capability("net_config"),
         context->inherited.variables, context->inherited.count, NULL);
   }
   if (status != CALL_OK) {
@@ -395,7 +397,7 @@ static enum call_status context_init(struct remote_context *context)
   if (status != CALL_OK) {
     goto failed;
   }
-  struct startup_variable *variables = realloc(context->environment.variables,
+  struct launch_environment_entry *variables = realloc(context->environment.variables,
       (context->environment.count + 1) * sizeof(*variables));
   if (!variables) {
     status = CALL_NO_MEMORY;
@@ -403,7 +405,7 @@ static enum call_status context_init(struct remote_context *context)
   }
   context->environment.variables = variables;
   variables[context->environment.count++] =
-      (struct startup_variable){(uintptr_t)"PYXIS_REMOTE_MUX", (uintptr_t)"1"};
+      (struct launch_environment_entry){(uintptr_t)"PYXIS_REMOTE_MUX", (uintptr_t)"1"};
   return CALL_OK;
 
 failed:
@@ -433,14 +435,14 @@ static enum call_status broker_launch(struct remote_context *context,
   }
   struct terminal_create_reply terminal = {0};
   handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
-  enum call_status status = terminal_create(startup_resource("remote_mux_terminal"),
+  enum call_status status = terminal_create(bootstrap_capability("remote_mux_terminal"),
       columns, rows, &terminal);
   if (status != CALL_OK) {
     goto done;
   }
   shell->attachment = terminal.attachment;
   struct execution_group_create_reply group;
-  status = launcher_create_group(startup_resource("launcher"), &group);
+  status = launcher_create_group(bootstrap_capability("launcher"), &group);
   if (status != CALL_OK) {
     goto done;
   }
@@ -470,40 +472,38 @@ static enum call_status broker_launch(struct remote_context *context,
   grants[STDOUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[STDERR] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
   grants[EVENTS] = (struct launch_grant){terminal.events, TERMINAL_EVENTS_RIGHT_EMIT, 0};
-  struct launch_binding resources[24] = {
-    {(uintptr_t)"input", INPUT}, {(uintptr_t)"output", OUTPUT},
-    {(uintptr_t)"launcher", LAUNCHER}, {(uintptr_t)"terminal_events", EVENTS},
+  struct launch_environment_entry resources[24] = {
+    PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
+    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal_events", EVENTS),
   };
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
   for (size_t i = 0; i < context->grant_count; ++i) {
     grants[grant_count++] = context->grants[i];
   }
   for (size_t i = 0; i < context->resource_count; ++i) {
-    resources[resource_count++] = (struct launch_binding){context->resources[i].name,
-        context->resources[i].grant + FIRST_OPTIONAL};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP(context->resources[i].name, context->resources[i].grant + FIRST_OPTIONAL);
   }
-  struct launch_binding roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry roots[STARTUP_ROOT_LIMIT];
   for (size_t i = 0; i < context->root_count; ++i) {
-    roots[i] = (struct launch_binding){context->roots[i].name,
-        context->roots[i].grant + FIRST_OPTIONAL};
+    roots[i] = (struct launch_environment_entry)PROFILE_CAP(context->roots[i].name, context->roots[i].grant + FIRST_OPTIONAL);
   }
   if (context->job_provisioner != HANDLE_INVALID) {
-    status = job_work_create(context->job_provisioner, startup_resource("clock"),
+    status = job_work_create(context->job_provisioner, bootstrap_capability("clock"),
         &shell->job_provisioner);
     if (status != CALL_OK) {
       goto done;
     }
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"job_provisioner", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"job_provisioner", grant_count);
     grants[grant_count++] = (struct launch_grant){
       job_work_directory(shell->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };
   }
   if (context->allow_launch) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)"child_launcher", grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
   }
   if (mux || bootstrap != HANDLE_INVALID) {
-    resources[resource_count++] = (struct launch_binding){(uintptr_t)(mux ? "pane_broker" : "pane_cwd"), grant_count};
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)(mux ? "pane_broker" : "pane_cwd"), grant_count);
     grants[grant_count++] = (struct launch_grant){mux ? broker_caller : bootstrap, 0, HANDLE_TRANSPORT_SEND};
   }
   for (size_t i = 0; i < depth; ++i) {
@@ -534,7 +534,7 @@ static enum call_status broker_launch(struct remote_context *context,
   };
   if (deadline) {
     uint64_t now;
-    status = clock_now(startup_resource("clock"), &now);
+    status = clock_now(bootstrap_capability("clock"), &now);
     if (status != CALL_OK) {
       goto done;
     }
@@ -614,7 +614,7 @@ enum call_status remote_mux_launch(size_t columns, size_t rows, unsigned tab_wid
     return status;
   }
   struct endpoint_create_reply endpoint = {0};
-  status = endpoint_create(startup_resource("service"), &endpoint);
+  status = endpoint_create(bootstrap_capability("service"), &endpoint);
   if (status != CALL_OK) {
     return status;
   }
@@ -778,7 +778,7 @@ static void broker_record(struct remote_broker *broker, struct endpoint_packet *
        * untrustworthy launch response likewise remains OUTCOME_UNKNOWN. */
       if (status == CALL_OK) {
         uint64_t completed_at;
-        enum call_status clock_status = clock_now(startup_resource("clock"), &completed_at);
+        enum call_status clock_status = clock_now(bootstrap_capability("clock"), &completed_at);
         if (clock_status != CALL_OK || completed_at >= pane->request.deadline) {
           status = CALL_OUTCOME_UNKNOWN;
         }
@@ -839,7 +839,7 @@ bool remote_broker_service(struct remote_broker *broker)
     }
     if (pane->request.deadline) {
       uint64_t now;
-      enum call_status status = clock_now(startup_resource("clock"), &now);
+      enum call_status status = clock_now(bootstrap_capability("clock"), &now);
       if (status != CALL_OK) {
         broker->error = status;
       } else if (now >= pane->request.deadline) {
@@ -865,7 +865,7 @@ bool remote_broker_service(struct remote_broker *broker)
       break;
     }
     uint64_t now;
-    status = clock_now(startup_resource("clock"), &now);
+    status = clock_now(bootstrap_capability("clock"), &now);
     if (status != CALL_OK) {
       pane_broker_packet_close(&packet);
       broker->error = status;

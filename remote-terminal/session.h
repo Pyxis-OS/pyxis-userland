@@ -1,3 +1,4 @@
+#include "../common/launch_environment.h"
 #ifndef REMOTE_SESSION_H
 #define REMOTE_SESSION_H
 
@@ -29,7 +30,7 @@ struct remote_context {
   handle_t job_provisioner;
   struct launch_grant grants[REMOTE_POLICY_GRANTS];
   size_t grant_count;
-  struct launch_binding resources[17], roots[STARTUP_ROOT_LIMIT];
+  struct launch_environment_entry resources[17], roots[STARTUP_ROOT_LIMIT];
   size_t resource_count, root_count;
   size_t directory, namespace_index;
   bool allow_launch;

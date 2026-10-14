@@ -458,8 +458,8 @@ static enum call_status collect_data(struct shell *shell, uint64_t domain,
 
 static enum call_status unbind_data(struct shell *shell, const handle_t *handles, size_t count)
 {
-  struct path_root previous[STARTUP_ROOT_LIMIT];
-  bool owned[STARTUP_ROOT_LIMIT];
+  struct path_root previous[PROFILE_DIRECTORY_LIMIT];
+  bool owned[PROFILE_DIRECTORY_LIMIT];
   size_t old_count = shell->directory->root_count, retained = 0;
   memcpy(previous, shell->roots, old_count * sizeof(*previous));
   memcpy(owned, shell->owns_root, old_count * sizeof(*owned));

@@ -31,7 +31,7 @@ static const char *background_tail(const char *tail,
 }
 
 static const char *begin_redirection(struct shell_stage *stage,
-    struct shell_redirection **pending, enum startup_stream_index stream,
+    struct shell_redirection **pending, enum environment_stream_index stream,
     const char *tail)
 {
   if (!stage->count) {
@@ -137,7 +137,7 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
         return "Redirection requires a preceding command";
       }
       const char *error = begin_redirection(stage, &pending,
-          operator == '<' ? STARTUP_STDIN : STARTUP_STDOUT, read);
+          operator == '<' ? ENVIRONMENT_STDIN : ENVIRONMENT_STDOUT, read);
       if (error) {
         return error;
       }
@@ -158,7 +158,7 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
         if (!stage) {
           return "Redirection requires a preceding command";
         }
-        const char *error = begin_redirection(stage, &pending, STARTUP_STDERR, read);
+        const char *error = begin_redirection(stage, &pending, ENVIRONMENT_STDERR, read);
         if (error) {
           return error;
         }
@@ -239,7 +239,7 @@ const char *parse_line(char *line, char **arguments, size_t capacity,
     } else if (delimiter == '<' || delimiter == '>') {
       const char *error = begin_redirection(&command->stages[command->stage_count - 1],
           &pending,
-          delimiter == '<' ? STARTUP_STDIN : STARTUP_STDOUT, read);
+          delimiter == '<' ? ENVIRONMENT_STDIN : ENVIRONMENT_STDOUT, read);
       if (error) {
         return error;
       }

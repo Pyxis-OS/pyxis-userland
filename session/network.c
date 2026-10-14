@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "network.h"
 #include "dhcp.h"
 #include <clock.h>
@@ -420,10 +421,10 @@ static bool apply_ipv4(const struct network_config *config, struct network_runti
 bool network_config_apply(const struct network_config *config, struct network_runtime *runtime)
 {
   *runtime = (struct network_runtime){
-    .authority = startup_resource("net_config"),
-    .udp = config->dhcp ? startup_resource("udp") : HANDLE_INVALID,
-    .dhcp = {.clock = startup_resource("clock"),
-        .random = config->dhcp ? startup_resource("random") : HANDLE_INVALID},
+    .authority = bootstrap_capability("net_config"),
+    .udp = config->dhcp ? bootstrap_capability("udp") : HANDLE_INVALID,
+    .dhcp = {.clock = bootstrap_capability("clock"),
+        .random = config->dhcp ? bootstrap_capability("random") : HANDLE_INVALID},
   };
   if (runtime->authority == HANDLE_INVALID) {
     fputs("session: no network configuration authority; keeping current settings\n", stderr);
