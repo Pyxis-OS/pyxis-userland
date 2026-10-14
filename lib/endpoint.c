@@ -22,7 +22,8 @@ static bool completion_valid(const struct endpoint_packet *packet)
       (packet->completion_flags & ~flags) || packet->grant_count > 1 ||
       packet->object_id != 0 || packet->rights != 0 || !packet->deadline_ns ||
       (packet->reason != CALL_OK && packet->reason != CALL_TIMED_OUT &&
-      packet->reason != CALL_ENDPOINT_CLOSED && packet->reason != CALL_ABANDONED)) {
+      packet->reason != CALL_ENDPOINT_CLOSED && packet->reason != CALL_ABANDONED &&
+      packet->reason != CALL_DENIED)) {
     return false;
   }
   uint64_t returned_rights = 0;

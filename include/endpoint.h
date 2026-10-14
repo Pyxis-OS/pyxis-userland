@@ -54,6 +54,7 @@ enum call_status endpoint_notify(handle_t client, uint64_t protocol,
  * endpoint_finish(); separately delivered attachments remain owned. Closing
  * an unanswered CALL receipt abandons the call. Native COMPLETION carries the
  * correlation ID, actual result/progress and separate cancellation reason.
+ * Pending native work stopped by forwarder CUT reports DENIED as its reason.
  * Closing its zero-right receipt acknowledges that operation; attached native
  * grants remain independent. Failed collection leaves completion work queued
  * for retry without replaying the native operation. */

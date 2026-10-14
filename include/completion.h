@@ -16,7 +16,8 @@ enum call_status completion_submit(handle_t target, handle_t receiver,
 
 /* Cancellation requests safe interruption, never rollback or result collection.
  * Terminal results remain available; repeated requests are idempotent until ACK.
- * Actual result/progress and cancellation reason are separate packet fields. */
+ * Actual result/progress and cancellation reason are separate packet fields.
+ * Forwarder CUT before native work starts reports DENIED as its reason. */
 enum call_status completion_cancel(handle_t receiver, uint64_t correlation_id);
 
 #endif
