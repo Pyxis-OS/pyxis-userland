@@ -25,10 +25,15 @@ enum call_status resource_result_adopt(handle_t resource, struct resource_result
 
 /* Borrows target and never rediscovers a name. PROVIDER receives the opaque
  * remainder. A held FILE requires an empty remainder and the intent's rights;
- * CREATE/EXCLUSIVE without a name are unsupported. Other types are unsupported
- * until their typed OPEN implementations are integrated. Exported truncation
- * uses the original endpoint deadline; native resize keeps its synchronous
- * wait/cancellation contract. APPEND is consumer intent, not atomic append.
+ * CREATE/EXCLUSIVE without a name are unsupported. A native DIRECTORY walks
+ * components within the held subtree; .. cannot escape its root. Directory
+ * children inherit no more than the actual parent mask; empty remainder copies
+ * that mask. Final FILE access follows intent. CREATE is exclusive at native
+ * publication: ALREADY_EXISTS after a missing lookup is final, never re-opened.
+ * Exported directories and flags on a directory result are unsupported.
+ * Exported truncation uses the original endpoint deadline; native lookup,
+ * create and resize keep their synchronous wait/cancellation contracts.
+ * APPEND is consumer intent, not atomic append.
  * No automatic retry. */
 enum call_status resource_open_held(handle_t target, const char *remainder,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,

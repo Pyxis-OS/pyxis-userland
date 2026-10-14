@@ -1,9 +1,12 @@
 #include <resource.h>
 #include <endpoint.h>
+#include <directory.h>
 #include <file.h>
 #include <handle.h>
 #include <provider.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 static bool counted_utf8(const char *text, size_t size, size_t capacity)
 {
@@ -141,6 +144,176 @@ static enum call_status truncate_file(handle_t file, const struct describe_reply
   return malformed ? CALL_OUTCOME_UNKNOWN : (enum call_status)packet.result;
 }
 
+static enum call_status finish_file(handle_t resource, uint64_t intent, uint64_t flags,
+    uint64_t deadline_ns, struct resource_result *result)
+{
+  enum call_status status = resource_result_adopt(resource, result);
+  if (status != CALL_OK) {
+    handle_close(resource);
+    return status;
+  }
+  if (result->info.protocol != PROTOCOL_FILE) {
+    resource_result_close(result);
+    return CALL_BAD_OPERATION;
+  }
+  uint64_t rights = ((intent & PROVIDER_INTENT_READ) ? FILE_RIGHT_READ : 0) |
+      ((intent & PROVIDER_INTENT_WRITE) ? FILE_RIGHT_WRITE : 0);
+  if ((result->info.rights & rights) != rights ||
+      (result->info.kind == HANDLE_KIND_EXPORTED &&
+      (result->info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL)) {
+    resource_result_close(result);
+    return CALL_DENIED;
+  }
+  if (result->info.kind == HANDLE_KIND_NATIVE && result->info.transport) {
+    resource_result_close(result);
+    return CALL_BAD_REQUEST;
+  }
+  /* APPEND remains consumer intent over positioned FILE operations. This copy
+   * establishes no shared offset or atomic append guarantee. */
+  if ((flags & PROVIDER_OPEN_TRUNCATE) && result->info.description.outcome == RESOURCE_OK) {
+    uint64_t delivery = 0;
+    status = truncate_file(resource, &result->info, deadline_ns, &delivery);
+    result->delivery = delivery;
+    if (status != CALL_OK) {
+      resource_result_close(result);
+      result->delivery = delivery;
+      return status;
+    }
+    result->info.description.flags |= RESOURCE_LENGTH_KNOWN;
+    result->info.description.length = 0;
+  }
+  return CALL_OK;
+}
+
+static enum call_status open_directory(handle_t target, const char *remainder,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+    struct resource_result *result)
+{
+  size_t length = strlen(remainder);
+  if (length == SIZE_MAX || length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    return CALL_LIMIT;
+  }
+  handle_t *chain = malloc((length + 1) * sizeof(*chain));
+  char *component = malloc(length + 1);
+  if (!chain || !component) {
+    free(component);
+    free(chain);
+    return CALL_NO_MEMORY;
+  }
+  size_t count = 0;
+  enum call_status status = handle_copy(target, &chain[0]);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  count = 1;
+  const char *path = remainder;
+  uint64_t file_rights = ((intent & PROVIDER_INTENT_READ) ? FILE_RIGHT_READ : 0) |
+      ((intent & PROVIDER_INTENT_WRITE) ? FILE_RIGHT_WRITE : 0);
+  for (;;) {
+    while (*path == '/') {
+      ++path;
+    }
+    if (!*path) {
+      if (flags) {
+        status = CALL_BAD_OPERATION;
+      } else {
+        status = resource_result_adopt(chain[count - 1], result);
+        if (status == CALL_OK) {
+          --count;
+        }
+      }
+      break;
+    }
+    const char *start = path;
+    while (*path && *path != '/') {
+      ++path;
+    }
+    size_t size = path - start;
+    bool separator = *path != 0;
+    while (*path == '/') {
+      ++path;
+    }
+    if (size == 1 && start[0] == '.') {
+      continue;
+    }
+    if (size == 2 && start[0] == '.' && start[1] == '.') {
+      if (count == 1) {
+        status = CALL_DENIED;
+        break;
+      }
+      handle_close(chain[--count]);
+      continue;
+    }
+    memcpy(component, start, size);
+    component[size] = 0;
+    handle_t parent = chain[count - 1];
+    struct handle_info parent_info;
+    status = handle_query(parent, &parent_info);
+    if (status != CALL_OK) {
+      break;
+    }
+    if (*path) {
+      status = directory_lookup(parent, component, DIRECTORY_KIND_DIRECTORY,
+          parent_info.rights & DIRECTORY_RIGHTS, &chain[count]);
+      if (status != CALL_OK) {
+        break;
+      }
+      ++count;
+      continue;
+    }
+    if (separator && flags) {
+      status = CALL_BAD_OPERATION;
+      break;
+    }
+    if ((flags & PROVIDER_OPEN_CREATE) && !(parent_info.rights & DIRECTORY_RIGHT_CREATE)) {
+      status = CALL_DENIED;
+      break;
+    }
+    struct directory_typed_lookup_reply child = {0};
+    if (flags & PROVIDER_OPEN_EXCLUSIVE) {
+      status = directory_create(parent, component, DIRECTORY_KIND_FILE, file_rights,
+          &child.handle);
+      child.protocol = PROTOCOL_FILE;
+    } else {
+      status = directory_lookup_typed(parent, component, file_rights,
+          parent_info.rights & DIRECTORY_RIGHTS, &child);
+      if (status == CALL_NOT_FOUND && (flags & PROVIDER_OPEN_CREATE)) {
+        status = directory_create(parent, component, DIRECTORY_KIND_FILE, file_rights,
+            &child.handle);
+        child.protocol = PROTOCOL_FILE;
+        /* A concurrent creator's ALREADY_EXISTS is final; do not re-open. */
+      }
+    }
+    if (status != CALL_OK) {
+      break;
+    }
+    if (child.protocol == PROTOCOL_FILE) {
+      if (separator) {
+        handle_close(child.handle);
+        status = CALL_WRONG_TYPE;
+      } else {
+        status = finish_file(child.handle, intent, flags, deadline_ns, result);
+      }
+    } else if (flags) {
+      handle_close(child.handle);
+      status = CALL_BAD_OPERATION;
+    } else {
+      status = resource_result_adopt(child.handle, result);
+      if (status != CALL_OK) {
+        handle_close(child.handle);
+      }
+    }
+    break;
+  }
+done:
+  while (count) {
+    handle_close(chain[--count]);
+  }
+  free(component);
+  free(chain);
+  return status;
+}
+
 enum call_status resource_open_held(handle_t target, const char *remainder,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
     struct resource_result *result)
@@ -164,6 +337,11 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
   if (info.protocol == PROTOCOL_PROVIDER) {
     return provider_open_typed(target, remainder, intent, flags, deadline_ns, result);
   }
+  if (info.protocol == PROTOCOL_DIRECTORY) {
+    return info.kind == HANDLE_KIND_NATIVE && !info.transport ?
+        open_directory(target, remainder, intent, flags, deadline_ns, result) :
+        CALL_BAD_OPERATION;
+  }
   if (info.protocol != PROTOCOL_FILE) {
     return CALL_BAD_OPERATION;
   }
@@ -181,24 +359,5 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
   if (status != CALL_OK) {
     return status;
   }
-  status = resource_result_adopt(resource, result);
-  if (status != CALL_OK) {
-    handle_close(resource);
-    return status;
-  }
-  /* APPEND remains consumer intent over positioned FILE operations. This copy
-   * establishes no shared offset or atomic append guarantee. */
-  if ((flags & PROVIDER_OPEN_TRUNCATE) && result->info.description.outcome == RESOURCE_OK) {
-    uint64_t delivery = 0;
-    status = truncate_file(resource, &result->info, deadline_ns, &delivery);
-    result->delivery = delivery;
-    if (status != CALL_OK) {
-      resource_result_close(result);
-      result->delivery = delivery;
-      return status;
-    }
-    result->info.description.flags |= RESOURCE_LENGTH_KNOWN;
-    result->info.description.length = 0;
-  }
-  return CALL_OK;
+  return finish_file(resource, intent, flags, deadline_ns, result);
 }

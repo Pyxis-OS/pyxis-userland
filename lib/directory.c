@@ -1,4 +1,6 @@
 #include <directory.h>
+#include <abi/file.h>
+#include <handle.h>
 #include <string.h>
 #include <syscall.h>
 #include "file_info.h"
@@ -70,6 +72,56 @@ enum call_status directory_create(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle)
 {
   return child_call(directory, DIRECTORY_CREATE, name, kind, rights, handle);
+}
+
+enum call_status directory_lookup_typed(handle_t directory, const char *name,
+    uint64_t file_rights, uint64_t directory_rights,
+    struct directory_typed_lookup_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  *reply = (struct directory_typed_lookup_reply){0};
+  if (!name || (file_rights & ~FILE_RIGHTS) || (directory_rights & ~DIRECTORY_RIGHTS)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(directory, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != PROTOCOL_DIRECTORY) {
+    return CALL_WRONG_TYPE;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.transport) {
+    return CALL_BAD_OPERATION;
+  }
+  struct directory_message message = {
+    .header = {PROTOCOL_DIRECTORY, DIRECTORY_LOOKUP_TYPED},
+    .body.lookup_typed = {(uintptr_t)name, strlen(name), file_rights, directory_rights},
+  };
+  struct directory_typed_lookup_reply child = {0};
+  status = call_status(syscall_call(directory, &message, sizeof(message),
+      &child, sizeof(child)), sizeof(child));
+  if (status == CALL_OK) {
+    if (child.handle == HANDLE_INVALID || child.handle == directory ||
+        (child.protocol != PROTOCOL_FILE && child.protocol != PROTOCOL_DIRECTORY)) {
+      status = CALL_BAD_REQUEST;
+    } else {
+      status = handle_query(child.handle, &info);
+      uint64_t requested = child.protocol == PROTOCOL_FILE ? file_rights : directory_rights;
+      if (status == CALL_OK && (info.protocol != child.protocol ||
+          info.kind != HANDLE_KIND_NATIVE || info.transport || (info.rights & ~requested))) {
+        status = CALL_BAD_REQUEST;
+      }
+    }
+  }
+  if (status == CALL_OK) {
+    *reply = child;
+  } else if (child.handle != HANDLE_INVALID && child.handle != directory) {
+    handle_close(child.handle);
+  }
+  return status;
 }
 
 enum call_status directory_remove(handle_t directory, const char *name, uint64_t kind)

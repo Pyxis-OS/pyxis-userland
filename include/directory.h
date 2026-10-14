@@ -11,6 +11,14 @@
 enum call_status directory_lookup(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle);
 
+/* One native lookup selects actual FILE or DIRECTORY, checking only that
+ * kind's requested mask against parent authority. Success owns reply->handle;
+ * protocol is checked against the new grant. Failure closes provisional grants
+ * and clears reply. Exported directory traversal remains unsupported. */
+enum call_status directory_lookup_typed(handle_t directory, const char *name,
+    uint64_t file_rights, uint64_t directory_rights,
+    struct directory_typed_lookup_reply *reply);
+
 /* Exclusive creation of an empty regular file/directory. Requires CREATE; child
  * rights are bounded exactly as for lookup. An existing name returns
  * ALREADY_EXISTS, without opening/replacing it. Initrd rejects mutation even
