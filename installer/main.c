@@ -458,7 +458,7 @@ int main(int argc, char **argv)
   } else if (!updating && !choose_mode(&terminal, &read_the_room)) {
     goto done;
   }
-  install_progress_plain_stream(clock, stderr, startup_resource("installer_diagnostics"),
+  install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"),
       verbose || print_only);
   install_progress_begin("Initializing revision hashing", INSTALL_PROGRESS_NONE, NULL);
   crypto = hash_init(clock, random);

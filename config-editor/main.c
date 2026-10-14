@@ -120,7 +120,8 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   struct config_editor_context context;
-  install_progress_plain_stream(bootstrap_capability("clock"), stderr);
+  /* Keep local phase detail; this client has no Caelum diagnostic writer. */
+  install_progress_plain_stream(bootstrap_capability("clock"), stderr, HANDLE_INVALID, true);
   bool ok = config_editor_load(&context);
   if (ok && !strcmp(argv[1], "validate")) {
     ok = config_editor_validate(&context, false);

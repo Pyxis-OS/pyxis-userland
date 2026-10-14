@@ -439,7 +439,7 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
     } else if (!strcmp(plan->record.previous, plan->record.revision)) {
       fputs("Programs reuse the previous revision tree.\n", output);
     } else {
-      fputs("The previous program revision is retained.\n", output);
+      fputs("Cleanup excludes the known previous program revision.\n", output);
     }
     if (!strcmp(plan->record.previous, plan->record.revision) ||
         !strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
