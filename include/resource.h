@@ -15,6 +15,10 @@ struct resource_result {
   uint64_t delivery;
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 bool resource_description_valid(const struct resource_description *description);
 enum call_status resource_outcome_status(uint64_t outcome);
 enum call_status resource_result_close(struct resource_result *result);
@@ -47,5 +51,9 @@ struct path_context;
 enum call_status resource_open_path(const struct path_context *context, const char *path,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
     struct resource_result *result);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
