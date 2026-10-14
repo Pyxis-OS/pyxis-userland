@@ -20,6 +20,13 @@ return {
       grants = { http_staging = { volume = "http-work", kind = "directory",
                                  access = "read-write", optional = true } },
       roots = { host = { access = "read-write", optional = true }, home = "read-write" } },
+    -- init-readonly skips network setup; Development owns it, while these roots stay writable.
+    { name = "multiplexer", title = "Multiplexer", init = "boot://init-readonly",
+      launch = true, jobs = true, screenshot = true, power = true, multiplexer = true,
+      clipboard_local = true, clipboard_shared = true,
+      grants = { http_staging = { volume = "http-work", kind = "directory",
+                                 access = "read-write", optional = true } },
+      roots = { host = { access = "read-write", optional = true }, home = "read-write" } },
     { name = "readonly", title = "Read-only", init = "boot://init-readonly",
       clipboard_local = true, clipboard_shared = true,
       grants = { http_staging = { volume = "http-work", kind = "directory",
