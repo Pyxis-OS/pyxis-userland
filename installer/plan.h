@@ -31,7 +31,7 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
  * caller compares the result to a serialized expected record before Review. */
 bool install_plan_prepare(struct install_plan *plan, const struct disk_info *target);
 bool install_plan_revalidate(const struct install_plan *plan);
-bool install_plan_report(const struct install_plan *plan, FILE *output);
+bool install_plan_report(const struct install_plan *plan, FILE *output, bool verbose);
 void install_plan_destroy(struct install_plan *plan);
 
 /* The only mutating entry point. Explicit consent must match this ready plan;

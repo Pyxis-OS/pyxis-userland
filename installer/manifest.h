@@ -65,8 +65,9 @@ enum install_manifest_status install_manifest_source(handle_t boot,
     struct install_manifest *manifest);
 
 /* NULL previous describes Install; unknown previous revisions must be handled
- * explicitly by the caller. Reports escape untrusted name bytes. */
+ * explicitly by the caller. Summaries always include counts and sizes; verbose
+ * reports additionally escape and print each program name. */
 bool install_manifest_report(FILE *output, const struct install_manifest *previous,
-    const struct install_manifest *source);
+    const struct install_manifest *source, bool verbose);
 
 #endif

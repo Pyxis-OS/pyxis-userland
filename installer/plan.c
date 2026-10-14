@@ -375,22 +375,25 @@ static void report_name(FILE *output, const char *name)
   fputc('"', output);
 }
 
-bool install_plan_report(const struct install_plan *plan, FILE *output)
+bool install_plan_report(const struct install_plan *plan, FILE *output, bool verbose)
 {
   if (!plan->ready) {
     return false;
   }
   char guid[37];
   install_guid_text(plan->record.existing_guid, guid);
-  fprintf(output, "Review: %s, %llu MiB target, existing GUID %s.\n",
-      plan->record.updating ? "Update" : "Install",
+  fprintf(output, "Review: %s on Disk %llu (%llu MiB).\n"
+      "Existing GUID: %s.\n",
+      plan->record.updating ? "Update" : "Install", (unsigned long long)plan->disk.info.id,
       (unsigned long long)(plan->disk.bytes / INSTALL_MIB),
       plan->record.portable ? guid : "unavailable (interactive apply only)");
-  fprintf(output, "ESP: byte %llu, length %llu; pool: byte %llu, length %llu.\n",
-      (unsigned long long)plan->record.layout.esp_start,
-      (unsigned long long)plan->record.layout.esp_bytes,
-      (unsigned long long)plan->record.layout.pool_start,
-      (unsigned long long)plan->record.layout.pool_bytes);
+  if (verbose) {
+    fprintf(output, "ESP: byte %llu, length %llu; pool: byte %llu, length %llu.\n",
+        (unsigned long long)plan->record.layout.esp_start,
+        (unsigned long long)plan->record.layout.esp_bytes,
+        (unsigned long long)plan->record.layout.pool_start,
+        (unsigned long long)plan->record.layout.pool_bytes);
+  }
   if (!plan->record.updating) {
     fprintf(output, "Journal: %llu MiB; Read the room: %s.\n",
         (unsigned long long)plan->record.journal_mib,
@@ -399,11 +402,13 @@ bool install_plan_report(const struct install_plan *plan, FILE *output)
     fprintf(output, "Previous revision: %s; explicit legacy scan: %s.\n",
         plan->record.previous, plan->record.legacy ? "yes" : "no");
   }
-  fprintf(output, "Programs revision %s; %zu files, %llu payload bytes.\n",
+  fprintf(output, "Programs revision: %s\nSelected payload: %zu files, %llu bytes.\n",
       plan->record.revision, plan->manifest.files, (unsigned long long)plan->manifest.bytes);
   if (plan->record.updating && plan->prior.state == INSTALL_PRIOR_UNKNOWN) {
-    fprintf(output, "Previous Programs report: unknown (%s); no unchanged claim.\n", plan->prior.reason);
-    for (size_t i = 0; i < plan->programs.count; i++) {
+    fprintf(output, "Programs: %zu with unknown changes (%s).\n"
+        "Updated/new/removed/unchanged counts and old sizes are unknown.\n",
+        plan->programs.count, plan->prior.reason);
+    for (size_t i = 0; verbose && i < plan->programs.count; i++) {
       const char *name = plan->programs.entries[i].name;
       size_t length = strlen(name);
       uint64_t bytes = 0;
@@ -420,22 +425,35 @@ bool install_plan_report(const struct install_plan *plan, FILE *output)
     }
   } else {
     const struct install_manifest *previous = plan->record.updating ? &plan->prior.inventory : NULL;
-    if (!install_manifest_report(output, previous, &plan->manifest)) {
+    if (!install_manifest_report(output, previous, &plan->manifest, verbose)) {
       return false;
     }
   }
   fprintf(output, "Staging reserve: %llu blocks; available %llu.\n",
       (unsigned long long)plan->required_blocks, (unsigned long long)plan->available_blocks);
   if (plan->record.updating) {
-    fputs("GPT and volumes stay; the whole ESP will be replaced. Removed programs\n"
-        "are absent from the new revision; the known previous revision is retained.\n", output);
+    fputs("GPT and volumes stay; the whole ESP will be replaced.\n"
+        "Removed programs are absent from the new revision.\n", output);
+    if (!strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
+      fputs("Previous program revision unknown; old revision cleanup is skipped.\n", output);
+    } else if (!strcmp(plan->record.previous, plan->record.revision)) {
+      fputs("Programs reuse the previous revision tree.\n", output);
+    } else {
+      fputs("The previous program revision is retained.\n", output);
+    }
     if (!strcmp(plan->record.previous, plan->record.revision) ||
         !strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
       fputs("A failed program stage can leave the previously used revision incomplete.\n", output);
     }
   } else {
-    fputs("The entire disk will be rebuilt; these volumes will be destroyed:\n", output);
-    fprintf(output, "%s\n", plan->consent.volume_labels ? plan->consent.volume_labels : "  none readable");
+    fputs("The entire disk will be rebuilt; all existing volumes will be destroyed.\n", output);
+    if (verbose) {
+      fputs("Existing volumes:\n", output);
+      fprintf(output, "%s\n", plan->consent.volume_labels ? plan->consent.volume_labels : "  none readable");
+    }
+  }
+  if (!verbose) {
+    fputs("Details: use -v or Print plan for programs and existing volumes.\n", output);
   }
   fputs("Programs are synced/verified before replacing EFI. Failure is partial,\n"
       "with no whole-install rollback; use live-media recovery.\n", output);

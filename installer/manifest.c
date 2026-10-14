@@ -570,7 +570,7 @@ enum install_manifest_status install_manifest_source(handle_t boot,
   if (!path || !buffer || !levels) {
     status = INSTALL_MANIFEST_NO_MEMORY;
   }
-  install_progress_begin("Inventorying and hashing source programs",
+  install_progress_begin_major("Inventorying and hashing source programs",
       INSTALL_PROGRESS_SOURCE_READ, "entries");
   if (programs->totals_known) {
     install_progress_bytes_total(programs->bytes);
@@ -618,6 +618,7 @@ enum program_change {
   PROGRAM_UPDATED,
   PROGRAM_REMOVED,
   PROGRAM_UNCHANGED,
+  PROGRAM_CHANGE_COUNT,
 };
 
 struct program_report {
@@ -680,7 +681,7 @@ static bool print_name(FILE *output, const char *name)
 }
 
 bool install_manifest_report(FILE *output, const struct install_manifest *previous,
-    const struct install_manifest *source)
+    const struct install_manifest *source, bool verbose)
 {
   static const char *const changes[] = {"new", "updated", "removed", "unchanged"};
   if (!source->sealed || (previous && !previous->sealed)) {
@@ -748,8 +749,23 @@ bool install_manifest_report(FILE *output, const struct install_manifest *previo
       ++new;
     }
   }
-  bool ok = true;
-  for (size_t index = 0; ok && index < count; ++index) {
+  size_t totals[PROGRAM_CHANGE_COUNT] = {0};
+  uint64_t old_bytes[PROGRAM_CHANGE_COUNT] = {0}, new_bytes[PROGRAM_CHANGE_COUNT] = {0};
+  for (size_t index = 0; index < count; ++index) {
+    const struct program_report *report = &reports[index];
+    ++totals[report->change];
+    old_bytes[report->change] += report->old_bytes;
+    new_bytes[report->change] += report->new_bytes;
+  }
+  bool ok = fprintf(output, "Programs: %zu updated (%llu -> %llu bytes)\n"
+      "          %zu new (%llu bytes), %zu removed (%llu bytes)\n"
+      "          %zu unchanged (%llu bytes)\n",
+      totals[PROGRAM_UPDATED], (unsigned long long)old_bytes[PROGRAM_UPDATED],
+      (unsigned long long)new_bytes[PROGRAM_UPDATED], totals[PROGRAM_NEW],
+      (unsigned long long)new_bytes[PROGRAM_NEW], totals[PROGRAM_REMOVED],
+      (unsigned long long)old_bytes[PROGRAM_REMOVED], totals[PROGRAM_UNCHANGED],
+      (unsigned long long)new_bytes[PROGRAM_UNCHANGED]) >= 0;
+  for (size_t index = 0; verbose && ok && index < count; ++index) {
     const struct program_report *report = &reports[index];
     ok = fprintf(output, "  %-9s ", changes[report->change]) >= 0 &&
         print_name(output, report->name) &&

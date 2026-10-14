@@ -304,6 +304,17 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
   }
 }
 
+static bool show_selected_target(const struct target *selected)
+{
+  install_progress_pause();
+  char guid[37];
+  install_guid_text(selected->info.gpt_guid, guid);
+  return fprintf(stderr, "Selected target: Disk %llu (%llu MiB), GUID %s.\n",
+      (unsigned long long)selected->info.id,
+      (unsigned long long)(selected->info.block_count * selected->info.block_size / INSTALL_MIB),
+      npfs_id_valid(selected->info.gpt_guid) ? guid : "unavailable") >= 0 && !ferror(stderr);
+}
+
 static bool new_ids(handle_t clock, handle_t random, struct install_layout *layout,
     uint8_t pool_id[16], uint8_t volume_id[16])
 {
@@ -390,10 +401,12 @@ static bool record_matches(const struct install_plan_record *expected,
 
 int main(int argc, char **argv)
 {
-  bool print_only = false, dry_run = false, replay = false;
+  bool print_only = false, dry_run = false, replay = false, verbose = false;
   const char *explicit_consent = NULL;
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--plan")) {
+    if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
+      verbose = true;
+    } else if (!strcmp(argv[i], "--plan")) {
       print_only = true;
     } else if (!strcmp(argv[i], "--dry-run")) {
       dry_run = true;
@@ -402,7 +415,7 @@ int main(int argc, char **argv)
     } else if (!strncmp(argv[i], "--confirm=", 10) && !explicit_consent) {
       explicit_consent = argv[i] + 10;
     } else {
-      fputs("usage: installer [--plan | --apply] [--dry-run] [--confirm=wipe|update]\n", stderr);
+      fputs("usage: installer [-v | --verbose] [--plan | --apply] [--dry-run] [--confirm=wipe|update]\n", stderr);
       return EXIT_FAILURE;
     }
   }
@@ -445,17 +458,20 @@ int main(int argc, char **argv)
   } else if (!updating && !choose_mode(&terminal, &read_the_room)) {
     goto done;
   }
-  install_progress_plain_stream(clock, stderr);
+  install_progress_plain_stream(clock, stderr, startup_resource("installer_diagnostics"),
+      verbose || print_only);
   install_progress_begin("Initializing revision hashing", INSTALL_PROGRESS_NONE, NULL);
   crypto = hash_init(clock, random);
   if (!crypto || !install_plan_sources(&plan, disks, boot, kernel, archive, clock,
         bootstrap_capability("system_info")) ||
       !inventory(disks, read_the_room, updating, &targets, &count)) {
+    install_progress_pause();
     fputs("installer: sources or inventory unavailable; nothing was written\n", stderr);
     goto done;
   }
   char revision[64];
   strcpy(revision, plan.record.revision);
+  install_progress_pause();
   struct target *selected = replay ? replay_target(targets, count, &expected) :
       choose_target(&terminal, targets, count, updating);
   if (!selected) {
@@ -481,6 +497,7 @@ int main(int argc, char **argv)
         .bytes = selected->info.block_count * selected->info.block_size};
       if (!install_layout_plan(&disk, &plan.record.layout) ||
           !new_ids(clock, random, &plan.record.layout, plan.record.pool_id, plan.record.volume_id) ||
+          !show_selected_target(selected) ||
           !choose_journal(&terminal, &plan.record.layout, plan.record.pool_id, &plan.header)) {
         goto done;
       }
@@ -489,7 +506,9 @@ int main(int argc, char **argv)
   }
   bool prepared = install_plan_prepare(&plan, &selected->info);
   if (!prepared && plan.prior.needs_legacy && !replay) {
-    install_progress_pause();
+    if (!show_selected_target(selected)) {
+      goto done;
+    }
     say("The previous revision has no valid manifest. Read and hash its programs once?");
     char choice[16];
     if (!read_line(&terminal, "Type scan to build a read-only inventory, or cancel: ",
@@ -505,7 +524,8 @@ int main(int argc, char **argv)
         "nothing was written. Build and review a new plan.\n", stderr);
     goto done;
   }
-  if (!install_plan_report(&plan, stderr)) {
+  install_progress_pause();
+  if (!install_plan_report(&plan, stderr, verbose || print_only)) {
     goto done;
   }
   if (!print_only && !dry_run && !replay) {
@@ -516,6 +536,9 @@ int main(int argc, char **argv)
     }
     if (!strcmp(action, "2")) {
       print_only = true;
+      if (!verbose && !install_plan_report(&plan, stderr, true)) {
+        goto done;
+      }
     } else if (!strcmp(action, "3")) {
       dry_run = true;
     } else if (strcmp(action, "1")) {
