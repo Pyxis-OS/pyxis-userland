@@ -8,6 +8,7 @@
 #include <endpoint.h>
 #include <file.h>
 #include <handle.h>
+#include <forwarder.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,7 @@ enum staging_operation { STAGING_NONE, STAGING_CREATE, STAGING_UNLINK,
 
 struct transaction;
 struct exported {
+  handle_t controller;
   struct transaction *owner;
   enum facet facet;
   bool live;
@@ -65,7 +67,7 @@ struct transaction {
 };
 
 struct loop {
-  handle_t service, receiver, staging;
+  handle_t service, receiver, controller, staging;
   uint64_t body_cap;
   struct http_client client;
   struct http_storage storage;
@@ -137,7 +139,8 @@ static enum call_status export(struct loop *loop, struct transaction *transactio
 {
   size_t slot = transaction->slots[position];
   enum call_status status = endpoint_export(loop->service, loop->receiver, object_id(slot),
-      facet_protocol(facet), facet_rights(facet), HANDLE_TRANSPORT_CALL, handle);
+      facet_protocol(facet), facet_rights(facet), HANDLE_TRANSPORT_CALL, handle,
+      &loop->exports[slot].controller);
   if (status == CALL_OK) {
     loop->exports[slot].facet = facet;
     loop->exports[slot].live = true;
@@ -171,12 +174,12 @@ static enum call_status response_status(const struct http_response *response)
   return http_result_status(&result);
 }
 
-static void withdraw(struct loop *loop, struct transaction *transaction)
+static void cut_exports(struct loop *loop, struct transaction *transaction)
 {
   for (size_t i = 0; i < transaction->slot_count; ++i) {
     struct exported *entry = &loop->exports[transaction->slots[i]];
     if (entry->owner == transaction && entry->live) {
-      enum call_status status = endpoint_withdraw(loop->receiver, object_id(transaction->slots[i]));
+      enum call_status status = forwarder_cut(entry->controller);
       if (status != CALL_OK && status != CALL_NOT_FOUND) {
         loop->fatal = status;
       }
@@ -436,7 +439,7 @@ static void preparation_ready(struct loop *loop, struct transaction *transaction
   }
   if (status != CALL_OK) {
     abort_transaction(loop, transaction, status);
-    withdraw(loop, transaction);
+    cut_exports(loop, transaction);
   } else {
     transaction->phase = HTTP_TRANSACTION_STAGING;
   }
@@ -1108,7 +1111,7 @@ static void legacy_publish(struct loop *loop, struct transaction *transaction, b
     loop->fatal = CALL_BAD_HANDLE;
   }
   if (status != CALL_OK) {
-    withdraw(loop, transaction);
+    cut_exports(loop, transaction);
     abort_transaction(loop, transaction, status);
   } else if (redirect) {
     /* Redirect handoff intentionally discards transport, never its body. */
@@ -1144,7 +1147,11 @@ static void publish_reader(struct loop *loop, struct transaction *transaction)
   } else {
     abort_transaction(loop, transaction, status);
     if (reader) {
-      endpoint_withdraw(loop->receiver, object_id(transaction->slots[transaction->slot_count - 1]));
+      enum call_status cut = forwarder_cut(
+          loop->exports[transaction->slots[transaction->slot_count - 1]].controller);
+      if (cut != CALL_OK) {
+        loop->fatal = cut;
+      }
     }
   }
 }
@@ -1411,6 +1418,11 @@ static void canceled(struct loop *loop, handle_t receipt)
 static void retired(struct loop *loop, const struct endpoint_packet *packet)
 {
   if (packet->object_id == SERVICE_ID && packet->protocol == PROTOCOL_PROVIDER) {
+    if (handle_close(loop->controller) != 0) {
+      loop->fatal = CALL_BAD_HANDLE;
+      return;
+    }
+    loop->controller = HANDLE_INVALID;
     loop->published = false;
     loop->fatal = endpoint_retire_ack(loop->receiver, SERVICE_ID);
     return;
@@ -1431,6 +1443,11 @@ static void retired(struct loop *loop, const struct endpoint_packet *packet)
     loop->fatal = status;
     return;
   }
+  if (handle_close(entry->controller) != 0) {
+    loop->fatal = CALL_BAD_HANDLE;
+    return;
+  }
+  entry->controller = HANDLE_INVALID;
   entry->live = false;
   if (facet == FACET_CONTROL && !transaction->handed_off &&
       (!transaction->work || !transaction->work->commit.receipt)) {
@@ -1561,10 +1578,11 @@ static bool alive(const struct loop *loop)
   return false;
 }
 
-enum call_status httpfs_serve(handle_t service, handle_t receiver,
+enum call_status httpfs_serve(handle_t service, handle_t receiver, handle_t controller,
     const struct http_client *client, bool custom_trust, handle_t staging, uint64_t body_cap)
 {
-  struct loop loop = {.service = service, .receiver = receiver, .client = *client, .next_id = 1,
+  struct loop loop = {.service = service, .receiver = receiver, .controller = controller,
+    .client = *client, .next_id = 1,
     .staging = staging, .body_cap = body_cap, .published = true, .custom_trust = custom_trust};
   while (loop.fatal == CALL_OK && alive(&loop)) {
     struct endpoint_packet packet = {0};
@@ -1606,5 +1624,13 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
   }
   /* Fatal provider failure is process death: native completion receiver close
    * drains kernel ownership independently; every exported facet fails closed. */
+  if (loop.controller && handle_close(loop.controller) != 0) {
+    loop.fatal = CALL_BAD_HANDLE;
+  }
+  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+    if (loop.exports[i].controller && handle_close(loop.exports[i].controller) != 0) {
+      loop.fatal = CALL_BAD_HANDLE;
+    }
+  }
   return loop.fatal;
 }

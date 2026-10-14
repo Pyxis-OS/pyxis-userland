@@ -359,7 +359,7 @@ static int receiver_main(enum mode mode)
   handle_t clock = startup_resource("clock");
   handle_t bootstrap = startup_resource("bootstrap");
   struct endpoint_create_reply control = {0}, data = {0};
-  handle_t exported = HANDLE_INVALID;
+  handle_t exported = HANDLE_INVALID, controller = HANDLE_INVALID;
   struct receiver receiver = {.mode = mode};
   bool ok = false;
   if (service == HANDLE_INVALID || clock == HANDLE_INVALID || bootstrap == HANDLE_INVALID ||
@@ -369,7 +369,7 @@ static int receiver_main(enum mode mode)
   struct endpoint_grant grants[2];
   size_t grant_count;
   if (endpoint_export(service, control.receiver, IPCBENCH_OBJECT, IPCBENCH_PROTOCOL,
-      0, HANDLE_TRANSPORT_CALL, &exported) != CALL_OK) {
+      0, HANDLE_TRANSPORT_CALL, &exported, &controller) != CALL_OK) {
     goto done;
   }
   grants[0] = (struct endpoint_grant){exported, 0, HANDLE_TRANSPORT_CALL};
@@ -401,6 +401,9 @@ static int receiver_main(enum mode mode)
   receiver.data = data.receiver;
   ok = serve(&receiver);
 done:
+  if (!close_handle(&controller)) {
+    ok = false;
+  }
   free(receiver.retained);
   if (!close_handle(&exported)) {
     ok = false;

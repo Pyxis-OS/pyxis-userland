@@ -7,6 +7,7 @@
 #include <directory.h>
 #include <endpoint.h>
 #include <handle.h>
+#include <forwarder.h>
 #include <launcher.h>
 #include <process.h>
 #include <startup.h>
@@ -128,7 +129,7 @@ static int client_basic(void)
   return ok ? 0 : 1;
 }
 
-static int client_withdraw(void)
+static int client_cut(void)
 {
   handle_t client = startup_resource("second");
   handle_t output = startup_resource("output");
@@ -136,12 +137,27 @@ static int client_withdraw(void)
   struct endpoint_packet reply;
   bool ok = client != HANDLE_INVALID &&
       endpoint_invoke(client, COUNTER_PROTOCOL, COUNTER_ADD, &increment,
+          sizeof(increment), NULL, 0, 0, &reply) == CALL_OK &&
+      reply.delivery == ENDPOINT_DELIVERED && reply.result == 12 &&
+      endpoint_invoke(client, COUNTER_PROTOCOL, COUNTER_GET, NULL, 0,
+          NULL, 0, 0, &reply) == CALL_DENIED &&
+      reply.delivery == ENDPOINT_NOT_DELIVERED;
+  if (output != HANDLE_INVALID) {
+    console_print(output, ok ? "cut client: delivered work completed, later use denied\n" :
+        "cut client: failed\n");
+  }
+  return close_handle(&client) && ok ? 0 : 1;
+}
+
+static int client_exit(void)
+{
+  handle_t client = startup_resource("second");
+  uint64_t increment = 3;
+  struct endpoint_packet reply;
+  bool ok = client != HANDLE_INVALID &&
+      endpoint_invoke(client, COUNTER_PROTOCOL, COUNTER_ADD, &increment,
           sizeof(increment), NULL, 0, 0, &reply) == CALL_ENDPOINT_CLOSED &&
       reply.delivery == ENDPOINT_DELIVERED;
-  if (output != HANDLE_INVALID) {
-    console_print(output, ok ? "withdraw client: closed after delivery\n" :
-        "withdraw client: failed\n");
-  }
   return close_handle(&client) && ok ? 0 : 1;
 }
 
@@ -170,9 +186,9 @@ static int client_queued(void)
           &zero, sizeof(zero), NULL, 0) == CALL_OK &&
       endpoint_invoke(client, COUNTER_PROTOCOL, COUNTER_ADD,
           &increment, sizeof(increment), NULL, 0, 0, &reply) ==
-          CALL_ENDPOINT_CLOSED && reply.delivery == ENDPOINT_NOT_DELIVERED;
+          CALL_DENIED && reply.delivery == ENDPOINT_NOT_DELIVERED;
   if (output != HANDLE_INVALID) {
-    console_print(output, ok ? "queued client: closed before delivery\n" :
+    console_print(output, ok ? "queued client: denied before delivery\n" :
         "queued client: failed\n");
   }
   return close_handle(&client) && ok ? 0 : 1;
@@ -281,11 +297,12 @@ static bool serve_basic(handle_t service, handle_t receiver, handle_t launcher,
     handle_t image, handle_t memory, handle_t output)
 {
   handle_t first = HANDLE_INVALID, second = HANDLE_INVALID, child = HANDLE_INVALID;
+  handle_t first_controller = HANDLE_INVALID, second_controller = HANDLE_INVALID;
   bool ok = endpoint_export(service, receiver, COUNTER_FIRST_ID,
-      COUNTER_PROTOCOL, COUNTER_RIGHT_READ, HANDLE_TRANSPORT_CALL, &first) == CALL_OK &&
+      COUNTER_PROTOCOL, COUNTER_RIGHT_READ, HANDLE_TRANSPORT_CALL, &first, &first_controller) == CALL_OK &&
       endpoint_export(service, receiver, COUNTER_SECOND_ID, COUNTER_PROTOCOL,
           COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE, HANDLE_TRANSPORT_CALL,
-          &second) == CALL_OK;
+          &second, &second_controller) == CALL_OK;
   if (ok) {
     ok = launch_client(launcher, image, memory, output, first, second,
         "client-basic", &child) == CALL_OK;
@@ -307,6 +324,9 @@ static bool serve_basic(handle_t service, handle_t receiver, handle_t launcher,
           packet.object_id == COUNTER_SECOND_ID ? 2 : 0;
       ok = bit && !(retired & bit) &&
           endpoint_retire_ack(receiver, packet.object_id) == CALL_OK;
+      if (bit) {
+        ok = close_handle(bit == 1 ? &first_controller : &second_controller) && ok;
+      }
       retired |= bit;
     } else {
       ok = deliveries < 4 && serve_packet(&packet, &first_value, &second_value);
@@ -316,20 +336,24 @@ static bool serve_basic(handle_t service, handle_t receiver, handle_t launcher,
   if (ok) {
     ok = wait_child(child) && first_value == 4 && second_value == 14;
   }
-  return close_handle(&child) && ok;
+  bool first_controller_closed = close_handle(&first_controller);
+  bool second_controller_closed = close_handle(&second_controller);
+  bool controllers_closed = first_controller_closed && second_controller_closed;
+  return close_handle(&child) && controllers_closed && ok;
 }
 
-static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launcher,
+static bool serve_cut(handle_t service, handle_t receiver, handle_t launcher,
     handle_t image, handle_t memory, handle_t output)
 {
   handle_t old = HANDLE_INVALID, fresh = HANDLE_INVALID;
+  handle_t old_controller = HANDLE_INVALID, fresh_controller = HANDLE_INVALID;
   handle_t child = HANDLE_INVALID, reused_child = HANDLE_INVALID;
   bool ok = endpoint_export(service, receiver, COUNTER_SECOND_ID,
       COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
-      HANDLE_TRANSPORT_CALL, &old) == CALL_OK;
+      HANDLE_TRANSPORT_CALL, &old, &old_controller) == CALL_OK;
   if (ok) {
     ok = launch_client(launcher, image, memory, output, HANDLE_INVALID, old,
-        "client-withdraw", &child) == CALL_OK;
+        "client-cut", &child) == CALL_OK;
   }
   struct endpoint_packet packet;
   if (ok) {
@@ -341,17 +365,11 @@ static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launche
         packet.rights == (COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE);
   }
   if (ok) {
-    ok = endpoint_withdraw(receiver, COUNTER_SECOND_ID) == CALL_OK;
+    ok = forwarder_cut(old_controller) == CALL_OK;
   }
   if (ok) {
-    struct endpoint_packet notice;
-    ok = receive_packet(receiver, &notice) == CALL_OK &&
-        notice.kind == ENDPOINT_MESSAGE_CANCEL &&
-        notice.receipt == packet.receipt &&
-        notice.object_id == COUNTER_SECOND_ID &&
-        notice.reason == CALL_ENDPOINT_CLOSED &&
-        endpoint_reply(packet.receipt, 0, NULL, 0, NULL, 0) == CALL_ENDPOINT_CLOSED &&
-        endpoint_finish(packet.receipt) == CALL_OK;
+    uint64_t first_value = 4, second_value = 9;
+    ok = serve_packet(&packet, &first_value, &second_value) && second_value == 12;
   }
   if (ok) {
     ok = receive_retire(receiver, COUNTER_SECOND_ID, 0);
@@ -359,12 +377,12 @@ static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launche
   if (ok) {
     ok = endpoint_export(service, receiver, COUNTER_SECOND_ID,
         COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
-        HANDLE_TRANSPORT_CALL, &fresh) == CALL_OK;
+        HANDLE_TRANSPORT_CALL, &fresh, &fresh_controller) == CALL_OK;
   }
   if (ok) {
     struct endpoint_packet reply;
     ok = endpoint_invoke(old, COUNTER_PROTOCOL, COUNTER_GET, NULL, 0,
-        NULL, 0, 0, &reply) == CALL_ENDPOINT_CLOSED &&
+        NULL, 0, 0, &reply) == CALL_DENIED &&
         reply.delivery == ENDPOINT_NOT_DELIVERED;
   }
   if (ok) {
@@ -380,20 +398,24 @@ static bool serve_withdraw(handle_t service, handle_t receiver, handle_t launche
         wait_child(reused_child) && wait_child(child) &&
         receive_retire(receiver, COUNTER_SECOND_ID, 0);
   }
-  return close_handle(&child) && close_handle(&reused_child) && ok;
+  bool old_controller_closed = close_handle(&old_controller);
+  bool fresh_controller_closed = close_handle(&fresh_controller);
+  bool controllers_closed = old_controller_closed && fresh_controller_closed;
+  return close_handle(&child) && close_handle(&reused_child) && controllers_closed && ok;
 }
 
 static bool start_exit_call(handle_t service, handle_t receiver, handle_t launcher,
     handle_t image, handle_t memory, handle_t output)
 {
   handle_t client = HANDLE_INVALID, child = HANDLE_INVALID;
+  handle_t controller = HANDLE_INVALID;
   if (endpoint_export(service, receiver, COUNTER_SECOND_ID,
       COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
-      HANDLE_TRANSPORT_CALL, &client) != CALL_OK) {
+      HANDLE_TRANSPORT_CALL, &client, &controller) != CALL_OK) {
     return false;
   }
   bool ok = launch_client(launcher, image, memory, output, HANDLE_INVALID,
-      client, "client-withdraw", &child) == CALL_OK;
+      client, "client-exit", &child) == CALL_OK;
   if (ok) {
     struct endpoint_packet packet;
     ok = receive_packet(receiver, &packet) == CALL_OK &&
@@ -403,19 +425,21 @@ static bool start_exit_call(handle_t service, handle_t receiver, handle_t launch
   if (!ok) {
     close_handle(&child);
     close_handle(&client);
+    close_handle(&controller);
   }
   /* Success leaves the receiver and live receipt to owner-process teardown. */
   return ok;
 }
 
-static bool serve_queued_withdraw(handle_t service, handle_t receiver,
+static bool serve_queued_cut(handle_t service, handle_t receiver,
     handle_t launcher, handle_t image, handle_t memory, handle_t output,
     handle_t clock)
 {
   handle_t client = HANDLE_INVALID, child = HANDLE_INVALID;
+  handle_t controller = HANDLE_INVALID;
   bool ok = endpoint_export(service, receiver, COUNTER_SECOND_ID,
       COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
-      HANDLE_TRANSPORT_CALL, &client) == CALL_OK;
+      HANDLE_TRANSPORT_CALL, &client, &controller) == CALL_OK;
   if (ok) {
     ok = launch_client(launcher, image, memory, output, HANDLE_INVALID,
         client, "client-queued", &child) == CALL_OK;
@@ -431,25 +455,26 @@ static bool serve_queued_withdraw(handle_t service, handle_t receiver,
         second_value == 9;
   }
   /* The first SEND shows the child reached the export. Parking this process
-   * gives the child time to admit its following CALL before withdrawal. */
+   * gives the child time to admit its following CALL before CUT. */
   if (ok) {
     ok = clock_sleep_for(clock, UINT64_C(1000000000)) == CALL_OK &&
-        endpoint_withdraw(receiver, COUNTER_SECOND_ID) == CALL_OK;
+        forwarder_cut(controller) == CALL_OK;
   }
   if (ok) {
     ok = wait_child(child) && receive_retire(receiver, COUNTER_SECOND_ID, 0);
   }
   bool client_closed = close_handle(&client);
   bool child_closed = close_handle(&child);
-  return ok && client_closed && child_closed;
+  bool controller_closed = close_handle(&controller);
+  return ok && client_closed && child_closed && controller_closed;
 }
 
 static bool serve_retire_full(handle_t service, handle_t receiver, handle_t caller)
 {
-  handle_t client = HANDLE_INVALID;
+  handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;
   bool ok = endpoint_export(service, receiver, COUNTER_FIRST_ID,
       COUNTER_PROTOCOL, COUNTER_RIGHT_READ, HANDLE_TRANSPORT_CALL,
-      &client) == CALL_OK;
+      &client, &controller) == CALL_OK;
   for (size_t i = 0; ok && i < ENDPOINT_DELIVERIES_MAX; ++i) {
     ok = endpoint_send(caller, NULL, 0, NULL, 0) == CALL_OK;
   }
@@ -457,7 +482,7 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
     ok = endpoint_send(caller, NULL, 0, NULL, 0) == CALL_QUEUE_FULL;
   }
   if (ok) {
-    ok = endpoint_withdraw(receiver, COUNTER_FIRST_ID) == CALL_OK;
+    ok = forwarder_cut(controller) == CALL_OK;
   }
   ok = close_handle(&client) && ok;
   if (ok) {
@@ -476,11 +501,15 @@ static bool serve_retire_full(handle_t service, handle_t receiver, handle_t call
         packet.rights == 0 && packet.size == 0 && packet.grant_count == 0 &&
         endpoint_finish(packet.receipt) == CALL_OK;
   }
-  return ok;
+  return close_handle(&controller) && ok;
 }
 
 int main(int argc, char **argv)
 {
+  if (argc == 5 && !strcmp(argv[1], "--forwarders")) {
+    extern int counter_forwarders_main(const char *, const char *, const char *);
+    return counter_forwarders_main(argv[2], argv[3], argv[4]);
+  }
   if (argc > 1 && (!strcmp(argv[1], "--provide") ||
       !strcmp(argv[1], "--provide-once") || !strcmp(argv[1], "--lookup") ||
       !strcmp(argv[1], "--add") || !strcmp(argv[1], "--restrict") ||
@@ -491,8 +520,11 @@ int main(int argc, char **argv)
   if (argc == 2 && !strcmp(argv[1], "client-basic")) {
     return client_basic();
   }
-  if (argc == 2 && !strcmp(argv[1], "client-withdraw")) {
-    return client_withdraw();
+  if (argc == 2 && !strcmp(argv[1], "client-cut")) {
+    return client_cut();
+  }
+  if (argc == 2 && !strcmp(argv[1], "client-exit")) {
+    return client_exit();
   }
   if (argc == 2 && !strcmp(argv[1], "client-reuse")) {
     return client_reuse();
@@ -505,8 +537,8 @@ int main(int argc, char **argv)
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--wait") && !receiver_wait.enabled) {
       receiver_wait.enabled = true;
-    } else if (!mode_set && (!strcmp(argv[i], "--withdraw") ||
-        !strcmp(argv[i], "--queued-withdraw") ||
+    } else if (!mode_set && (!strcmp(argv[i], "--cut") ||
+        !strcmp(argv[i], "--queued-cut") ||
         !strcmp(argv[i], "--retire-full") || !strcmp(argv[i], "--exit"))) {
       mode = argv[i] + 2;
       mode_set = true;
@@ -529,7 +561,7 @@ int main(int argc, char **argv)
   handle_t bin = startup_root("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
-      (!strcmp(mode, "queued-withdraw") &&
+      (!strcmp(mode, "queued-cut") &&
       clock == HANDLE_INVALID) ||
       bin == HANDLE_INVALID) {
     return 1;
@@ -558,10 +590,10 @@ int main(int argc, char **argv)
     return launched ? 0 : 1;
   }
   bool ok;
-  if (!strcmp(mode, "withdraw")) {
-    ok = serve_withdraw(service, endpoint.receiver, launcher, image, memory, output);
-  } else if (!strcmp(mode, "queued-withdraw")) {
-    ok = serve_queued_withdraw(service, endpoint.receiver, launcher, image,
+  if (!strcmp(mode, "cut")) {
+    ok = serve_cut(service, endpoint.receiver, launcher, image, memory, output);
+  } else if (!strcmp(mode, "queued-cut")) {
+    ok = serve_queued_cut(service, endpoint.receiver, launcher, image,
         memory, output, clock);
   } else if (!strcmp(mode, "retire-full")) {
     ok = serve_retire_full(service, endpoint.receiver, endpoint.caller);

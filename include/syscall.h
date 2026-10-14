@@ -2,6 +2,7 @@
 #define USERSPACE_SYSCALL_H
 
 #include <abi/handle.h>
+#include <abi/forwarder.h>
 #include <abi/syscall.h>
 #include <abi/wait.h>
 #include <stddef.h>
@@ -81,6 +82,18 @@ static inline struct syscall_result syscall_wait_many(const struct wait_interest
   __asm__ volatile("syscall"
                    : "+a"(status), "+d"(reply_size)
                    : "D"(interests), "S"(count), "r"(arg4)
+                   : "rcx", "r11", "cc", "memory");
+  return (struct syscall_result){status, reply_size};
+}
+
+static inline struct syscall_result syscall_forwarder_create(
+    const struct forwarder_create *request, struct forwarder_reply *reply)
+{
+  uint64_t status = SYSCALL_FORWARDER_CREATE;
+  uint64_t reply_size;
+  __asm__ volatile("syscall"
+                   : "+a"(status), "=d"(reply_size)
+                   : "D"(request), "S"(reply)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }

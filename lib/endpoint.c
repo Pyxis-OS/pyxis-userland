@@ -163,12 +163,13 @@ enum call_status endpoint_create(handle_t service, struct endpoint_create_reply 
 
 enum call_status endpoint_export(handle_t service, handle_t receiver,
     uint64_t object_id, uint64_t protocol, uint64_t rights, uint64_t transport,
-    handle_t *client)
+    handle_t *client, handle_t *controller)
 {
-  if (!client) {
+  if (!client || !controller || client == controller) {
     return CALL_BAD_REQUEST;
   }
   *client = HANDLE_INVALID;
+  *controller = HANDLE_INVALID;
   struct endpoint_export_message request = {
     .header = {PROTOCOL_ENDPOINT_SERVICE, ENDPOINT_EXPORT},
     .receiver = receiver,
@@ -182,12 +183,14 @@ enum call_status endpoint_export(handle_t service, handle_t receiver,
       &reply, sizeof(reply));
   enum call_status status = checked_status(result);
   if (status != CALL_OK) {
-    return result.reply_size == 0 ? status : CALL_BAD_REQUEST;
+    return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
   }
-  if (result.reply_size != sizeof(reply) || reply.client == HANDLE_INVALID) {
+  if (result.reply_size != sizeof(reply) || reply.client == HANDLE_INVALID ||
+      reply.controller == HANDLE_INVALID || reply.client == reply.controller) {
     return CALL_OUTCOME_UNKNOWN;
   }
   *client = reply.client;
+  *controller = reply.controller;
   return CALL_OK;
 }
 
@@ -202,11 +205,6 @@ static enum call_status control(handle_t receiver, uint64_t operation,
       NULL, 0);
   enum call_status status = checked_status(result);
   return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
-}
-
-enum call_status endpoint_withdraw(handle_t receiver, uint64_t object_id)
-{
-  return control(receiver, ENDPOINT_WITHDRAW, object_id);
 }
 
 enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id)

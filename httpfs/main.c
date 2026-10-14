@@ -51,7 +51,7 @@ int main(int argc, char **argv)
     .authority = {.tcp = startup_resource("tcp"), .udp = startup_resource("udp"),
       .random = startup_resource("random"), .clock = clock}};
   struct endpoint_create_reply endpoint = {0};
-  handle_t published = HANDLE_INVALID;
+  handle_t published = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = CALL_OK, cleanup = CALL_OK;
   bool publication_attempted = false;
   bool cap_selected = false;
@@ -130,7 +130,7 @@ int main(int argc, char **argv)
   }
   uint64_t rights = PROVIDER_RIGHT_OPEN_READ | (staging ? PROVIDER_RIGHT_OPEN_WRITE : 0);
   status = endpoint_export(service, endpoint.receiver, 1, PROTOCOL_PROVIDER,
-      rights, HANDLE_TRANSPORT_CALL, &published);
+      rights, HANDLE_TRANSPORT_CALL, &published, &controller);
   if (status != CALL_OK) {
     goto done;
   }
@@ -144,10 +144,16 @@ int main(int argc, char **argv)
     status = close_handle(&publication);
   }
   if (status == CALL_OK) {
-    status = httpfs_serve(service, endpoint.receiver, &client, custom_bundle != NULL, staging, body_cap);
+    handle_t owned_controller = controller;
+    controller = HANDLE_INVALID;
+    status = httpfs_serve(service, endpoint.receiver, owned_controller, &client,
+        custom_bundle != NULL, staging, body_cap);
   }
 
 done:
+  if (close_handle(&controller) != CALL_OK) {
+    cleanup = CALL_BAD_HANDLE;
+  }
   if (close_handle(&published) != CALL_OK || close_handle(&endpoint.caller) != CALL_OK ||
       close_handle(&endpoint.receiver) != CALL_OK) {
     cleanup = CALL_BAD_HANDLE;

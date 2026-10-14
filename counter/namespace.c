@@ -16,7 +16,7 @@ static int provide(bool once)
   handle_t publication = startup_resource("publication");
   handle_t clock = startup_resource("clock");
   struct endpoint_create_reply endpoint = {0};
-  handle_t client = HANDLE_INVALID;
+  handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = CALL_OK;
   enum call_status cleanup_status = CALL_OK;
   bool publication_attempted = false;
@@ -32,7 +32,7 @@ static int provide(bool once)
   }
   status = endpoint_export(service, endpoint.receiver, COUNTER_FIRST_ID,
       COUNTER_PROTOCOL, COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE,
-      HANDLE_TRANSPORT_CALL, &client);
+      HANDLE_TRANSPORT_CALL, &client, &controller);
   if (status != CALL_OK) {
     fprintf(stderr, "counter: export failed (status %u)\n", status);
     goto done;
@@ -111,6 +111,9 @@ static int provide(bool once)
   }
 
 done:
+  if (controller != HANDLE_INVALID && handle_close(controller) != 0) {
+    cleanup_status = CALL_BAD_HANDLE;
+  }
   if (client != HANDLE_INVALID && handle_close(client) != 0) {
     cleanup_status = CALL_BAD_HANDLE;
   }

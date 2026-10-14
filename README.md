@@ -303,25 +303,33 @@ retain their ordinary blocking RECEIVE behavior.
 receiver. A launched client receives different resource grants, attenuates a
 copy and an IPC attachment, verifies protocol matching, and uses both CALL and
 send-only delivery. The provider authenticates object ID and actual rights,
-then acknowledges natural retirement. `session bin://counter.pxe --withdraw`
-withdraws an export during a delivered call, finishes its cancellation receipt,
+then acknowledges natural retirement. `session bin://counter.pxe --cut`
+cuts an export during a delivered call, completes that call and denies later use,
 acknowledges retirement while an old client handle remains open, and reuses the
 same ID for a new export. `--exit` ends the provider with a delivered call; its
 client reports closure after owner-process teardown.
-`--queued-withdraw` parks the provider after the client sends a marker through
-its export, then withdraws while the client's following CALL waits in the queue;
-the client reports closure before delivery. `--retire-full` fills all sixteen
-ordinary delivery slots with raw SENDs, withdraws an idle export, receives its
+`--queued-cut` parks the provider after the client sends a marker through
+its export, then cuts while the client's following CALL waits in the queue;
+the client reports DENIED before delivery. `--retire-full` fills all sixteen
+ordinary delivery slots with raw SENDs, cuts an idle export, receives its
 retirement notice ahead of those SENDs, acknowledges it and drains them.
+`counter --forwarders bin counter.pxe textfs.pxe` uses two selected existing
+native files to qualify directory child lineage, nested revocable copies,
+ordinary COPY, explicit CUT and last-controller auto-cut. It also exercises
+same-type service-slot retargeting, type/authority refusal, empty-slot NOT_FOUND,
+explicit supervisor-controller takeover and target retention after all managers
+close. Slot CUT remains terminal. This mode changes neither file and needs only
+readable roots. These are manual qualification commands, not boot checks.
+
 The standalone counter modes also accept `--wait` with the same interactive
 start and mixed receiver/input wait:
 
 ```sh
-session bin://counter.pxe --wait --withdraw
+session bin://counter.pxe --wait --cut
 session bin://counter.pxe --wait --retire-full
 ```
 
-Withdrawal reports CALL, CANCEL and RETIRE; the full-queue mode reports RETIRE
+CUT reports CALL and RETIRE; the full-queue mode reports RETIRE
 before draining sixteen SENDs. Namespace provider/client modes do not accept
 this option.
 

@@ -10,11 +10,11 @@
 enum call_status endpoint_create(handle_t service, struct endpoint_create_reply *endpoints);
 
 /* Export one resource behind the owned receiver. Resource rights and transport
- * authority are separate masks; the provider keeps withdrawal control. */
+ * authority are separate masks. Keep the returned CUT controller until RETIRE
+ * or provider teardown; closing its last logical grant cuts the export. */
 enum call_status endpoint_export(handle_t service, handle_t receiver,
     uint64_t object_id, uint64_t protocol, uint64_t rights, uint64_t transport,
-    handle_t *client);
-enum call_status endpoint_withdraw(handle_t receiver, uint64_t object_id);
+    handle_t *client, handle_t *controller);
 enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id);
 
 /* CALL, SEND and REPLY borrow bytes and source grants until return. A successful CALL

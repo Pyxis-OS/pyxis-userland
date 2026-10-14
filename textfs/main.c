@@ -3,6 +3,7 @@
 #include <clock.h>
 #include <endpoint.h>
 #include <handle.h>
+#include <forwarder.h>
 #include <startup.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -20,6 +21,7 @@ static const char default_welcome[] =
     "Read text://guide for file, namespace and service commands.\n";
 
 struct file_export {
+  handle_t controller;
   const char *bytes;
   size_t size;
   /* A slot remains reserved until its export's RETIRE is acknowledged. */
@@ -29,6 +31,7 @@ struct file_export {
 struct provider {
   handle_t service;
   handle_t receiver;
+  handle_t controller;
   const char *welcome;
   bool published;
   struct file_export files[FILE_SLOTS];
@@ -152,10 +155,10 @@ static enum call_status open_file(struct provider *provider,
   if (slot == FILE_SLOTS) {
     return reply(packet, CALL_LIMIT, NULL, 0, NULL);
   }
-  handle_t client = HANDLE_INVALID;
+  handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = endpoint_export(provider->service, provider->receiver,
       FILE_FIRST_ID + slot, PROTOCOL_FILE, FILE_RIGHT_READ,
-      HANDLE_TRANSPORT_CALL, &client);
+      HANDLE_TRANSPORT_CALL, &client, &controller);
   if (status != CALL_OK) {
     if (status == CALL_OUTCOME_UNKNOWN) {
       endpoint_finish(packet->receipt);
@@ -163,7 +166,9 @@ static enum call_status open_file(struct provider *provider,
     }
     return reply(packet, status, NULL, 0, NULL);
   }
-  provider->files[slot] = (struct file_export){bytes, size, true};
+  provider->files[slot] = (struct file_export){
+    .controller = controller, .bytes = bytes, .size = size, .live = true,
+  };
   static const char media_type[] = "text/plain; charset=utf-8";
   struct provider_open_reply header = {
     .outcome = PROVIDER_OUTCOME_BYTES,
@@ -178,17 +183,17 @@ static enum call_status open_file(struct provider *provider,
   status = endpoint_reply(packet->receipt, CALL_OK, response, sizeof(response),
       &grant, 1);
   /* The export state survives until RETIRE, including when reply transfer fails. */
-  enum call_status withdrawn = CALL_OK;
+  enum call_status cut = CALL_OK;
   if (status != CALL_OK) {
-    withdrawn = endpoint_withdraw(provider->receiver, FILE_FIRST_ID + slot);
+    cut = forwarder_cut(provider->files[slot].controller);
   }
   enum call_status closed = close_handle(&client);
   enum call_status finished = CALL_OK;
   if (status != CALL_OK) {
     finished = endpoint_finish(packet->receipt);
   }
-  if (withdrawn != CALL_OK) {
-    return withdrawn;
+  if (cut != CALL_OK) {
+    return cut;
   }
   if (closed != CALL_OK) {
     return closed;
@@ -262,11 +267,19 @@ static enum call_status serve(struct provider *provider)
     if (packet.kind == ENDPOINT_MESSAGE_RETIRE) {
       if (packet.object_id == SERVICE_ID && packet.protocol == PROTOCOL_PROVIDER &&
           provider->published) {
+        status = close_handle(&provider->controller);
+        if (status != CALL_OK) {
+          return status;
+        }
         provider->published = false;
       } else if (packet.object_id >= FILE_FIRST_ID &&
           packet.object_id - FILE_FIRST_ID < FILE_SLOTS &&
           packet.protocol == PROTOCOL_FILE &&
           provider->files[packet.object_id - FILE_FIRST_ID].live) {
+        status = close_handle(&provider->files[packet.object_id - FILE_FIRST_ID].controller);
+        if (status != CALL_OK) {
+          return status;
+        }
         provider->files[packet.object_id - FILE_FIRST_ID] = (struct file_export){0};
       } else {
         return CALL_BAD_REQUEST;
@@ -343,7 +356,7 @@ int main(int argc, char **argv)
     goto done;
   }
   status = endpoint_export(service, endpoint.receiver, SERVICE_ID, PROTOCOL_PROVIDER,
-      PROVIDER_RIGHT_OPEN_READ, HANDLE_TRANSPORT_CALL, &client);
+      PROVIDER_RIGHT_OPEN_READ, HANDLE_TRANSPORT_CALL, &client, &provider.controller);
   if (status != CALL_OK) {
     goto done;
   }
@@ -368,6 +381,14 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (close_handle(&provider.controller) != CALL_OK) {
+    cleanup_status = CALL_BAD_HANDLE;
+  }
+  for (size_t i = 0; i < FILE_SLOTS; ++i) {
+    if (close_handle(&provider.files[i].controller) != CALL_OK) {
+      cleanup_status = CALL_BAD_HANDLE;
+    }
+  }
   enum call_status client_closed = close_handle(&client);
   enum call_status caller_closed = close_handle(&endpoint.caller);
   enum call_status receiver_closed = close_handle(&endpoint.receiver);
