@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "../common/udp.h"
 #include <handle.h>
 #include <startup.h>
@@ -24,13 +25,13 @@ int main(int argc, char **argv)
       !udp_parse_number(argv[4], ECHO_MAX_COUNT, &count) || !count)) {
     goto usage;
   }
-  handle_t clock = startup_resource("clock");
+  handle_t clock = bootstrap_capability("clock");
   if (clock == HANDLE_INVALID) {
     fputs("udp-echo: missing clock capability\n", stderr);
     return EXIT_FAILURE;
   }
   struct udp_open_reply endpoint = {.handle = HANDLE_INVALID};
-  handle_t service = startup_resource("udp");
+  handle_t service = bootstrap_capability("udp");
   enum call_status status = udp_open(service, local, port, &endpoint);
   if (status != CALL_OK) {
     fprintf(stderr, "udp-echo: open: %s (status %u)\n", udp_error(status), (unsigned)status);

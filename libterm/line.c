@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <handle.h>
 #include "input.h"
 #include <console.h>
@@ -472,7 +473,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     .length = initial_length, .cursor = initial_length,
   };
   struct term_event_reader reader = {.term = term, .clock = HANDLE_INVALID};
-  handle_t clock = startup_resource("clock");
+  handle_t clock = bootstrap_capability("clock");
   bool adaptive = false;
   if (clock != HANDLE_INVALID) {
     result.error = term_event_reader_init(&reader, term, clock);

@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <clock.h>
 #include <display.h>
 #include <keyboard.h>
@@ -307,9 +308,9 @@ static enum call_status explore(struct display_buffer *buffer,
 
 int main(void)
 {
-  handle_t display = startup_resource("display");
-  handle_t keyboard = startup_resource("keyboard");
-  handle_t clock = startup_resource("clock");
+  handle_t display = bootstrap_capability("display");
+  handle_t keyboard = bootstrap_capability("keyboard");
+  handle_t clock = bootstrap_capability("clock");
   if (display == HANDLE_INVALID || keyboard == HANDLE_INVALID ||
       clock == HANDLE_INVALID) {
     fputs("mandelbrot: display, keyboard and clock resources are required\n", stderr);

@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/pipe.h>
 #include <abi/file.h>
 #include <file.h>
@@ -7,8 +8,8 @@
 
 int main(void)
 {
-  struct startup_stream input = startup_stream(STARTUP_STDIN);
-  struct startup_stream output = startup_stream(STARTUP_STDOUT);
+  struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
+  struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
   if (input.protocol != PROTOCOL_PIPE || output.protocol != PROTOCOL_FILE) {
     fputs("http-stage: requires declared pipe input and staging writer\n", stderr);
     return 1;

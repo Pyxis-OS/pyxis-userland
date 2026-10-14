@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/clock.h>
 #include <abi/endpoint.h>
@@ -241,9 +242,9 @@ int main(int argc, char **argv)
       return 1;
     }
   }
-  receiver_wait.input = startup_resource("input");
-  receiver_wait.output = startup_resource("output");
-  receiver_wait.clock = startup_resource("clock");
+  receiver_wait.input = bootstrap_capability("input");
+  receiver_wait.output = bootstrap_capability("output");
+  receiver_wait.clock = bootstrap_capability("clock");
   if (receiver_wait.enabled && (receiver_wait.input == HANDLE_INVALID ||
       receiver_wait.clock == HANDLE_INVALID)) {
     return 1;
@@ -251,12 +252,12 @@ int main(int argc, char **argv)
   bool deadline_mode = !strcmp(mode, "expired") || !strcmp(mode, "queued-timeout") ||
       !strcmp(mode, "delivered-timeout") || !strcmp(mode, "cancel-full") ||
       !strcmp(mode, "cancel-finish") || !strcmp(mode, "deadline-reply");
-  handle_t service = startup_resource("service");
-  handle_t launcher = startup_resource("launcher");
-  handle_t memory = startup_resource("memory");
-  handle_t output = startup_resource("output");
-  handle_t clock = startup_resource("clock");
-  handle_t boot = startup_root("boot"), bin = startup_root("bin");
+  handle_t service = bootstrap_capability("service");
+  handle_t launcher = bootstrap_capability("launcher");
+  handle_t memory = bootstrap_capability("memory");
+  handle_t output = bootstrap_capability("output");
+  handle_t clock = bootstrap_capability("clock");
+  handle_t boot = bootstrap_capability("boot"), bin = bootstrap_capability("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (deadline_mode && clock == HANDLE_INVALID) ||

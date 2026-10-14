@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <clock.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -291,12 +292,12 @@ int main(int argc, char **argv)
           "OUTPUT must be a new file; it is retained even on failure\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t clock = startup_resource("clock");
+  handle_t clock = bootstrap_capability("clock");
   if (clock == HANDLE_INVALID) {
     fputs("iobench: missing clock grant\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t profile = options.host_profile ? startup_resource("profile") : HANDLE_INVALID;
+  handle_t profile = options.host_profile ? bootstrap_capability("profile") : HANDLE_INVALID;
   if (options.host_profile && profile == HANDLE_INVALID) {
     fputs("iobench: missing requested profile grant\n", stderr);
     return EXIT_FAILURE;

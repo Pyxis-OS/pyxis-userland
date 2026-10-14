@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "../common/dns.h"
 #include <startup.h>
 #include <stdio.h>
@@ -82,8 +83,8 @@ int main(int argc, char **argv)
     fputs("dig: server must be a numeric unicast IPv4 address\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t udp = startup_resource("udp"), clock = startup_resource("clock");
-  handle_t random = startup_resource("random");
+  handle_t udp = bootstrap_capability("udp"), clock = bootstrap_capability("clock");
+  handle_t random = bootstrap_capability("random");
   if (udp == HANDLE_INVALID || clock == HANDLE_INVALID || random == HANDLE_INVALID) {
     fputs("dig: missing udp, clock or random capability\n", stderr);
     return EXIT_FAILURE;

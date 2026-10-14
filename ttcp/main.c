@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "../common/dns.h"
 #include "../common/udp.h"
 #include <clock.h>
@@ -279,7 +280,7 @@ int main(int argc, char **argv)
   }
   /* Both factors are positive 32-bit values; widen before multiplying. */
   uint64_t total = (uint64_t)options.buffers * options.length;
-  handle_t service = startup_resource("tcp"), clock = startup_resource("clock");
+  handle_t service = bootstrap_capability("tcp"), clock = bootstrap_capability("clock");
   if (service == HANDLE_INVALID || clock == HANDLE_INVALID) {
     fputs("ttcp: missing tcp or clock capability\n", stderr);
     return EXIT_FAILURE;

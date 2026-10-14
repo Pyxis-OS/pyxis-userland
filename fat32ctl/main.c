@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <disk.h>
 #include <mount.h>
 #include <handle.h>
@@ -44,7 +45,7 @@ int main(int argc, char **argv)
   }
   const char *operation = argv[1];
   if (!strcmp(operation, "list")) {
-    return list(startup_resource("inventory"));
+    return list(bootstrap_capability("inventory"));
   }
   bool state = !strcmp(operation, "state");
   bool sync = !strcmp(operation, "sync");
@@ -53,7 +54,7 @@ int main(int argc, char **argv)
     fputs("usage: fat32ctl list | state | sync | retire\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t control = startup_resource(sync ? "sync_control" : "control");
+  handle_t control = bootstrap_capability(sync ? "sync_control" : "control");
   if (control == HANDLE_INVALID) {
     return failure(operation, CALL_DENIED);
   }

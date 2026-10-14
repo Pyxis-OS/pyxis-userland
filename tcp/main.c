@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "../common/dns.h"
 #include "../common/udp.h"
 #include "serve.h"
@@ -128,7 +129,7 @@ int main(int argc, char **argv)
     fputs("Usage: tcp HOST PORT [REQUEST_FILE]\n       tcp --serve [COUNT]\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t service = startup_resource("tcp"), clock = startup_resource("clock");
+  handle_t service = bootstrap_capability("tcp"), clock = bootstrap_capability("clock");
   if (service == HANDLE_INVALID || clock == HANDLE_INVALID) {
     fputs("tcp: missing tcp or clock capability\n", stderr);
     return EXIT_FAILURE;

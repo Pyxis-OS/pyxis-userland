@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "iobench.h"
 #include "../common/directory.h"
 #include <abi/clock.h>
@@ -231,15 +232,15 @@ int pipe_worker(int argc, char **argv)
     return EXIT_FAILURE;
   }
   bool producer = !strcmp(argv[2], "producer");
-  handle_t coordinator = startup_resource("coordinator");
-  handle_t clock = startup_resource("clock");
+  handle_t coordinator = bootstrap_capability("coordinator");
+  handle_t clock = bootstrap_capability("clock");
   struct endpoint_create_reply control = {0};
   unsigned char *bytes = malloc(FIXTURE_BYTES);
   bool prepared = bytes != NULL;
   if (prepared) {
     fill_fixture(bytes, FIXTURE_BYTES, !producer);
   }
-  if (!producer && endpoint_create(startup_resource("service"), &control) != CALL_OK) {
+  if (!producer && endpoint_create(bootstrap_capability("service"), &control) != CALL_OK) {
     prepared = false;
   }
   struct ready ready = {.role = producer ? PRODUCER : CONSUMER, .prepared = prepared};
@@ -300,11 +301,11 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
   handle_t ready_receipts[WORKERS] = {0};
   struct endpoint_packet packet = {0};
   bool ok = false;
-  enum call_status status = pipe_create(startup_resource("pipe"), &pipe);
+  enum call_status status = pipe_create(bootstrap_capability("pipe"), &pipe);
   if (status != CALL_OK) {
     goto cleanup;
   }
-  status = endpoint_create(startup_resource("service"), &coordinator);
+  status = endpoint_create(bootstrap_capability("service"), &coordinator);
   if (status != CALL_OK) {
     goto cleanup;
   }
@@ -322,23 +323,23 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
   };
   struct launch_request requests[WORKERS] = {0};
   for (size_t i = 0; i < WORKERS; ++i) {
-    grants[i][MEMORY] = (struct launch_grant){startup_resource("memory"), MEMORY_RIGHT_MANAGE, 0};
+    grants[i][MEMORY] = (struct launch_grant){bootstrap_capability("memory"), MEMORY_RIGHT_MANAGE, 0};
     grants[i][CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ, 0};
     grants[i][COORDINATOR] = (struct launch_grant){coordinator.caller, 0, HANDLE_TRANSPORT_CALL};
     grants[i][STREAM] = (struct launch_grant){i == PRODUCER ? pipe.writer : pipe.reader,
         i == PRODUCER ? PIPE_RIGHT_WRITE : PIPE_RIGHT_READ, 0};
-    grants[i][SERVICE] = (struct launch_grant){startup_resource("service"), ENDPOINT_SERVICE_RIGHT_CREATE, 0};
+    grants[i][SERVICE] = (struct launch_grant){bootstrap_capability("service"), ENDPOINT_SERVICE_RIGHT_CREATE, 0};
     requests[i] = (struct launch_request){
       .image = image, .grants = (uintptr_t)grants[i],
       .grant_count = i == CONSUMER ? GRANTS : GRANTS - 1,
       .resources = (uintptr_t)resources, .resource_count = i == CONSUMER ? 4 : 3,
       .argv = (uintptr_t)arguments[i], .argc = 5,
     };
-    requests[i].streams[i == PRODUCER ? STARTUP_STDOUT : STARTUP_STDIN] =
+    requests[i].streams[i == PRODUCER ? ENVIRONMENT_STDOUT : ENVIRONMENT_STDIN] =
         (struct launch_stream){.protocol = PROTOCOL_PIPE, .grant = STREAM};
   }
   uint64_t failed;
-  status = launcher_launch_batch(startup_resource("launcher"), requests, WORKERS,
+  status = launcher_launch_batch(bootstrap_capability("launcher"), requests, WORKERS,
       children, &failed);
   if (status != CALL_OK) {
     goto cleanup;

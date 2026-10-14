@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "../common/udp.h"
 #include <handle.h>
 #include <startup.h>
@@ -42,7 +43,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "udp-send: message exceeds %u bytes\n", (unsigned)UDP_MAX_PAYLOAD);
     return EXIT_FAILURE;
   }
-  handle_t service = startup_resource("udp"), clock = startup_resource("clock");
+  handle_t service = bootstrap_capability("udp"), clock = bootstrap_capability("clock");
   if (service == HANDLE_INVALID || clock == HANDLE_INVALID) {
     fputs("udp-send: missing udp or clock capability\n", stderr);
     return EXIT_FAILURE;

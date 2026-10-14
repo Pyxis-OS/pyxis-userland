@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "plan.h"
 #include "../xfer/hash.h"
 
@@ -412,11 +413,11 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   struct terminal terminal = {
-    .input = startup_resource("input"), .output = startup_resource("output"),
+    .input = bootstrap_capability("input"), .output = bootstrap_capability("output"),
   };
-  handle_t disks = startup_resource("disks"), boot = startup_root("boot");
-  handle_t clock = startup_resource("clock"), random = startup_resource("random");
-  handle_t kernel = startup_resource("boot_kernel"), archive = startup_resource("boot_archive");
+  handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
+  handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
+  handle_t kernel = bootstrap_capability("boot_kernel"), archive = bootstrap_capability("boot_archive");
   struct install_plan plan = {.disk.handle = HANDLE_INVALID,
     .efi.handle = HANDLE_INVALID, .template.handle = HANDLE_INVALID};
   struct install_plan_record expected = {0};
@@ -448,7 +449,7 @@ int main(int argc, char **argv)
   install_progress_begin("Initializing revision hashing", INSTALL_PROGRESS_NONE, NULL);
   crypto = hash_init(clock, random);
   if (!crypto || !install_plan_sources(&plan, disks, boot, kernel, archive, clock,
-        startup_resource("system_info")) ||
+        bootstrap_capability("system_info")) ||
       !inventory(disks, read_the_room, updating, &targets, &count)) {
     fputs("installer: sources or inventory unavailable; nothing was written\n", stderr);
     goto done;
@@ -545,7 +546,7 @@ int main(int argc, char **argv)
   }
   result = EXIT_SUCCESS;
   if (interactive_consent) {
-    offer_restart(&terminal, startup_resource("power"), updating);
+    offer_restart(&terminal, bootstrap_capability("power"), updating);
   }
 
 done:

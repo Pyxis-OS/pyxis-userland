@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
 #include <abi/endpoint.h>
@@ -355,9 +356,9 @@ static bool serve(struct receiver *receiver)
 
 static int receiver_main(enum mode mode)
 {
-  handle_t service = startup_resource("service");
-  handle_t clock = startup_resource("clock");
-  handle_t bootstrap = startup_resource("bootstrap");
+  handle_t service = bootstrap_capability("service");
+  handle_t clock = bootstrap_capability("clock");
+  handle_t bootstrap = bootstrap_capability("bootstrap");
   struct endpoint_create_reply control = {0}, data = {0};
   handle_t exported = HANDLE_INVALID, controller = HANDLE_INVALID;
   struct receiver receiver = {.mode = mode};
@@ -830,11 +831,11 @@ int main(int argc, char **argv)
         "[--messages 1..256] [--rounds 1..100]\n", stderr);
     return 1;
   }
-  handle_t clock = startup_resource("clock");
-  handle_t memory = startup_resource("memory");
-  handle_t service = startup_resource("service");
-  handle_t launcher = startup_resource("launcher");
-  handle_t bin = startup_root("bin");
+  handle_t clock = bootstrap_capability("clock");
+  handle_t memory = bootstrap_capability("memory");
+  handle_t service = bootstrap_capability("service");
+  handle_t launcher = bootstrap_capability("launcher");
+  handle_t bin = bootstrap_capability("bin");
   handle_t image = HANDLE_INVALID;
   struct sample *samples = calloc(options.rounds + 1, sizeof(*samples));
   size_t bytes = options.size * options.messages;

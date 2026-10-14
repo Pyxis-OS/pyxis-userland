@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "iobench.h"
 #include "../common/directory.h"
 #include <file.h>
@@ -274,7 +275,7 @@ static void report_pass(size_t pass, const struct output_result *result, bool su
 
 bool run_output(const struct options *options, unsigned char *scratch, handle_t clock)
 {
-  handle_t profile = options->host_profile ? startup_resource("profile") : HANDLE_INVALID;
+  handle_t profile = options->host_profile ? bootstrap_capability("profile") : HANDLE_INVALID;
   if (options->host_profile && profile == HANDLE_INVALID) {
     fputs("iobench: missing requested profile grant\n", stderr);
     return false;

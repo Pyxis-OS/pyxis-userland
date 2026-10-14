@@ -1,3 +1,4 @@
+#include "bootstrap_environment.h"
 #include "pane_broker.h"
 #include <abi/launcher.h>
 #include <abi/execution_group.h>
@@ -113,7 +114,7 @@ enum call_status pane_broker_start(size_t columns, size_t rows, unsigned tab_wid
 {
   static uint64_t next_id = 1;
   *result = (struct pane_broker_result){0};
-  handle_t clock = startup_resource("clock"), caller = startup_resource("pane_broker");
+  handle_t clock = bootstrap_capability("clock"), caller = bootstrap_capability("pane_broker");
   uint64_t now;
   enum call_status status = clock_now(clock, &now);
   if (status != CALL_OK) {
@@ -128,7 +129,7 @@ enum call_status pane_broker_start(size_t columns, size_t rows, unsigned tab_wid
     return CALL_LIMIT;
   }
   struct endpoint_create_reply endpoint = {0};
-  status = endpoint_create(startup_resource("service"), &endpoint);
+  status = endpoint_create(bootstrap_capability("service"), &endpoint);
   if (status != CALL_OK) {
     return status;
   }

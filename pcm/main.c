@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <audio.h>
 #include <clock.h>
 #include <startup.h>
@@ -225,7 +226,7 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   struct producer producer = {
-    .audio = startup_resource("audio"), .clock = startup_resource("clock"),
+    .audio = bootstrap_capability("audio"), .clock = bootstrap_capability("clock"),
   };
   if (producer.audio == HANDLE_INVALID || producer.clock == HANDLE_INVALID) {
     fputs("pcm: requires audio playback and clock grants\n", stderr);

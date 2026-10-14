@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/memory.h>
 #include <disk.h>
 #include <handle.h>
@@ -303,10 +304,10 @@ static enum fat32_status mutate(struct fat32_writer *writer, char *line)
 
 int main(int argc, char **argv)
 {
-  handle_t disk = startup_resource("disk");
-  struct startup_stream input = startup_stream(STARTUP_STDIN);
-  struct startup_stream output = startup_stream(STARTUP_STDOUT);
-  struct startup_stream error = startup_stream(STARTUP_STDERR);
+  handle_t disk = bootstrap_capability("disk");
+  struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
+  struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
+  struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
   struct terminal terminal = {.input = input.handle, .output = output.handle};
   struct fat32_workspace workspace = {
     .step_limit = STEP_LIMIT, .sector_limit = SECTOR_LIMIT,
@@ -321,7 +322,7 @@ int main(int argc, char **argv)
   uint32_t entry;
   uint64_t rights, transport;
   if (argc != 2 || !decimal_entry(argv[1], &entry) || disk == HANDLE_INVALID ||
-      startup_resource_count() != 2 || startup_resource("memory") == HANDLE_INVALID ||
+      startup_resource_count() != 2 || bootstrap_capability("memory") == HANDLE_INVALID ||
       startup_root_count() || startup_namespace() != HANDLE_INVALID ||
       startup_working_directory_count() || input.protocol != PROTOCOL_CONSOLE ||
       output.protocol != PROTOCOL_CONSOLE || error.protocol != PROTOCOL_CONSOLE) {

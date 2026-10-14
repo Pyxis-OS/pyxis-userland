@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <clock.h>
 #include <log.h>
 #include <startup.h>
@@ -20,7 +21,7 @@ int main(int argc, char **argv)
     fputs("usage: log [-f]\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t log = startup_resource("log"), clock = startup_resource("clock");
+  handle_t log = bootstrap_capability("log"), clock = bootstrap_capability("clock");
   if (log == HANDLE_INVALID) {
     fputs("log: missing read grant\n", stderr);
     return EXIT_FAILURE;

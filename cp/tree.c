@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "cp.h"
 #include "../common/directory.h"
 #include <clock.h>
@@ -222,8 +223,8 @@ static enum cp_result walk(struct tree *tree, handle_t source_root, handle_t des
  * libc's mkstemp uses. A leftover marker from another run cannot match it. */
 static enum call_status generate_sentinel(char *name)
 {
-  handle_t clock = startup_resource("clock");
-  handle_t random = startup_resource("random");
+  handle_t clock = bootstrap_capability("clock");
+  handle_t random = bootstrap_capability("random");
   if (clock == HANDLE_INVALID || random == HANDLE_INVALID) {
     return CALL_UNAVAILABLE;
   }

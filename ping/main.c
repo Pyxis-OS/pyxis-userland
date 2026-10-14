@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "../common/dns.h"
 #include "../common/udp.h"
 #include <clock.h>
@@ -58,7 +59,7 @@ int main(int argc, char **argv)
     fputs("Usage: ping [-c count] IPv4-address-or-hostname\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t echo = startup_resource("echo"), clock = startup_resource("clock");
+  handle_t echo = bootstrap_capability("echo"), clock = bootstrap_capability("clock");
   if (echo == HANDLE_INVALID || clock == HANDLE_INVALID) {
     fputs("ping: missing echo or clock capability\n", stderr);
     return EXIT_FAILURE;

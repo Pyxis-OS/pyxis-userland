@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <errno.h>
 #include <startup.h>
 #include <stdint.h>
@@ -229,7 +230,7 @@ int main(int argc, char **argv)
     database = DEFAULT_DATABASE;
   }
 
-  handle_t system_info = startup_resource("system_info");
+  handle_t system_info = bootstrap_capability("system_info");
   if (system_info == HANDLE_INVALID) {
     fputs("lspci: system information authority unavailable\n", stderr);
     return EXIT_FAILURE;

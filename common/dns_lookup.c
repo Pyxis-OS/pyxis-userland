@@ -1,3 +1,4 @@
+#include "bootstrap_environment.h"
 #include "dns.h"
 #include <startup.h>
 #include <stdio.h>
@@ -15,7 +16,7 @@ bool dns_resolve_address(const char *program, const char *target,
     fprintf(stderr, "%s: DNS server must be a numeric unicast IPv4 address\n", program);
     return false;
   }
-  handle_t udp = startup_resource("udp"), random = startup_resource("random");
+  handle_t udp = bootstrap_capability("udp"), random = bootstrap_capability("random");
   if (udp == HANDLE_INVALID || random == HANDLE_INVALID) {
     fprintf(stderr, "%s: missing udp or random capability for DNS\n", program);
     return false;

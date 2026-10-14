@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "context.h"
 #include "render.h"
 #include <clock.h>
@@ -125,12 +126,12 @@ bool config_editor_load(struct config_editor_context *context)
 {
   memset(context, 0, sizeof(*context));
   context->view = (struct config_storage_view){
-    .config_parent = startup_resource("config_read"),
-    .limine_parent = startup_resource("limine_read"),
-    .control = startup_resource("control"), .clock = startup_resource("clock"),
+    .config_parent = bootstrap_capability("config_read"),
+    .limine_parent = bootstrap_capability("limine_read"),
+    .control = bootstrap_capability("control"), .clock = bootstrap_capability("clock"),
   };
-  handle_t config_write = startup_resource("config_write"),
-      limine_write = startup_resource("limine_write"), writer = startup_resource("writer");
+  handle_t config_write = bootstrap_capability("config_write"),
+      limine_write = bootstrap_capability("limine_write"), writer = bootstrap_capability("writer");
   context->writer = rights(config_write, WRITE_RIGHTS) &&
       rights(writer, MOUNT_RIGHT_OBSERVE | MOUNT_RIGHT_WRITE | MOUNT_RIGHT_INTERVAL);
   if (context->writer) {
@@ -140,7 +141,7 @@ bool config_editor_load(struct config_editor_context *context)
       context->view.limine_parent = limine_write;
     }
   }
-  handle_t defaults = startup_root("defaults");
+  handle_t defaults = bootstrap_capability("defaults");
   const char *names[] = {"installed.lua", "session.lua", "network.lua"};
   for (size_t i = 0; i < CONFIG_LUA_COUNT; ++i) {
     if (!read_source(defaults, names[i], &context->archive[i])) {
@@ -251,7 +252,7 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
         selection.boot.volume_sources[i] == BOOT_ENTRY_OVERRIDE ? "ESP override" : "archive default");
   }
   struct system_info_cpu cpu;
-  if (system_info_get_cpu(startup_resource("system_info"), &cpu) == CALL_OK && cpu.online_count) {
+  if (system_info_get_cpu(bootstrap_capability("system_info"), &cpu) == CALL_OK && cpu.online_count) {
     for (size_t i = 0; i < selection.boot.space_count; ++i) {
       const struct boot_space *space = selection.boot.spaces[i];
       for (size_t j = 0; j < space->cpu_count; ++j) {
@@ -368,7 +369,7 @@ bool config_editor_publish(struct config_editor_context *context)
   char transaction[33];
   static const char hex[] = "0123456789abcdef";
   ok = ok && clock_now(context->view.clock, &now) == CALL_OK && now <= UINT64_MAX - UINT64_C(2000000000) &&
-      random_read(startup_resource("random"), random, sizeof(random), now + UINT64_C(2000000000)) == CALL_OK;
+      random_read(bootstrap_capability("random"), random, sizeof(random), now + UINT64_C(2000000000)) == CALL_OK;
   if (ok) {
     for (size_t i = 0; i < sizeof(random); ++i) {
       transaction[2 * i] = hex[random[i] >> 4];

@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/file.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -256,7 +257,7 @@ static int native_pipe(int *reader, int *writer)
 {
   *reader = *writer = -1;
   struct pipe_create_reply ends;
-  enum call_status status = pipe_create(startup_resource("pipe"), &ends);
+  enum call_status status = pipe_create(bootstrap_capability("pipe"), &ends);
   if (status != CALL_OK) {
     fprintf(stderr, "threadprobe runtime-io: pipe CREATE status %u\n", status);
     return 1;

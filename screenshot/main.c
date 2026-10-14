@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "encode.h"
 #include "../common/directory.h"
 #include <directory.h>
@@ -85,7 +86,7 @@ int main(int argc, char **argv)
     fputs("usage: screenshot PATH\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t capture = startup_resource("screen_capture");
+  handle_t capture = bootstrap_capability("screen_capture");
   if (capture == HANDLE_INVALID) {
     fputs("screenshot: screen_capture resource unavailable\n", stderr);
     return EXIT_FAILURE;

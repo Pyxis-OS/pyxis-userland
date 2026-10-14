@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "provider.h"
 #include "trust.h"
 #include "../common/dns.h"
@@ -41,15 +42,15 @@ static enum call_status close_handle(handle_t *handle)
 
 int main(int argc, char **argv)
 {
-  handle_t service = startup_resource("service");
-  handle_t publication = startup_resource("publication");
-  handle_t clock = startup_resource("clock");
+  handle_t service = bootstrap_capability("service");
+  handle_t publication = bootstrap_capability("publication");
+  handle_t clock = bootstrap_capability("clock");
   /* The launcher explicitly provisions an isolated RAM or NPFS directory. No
    * shared root/path or filename implicitly supplies staging privacy. */
-  handle_t staging = startup_resource("staging");
+  handle_t staging = bootstrap_capability("staging");
   struct http_client client = {.scheme = HTTP_SCHEME_HTTP,
-    .authority = {.tcp = startup_resource("tcp"), .udp = startup_resource("udp"),
-      .random = startup_resource("random"), .clock = clock}};
+    .authority = {.tcp = bootstrap_capability("tcp"), .udp = bootstrap_capability("udp"),
+      .random = bootstrap_capability("random"), .clock = clock}};
   struct endpoint_create_reply endpoint = {0};
   handle_t published = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = CALL_OK, cleanup = CALL_OK;

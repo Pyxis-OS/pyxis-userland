@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "ls.h"
 #include <pyxis/stdio.h>
 #include <stdio.h>
@@ -37,7 +38,7 @@ int main(int argc, char **argv)
     argv[++operands] = argv[i];
   }
 
-  struct startup_stream binding;
+  struct pyxis_stdio_binding binding;
   if (pyxis_stdio_stream(stdout, &binding) != 0) {
     perror("ls: stdout");
     return EXIT_FAILURE;

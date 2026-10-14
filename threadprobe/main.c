@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/console.h>
 #include <abi/directory.h>
 #include <abi/file.h>
@@ -282,7 +283,7 @@ static int lifecycle(bool inspect)
   if (inspect) {
     char byte;
     size_t size;
-    handle_t input = startup_stream(STARTUP_STDIN).handle;
+    handle_t input = bootstrap_stdio(ENVIRONMENT_STDIN).handle;
     if (console_read(input, &byte, 1, &size) != CALL_OK || size != 1) {
       stop_process(1);
     }
@@ -474,7 +475,7 @@ static int tls_lifecycle(bool inspect)
   if (inspect) {
     char byte;
     size_t size;
-    if (console_read(startup_stream(STARTUP_STDIN).handle, &byte, 1, &size) != CALL_OK || size != 1) {
+    if (console_read(bootstrap_stdio(ENVIRONMENT_STDIN).handle, &byte, 1, &size) != CALL_OK || size != 1) {
       stop_process(1);
     }
   }
@@ -547,7 +548,7 @@ static void parking_enter(void)
 {
   char byte;
   size_t size;
-  if (console_read(startup_stream(STARTUP_STDIN).handle, &byte, 1, &size) != CALL_OK || size != 1) {
+  if (console_read(bootstrap_stdio(ENVIRONMENT_STDIN).handle, &byte, 1, &size) != CALL_OK || size != 1) {
     stop_process(1);
   }
 }
@@ -872,7 +873,7 @@ static int exhaustion(void)
 static int close_race(void)
 {
   struct endpoint_create_reply endpoint;
-  if (!prepare_pair() || endpoint_create(startup_resource("service"), &endpoint) != CALL_OK) {
+  if (!prepare_pair() || endpoint_create(bootstrap_capability("service"), &endpoint) != CALL_OK) {
     return 1;
   }
   contexts[0].action = CHILD_CALL;
@@ -943,7 +944,7 @@ static int close_race(void)
     {tls ? tls_contexts[1].native.completion : contexts[1].completion, THREAD_COMPLETION_RIGHT_WAIT, 0},
   };
   struct endpoint_packet reply;
-  if (endpoint_request(startup_resource("bootstrap"), NULL, 0, observers, 2, 0, &reply) != CALL_OK) {
+  if (endpoint_request(bootstrap_capability("bootstrap"), NULL, 0, observers, 2, 0, &reply) != CALL_OK) {
     stop_process(1);
   }
   if (fault) {
@@ -958,12 +959,12 @@ static int supervise(bool fault, bool parking, bool tls)
 {
   struct endpoint_create_reply endpoint;
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
-  enum call_status status = endpoint_create(startup_resource("service"), &endpoint);
+  enum call_status status = endpoint_create(bootstrap_capability("service"), &endpoint);
   if (status != CALL_OK) {
     fprintf(stderr, "threadprobe: endpoint status %u\n", status);
     return 1;
   }
-  status = directory_lookup(startup_root("bin"), "threadprobe.pxe", DIRECTORY_KIND_FILE,
+  status = directory_lookup(bootstrap_capability("bin"), "threadprobe.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   enum { MEMORY, THREADS, CLOCK, BOOTSTRAP, GRANT_COUNT };
   struct launch_grant grants[GRANT_COUNT] = {
@@ -985,7 +986,7 @@ static int supervise(bool fault, bool parking, bool tls)
     .argv = (uintptr_t)arguments, .argc = 2,
   };
   if (status == CALL_OK) {
-    status = launcher_launch(startup_resource("launcher"), &request, &child);
+    status = launcher_launch(bootstrap_capability("launcher"), &request, &child);
   }
   bool valid = status == CALL_OK;
   uint64_t supervisor_woken = UINT64_MAX;
@@ -1057,9 +1058,9 @@ static int supervise(bool fault, bool parking, bool tls)
 
 int main(int argc, char **argv)
 {
-  memory = startup_resource("memory");
-  threads = startup_resource("threads");
-  clock_service = startup_resource("clock");
+  memory = bootstrap_capability("memory");
+  threads = bootstrap_capability("threads");
+  clock_service = bootstrap_capability("clock");
   if (argc != 2) {
     fputs("usage: session bin://threadprobe.pxe "
         "lifecycle|inspect|tls|tls-inspect|tls-stop|tls-fault|bind|refusal|exhaust|stop|fault|close|"

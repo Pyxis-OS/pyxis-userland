@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <clock.h>
 #include <memory.h>
 #include <profile.h>
@@ -234,8 +235,8 @@ int main(int argc, char **argv)
           "growth uses one round; pages requires page-aligned size and no --mixed\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t clock = startup_resource("clock"), memory = startup_resource("memory");
-  handle_t profile = startup_resource("profile");
+  handle_t clock = bootstrap_capability("clock"), memory = bootstrap_capability("memory");
+  handle_t profile = bootstrap_capability("profile");
   if (clock == HANDLE_INVALID || memory == HANDLE_INVALID ||
       (options.profile && profile == HANDLE_INVALID)) {
     fputs("allocbench: missing clock, memory or requested profile grant\n", stderr);

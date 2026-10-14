@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "serve.h"
 #include <clock.h>
 #include <handle.h>
@@ -167,7 +168,7 @@ static bool close_listener(handle_t *listener)
 
 int tcp_serve(unsigned count)
 {
-  handle_t listener = startup_resource("tcp_listener"), clock = startup_resource("clock");
+  handle_t listener = bootstrap_capability("tcp_listener"), clock = bootstrap_capability("clock");
   if (listener == HANDLE_INVALID || clock == HANDLE_INVALID) {
     fputs("tcp: missing tcp_listener or clock capability\n", stderr);
     return EXIT_FAILURE;

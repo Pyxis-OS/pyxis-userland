@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "context.h"
 #include "../xfer/hash.h"
 #include "../installer/progress.h"
@@ -12,8 +13,8 @@ static bool line(const char *prompt, char *bytes, size_t capacity)
 {
   if (isatty(fileno(stdin)) && isatty(fileno(stderr))) {
     struct terminal terminal = {
-      startup_stream(STARTUP_STDIN).handle,
-      startup_stream(STARTUP_STDERR).handle,
+      bootstrap_stdio(ENVIRONMENT_STDIN).handle,
+      bootstrap_stdio(ENVIRONMENT_STDERR).handle,
     };
     struct term_line_result result = term_read_line(&terminal, prompt, bytes, capacity);
     return result.status == TERM_LINE_OK && !result.limit_reached;
@@ -113,13 +114,13 @@ int main(int argc, char **argv)
     fputs("usage: config validate | plan | edit | apply [--confirm=config]\n", stderr);
     return EXIT_FAILURE;
   }
-  if (!hash_init(startup_resource("clock"), startup_resource("random"))) {
+  if (!hash_init(bootstrap_capability("clock"), bootstrap_capability("random"))) {
     fputs("config: declared clock/random unavailable for source hashing\n", stderr);
     hash_close();
     return EXIT_FAILURE;
   }
   struct config_editor_context context;
-  install_progress_plain_stream(startup_resource("clock"), stderr);
+  install_progress_plain_stream(bootstrap_capability("clock"), stderr);
   bool ok = config_editor_load(&context);
   if (ok && !strcmp(argv[1], "validate")) {
     ok = config_editor_validate(&context, false);

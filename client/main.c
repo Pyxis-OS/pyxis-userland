@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include <abi/file.h>
 #include <clock.h>
 #include <console.h>
@@ -52,10 +53,10 @@ int main(int argc, char **argv)
   if (*end || id < 1 || id > ENDPOINT_DELIVERIES_MAX + 1) {
     return 1;
   }
-  handle_t output = startup_resource("output");
-  handle_t endpoint = startup_resource("endpoint");
-  handle_t content = startup_resource("content");
-  handle_t clock = startup_resource("clock");
+  handle_t output = bootstrap_capability("output");
+  handle_t endpoint = bootstrap_capability("endpoint");
+  handle_t content = bootstrap_capability("content");
+  handle_t clock = bootstrap_capability("clock");
   if (output == HANDLE_INVALID || endpoint == HANDLE_INVALID || content == HANDLE_INVALID) {
     return 1;
   }

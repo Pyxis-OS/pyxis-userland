@@ -1,3 +1,4 @@
+#include "../common/bootstrap_environment.h"
 #include "hash.h"
 #include "protocol.h"
 #include <directory.h>
@@ -507,8 +508,8 @@ int main(int argc, char **argv)
   }
   struct transfer transfer = {
     .wire = {
-      .terminal = {startup_resource("input"), startup_resource("output")},
-      .clock = startup_resource("clock"),
+      .terminal = {bootstrap_capability("input"), bootstrap_capability("output")},
+      .clock = bootstrap_capability("clock"),
     },
     .source = -1,
     .stage_file = HANDLE_INVALID,
@@ -527,7 +528,7 @@ int main(int argc, char **argv)
     term_print(&wire->terminal, "xfer: terminal passthrough unavailable\n");
     return EXIT_FAILURE;
   }
-  bool success = hash_init(wire->clock, startup_resource("random"));
+  bool success = hash_init(wire->clock, bootstrap_capability("random"));
   if (!success) {
     transfer_fail(&transfer, "EIO", "PSA initialization failed; native entropy and clock grants are required");
   } else if (sending) {
