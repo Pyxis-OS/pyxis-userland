@@ -1,6 +1,7 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include <abi/clock.h>
+#include <abi/console.h>
 #include <abi/disk.h>
 #include <abi/file.h>
 #include <abi/log.h>
@@ -40,20 +41,26 @@ int main(int argc, char **argv)
 {
 
   /* The kernel adds the install space's console, input devices and display. */
-  enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, POWER,
+  enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, DIAGNOSTICS, POWER,
     FACTORY, SOURCE_COUNT, GRANT_COUNT = FACTORY };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
-    "clock", "random", "system_info", "log", "boot", "power", "space_factory"};
+    "clock", "random", "system_info", "log", "boot", "installer_diagnostics", "power", "space_factory"};
   handle_t sources[SOURCE_COUNT] = {
     bootstrap_capability("disks"), bootstrap_capability("boot_kernel"), bootstrap_capability("boot_archive"),
     bootstrap_capability("memory"), bootstrap_capability("clock"), bootstrap_capability("random"),
     bootstrap_capability("system_info"), bootstrap_capability("log"), bootstrap_capability("boot"),
-    bootstrap_capability("power"), bootstrap_capability("space_factory"),
+    HANDLE_INVALID, bootstrap_capability("power"), bootstrap_capability("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
   const char **arguments = NULL;
   int result = EXIT_FAILURE;
+  struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
+  if (output.protocol != PROTOCOL_CONSOLE ||
+      handle_copy_restricted(output.handle, CONSOLE_RIGHT_WRITE, 0, &sources[DIAGNOSTICS]) != CALL_OK) {
+    fputs("init-install: cannot delegate Caelum diagnostic output\n", stderr);
+    goto done;
+  }
   for (unsigned i = 0; i < SOURCE_COUNT; i++) {
     /* Without power the installer simply offers no restart. */
     if (sources[i] == HANDLE_INVALID && i != POWER) {
@@ -92,6 +99,7 @@ int main(int argc, char **argv)
     [RANDOM] = {sources[RANDOM], RANDOM_RIGHT_READ, 0},
     [SYSTEM_INFO] = {sources[SYSTEM_INFO], SYSTEM_INFO_RIGHT_READ, 0},
     [LOG] = {sources[LOG], LOG_RIGHT_READ, 0},
+    [DIAGNOSTICS] = {sources[DIAGNOSTICS], CONSOLE_RIGHT_WRITE, 0},
     [BOOT_ROOT] = {sources[BOOT_ROOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES, 0},
     [POWER] = {sources[POWER], POWER_RIGHT_RESTART, 0},
@@ -101,6 +109,7 @@ int main(int argc, char **argv)
     PROFILE_CAP((uintptr_t)"boot_archive", ARCHIVE), PROFILE_CAP((uintptr_t)"memory", MEMORY),
     PROFILE_CAP((uintptr_t)"clock", CLOCK), PROFILE_CAP((uintptr_t)"random", RANDOM),
     PROFILE_CAP((uintptr_t)"system_info", SYSTEM_INFO), PROFILE_CAP((uintptr_t)"log", LOG),
+    PROFILE_PRIVATE_CAP((uintptr_t)"installer_diagnostics", DIAGNOSTICS),
     PROFILE_CAP((uintptr_t)"power", POWER),
   };
   bool has_power = sources[POWER] != HANDLE_INVALID;
