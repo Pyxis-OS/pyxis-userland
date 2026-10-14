@@ -2,6 +2,7 @@
 #define USERSPACE_ENDPOINT_H
 
 #include <abi/endpoint.h>
+#include <abi/describe.h>
 #include <abi/handle.h>
 #include <abi/syscall.h>
 
@@ -16,6 +17,14 @@ enum call_status endpoint_export(handle_t service, handle_t receiver,
     uint64_t object_id, uint64_t protocol, uint64_t rights, uint64_t transport,
     handle_t *client, handle_t *controller);
 enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id);
+
+/* Publish an immutable description on the issuer-owned CONTROL receiver.
+ * Optional bounded body bytes are copied into an independent native snapshot;
+ * ERROR_BODY includes a zero-byte body. Failure preserves the prior snapshot.
+ * No body grant is accepted and no provider-owned capability is retained. */
+enum call_status endpoint_describe_publish(handle_t receiver, uint64_t object_id,
+    const struct resource_description *description, const void *error_body,
+    size_t error_body_size);
 
 /* CALL, SEND and REPLY borrow bytes and source grants until return. A successful CALL
  * returns an owned packet with reply grants; size is the actual payload length,

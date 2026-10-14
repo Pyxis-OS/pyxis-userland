@@ -5,6 +5,7 @@
 #include <abi/handle.h>
 #include <abi/syscall.h>
 #include <stddef.h>
+#include <resource.h>
 
 struct provider_metadata {
   uint64_t protocol;
@@ -19,13 +20,21 @@ struct provider_result {
   struct provider_metadata metadata;
 };
 
-/* Transitional strict FILE adapter; typed results/describe remain unfinished.
- * OPEN copies opaque target bytes, intent, flags and the original absolute
- * deadline. No HTTP context or fallback. Success owns one exported FILE with
- * exactly the intent's FILE rights and CALL transport. Failure clears file
- * and closes all provisional attachments. Only CALL_OK makes result->status
- * meaningful; delivery survives transport/local validation failure.
- * Metadata is copied and NUL-terminated. No retry or allocation. */
+/* Generic typed OPEN, with no HTTP context or fallback. CALL_OK publishes an
+ * owned result, including resource failures; callers inspect its outcome.
+ * Other statuses are transport/local/admission failures and clear ownership.
+ * Issuers select actual attenuated authority; it is checked against the kernel,
+ * never widened to intent. Error bodies come from native DESCRIBE snapshots.
+ * The absolute deadline is copied unchanged and never restarted. No retry. */
+enum call_status provider_open_typed(handle_t provider, const char *target,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+    struct resource_result *result);
+
+/* Existing FILE consumers adapt the same typed OPEN, with no second wire ABI.
+ * CALL_OK makes result->status meaningful. A successful outcome must be a FILE
+ * with the intent's access and usable transport; other types are unsupported.
+ * Success transfers an owned file. Failures close resource and body grants.
+ * Copied media type is counted UTF-8. delivery survives validation failure. */
 enum call_status provider_open(handle_t provider, const char *target, uint64_t intent,
     uint64_t flags, uint64_t deadline_ns, struct provider_result *result, handle_t *file);
 

@@ -2,6 +2,7 @@
 #define USERSPACE_HANDLE_H
 
 #include <abi/handle.h>
+#include <abi/describe.h>
 #include <abi/syscall.h>
 
 /* Releases this process's reference, making the handle stale immediately.
@@ -13,6 +14,14 @@ int handle_close(handle_t handle);
  * Failure clears the output. Querying a closed export still succeeds; subsequent
  * invocation reports closure. No object identity or extra authority is exposed. */
 enum call_status handle_query(handle_t handle, struct handle_info *info);
+
+/* Provider-free description of a held grant. The optional error_body is a new
+ * owned READ-only native immutable FILE, independent of issuer exit or CUT.
+ * INCLUDE_ERROR_BODY can fail with LIMIT if no handle slot is immediately free.
+ * Cut/empty targets are successful descriptions with denied/not-found outcome.
+ * Failure clears output and releases every provisional body handle. */
+enum call_status handle_describe(handle_t handle, uint64_t flags,
+    struct describe_reply *info);
 
 /* Queries independently granted resource and transport authority. At least one
  * output is required; omitted outputs are ignored. Failure clears both supplied

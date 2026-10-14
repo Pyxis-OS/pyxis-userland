@@ -66,8 +66,48 @@ static enum call_status reply(struct endpoint_packet *packet, uint64_t result,
   struct provider_open_reply open_result = {0};
   if (packet->protocol == PROTOCOL_PROVIDER && packet->operation == PROVIDER_OPEN &&
       result != CALL_OK) {
-    bytes = &open_result;
-    size = sizeof(open_result);
+    const char *detail = NULL;
+    switch (result) {
+    case CALL_NOT_FOUND:
+      open_result.description.outcome = RESOURCE_NOT_FOUND;
+      detail = "Not found";
+      break;
+    case CALL_DENIED:
+    case CALL_READ_ONLY:
+      open_result.description.outcome = RESOURCE_DENIED;
+      detail = "Permission denied";
+      break;
+    case CALL_IO:
+    case CALL_TIMED_OUT:
+      open_result.description.outcome = RESOURCE_IO_ERROR;
+      detail = "I/O error";
+      break;
+    case CALL_FILE_TOO_LARGE:
+      open_result.description.outcome = RESOURCE_TOO_LARGE;
+      detail = "Resource too large";
+      break;
+    case CALL_ABANDONED:
+      open_result.description.outcome = RESOURCE_ABORTED;
+      detail = "Operation aborted";
+      break;
+    case CALL_OUTCOME_UNKNOWN:
+      open_result.description.outcome = RESOURCE_UNCERTAIN;
+      detail = "Operation outcome uncertain";
+      break;
+    default:
+      break;
+    }
+    if (detail) {
+      open_result.description.detail_size = strlen(detail);
+      memcpy(open_result.description.detail, detail, open_result.description.detail_size);
+      result = CALL_OK;
+      bytes = &open_result;
+      size = sizeof(open_result);
+    } else {
+      /* Argument, unsupported-intent and admission errors have no typed reply. */
+      bytes = NULL;
+      size = 0;
+    }
   }
   enum call_status status = endpoint_reply(packet->receipt, result, bytes, size,
       grant, grant ? 1 : 0);
@@ -157,16 +197,29 @@ static enum call_status open_file(struct provider *provider,
     .controller = controller, .bytes = bytes, .size = size, .live = true,
   };
   static const char media_type[] = "text/plain; charset=utf-8";
-  struct provider_open_reply header = {
+  struct provider_open_reply response = {
     .protocol = PROTOCOL_FILE,
-    .representation = PROVIDER_REPRESENTATION_BYTES,
-    .media_type_size = sizeof(media_type) - 1,
+    .description = {
+      .outcome = RESOURCE_OK,
+      .flags = RESOURCE_LENGTH_KNOWN | RESOURCE_REREADABLE | RESOURCE_COMPLETE,
+      .length = size,
+      .media_type_size = sizeof(media_type) - 1,
+    },
   };
-  uint8_t response[sizeof(header) + sizeof(media_type) - 1];
-  memcpy(response, &header, sizeof(header));
-  memcpy(response + sizeof(header), media_type, sizeof(media_type) - 1);
+  memcpy(response.description.media_type, media_type, sizeof(media_type) - 1);
+  status = endpoint_describe_publish(provider->receiver, FILE_FIRST_ID + slot,
+      &response.description, NULL, 0);
+  if (status != CALL_OK) {
+    enum call_status cut = forwarder_cut(provider->files[slot].controller);
+    enum call_status closed = close_handle(&client);
+    enum call_status replied = reply(packet, status, NULL, 0, NULL);
+    if (cut != CALL_OK) {
+      return cut;
+    }
+    return closed != CALL_OK ? closed : replied;
+  }
   struct endpoint_grant grant = {client, FILE_RIGHT_READ, HANDLE_TRANSPORT_CALL};
-  status = endpoint_reply(packet->receipt, CALL_OK, response, sizeof(response),
+  status = endpoint_reply(packet->receipt, CALL_OK, &response, sizeof(response),
       &grant, 1);
   /* The export state survives until RETIRE, including when reply transfer fails. */
   enum call_status cut = CALL_OK;

@@ -5,6 +5,7 @@
 #include <abi/tcp.h>
 #include <abi/udp.h>
 #include <handle.h>
+#include <resource.h>
 #include <syscall.h>
 #include <stdbool.h>
 
@@ -211,6 +212,28 @@ static enum call_status control(handle_t receiver, uint64_t operation,
 enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id)
 {
   return control(receiver, ENDPOINT_RETIRE_ACK, object_id);
+}
+
+enum call_status endpoint_describe_publish(handle_t receiver, uint64_t object_id,
+    const struct resource_description *description, const void *error_body,
+    size_t error_body_size)
+{
+  if (!object_id || !resource_description_valid(description) ||
+      error_body_size > RESOURCE_ERROR_BODY_MAX_BYTES ||
+      (error_body_size && !error_body) ||
+      (!(description->flags & RESOURCE_ERROR_BODY) && (error_body || error_body_size))) {
+    return CALL_BAD_REQUEST;
+  }
+  struct endpoint_describe_publish request = {
+    .header = {PROTOCOL_ENDPOINT_RECEIVER, ENDPOINT_DESCRIBE_PUBLISH},
+    .object_id = object_id,
+    .description = *description,
+    .error_body_address = (uintptr_t)error_body,
+    .error_body_size = error_body_size,
+  };
+  struct syscall_result result = syscall_call(receiver, &request, sizeof(request), NULL, 0);
+  enum call_status status = checked_status(result);
+  return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
 }
 
 enum call_status endpoint_invoke(handle_t caller, uint64_t protocol,

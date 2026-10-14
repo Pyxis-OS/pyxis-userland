@@ -3,6 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/forwarder.h>
+#include <abi/describe.h>
 #include <abi/syscall.h>
 #include <abi/wait.h>
 #include <stddef.h>
@@ -69,6 +70,19 @@ static inline struct syscall_result syscall_handle_info(handle_t handle,
   __asm__ volatile("syscall"
                    : "+a"(status), "=d"(reply_size)
                    : "D"(handle), "S"(info)
+                   : "rcx", "r11", "cc", "memory");
+  return (struct syscall_result){status, reply_size};
+}
+
+/* DESCRIBE uses RDX for the fixed output address on entry and reply size on exit. */
+static inline struct syscall_result syscall_describe(handle_t handle, uint64_t flags,
+    struct describe_reply *info)
+{
+  uint64_t status = SYSCALL_DESCRIBE;
+  uint64_t reply_size = (uintptr_t)info;
+  __asm__ volatile("syscall"
+                   : "+a"(status), "+d"(reply_size)
+                   : "D"(handle), "S"(flags)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }

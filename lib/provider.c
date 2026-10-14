@@ -11,16 +11,62 @@ struct provider_open_payload {
 _Static_assert(offsetof(struct provider_open_payload, target) ==
     sizeof(struct provider_open_request), "provider target follows the request");
 
-enum call_status provider_open(handle_t provider, const char *target, uint64_t intent,
-    uint64_t flags, uint64_t deadline_ns, struct provider_result *result, handle_t *file)
+static enum call_status capture_reply(struct endpoint_packet *packet,
+    const struct provider_open_reply *reply, struct resource_result *result)
 {
-  if (file) {
-    *file = HANDLE_INVALID;
+  if (!resource_description_valid(&reply->description) ||
+      packet->grant_count != (reply->protocol ? 1u : 0u) ||
+      (!reply->protocol && (reply->description.outcome == RESOURCE_OK ||
+      (reply->description.flags & RESOURCE_ERROR_BODY)))) {
+    return CALL_BAD_REQUEST;
   }
-  if (result) {
-    *result = (struct provider_result){0};
+  if (!reply->protocol) {
+    result->info.description = reply->description;
+    return CALL_OK;
   }
-  if (!file || !result || !target || !intent || (intent & ~PROVIDER_INTENTS) ||
+  const struct endpoint_grant *grant = &packet->grants[0];
+  struct handle_info queried;
+  enum call_status status = handle_query(grant->handle, &queried);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (queried.protocol != reply->protocol || queried.rights != grant->rights ||
+      queried.transport != grant->transport) {
+    return CALL_BAD_REQUEST;
+  }
+  uint64_t flags = (reply->description.flags & RESOURCE_ERROR_BODY) ?
+      DESCRIBE_INCLUDE_ERROR_BODY : 0;
+  struct describe_reply info;
+  status = handle_describe(grant->handle, flags, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != queried.protocol || info.kind != queried.kind ||
+      info.rights != queried.rights || info.transport != queried.transport ||
+      info.description.outcome != reply->description.outcome ||
+      ((reply->description.flags & RESOURCE_ERROR_BODY) &&
+      info.error_body == HANDLE_INVALID)) {
+    if (info.error_body != HANDLE_INVALID) {
+      handle_close(info.error_body);
+    }
+    return CALL_BAD_REQUEST;
+  }
+  info.description = reply->description;
+  result->resource = grant->handle;
+  result->info = info;
+  packet->grants[0].handle = HANDLE_INVALID;
+  return CALL_OK;
+}
+
+enum call_status provider_open_typed(handle_t provider, const char *target,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+    struct resource_result *result)
+{
+  if (!result) {
+    return CALL_BAD_REQUEST;
+  }
+  *result = (struct resource_result){0};
+  if (!target || !intent || (intent & ~PROVIDER_INTENTS) ||
       (flags & ~PROVIDER_OPEN_FLAGS) ||
       ((flags & PROVIDER_OPEN_EXCLUSIVE) && !(flags & PROVIDER_OPEN_CREATE)) ||
       ((flags & (PROVIDER_OPEN_TRUNCATE | PROVIDER_OPEN_APPEND)) &&
@@ -43,16 +89,10 @@ enum call_status provider_open(handle_t provider, const char *target, uint64_t i
     return CALL_WRONG_TYPE;
   }
   uint64_t required = 0;
-  uint64_t rights = 0;
   if (intent & PROVIDER_INTENT_READ) {
     required |= PROVIDER_RIGHT_OPEN_READ;
-    rights |= FILE_RIGHT_READ;
   }
-  if (intent & PROVIDER_INTENT_WRITE) {
-    required |= PROVIDER_RIGHT_OPEN_WRITE;
-    rights |= FILE_RIGHT_WRITE;
-  }
-  if (flags & PROVIDER_OPEN_CREATE) {
+  if ((intent & PROVIDER_INTENT_WRITE) || (flags & PROVIDER_OPEN_CREATE)) {
     required |= PROVIDER_RIGHT_OPEN_WRITE;
   }
   if ((info.rights & required) != required ||
@@ -70,55 +110,67 @@ enum call_status provider_open(handle_t provider, const char *target, uint64_t i
   if (status != CALL_OK) {
     return status;
   }
-
-  struct provider_open_reply reply = {0};
-  if (packet.result >= CALL_STATUS_COUNT || packet.size < sizeof(reply)) {
+  if (packet.result >= CALL_STATUS_COUNT) {
+    status = CALL_BAD_REQUEST;
+  } else if (packet.result != CALL_OK) {
+    status = packet.size || packet.grant_count ? CALL_BAD_REQUEST :
+        (enum call_status)packet.result;
+  } else if (packet.size != sizeof(struct provider_open_reply)) {
     status = CALL_BAD_REQUEST;
   } else {
+    struct provider_open_reply reply;
     memcpy(&reply, packet.data, sizeof(reply));
-    if (packet.result != CALL_OK) {
-      if (packet.size != sizeof(reply) || packet.grant_count ||
-          reply.protocol || reply.representation || reply.media_type_size) {
-        status = CALL_BAD_REQUEST;
-      }
-    } else if (packet.grant_count != 1 || reply.protocol != PROTOCOL_FILE ||
-        reply.representation != PROVIDER_REPRESENTATION_BYTES ||
-        reply.media_type_size > PROVIDER_MEDIA_TYPE_MAX_BYTES ||
-        packet.size != sizeof(reply) + reply.media_type_size ||
-        packet.grants[0].rights != rights ||
-        packet.grants[0].transport != HANDLE_TRANSPORT_CALL) {
-      status = CALL_BAD_REQUEST;
-    } else {
-      status = handle_query(packet.grants[0].handle, &info);
-      if (status == CALL_OK && (info.kind != HANDLE_KIND_EXPORTED ||
-          info.protocol != reply.protocol || info.rights != rights ||
-          info.transport != HANDLE_TRANSPORT_CALL)) {
-        status = CALL_BAD_REQUEST;
-      }
-      for (size_t i = 0; status == CALL_OK && i < reply.media_type_size; ++i) {
-        unsigned char byte = packet.data[sizeof(reply) + i];
-        if (byte < 0x20 || byte > 0x7e) {
-          status = CALL_BAD_REQUEST;
-        }
-      }
-    }
-  }
-  if (status == CALL_OK) {
-    result->status = packet.result;
-    if (result->status == CALL_OK) {
-      *file = packet.grants[0].handle;
-      packet.grants[0].handle = HANDLE_INVALID;
-      result->metadata.protocol = reply.protocol;
-      result->metadata.representation = reply.representation;
-      result->metadata.media_type_size = reply.media_type_size;
-      memcpy(result->metadata.media_type, packet.data + sizeof(reply), reply.media_type_size);
-      result->metadata.media_type[reply.media_type_size] = '\0';
-    }
+    status = capture_reply(&packet, &reply, result);
   }
   for (size_t i = 0; i < packet.grant_count; ++i) {
     if (packet.grants[i].handle != HANDLE_INVALID) {
       handle_close(packet.grants[i].handle);
     }
   }
+  return status;
+}
+
+enum call_status provider_open(handle_t provider, const char *target, uint64_t intent,
+    uint64_t flags, uint64_t deadline_ns, struct provider_result *result, handle_t *file)
+{
+  if (file) {
+    *file = HANDLE_INVALID;
+  }
+  if (result) {
+    *result = (struct provider_result){0};
+  }
+  if (!result || !file) {
+    return CALL_BAD_REQUEST;
+  }
+  struct resource_result typed;
+  enum call_status status = provider_open_typed(provider, target, intent, flags,
+      deadline_ns, &typed);
+  result->delivery = typed.delivery;
+  if (status != CALL_OK) {
+    return status;
+  }
+  result->status = resource_outcome_status(typed.info.description.outcome);
+  if (result->status == CALL_OK) {
+    uint64_t rights = ((intent & PROVIDER_INTENT_READ) ? FILE_RIGHT_READ : 0) |
+        ((intent & PROVIDER_INTENT_WRITE) ? FILE_RIGHT_WRITE : 0);
+    if (typed.info.protocol != PROTOCOL_FILE) {
+      status = CALL_BAD_OPERATION;
+    } else if ((typed.info.rights & rights) != rights ||
+        (typed.info.kind == HANDLE_KIND_EXPORTED &&
+        (typed.info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL)) {
+      status = CALL_DENIED;
+    } else if (typed.info.kind == HANDLE_KIND_NATIVE && typed.info.transport) {
+      status = CALL_BAD_REQUEST;
+    } else {
+      *file = typed.resource;
+      typed.resource = HANDLE_INVALID;
+      result->metadata.protocol = typed.info.protocol;
+      result->metadata.representation = PROVIDER_REPRESENTATION_BYTES;
+      result->metadata.media_type_size = typed.info.description.media_type_size;
+      memcpy(result->metadata.media_type, typed.info.description.media_type,
+          typed.info.description.media_type_size + 1);
+    }
+  }
+  resource_result_close(&typed);
   return status;
 }

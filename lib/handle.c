@@ -1,4 +1,6 @@
 #include <handle.h>
+#include <abi/file.h>
+#include <resource.h>
 #include <syscall.h>
 
 int handle_close(handle_t handle)
@@ -43,6 +45,66 @@ enum call_status handle_rights(handle_t handle, uint64_t *rights, uint64_t *tran
   }
   if (transport) {
     *transport = info.transport;
+  }
+  return status;
+}
+
+static bool description_reply_valid(const struct describe_reply *reply, uint64_t flags)
+{
+  if (!reply->protocol || (reply->kind != HANDLE_KIND_NATIVE &&
+      reply->kind != HANDLE_KIND_EXPORTED) ||
+      (reply->transport & ~HANDLE_TRANSPORT_CALL) ||
+      (reply->properties & ~DESCRIBE_IMMUTABLE_SNAPSHOT) ||
+      !resource_description_valid(&reply->description)) {
+    return false;
+  }
+  if (reply->properties & DESCRIBE_IMMUTABLE_SNAPSHOT) {
+    if (reply->protocol != PROTOCOL_FILE || reply->kind != HANDLE_KIND_NATIVE ||
+        (reply->rights & ~FILE_RIGHT_READ) || reply->transport) {
+      return false;
+    }
+  }
+  bool body = (flags & DESCRIBE_INCLUDE_ERROR_BODY) &&
+      (reply->description.flags & RESOURCE_ERROR_BODY);
+  return (reply->error_body != HANDLE_INVALID) == body;
+}
+
+enum call_status handle_describe(handle_t handle, uint64_t flags,
+    struct describe_reply *info)
+{
+  if (!info) {
+    return CALL_BAD_REQUEST;
+  }
+  *info = (struct describe_reply){0};
+  if (flags & ~DESCRIBE_INCLUDE_ERROR_BODY) {
+    return CALL_BAD_REQUEST;
+  }
+  struct describe_reply reply = {0};
+  struct syscall_result result = syscall_describe(handle, flags, &reply);
+  enum call_status status = result.status < CALL_STATUS_COUNT ?
+      (enum call_status)result.status : CALL_BAD_REQUEST;
+  if (result.reply_size != (status == CALL_OK ? sizeof(reply) : 0) ||
+      (status == CALL_OK && (!description_reply_valid(&reply, flags) ||
+      reply.error_body == handle))) {
+    status = CALL_BAD_REQUEST;
+  }
+  if (status == CALL_OK && reply.error_body != HANDLE_INVALID) {
+    struct describe_reply body;
+    status = handle_describe(reply.error_body, 0, &body);
+    if (status == CALL_OK && (body.protocol != PROTOCOL_FILE ||
+        body.kind != HANDLE_KIND_NATIVE || body.rights != FILE_RIGHT_READ ||
+        body.transport || body.properties != DESCRIBE_IMMUTABLE_SNAPSHOT ||
+        body.description.outcome != RESOURCE_OK ||
+        !(body.description.flags & RESOURCE_LENGTH_KNOWN) ||
+        (body.description.flags & RESOURCE_ERROR_BODY) ||
+        body.description.length > RESOURCE_ERROR_BODY_MAX_BYTES)) {
+      status = CALL_BAD_REQUEST;
+    }
+  }
+  if (status == CALL_OK) {
+    *info = reply;
+  } else if (reply.error_body != HANDLE_INVALID && reply.error_body != handle) {
+    handle_close(reply.error_body);
   }
   return status;
 }
