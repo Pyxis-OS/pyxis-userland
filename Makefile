@@ -85,6 +85,9 @@ UTILITY_OBJECT := $(BUILD)/common/directory.o
 .PHONY: fat32ctl config
 all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
+# Lua scripts for hand-run native checks, installed as boot://share/checks/.
+CHECK_SCRIPTS := console-burst.lua console-flood.lua cpu-busy.lua exit-latency.lua
+
 # Publish only the boot payload, never objects or debug ELFs. Recreate it so
 # removed programs/assets cannot survive from an earlier install.
 install: all
@@ -92,7 +95,7 @@ install: all
 	  staging="$(DESTDIR).tmp"; \
 	  trap 'rm -rf -- "$$staging"' EXIT; \
 	  rm -rf -- "$$staging"; \
-	  mkdir -p "$$staging/share" "$$staging/config"; \
+	  mkdir -p "$$staging/share/checks" "$$staging/config"; \
 	  for program in $(INSTALL_PROGRAMS); do \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/"; \
 	  done; \
@@ -110,6 +113,9 @@ install: all
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  install -m 644 "$(BUILD)/share/iobench.bin" "$$staging/share/iobench.bin"; \
 	  install -m 644 "$(BUILD)/share/iobench-small.bin" "$$staging/share/iobench-small.bin"; \
+	  for script in $(CHECK_SCRIPTS); do \
+	    install -m 644 "checks/$$script" "$$staging/share/checks/$$script"; \
+	  done; \
 	  if ! diff -qr "$$staging" "$(DESTDIR)" >/dev/null 2>&1; then \
 	    rm -rf -- "$(DESTDIR)"; \
 	    mv -- "$$staging" "$(DESTDIR)"; \
