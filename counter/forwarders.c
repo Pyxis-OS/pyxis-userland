@@ -184,8 +184,11 @@ int counter_provider_forwarders_main(const char *provider_name,
   handle_t guide = HANDLE_INVALID, welcome = HANDLE_INVALID;
   handle_t child = HANDLE_INVALID, child_copy = HANDLE_INVALID;
   handle_t independent = HANDLE_INVALID, powerless = HANDLE_INVALID;
+  handle_t old_child = HANDLE_INVALID, new_child = HANDLE_INVALID;
+  handle_t denied_open = HANDLE_INVALID;
   struct forwarder_reply exported_slot = {0}, native_slot = {0};
   struct forwarder_reply provider_copy = {0}, automatic = {0};
+  struct forwarder_reply provider_target = {0}, provider_slot = {0};
   uint64_t welcome_file_size = 0;
   char guide_uri[NAMESPACE_NAME_MAX + sizeof("://guide")];
   char welcome_uri[NAMESPACE_NAME_MAX + sizeof("://welcome")];
@@ -249,6 +252,35 @@ int counter_provider_forwarders_main(const char *provider_name,
         file_matches(independent, guide);
   }
   if (ok) {
+    phase = "provider slot initial target and reply lineage";
+    ok = forwarder_revocable(provider, 0, 0, FORWARDER_CREATE_SAME_RIGHTS,
+        &provider_target) == CALL_OK &&
+        forwarder_slot(provider_target.holder, 0, 0, FORWARDER_CREATE_SAME_RIGHTS,
+        &provider_slot) == CALL_OK &&
+        open_provider_file(provider_slot.holder, guide_uri, &old_child) &&
+        file_matches(old_child, guide);
+  }
+  if (ok) {
+    phase = "provider slot current target last controller release";
+    struct provider_result result;
+    ok = close_owned(&provider_target.controller) && provider_file_revoked(old_child) &&
+        provider_open(provider_slot.holder, guide_uri, FILE_RIGHT_READ, 0,
+        &result, &denied_open) == CALL_DENIED && denied_open == HANDLE_INVALID;
+  }
+  if (ok) {
+    phase = "provider slot supervisor takeover after target CUT";
+    ok = forwarder_retarget(provider_slot.controller, provider) == CALL_OK &&
+        open_provider_file(provider_slot.holder, welcome_uri, &new_child) &&
+        file_matches(new_child, welcome) && provider_file_revoked(old_child);
+  }
+  if (ok) {
+    phase = "provider slot terminal CUT";
+    ok = forwarder_cut(provider_slot.controller) == CALL_OK &&
+        provider_file_revoked(new_child) &&
+        forwarder_retarget(provider_slot.controller, provider) == CALL_DENIED &&
+        file_matches(independent, guide);
+  }
+  if (ok) {
     phase = "powerless controller copy and last controller release";
     ok = forwarder_revocable(welcome, 0, 0, FORWARDER_CREATE_SAME_RIGHTS,
         &automatic) == CALL_OK &&
@@ -261,10 +293,15 @@ int counter_provider_forwarders_main(const char *provider_name,
   cleanup = close_pair(&native_slot) && cleanup;
   cleanup = close_pair(&provider_copy) && cleanup;
   cleanup = close_pair(&automatic) && cleanup;
+  cleanup = close_pair(&provider_target) && cleanup;
+  cleanup = close_pair(&provider_slot) && cleanup;
   cleanup = close_owned(&powerless) && cleanup;
   cleanup = close_owned(&child) && cleanup;
   cleanup = close_owned(&child_copy) && cleanup;
   cleanup = close_owned(&independent) && cleanup;
+  cleanup = close_owned(&old_child) && cleanup;
+  cleanup = close_owned(&new_child) && cleanup;
+  cleanup = close_owned(&denied_open) && cleanup;
   cleanup = close_owned(&guide) && cleanup;
   cleanup = close_owned(&welcome) && cleanup;
   cleanup = close_owned(&native) && cleanup;
@@ -274,8 +311,8 @@ int counter_provider_forwarders_main(const char *provider_name,
   }
   ok = ok && cleanup;
   if (ok) {
-    fputs("provider forwarders: exported retarget, representation rejection, reply lineage "
-        "and powerless controller release complete\n", stdout);
+    fputs("provider forwarders: exported retarget, representation rejection, reply lineage, "
+        "provider slot takeover and powerless controller release complete\n", stdout);
   } else {
     fprintf(stderr, "provider forwarders: qualification failed at %s\n", phase);
   }
