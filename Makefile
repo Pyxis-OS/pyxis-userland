@@ -56,7 +56,7 @@ REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_directory.o esp_payload.o boot_entry.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o archive_config.o coexist_ui.o esp_view.o target.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_directory.o esp_payload.o esp_transfer.o boot_entry.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o archive_config.o coexist_ui.o esp_view.o target.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
@@ -71,7 +71,7 @@ TLS_OBJECT := $(BUILD)/libtls/tls.o
 TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o literal.o boot.o session.o network.o selection.o)
-CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o)
+CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o

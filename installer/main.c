@@ -505,7 +505,7 @@ int main(int argc, char **argv)
   handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
   handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
   handle_t kernel = bootstrap_capability("boot_kernel"), archive = bootstrap_capability("boot_archive");
-  handle_t payload_workspace = coexist ? bootstrap_capability("config_snapshot_parent") : HANDLE_INVALID;
+  handle_t payload_workspace = bootstrap_capability("config_snapshot_parent");
   struct install_plan plan = {.disk.handle = HANDLE_INVALID,
     .efi.handle = HANDLE_INVALID};
   struct install_plan_record expected = {0};
@@ -518,7 +518,7 @@ int main(int argc, char **argv)
   if (disks == HANDLE_INVALID || boot == HANDLE_INVALID || clock == HANDLE_INVALID ||
       random == HANDLE_INVALID || kernel == HANDLE_INVALID || archive == HANDLE_INVALID ||
       terminal.input == HANDLE_INVALID || terminal.output == HANDLE_INVALID ||
-      (coexist && payload_workspace == HANDLE_INVALID)) {
+      payload_workspace == HANDLE_INVALID) {
     fputs("installer: missing install-mode authority\n", stderr);
     goto done;
   }
@@ -664,6 +664,7 @@ int main(int argc, char **argv)
     goto done;
   }
   plan.payload_request.workspace = payload_workspace;
+  plan.classic_request.workspace = payload_workspace;
   install_progress_pause();
   if (!install_plan_report(&plan, stderr, verbose || print_only)) {
     goto done;

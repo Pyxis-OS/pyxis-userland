@@ -13,6 +13,7 @@ enum install_esp_classic_payload {
 
 struct install_esp_activation_request {
   handle_t root, control;
+  handle_t workspace; /* Borrowed private native RAM parent, used only during stage. */
   struct mount_state_reply expected;
   struct install_source payloads[INSTALL_ESP_CLASSIC_PAYLOAD_COUNT];
   struct config_file_digest expected_payloads[INSTALL_ESP_CLASSIC_PAYLOAD_COUNT];
@@ -28,23 +29,28 @@ struct install_esp_classic_files;
  * boot/initrd.cpio, in payload order. Creates missing EFI/BOOT and boot/limine
  * parents without making attempt directories. The caller has explicitly
  * authorized classic installation; paths/names confer no authority themselves.
- * Root/control and sources are borrowed; source bytes remain fixed through
- * stage. Expected digests are frozen plan evidence, not ownership credentials.
+ * Root/control, workspace parent and sources are borrowed; source bytes remain
+ * fixed through stage. The helper creates and immediately unlinks a RAM FILE,
+ * retaining it for bounded transfers through final verify and close. Expected
+ * digests are frozen plan evidence, not ownership credentials.
  * Keep the shared hash context initialized through verify. Initialize *result
  * to NULL; failure may still return owned files/parents and partial changes.
- * Writes grow through bounded copies and truncate only after a matching copy
- * hash. Success syncs all files, parents and the mount. No retry or rollback.
+ * Native FILE transfers grow through bounded copies and truncate only after a
+ * matching copy hash. Success syncs all files, parents and the mount. No retry,
+ * fallback or rollback. The classic UINT32_MAX file-size bound is unchanged.
  * Close any returned result before retiring the caller's view. */
 bool install_esp_classic_stage(const struct install_esp_activation_request *request,
     struct install_esp_classic_files **result, enum call_status *status);
 /* Borrowed root/control must remain alive. Sources are no longer needed.
  * Reobserve issuer-bound facts, sync, then reopen canonical parents/files and
  * compare retained native object identities, exact sizes and complete hashes.
+ * Verification writes only the retained private RAM FILE, never ESP payloads.
  * The caller stages outside its publication interval, then BEGIN/CHECKs before
  * this verify and the small activation below. No interval is extended here. */
 bool install_esp_classic_verify(struct install_esp_classic_files *result,
     enum call_status *status);
-/* Releases held files/parents and always frees result; never retires or deletes.
+/* Releases held files/parents and the RAM FILE, and always frees result;
+ * never closes the borrowed workspace parent, retires or deletes ESP objects.
  * False reports invalid-handle bookkeeping, not retained authority. The caller
  * clears its pointer on either result and still retires its drained view. */
 bool install_esp_classic_close(struct install_esp_classic_files *result);

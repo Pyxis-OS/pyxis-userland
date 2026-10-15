@@ -1,6 +1,6 @@
 #include "esp_activate.h"
 #include "esp_directory.h"
-#include "digest.h"
+#include "esp_transfer.h"
 
 #include <directory.h>
 #include <file.h>
@@ -21,6 +21,7 @@ static const char *const classic_payload_names[INSTALL_ESP_CLASSIC_PAYLOAD_COUNT
 
 struct install_esp_classic_files {
   handle_t root, control; /* Borrowed. */
+  handle_t workspace; /* Owned unlinked RAM FILE. */
   struct mount_state_reply expected;
   struct config_file_digest payloads[INSTALL_ESP_CLASSIC_PAYLOAD_COUNT];
   handle_t efi, efi_boot, boot, limine;
@@ -125,73 +126,6 @@ static enum call_status source_size(const struct install_source *source, uint64_
   return file_size(source->handle, size);
 }
 
-static enum call_status stream_payload(const struct install_source *source, handle_t target,
-    const struct config_file_digest *expected, size_t capacity)
-{
-  uint64_t size = 0;
-  enum call_status status = source_size(source, &size);
-  if (status != CALL_OK || size != expected->size) {
-    return status != CALL_OK ? status : CALL_BAD_REQUEST;
-  }
-  struct install_digest hash = {0};
-  if (!install_digest_begin(&hash)) {
-    return CALL_NO_MEMORY;
-  }
-  if (target != HANDLE_INVALID && capacity > FILE_WRITE_MAX_BYTES) {
-    capacity = FILE_WRITE_MAX_BYTES;
-  }
-  unsigned char bytes[FILE_READ_MAX_BYTES];
-  install_progress_begin(target == HANDLE_INVALID ? "Verifying classic boot payload" :
-      "Staging classic boot payload", INSTALL_PROGRESS_WORK, NULL);
-  install_progress_bytes_total(size);
-  for (uint64_t offset = 0; status == CALL_OK && offset < size;) {
-    size_t wanted = size - offset > capacity ? capacity : (size_t)(size - offset);
-    size_t count = 0;
-    if (source->memory) {
-      memcpy(bytes, source->memory + (size_t)offset, wanted);
-      count = wanted;
-    } else {
-      status = file_read(source->handle, offset, bytes, wanted, &count);
-    }
-    if (status == CALL_OK && (!count || count > wanted)) {
-      status = CALL_OUTCOME_UNKNOWN;
-    }
-    if (status == CALL_OK && !install_digest_update(&hash, bytes, count)) {
-      status = CALL_NO_MEMORY;
-    }
-    for (size_t copied = 0; status == CALL_OK && target != HANDLE_INVALID && copied < count;) {
-      size_t written = 0;
-      status = file_write(target, offset + copied, bytes + copied, count - copied, &written);
-      if (status == CALL_OK && (!written || written > count - copied)) {
-        status = CALL_OUTCOME_UNKNOWN;
-      }
-      if (status == CALL_OK) {
-        copied += written;
-      }
-    }
-    if (status == CALL_OK) {
-      offset += count;
-      install_progress_advance(count, 0);
-    }
-  }
-  if (status == CALL_OK) {
-    status = source_size(source, &size);
-    if (status == CALL_OK && size != expected->size) {
-      status = CALL_BAD_REQUEST;
-    }
-  }
-  char sha256[65];
-  if (status == CALL_OK && !install_digest_finish(&hash, sha256)) {
-    status = CALL_NO_MEMORY;
-  }
-  if (status == CALL_OK && strcmp(sha256, expected->sha256)) {
-    status = CALL_BAD_REQUEST;
-  }
-  install_digest_abort(&hash);
-  install_progress_finish();
-  return status;
-}
-
 static enum call_status classic_directory(handle_t parent, const char *name, handle_t *child)
 {
   return install_esp_child_open(parent, name, DIRECTORY_KIND_DIRECTORY,
@@ -216,6 +150,7 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
   *output = result;
   result->root = request->root;
   result->control = request->control;
+  result->workspace = HANDLE_INVALID;
   result->expected = request->expected;
   enum call_status status = native_grant(result->root, PROTOCOL_DIRECTORY, ACTIVATE_DIRECTORY_WRITE);
   if (status == CALL_OK) {
@@ -256,6 +191,9 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
     status = current_target(result->root, result->control, &result->expected);
   }
   if (status == CALL_OK) {
+    status = install_esp_transfer_workspace(request->workspace, &result->workspace);
+  }
+  if (status == CALL_OK) {
     status = classic_directory(result->root, "EFI", &result->efi);
   }
   if (status == CALL_OK) {
@@ -272,8 +210,8 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
     status = install_esp_child_open(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
         FILE_RIGHT_READ | FILE_RIGHT_WRITE, true, &result->files[i]);
     if (status == CALL_OK) {
-      status = stream_payload(&request->payloads[i], result->files[i],
-          &result->payloads[i], FILE_READ_MAX_BYTES);
+      status = install_esp_transfer_source(&request->payloads[i], result->files[i],
+          result->workspace, result->payloads[i].size, result->payloads[i].sha256, UINT32_MAX);
     }
     if (status == CALL_OK) {
       status = file_resize(result->files[i], result->payloads[i].size);
@@ -342,10 +280,6 @@ bool install_esp_classic_verify(struct install_esp_classic_files *result,
   if (status == CALL_OK) {
     status = same_object(result->limine, limine, true, result->expected.domain);
   }
-  size_t capacity = FILE_READ_MAX_BYTES;
-  if (result->expected.device_block_size && result->expected.device_block_size <= capacity) {
-    capacity -= capacity % (size_t)result->expected.device_block_size;
-  }
   for (unsigned i = 0; status == CALL_OK && i < INSTALL_ESP_CLASSIC_PAYLOAD_COUNT; ++i) {
     handle_t file = HANDLE_INVALID;
     handle_t parent = i == INSTALL_ESP_CLASSIC_EFI ? efi_boot : boot;
@@ -355,8 +289,8 @@ bool install_esp_classic_verify(struct install_esp_classic_files *result,
       status = same_object(result->files[i], file, false, result->expected.domain);
     }
     if (status == CALL_OK) {
-      struct install_source source = {.handle = file, .bytes = result->payloads[i].size};
-      status = stream_payload(&source, HANDLE_INVALID, &result->payloads[i], capacity);
+      status = install_esp_transfer_file(file, result->workspace, true,
+          result->payloads[i].size, result->payloads[i].sha256, UINT32_MAX);
     }
     if (!close_reference(&file)) {
       status = CALL_BAD_HANDLE;
@@ -388,6 +322,7 @@ bool install_esp_classic_close(struct install_esp_classic_files *result)
   for (size_t i = 0; i < sizeof(parents) / sizeof(parents[0]); ++i) {
     closed = close_reference(parents[i]) && closed;
   }
+  closed = close_reference(&result->workspace) && closed;
   free(result);
   return closed;
 }
