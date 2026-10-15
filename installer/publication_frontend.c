@@ -151,6 +151,53 @@ static uint64_t required_capacity(const struct install_configuration *plan,
   return required;
 }
 
+static const char *publication_phase(enum config_publish_phase phase)
+{
+  const char *const names[] = {"check", "stage", "verify", "exclusive revalidation",
+    "prepared record", "canonical swap", "committed record", "boot activation", "cleanup", "done"};
+  return (unsigned)phase < sizeof(names) / sizeof(names[0]) ? names[phase] : "unknown";
+}
+
+static void publication_result(const struct install_publication_request *request,
+    const struct config_storage_report *report, bool ok)
+{
+  fprintf(stderr, "Scratch publication: status %u, phase %s, readiness %s, boot %s.\n",
+      report->status, publication_phase(report->phase), report->committed ? "committed" : "not confirmed",
+      report->boot_activated ? "entry confirmed" : report->committed ?
+      "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
+  if (report->boot_cleanup_skipped && report->record.previous_boot.present) {
+    fputs("Older boot cleanup skipped: ownership/hash evidence is uncertain; files retained.\n", stderr);
+  }
+  if (ok && !report->boot_cleanup_skipped) {
+    return;
+  }
+  fprintf(stderr, "Attempt: %s; inspect EFI/pyxis/config/config.record before recovery.\n",
+      request->binding.kernel.path);
+  if (report->artifact[0]) {
+    const char *file = config_storage_file_name(report->file);
+    fprintf(stderr, "Last artifact: %s (file %s).\n", report->artifact,
+        file ? file : "unknown");
+  }
+  if (!ok && config_transaction_valid(report->record.transaction)) {
+    char name[CONFIG_ARTIFACT_NAME_BYTES];
+    config_record_artifact_name(report->record.transaction, CONFIG_CATALOG, "prepared", name);
+    fprintf(stderr, "Prepared record candidate: EFI/pyxis/config/%s\n", name);
+    config_record_artifact_name(report->record.transaction, CONFIG_CATALOG, "committed", name);
+    fprintf(stderr, "Committed record candidate: EFI/pyxis/config/%s\n", name);
+  }
+  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
+    const struct config_recovery_file *previous = &report->record.previous[i];
+    if (previous->digest.present) {
+      fprintf(stderr, "Recorded previous file: %s/%s\n",
+          i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config", previous->name);
+    }
+  }
+  if (!ok) {
+    fputs("Stopped; retain artifacts and verify the recorded hashes before explicit recovery.\n"
+        "No automatic rollback, retry or reboot offer.\n", stderr);
+  }
+}
+
 static bool ready_preview(struct install_configuration *plan, const struct config_blob *record)
 {
   struct config_bytes archive[CONFIG_LUA_COUNT], esp[CONFIG_LUA_COUNT];
@@ -537,15 +584,9 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   request.revision = plan.catalog->revision;
   struct config_storage_report report = {0};
   bool ok = install_publication_publish(&request, &report);
-  fprintf(stderr, "Scratch publication: status %u, phase %u, readiness %s, boot %s.\n",
-      report.status, report.phase, report.committed ? "committed" : "not confirmed",
-      report.boot_activated ? "entry confirmed" : report.committed ?
-      "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
+  publication_result(&request, &report, ok);
   if (report.committed && pending) {
     install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
-  }
-  if (!ok) {
-    fputs("Stopped; retain artifacts for manual disposition. No rollback, retry or reboot offer.\n", stderr);
   }
   result = ok ? EXIT_SUCCESS : EXIT_FAILURE;
 done:

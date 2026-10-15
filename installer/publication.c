@@ -334,7 +334,6 @@ bool install_publication_cleanup(const struct install_staged_boot *boot,
     struct config_storage_report *report)
 {
   if (!obsolete->present) {
-    report->boot_cleanup_skipped = true;
     return true;
   }
   /* Hash evidence certifies only the exact three files. Uncertain evidence
