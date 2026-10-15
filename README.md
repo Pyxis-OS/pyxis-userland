@@ -538,9 +538,11 @@ Its update loop keeps running without input focus, clearing held buttons on
 focus, boundary and state changes and allowing the scroll indicators to expire.
 Keyboard and pointer controls follow their own session's focus.
 
-`httpfs.pxb` publishes prepared GET/POST response streams and legacy HTTP FILE
-snapshots; `--https` selects verified HTTPS. Trusted startup declares private RAM
-staging (16 MiB by default), with isolated npfs backing opt-in for large uploads.
+`httpfs.pxb` publishes fully framed, re-readable GET/POST FILE snapshots and
+one-shot POST transactions; independently authorized REMOVE sends DELETE.
+Trusted startup declares private RAM backing (64 MiB aggregate logical bytes by
+default, including retained replies and staged bodies; POST bodies also have a
+16 MiB cap). Isolated npfs backing is the explicit large-transfer option.
 Prepared request, response and status owners retain the existing private shell
 HTTP registry and `@NAME` selectors until B8's HTTP migration. Reservation checks
 TEXT names and can reuse a capability entry's name. The registry holds HTTP
@@ -574,9 +576,10 @@ snapshots remain readable after replacement until their grants retire. Publicati
 itself does not fetch remotely. With networking enabled, ordinary consumers can run
 `cat http://example.com/` or
 `cat http://example.com/ | tee home://example.html | cksum`.
-Each open fetches independently under a 30-second budget, capped by any native
-caller's earlier deadline. Retained snapshots share a 64 MiB storage account and
-63 export slots. Build the provider with
+Each open fetches independently under one absolute deadline, default 30 seconds;
+an explicit native deadline may be longer. The current result pool has 60 export
+slots, shared by response, body, control and observation facets. The provider
+follows redirects without client-side rebinding or automatic transport retry. Build the provider with
 `PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser`.
 
 Foreground pipelines preserve the first stage's console-input, keyboard and
