@@ -1462,6 +1462,12 @@ static void settle(struct loop *loop, struct transaction *transaction)
   if (!has_facet(loop, transaction, FACET_SNAPSHOT)) {
     close_backing(loop, &transaction->snapshot, &transaction->snapshot_charge);
   }
+  if (transaction->failure == CALL_OK && transaction->error_body) {
+    erase(transaction->error_body, transaction->error_size);
+    free(transaction->error_body);
+    transaction->error_body = NULL;
+    transaction->error_size = 0;
+  }
   if (loop->active == transaction) {
     loop->active = NULL;
   }

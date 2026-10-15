@@ -65,7 +65,7 @@ SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/se
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o $(BUILD)/httpfs/provider.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
-HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o $(BUILD)/libhttp/request.o $(BUILD)/libhttp/snapshot.o
+HTTP_OBJECTS := $(BUILD)/libhttp/uri.o $(BUILD)/libhttp/fetch.o $(BUILD)/libhttp/request.o
 TLS_LIBRARY := $(BUILD)/libtls.a
 TLS_OBJECT := $(BUILD)/libtls/tls.o
 TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)

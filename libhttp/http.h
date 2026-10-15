@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include "../libtls/tls.h"
 
-#define HTTP_STORAGE_MAX (64 * 1024 * 1024)
 #define HTTP_MEDIA_TYPE_MAX 127
 #define HTTP_READ_MAX 4096
 #define HTTP_REQUEST_HEADERS_MAX 32768
@@ -30,19 +29,6 @@ struct http_client {
   struct http_authority authority;
   enum http_scheme scheme;
   struct tls_runtime *tls;
-};
-
-/* Zero initialize. Single-task accounting; keep alive until all bodies release.
- * Counts allocated body capacity, including both allocations during growth.
- * Fixed parser/request scratch is bounded separately, outside this budget. */
-struct http_storage {
-  size_t reserved;
-};
-
-struct http_body {
-  unsigned char *data;
-  size_t size, capacity;
-  struct http_storage *storage;
 };
 
 enum http_error {
@@ -217,10 +203,8 @@ struct http_result {
   bool tls_cleanup_attempted;
   char media_type[HTTP_MEDIA_TYPE_MAX + 1];
   char location[HTTP_URI_MAX + 1]; /* Validated URI reference, never a body. */
-  struct http_body body; /* Owned only on success; no partial body on failure. */
 };
 
-void http_body_release(struct http_body *body);
 const char *http_error_name(enum http_error error);
 enum call_status http_result_status(const struct http_result *result);
 
