@@ -1000,16 +1000,21 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       if (selected) {
         continue;
       }
+      size_t length = strlen(entry->name);
+      bool controller = session && !(entry->flags & ENVIRONMENT_EXPORTED) &&
+          length > sizeof(".control") - 1 &&
+          !strcmp(entry->name + length - (sizeof(".control") - 1), ".control");
+      /* An unrelated private revoked holder must not poison launch. Query only
+       * actual inheritance candidates; selected operands are checked separately. */
+      if (!(entry->flags & ENVIRONMENT_EXPORTED) && !controller) {
+        continue;
+      }
       struct handle_info info;
       enum call_status status = handle_query(entry->handle, &info);
       if (status != CALL_OK) {
         return status;
       }
-      size_t length = strlen(entry->name);
-      bool controller = session && !(entry->flags & ENVIRONMENT_EXPORTED) &&
-          length > sizeof(".control") - 1 &&
-          !strcmp(entry->name + length - (sizeof(".control") - 1), ".control") &&
-          info.protocol == PROTOCOL_FORWARDER;
+      controller = controller && info.protocol == PROTOCOL_FORWARDER;
       bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER;
       if (!controller && (!(entry->flags & ENVIRONMENT_EXPORTED) ||
           (info.kind != HANDLE_KIND_EXPORTED && !value))) {
