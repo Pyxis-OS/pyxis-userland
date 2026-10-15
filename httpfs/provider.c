@@ -19,6 +19,7 @@
 #define EXPORT_SLOTS (ENDPOINT_EXPORTS_MAX - HTTPFS_ROOT_COUNT)
 #define RESPONSE_BYTES 8192u
 #define REQUEST_FIELDS_MAX 256u
+#define REDIRECT_DETAIL_BYTES 220u
 
 _Static_assert((unsigned)HTTP_RESPONSE_PENDING == (unsigned)HTTP_FRAMING_PENDING &&
     (unsigned)HTTP_RESPONSE_COMPLETE == (unsigned)HTTP_FRAMING_COMPLETE &&
@@ -1290,6 +1291,21 @@ static enum call_status charge_hop(struct transaction *transaction)
 static enum call_status redirect_prepare(struct loop *loop, struct transaction *transaction)
 {
   struct http_uri current, next;
+  static const char hex[] = "0123456789ABCDEF";
+  size_t used = (size_t)snprintf(transaction->detail, sizeof(transaction->detail), "Redirect refused: ");
+  /* Location is peer input, not necessarily UTF-8. Keep the failure facet
+   * printable and leave room for its HTTP status suffix. */
+  for (size_t i = 0; transaction->response.location[i] && used + 3 < REDIRECT_DETAIL_BYTES; ++i) {
+    unsigned char byte = (unsigned char)transaction->response.location[i];
+    if (byte >= ' ' && byte <= '~') {
+      transaction->detail[used++] = (char)byte;
+    } else {
+      transaction->detail[used++] = '%';
+      transaction->detail[used++] = hex[byte >> 4];
+      transaction->detail[used++] = hex[byte & 15];
+    }
+  }
+  transaction->detail[used] = 0;
   if (transaction->redirects == HTTP_REDIRECT_MAX || transaction->response.invalid_location ||
       !transaction->response.location[0]) {
     return CALL_BAD_REQUEST;
@@ -1300,8 +1316,6 @@ static enum call_status redirect_prepare(struct loop *loop, struct transaction *
         transaction->work->next_uri);
   }
   if (status != CALL_OK) {
-    snprintf(transaction->detail, sizeof(transaction->detail), "Redirect refused: %.200s",
-        transaction->response.location);
     return status;
   }
   status = http_url_parse(transaction->work->next_uri, &next);
@@ -1347,6 +1361,7 @@ static enum call_status redirect_prepare(struct loop *loop, struct transaction *
   if (get) {
     transaction->method = HTTP_METHOD_GET;
   }
+  transaction->detail[0] = 0;
   transaction->redirecting = true;
   status = http_stream_abort(transaction->engine);
   return status;
