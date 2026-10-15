@@ -439,10 +439,26 @@ a whole-word CAP target uses its held value. With a writable destination,
 `cat < text://guide > tmp://guide` saves a readable provider file, and
 `echo extra >> tmp://guide` appends to it.
 
-Command substitution (`$(...)`), including paired `revocable` and service capture,
-waits for kernel capture handoff and retention/failed-value support. Such forms
-refuse before any command in the submitted sequence runs. Continue using
-`service start NAME IMAGE` at this prerequisite boundary.
+`x=$(echo hello); cat $x` captures a typed capability and reads its content.
+Inline `cat $(cat text://welcome)` passes a held CAP through child admission.
+Eligible re-readable FILEs pass without copying their bytes or charging retention
+again. Byte output is retained as a read-only FILE, with configured defaults of
+64 MiB/value and 512 MiB/session shared by session successors and panes. Crossing
+either limit binds an immutable TOO_LARGE failed value, never a successful prefix,
+and suggests writing to a file. Failed inline capture prevents the outer launch.
+A failure before evaluation or during publication preserves old bindings. Once
+evaluation starts, command failure publishes its actual result and reports failure.
+
+`guarded=$(revocable $clicks)` and `svc=$(service start bin://counter.pxe --provide)`
+publish the primary and private `.control` companion atomically. Paired services
+are leaf-only: delegating a launcher refuses before provider startup. Publication
+failure stops and drains the unpublished provider. An optional observation is a
+separate private `.status` entry. Companion collisions refuse the publication;
+copying, exporting or unsetting the primary does not act on either companion.
+Use `${guarded.control}` or `${x.status}` explicitly. A writable native FILE held
+in `x` accepts `> $x` and `>> $x`; read-only captured FILEs refuse writes.
+Named `service start NAME IMAGE` remains available for bootstrap services, and
+private HTTP request/response handling retains its existing commands.
 
 A provider launched through `service start` receives private endpoint creation
 and a one-use publication CALL endpoint. The shell atomically publishes an
