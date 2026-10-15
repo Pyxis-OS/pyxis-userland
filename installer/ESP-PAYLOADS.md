@@ -14,9 +14,13 @@ the control's root to compare held domain/object identity. It never accepts a
 path as authority or substitutes another target. Stage requires native
 LOOKUP|READ_FILES|CREATE|WRITE_FILES on the root and OPEN_ROOT|OBSERVE|WRITE on
 the control. No REMOVE grant is needed. Verification traverses with read rights.
+After a planning view is retired, the caller matches the newly admitted RW
+instance to Review and supplies that instance's OBSERVE facts: its live domain
+is not assumed to survive retirement/re-admission.
 
 Sources use the existing install_source: either a native readable FILE or
 caller-owned memory (the filtered archive). Sources live throughout stage;
+the request and source descriptors stay unchanged until stage returns, and
 expected sizes/hashes are frozen Review inputs. The caller initializes the
 shared crypto context with hash_init and retains it through verification.
 Sources are checked before namespace effects and again while copying. Each

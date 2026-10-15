@@ -54,8 +54,9 @@ struct install_esp_payloads;
 bool install_esp_payload_path(const char *revision, const char *attempt,
     enum install_esp_payload_index index, char path[INSTALL_ESP_PAYLOAD_PATH_BYTES]);
 
-/* Initialize *result to NULL. Sources and hash_init() context live through stage;
- * root/control are borrowed and must outlive the result. The helper verifies the
+/* Initialize *result to NULL. The request, source descriptors and bytes stay
+ * unchanged through stage. Retain the hash_init() context through the final
+ * verify call. Root/control are borrowed and must outlive the result. The helper verifies the
  * bound root and reviewed target, creates one fresh attempt, syncs and reopens
  * each retained object before checking its exact extent/hash. No REMOVE rights,
  * raw access, admission, BEGIN/CHECK/END, configuration or activation.
