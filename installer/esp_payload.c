@@ -159,7 +159,7 @@ static bool current_target(const struct install_esp_payloads *result,
 /* Hash/copy exactly the recorded extent. A short successful native transfer
  * advances only its known suffix; an error ends the operation without replay. */
 static bool stream_source(const struct install_source *source, handle_t target,
-    const struct install_esp_payload_digest *expected,
+    const struct install_esp_payload_digest *expected, size_t capacity,
     struct install_esp_payload_report *report)
 {
   uint64_t size = 0;
@@ -181,7 +181,6 @@ static bool stream_source(const struct install_source *source, handle_t target,
   struct install_digest hash = {0};
   bool ok = install_digest_begin(&hash);
   unsigned char bytes[FILE_READ_MAX_BYTES];
-  size_t capacity = sizeof(bytes);
   if (target != HANDLE_INVALID && capacity > FILE_WRITE_MAX_BYTES) {
     capacity = FILE_WRITE_MAX_BYTES;
   }
@@ -240,11 +239,16 @@ static bool stream_source(const struct install_source *source, handle_t target,
   return ok || fail(report, status == CALL_OK ? CALL_NO_MEMORY : status);
 }
 
-static bool stream(handle_t source, handle_t target,
+static bool verify_file(handle_t source, uint64_t block_size,
     const struct install_esp_payload_digest *expected, struct install_esp_payload_report *report)
 {
   struct install_source held = {.handle = source, .bytes = expected->size};
-  return stream_source(&held, target, expected, report);
+  size_t capacity = FILE_READ_MAX_BYTES;
+  /* Avoid straddling an extra backing sector on each bounded FILE read. */
+  if (block_size && block_size <= capacity) {
+    capacity -= capacity % (size_t)block_size;
+  }
+  return stream_source(&held, HANDLE_INVALID, expected, capacity, report);
 }
 
 static bool directory_child(handle_t parent, const char *name, bool create,
@@ -336,7 +340,8 @@ static bool verify_staged(const struct install_esp_payloads *result,
     ok = status == CALL_OK || fail(report, status);
     if (ok) {
       ok = same_object(manifest ? result->manifest : result->files[i], file, false,
-          result->expected.domain, report) && stream(file, HANDLE_INVALID, digest, report);
+          result->expected.domain, report) &&
+          verify_file(file, result->expected.device_block_size, digest, report);
     }
     if (file != HANDLE_INVALID) {
       handle_close(file);
@@ -427,7 +432,7 @@ bool install_esp_payload_stage(const struct install_esp_payload_request *request
     record->payloads[i] = *digest;
     snprintf(report->artifact, sizeof(report->artifact), "%s", payload_names[i]);
     if ((!source->memory && !grant(source->handle, PROTOCOL_FILE, FILE_RIGHT_READ, report)) ||
-        !stream_source(source, HANDLE_INVALID, digest, report)) {
+        !stream_source(source, HANDLE_INVALID, digest, FILE_READ_MAX_BYTES, report)) {
       return false;
     }
   }
@@ -457,7 +462,7 @@ bool install_esp_payload_stage(const struct install_esp_payload_request *request
     if (status != CALL_OK) {
       return fail(report, status);
     }
-    if (!stream_source(source, *file, digest, report)) {
+    if (!stream_source(source, *file, digest, FILE_READ_MAX_BYTES, report)) {
       return false;
     }
     report->phase = INSTALL_ESP_PAYLOAD_SYNC;
