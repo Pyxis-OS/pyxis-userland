@@ -384,8 +384,12 @@ static bool trailers(struct http_stream *fetch)
       return fail(fetch, count == field_limit ? HTTP_LIMIT : HTTP_BAD_RESPONSE);
     }
     struct framing ignored = {0};
-    return count_headers(fetch, parsed, count) &&
-        parse_fields(fetch, count, &ignored, true, false);
+    if (!count_headers(fetch, parsed, count) ||
+        !parse_fields(fetch, count, &ignored, true, false)) {
+      return false;
+    }
+    consume(fetch, parsed);
+    return true;
   }
 }
 
