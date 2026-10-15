@@ -18,21 +18,22 @@
 struct disk_source {
   handle_t disk;
   uint64_t first, sectors;
+  uint32_t sector_bytes;
   enum call_status last_error;
 };
 
 static bool read_sectors(void *context, uint64_t first, uint32_t count, void *bytes)
 {
   struct disk_source *source = context;
-  if (!count || count > DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES || first < source->first ||
+  if (!count || count > DISK_IO_MAX_BYTES / source->sector_bytes || first < source->first ||
       first - source->first >= source->sectors ||
       count > source->sectors - (first - source->first) ||
-      first > UINT64_MAX / FAT32_SECTOR_BYTES) {
+      first > UINT64_MAX / source->sector_bytes) {
     source->last_error = CALL_BAD_REQUEST;
     return false;
   }
-  source->last_error = disk_read(source->disk, first * FAT32_SECTOR_BYTES,
-      bytes, (size_t)count * FAT32_SECTOR_BYTES);
+  source->last_error = disk_read(source->disk, first * source->sector_bytes,
+      bytes, (size_t)count * source->sector_bytes);
   return source->last_error == CALL_OK;
 }
 
@@ -51,6 +52,13 @@ static const char *status_name(enum fat32_status status)
   case FAT32_NOT_DIRECTORY: return "NOT_DIRECTORY";
   case FAT32_IS_DIRECTORY: return "IS_DIRECTORY";
   case FAT32_OUTPUT: return "OUTPUT";
+  case FAT32_EXISTS: return "EXISTS";
+  case FAT32_NO_SPACE: return "NO_SPACE";
+  case FAT32_STALE: return "STALE";
+  case FAT32_STOPPED: return "STOPPED";
+  case FAT32_INPUT: return "INPUT";
+  case FAT32_READ_ONLY: return "READ_ONLY";
+  case FAT32_NOT_EMPTY: return "NOT_EMPTY";
   }
   return "UNKNOWN";
 }
@@ -190,16 +198,18 @@ int main(int argc, char **argv)
     fprintf(stderr, "fat32-inspect: disk info failed (status %u)\n", native);
     goto done;
   }
-  if (disk_info.preparation != DISK_READY || disk_info.block_size != FAT32_SECTOR_BYTES ||
-      !disk_info.block_count || disk_info.block_count > UINT64_MAX / FAT32_SECTOR_BYTES) {
-    fputs("fat32-inspect: UNSUPPORTED disk geometry; requires ready 512-byte blocks\n", stderr);
+  if (disk_info.preparation != DISK_READY || (disk_info.block_size != FAT32_SECTOR_MIN_BYTES &&
+        disk_info.block_size != FAT32_SECTOR_MAX_BYTES) ||
+      !disk_info.block_count || disk_info.block_count > UINT64_MAX / disk_info.block_size) {
+    fputs("fat32-inspect: UNSUPPORTED disk geometry; requires ready 512- or 4096-byte blocks\n", stderr);
     goto done;
   }
   backing.sectors = disk_info.block_count;
+  backing.sector_bytes = disk_info.block_size;
   struct fat32_source source = {
     .read = read_sectors, .context = &backing, .sectors = disk_info.block_count,
-    .sector_bytes = FAT32_SECTOR_BYTES,
-    .max_read_sectors = DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES,
+    .sector_bytes = disk_info.block_size,
+    .max_read_sectors = DISK_IO_MAX_BYTES / disk_info.block_size,
   };
   if (!allocate_workspace(&workspace, fat32_open_workspace_size())) {
     goto done;

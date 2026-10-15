@@ -16,42 +16,42 @@
 #define COMMAND_BYTES 4096u
 #define FILE_MAX_BYTES 4096u
 #define RECEIPT_COUNT 32u
-#define RECEIPT_CHAIN_CLUSTERS (FILE_MAX_BYTES / FAT32_SECTOR_BYTES)
 #define WRITER_DISK_RIGHTS (DISK_RIGHT_INFO | DISK_RIGHT_READ | DISK_RIGHT_WRITE | DISK_RIGHT_RELEASE)
 
 struct disk_source {
   handle_t disk;
   uint64_t first, sectors;
+  uint32_t sector_bytes;
   enum call_status last_error;
 };
 
 static bool read_sectors(void *context, uint64_t first, uint32_t count, void *bytes)
 {
   struct disk_source *source = context;
-  if (!count || count > DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES || first < source->first ||
+  if (!count || count > DISK_IO_MAX_BYTES / source->sector_bytes || first < source->first ||
       first - source->first >= source->sectors ||
       count > source->sectors - (first - source->first) ||
-      first > UINT64_MAX / FAT32_SECTOR_BYTES) {
+      first > UINT64_MAX / source->sector_bytes) {
     source->last_error = CALL_BAD_REQUEST;
     return false;
   }
-  source->last_error = disk_read(source->disk, first * FAT32_SECTOR_BYTES,
-      bytes, (size_t)count * FAT32_SECTOR_BYTES);
+  source->last_error = disk_read(source->disk, first * source->sector_bytes,
+      bytes, (size_t)count * source->sector_bytes);
   return source->last_error == CALL_OK;
 }
 
 static bool write_sectors(void *context, uint64_t first, uint32_t count, const void *bytes)
 {
   struct disk_source *source = context;
-  if (!count || count > DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES || first < source->first ||
+  if (!count || count > DISK_IO_MAX_BYTES / source->sector_bytes || first < source->first ||
       first - source->first >= source->sectors ||
       count > source->sectors - (first - source->first) ||
-      first > UINT64_MAX / FAT32_SECTOR_BYTES) {
+      first > UINT64_MAX / source->sector_bytes) {
     source->last_error = CALL_BAD_REQUEST;
     return false;
   }
-  source->last_error = disk_write(source->disk, first * FAT32_SECTOR_BYTES,
-      bytes, (size_t)count * FAT32_SECTOR_BYTES);
+  source->last_error = disk_write(source->disk, first * source->sector_bytes,
+      bytes, (size_t)count * source->sector_bytes);
   return source->last_error == CALL_OK;
 }
 
@@ -341,9 +341,10 @@ int main(int argc, char **argv)
     fprintf(stderr, "fat32-write: disk info failed (status %u)\n", native);
     goto done;
   }
-  if (disk_info.preparation != DISK_READY || disk_info.block_size != FAT32_SECTOR_BYTES ||
-      !disk_info.block_count || disk_info.block_count > UINT64_MAX / FAT32_SECTOR_BYTES) {
-    fputs("fat32-write: UNSUPPORTED disk geometry; requires ready 512-byte blocks\n", stderr);
+  if (disk_info.preparation != DISK_READY || (disk_info.block_size != FAT32_SECTOR_MIN_BYTES &&
+        disk_info.block_size != FAT32_SECTOR_MAX_BYTES) ||
+      !disk_info.block_count || disk_info.block_count > UINT64_MAX / disk_info.block_size) {
+    fputs("fat32-write: UNSUPPORTED disk geometry; requires ready 512- or 4096-byte blocks\n", stderr);
     goto done;
   }
   uint64_t required_flags = DISK_FLAG_WRITABLE | DISK_FLAG_FLUSH_SUPPORTED | DISK_FLAG_CLAIMED;
@@ -353,10 +354,11 @@ int main(int argc, char **argv)
     goto done;
   }
   backing.sectors = disk_info.block_count;
+  backing.sector_bytes = disk_info.block_size;
   struct fat32_source source = {
     .read = read_sectors, .context = &backing, .sectors = disk_info.block_count,
-    .sector_bytes = FAT32_SECTOR_BYTES,
-    .max_read_sectors = DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES,
+    .sector_bytes = disk_info.block_size,
+    .max_read_sectors = DISK_IO_MAX_BYTES / disk_info.block_size,
   };
   if (!allocate_workspace(&workspace, fat32_open_workspace_size())) {
     goto done;
@@ -379,18 +381,21 @@ int main(int argc, char **argv)
   if (!allocate_workspace(&workspace, bytes)) {
     goto done;
   }
+  uint64_t cluster_bytes = (uint64_t)volume.source.sector_bytes * volume.sectors_per_cluster;
+  uint32_t receipt_chain_clusters = FILE_MAX_BYTES / cluster_bytes +
+      (FILE_MAX_BYTES % cluster_bytes != 0);
   receipts = calloc(RECEIPT_COUNT, sizeof(*receipts));
-  chains = calloc(RECEIPT_COUNT * RECEIPT_CHAIN_CLUSTERS, sizeof(*chains));
+  chains = calloc(RECEIPT_COUNT * receipt_chain_clusters, sizeof(*chains));
   if (!receipts || !chains) {
     report(FAT32_NO_MEMORY, &backing);
     goto done;
   }
   for (unsigned i = 0; i < RECEIPT_COUNT; ++i) {
-    receipts[i].chain = chains + i * RECEIPT_CHAIN_CLUSTERS;
-    receipts[i].chain_capacity = RECEIPT_CHAIN_CLUSTERS;
+    receipts[i].chain = chains + i * receipt_chain_clusters;
+    receipts[i].chain_capacity = receipt_chain_clusters;
   }
   struct fat32_write_io io = {.write = write_sectors, .flush = flush_disk, .context = &backing,
-    .max_write_sectors = DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES};
+    .max_write_sectors = DISK_IO_MAX_BYTES / disk_info.block_size};
   status = fat32_writer_open(&writer, &volume, &io, &workspace, FILE_MAX_BYTES,
       receipts, RECEIPT_COUNT);
   if (status != FAT32_OK) {
@@ -400,7 +405,7 @@ int main(int argc, char **argv)
   info(&volume);
   puts("GPT and volume revalidated under the selected claim. Each mutation preflights whole-volume integrity.");
   printf("Session limits: %u receipts, %u-byte files, %u clusters per receipt; no restart ownership.\n",
-      RECEIPT_COUNT, FILE_MAX_BYTES, RECEIPT_CHAIN_CLUSTERS);
+      RECEIPT_COUNT, FILE_MAX_BYTES, receipt_chain_clusters);
   help();
   char line[COMMAND_BYTES];
   result = EXIT_SUCCESS;
