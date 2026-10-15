@@ -185,7 +185,7 @@ static enum command_result describe_value(struct shell *shell,
     }
     if (status == CALL_OK) {
       status = resource_open_path(shell->directory, stage->arguments[1],
-          PROVIDER_OPEN_READ, 0, now + UINT64_C(30000000000), &opened);
+          PROVIDER_INTENT_READ, 0, now + UINT64_C(30000000000), &opened);
       info = opened.info;
     }
   }
