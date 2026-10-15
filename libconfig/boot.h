@@ -136,6 +136,9 @@ enum boot_config_result boot_config_read_archive_bytes(const char *name, const c
     size_t size, struct boot_config *config);
 enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
+/* Archive schema, including machine defaults, without executing input Lua. */
+enum boot_config_result boot_config_read_archive_literal_bytes(const char *name, const char *bytes,
+    size_t size, struct boot_config *config);
 void boot_config_free(struct boot_config *config);
 
 /* Builds the plan for DEFAULTS and an optional OVERRIDE. An override entry

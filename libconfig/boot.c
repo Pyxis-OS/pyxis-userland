@@ -683,6 +683,13 @@ enum boot_config_result boot_config_read_literal_bytes(const char *name, const c
   return result_of(config_read_literal_bytes(name, bytes, size, decode_override, config), config);
 }
 
+enum boot_config_result boot_config_read_archive_literal_bytes(const char *name, const char *bytes,
+    size_t size, struct boot_config *config)
+{
+  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
+  return result_of(config_read_literal_bytes(name, bytes, size, decode_archive, config), config);
+}
+
 void boot_config_free(struct boot_config *config)
 {
   for (size_t i = 0; i < config->volume_count; ++i) {

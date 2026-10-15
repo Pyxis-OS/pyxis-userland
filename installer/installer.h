@@ -165,9 +165,11 @@ bool install_programs_list(handle_t boot, struct install_programs *programs);
 void install_programs_destroy(struct install_programs *programs);
 bool install_archive_rescue_identity(const struct install_source *archive);
 /* The rescue archive: newc without selected roots or their descendants, as
- * owned memory. Descendant matching respects component boundaries. */
+ * owned memory. Descendant matching respects component boundaries. Exactly one
+ * normalized config/installed.lua is rebound to the selected pool as literal
+ * data; an unchanged binding preserves its original record bytes. */
 bool install_archive_filter(const struct install_source *archive,
-    struct install_programs *programs, struct install_source *rescue);
+    uint64_t pool_partition, struct install_programs *programs, struct install_source *rescue);
 struct install_manifest;
 /* Outside any raw claim on the pool: creates the bin volume if missing, writes
  * complete program trees into bin/REVISION, replacing an earlier partial copy,

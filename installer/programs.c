@@ -3,6 +3,7 @@
 #include <pxe/p1f.h>
 #include "manifest.h"
 #include "digest.h"
+#include "archive_config.h"
 
 #include <directory.h>
 #include <file.h>
@@ -247,9 +248,22 @@ static bool newc_field(const uint8_t *header, unsigned index, uint32_t *value)
   return true;
 }
 
-static size_t align4(size_t value)
+static bool align4(size_t value, size_t *aligned)
 {
-  return (value + 3) & ~(size_t)3;
+  if (value > SIZE_MAX - 3) {
+    return false;
+  }
+  *aligned = (value + 3) & ~(size_t)3;
+  return true;
+}
+
+static void newc_write_field(uint8_t *header, unsigned index, uint32_t value)
+{
+  static const char digits[] = "0123456789abcdef";
+  for (unsigned i = 0; i < 8; ++i) {
+    header[6 + index * 8 + 7 - i] = digits[value & 15];
+    value >>= 4;
+  }
 }
 
 static bool program_path(const struct install_programs *programs, const char *path)
@@ -267,17 +281,19 @@ static bool program_path(const struct install_programs *programs, const char *pa
 }
 
 bool install_archive_filter(const struct install_source *archive,
-    struct install_programs *programs, struct install_source *rescue)
+    uint64_t pool_partition, struct install_programs *programs, struct install_source *rescue)
 {
   install_progress_begin("Reading source boot archive", INSTALL_PROGRESS_SOURCE_READ, NULL);
   install_progress_bytes_total(archive->bytes);
   *rescue = (struct install_source){.handle = HANDLE_INVALID};
-  if (archive->bytes > SIZE_MAX) {
+  if (archive->bytes > SIZE_MAX - INSTALL_ARCHIVE_CONFIG_MAX_BYTES - 3) {
     install_progress_finish();
     return false;
   }
   size_t size = (size_t)archive->bytes;
-  uint8_t *input = malloc(size), *output = malloc(size);
+  size_t capacity = size + INSTALL_ARCHIVE_CONFIG_MAX_BYTES + 3;
+  uint8_t *input = malloc(size), *output = malloc(capacity);
+  char *configuration = NULL;
   if (!input || !output || !install_source_read(archive, 0, input, size)) {
     goto fail;
   }
@@ -286,27 +302,53 @@ bool install_archive_filter(const struct install_source *archive,
    * with the header, then its data padded to four bytes. */
   size_t used = 0, files = 0;
   uint64_t program_bytes = 0;
-  bool totals_known = true;
+  bool totals_known = true, config_seen = false;
   for (size_t offset = 0;;) {
     uint32_t file_size, name_size;
-    if (size - offset < NEWC_HEADER_BYTES || memcmp(input + offset, "07070", 5) ||
+    if (size - offset < NEWC_HEADER_BYTES || memcmp(input + offset, "070701", 6) ||
         !newc_field(input + offset, 6, &file_size) ||
         !newc_field(input + offset, 11, &name_size) || !name_size) {
       goto fail;
     }
-    size_t data = align4(offset + NEWC_HEADER_BYTES + name_size);
-    size_t next = align4(data + file_size);
-    if (data > size || next > size || next < data ||
-        input[offset + NEWC_HEADER_BYTES + name_size - 1] != '\0') {
+    size_t name_start = offset + NEWC_HEADER_BYTES;
+    size_t data, next;
+    if (name_size > size - name_start ||
+        !align4(name_start + name_size, &data) || data > size || file_size > size - data ||
+        !align4(data + file_size, &next) || next > size) {
       goto fail;
     }
-    const char *name = (const char *)input + offset + NEWC_HEADER_BYTES;
+    const char *name = (const char *)input + name_start;
+    size_t name_length = strnlen(name, name_size);
+    if (!name_length || name_length == name_size) {
+      goto fail;
+    }
+    for (size_t i = name_length; i < name_size; ++i) {
+      if (name[i]) {
+        goto fail;
+      }
+    }
     bool trailer = !strcmp(name, NEWC_TRAILER);
     /* Boot normalizes leading ./; progress must not claim a raw-path total. */
     if (!strncmp(name, "./", 2)) {
       totals_known = false;
     }
     bool selected = !trailer && program_path(programs, name);
+    const char *normalized = name;
+    while (!strncmp(normalized, "./", 2)) {
+      normalized += 2;
+    }
+    bool installed_config = !trailer && !strcmp(normalized, "config/installed.lua");
+    size_t configuration_size = 0;
+    if (installed_config) {
+      uint32_t mode, links;
+      if (config_seen || selected || !newc_field(input + offset, 1, &mode) ||
+          (mode & 0170000) != 0100000 || !newc_field(input + offset, 4, &links) || links != 1 ||
+          !install_archive_config_rebind((const char *)input + data, file_size,
+              pool_partition, &configuration, &configuration_size)) {
+        goto fail;
+      }
+      config_seen = true;
+    }
     if (selected) {
       uint32_t mode;
       if (!newc_field(input + offset, 1, &mode)) {
@@ -317,12 +359,38 @@ bool install_archive_filter(const struct install_source *archive,
       }
     }
     if (!selected) {
-      memcpy(output + used, input + offset, next - offset);
-      used += next - offset;
+      if (installed_config && configuration) {
+        size_t prefix_size = data - offset, padded;
+        if (configuration_size > UINT32_MAX || !align4(configuration_size, &padded) ||
+            prefix_size > capacity - used || padded > capacity - used - prefix_size) {
+          goto fail;
+        }
+        memcpy(output + used, input + offset, prefix_size);
+        newc_write_field(output + used, 6, (uint32_t)configuration_size);
+        memcpy(output + used + prefix_size, configuration, configuration_size);
+        memset(output + used + prefix_size + configuration_size, 0, padded - configuration_size);
+        used += prefix_size + padded;
+      } else {
+        if (next - offset > capacity - used) {
+          goto fail;
+        }
+        memcpy(output + used, input + offset, next - offset);
+        used += next - offset;
+      }
     }
+    free(configuration);
+    configuration = NULL;
     install_progress_advance(next - offset, 1);
     offset = next;
     if (trailer) {
+      if (file_size || !config_seen) {
+        goto fail;
+      }
+      for (size_t i = offset; i < size; ++i) {
+        if (input[i]) {
+          goto fail;
+        }
+      }
       break;
     }
   }
@@ -337,7 +405,8 @@ bool install_archive_filter(const struct install_source *archive,
 
 fail:
   install_progress_pause();
-  fputs("installer: the boot archive is not a valid newc archive\n", stderr);
+  fputs("installer: boot archive or installed configuration is invalid or unsupported\n", stderr);
+  free(configuration);
   free(input);
   free(output);
   install_progress_finish();
