@@ -389,7 +389,8 @@ int main(int argc, char **argv)
     receipts[i].chain = chains + i * RECEIPT_CHAIN_CLUSTERS;
     receipts[i].chain_capacity = RECEIPT_CHAIN_CLUSTERS;
   }
-  struct fat32_write_io io = {.write = write_sectors, .flush = flush_disk, .context = &backing};
+  struct fat32_write_io io = {.write = write_sectors, .flush = flush_disk, .context = &backing,
+    .max_write_sectors = DISK_IO_MAX_BYTES / FAT32_SECTOR_BYTES};
   status = fat32_writer_open(&writer, &volume, &io, &workspace, FILE_MAX_BYTES,
       receipts, RECEIPT_COUNT);
   if (status != FAT32_OK) {
