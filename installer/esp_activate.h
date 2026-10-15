@@ -44,9 +44,9 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
  * this verify and the small activation below. No interval is extended here. */
 bool install_esp_classic_verify(struct install_esp_classic_files *result,
     enum call_status *status);
-/* Releases held files/parents and memory only; never retires or deletes.
- * True frees result; false preserves it with every reference whose close
- * failed, so the caller must retain its pointer before retiring the view. */
+/* Releases held files/parents and always frees result; never retires or deletes.
+ * False reports invalid-handle bookkeeping, not retained authority. The caller
+ * clears its pointer on either result and still retires its drained view. */
 bool install_esp_classic_close(struct install_esp_classic_files *result);
 
 /* Classic fixed-path publication only: the caller renders the normal/rescue

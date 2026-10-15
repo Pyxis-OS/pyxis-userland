@@ -23,8 +23,6 @@ struct install_esp_classic_files {
   struct config_file_digest payloads[INSTALL_ESP_CLASSIC_PAYLOAD_COUNT];
   handle_t efi, efi_boot, boot, limine;
   handle_t files[INSTALL_ESP_CLASSIC_PAYLOAD_COUNT];
-  handle_t reopened_root, reopened_efi, reopened_efi_boot, reopened_boot, reopened_limine;
-  handle_t reopened_file;
   bool synchronized;
 };
 
@@ -82,50 +80,29 @@ static enum call_status observe_target(handle_t control,
   return CALL_OK;
 }
 
-static enum call_status current_target(handle_t held_root, handle_t control,
-    const struct mount_state_reply *expected)
-{
-  enum call_status status = observe_target(control, expected);
-  if (status != CALL_OK) {
-    return status;
-  }
-  handle_t root = HANDLE_INVALID;
-  status = mount_reopen_fat32(control, ACTIVATE_DIRECTORY_READ, &root);
-  if (status == CALL_OK) {
-    status = same_object(held_root, root, true, expected->domain);
-  }
-  if (root != HANDLE_INVALID) {
-    handle_close(root);
-  }
-  return status;
-}
-
 static bool close_reference(handle_t *handle)
 {
   if (*handle == HANDLE_INVALID) {
     return true;
   }
-  if (handle_close(*handle) != 0) {
-    return false;
-  }
+  handle_t closed = *handle;
   *handle = HANDLE_INVALID;
-  return true;
+  return handle_close(closed) == 0;
 }
 
-static enum call_status classic_target(struct install_esp_classic_files *result)
+static enum call_status current_target(handle_t held_root, handle_t control,
+    const struct mount_state_reply *expected)
 {
-  if (result->reopened_root != HANDLE_INVALID) {
-    return CALL_BAD_REQUEST;
-  }
-  enum call_status status = observe_target(result->control, &result->expected);
+  enum call_status status = observe_target(control, expected);
+  handle_t root = HANDLE_INVALID;
   if (status == CALL_OK) {
-    status = mount_reopen_fat32(result->control, ACTIVATE_DIRECTORY_READ, &result->reopened_root);
+    status = mount_reopen_fat32(control, ACTIVATE_DIRECTORY_READ, &root);
   }
   if (status == CALL_OK) {
-    status = same_object(result->root, result->reopened_root, true, result->expected.domain);
+    status = same_object(held_root, root, true, expected->domain);
   }
-  if (!close_reference(&result->reopened_root)) {
-    status = CALL_OUTCOME_UNKNOWN;
+  if (!close_reference(&root)) {
+    status = CALL_BAD_HANDLE;
   }
   return status;
 }
@@ -248,7 +225,7 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
     status = native_grant(result->control, PROTOCOL_MOUNT, ACTIVATE_CONTROL_RIGHTS);
   }
   if (status == CALL_OK) {
-    status = classic_target(result);
+    status = current_target(result->root, result->control, &result->expected);
   }
   for (unsigned i = 0; status == CALL_OK && i < INSTALL_ESP_CLASSIC_PAYLOAD_COUNT; ++i) {
     const struct install_source *source = &request->payloads[i];
@@ -279,7 +256,7 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
     result->payloads[i] = *expected;
   }
   if (status == CALL_OK) {
-    status = classic_target(result);
+    status = current_target(result->root, result->control, &result->expected);
   }
   if (status == CALL_OK) {
     status = classic_directory(result->root, "EFI", &result->efi);
@@ -332,73 +309,73 @@ bool install_esp_classic_verify(struct install_esp_classic_files *result,
     return false;
   }
   *output_status = CALL_BAD_REQUEST;
-  if (!result || !result->synchronized || result->reopened_efi != HANDLE_INVALID ||
-      result->reopened_efi_boot != HANDLE_INVALID || result->reopened_boot != HANDLE_INVALID ||
-      result->reopened_limine != HANDLE_INVALID || result->reopened_file != HANDLE_INVALID) {
+  if (!result || !result->synchronized) {
     return false;
   }
-  enum call_status status = classic_target(result);
+  enum call_status status = current_target(result->root, result->control, &result->expected);
   if (status == CALL_OK) {
     status = mount_sync(result->control);
   }
   if (status == CALL_OK) {
-    status = classic_target(result);
+    status = current_target(result->root, result->control, &result->expected);
   }
+  handle_t efi = HANDLE_INVALID, efi_boot = HANDLE_INVALID;
+  handle_t boot = HANDLE_INVALID, limine = HANDLE_INVALID;
   if (status == CALL_OK) {
     status = directory_lookup(result->root, "EFI", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &result->reopened_efi);
+        ACTIVATE_DIRECTORY_READ, &efi);
   }
   if (status == CALL_OK) {
-    status = same_object(result->efi, result->reopened_efi, true, result->expected.domain);
+    status = same_object(result->efi, efi, true, result->expected.domain);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(result->reopened_efi, "BOOT", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &result->reopened_efi_boot);
+    status = directory_lookup(efi, "BOOT", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, &efi_boot);
   }
   if (status == CALL_OK) {
-    status = same_object(result->efi_boot, result->reopened_efi_boot, true, result->expected.domain);
+    status = same_object(result->efi_boot, efi_boot, true, result->expected.domain);
   }
   if (status == CALL_OK) {
     status = directory_lookup(result->root, "boot", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &result->reopened_boot);
+        ACTIVATE_DIRECTORY_READ, &boot);
   }
   if (status == CALL_OK) {
-    status = same_object(result->boot, result->reopened_boot, true, result->expected.domain);
+    status = same_object(result->boot, boot, true, result->expected.domain);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(result->reopened_boot, "limine", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &result->reopened_limine);
+    status = directory_lookup(boot, "limine", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, &limine);
   }
   if (status == CALL_OK) {
-    status = same_object(result->limine, result->reopened_limine, true, result->expected.domain);
+    status = same_object(result->limine, limine, true, result->expected.domain);
   }
   size_t capacity = FILE_READ_MAX_BYTES;
   if (result->expected.device_block_size && result->expected.device_block_size <= capacity) {
     capacity -= capacity % (size_t)result->expected.device_block_size;
   }
   for (unsigned i = 0; status == CALL_OK && i < INSTALL_ESP_CLASSIC_PAYLOAD_COUNT; ++i) {
-    handle_t parent = i == INSTALL_ESP_CLASSIC_EFI ? result->reopened_efi_boot : result->reopened_boot;
+    handle_t file = HANDLE_INVALID;
+    handle_t parent = i == INSTALL_ESP_CLASSIC_EFI ? efi_boot : boot;
     status = directory_lookup(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &result->reopened_file);
+        FILE_RIGHT_READ, &file);
     if (status == CALL_OK) {
-      status = same_object(result->files[i], result->reopened_file, false, result->expected.domain);
+      status = same_object(result->files[i], file, false, result->expected.domain);
     }
     if (status == CALL_OK) {
-      struct install_source source = {.handle = result->reopened_file, .bytes = result->payloads[i].size};
+      struct install_source source = {.handle = file, .bytes = result->payloads[i].size};
       status = stream_payload(&source, HANDLE_INVALID, &result->payloads[i], capacity);
     }
-    if (!close_reference(&result->reopened_file)) {
-      status = CALL_OUTCOME_UNKNOWN;
+    if (!close_reference(&file)) {
+      status = CALL_BAD_HANDLE;
     }
   }
   if (status == CALL_OK) {
-    status = classic_target(result);
+    status = current_target(result->root, result->control, &result->expected);
   }
-  handle_t *parents[] = {&result->reopened_limine, &result->reopened_boot,
-      &result->reopened_efi_boot, &result->reopened_efi};
+  handle_t *parents[] = {&limine, &boot, &efi_boot, &efi};
   for (size_t i = 0; i < sizeof(parents) / sizeof(parents[0]); ++i) {
     if (!close_reference(parents[i])) {
-      status = CALL_OUTCOME_UNKNOWN;
+      status = CALL_BAD_HANDLE;
     }
   }
   *output_status = status;
@@ -414,15 +391,11 @@ bool install_esp_classic_close(struct install_esp_classic_files *result)
   for (unsigned i = 0; i < INSTALL_ESP_CLASSIC_PAYLOAD_COUNT; ++i) {
     closed = close_reference(&result->files[i]) && closed;
   }
-  handle_t *parents[] = {&result->reopened_file, &result->reopened_limine,
-      &result->reopened_boot, &result->reopened_efi_boot, &result->reopened_efi,
-      &result->reopened_root, &result->limine, &result->boot, &result->efi_boot, &result->efi};
+  handle_t *parents[] = {&result->limine, &result->boot, &result->efi_boot, &result->efi};
   for (size_t i = 0; i < sizeof(parents) / sizeof(parents[0]); ++i) {
     closed = close_reference(parents[i]) && closed;
   }
-  if (closed) {
-    free(result);
-  }
+  free(result);
   return closed;
 }
 
@@ -492,8 +465,8 @@ static enum call_status verify_text(handle_t parent, const char *name, handle_t 
       status = CALL_BAD_REQUEST;
     }
   }
-  if (file != HANDLE_INVALID) {
-    handle_close(file);
+  if (!close_reference(&file)) {
+    status = CALL_BAD_HANDLE;
   }
   return status;
 }
@@ -572,10 +545,10 @@ bool install_esp_activate_classic(const struct install_esp_activation_request *r
   if (status == CALL_OK) {
     status = current_target(request->root, request->control, &request->expected);
   }
-  handle_t handles[] = {reopened_limine, reopened_boot, configuration, revision, limine, boot};
+  handle_t *handles[] = {&reopened_limine, &reopened_boot, &configuration, &revision, &limine, &boot};
   for (size_t i = 0; i < sizeof(handles) / sizeof(handles[0]); ++i) {
-    if (handles[i] != HANDLE_INVALID) {
-      handle_close(handles[i]);
+    if (!close_reference(handles[i])) {
+      status = CALL_BAD_HANDLE;
     }
   }
   *output_status = status;
