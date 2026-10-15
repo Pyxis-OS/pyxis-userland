@@ -711,7 +711,7 @@ int main(int argc, char **argv)
     goto done;
   }
   result = EXIT_SUCCESS;
-  if (interactive_consent) {
+  if (interactive_consent && !coexist) {
     offer_restart(&terminal, bootstrap_capability("power"), updating);
   }
 

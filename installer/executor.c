@@ -313,7 +313,6 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
   } else if (!install_programs_cleanup(disk, plan->target.pool.partition, revision, previous)) {
     fputs("installer: old program directory cleanup failed\n", stderr);
-    goto done;
   }
   ok = true;
 

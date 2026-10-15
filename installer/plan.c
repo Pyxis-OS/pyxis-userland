@@ -460,7 +460,7 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
   if (!verbose) {
     fputs("Details: use -v or Print plan for program changes.\n", output);
   }
-  fputs("Programs are synced/verified before EFI payload changes. Failure is partial,\n"
+  fputs("Programs are synced/verified before kernel/archive publication. Failure is partial,\n"
       "with no whole-install rollback or automatic retry.\n", output);
   return !ferror(output);
 }
