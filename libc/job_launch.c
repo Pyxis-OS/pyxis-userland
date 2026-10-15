@@ -273,13 +273,6 @@ static enum call_status capture_stream(struct job_preparation *prepared,
       binding.info.kind == HANDLE_KIND_EXPORTED) {
     rights = STREAM_RIGHT_READ;
     transport = HANDLE_TRANSPORT_CALL;
-    if (binding.observation == HANDLE_INVALID || binding.observation == binding.handle ||
-        binding.observation_info.protocol != PROTOCOL_HTTP_TRANSACTION ||
-        binding.observation_info.kind != HANDLE_KIND_EXPORTED ||
-        !(binding.observation_info.rights & HTTP_TRANSACTION_RIGHT_STATUS) ||
-        (binding.observation_info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
-      return CALL_WRONG_TYPE;
-    }
   } else if (binding.info.protocol == PROTOCOL_PIPE && binding.info.kind == HANDLE_KIND_NATIVE) {
     rights = input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE;
   } else if (binding.info.protocol == PROTOCOL_CONSOLE && binding.info.kind == HANDLE_KIND_NATIVE) {
@@ -292,13 +285,21 @@ static enum call_status capture_stream(struct job_preparation *prepared,
       (binding.info.transport & transport) != transport) {
     return CALL_DENIED;
   }
-  if (binding.info.protocol == PROTOCOL_STREAM) {
+  if (binding.observation != HANDLE_INVALID) {
+    if (!input || (binding.info.protocol != PROTOCOL_FILE &&
+        binding.info.protocol != PROTOCOL_STREAM) || binding.observation == binding.handle ||
+        binding.observation_info.protocol != PROTOCOL_HTTP_TRANSACTION ||
+        binding.observation_info.kind != HANDLE_KIND_EXPORTED ||
+        !(binding.observation_info.rights & HTTP_TRANSACTION_RIGHT_STATUS) ||
+        (binding.observation_info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
+      return CALL_WRONG_TYPE;
+    }
     stream->observation_protocol = PROTOCOL_HTTP_TRANSACTION;
     prepared->grants[stream->observation_grant] = (struct launch_grant){
       binding.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
     };
-  } else if (binding.observation != HANDLE_INVALID) {
-    return CALL_BAD_REQUEST;
+  } else if (binding.info.protocol == PROTOCOL_STREAM) {
+    return CALL_WRONG_TYPE;
   }
   stream->protocol = binding.info.protocol;
   stream->append = binding.append;

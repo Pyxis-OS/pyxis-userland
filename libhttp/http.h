@@ -3,7 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/endpoint.h>
-#include <abi/provider_http_private.h>
+#include <abi/http_types.h>
 #include <abi/syscall.h>
 #include <http_url.h>
 #include <stddef.h>
@@ -208,7 +208,6 @@ enum call_status http_stream_close(struct http_stream *stream);
 
 struct http_result {
   enum http_error error;
-  uint64_t outcome; /* PROVIDER_LEGACY_HTTP_OUTCOME_BYTES or REDIRECT only on success. */
   struct provider_http_budget consumed;
   enum call_status network_status;
   unsigned status; /* Final HTTP status, or zero if none was received. */
@@ -221,19 +220,6 @@ struct http_result {
   struct http_body body; /* Owned only on success; no partial body on failure. */
 };
 
-/* One GET, no replay. HTTP context borrows the remaining chain budgets; NULL
- * selects the ordinary limits. Redirects stop after validated headers, retain
- * no body, and charge discarded body read-ahead before checked stream closure.
- * deadline_ns is an optional absolute monotonic cap; zero
- * selects the 30-second overall budget. This initializes result; release any
- * previous successful body before reusing it. No printing or startup lookup.
- * Numeric HTTPS hosts are unsupported. Framed responses complete without peer
- * shutdown; close-delimited HTTPS needs authenticated TLS EOF. Cleanup preserves
- * the first fetch failure and status. A native handle-close failure invalidates
- * success; local TLS notification failure is retained as a diagnostic only. */
-void http_fetch(const struct http_client *client, struct http_storage *storage,
-    const char *uri, uint64_t deadline_ns,
-    const struct provider_legacy_http_open_request *request, struct http_result *result);
 void http_body_release(struct http_body *body);
 const char *http_error_name(enum http_error error);
 enum call_status http_result_status(const struct http_result *result);

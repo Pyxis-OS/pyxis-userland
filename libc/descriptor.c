@@ -9,7 +9,6 @@
 #include <resource.h>
 #include <pyxis/resource.h>
 #include "legacy_http.h"
-#include <provider_http_private.h>
 #include <pyxis/working_path.h>
 #include <stream.h>
 #include <directory.h>
@@ -607,8 +606,8 @@ int descriptor_stream(FILE *stream, struct pyxis_stdio_binding *binding)
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
       .handle = object->handle,
       .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
-      .observation_protocol = object->kind == DESCRIPTOR_RESPONSE && object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
-      .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
+      .observation_protocol = object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
+      .observation = object->observation,
     };
   }
   libc_lock_release(&table_guard);
@@ -636,7 +635,7 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
         (object->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
     .buffered_read = object->ahead_count,
     .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
-    .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
+    .observation = object->observation,
   };
   unlock_object(&object->read_guard);
   enum call_status status = handle_query(result.handle, &result.info);
@@ -1577,7 +1576,8 @@ static int response_locked(struct descriptor_object *entry, struct pyxis_respons
     *info = *entry->response;
     return 0;
   }
-  if (entry->observation && entry->kind == DESCRIPTOR_RESPONSE) {
+  if (entry->observation && (entry->kind == DESCRIPTOR_RESPONSE ||
+      entry->kind == DESCRIPTOR_FILE)) {
     struct http_response_metadata metadata;
     struct http_transaction_status response;
     enum call_status status = http_transaction_metadata(entry->observation, 0, &metadata);
@@ -1645,8 +1645,8 @@ int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdi
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
     .handle = object->handle,
     .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
-    .observation_protocol = object->kind == DESCRIPTOR_RESPONSE && object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
-    .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
+    .observation_protocol = object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
+    .observation = object->observation,
   };
   return 0;
 }

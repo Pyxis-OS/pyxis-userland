@@ -1133,9 +1133,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     bool input = i == ENVIRONMENT_STDIN;
     bool response = stream.protocol == PROTOCOL_STREAM;
-    if ((response && (!input || stream.observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
-          stream.observation == HANDLE_INVALID || stream.observation == stream.handle)) ||
-        (!response && (stream.observation_protocol || stream.observation))) {
+    bool observation = stream.observation_protocol || stream.observation;
+    if ((response && !observation) || (observation && (!input ||
+        (stream.protocol != PROTOCOL_FILE && !response) ||
+        stream.observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
+        stream.observation == HANDLE_INVALID || stream.observation == stream.handle))) {
       return CALL_BAD_REQUEST;
     }
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
@@ -1167,7 +1169,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       }
       prepared->entries[request->entry_count++] = environment_stdio_append_entry(i);
     }
-    if (response) {
+    if (observation) {
       prepared->entries[request->entry_count++] = (struct launch_environment_entry)
           PROFILE_CAP("stdin.status", request->grant_count);
       grants[request->grant_count++] = (struct launch_grant){
@@ -1264,7 +1266,7 @@ static const char *selected_stream_conflict(const struct prepared_stage *prepare
           (stream == ENVIRONMENT_STDIN && index) ||
           (stream == ENVIRONMENT_STDOUT && index + 1 < count);
       bool append = streams[stream].append;
-      bool response = streams[stream].protocol == PROTOCOL_STREAM;
+      bool response = streams[stream].observation != HANDLE_INVALID;
       for (size_t j = 0; j < stage->redirection_count; ++j) {
         const struct shell_redirection *redirect = &stage->redirections[j];
         if (redirect->stream == stream) {
@@ -1799,7 +1801,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
             status = CALL_BAD_OPERATION;
           }
           if (status == CALL_OK) {
-            status = handle_copy_restricted(entry->value.response, STREAM_RIGHT_READ,
+            status = handle_copy_restricted(entry->value.response, FILE_RIGHT_READ,
                 HANDLE_TRANSPORT_CALL, &opened.response);
           }
           if (status == CALL_OK) {
@@ -1823,7 +1825,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         }
         prepared[i].redirected[redirect->stream] = opened.response;
         prepared[i].observation[redirect->stream] = opened.observation;
-        streams[i][redirect->stream] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_STREAM,
+        streams[i][redirect->stream] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
           .handle = opened.response, .observation_protocol = PROTOCOL_HTTP_TRANSACTION,
           .observation = opened.observation};
         opened.response = opened.observation = HANDLE_INVALID;
@@ -1846,7 +1848,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
             }
           }
         }
-        bool response = input && opened.info.protocol == PROTOCOL_STREAM && redirect->observation;
+        bool response = input && (opened.info.protocol == PROTOCOL_STREAM ||
+            opened.info.protocol == PROTOCOL_FILE) && redirect->observation;
         if (status == CALL_OK && (response || redirect->observation)) {
           struct handle_info info;
           const struct environment_value *observation = redirect->observation;
@@ -1873,7 +1876,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           prepared[i].redirected[redirect->stream] = opened.resource;
           opened.resource = HANDLE_INVALID;
           streams[i][redirect->stream] = (struct pyxis_stdio_binding){
-            .protocol = response ? PROTOCOL_STREAM : PROTOCOL_FILE,
+            .protocol = opened.info.protocol,
             .handle = prepared[i].redirected[redirect->stream], .append = redirect->append,
             .observation_protocol = response ? PROTOCOL_HTTP_TRANSACTION : 0,
             .observation = prepared[i].observation[redirect->stream],
@@ -1942,7 +1945,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
 
   for (size_t i = 0; i < stage_count; ++i) {
-    response_input |= streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_STREAM;
+    response_input |= streams[i][ENVIRONMENT_STDIN].observation != HANDLE_INVALID;
   }
   /* Compare held objects after pipe wiring, before the first output resize. */
   status = check_redirect_inputs(stages, prepared, streams, stage_count,

@@ -5,7 +5,7 @@
 #include <path.h>
 #include <resource.h>
 #include <provider.h>
-#include <provider_http_private.h>
+#include <pyxis/response.h>
 #include <startup.h>
 #include <string.h>
 
@@ -142,10 +142,6 @@ static enum call_status walk(const struct path_context *context, const char *pat
       (workspace->component_capacity && !workspace->component)) {
     return CALL_BAD_REQUEST;
   }
-  const char *uri = path;
-  const char *http_uri = !strncmp(uri, "json+", 5) ? uri + 5 : uri;
-  bool http = target == WALK_FILE && !native_only &&
-      provider_http_uri(http_uri);
   handle_t provider = HANDLE_INVALID;
   enum call_status status = starting_chain(context, &path, workspace, count, &provider);
   if (status != CALL_OK) {
@@ -177,10 +173,7 @@ static enum call_status walk(const struct path_context *context, const char *pat
     if (status == CALL_OK && target != WALK_FILE) {
       status = CALL_BAD_OPERATION;
     }
-    if (status == CALL_OK && http && binding.protocol == PROTOCOL_PROVIDER) {
-      status = provider_http_open(context, provider, uri, rights, workspace->clock,
-          workspace->deadline_ns, workspace->http, workspace->response, file);
-    } else if (status == CALL_OK) {
+    if (status == CALL_OK) {
       struct resource_result result;
       uint64_t intent = ((rights & FILE_RIGHT_READ) ? PROVIDER_INTENT_READ : 0) |
           ((rights & FILE_RIGHT_WRITE) ? PROVIDER_INTENT_WRITE : 0);

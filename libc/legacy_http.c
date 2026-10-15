@@ -13,8 +13,10 @@ bool libc_legacy_http_path(const char *path)
 
 void libc_legacy_http_close(struct libc_legacy_open *opened)
 {
-  /* The typed result describes a handle owned in prepared, not a second grant. */
-  opened->result.resource = HANDLE_INVALID;
+  if (opened->result.resource == opened->prepared.control ||
+      opened->result.resource == opened->prepared.response) {
+    opened->result.resource = HANDLE_INVALID;
+  }
   resource_result_close(&opened->result);
   http_prepared_close(&opened->prepared);
 }
@@ -57,7 +59,8 @@ enum call_status libc_legacy_http_open(const char *path,
     status = resource_result_adopt(resource, &opened->result);
   }
   if (status != CALL_OK) {
-    libc_legacy_http_close(opened);
+    opened->result = opened->prepared.failed_result;
+    opened->prepared.failed_result = (struct resource_result){0};
   }
   return status;
 }

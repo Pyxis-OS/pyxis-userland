@@ -1,6 +1,5 @@
 #include "directory.h"
 #include <path.h>
-#include <provider_http_private.h>
 #include <pyxis/working_path.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,22 +30,12 @@ static enum call_status resolve_path(const char *path, uint64_t kind, uint64_t r
     free(directories);
     return CALL_NO_MEMORY;
   }
-  struct provider_http_workspace *http = NULL;
-  if (kind == DIRECTORY_KIND_FILE && provider_http_uri(path)) {
-    http = malloc(sizeof(*http));
-    if (!http) {
-      free(component);
-      free(directories);
-      return CALL_NO_MEMORY;
-    }
-  }
   struct path_workspace workspace = {
     .directories = directories, .directory_capacity = slots,
-    .component = component, .component_capacity = length + 1, .http = http,
+    .component = component, .component_capacity = length + 1,
   };
   /* Resolution borrows libc's retained chain. */
   status = path_resolve(context, path, kind, rights, &workspace, handle);
-  free(http);
   free(component);
   free(directories);
   return status;

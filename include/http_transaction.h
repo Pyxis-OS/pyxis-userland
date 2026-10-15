@@ -11,7 +11,7 @@
 /* An explicitly owned native value. Copies/delegation use narrower grant copies,
  * not serialization or ambient inheritance. Close releases only these refs;
  * ABORT is an explicit operation. No close/flush commits a transaction. */
-/* Private redirect/observation adapter result, not a transaction wire reply. */
+/* Private observation adapter result, not a transaction wire reply. */
 #define HTTP_COMMIT_RESPONSE UINT64_C(1)
 struct http_commit_reply { uint64_t flags, http_status; };
 
@@ -19,6 +19,7 @@ struct http_prepared {
   handle_t control, body, observation, response;
   uint64_t method, delivery, trust_flags;
   bool commit_attempted;
+  struct resource_result failed_result;
 };
 
 enum call_status http_transaction_prepare(handle_t provider, const char *uri,
@@ -26,21 +27,17 @@ enum call_status http_transaction_prepare(handle_t provider, const char *uri,
     uint64_t deadline_ns, struct http_prepared *prepared);
 /* URI resolution borrows only declared bindings and namespace lookup. It never
  * provisions providers or acquires network/trust authority. json+ selects JSON
- * request headers; explicit preparation does not redirect or filter HTTP status. */
+ * request headers. The selected provider owns redirects and final outcomes. */
 struct path_context;
 enum call_status http_transaction_prepare_uri(const struct path_context *context,
     const char *uri, uint64_t method, uint64_t flags, const char *headers,
     size_t headers_size, uint64_t deadline_ns, struct http_prepared *prepared);
-/* Anonymous ordinary GET: one deadline and aggregate framing budget, at most
- * ten redirects, successful 200/204 only. Owns returned prepared facets. */
+/* Anonymous ordinary GET through the selected provider's completed snapshot.
+ * No client-side following or retry. Caller closes prepared on every outcome;
+ * a failed COMMIT retains its typed result and independent error body there. */
 enum call_status http_transaction_open_uri(const struct path_context *context,
     const char *uri, uint64_t deadline_ns, struct http_prepared *prepared,
     struct pyxis_response_info *info);
-/* Explicit continuity for a redirect chain. NULL initializes origin/budget. */
-enum call_status http_transaction_prepare_context(handle_t provider, const char *uri,
-    uint64_t method, uint64_t flags, const char *headers, size_t headers_size,
-    uint64_t deadline_ns, const struct http_prepare_context *context,
-    struct http_prepared *prepared);
 enum call_status http_transaction_metadata(handle_t observation, uint64_t deadline_ns,
     struct http_response_metadata *metadata);
 

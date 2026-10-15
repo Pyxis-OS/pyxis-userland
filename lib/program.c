@@ -3,7 +3,6 @@
 #include <handle.h>
 #include <launcher.h>
 #include <path.h>
-#include <provider_http_private.h>
 #include <pxe/shebang.h>
 #include <space.h>
 #include <stdlib.h>
@@ -47,19 +46,12 @@ static enum call_status open_interpreter(const struct path_context *context,
     free(directories);
     return CALL_NO_MEMORY;
   }
-  struct provider_http_workspace *http = provider_http_uri(uri) ? malloc(sizeof(*http)) : NULL;
-  if (provider_http_uri(uri) && !http) {
-    free(component);
-    free(directories);
-    return CALL_NO_MEMORY;
-  }
   struct path_workspace workspace = {
     .directories = directories, .directory_capacity = capacity,
-    .component = component, .component_capacity = capacity, .http = http,
+    .component = component, .component_capacity = capacity,
   };
   enum call_status status = path_resolve(context, uri, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
       &workspace, image);
-  free(http);
   free(component);
   free(directories);
   return status;

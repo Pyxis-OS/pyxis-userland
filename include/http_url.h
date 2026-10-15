@@ -1,7 +1,7 @@
 #ifndef USERSPACE_HTTP_URL_H
 #define USERSPACE_HTTP_URL_H
 
-#include <abi/provider_http_private.h>
+#include <abi/http_types.h>
 #include <abi/syscall.h>
 #include <stdbool.h>
 #include <stdint.h>

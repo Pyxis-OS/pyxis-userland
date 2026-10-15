@@ -63,13 +63,6 @@ static bool http_lineage_exchange(handle_t provider, handle_t clock, const char 
   if (status != CALL_OK) {
     goto failed;
   }
-  /* Force adoption of COMMIT's newly returned observation, rather than keeping
-   * the separately derived PREPARE observation. */
-  phase = "release initial observation";
-  if (!close_owned(&prepared->observation)) {
-    status = CALL_BAD_HANDLE;
-    goto failed;
-  }
   if (method == HTTP_PREPARE_POST) {
     phase = "stage POST body";
     size_t offset = 0;
@@ -113,7 +106,7 @@ static bool http_lineage_exchange(handle_t provider, handle_t clock, const char 
   uint64_t consumed = 0;
   for (;;) {
     size_t read;
-    status = stream_read(prepared->response, bytes, sizeof(bytes), deadline, &read);
+    status = file_read(prepared->response, consumed, bytes, sizeof(bytes), &read);
     if (status != CALL_OK) {
       goto failed;
     }
@@ -135,7 +128,7 @@ static bool http_lineage_exchange(handle_t provider, handle_t clock, const char 
   if (!consumed || final.phase != HTTP_TRANSACTION_COMPLETE ||
       final.framing != HTTP_FRAMING_COMPLETE || final.status != CALL_OK ||
       final.source_status != CALL_OK || final.cleanup_status != CALL_OK ||
-      final.http_status != committed.http_status || final.consumed != consumed ||
+      final.http_status != committed.http_status || final.received != consumed ||
       (method == HTTP_PREPARE_POST && final.uploaded != sizeof(body) - 1)) {
     status = CALL_BAD_REQUEST;
     goto failed;
@@ -189,7 +182,7 @@ static bool http_lineage_method(handle_t provider, handle_t clock, const char *u
     size_t read;
     ok = http_lineage_deadline(clock, &deadline) &&
         forwarder_cut(source.controller) == CALL_OK &&
-        stream_read(prepared.response, &byte, sizeof(byte), deadline, &read) == CALL_DENIED &&
+        file_read(prepared.response, 0, &byte, sizeof(byte), &read) == CALL_DENIED &&
         read == 0 &&
         http_transaction_status(prepared.observation, deadline, &final) == CALL_DENIED &&
         http_transaction_metadata(prepared.observation, deadline, &metadata) == CALL_DENIED;

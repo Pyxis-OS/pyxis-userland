@@ -25,10 +25,9 @@ static bool grant_valid(const struct endpoint_grant *grant, uint64_t protocol,
       info.rights == rights && info.transport == HANDLE_TRANSPORT_CALL;
 }
 
-enum call_status http_transaction_prepare_context(handle_t provider, const char *uri,
+enum call_status http_transaction_prepare(handle_t provider, const char *uri,
     uint64_t method, uint64_t flags, const char *headers, size_t headers_size,
-    uint64_t deadline_ns, const struct http_prepare_context *context,
-    struct http_prepared *prepared)
+    uint64_t deadline_ns, struct http_prepared *prepared)
 {
   if (!prepared) {
     return CALL_BAD_REQUEST;
@@ -49,9 +48,7 @@ enum call_status http_transaction_prepare_context(handle_t provider, const char 
     .method = method, .flags = flags, .deadline_ns = deadline_ns,
     .uri_size = length, .headers_size = headers_size,
   };
-  if (context) {
-    request.context = *context;
-  } else {
+  {
     struct http_uri parsed;
     const char *endpoint = !strncmp(uri, "json+", 5) ? uri + 5 : uri;
     enum call_status status = http_url_parse(endpoint, &parsed);
@@ -110,14 +107,6 @@ enum call_status http_transaction_prepare_context(handle_t provider, const char 
   return status;
 }
 
-enum call_status http_transaction_prepare(handle_t provider, const char *uri,
-    uint64_t method, uint64_t flags, const char *headers, size_t headers_size,
-    uint64_t deadline_ns, struct http_prepared *prepared)
-{
-  return http_transaction_prepare_context(provider, uri, method, flags, headers,
-      headers_size, deadline_ns, NULL, prepared);
-}
-
 enum call_status http_transaction_commit(struct http_prepared *prepared,
     uint64_t deadline_ns, struct http_commit_reply *reply)
 {
@@ -135,15 +124,24 @@ enum call_status http_transaction_commit(struct http_prepared *prepared,
   if (status == CALL_OK) {
     status = resource_outcome_status(result.info.description.outcome);
   }
+  if (status != CALL_OK) {
+    prepared->failed_result = result;
+    return status;
+  }
+  if (result.info.protocol != PROTOCOL_FILE ||
+      result.info.rights != FILE_RIGHT_READ ||
+      (result.info.description.flags & (RESOURCE_COMPLETE | RESOURCE_REREADABLE)) !=
+      (RESOURCE_COMPLETE | RESOURCE_REREADABLE)) {
+    resource_result_close(&result);
+    return CALL_BAD_REQUEST;
+  }
+  prepared->response = result.resource;
+  result.resource = HANDLE_INVALID;
+  reply->flags = HTTP_COMMIT_RESPONSE;
+  struct http_transaction_status observation;
+  status = http_transaction_status(prepared->observation, deadline_ns, &observation);
   if (status == CALL_OK) {
-    prepared->response = result.resource;
-    result.resource = HANDLE_INVALID;
-    reply->flags = HTTP_COMMIT_RESPONSE;
-    struct http_transaction_status observation;
-    status = http_transaction_status(prepared->observation, deadline_ns, &observation);
-    if (status == CALL_OK) {
-      reply->http_status = observation.http_status;
-    }
+    reply->http_status = observation.http_status;
   }
   resource_result_close(&result);
   return status;
@@ -239,6 +237,10 @@ enum call_status http_prepared_close(struct http_prepared *prepared)
     if (handles[i] != HANDLE_INVALID && handle_close(handles[i])) {
       status = CALL_BAD_HANDLE;
     }
+  }
+  enum call_status closed = resource_result_close(&prepared->failed_result);
+  if (status == CALL_OK) {
+    status = closed;
   }
   *prepared = (struct http_prepared){0};
   return status;

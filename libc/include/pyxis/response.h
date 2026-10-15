@@ -1,7 +1,7 @@
 #ifndef LIBC_PYXIS_RESPONSE_H
 #define LIBC_PYXIS_RESPONSE_H
 
-#include <abi/provider_http_private.h>
+#include <abi/http_types.h>
 #include <stdint.h>
 
 #define PYXIS_RESPONSE_PROVIDER UINT64_C(1)
@@ -13,7 +13,6 @@
 struct pyxis_response_info {
   uint64_t flags;
   uint64_t status;
-  uint64_t redirect_count;
   char url[PROVIDER_HTTP_URI_MAX_BYTES + 1];
   char media_type[PROVIDER_MEDIA_TYPE_MAX_BYTES + 1];
 };

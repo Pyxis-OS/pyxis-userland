@@ -272,7 +272,7 @@ static enum call_status copy_entry(struct shell *shell, const char *name,
     }
   }
   if (status == CALL_OK && type != SHELL_CAPABILITY_STATUS) {
-    status = copy_facet(source->value.response, STREAM_RIGHT_READ, &destination->value.response);
+    status = copy_facet(source->value.response, FILE_RIGHT_READ, &destination->value.response);
   }
   if (status == CALL_OK) {
     status = copy_facet(source->value.observation, HTTP_TRANSACTION_RIGHT_STATUS,

@@ -6,7 +6,6 @@
 #include <resource.h>
 #include <startup.h>
 #include <handle.h>
-#include <provider_http_private.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -84,7 +83,6 @@ void shell_directory_close(struct shell *shell)
   shell->initial_directory_count = 0;
   free(shell->workspace.directories);
   free(shell->workspace.component);
-  free(shell->workspace.http);
 }
 
 enum call_status shell_change_directory(struct shell *shell, const char *path)
@@ -95,14 +93,7 @@ enum call_status shell_change_directory(struct shell *shell, const char *path)
 
 static enum call_status prepare_open_workspace(struct shell *shell, const char *path)
 {
-  enum call_status status = prepare_workspace(shell, strlen(path));
-  if (status == CALL_OK && provider_http_uri(path) && !shell->workspace.http) {
-    shell->workspace.http = malloc(sizeof(*shell->workspace.http));
-    if (!shell->workspace.http) {
-      return CALL_NO_MEMORY;
-    }
-  }
-  return status;
+  return prepare_workspace(shell, strlen(path));
 }
 
 enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,

@@ -448,7 +448,9 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
   if (identity) {
     *identity = entry.identity;
   }
-  if (index == ENVIRONMENT_STDIN && info.protocol == PROTOCOL_STREAM) {
+  if (index == ENVIRONMENT_STDIN &&
+      (info.protocol == PROTOCOL_STREAM || info.protocol == PROTOCOL_FILE)) {
+    bool optional = info.protocol == PROTOCOL_FILE;
     status = environment_lookup(snapshot, "stdin.status", &entry, NULL, 0);
     if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
       binding->observation = entry.handle;
@@ -465,6 +467,8 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
           *observation_identity = entry.identity;
         }
       }
+    } else if (status == CALL_NOT_FOUND && optional) {
+      status = CALL_OK;
     } else if (status == CALL_OK) {
       status = CALL_WRONG_TYPE;
     }
