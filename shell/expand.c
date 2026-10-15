@@ -285,7 +285,7 @@ const char *shell_syntax_expand(struct shell *shell,
       }
       stage->redirections[j] = (struct shell_redirection){
         .stream = redirection->stream, .path = *path, .append = redirection->append,
-        .value = value,
+        .value = value->kind == ENVIRONMENT_CAP ? value : NULL,
         .capability = redirection->word->plain && *path && **path == '@',
       };
     }
