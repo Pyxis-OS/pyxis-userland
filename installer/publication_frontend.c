@@ -159,14 +159,14 @@ static const char *publication_phase(enum config_publish_phase phase)
 }
 
 static void publication_result(const struct install_publication_request *request,
-    const struct config_storage_report *report, bool ok)
+    const struct config_storage_report *report, const struct config_boot_binding *obsolete, bool ok)
 {
   fprintf(stderr, "Scratch publication: status %u, phase %s, readiness %s, boot %s.\n",
       report->status, publication_phase(report->phase), report->committed ? "committed" : "not confirmed",
       report->boot_activated ? "entry confirmed" : report->committed ?
       "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
-  if (report->boot_cleanup_skipped && report->record.previous_boot.present) {
-    fputs("Older boot cleanup skipped: ownership/hash evidence is uncertain; files retained.\n", stderr);
+  if (report->boot_cleanup_skipped) {
+    fputs("Older boot cleanup skipped: ownership/hash evidence is uncertain; no removal attempted.\n", stderr);
   }
   if (ok && !report->boot_cleanup_skipped) {
     return;
@@ -174,9 +174,12 @@ static void publication_result(const struct install_publication_request *request
   fprintf(stderr, "Attempt: %s; inspect EFI/pyxis/config/config.record before recovery.\n",
       request->binding.kernel.path);
   if (report->artifact[0]) {
-    const char *file = config_storage_file_name(report->file);
-    fprintf(stderr, "Last artifact: %s (file %s).\n", report->artifact,
-        file ? file : "unknown");
+    fprintf(stderr, "Last artifact: %s\n", report->artifact);
+  }
+  if (obsolete && obsolete->present &&
+      (report->boot_cleanup_skipped || (!ok && report->phase == CONFIG_PHASE_CLEANUP))) {
+    fprintf(stderr, "Older cleanup candidates (inspect before recovery):\n  %s\n  %s\n  %s\n",
+        obsolete->kernel.path, obsolete->archive.path, obsolete->revision.path);
   }
   if (!ok && config_transaction_valid(report->record.transaction)) {
     char name[CONFIG_ARTIFACT_NAME_BYTES];
@@ -584,7 +587,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   request.revision = plan.catalog->revision;
   struct config_storage_report report = {0};
   bool ok = install_publication_publish(&request, &report);
-  publication_result(&request, &report, ok);
+  publication_result(&request, &report, previous_valid ? &previous.previous_boot : NULL, ok);
   if (report.committed && pending) {
     install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
   }
