@@ -66,7 +66,9 @@ static const char *append_text(char **text, size_t *length,
   if (!grown) {
     return "Out of memory";
   }
-  memcpy(grown + *length, addition, count);
+  if (count) {
+    memcpy(grown + *length, addition, count);
+  }
   *length += count;
   grown[*length] = 0;
   *text = grown;
@@ -189,9 +191,22 @@ const char *shell_syntax_expand(struct shell *shell,
   *expansion = (struct shell_expansion){0};
   *status = CALL_OK;
   size_t redirections = 0;
+  bool needs_environment = false;
   for (size_t i = 0; i < syntax->stage_count; ++i) {
-    expansion->word_count += syntax->stages[i].count;
-    redirections += syntax->stages[i].redirection_count;
+    const struct shell_syntax_stage *stage = &syntax->stages[i];
+    expansion->word_count += stage->count;
+    redirections += stage->redirection_count;
+    size_t total = stage->count + stage->redirection_count;
+    for (size_t j = 0; j < total && !needs_environment; ++j) {
+      const struct shell_word *word = j < stage->count ? stage->words[j] :
+          stage->redirections[j - stage->count].word;
+      for (size_t k = 0; k < word->count; ++k) {
+        if (word->pieces[k].kind == SHELL_VARIABLE) {
+          needs_environment = true;
+          break;
+        }
+      }
+    }
   }
   expansion->value_count = expansion->word_count + redirections;
   expansion->argument_count = expansion->value_count + syntax->stage_count;
@@ -203,12 +218,14 @@ const char *shell_syntax_expand(struct shell *shell,
     return "Out of memory";
   }
   handle_t snapshot = HANDLE_INVALID;
-  struct environment_info_reply info;
-  *status = environment_snapshot(shell->environment,
-      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &snapshot, &info);
-  if (*status != CALL_OK) {
-    shell_expansion_close(expansion);
-    return "Could not snapshot the environment for expansion";
+  struct environment_info_reply info = {0};
+  if (needs_environment) {
+    *status = environment_snapshot(shell->environment,
+        ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &snapshot, &info);
+    if (*status != CALL_OK) {
+      shell_expansion_close(expansion);
+      return "Could not snapshot the environment for expansion";
+    }
   }
   expansion->command.stage_count = syntax->stage_count;
   expansion->command.background = syntax->background;
@@ -256,7 +273,7 @@ const char *shell_syntax_expand(struct shell *shell,
       };
     }
   }
-  if (handle_close(snapshot) && !error) {
+  if (snapshot != HANDLE_INVALID && handle_close(snapshot) && !error) {
     *status = CALL_OUTCOME_UNKNOWN;
     error = "Could not release the expansion snapshot";
   }
