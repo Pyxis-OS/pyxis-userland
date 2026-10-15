@@ -224,7 +224,7 @@ enum call_status libc_job_validate_capture_grants(const struct launch_grant *gra
   if (status != CALL_OK) {
     return status;
   }
-  if ((root_info.protocol != PROTOCOL_DIRECTORY && root_info.protocol != PROTOCOL_PIPE_SERVICE) ||
+  if ((root_info.protocol != PROTOCOL_DIRECTORY && root_info.protocol != PROTOCOL_RETENTION_ACCOUNT) ||
       root_info.kind != HANDLE_KIND_NATIVE ||
       root_info.transport) {
     return CALL_WRONG_TYPE;
@@ -246,7 +246,8 @@ enum call_status libc_job_validate_capture_grants(const struct launch_grant *gra
       return status;
     }
     if (capture_protocol_denied(info.protocol) ||
-        (root_info.protocol == PROTOCOL_PIPE_SERVICE && info.protocol == PROTOCOL_PIPE_SERVICE)) {
+        (root_info.protocol == PROTOCOL_RETENTION_ACCOUNT &&
+         (info.protocol == PROTOCOL_RETENTION_FACTORY || info.protocol == PROTOCOL_RETENTION_ACCOUNT))) {
       return CALL_DENIED;
     }
     if (root_info.protocol == PROTOCOL_DIRECTORY && info.protocol == PROTOCOL_DIRECTORY) {

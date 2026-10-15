@@ -14,9 +14,9 @@ struct pyxis_capture_options {
   /* Every stream must be -1. This profile supplies its own separate stdout/
    * stderr FILEs and no stdin; all other command inputs remain explicit. */
   struct pyxis_job_options command;
-  /* Explicit native pipe CREATE authority for producer/collector construction.
+  /* Explicit session account capture authority for producer/collector construction.
    * Capture retains the process-local collectors and delegates only producers. */
-  handle_t output_service;
+  handle_t output_account;
   handle_t clock;
   uint64_t deadline_ns; /* Required, absolute monotonic; never refreshed. */
   /* Zero selects the defaults above. Limits are per-stream polled triggers
@@ -45,6 +45,7 @@ enum pyxis_capture_stop {
 struct pyxis_capture_output {
   bool valid; /* Collected after confirmed retirement. */
   bool taken;
+  uint64_t outcome; /* DESCRIBE outcome; failed values remain owned and valid. */
   uint64_t mode; /* OUTPUT_MODE_EMPTY/BYTES/VALUE; sizes apply only to bytes. */
   bool truncated;
   uint64_t size;
@@ -68,7 +69,7 @@ extern "C" {
 
 /* Single-owner API. Inputs are borrowed valid C storage until return. Creates
  * both output pairs before launch. Checks the stricter capture inventory,
- * including unnamed/cwd grants; pipe CREATE service grants are refused. The
+ * including unnamed/cwd grants; retention factory/account grants are refused. The
  * trusted caller audits credentials, subtree/provider and namespace reachability.
  * Synchronous preparation may exceed the deadline; expiry is checked on return.
  *

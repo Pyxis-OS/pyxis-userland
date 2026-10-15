@@ -4,9 +4,9 @@
 #include <abi/output.h>
 #include <abi/syscall.h>
 
-/* Borrow pipe CREATE authority. Success returns two owned handles. The collector
+/* Borrow session account capture authority. Success returns two owned handles. The collector
  * belongs to this process only; never copy, delegate or store it in a value. */
-enum call_status output_create(handle_t service, struct output_create_reply *reply);
+enum call_status output_create(handle_t account, struct output_create_reply *reply);
 enum call_status output_status(handle_t collector, struct output_status_reply *reply);
 /* Provider-free native FILE feature query before allocating transfer copies.
  * Ordinary FILEs and console/pipe/exported grants return BAD_OPERATION. */

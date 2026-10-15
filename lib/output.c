@@ -1,4 +1,5 @@
 #include <output.h>
+#include <abi/retention.h>
 #include <handle.h>
 #include <stdbool.h>
 #include <syscall.h>
@@ -13,14 +14,14 @@ static enum call_status response_status(struct syscall_result result, size_t siz
   return result.status;
 }
 
-enum call_status output_create(handle_t service, struct output_create_reply *reply)
+enum call_status output_create(handle_t account, struct output_create_reply *reply)
 {
   if (!reply) {
     return CALL_BAD_REQUEST;
   }
-  struct message_header request = {PROTOCOL_PIPE_SERVICE, PIPE_CREATE_OUTPUT};
+  struct message_header request = {PROTOCOL_RETENTION_ACCOUNT, RETENTION_CREATE_OUTPUT};
   struct output_create_reply response;
-  enum call_status status = response_status(syscall_call(service, &request, sizeof(request),
+  enum call_status status = response_status(syscall_call(account, &request, sizeof(request),
       &response, sizeof(response)), sizeof(response), true);
   if (status == CALL_OK) {
     *reply = response;

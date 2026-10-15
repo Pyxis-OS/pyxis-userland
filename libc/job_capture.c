@@ -1,6 +1,6 @@
 #include <environment.h>
 #include <pyxis/capture.h>
-#include <abi/pipe.h>
+#include <abi/retention.h>
 #include <output.h>
 #include <pyxis/descriptor.h>
 #include <abi/clock.h>
@@ -16,7 +16,7 @@
 
 struct pyxis_capture {
   struct pyxis_job *job;
-  handle_t clock, output_service, launcher, supervision;
+  handle_t clock, output_account, launcher, supervision;
   handle_t values[2], observations[2], collectors[2], producers[2];
   bool sealed[2], collected[2], take_uncertain[2];
   uint64_t limits[2], deadline, poll_interval, next_poll;
@@ -66,7 +66,7 @@ static enum call_status discard_capture(struct pyxis_capture *capture)
     &capture->observations[0], &capture->observations[1],
     &capture->collectors[0], &capture->collectors[1],
     &capture->producers[0], &capture->producers[1],
-    &capture->supervision, &capture->launcher, &capture->output_service, &capture->clock};
+    &capture->supervision, &capture->launcher, &capture->output_account, &capture->clock};
   for (size_t i = 0; i < sizeof(handles) / sizeof(*handles); ++i) {
     enum call_status status = close_handle(handles[i]);
     if (error == CALL_OK) {
@@ -154,15 +154,21 @@ static enum call_status final_outputs(struct pyxis_capture *capture)
       capture->observations[i] = taken.observation;
       capture->collected[i] = true;
     }
+    struct describe_reply description;
+    status = handle_describe(capture->values[i], 0, &description);
+    if (status != CALL_OK) {
+      return remember_error(capture, status);
+    }
+    uint64_t outcome = description.description.outcome;
     uint64_t size = 0;
-    if (state.mode != OUTPUT_MODE_VALUE) {
+    if (state.mode != OUTPUT_MODE_VALUE && outcome == RESOURCE_OK) {
       status = file_size(capture->values[i], &size);
       if (status != CALL_OK) {
         return remember_error(capture, status);
       }
     }
     *outputs[i] = (struct pyxis_capture_output){
-      .valid = true, .mode = state.mode, .size = size,
+      .valid = true, .mode = state.mode, .outcome = outcome, .size = size,
       .truncated = state.mode != OUTPUT_MODE_VALUE && size > capture->limits[i],
       .returned_size = size < capture->limits[i] ? size : capture->limits[i],
     };
@@ -260,6 +266,10 @@ static enum call_status advance(struct pyxis_capture *capture)
       if (status == CALL_OK) {
         status = file_size(capture->producers[i], &size);
       }
+      if (status == CALL_FILE_TOO_LARGE) {
+        set_stop(capture, i ? PYXIS_CAPTURE_STOP_STDERR_LIMIT : PYXIS_CAPTURE_STOP_STDOUT_LIMIT);
+        continue;
+      }
       if (status != CALL_OK) {
         remember_error(capture, status);
         request_stop(capture);
@@ -312,12 +322,12 @@ static enum call_status validate_options(handle_t launcher,
   if (status != CALL_OK) {
     return status;
   }
-  status = validate_source(options->output_service, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE);
+  status = validate_source(options->output_account, PROTOCOL_RETENTION_ACCOUNT, RETENTION_RIGHT_CAPTURE);
   if (status != CALL_OK) {
     return status;
   }
   return libc_job_validate_capture_grants(options->command.grants,
-      options->command.grant_count, options->output_service);
+      options->command.grant_count, options->output_account);
 }
 
 enum call_status pyxis_capture_start(handle_t launcher,
@@ -342,7 +352,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
   owned->limits[1] = options->stderr_limit ? options->stderr_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
   status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ, 0, &owned->clock);
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->output_service, PIPE_SERVICE_RIGHT_CREATE, 0, &owned->output_service);
+    status = handle_copy_restricted(options->output_account, RETENTION_RIGHT_CAPTURE, 0, &owned->output_account);
   }
   if (status == CALL_OK) {
     status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
@@ -357,7 +367,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
   int writers[2] = {-1, -1};
   for (size_t i = 0; i < 2 && status == CALL_OK; ++i) {
     struct output_create_reply pair;
-    status = output_create(owned->output_service, &pair);
+    status = output_create(owned->output_account, &pair);
     if (status == CALL_OK) {
       owned->collectors[i] = pair.collector;
       owned->producers[i] = pair.producer;
@@ -387,7 +397,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
     struct pyxis_job_options command = options->command;
     command.streams[ENVIRONMENT_STDOUT] = writers[0];
     command.streams[ENVIRONMENT_STDERR] = writers[1];
-    status = libc_job_launch_captured(owned->launcher, &command, owned->output_service, &owned->job);
+    status = libc_job_launch_captured(owned->launcher, &command, owned->output_account, &owned->job);
     if (status == CALL_OUTCOME_UNKNOWN) {
       owned->uncertain = true;
     }
