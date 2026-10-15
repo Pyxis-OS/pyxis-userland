@@ -38,6 +38,8 @@ struct shell_redirection {
   enum environment_stream_index stream;
   const char *path;
   bool capability;
+  bool append;
+  const struct environment_value *value;
 };
 
 struct shell_stage {
@@ -46,6 +48,7 @@ struct shell_stage {
   size_t redirection_count;
   bool http_worker;
   bool http_producer;
+  const struct environment_capture *operands;
   struct shell_redirection redirections[ENVIRONMENT_STREAM_COUNT];
 };
 
