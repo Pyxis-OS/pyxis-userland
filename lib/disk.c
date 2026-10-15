@@ -218,6 +218,41 @@ enum call_status disks_open_partition(handle_t disks,
   return disks_open_selection(disks, DISKS_OPEN_PARTITION, selection, disk);
 }
 
+enum call_status disks_review_esp(handle_t disks,
+    const struct disk_partition_selection *selection, handle_t *review)
+{
+  return disks_open_selection(disks, DISKS_REVIEW_ESP, selection, review);
+}
+
+enum call_status disk_begin_esp_rebuild(handle_t review, const char *confirmation,
+    handle_t *writer)
+{
+  if (!writer) {
+    return CALL_BAD_REQUEST;
+  }
+  *writer = HANDLE_INVALID;
+  size_t length = sizeof(DISK_ESP_REBUILD_CONFIRMATION) - 1;
+  if (!confirmation || strnlen(confirmation, length + 1) != length ||
+      memcmp(confirmation, DISK_ESP_REBUILD_CONFIRMATION, length)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_begin_esp_rebuild_request body;
+  } message = {{PROTOCOL_DISK, DISK_BEGIN_ESP_REBUILD}, {(uintptr_t)confirmation, length}};
+  struct disk_open_reply reply = {HANDLE_INVALID};
+  enum call_status status = reply_status(syscall_call(review, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.disk == HANDLE_INVALID) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *writer = reply.disk;
+  return CALL_OK;
+}
+
 enum call_status disk_partition_info(handle_t disk, uint64_t entry,
     struct disk_partition_selection *selection)
 {

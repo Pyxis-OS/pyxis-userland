@@ -42,6 +42,16 @@ enum call_status disks_open_partition(handle_t disks,
 enum call_status disk_partition_info(handle_t disk, uint64_t entry,
     struct disk_partition_selection *selection);
 
+/* Explicit classic recovery authority. Review binds the selected ESP and exact
+ * GPT snapshot; begin consumes it once with the exact confirmation "update".
+ * The returned writer is ESP-only, with no mount or later reclaim authority.
+ * Healthy ESPs use native FAT views. Failure clears the output; never retry an
+ * uncertain reply automatically. */
+enum call_status disks_review_esp(handle_t disks,
+    const struct disk_partition_selection *selection, handle_t *review);
+enum call_status disk_begin_esp_rebuild(handle_t review, const char *confirmation,
+    handle_t *writer);
+
 /* Append one proposed native-pool partition through single-use review.
  * Full worker failures retain validated phase/identity evidence and no handle;
  * early failures leave PREPARE, UINT64_MAX failed block and an invalid handle.

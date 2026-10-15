@@ -146,7 +146,7 @@ static int run_install(int argc, char **argv, bool selector)
   struct launch_grant grants[GRANT_COUNT] = {
     [DISKS] = {sources[DISKS], INSTALL_COMMON_DISK_RIGHTS |
         (!selector || coexist ? DISKS_RIGHT_APPEND_POOL : 0) |
-        (!selector || !coexist ? DISKS_RIGHT_ERASE : 0), 0},
+        (!selector || !coexist ? DISKS_RIGHT_ERASE | DISKS_RIGHT_REBUILD_ESP : 0), 0},
     [KERNEL] = {sources[KERNEL], FILE_RIGHT_READ, 0},
     [ARCHIVE] = {sources[ARCHIVE], FILE_RIGHT_READ, 0},
     [MEMORY] = {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
