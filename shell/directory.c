@@ -3,6 +3,7 @@
 #include "shell.h"
 #include <abi/file.h>
 #include <program.h>
+#include <resource.h>
 #include <startup.h>
 #include <handle.h>
 #include <provider_http_private.h>
@@ -133,6 +134,33 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
   uint64_t rights = input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE;
   return path_open_file(shell->directory, path, rights, !input,
       &shell->workspace, file);
+}
+
+enum call_status shell_open_redirect_value(struct shell *shell,
+    const struct shell_redirection *redirect, struct resource_result *result)
+{
+  *result = (struct resource_result){0};
+  bool input = redirect->stream == ENVIRONMENT_STDIN;
+  uint64_t intent = input ? PROVIDER_INTENT_READ : PROVIDER_INTENT_WRITE;
+  uint64_t flags = redirect->append ? PROVIDER_OPEN_APPEND : 0;
+  if (redirect->value) {
+    if (redirect->value->kind != ENVIRONMENT_CAP) {
+      return CALL_BAD_REQUEST;
+    }
+    struct handle_info info;
+    enum call_status status = handle_query(redirect->value->handle, &info);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (!input && info.protocol == PROTOCOL_PROVIDER) {
+      flags |= PROVIDER_OPEN_CREATE;
+    }
+    return resource_open_held(redirect->value->handle, "", intent, flags, 0, result);
+  }
+  if (!input) {
+    flags |= PROVIDER_OPEN_CREATE;
+  }
+  return resource_open_path(shell->directory, redirect->path, intent, flags, 0, result);
 }
 
 enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,

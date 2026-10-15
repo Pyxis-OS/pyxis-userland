@@ -9,6 +9,7 @@
 #include <startup.h>
 #include "../common/launch_environment.h"
 #include <bundle_launch.h>
+#include <resource.h>
 
 #define SHELL_LINE_CAPACITY 1024
 /* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
@@ -101,12 +102,6 @@ struct shell {
   struct shell_fat_mount fat_mounts[SHELL_FAT_MOUNT_LIMIT];
 };
 
-/* Compacts in place. Arguments and redirection paths borrow line; capacity
- * includes a NULL after each stage's arguments. Redirections remain in source order.
- * An unquoted trailing & selects background launch.
- * Returns a static diagnostic on malformed input, NULL on success. */
-const char *parse_line(char *line, char **arguments, size_t capacity,
-    struct shell_command_line *command);
 enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);
@@ -145,6 +140,9 @@ enum call_status shell_open_image(struct shell *shell, const char *command, hand
     struct bundle_program **bundle);
 enum call_status shell_open_redirect(struct shell *shell, const char *path,
     bool input, handle_t *file);
+/* Typed OPEN without truncation; the caller owns the complete result. */
+enum call_status shell_open_redirect_value(struct shell *shell,
+    const struct shell_redirection *redirect, struct resource_result *result);
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
@@ -153,17 +151,20 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
  * starts with a space. Neither reports a missing or read-only home. */
 void shell_history_load(struct shell *shell);
 void shell_history_save(struct shell *shell, const char *line);
-enum command_result shell_command(struct shell *shell, char *line, char **arguments,
+enum command_result shell_command(struct shell *shell, char *line,
     struct shell_outcome *outcome);
 /* Outcome is NULL for the session builtin, which reports its own result. */
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
     enum shell_launch_mode mode, const struct shell_redirection *redirections,
     size_t redirection_count, struct shell_outcome *outcome);
+enum command_result shell_launch_selected(struct shell *shell,
+    const struct shell_stage *stage, enum shell_launch_mode mode, struct shell_outcome *outcome);
 enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_command_line *command, struct shell_outcome *outcome);
 enum command_result shell_launch_service(struct shell *shell, const char *name,
-    bool replace, bool optional, bool read_only, char **arguments, size_t count);
+    bool replace, bool optional, bool read_only, char **arguments, size_t count,
+    const struct environment_capture *operands);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
-int shell_script(struct shell *shell, handle_t script, char *line, char **arguments);
+int shell_script(struct shell *shell, handle_t script, char *line);
 
 #endif

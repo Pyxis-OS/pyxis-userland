@@ -74,6 +74,9 @@ struct prepared_stage {
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   struct environment_capture captured;
   struct launch_environment_entry *entries;
+  struct launch_grant *selected_grants;
+  struct launch_environment_entry *selected_entries;
+  const char *conflict;
   struct launch_request request;
 };
 
@@ -130,6 +133,11 @@ static bool http_uri(const char *path)
 {
   return provider_http_uri(path) ||
       (!strncmp(path, "json+", 5) && provider_http_uri(path + 5));
+}
+
+static bool legacy_http_redirect(const struct shell_redirection *redirect)
+{
+  return !redirect->value && (redirect->capability || http_uri(redirect->path));
 }
 
 static bool close_handle(handle_t *handle)
@@ -217,6 +225,8 @@ static void free_preparation(struct prepared_stage *stages, size_t stage_count)
     free(stages[i].directories);
     free(stages[i].grants);
     free(stages[i].entries);
+    free(stages[i].selected_grants);
+    free(stages[i].selected_entries);
     environment_capture_close(&stages[i].captured);
   }
   free(stages);
@@ -290,10 +300,108 @@ static enum call_status prepare_http_worker(struct shell *shell,
   return CALL_OK;
 }
 
+static enum call_status select_operands(struct prepared_stage *prepared,
+    const struct shell_stage *stage, bool read_only)
+{
+  const struct environment_capture *operands = stage->operands;
+  if (!operands || !operands->count) {
+    return CALL_OK;
+  }
+  struct launch_request *request = &prepared->request;
+  size_t count = operands->count;
+  if (request->grant_count > SIZE_MAX / sizeof(struct launch_grant) ||
+      count > SIZE_MAX / sizeof(struct launch_grant) - request->grant_count ||
+      request->entry_count > SIZE_MAX / sizeof(struct launch_environment_entry) ||
+      count > SIZE_MAX / sizeof(struct launch_environment_entry) - request->entry_count) {
+    return CALL_LIMIT;
+  }
+  size_t grant_capacity = request->grant_count + count;
+  size_t entry_capacity = request->entry_count + count;
+  prepared->selected_grants = malloc(grant_capacity * sizeof(*prepared->selected_grants));
+  prepared->selected_entries = malloc(entry_capacity * sizeof(*prepared->selected_entries));
+  if (!prepared->selected_grants || !prepared->selected_entries) {
+    return CALL_NO_MEMORY;
+  }
+  memcpy(prepared->selected_grants, (const void *)(uintptr_t)request->grants,
+      request->grant_count * sizeof(*prepared->selected_grants));
+  memcpy(prepared->selected_entries, (const void *)(uintptr_t)request->entries,
+      request->entry_count * sizeof(*prepared->selected_entries));
+  request->grants = (uintptr_t)prepared->selected_grants;
+  request->entries = (uintptr_t)prepared->selected_entries;
+  for (size_t i = 0; i < count; ++i) {
+    const struct environment_value *value = &operands->values[i];
+    if (value->kind != ENVIRONMENT_CAP) {
+      return CALL_BAD_REQUEST;
+    }
+    bool repeated = false;
+    for (size_t j = 0; j < i; ++j) {
+      const struct environment_value *earlier = &operands->values[j];
+      if (strcmp(value->name, earlier->name)) {
+        continue;
+      }
+      if (!value->identity || value->identity != earlier->identity ||
+          value->rights != earlier->rights || value->transport != earlier->transport) {
+        prepared->conflict = value->name;
+        return CALL_ALREADY_EXISTS;
+      }
+      repeated = true;
+      break;
+    }
+    if (repeated) {
+      continue;
+    }
+    bool selected = false;
+    for (size_t j = 0; j < request->entry_count; ++j) {
+      const struct launch_environment_entry *entry = &prepared->selected_entries[j];
+      if (strcmp(value->name, (const char *)(uintptr_t)entry->name)) {
+        continue;
+      }
+      const struct environment_value *origin =
+          environment_capture_find(&prepared->captured, value->name);
+      const struct launch_grant *grant = entry->kind == ENVIRONMENT_CAP ?
+          &prepared->selected_grants[entry->value] : NULL;
+      /* A capture-owned source and publication establish provenance. Handle
+       * metadata and independently acquired handle numbers establish no identity. */
+      if (!origin || origin->kind != ENVIRONMENT_CAP || !value->identity ||
+          origin->identity != value->identity || !grant ||
+          grant->source != origin->handle || (grant->rights & ~value->rights) ||
+          (grant->transport & ~value->transport)) {
+        prepared->conflict = value->name;
+        return CALL_ALREADY_EXISTS;
+      }
+      selected = true;
+      break;
+    }
+    if (selected) {
+      continue;
+    }
+    uint64_t rights = value->rights;
+    if (read_only) {
+      struct handle_info info;
+      enum call_status status = handle_query(value->handle, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (info.protocol == PROTOCOL_DIRECTORY) {
+        rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+            DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO;
+      }
+    }
+    prepared->selected_entries[request->entry_count++] = (struct launch_environment_entry){
+      .name = (uintptr_t)value->name, .kind = ENVIRONMENT_CAP,
+      .flags = ENVIRONMENT_EXPORTED, .value = request->grant_count,
+    };
+    prepared->selected_grants[request->grant_count++] = (struct launch_grant){
+      value->handle, rights, value->transport,
+    };
+  }
+  return CALL_OK;
+}
+
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], handle_t publication,
-    bool read_only, const struct network_environment *environment)
+    bool read_only, const struct network_environment *environment, bool preflight)
 {
   if (stage->http_worker) {
     return prepare_http_worker(shell, prepared, stage, streams);
@@ -790,7 +898,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
 
   size_t entry_capacity = resource_count + root_count + environment->count +
-      prepared->captured.count + ENVIRONMENT_STREAM_COUNT + 1;
+      prepared->captured.count + 2 * ENVIRONMENT_STREAM_COUNT + 1;
   prepared->entries = calloc(entry_capacity, sizeof(*prepared->entries));
   if (!prepared->entries) {
     return CALL_NO_MEMORY;
@@ -799,9 +907,17 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   memcpy(prepared->entries, resources, resource_count * sizeof(*prepared->entries));
   memcpy(prepared->entries + entry_count, roots, root_count * sizeof(*prepared->entries));
   entry_count += root_count;
-  memcpy(prepared->entries + entry_count, environment->variables,
-      environment->count * sizeof(*prepared->entries));
-  entry_count += environment->count;
+  for (size_t i = 0; i < environment->count; ++i) {
+    const struct launch_environment_entry *entry = &environment->variables[i];
+    bool stream_policy = false;
+    for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
+      stream_policy |= !strcmp((const char *)(uintptr_t)entry->name,
+          environment_stdio_append_name(stream));
+    }
+    if (!stream_policy) {
+      prepared->entries[entry_count++] = *entry;
+    }
+  }
   if (!provider) {
     for (size_t i = 0; i < prepared->captured.count; ++i) {
       const struct environment_value *entry = &prepared->captured.values[i];
@@ -886,6 +1002,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       }
     }
     grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, transport};
+    if (stream.append) {
+      if (input || stream.protocol != PROTOCOL_FILE) {
+        return CALL_BAD_REQUEST;
+      }
+      prepared->entries[request->entry_count++] = environment_stdio_append_entry(i);
+    }
     if (response) {
       prepared->entries[request->entry_count++] = (struct launch_environment_entry)
           PROFILE_CAP("stdin.status", request->grant_count);
@@ -937,6 +1059,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         authority[i].source = HANDLE_INVALID;
         continue;
       }
+      if (preflight) {
+        continue;
+      }
       uint64_t now;
       status = clock_now(shell->clock, &now);
       if (status != CALL_OK) {
@@ -962,7 +1087,68 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     *request = *bundle_launch_request(prepared->bundle_launch);
   }
-  return CALL_OK;
+  return select_operands(prepared, stage, read_only);
+}
+
+static const char *selected_stream_conflict(const struct shell_stage *stage,
+    const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT],
+    size_t index, size_t count)
+{
+  if (!stage->operands) {
+    return NULL;
+  }
+  for (size_t i = 0; i < stage->operands->count; ++i) {
+    const char *name = stage->operands->values[i].name;
+    for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
+      bool bound = streams[stream].protocol ||
+          (stream == ENVIRONMENT_STDIN && index) ||
+          (stream == ENVIRONMENT_STDOUT && index + 1 < count);
+      bool append = streams[stream].append;
+      bool response = streams[stream].protocol == PROTOCOL_STREAM;
+      for (size_t j = 0; j < stage->redirection_count; ++j) {
+        const struct shell_redirection *redirect = &stage->redirections[j];
+        if (redirect->stream == stream) {
+          bound = true;
+          append = redirect->append;
+          response = legacy_http_redirect(redirect);
+        }
+      }
+      struct launch_environment_entry entry = profile_stdio_entry(stream, 0);
+      if ((bound && !strcmp(name, (const char *)(uintptr_t)entry.name)) ||
+          (append && !strcmp(name, environment_stdio_append_name(stream))) ||
+          (stream == ENVIRONMENT_STDIN && response && !strcmp(name, "stdin.status"))) {
+        return name;
+      }
+    }
+  }
+  return NULL;
+}
+
+static enum call_status preflight_operands(struct shell *shell,
+    const struct shell_stage *stage, struct prepared_stage *image,
+    enum shell_launch_mode mode, bool named_input,
+    const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT],
+    handle_t publication, bool read_only, const struct network_environment *environment,
+    const char **conflict)
+{
+  *conflict = NULL;
+  struct prepared_stage *prepared = calloc(1, sizeof(*prepared));
+  if (!prepared) {
+    return CALL_NO_MEMORY;
+  }
+  prepared->image = image->image;
+  prepared->bundle = image->bundle;
+  enum call_status status = prepare_stage(shell, prepared, stage, mode, named_input,
+      streams, publication, read_only, environment, true);
+  *conflict = prepared->conflict;
+  /* The image/bundle belong to the real launch, not this temporary selection. */
+  prepared->image = HANDLE_INVALID;
+  prepared->bundle = NULL;
+  if (!release_sources(prepared, 1, NULL)) {
+    status = CALL_BAD_HANDLE;
+  }
+  free_preparation(prepared, 1);
+  return status;
 }
 
 /* Arms Ctrl+C for one foreground job. Without interrupt authority the job
@@ -1103,7 +1289,7 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
       if (redirect->stream == ENVIRONMENT_STDIN) {
         continue;
       }
-      if (stages[i].http_producer && (redirect->capability || http_uri(redirect->path))) {
+      if (stages[i].http_producer && legacy_http_redirect(redirect)) {
         continue;
       }
       *failed_stage = i;
@@ -1220,6 +1406,65 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     if (mode == SHELL_BACKGROUND || mode == SHELL_SERVICE) {
       streams[i][ENVIRONMENT_STDIN] = (struct pyxis_stdio_binding){0};
     }
+  }
+
+  operation = "shell: network environment";
+  path = stages[0].arguments[0];
+  status = pyxis_environment_snapshot_init(&inherited);
+  if (status != CALL_OK) {
+    goto failed;
+  }
+  status = network_environment_from_capture(&environment, shell->net_config,
+      &inherited.capture, NULL);
+  if (status != CALL_OK) {
+    goto failed;
+  }
+  status = session_wait_environment(&environment, mode == SHELL_SESSION && shell->session_wait);
+  if (status != CALL_OK) {
+    goto failed;
+  }
+
+  bool has_redirects = false;
+  for (size_t i = 0; i < stage_count; ++i) {
+    has_redirects |= stages[i].redirection_count != 0;
+  }
+  /* Validate every explicit selection before any redirect target is opened. */
+  for (size_t i = 0; has_redirects && i < stage_count; ++i) {
+    if (!stages[i].operands || !stages[i].operands->count) {
+      continue;
+    }
+    failed_stage = i;
+    operation = "shell: prepare";
+    path = stages[i].arguments[0];
+    const char *conflict = selected_stream_conflict(&stages[i], streams[i], i, stage_count);
+    if (!conflict) {
+      bool input_redirect = false;
+      for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+        input_redirect |= stages[i].redirections[j].stream == ENVIRONMENT_STDIN;
+      }
+      bool console_stdin = streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
+      bool pager_input = mode == SHELL_FOREGROUND && i + 1 == stage_count &&
+          streams[i][ENVIRONMENT_STDOUT].protocol == PROTOCOL_CONSOLE &&
+          (i || input_redirect || streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_FILE ||
+           streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_PIPE ||
+           streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_STREAM);
+      bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
+          ((i == 0 && console_stdin) || pager_input);
+      status = preflight_operands(shell, &stages[i], &prepared[i], mode, named_input,
+          streams[i], publication.caller, read_only, &environment, &conflict);
+    } else {
+      status = CALL_ALREADY_EXISTS;
+    }
+    if (conflict) {
+      operation = "shell: CAP entry conflicts; copy the value to a different name:";
+      path = conflict;
+    }
+    if (status != CALL_OK) {
+      goto failed;
+    }
+  }
+
+  for (size_t i = 0; i < stage_count; ++i) {
     for (size_t j = 0; j < stages[i].redirection_count; ++j) {
       const struct shell_redirection *redirect = &stages[i].redirections[j];
       failed_stage = i;
@@ -1227,7 +1472,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       path = redirect->path;
       bool input = redirect->stream == ENVIRONMENT_STDIN;
       if (!input && stages[i].http_producer &&
-          (redirect->capability || http_uri(path))) {
+          legacy_http_redirect(redirect)) {
         if (automatic) {
           status = shell_capability_prepare(shell, body, path, HTTP_PREPARE_POST, NULL, 0, 30);
           if (status != CALL_OK) {
@@ -1236,7 +1481,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         }
         continue;
       }
-      if (input && (redirect->capability || http_uri(path))) {
+      if (input && legacy_http_redirect(redirect)) {
         struct http_prepared opened = {0};
         struct shell_capability *entry = NULL;
         if (redirect->capability) {
@@ -1276,9 +1521,28 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         status = http_prepared_close(&opened);
         response_input = true;
       } else {
-        status = shell_open_redirect(shell, path, input, &prepared[i].redirected[redirect->stream]);
-        streams[i][redirect->stream] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
-          .handle = prepared[i].redirected[redirect->stream]};
+        struct resource_result opened = {0};
+        status = shell_open_redirect_value(shell, redirect, &opened);
+        if (status == CALL_OK) {
+          status = resource_outcome_status(opened.info.description.outcome);
+        }
+        if (status == CALL_OK && opened.info.protocol != PROTOCOL_FILE) {
+          status = CALL_BAD_OPERATION;
+          operation = "shell: typed redirect requires a FILE";
+        }
+        if (status == CALL_OK) {
+          prepared[i].redirected[redirect->stream] = opened.resource;
+          opened.resource = HANDLE_INVALID;
+          streams[i][redirect->stream] = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
+            .handle = prepared[i].redirected[redirect->stream], .append = redirect->append};
+        }
+        enum call_status closed = resource_result_close(&opened);
+        if (closed != CALL_OK) {
+          cleanup_failure = true;
+          if (status == CALL_OK) {
+            status = closed;
+          }
+        }
       }
       if (status != CALL_OK) {
         goto failed;
@@ -1343,22 +1607,6 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     goto failed;
   }
 
-  operation = "shell: network environment";
-  path = stages[0].arguments[0];
-  status = pyxis_environment_snapshot_init(&inherited);
-  if (status != CALL_OK) {
-    goto failed;
-  }
-  status = network_environment_from_capture(&environment, shell->net_config,
-      &inherited.capture, NULL);
-  if (status != CALL_OK) {
-    goto failed;
-  }
-  status = session_wait_environment(&environment, mode == SHELL_SESSION && shell->session_wait);
-  if (status != CALL_OK) {
-    goto failed;
-  }
-
   /* A redirected pipe side is absent from every grant, so its peer sees
    * EOF or a broken reader once the remaining owned endpoint closes. */
   for (size_t i = 0; i < stage_count; ++i) {
@@ -1374,8 +1622,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
         ((i == 0 && console_stdin) || pager_input);
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
-        streams[i], publication.caller, read_only, &environment);
+        streams[i], publication.caller, read_only, &environment, false);
     if (status != CALL_OK) {
+      if (prepared[i].conflict) {
+        operation = "shell: CAP entry conflicts; copy the value to a different name:";
+        path = prepared[i].conflict;
+      }
       goto failed;
     }
     requests[i] = prepared[i].request;
@@ -1389,10 +1641,13 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       if (redirect->stream == ENVIRONMENT_STDIN) {
         continue;
       }
-      if (stages[i].http_producer && (redirect->capability || http_uri(redirect->path))) {
+      if (stages[i].http_producer && legacy_http_redirect(redirect)) {
         continue;
       }
       failed_stage = i;
+      if (redirect->append) {
+        continue;
+      }
       operation = "shell: truncate";
       path = redirect->path;
       status = file_resize(prepared[i].redirected[redirect->stream], 0);
@@ -1679,13 +1934,20 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
   for (size_t i = 0; i < redirection_count; ++i) {
     stage.redirections[i] = redirections[i];
   }
-  return launch_stages(shell, &stage, 1, mode, NULL, false, false, false, outcome, NULL, false);
+  return shell_launch_selected(shell, &stage, mode, outcome);
+}
+
+enum command_result shell_launch_selected(struct shell *shell,
+    const struct shell_stage *stage, enum shell_launch_mode mode, struct shell_outcome *outcome)
+{
+  return launch_stages(shell, stage, 1, mode, NULL, false, false, false, outcome, NULL, false);
 }
 
 enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_command_line *command, struct shell_outcome *outcome)
 {
-  if (!command->stage_count || command->stage_count > LAUNCH_BATCH_MAX || command->background) {
+  if (!command->stage_count || command->stage_count > LAUNCH_BATCH_MAX ||
+      (command->background && command->stage_count != 1)) {
     return shell_error(shell, "shell: Invalid foreground pipeline\n");
   }
   const struct shell_redirection *sink = NULL;
@@ -1693,8 +1955,7 @@ enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_stage *stage = &command->stages[i];
     for (size_t j = 0; j < stage->redirection_count; ++j) {
       const struct shell_redirection *redirect = &stage->redirections[j];
-      if (redirect->stream == ENVIRONMENT_STDIN ||
-          (!redirect->capability && !http_uri(redirect->path))) {
+      if (redirect->stream == ENVIRONMENT_STDIN || !legacy_http_redirect(redirect)) {
         continue;
       }
       if (sink || redirect->stream != ENVIRONMENT_STDOUT || i + 1 != command->stage_count) {
@@ -1708,7 +1969,14 @@ enum command_result shell_launch_pipeline(struct shell *shell,
   }
   if (!sink) {
     return launch_stages(shell, command->stages, command->stage_count,
-        SHELL_FOREGROUND, NULL, false, false, false, outcome, NULL, false);
+        command->background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
+        NULL, false, false, false, outcome, NULL, false);
+  }
+  if (command->background) {
+    return shell_error(shell, "shell: HTTP redirection is unsupported in background commands\n");
+  }
+  if (sink->append) {
+    return shell_error(shell, "shell: HTTP staging does not support append\n");
   }
   if (command->stage_count == LAUNCH_BATCH_MAX) {
     return shell_error(shell, "shell: HTTP staging supports at most seven producer stages\n");
@@ -1739,7 +2007,8 @@ enum command_result shell_launch_pipeline(struct shell *shell,
 }
 
 enum command_result shell_launch_service(struct shell *shell, const char *name,
-    bool replace, bool optional, bool read_only, char **arguments, size_t count)
+    bool replace, bool optional, bool read_only, char **arguments, size_t count,
+    const struct environment_capture *operands)
 {
   if (shell->service == HANDLE_INVALID || shell->clock == HANDLE_INVALID) {
     return shell_error(shell, "service: endpoint or clock authority unavailable\n");
@@ -1774,7 +2043,7 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
       return shell_directory_error(shell, "service", names[i], status);
     }
   }
-  struct shell_stage stage = {.arguments = arguments, .count = count};
+  struct shell_stage stage = {.arguments = arguments, .count = count, .operands = operands};
   return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace, optional, read_only,
       NULL, NULL, false);
 }
