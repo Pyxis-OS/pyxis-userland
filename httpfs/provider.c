@@ -1027,6 +1027,11 @@ static void body_request(struct loop *loop, struct transaction *transaction,
       reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
       return;
     }
+    if (!request.size) {
+      struct file_write_reply response = {0};
+      reply(loop, packet, CALL_OK, &response, sizeof(response), NULL, 0);
+      return;
+    }
     transaction->mutation_offset = request.offset;
     transaction->mutation_size = request.size;
     kind = STAGING_WRITE;
