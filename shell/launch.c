@@ -83,25 +83,17 @@ struct prepared_stage {
 };
 
 static enum call_status publish_service(struct shell *shell, const char *name,
-    bool replace, handle_t target, uint64_t rights, uint64_t transport)
+    handle_t replacement_control, handle_t target, uint64_t rights, uint64_t transport)
 {
+  if (replacement_control != HANDLE_INVALID) {
+    return forwarder_retarget(replacement_control, target);
+  }
   size_t length = strlen(name);
   if (length > ENVIRONMENT_NAME_MAX - (sizeof(".control") - 1)) {
     return CALL_BAD_REQUEST;
   }
   char control_name[ENVIRONMENT_NAME_MAX + 1];
   snprintf(control_name, sizeof(control_name), "%s.control", name);
-  if (replace) {
-    handle_t control = HANDLE_INVALID;
-    enum call_status status = environment_capability(shell->environment, control_name, &control);
-    if (status == CALL_OK) {
-      status = forwarder_retarget(control, target);
-      if (handle_close(control) != 0 && status == CALL_OK) {
-        status = CALL_BAD_HANDLE;
-      }
-    }
-    return status;
-  }
   struct forwarder_reply slot = {0};
   enum call_status status = forwarder_slot(target, rights, transport, 0, &slot);
   if (status != CALL_OK) {
@@ -1371,7 +1363,8 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
 }
 
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
-    size_t stage_count, enum shell_launch_mode mode, const char *service_name, bool replace,
+    size_t stage_count, enum shell_launch_mode mode, const char *service_name,
+    handle_t replacement_control,
     bool optional, bool read_only, struct shell_outcome *outcome,
     struct shell_capability *body, bool automatic)
 {
@@ -1783,7 +1776,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           if (queried == CALL_OK && info.kind == HANDLE_KIND_EXPORTED &&
               grant->transport == HANDLE_TRANSPORT_CALL &&
               info.rights == grant->rights && info.transport == grant->transport) {
-            published = publish_service(shell, service_name, replace,
+            published = publish_service(shell, service_name, replacement_control,
                 grant->handle, grant->rights, grant->transport);
           }
         } else if (setup.status != CALL_OK && packet.grant_count == 0) {
@@ -1812,7 +1805,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     if (published != CALL_OK || reply_status != CALL_OK || !closed || !finished) {
       enum command_result diagnostic = shell_error(shell,
           "service: %s %s failed (status %u, reply %u)\n",
-          replace ? "replace" : "start", service_name, published, reply_status);
+          replacement_control != HANDLE_INVALID ? "replace" : "start",
+          service_name, published, reply_status);
       return !closed || !closed_grants || !finished ? COMMAND_FATAL : diagnostic;
     }
     if (reported_failure) {
@@ -1991,7 +1985,7 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
 enum command_result shell_launch_selected(struct shell *shell,
     const struct shell_stage *stage, enum shell_launch_mode mode, struct shell_outcome *outcome)
 {
-  return launch_stages(shell, stage, 1, mode, NULL, false, false, false, outcome, NULL, false);
+  return launch_stages(shell, stage, 1, mode, NULL, HANDLE_INVALID, false, false, outcome, NULL, false);
 }
 
 enum command_result shell_launch_pipeline(struct shell *shell,
@@ -2021,7 +2015,7 @@ enum command_result shell_launch_pipeline(struct shell *shell,
   if (!sink) {
     return launch_stages(shell, command->stages, command->stage_count,
         command->background ? SHELL_BACKGROUND : SHELL_FOREGROUND,
-        NULL, false, false, false, outcome, NULL, false);
+        NULL, HANDLE_INVALID, false, false, outcome, NULL, false);
   }
   if (command->background) {
     return shell_error(shell, "shell: HTTP redirection is unsupported in background commands\n");
@@ -2054,7 +2048,7 @@ enum command_result shell_launch_pipeline(struct shell *shell,
   stages[command->stage_count] = (struct shell_stage){.arguments = worker_arguments,
       .count = 1, .http_worker = true};
   return launch_stages(shell, stages, command->stage_count + 1,
-      SHELL_FOREGROUND, NULL, false, false, false, outcome, body, !sink->capability);
+      SHELL_FOREGROUND, NULL, HANDLE_INVALID, false, false, outcome, body, !sink->capability);
 }
 
 enum command_result shell_launch_service(struct shell *shell, const char *name,
@@ -2071,30 +2065,72 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
   }
   snprintf(control_name, sizeof(control_name), "%s.control", name);
   const char *names[] = {name, control_name};
+  struct shell_stage stage = {.arguments = arguments, .count = count, .operands = operands};
+  if (replace) {
+    handle_t snapshot = HANDLE_INVALID;
+    handle_t held[2] = {HANDLE_INVALID, HANDLE_INVALID};
+    const char *failed_name = name;
+    enum call_status status = environment_snapshot(shell->environment,
+        ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &snapshot, NULL);
+    for (size_t i = 0; status == CALL_OK && i < 2; ++i) {
+      failed_name = names[i];
+      struct environment_entry_reply entry;
+      status = environment_lookup(snapshot, names[i], &entry, NULL, 0);
+      if (status == CALL_BUFFER_TOO_SMALL ||
+          (status == CALL_OK && entry.kind != ENVIRONMENT_CAP)) {
+        status = CALL_WRONG_TYPE;
+      }
+      if (status == CALL_OK) {
+        held[i] = entry.handle;
+      }
+    }
+    if (status == CALL_OK) {
+      struct handle_info info;
+      status = handle_query(held[1], &info);
+      if (status == CALL_OK && info.protocol != PROTOCOL_FORWARDER) {
+        status = CALL_WRONG_TYPE;
+      } else if (status == CALL_OK && !(info.rights & FORWARDER_RIGHT_RETARGET)) {
+        status = CALL_DENIED;
+      }
+      if (status == CALL_OK) {
+        status = forwarder_match(held[1], held[0]);
+      }
+    }
+    bool closed_snapshot = close_handle(&snapshot);
+    if (!closed_snapshot && status == CALL_OK) {
+      status = CALL_BAD_HANDLE;
+    }
+    /* Both grants stay owned through startup and its publication reply. A
+     * later environment replacement cannot redirect this management operation. */
+    enum command_result result = status == CALL_OK ?
+        launch_stages(shell, &stage, 1, SHELL_SERVICE, name, held[1], optional, read_only,
+            NULL, NULL, false) :
+        shell_directory_error(shell, "service: replace", failed_name, status);
+    bool closed = close_handle(&held[0]);
+    closed = close_handle(&held[1]) && closed;
+    if (!closed || !closed_snapshot) {
+      shell_directory_error(shell, "service: close replacement", name, CALL_BAD_HANDLE);
+      return COMMAND_FATAL;
+    }
+    return result;
+  }
   for (size_t i = 0; i < 2; ++i) {
     struct environment_entry_reply entry;
     enum call_status status = environment_lookup(shell->environment, names[i], &entry, NULL, 0);
     bool present = status == CALL_OK || status == CALL_BUFFER_TOO_SMALL;
     if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
-      if (replace && i == 1) {
-        struct handle_info info;
-        status = handle_query(entry.handle, &info);
-        if (status == CALL_OK && (info.protocol != PROTOCOL_FORWARDER ||
-            !(info.rights & FORWARDER_RIGHT_RETARGET))) {
-          status = CALL_DENIED;
-        }
+      if (handle_close(entry.handle) != 0) {
+        shell_directory_error(shell, "service: close", names[i], CALL_BAD_HANDLE);
+        return COMMAND_FATAL;
       }
-      handle_close(entry.handle);
     }
-    if (present != replace || (replace && i == 1 && entry.kind != ENVIRONMENT_CAP)) {
-      return shell_directory_error(shell, "service", names[i],
-          replace ? CALL_NOT_FOUND : CALL_ALREADY_EXISTS);
+    if (present) {
+      return shell_directory_error(shell, "service", names[i], CALL_ALREADY_EXISTS);
     }
     if (status != CALL_OK && status != CALL_BUFFER_TOO_SMALL && status != CALL_NOT_FOUND) {
       return shell_directory_error(shell, "service", names[i], status);
     }
   }
-  struct shell_stage stage = {.arguments = arguments, .count = count, .operands = operands};
-  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, replace, optional, read_only,
+  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, HANDLE_INVALID, optional, read_only,
       NULL, NULL, false);
 }
