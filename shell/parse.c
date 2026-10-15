@@ -1,9 +1,17 @@
-#include "shell.h"
+#include "syntax.h"
+#include <stdlib.h>
+#include <string.h>
 
 static bool separator(char character)
 {
   return character == ' ' || character == '\t' || character == '\n' ||
-         character == '\r' || character == '\v' || character == '\f';
+      character == '\r' || character == '\v' || character == '\f';
+}
+
+static bool letter(char character)
+{
+  return (character >= 'a' && character <= 'z') ||
+      (character >= 'A' && character <= 'Z') || character == '_';
 }
 
 static bool digit(char character)
@@ -11,261 +19,483 @@ static bool digit(char character)
   return character >= '0' && character <= '9';
 }
 
-static const char *background_tail(const char *tail,
-    struct shell_command_line *command)
+static bool name_character(char character)
 {
-  while (separator(*tail)) {
-    ++tail;
+  return letter(character) || digit(character) || character == '.' ||
+      character == '+' || character == '-';
+}
+
+static char *copy_text(const char *text, size_t length)
+{
+  char *copy = malloc(length + 1);
+  if (copy) {
+    memcpy(copy, text, length);
+    copy[length] = 0;
   }
-  if (*tail || !command->stage_count) {
-    return "& requires a preceding command and must end the line";
+  return copy;
+}
+
+static void close_word(struct shell_word *word)
+{
+  if (!word) {
+    return;
   }
-  if (!command->stages[command->stage_count - 1].count) {
-    return "Pipeline stage requires a command";
+  for (size_t i = 0; i < word->count; ++i) {
+    free(word->pieces[i].text);
   }
-  if (command->stage_count > 1) {
-    return "Background pipelines are unsupported";
+  free(word->pieces);
+  free(word->assignment_name);
+  free(word);
+}
+
+void shell_syntax_close(struct shell_syntax *syntax)
+{
+  for (size_t i = 0; i < syntax->count; ++i) {
+    struct shell_syntax_command *command = &syntax->commands[i];
+    for (size_t j = 0; j < command->stage_count; ++j) {
+      struct shell_syntax_stage *stage = &command->stages[j];
+      for (size_t k = 0; k < stage->count; ++k) {
+        close_word(stage->words[k]);
+      }
+      free(stage->words);
+      for (size_t k = 0; k < stage->redirection_count; ++k) {
+        close_word(stage->redirections[k].word);
+      }
+    }
+    free(command->capture);
   }
-  command->background = true;
+  free(syntax->commands);
+  *syntax = (struct shell_syntax){0};
+}
+
+static const char *add_piece(struct shell_word *word, enum shell_piece_kind kind,
+    const char *text, size_t length)
+{
+  if (kind == SHELL_LITERAL && word->count &&
+      word->pieces[word->count - 1].kind == SHELL_LITERAL) {
+    struct shell_piece *last = &word->pieces[word->count - 1];
+    size_t previous = strlen(last->text);
+    char *combined = realloc(last->text, previous + length + 1);
+    if (!combined) {
+      return "Out of memory";
+    }
+    memcpy(combined + previous, text, length);
+    combined[previous + length] = 0;
+    last->text = combined;
+    return NULL;
+  }
+  char *copy = copy_text(text, length);
+  if (!copy) {
+    return "Out of memory";
+  }
+  struct shell_piece *pieces = realloc(word->pieces,
+      (word->count + 1) * sizeof(*pieces));
+  if (!pieces) {
+    free(copy);
+    return "Out of memory";
+  }
+  word->pieces = pieces;
+  pieces[word->count++] = (struct shell_piece){kind, copy};
   return NULL;
 }
 
-static const char *begin_redirection(struct shell_stage *stage,
-    struct shell_redirection **pending, enum environment_stream_index stream,
-    const char *tail)
+static const char *parse_sequence(const char **cursor, bool nested,
+    struct shell_syntax *syntax);
+
+static const char *parse_word(const char **cursor, struct shell_word **result)
 {
-  if (!stage->count) {
-    return "Redirection requires a preceding command";
+  struct shell_word *word = calloc(1, sizeof(*word));
+  if (!word) {
+    return "Out of memory";
   }
-  if (*pending) {
-    return "Redirection requires a filename";
+  *result = word;
+  word->plain = true;
+  const char *read = *cursor;
+  const char *name_end = read;
+  while (name_character(*name_end)) {
+    ++name_end;
   }
-  if (*tail == '<' || *tail == '>' || *tail == '&' || *tail == '|') {
-    return "Unsupported operator";
+  if (name_end != read && *name_end == '=' && name_end[1] != '>') {
+    if ((size_t)(name_end - read) > ENVIRONMENT_NAME_MAX) {
+      return "Environment name is too long";
+    }
+    word->assignment_name = copy_text(read, name_end - read);
+    if (!word->assignment_name) {
+      return "Out of memory";
+    }
+    read = name_end + 1;
   }
-  for (size_t i = 0; i < stage->redirection_count; ++i) {
-    if (stage->redirections[i].stream == stream) {
-      return "Duplicate redirection";
+  char quote = 0;
+  const char *error = NULL;
+  while (*read && (quote || (!separator(*read) && *read != '<' && *read != '>' &&
+      *read != '&' && *read != '|' && *read != ';' && *read != ')' &&
+      !(*read == '=' && read[1] == '>')))) {
+    char character = *read++;
+    if (character == '\\' && quote != '\'') {
+      word->plain = false;
+      if (!*read) {
+        return "Unfinished escape";
+      }
+      error = add_piece(word, SHELL_LITERAL, read++, 1);
+    } else if (quote && character == quote) {
+      quote = 0;
+    } else if (!quote && (character == '\'' || character == '"')) {
+      quote = character;
+      word->plain = false;
+    } else if (character == '$' && quote != '\'') {
+      word->plain = false;
+      if (*read == '(') {
+        ++read;
+        const char *start = read;
+        struct shell_syntax nested = {0};
+        error = parse_sequence(&read, true, &nested);
+        bool empty = !nested.count;
+        shell_syntax_close(&nested);
+        if (!error && empty) {
+          error = "Command substitution requires a command";
+        }
+        if (!error) {
+          error = add_piece(word, SHELL_SUBSTITUTION, start, read - start - 1);
+        }
+      } else if (*read == '{') {
+        const char *start = ++read;
+        while (name_character(*read)) {
+          ++read;
+        }
+        if (*read != '}' || read == start ||
+            (size_t)(read - start) > ENVIRONMENT_NAME_MAX) {
+          return "Invalid braced environment name";
+        }
+        error = add_piece(word, SHELL_VARIABLE, start, read - start);
+        ++read;
+      } else if (letter(*read)) {
+        const char *start = read++;
+        while (letter(*read) || digit(*read)) {
+          ++read;
+        }
+        if ((size_t)(read - start) > ENVIRONMENT_NAME_MAX) {
+          return "Environment name is too long";
+        }
+        error = add_piece(word, SHELL_VARIABLE, start, read - start);
+      } else if (digit(*read)) {
+        return "Positional expansion is unsupported";
+      } else {
+        error = add_piece(word, SHELL_LITERAL, "$", 1);
+      }
+    } else {
+      error = add_piece(word, SHELL_LITERAL, &character, 1);
+    }
+    if (error) {
+      return error;
     }
   }
-  *pending = &stage->redirections[stage->redirection_count++];
-  (*pending)->stream = stream;
-  (*pending)->path = NULL;
+  if (quote) {
+    return "Unfinished quote";
+  }
+  *cursor = read;
   return NULL;
 }
 
-static const char *begin_next_stage(char **arguments, size_t *used,
-    struct shell_command_line *command, const char *tail)
+static bool word_is(const struct shell_word *word, const char *text)
 {
-  if (*tail == '|' || *tail == '&') {
-    return "Unsupported operator";
+  if (word->assignment_name) {
+    return false;
   }
-  if (!command->stage_count || !command->stages[command->stage_count - 1].count) {
+  size_t offset = 0;
+  for (size_t i = 0; i < word->count; ++i) {
+    const struct shell_piece *piece = &word->pieces[i];
+    if (piece->kind != SHELL_LITERAL) {
+      return false;
+    }
+    size_t length = strlen(piece->text);
+    if (length > strlen(text) - offset ||
+        strncmp(text + offset, piece->text, length)) {
+      return false;
+    }
+    offset += length;
+  }
+  return !text[offset];
+}
+
+static const char *restore_assignment(struct shell_word *word)
+{
+  if (!word->assignment_name) {
+    return NULL;
+  }
+  size_t length = strlen(word->assignment_name);
+  char prefix[ENVIRONMENT_NAME_MAX + 2];
+  memcpy(prefix, word->assignment_name, length);
+  prefix[length++] = '=';
+  prefix[length] = 0;
+  char *text = copy_text(prefix, length);
+  if (!text) {
+    return "Out of memory";
+  }
+  struct shell_piece *pieces = realloc(word->pieces,
+      (word->count + 1) * sizeof(*pieces));
+  if (!pieces) {
+    free(text);
+    return "Out of memory";
+  }
+  word->pieces = pieces;
+  memmove(pieces + 1, pieces, word->count * sizeof(*pieces));
+  pieces[0] = (struct shell_piece){SHELL_LITERAL, text};
+  ++word->count;
+  free(word->assignment_name);
+  word->assignment_name = NULL;
+  return NULL;
+}
+
+static const char *finish_command(struct shell_syntax_command *command)
+{
+  if (!command->stage_count ||
+      !command->stages[command->stage_count - 1].count) {
     return "Pipeline stage requires a command";
   }
-  if (command->stage_count == LAUNCH_BATCH_MAX) {
-    return "Too many pipeline stages";
+  struct shell_syntax_stage *first = &command->stages[0];
+  command->assignment = first->words[0]->assignment_name != NULL;
+  bool exporting = word_is(first->words[0], "export");
+  if (command->assignment && (command->stage_count != 1 || first->count != 1 ||
+      first->redirection_count || command->background || command->capture)) {
+    return "Assignments must be standalone commands";
   }
-  arguments[(*used)++] = NULL;
-  command->stages[command->stage_count++] =
-      (struct shell_stage){.arguments = arguments + *used};
+  if (exporting && (command->stage_count != 1 || first->redirection_count ||
+      command->background || command->capture)) {
+    return "export must be a standalone foreground command";
+  }
+  if (!command->assignment && !exporting) {
+    for (size_t i = 0; i < command->stage_count; ++i) {
+      struct shell_syntax_stage *stage = &command->stages[i];
+      if (stage->words[0]->assignment_name) {
+        return "Assignments must be standalone commands";
+      }
+      for (size_t j = 1; j < stage->count; ++j) {
+        const char *error = restore_assignment(stage->words[j]);
+        if (error) {
+          return error;
+        }
+      }
+    }
+  }
   return NULL;
 }
 
-const char *parse_line(char *line, char **arguments, size_t capacity,
-    struct shell_command_line *command)
+static const char *parse_sequence(const char **cursor, bool nested,
+    struct shell_syntax *syntax)
 {
-  char *read = line, *write = line;
-  struct shell_redirection *pending = NULL;
-  size_t used = 0;
+  const char *read = *cursor;
+  struct shell_syntax_command *command = NULL;
+  struct shell_syntax_redirection *pending = NULL;
   bool capture_pending = false;
-  command->stage_count = 0;
-  command->background = false;
-  command->capture = NULL;
-  if (!capacity) {
-    return "Too many arguments";
-  }
-
   for (;;) {
     while (separator(*read)) {
       ++read;
     }
-    if (!*read) {
-      break;
+    if (!*read || (nested && *read == ')')) {
+      if (pending) {
+        return "Redirection requires a filename";
+      }
+      if (capture_pending) {
+        return "=> requires a name";
+      }
+      if (command) {
+        const char *error = finish_command(command);
+        if (error) {
+          return error;
+        }
+      }
+      if (nested && !*read) {
+        return "Unfinished command substitution";
+      }
+      *cursor = read + (nested ? 1 : 0);
+      return NULL;
+    }
+    if (*read == ')') {
+      return "Unexpected closing parenthesis";
+    }
+    if (*read == ';') {
+      if (!command) {
+        return "Semicolon requires a preceding command";
+      }
+      if (pending || capture_pending) {
+        return pending ? "Redirection requires a filename" : "=> requires a name";
+      }
+      const char *error = finish_command(command);
+      if (error) {
+        return error;
+      }
+      command = NULL;
+      ++read;
+      continue;
+    }
+    if (!command) {
+      struct shell_syntax_command *commands = realloc(syntax->commands,
+          (syntax->count + 1) * sizeof(*commands));
+      if (!commands) {
+        return "Out of memory";
+      }
+      syntax->commands = commands;
+      command = &commands[syntax->count++];
+      *command = (struct shell_syntax_command){.stage_count = 1};
+    }
+    struct shell_syntax_stage *stage = &command->stages[command->stage_count - 1];
+    if (command->background) {
+      return "& must end the line";
     }
     if (command->capture) {
       return "=> name must end the foreground command";
     }
+    if (*read == '&') {
+      if (read[1] == '&') {
+        return "Unsupported operator";
+      }
+      if (pending || capture_pending || !stage->count || command->stage_count > 1) {
+        return "& requires one completed command";
+      }
+      command->background = true;
+      ++read;
+      while (separator(*read)) {
+        ++read;
+      }
+      if (*read && !(nested && *read == ')')) {
+        return "& must end the line";
+      }
+      continue;
+    }
+    if (*read == '|') {
+      if (read[1] == '|' || read[1] == '&') {
+        return "Unsupported operator";
+      }
+      if (pending || capture_pending || !stage->count) {
+        return "Pipeline stage requires a command";
+      }
+      if (command->stage_count == LAUNCH_BATCH_MAX) {
+        return "Too many pipeline stages";
+      }
+      ++command->stage_count;
+      ++read;
+      continue;
+    }
     if (*read == '=' && read[1] == '>') {
-      if (pending || capture_pending || !command->stage_count ||
-          !command->stages[command->stage_count - 1].count) {
+      if (pending || capture_pending || !stage->count) {
         return "=> requires a completed foreground command";
       }
       capture_pending = true;
       read += 2;
       continue;
     }
-    if (capture_pending && (*read == '&' || *read == '|' || *read == '<' || *read == '>')) {
-      return "=> requires a name";
+    const char *operator = read;
+    while (digit(*operator)) {
+      ++operator;
     }
-    if (*read == '&') {
-      if (pending) {
-        return "Redirection requires a filename";
+    if (*operator == '<' || *operator == '>') {
+      if (pending || capture_pending || !stage->count) {
+        return "Redirection requires a preceding command and filename";
       }
-      const char *error = background_tail(read + 1, command);
-      if (!error) {
-        arguments[used] = NULL;
-      }
-      return error;
-    }
-    if (*read == '|') {
-      if (pending) {
-        return "Redirection requires a filename";
-      }
-      const char *error = begin_next_stage(arguments, &used, command, read + 1);
-      if (error) {
-        return error;
-      }
-      ++read;
-      continue;
-    }
-    if (*read == '<' || *read == '>') {
-      char operator = *read++;
-      struct shell_stage *stage = command->stage_count ?
-          &command->stages[command->stage_count - 1] : NULL;
-      if (!stage) {
-        return "Redirection requires a preceding command";
-      }
-      const char *error = begin_redirection(stage, &pending,
-          operator == '<' ? ENVIRONMENT_STDIN : ENVIRONMENT_STDOUT, read);
-      if (error) {
-        return error;
-      }
-      continue;
-    }
-    if (digit(*read)) {
-      char *after_digits = read;
-      while (digit(*after_digits)) {
-        ++after_digits;
-      }
-      if (*after_digits == '<' || *after_digits == '>') {
-        if (after_digits != read + 1 || *read != '2' || *after_digits != '>') {
+      enum environment_stream_index stream = *operator == '<' ?
+          ENVIRONMENT_STDIN : ENVIRONMENT_STDOUT;
+      if (operator != read) {
+        if (operator != read + 1 || *read != '2' || *operator != '>') {
           return "Unsupported descriptor redirection";
         }
-        read = after_digits + 1;
-        struct shell_stage *stage = command->stage_count ?
-            &command->stages[command->stage_count - 1] : NULL;
-        if (!stage) {
-          return "Redirection requires a preceding command";
-        }
-        const char *error = begin_redirection(stage, &pending, ENVIRONMENT_STDERR, read);
-        if (error) {
-          return error;
-        }
-        continue;
+        stream = ENVIRONMENT_STDERR;
       }
-    }
-
-    char *word = write;
-    char quote = 0;
-    bool literal = false;
-    while (*read && (quote || (!separator(*read) && *read != '<' && *read != '>' &&
-        *read != '&' && *read != '|' && !(*read == '=' && read[1] == '>')))) {
-      char character = *read++;
-      if (character == '\\' && quote != '\'') {
-        literal = true;
-        if (!*read) {
-          return "Unfinished escape";
+      bool append = *operator == '>' && operator[1] == '>';
+      read = operator + (append ? 2 : 1);
+      if (*read == '<' || *read == '>' || *read == '&' || *read == '|') {
+        return "Unsupported operator";
+      }
+      for (size_t i = 0; i < stage->redirection_count; ++i) {
+        if (stage->redirections[i].stream == stream) {
+          return "Duplicate redirection";
         }
-        *write++ = *read++;
-      } else if (quote && character == quote) {
-        quote = 0;
-      } else if (!quote && (character == '\'' || character == '"')) {
-        quote = character;
-        literal = true;
-      } else {
-        *write++ = character;
       }
+      pending = &stage->redirections[stage->redirection_count++];
+      *pending = (struct shell_syntax_redirection){.stream = stream, .append = append};
+      continue;
     }
-    if (quote) {
-      return "Unfinished quote";
+    struct shell_word *word = NULL;
+    const char *error = parse_word(&read, &word);
+    if (error) {
+      close_word(word);
+      return error;
     }
-
-    /* Consume the delimiter before writing NUL: uncompacted input can leave
-     * read and write pointing at the same operator or separator byte. */
-    char delimiter = *read;
-    bool capture_operator = delimiter == '=' && read[1] == '>';
-    if (delimiter) {
-      ++read;
-      if (capture_operator) {
-        ++read;
-      }
-    }
-    *write++ = '\0';
-
     if (capture_pending) {
-      if (literal || write == word + 1) {
+      char name[ENVIRONMENT_NAME_MAX + 1];
+      size_t length = 0;
+      if (!word->plain || word->assignment_name) {
+        close_word(word);
         return "=> requires an unquoted capability name";
       }
-      command->capture = word;
+      for (size_t i = 0; i < word->count; ++i) {
+        size_t size = strlen(word->pieces[i].text);
+        if (size > ENVIRONMENT_NAME_MAX - length) {
+          close_word(word);
+          return "=> capability name is too long";
+        }
+        memcpy(name + length, word->pieces[i].text, size);
+        length += size;
+      }
+      name[length] = 0;
+      char checked[ENVIRONMENT_NAME_MAX + 1];
+      if (!environment_name(checked, name)) {
+        close_word(word);
+        return "=> requires a valid capability name";
+      }
+      command->capture = copy_text(name, length);
+      close_word(word);
+      if (!command->capture) {
+        return "Out of memory";
+      }
       capture_pending = false;
     } else if (pending) {
-      if (write == word + 1) {
-        return "Redirection requires a filename";
+      error = restore_assignment(word);
+      if (error) {
+        close_word(word);
+        return error;
       }
-      pending->path = word;
-      pending->capability = !literal && word[0] == '@';
+      pending->word = word;
       pending = NULL;
     } else {
-      if (used >= capacity - 1) {
-        return "Too many arguments";
+      struct shell_word **words = realloc(stage->words,
+          (stage->count + 1) * sizeof(*words));
+      if (!words) {
+        close_word(word);
+        return "Out of memory";
       }
-      if (!command->stage_count) {
-        command->stages[command->stage_count++] =
-            (struct shell_stage){.arguments = arguments};
-      }
-      arguments[used++] = word;
-      ++command->stages[command->stage_count - 1].count;
+      stage->words = words;
+      stage->words[stage->count++] = word;
     }
+  }
+}
 
-    if (command->capture && delimiter && !separator(delimiter)) {
-      return "=> name must end the foreground command";
-    }
-    if (capture_operator) {
-      if (pending || !command->stages[command->stage_count - 1].count) {
-        return "=> requires a completed foreground command";
-      }
-      capture_pending = true;
-    } else if (delimiter == '<' || delimiter == '>') {
-      const char *error = begin_redirection(&command->stages[command->stage_count - 1],
-          &pending,
-          delimiter == '<' ? ENVIRONMENT_STDIN : ENVIRONMENT_STDOUT, read);
-      if (error) {
-        return error;
-      }
-    } else if (delimiter == '&') {
-      const char *error = background_tail(read, command);
-      if (!error) {
-        arguments[used] = NULL;
-      }
-      return error;
-    } else if (delimiter == '|') {
-      const char *error = begin_next_stage(arguments, &used, command, read);
-      if (error) {
-        return error;
+const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax)
+{
+  *syntax = (struct shell_syntax){0};
+  const char *cursor = line;
+  const char *error = parse_sequence(&cursor, false, syntax);
+  if (!error) {
+    /* Refuse dependent forms only after validating the complete submission. */
+    for (size_t i = 0; i < syntax->count && !error; ++i) {
+      const struct shell_syntax_command *command = &syntax->commands[i];
+      for (size_t j = 0; j < command->stage_count && !error; ++j) {
+        const struct shell_syntax_stage *stage = &command->stages[j];
+        size_t total = stage->count + stage->redirection_count;
+        for (size_t k = 0; k < total && !error; ++k) {
+          const struct shell_word *word = k < stage->count ? stage->words[k] :
+              stage->redirections[k - stage->count].word;
+          for (size_t p = 0; p < word->count; ++p) {
+            if (word->pieces[p].kind == SHELL_SUBSTITUTION) {
+              error = "Command substitution requires the pending capture prerequisites";
+              break;
+            }
+          }
+        }
       }
     }
   }
-
-  if (capture_pending) {
-    return "=> requires a name";
+  if (error) {
+    shell_syntax_close(syntax);
   }
-  if (pending) {
-    return "Redirection requires a filename";
-  }
-  if (command->stage_count && !command->stages[command->stage_count - 1].count) {
-    return "Pipeline stage requires a command";
-  }
-  arguments[used] = NULL;
-  return NULL;
+  return error;
 }
