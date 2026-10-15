@@ -85,7 +85,7 @@ struct prepared_stage {
 };
 
 struct launch_scope {
-  bool capture;
+  bool capture, append;
   handle_t producer;
   struct execution_group_create_reply group;
   bool evaluated, started, retired, stop_failed;
@@ -1558,7 +1558,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       if (scope && scope->capture && i + 1 == stage_count &&
           stream == ENVIRONMENT_STDOUT && !explicit_stream) {
         streams[i][stream] = (struct pyxis_stdio_binding){
-          .protocol = PROTOCOL_FILE, .handle = scope->producer,
+          .protocol = PROTOCOL_FILE, .handle = scope->producer, .append = scope->append,
         };
         continue;
       }
@@ -2425,7 +2425,8 @@ enum command_result shell_launch_capture(struct shell *shell,
     *error_status = status;
     return shell_directory_error(shell, "shell: capture output", "", status);
   }
-  struct launch_scope scope = {.capture = true, .producer = stdout_producer};
+  struct launch_scope scope = {.capture = true, .producer = stdout_producer,
+      .append = producer_status.mode == OUTPUT_MODE_BYTES};
   handle_t launcher = shell->child_launcher != HANDLE_INVALID ?
       shell->child_launcher : shell->launcher;
   status = launcher_create_group(launcher, &scope.group);
