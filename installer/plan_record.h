@@ -24,7 +24,8 @@ bool install_plan_record_valid(const struct install_plan_record *record);
  * "pyxis-install-plan 1\n" and "end\n". Revision bytes and IDs use lowercase
  * hex. Coexistence, ESP rebuild, selected GPT slots/attributes and the frozen
  * payload attempt are mandatory; earlier printed plans must be regenerated.
- * The attempt is 32 lowercase hex digits for every new payload, including Update.
+ * The attempt is 32 lowercase hex digits for coexistence, including Update.
+ * Classic currently emits an unused all-zero value and keeps fixed boot paths.
  * Parsing stops at the end marker and changes OUTPUT only on success;
  * any following input belongs to the caller, never to this plan. */
 bool install_plan_record_parse(FILE *input, struct install_plan_record *output);
