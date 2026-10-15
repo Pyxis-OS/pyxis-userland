@@ -20,6 +20,10 @@ struct install_esp_payload_digest {
 
 struct install_esp_payload_request {
   handle_t root, control;
+  /* Private native RAM parent with CREATE|REMOVE|READ_FILES|WRITE_FILES and
+   * FILESYSTEM_INFO, borrowed only during stage. One FILE is created and
+   * unlinked before any payload bytes are placed in it. */
+  handle_t workspace;
   /* Frozen, issuer-bound OBSERVE facts, not caller-authored authority. */
   struct mount_state_reply expected;
   const char *revision, *attempt;
@@ -62,10 +66,11 @@ bool install_esp_payload_space(const struct install_esp_payload_request *request
 
 /* Initialize *result to NULL. The request, source descriptors and bytes stay
  * unchanged through stage. Retain the hash_init() context through the final
- * verify call. Root/control are borrowed and must outlive the result. The helper verifies the
- * bound root and reviewed target, creates one fresh attempt, syncs and reopens
- * each retained object before checking its exact extent/hash. No REMOVE rights,
- * raw access, admission, BEGIN/CHECK/END, configuration or activation.
+ * verify call. Root/control are borrowed and must outlive the result. The helper
+ * retains its own unlinked RAM FILE for transfer and verification. It verifies
+ * the bound root and reviewed target, creates one fresh attempt, syncs and
+ * reopens each retained object before checking its exact extent/hash. No ESP
+ * REMOVE rights, raw access, admission, BEGIN/CHECK/END, configuration or activation.
  * Root and traversal handles need ENUMERATE to check canonical parent names;
  * an 8.3 alias of another name is refused. Stage is synchronous and does not
  * poll cancellation input after the caller confirms Apply.
@@ -76,7 +81,8 @@ bool install_esp_payload_space(const struct install_esp_payload_request *request
 bool install_esp_payload_stage(const struct install_esp_payload_request *request,
     struct install_esp_payloads **result, struct install_esp_payload_report *report);
 /* Rechecks issuer-bound facts, canonical names, retained identities and bytes.
- * Source handles/memory are no longer needed. No writes or interval management. */
+ * Source handles/memory are no longer needed. Writes only the retained private
+ * RAM workspace; no ESP writes or interval management. */
 bool install_esp_payload_verify(const struct install_esp_payloads *result,
     struct install_esp_payload_report *report);
 const struct install_esp_payload_record *install_esp_payload_record(

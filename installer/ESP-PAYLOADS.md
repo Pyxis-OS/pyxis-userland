@@ -5,21 +5,31 @@ optional entry.txt, in one freshly created EFI/pyxis/REVISION/ATTEMPT directory.
 The plan-time path builder supplies the same layout without opening anything.
 Revision is a portable ASCII FAT component of at most 63 bytes (not config);
 attempt is exactly 32 lowercase hex digits. Collisions refuse, without retry.
-Every payload is nonempty and at most 1 GiB. Target verification rounds
-`FILE_READ_MAX_BYTES` down to the trusted OBSERVE device block size when that
-block fits the transport (512-byte blocks use 3,584-byte requests). Larger
-blocks keep the transport maximum. Source checks use `FILE_READ_MAX_BYTES`;
-copy chunks also fit `FILE_WRITE_MAX_BYTES`, avoiding an extra tail write.
-Sequential writes grow each fresh empty file; there is no full-file resize
-whose single mutation plan would grow with the entire payload.
+Every payload is nonempty and at most 1 GiB. Source checks and hashing use
+`FILE_READ_MAX_BYTES`. Staging uses native FILE-to-FILE transfers of at most
+`FILE_TRANSFER_MAX_BYTES` (1 MiB), from RAM/initrd into FAT32. Each confirmed
+range is hashed from the source through small READ messages. Verification
+transfers FAT32 into a private RAM FILE in at most 1 MiB chunks, then hashes
+only confirmed bytes through small RAM READ messages. Unsupported backing
+combinations refuse without falling back to small FAT operations. Transfers
+grow each fresh empty FAT file; there is no full-file resize whose single
+mutation plan would grow with the entire payload.
 
 The trusted caller supplies borrowed native root/control capabilities, retained
-OBSERVE admission identity/geometry, reviewed sources and SHA-256 digests. The
-helper re-observes immutable target facts and lifecycle state; it also reopens
+OBSERVE admission identity/geometry, reviewed sources and SHA-256 digests.
+It also supplies a private native RAM directory with
+CREATE|REMOVE|READ_FILES|WRITE_FILES|FILESYSTEM_INFO, borrowed during stage.
+The helper validates RAM backing, creates `esp-transfer` and immediately
+unlinks its name before placing any bytes in it. The opaque result retains
+that FILE for transfers and verification until close. Caller memory sources
+are first copied and hashed into this RAM FILE. The trusted bootstrap creates
+the private `config_snapshot_parent` and explicitly passes only its typed
+directory grant through the selector; no broad RAM root reaches the installer.
+The helper re-observes immutable target facts and lifecycle state; it also reopens
 the control's root to compare held domain/object identity. It never accepts a
 path as authority or substitutes another target. Stage requires native
 LOOKUP|ENUMERATE|READ_FILES|CREATE|WRITE_FILES on the root and
-OPEN_ROOT|OBSERVE|WRITE on the control. No REMOVE grant is needed. Verification
+OPEN_ROOT|OBSERVE|WRITE on the control. No ESP REMOVE grant is needed. Verification
 traverses with read/enumeration rights. Each reused parent is selected from its
 enumerated canonical name with ASCII FAT case folding, at stage-open and each
 verification. An 8.3 alias of a different canonical name is never admitted;
@@ -48,7 +58,8 @@ effects. This reserves no space and does not replace stage-time error handling.
 
 Stage returns an owned opaque result even on partial failure when allocated.
 It retains the attempt and file references needed for object-ID comparison;
-verification reopens canonical names and checks their identities and bytes.
+verification reopens canonical names and checks their identities and bytes,
+using the retained private RAM FILE without writing the ESP.
 The public record is descriptive evidence: staged_verified records stage-time
 success, not a permanent attestation. Call verify again at the caller's final
 publication boundary. Borrowed root/control must outlive close; original
