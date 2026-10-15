@@ -1690,8 +1690,8 @@ static bool progress_reads(struct loop *loop)
     }
     struct endpoint_packet *packet = &transaction->work->read;
     if (loop->ram_backing) {
-      /* Frozen private RAM reads copy without scheduling or allocation. Keep
-       * NPFS reads and all growing writes on the completion path. */
+      /* Frozen private RAM reads copy without scheduling or allocation;
+       * persistent backing still uses completion-based I/O. */
       struct {
         struct file_read_reply reply;
         unsigned char data[FILE_READ_MAX_BYTES];
