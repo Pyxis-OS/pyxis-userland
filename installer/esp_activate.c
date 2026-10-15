@@ -1,4 +1,5 @@
 #include "esp_activate.h"
+#include "esp_directory.h"
 #include "digest.h"
 
 #include <directory.h>
@@ -8,7 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ACTIVATE_DIRECTORY_READ (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES)
+#define ACTIVATE_DIRECTORY_READ (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
+    DIRECTORY_RIGHT_READ_FILES)
 #define ACTIVATE_DIRECTORY_WRITE (ACTIVATE_DIRECTORY_READ | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
 #define ACTIVATE_CONTROL_RIGHTS (MOUNT_RIGHT_OPEN_ROOT | MOUNT_RIGHT_OBSERVE | MOUNT_RIGHT_WRITE)
 #define ACTIVATE_IO_BYTES 3072u
@@ -192,13 +194,8 @@ static enum call_status stream_payload(const struct install_source *source, hand
 
 static enum call_status classic_directory(handle_t parent, const char *name, handle_t *child)
 {
-  enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_DIRECTORY,
-      ACTIVATE_DIRECTORY_WRITE, child);
-  if (status == CALL_NOT_FOUND) {
-    status = directory_create(parent, name, DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_WRITE, child);
-  }
-  return status;
+  return install_esp_child_open(parent, name, DIRECTORY_KIND_DIRECTORY,
+      ACTIVATE_DIRECTORY_WRITE, true, child);
 }
 
 bool install_esp_classic_stage(const struct install_esp_activation_request *request,
@@ -272,12 +269,8 @@ bool install_esp_classic_stage(const struct install_esp_activation_request *requ
   }
   for (unsigned i = 0; status == CALL_OK && i < INSTALL_ESP_CLASSIC_PAYLOAD_COUNT; ++i) {
     handle_t parent = i == INSTALL_ESP_CLASSIC_EFI ? result->efi_boot : result->boot;
-    status = directory_lookup(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ | FILE_RIGHT_WRITE, &result->files[i]);
-    if (status == CALL_NOT_FOUND) {
-      status = directory_create(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
-          FILE_RIGHT_READ | FILE_RIGHT_WRITE, &result->files[i]);
-    }
+    status = install_esp_child_open(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ | FILE_RIGHT_WRITE, true, &result->files[i]);
     if (status == CALL_OK) {
       status = stream_payload(&request->payloads[i], result->files[i],
           &result->payloads[i], FILE_READ_MAX_BYTES);
@@ -322,29 +315,29 @@ bool install_esp_classic_verify(struct install_esp_classic_files *result,
   handle_t efi = HANDLE_INVALID, efi_boot = HANDLE_INVALID;
   handle_t boot = HANDLE_INVALID, limine = HANDLE_INVALID;
   if (status == CALL_OK) {
-    status = directory_lookup(result->root, "EFI", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &efi);
+    status = install_esp_child_open(result->root, "EFI", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, false, &efi);
   }
   if (status == CALL_OK) {
     status = same_object(result->efi, efi, true, result->expected.domain);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(efi, "BOOT", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &efi_boot);
+    status = install_esp_child_open(efi, "BOOT", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, false, &efi_boot);
   }
   if (status == CALL_OK) {
     status = same_object(result->efi_boot, efi_boot, true, result->expected.domain);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(result->root, "boot", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &boot);
+    status = install_esp_child_open(result->root, "boot", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, false, &boot);
   }
   if (status == CALL_OK) {
     status = same_object(result->boot, boot, true, result->expected.domain);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(boot, "limine", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &limine);
+    status = install_esp_child_open(boot, "limine", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, false, &limine);
   }
   if (status == CALL_OK) {
     status = same_object(result->limine, limine, true, result->expected.domain);
@@ -356,8 +349,8 @@ bool install_esp_classic_verify(struct install_esp_classic_files *result,
   for (unsigned i = 0; status == CALL_OK && i < INSTALL_ESP_CLASSIC_PAYLOAD_COUNT; ++i) {
     handle_t file = HANDLE_INVALID;
     handle_t parent = i == INSTALL_ESP_CLASSIC_EFI ? efi_boot : boot;
-    status = directory_lookup(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &file);
+    status = install_esp_child_open(parent, classic_payload_names[i], DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, false, &file);
     if (status == CALL_OK) {
       status = same_object(result->files[i], file, false, result->expected.domain);
     }
@@ -402,12 +395,8 @@ bool install_esp_classic_close(struct install_esp_classic_files *result)
 static enum call_status write_text(handle_t parent, const char *name,
     const char *text, size_t bytes, handle_t *file)
 {
-  enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ | FILE_RIGHT_WRITE, file);
-  if (status == CALL_NOT_FOUND) {
-    status = directory_create(parent, name, DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ | FILE_RIGHT_WRITE, file);
-  }
+  enum call_status status = install_esp_child_open(parent, name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ | FILE_RIGHT_WRITE, true, file);
   for (size_t offset = 0; status == CALL_OK && offset < bytes;) {
     size_t wanted = bytes - offset;
     if (wanted > ACTIVATE_IO_BYTES) {
@@ -435,8 +424,8 @@ static enum call_status verify_text(handle_t parent, const char *name, handle_t 
     const char *text, size_t bytes, uint64_t domain)
 {
   handle_t file = HANDLE_INVALID;
-  enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &file);
+  enum call_status status = install_esp_child_open(parent, name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ, false, &file);
   uint64_t size = 0;
   if (status == CALL_OK) {
     status = same_object(held, file, false, domain);
@@ -494,12 +483,12 @@ bool install_esp_activate_classic(const struct install_esp_activation_request *r
     status = current_target(request->root, request->control, &request->expected);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(request->root, "boot", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_WRITE, &boot);
+    status = install_esp_child_open(request->root, "boot", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_WRITE, false, &boot);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(boot, "limine", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_WRITE, &limine);
+    status = install_esp_child_open(boot, "limine", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_WRITE, false, &limine);
   }
   if (status == CALL_OK) {
     status = write_text(boot, "revision", request->revision, request->revision_bytes, &revision);
@@ -521,15 +510,15 @@ bool install_esp_activate_classic(const struct install_esp_activation_request *r
     status = current_target(request->root, request->control, &request->expected);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(request->root, "boot", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &reopened_boot);
+    status = install_esp_child_open(request->root, "boot", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, false, &reopened_boot);
   }
   if (status == CALL_OK) {
     status = same_object(boot, reopened_boot, true, request->expected.domain);
   }
   if (status == CALL_OK) {
-    status = directory_lookup(reopened_boot, "limine", DIRECTORY_KIND_DIRECTORY,
-        ACTIVATE_DIRECTORY_READ, &reopened_limine);
+    status = install_esp_child_open(reopened_boot, "limine", DIRECTORY_KIND_DIRECTORY,
+        ACTIVATE_DIRECTORY_READ, false, &reopened_limine);
   }
   if (status == CALL_OK) {
     status = same_object(limine, reopened_limine, true, request->expected.domain);
