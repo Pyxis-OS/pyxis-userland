@@ -1141,63 +1141,14 @@ static enum inspection update_system(struct pool_view *pool, const struct npfs_v
   return walked == cleanup_count ? INSPECT_OK : INSPECT_DAMAGED;
 }
 
-bool install_scan_update(const struct install_disk *disk, struct install_update *update)
+static bool scan_update_pool(const struct install_disk *disk, struct install_update *update)
 {
-  memset(update, 0, sizeof(*update));
-  update->reason = "disk is not writable with reliable flush support";
-  uint64_t required = DISK_FLAG_WRITABLE | DISK_FLAG_FLUSH_SUPPORTED;
-  if (disk->info.preparation != DISK_READY || (disk->info.flags & required) != required ||
-      (disk->info.flags & (DISK_FLAG_WRITE_FAILED | DISK_FLAG_MOUNTED))) {
-    return true;
-  }
-  if ((disk->info.block_size != 512 && disk->info.block_size != NPFS_BLOCK_SIZE) ||
-      disk->info.block_count < 3 || disk->info.block_count > UINT64_MAX / disk->info.block_size ||
-      disk->bytes != disk->info.block_count * disk->info.block_size) {
-    update->reason = "unsupported disk geometry";
+  struct pool_view *pool = calloc(1, sizeof(*pool));
+  if (!pool) {
+    update->reason = "out of memory during update inspection";
     return false;
   }
-  struct gpt_copy *maps = calloc(2, sizeof(*maps));
-  struct pool_view *pool = calloc(1, sizeof(*pool));
-  uint8_t *block = malloc(NPFS_BLOCK_SIZE);
-  bool success = false;
-  if (!maps || !pool || !block) {
-    update->reason = "out of memory during update inspection";
-    goto done;
-  }
-  update->reason = "I/O failure during update inspection";
-  install_progress_begin("Inspecting disk protective MBR", INSTALL_PROGRESS_RAW_READ, NULL);
-  if (!install_read(disk, 0, block, (size_t)disk->info.block_size)) {
-    goto done;
-  }
-  bool mbr = protective_mbr(block, disk);
-  bool empty_mbr = zero_bytes(block, (size_t)disk->info.block_size);
-  for (unsigned copy = 0; copy < 2; copy++) {
-    maps[copy].state = read_gpt(disk, copy, block, &maps[copy]);
-    if (maps[copy].state == GPT_FATAL) {
-      goto done;
-    }
-    if (maps[copy].state == GPT_UNSUPPORTED) {
-      update->reason = "unsupported GPT format or inspection capacity";
-      goto done;
-    }
-  }
-  success = true;
-  if (empty_mbr && maps[0].state == GPT_ABSENT && maps[1].state == GPT_ABSENT) {
-    update->reason = "blank disk: no installation";
-    goto done;
-  }
-  if (!mbr || maps[0].state != GPT_VALID || maps[1].state != GPT_VALID) {
-    update->reason = "no healthy validated protective GPT";
-    goto done;
-  }
-  if (!gpt_agree(&maps[0], &maps[1])) {
-    update->reason = "GPT copies disagree";
-    goto done;
-  }
-  if (!update_layout(disk, &maps[0], &update->layout)) {
-    update->reason = "foreign GPT disk: layout is not an installer layout";
-    goto done;
-  }
+  bool success = true;
   pool->disk = disk;
   pool->offset = update->layout.pool_start;
   pool->blocks = update->layout.pool_bytes / NPFS_BLOCK_SIZE;
@@ -1253,7 +1204,7 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
     goto inspection_failed;
   }
   update->eligible = true;
-  update->reason = "installer layout and system pool recognized";
+  update->reason = "selected native pool metadata validated; previous active revision unknown";
   goto done;
 inspection_failed:
   if (status == INSPECT_FATAL) {
@@ -1262,8 +1213,128 @@ inspection_failed:
   }
 done:
   install_progress_finish();
-  free(block);
   free(pool);
+  return success;
+}
+
+bool install_scan_pool_update(const struct install_disk *disk,
+    const struct install_layout *layout, struct install_update *update)
+{
+  if (!update) {
+    return false;
+  }
+  struct install_layout selected = layout ? *layout : (struct install_layout){0};
+  memset(update, 0, sizeof(*update));
+  update->layout = selected;
+  strcpy(update->revision, INSTALL_UNKNOWN_REVISION);
+  update->reason = "disk is not writable with reliable flush support";
+  uint64_t required = DISK_FLAG_WRITABLE | DISK_FLAG_FLUSH_SUPPORTED;
+  if (!disk || !layout) {
+    update->reason = "missing selected pool inspection input";
+    return false;
+  }
+  if (disk->info.preparation != DISK_READY || (disk->info.flags & required) != required ||
+      (disk->info.flags & DISK_FLAG_WRITE_FAILED)) {
+    return true;
+  }
+  struct install_gpt *gpt = calloc(1, sizeof(*gpt));
+  if (!gpt) {
+    update->reason = "out of memory during selected pool GPT inspection";
+    return false;
+  }
+  bool success = install_gpt_inspect(disk, gpt, &update->reason);
+  if (!success) {
+    free(gpt);
+    return false;
+  }
+  static const uint8_t pool_type[16] = {
+    0xa3, 0x94, 0x81, 0x1a, 0x07, 0x8a, 0xff, 0x4d,
+    0x83, 0x0e, 0x4c, 0xb4, 0xed, 0x7a, 0xac, 0x00,
+  };
+  update->reason = "selected pool identity or extent differs from healthy GPT";
+  bool found = false;
+  for (uint32_t i = 0; i < gpt->partition_count; ++i) {
+    const struct install_gpt_partition *partition = &gpt->partitions[i];
+    if (partition->entry == selected.pool_partition &&
+        !memcmp(gpt->disk_guid, selected.disk_guid, 16) &&
+        !memcmp(partition->type_guid, pool_type, 16) &&
+        !memcmp(partition->guid, selected.pool_guid, 16) &&
+        partition->attributes == selected.pool_attributes &&
+        partition->first_block * disk->info.block_size == selected.pool_start &&
+        partition->block_count * disk->info.block_size == selected.pool_bytes &&
+        !(selected.pool_start % NPFS_BLOCK_SIZE) &&
+        selected.pool_bytes >= 2 * NPFS_BLOCK_SIZE && !(selected.pool_bytes % NPFS_BLOCK_SIZE)) {
+      found = true;
+      break;
+    }
+  }
+  free(gpt);
+  return found ? scan_update_pool(disk, update) : true;
+}
+
+bool install_scan_update(const struct install_disk *disk, struct install_update *update)
+{
+  memset(update, 0, sizeof(*update));
+  update->reason = "disk is not writable with reliable flush support";
+  uint64_t required = DISK_FLAG_WRITABLE | DISK_FLAG_FLUSH_SUPPORTED;
+  if (disk->info.preparation != DISK_READY || (disk->info.flags & required) != required ||
+      (disk->info.flags & (DISK_FLAG_WRITE_FAILED | DISK_FLAG_MOUNTED))) {
+    return true;
+  }
+  if ((disk->info.block_size != 512 && disk->info.block_size != NPFS_BLOCK_SIZE) ||
+      disk->info.block_count < 3 || disk->info.block_count > UINT64_MAX / disk->info.block_size ||
+      disk->bytes != disk->info.block_count * disk->info.block_size) {
+    update->reason = "unsupported disk geometry";
+    return false;
+  }
+  struct gpt_copy *maps = calloc(2, sizeof(*maps));
+  uint8_t *block = malloc(NPFS_BLOCK_SIZE);
+  bool success = false;
+  if (!maps || !block) {
+    update->reason = "out of memory during update inspection";
+    goto done;
+  }
+  update->reason = "I/O failure during update inspection";
+  install_progress_begin("Inspecting disk protective MBR", INSTALL_PROGRESS_RAW_READ, NULL);
+  if (!install_read(disk, 0, block, (size_t)disk->info.block_size)) {
+    goto done;
+  }
+  bool mbr = protective_mbr(block, disk);
+  bool empty_mbr = zero_bytes(block, (size_t)disk->info.block_size);
+  for (unsigned copy = 0; copy < 2; copy++) {
+    maps[copy].state = read_gpt(disk, copy, block, &maps[copy]);
+    if (maps[copy].state == GPT_FATAL) {
+      goto done;
+    }
+    if (maps[copy].state == GPT_UNSUPPORTED) {
+      update->reason = "unsupported GPT format or inspection capacity";
+      goto done;
+    }
+  }
+  success = true;
+  if (empty_mbr && maps[0].state == GPT_ABSENT && maps[1].state == GPT_ABSENT) {
+    update->reason = "blank disk: no installation";
+    goto done;
+  }
+  if (!mbr || maps[0].state != GPT_VALID || maps[1].state != GPT_VALID) {
+    update->reason = "no healthy validated protective GPT";
+    goto done;
+  }
+  if (!gpt_agree(&maps[0], &maps[1])) {
+    update->reason = "GPT copies disagree";
+    goto done;
+  }
+  if (!update_layout(disk, &maps[0], &update->layout)) {
+    update->reason = "foreign GPT disk: layout is not an installer layout";
+    goto done;
+  }
+  success = scan_update_pool(disk, update);
+  if (update->eligible) {
+    update->reason = "installer layout and system pool recognized";
+  }
+done:
+  install_progress_finish();
+  free(block);
   free(maps);
   return success;
 }

@@ -119,6 +119,10 @@ void install_consent_destroy(struct install_consent *consent);
 /* Update inspection never mounts, replays or writes a pool. GPT/pool checks
  * must be followed by ESP inspection before offering a target. */
 bool install_scan_update(const struct install_disk *disk, struct install_update *update);
+/* Inspect exactly the selected native pool, independent of classic GPT layout.
+ * No mount, replay or writes; previous active revision remains unknown. */
+bool install_scan_pool_update(const struct install_disk *disk,
+    const struct install_layout *layout, struct install_update *update);
 /* Damaged ESP contents can be rebuilt only after healthy GPT/pool admission.
  * Failed reads, allocation, unsupported extents and explicit foreign or invalid
  * disk bindings refuse recovery. Unreadable revision text remains unknown;
