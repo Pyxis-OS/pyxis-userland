@@ -231,8 +231,10 @@ looks up the configured candidate without binding it, then waits for the setup
 owner to bind and assign an address.
 
 `net0 = { driver = "virtio", dhcp = true }` requests a lease instead of static
-address/prefix/gateway fields; the packaged profile uses this form. Acquisition
-waits at most about ten seconds, then starts the local session offline on failure.
+address/prefix/gateway fields; the packaged profile uses this form. DHCP waits
+for ready transport and reported carrier before acquisition; static settings do
+not wait for carrier. Acquisition waits at most about ten seconds, then starts the
+local session offline on failure.
 Task 2 keeps a successful lease until reboot; reboot before lease expiry until
 maintenance is implemented. Explicit profile `dns.server` wins, then first lease
 DNS, then `1.1.1.1`. Launchers read the chosen DNS for each new program; existing

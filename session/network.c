@@ -148,10 +148,11 @@ bool network_config_binding_pending(handle_t authority, bool *pending)
   }
 }
 
-static enum link_selection bound_readiness(struct network_runtime *runtime,
-    const struct net_config_reply *snapshot)
+static enum link_selection bound_readiness(const struct network_config *config,
+    struct network_runtime *runtime, const struct net_config_reply *snapshot)
 {
-  if (snapshot->flags & NET_CONFIG_READY) {
+  if ((snapshot->flags & NET_CONFIG_READY) &&
+      (!config->dhcp || (snapshot->flags & NET_CONFIG_LINK_UP))) {
     return LINK_BOUND;
   }
   bool pending;
@@ -168,7 +169,7 @@ static enum link_selection select_explicit(const struct network_config *config,
    * an arbitrary bound controller here would ignore the configured selector. */
   enum call_status status = net_config_bind(runtime->authority, &config->selector, snapshot);
   if (status == CALL_OK) {
-    return bound_readiness(runtime, snapshot);
+    return bound_readiness(config, runtime, snapshot);
   }
   if (status == CALL_QUEUE_FULL ||
       (status == CALL_UNAVAILABLE && config->selector.kind == NET_SELECT_MAC)) {
@@ -212,7 +213,7 @@ static enum link_selection select_link(const struct network_config *config,
     return LINK_FAILED;
   }
   if (snapshot->flags & NET_CONFIG_BOUND) {
-    return bound_readiness(runtime, snapshot);
+    return bound_readiness(config, runtime, snapshot);
   }
   struct net_controller_reply selected = {0};
   uint32_t after_id = 0;
@@ -251,14 +252,14 @@ static enum link_selection select_link(const struct network_config *config,
   };
   status = net_config_bind(runtime->authority, &selector, snapshot);
   if (status == CALL_OK) {
-    return bound_readiness(runtime, snapshot);
+    return bound_readiness(config, runtime, snapshot);
   }
   if (status == CALL_UNAVAILABLE || status == CALL_BUSY || status == CALL_NOT_FOUND) {
     /* A lost carrier does not consume selection. A committed binding, including
      * failed activation, is authoritative and must never trigger fallback. */
     status = net_config_query(runtime->authority, snapshot);
     if (status == CALL_OK) {
-      return snapshot->flags & NET_CONFIG_BOUND ? bound_readiness(runtime, snapshot) : LINK_WAIT;
+      return snapshot->flags & NET_CONFIG_BOUND ? bound_readiness(config, runtime, snapshot) : LINK_WAIT;
     }
   }
   if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
@@ -280,7 +281,8 @@ static bool apply_binding(const struct network_config *config, struct network_ru
     const struct net_config_reply *snapshot, uint64_t deadline, bool *published_dns)
 {
   runtime->waiting_link = false;
-  if (!(snapshot->flags & NET_CONFIG_READY)) {
+  if (!(snapshot->flags & NET_CONFIG_READY) ||
+      (config->dhcp && !(snapshot->flags & NET_CONFIG_LINK_UP))) {
     fputs("session: net0 transport unavailable; continuing without network setup\n", stderr);
     return true;
   }

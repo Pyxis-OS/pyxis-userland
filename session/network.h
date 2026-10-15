@@ -27,6 +27,8 @@ struct network_runtime {
  * Exact MAC selection retries that same selector while discovery is pending;
  * ambiguity and a different existing binding fail without fallback. VirtIO
  * selection does not wait for unrelated controller discovery.
+ * DHCP also waits for reported LINK_UP before reserving its endpoint or sending.
+ * Static settings require readiness without waiting for carrier.
  * A prepared binding whose configuration is temporarily unstable stays pending;
  * permanent transport failure stops setup without selecting another controller.
  * dns_server owns canonical dotted decimal, defaulting to 1.1.1.1.
