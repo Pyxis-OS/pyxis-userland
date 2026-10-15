@@ -1,6 +1,8 @@
 #include <pyxis/working_path.h>
 #include "shell.h"
 #include "capabilities.h"
+#include "syntax.h"
+#include "values.h"
 #include "../common/directory.h"
 #include <mount.h>
 #include <environment.h>
@@ -351,7 +353,7 @@ static enum command_result power_command(struct shell *shell, char **arguments, 
 static bool is_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
-  return !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
+  return shell_value_builtin(name) || !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") || !strcmp(name, "env") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
@@ -359,8 +361,15 @@ static bool is_builtin(char **arguments, size_t count)
        (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
 }
 
-static enum command_result builtin_command(struct shell *shell, char **arguments, size_t count)
+static enum command_result builtin_command(struct shell *shell,
+    const struct shell_expansion *expansion)
 {
+  const struct shell_stage *stage = &expansion->command.stages[0];
+  char **arguments = stage->arguments;
+  size_t count = stage->count;
+  if (shell_value_builtin(arguments[0])) {
+    return shell_values_command(shell, expansion);
+  }
   if (!strcmp(arguments[0], "request")) {
     return shell_request_command(shell, arguments, count);
   }
@@ -414,7 +423,10 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
     if (count < 2) {
       return shell_error(shell, "usage: session program [arguments...]\n");
     }
-    return shell_launch(shell, arguments + 1, count - 1, SHELL_SESSION, NULL, 0, NULL);
+    struct shell_stage selected = *stage;
+    selected.arguments = arguments + 1;
+    selected.count = count - 1;
+    return shell_launch_selected(shell, &selected, SHELL_SESSION, NULL);
   }
   if (!strcmp(arguments[0], "env")) {
     if (count == 3 && !strcmp(arguments[1], "unset")) {
@@ -480,60 +492,85 @@ static enum command_result builtin_command(struct shell *shell, char **arguments
         "       service replace [--read-only] NAME IMAGE [arguments...]\n");
   }
   return shell_launch_service(shell, arguments[index], replace, optional, read_only,
-      arguments + index + 1, count - index - 1);
+      arguments + index + 1, count - index - 1, stage->operands);
 }
 
-enum command_result shell_command(struct shell *shell, char *line, char **arguments,
-    struct shell_outcome *outcome)
+static enum command_result expanded_command(struct shell *shell,
+    const struct shell_expansion *expansion, bool assignment, struct shell_outcome *outcome)
 {
-  /* Syntax and command-form diagnostics below report a rejected line. */
-  *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
-  struct shell_command_line command;
-  const char *error = parse_line(line, arguments, SHELL_LINE_CAPACITY, &command);
-  if (error) {
-    return shell_error(shell, "shell: %s\n", error);
+  const struct shell_command_line *command = &expansion->command;
+  if (assignment) {
+    enum command_result result = shell_assign(shell, &expansion->words[0]);
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN,
+        result == COMMAND_FAILED};
+    return result;
   }
-  if (!command.stage_count) {
-    /* Only scripts reach this: interactive input skips blank lines. */
+  if (!command->stage_count) {
     *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0};
     return COMMAND_OK;
   }
-  if (command.stage_count > 1) {
-    for (size_t i = 0; i < command.stage_count; ++i) {
-      const struct shell_stage *stage = &command.stages[i];
-      if (!stage->count || !stage->arguments[0][0]) {
-        return shell_error(shell, "shell: Pipeline stage requires a command name\n");
-      }
-      if (is_builtin(stage->arguments, stage->count)) {
-        return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
-            stage->arguments[0]);
-      }
+  for (size_t i = 0; i < command->stage_count; ++i) {
+    const struct shell_stage *stage = &command->stages[i];
+    if (!stage->count || !stage->arguments[0][0]) {
+      return shell_error(shell, "shell: Pipeline stage requires a command name\n");
     }
-    return shell_launch_pipeline(shell, &command, outcome);
+    if (command->stage_count > 1 && is_builtin(stage->arguments, stage->count)) {
+      return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
+          stage->arguments[0]);
+    }
   }
-
-  const struct shell_stage *stage = &command.stages[0];
-  arguments = stage->arguments;
-  size_t count = stage->count;
-  if (!arguments[0][0]) {
-    return shell_error(shell, "shell: Empty command name\n");
-  }
-  bool builtin = is_builtin(arguments, count);
-  if ((stage->redirection_count || command.capture) && (builtin || command.background)) {
+  const struct shell_stage *stage = &command->stages[0];
+  bool builtin = is_builtin(stage->arguments, stage->count);
+  if ((stage->redirection_count || command->capture) && (builtin || command->background)) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }
-  if (command.background && builtin) {
+  if (command->background && builtin) {
     return shell_error(shell, "shell: & is only supported for external commands\n");
   }
   if (builtin) {
-    /* session and service remain builtin transactions, including their launches. */
-    enum command_result result = builtin_command(shell, arguments, count);
-    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED};
+    enum command_result result = builtin_command(shell, expansion);
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN,
+        result == COMMAND_FAILED};
     return result;
   }
-  if (!command.background) {
-    return shell_launch_pipeline(shell, &command, outcome);
+  return shell_launch_pipeline(shell, command, outcome);
+}
+
+enum command_result shell_command(struct shell *shell, char *line,
+    struct shell_outcome *outcome)
+{
+  *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
+  struct shell_syntax syntax = {0};
+  const char *error = shell_syntax_parse(line, &syntax);
+  if (error) {
+    return shell_error(shell, "shell: %s\n", error);
   }
-  return shell_launch(shell, arguments, count, SHELL_BACKGROUND,
-      stage->redirections, stage->redirection_count, outcome);
+  enum command_result result = COMMAND_OK;
+  if (!syntax.count) {
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0};
+  }
+  for (size_t i = 0; i < syntax.count; ++i) {
+    struct shell_expansion expansion = {0};
+    enum call_status status;
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
+    error = shell_syntax_expand(shell, &syntax.commands[i], &expansion, &status);
+    if (error) {
+      result = shell_error(shell, "shell: %s (status %u)\n", error, status);
+      if (status == CALL_OUTCOME_UNKNOWN) {
+        result = COMMAND_FATAL;
+      }
+    } else {
+      result = expanded_command(shell, &expansion, syntax.commands[i].assignment, outcome);
+      if (!shell_expansion_close(&expansion)) {
+        shell_directory_error(shell, "shell: cleanup", "expanded values", CALL_OUTCOME_UNKNOWN);
+        result = COMMAND_FATAL;
+      }
+    }
+    if (result == COMMAND_FATAL || result == COMMAND_EXIT ||
+        (shell->script_name && result == COMMAND_FAILED)) {
+      break;
+    }
+  }
+  shell_syntax_close(&syntax);
+  return result;
 }

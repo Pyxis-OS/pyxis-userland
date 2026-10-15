@@ -36,7 +36,7 @@ static bool separator(char byte)
          byte == '\f';
 }
 
-/* Reads the line up to the cursor the way parse_line does: operators end a
+/* Reads the line up to the cursor with the shell quoting rules: operators end a
  * word, and a backslash or quote groups bytes into it. Words compacted into
  * one argument are one word here too. */
 bool completion_scan(const char *line, size_t cursor, struct completion_word *word)
@@ -54,13 +54,13 @@ bool completion_scan(const char *line, size_t cursor, struct completion_word *wo
   for (size_t i = 0; ok && i < cursor; ++i) {
     char byte = line[i];
     bool end_word = !quote && (separator(byte) || byte == '|' || byte == '<' || byte == '>' ||
-                               byte == '&');
+                               byte == '&' || byte == ';');
     if (end_word) {
       if (in_word && word_command) {
         command_position = false;
       }
       in_word = false;
-      if (byte == '|') {
+      if (byte == '|' || byte == ';') {
         command_position = true;
         redirect_pending = false;
       } else if (byte == '<' || byte == '>') {
@@ -189,7 +189,7 @@ static char *render(const char *value, char quote)
   }
   for (size_t i = 0; i < length; ++i) {
     bool escape = quote == 0 ? special_unquoted(value[i])
-                             : quote == '"' && (value[i] == '"' || value[i] == '\\');
+                             : quote == '"' && (value[i] == '"' || value[i] == '\\' || value[i] == '$');
     if (escape) {
       text[used++] = '\\';
     }

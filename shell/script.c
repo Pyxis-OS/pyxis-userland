@@ -2,7 +2,7 @@
 #include <file.h>
 #include <stdlib.h>
 
-static enum command_result script_command(struct shell *shell, char *line, char **arguments)
+static enum command_result script_command(struct shell *shell, char *line)
 {
   /* Only whole-line comments are special; quoted or embedded # stays literal. */
   char *start = line;
@@ -14,10 +14,10 @@ static enum command_result script_command(struct shell *shell, char *line, char 
   }
   /* Scripts report no completion events; their policy uses the result only. */
   struct shell_outcome outcome;
-  return shell_command(shell, line, arguments, &outcome);
+  return shell_command(shell, line, &outcome);
 }
 
-int shell_script(struct shell *shell, handle_t script, char *line, char **arguments)
+int shell_script(struct shell *shell, handle_t script, char *line)
 {
   uint64_t offset = 0;
   size_t length = 0;
@@ -35,7 +35,7 @@ int shell_script(struct shell *shell, handle_t script, char *line, char **argume
         return EXIT_SUCCESS;
       }
       line[length] = '\0';
-      enum command_result result = script_command(shell, line, arguments);
+      enum command_result result = script_command(shell, line);
       if (result == COMMAND_EXIT) {
         return shell->exit_status;
       }
@@ -53,7 +53,7 @@ int shell_script(struct shell *shell, handle_t script, char *line, char **argume
           --length;
         }
         line[length] = '\0';
-        enum command_result result = script_command(shell, line, arguments);
+        enum command_result result = script_command(shell, line);
         if (result != COMMAND_OK) {
           return result == COMMAND_EXIT ? shell->exit_status : EXIT_FAILURE;
         }

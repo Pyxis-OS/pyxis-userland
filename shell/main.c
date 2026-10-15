@@ -165,19 +165,23 @@ int main(int argc, char **argv)
   int result = EXIT_FAILURE;
   struct shell_cwd_service cwd_service = {0};
   char *line = malloc(script != HANDLE_INVALID ? SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
-  char **arguments = malloc(SHELL_LINE_CAPACITY * sizeof(*arguments));
-  if (!line || !arguments) {
+  if (!line) {
     shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
   }
-  enum call_status status = shell_directory_init(&shell);
+  enum call_status status = shell_environment_init(&shell);
+  if (status != CALL_OK) {
+    shell_directory_error(&shell, "shell", "initial environment", status);
+    goto done;
+  }
+  status = shell_directory_init(&shell);
   if (status != CALL_OK) {
     shell_directory_error(&shell, "shell", "working directory", status);
     goto done;
   }
 
   if (script != HANDLE_INVALID) {
-    result = shell_script(&shell, script, line, arguments);
+    result = shell_script(&shell, script, line);
     goto done;
   }
   if (!quiet_input) {
@@ -216,7 +220,7 @@ int main(int argc, char **argv)
       report_directory_error("shell", "terminal", read.error);
       break;
     }
-    /* Before parsing, which rewrites the line in place. */
+    /* Preserve the submitted spelling in history. */
     if (read.recorded) {
       shell_history_save(&shell, line);
     }
@@ -238,7 +242,7 @@ int main(int argc, char **argv)
       continue;
     }
     struct shell_outcome outcome;
-    enum command_result command = shell_command(&shell, line, arguments, &outcome);
+    enum command_result command = shell_command(&shell, line, &outcome);
     if (command == COMMAND_FATAL) {
       break;
     }
@@ -252,6 +256,7 @@ int main(int argc, char **argv)
   }
 
 done:
+  shell_environment_close(&shell);
   shell_capabilities_close(&shell);
   if (bundle_jobs_close(&shell.jobs) != CALL_OK) {
     result = EXIT_FAILURE;
@@ -260,7 +265,6 @@ done:
   shell_fat_close(&shell);
   shell_directory_close(&shell);
   term_history_free(&shell.history);
-  free(arguments);
   free(line);
   /* Runtime exit releases the original startup grants, which may alias. */
   return result;

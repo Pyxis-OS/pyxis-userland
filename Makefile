@@ -46,7 +46,7 @@ PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
                    $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o
-SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/directory.o \
+SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/capabilities.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/complete.o \
                  $(BUILD)/shell/complete_path.o $(BUILD)/common/pane_cwd.o
