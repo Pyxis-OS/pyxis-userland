@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BOOT_IO_BYTES 3072u
 #define BOOT_DIRECTORY_READ (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES)
 #define BOOT_DIRECTORY_WRITE (BOOT_DIRECTORY_READ | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
 #define BOOT_CONTROL_READ (MOUNT_RIGHT_OPEN_ROOT | MOUNT_RIGHT_OBSERVE)
@@ -181,11 +180,15 @@ static bool stream_source(const struct install_source *source, handle_t target,
   install_progress_bytes_total(size);
   struct install_digest hash = {0};
   bool ok = install_digest_begin(&hash);
-  unsigned char bytes[BOOT_IO_BYTES];
+  unsigned char bytes[FILE_READ_MAX_BYTES];
+  size_t capacity = sizeof(bytes);
+  if (target != HANDLE_INVALID && capacity > FILE_WRITE_MAX_BYTES) {
+    capacity = FILE_WRITE_MAX_BYTES;
+  }
   char sha256[65];
   for (uint64_t offset = 0; ok && offset < size;) {
     size_t count = 0;
-    size_t wanted = size - offset > sizeof(bytes) ? sizeof(bytes) : (size_t)(size - offset);
+    size_t wanted = size - offset > capacity ? capacity : (size_t)(size - offset);
     if (source->memory) {
       memcpy(bytes, source->memory + (size_t)offset, wanted);
       count = wanted;

@@ -5,7 +5,9 @@ optional entry.txt, in one freshly created EFI/pyxis/REVISION/ATTEMPT directory.
 The plan-time path builder supplies the same layout without opening anything.
 Revision is a portable ASCII FAT component of at most 63 bytes (not config);
 attempt is exactly 32 lowercase hex digits. Collisions refuse, without retry.
-Every payload is nonempty and at most 1 GiB; copying/hashing uses bounded calls.
+Every payload is nonempty and at most 1 GiB. Verification reads use
+`FILE_READ_MAX_BYTES`; copy chunks fit both that buffer and
+`FILE_WRITE_MAX_BYTES`, so a full chunk does not require an extra tail write.
 Sequential writes grow each fresh empty file; there is no full-file resize
 whose single mutation plan would grow with the entire payload.
 
