@@ -38,6 +38,14 @@ file is synchronized, the ownership.record lists exact paths/sizes/hashes,
 and volume sync precedes reopening and verification. This is filesystem-view
 verification after confirmed sync, not a cache-bypassing or power-loss proof.
 
+`install_esp_payload_space` provides a read-only conservative cluster bound
+using this same ownership-record formatter. It rounds each payload and record
+separately and allows four new directories plus four parent-chain growth
+clusters; the validated names and attempt entries fit a minimum-size cluster.
+Existing paths and older attempts give no credit. The caller compares this
+bound with valid, checked native capacity during Review and revalidates before
+effects. This reserves no space and does not replace stage-time error handling.
+
 Stage returns an owned opaque result even on partial failure when allocated.
 It retains the attempt and file references needed for object-ID comparison;
 verification reopens canonical names and checks their identities and bytes.

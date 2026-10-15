@@ -34,6 +34,7 @@ struct install_plan {
   struct install_esp_payloads *payloads;
   struct install_esp_classic_files *classic_files;
   uint64_t available_blocks, required_blocks, cleanup_deadline_ns;
+  uint64_t esp_cluster_bytes, esp_required_clusters, esp_free_clusters;
   bool ready, disk_claimed, raw_claimed;
 };
 

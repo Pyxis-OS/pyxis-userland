@@ -252,6 +252,40 @@ static bool payload_plan(struct install_plan *plan)
   return true;
 }
 
+static bool esp_space_budget(struct install_plan *plan)
+{
+  plan->esp_cluster_bytes = plan->esp_required_clusters = plan->esp_free_clusters = 0;
+  if (!plan->record.coexist) {
+    return true;
+  }
+  const struct mount_state_reply *state = NULL;
+  for (size_t i = 0; i < plan->target.review.esp_count; ++i) {
+    const struct install_review_esp *esp = &plan->target.review.esps[i];
+    if (!memcmp(&esp->selection, &plan->target.esp, sizeof(esp->selection)) &&
+        esp->available && esp->identity_matches && esp->retired) {
+      state = &esp->observed;
+      break;
+    }
+  }
+  if (!state || !(state->flags & MOUNT_STATE_CAPACITY_VALID) ||
+      !install_esp_payload_space(&plan->payload_request, state->cluster_bytes,
+        &plan->esp_required_clusters)) {
+    install_progress_pause();
+    fputs("installer: ESP capacity is unknown; coexistence requires checked FAT32 free space; nothing was written\n", stderr);
+    return false;
+  }
+  plan->esp_cluster_bytes = state->cluster_bytes;
+  plan->esp_free_clusters = state->free_clusters;
+  if (plan->esp_required_clusters > plan->esp_free_clusters) {
+    install_progress_pause();
+    fprintf(stderr, "installer: insufficient ESP space: fresh attempt needs %llu bytes, checked free space is %llu bytes; no old attempts are removed; nothing was written\n",
+        (unsigned long long)(plan->esp_required_clusters * plan->esp_cluster_bytes),
+        (unsigned long long)(plan->esp_free_clusters * plan->esp_cluster_bytes));
+    return false;
+  }
+  return true;
+}
+
 bool install_plan_prepare(struct install_plan *plan, const struct disk_info *target)
 {
   plan->ready = false;
@@ -314,7 +348,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   memcpy(plan->revision_record, plan->record.revision, revision_bytes);
   plan->revision_record[revision_bytes++] = '\n';
   plan->revision_record[revision_bytes] = '\0';
-  if (!payload_plan(plan) || !source_fingerprint(plan, plan->record.source_hash) ||
+  if (!payload_plan(plan) || !esp_space_budget(plan) || !source_fingerprint(plan, plan->record.source_hash) ||
       !space_budget(plan) || !install_plan_record_valid(&plan->record)) {
     return false;
   }
@@ -437,6 +471,9 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
   fprintf(output, "Staging reserve: %llu blocks; available %llu.\n",
       (unsigned long long)plan->required_blocks, (unsigned long long)plan->available_blocks);
   if (plan->record.coexist) {
+    fprintf(output, "ESP staging reserve: %llu bytes; checked free space %llu bytes.\n",
+        (unsigned long long)(plan->esp_required_clusters * plan->esp_cluster_bytes),
+        (unsigned long long)(plan->esp_free_clusters * plan->esp_cluster_bytes));
     fputs(plan->record.updating ?
         "The selected pool is updated; GPT and all other partitions stay.\n" :
         "Only the reviewed unused GPT slot and required CRCs are appended, then\n"

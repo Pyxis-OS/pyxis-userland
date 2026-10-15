@@ -287,8 +287,7 @@ static bool open_attempt(const struct install_esp_payloads *result, bool create,
   return ok;
 }
 
-static bool manifest_prepare(struct install_esp_payloads *result,
-    struct install_esp_payload_report *report)
+static bool manifest_format(struct install_esp_payloads *result)
 {
   struct install_esp_payload_record *record = &result->record;
   int count = snprintf(result->manifest_bytes, sizeof(result->manifest_bytes),
@@ -296,7 +295,7 @@ static bool manifest_prepare(struct install_esp_payloads *result,
   size_t used = count > 0 ? (size_t)count : sizeof(result->manifest_bytes);
   for (unsigned i = 0; i < payload_count(result) && used < sizeof(result->manifest_bytes); ++i) {
     if (!install_esp_payload_path(record->revision, record->attempt, i, record->paths[i])) {
-      return fail(report, CALL_LIMIT);
+      return false;
     }
     count = snprintf(result->manifest_bytes + used, sizeof(result->manifest_bytes) - used,
         "%s %llu %s\n", record->paths[i], (unsigned long long)record->payloads[i].size,
@@ -304,19 +303,66 @@ static bool manifest_prepare(struct install_esp_payloads *result,
     used += count > 0 ? (size_t)count : sizeof(result->manifest_bytes);
   }
   if (used >= sizeof(result->manifest_bytes)) {
-    return fail(report, CALL_LIMIT);
+    return false;
   }
   if (!install_esp_payload_path(record->revision, record->attempt,
       INSTALL_ESP_OWNERSHIP, record->manifest_path)) {
-    return fail(report, CALL_LIMIT);
+    return false;
   }
   record->manifest.size = used;
+  return true;
+}
+
+static bool manifest_prepare(struct install_esp_payloads *result,
+    struct install_esp_payload_report *report)
+{
+  if (!manifest_format(result)) {
+    return fail(report, CALL_LIMIT);
+  }
   struct install_digest hash = {0};
   bool ok = install_digest_begin(&hash) &&
-      install_digest_update(&hash, result->manifest_bytes, used) &&
-      install_digest_finish(&hash, record->manifest.sha256);
+      install_digest_update(&hash, result->manifest_bytes, result->record.manifest.size) &&
+      install_digest_finish(&hash, result->record.manifest.sha256);
   install_digest_abort(&hash);
   return ok || fail(report, CALL_NO_MEMORY);
+}
+
+bool install_esp_payload_space(const struct install_esp_payload_request *request,
+    uint64_t cluster_bytes, uint64_t *required_clusters)
+{
+  if (!request || !required_clusters || cluster_bytes < 512 ||
+      (cluster_bytes & (cluster_bytes - 1)) ||
+      !revision_valid(request->revision) || !hex_valid(request->attempt, 32)) {
+    return false;
+  }
+  struct install_esp_payloads planned = {0};
+  struct install_esp_payload_record *record = &planned.record;
+  strcpy(record->revision, request->revision);
+  strcpy(record->attempt, request->attempt);
+  record->entry_present = request->entry_present;
+  /* EFI/pyxis/revision/attempt: each new directory fits one minimum-size
+   * cluster, including dots, its child or the five payload/record entries and
+   * the end marker. Each insertion can also extend its parent by one cluster.
+   * This follows the validated component lengths and fixed payload names. */
+  uint64_t clusters = 8;
+  for (unsigned i = 0; i < payload_count(&planned); ++i) {
+    const struct install_esp_payload_digest *digest = &request->expected_payloads[i];
+    if (!digest->size || digest->size > INSTALL_ESP_PAYLOAD_MAX_BYTES ||
+        !hex_valid(digest->sha256, 64) || request->sources[i].bytes != digest->size) {
+      return false;
+    }
+    record->payloads[i] = *digest;
+    clusters += digest->size / cluster_bytes + (digest->size % cluster_bytes != 0);
+  }
+  if (!manifest_format(&planned)) {
+    return false;
+  }
+  clusters += record->manifest.size / cluster_bytes + (record->manifest.size % cluster_bytes != 0);
+  if (clusters > UINT64_MAX / cluster_bytes) {
+    return false;
+  }
+  *required_clusters = clusters;
+  return true;
 }
 
 static bool verify_staged(const struct install_esp_payloads *result,

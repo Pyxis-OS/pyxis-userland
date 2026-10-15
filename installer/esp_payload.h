@@ -54,6 +54,12 @@ struct install_esp_payloads;
 bool install_esp_payload_path(const char *revision, const char *attempt,
     enum install_esp_payload_index index, char path[INSTALL_ESP_PAYLOAD_PATH_BYTES]);
 
+/* Read-only conservative allocation bound for one fresh attempt. Uses the same
+ * ownership formatter as stage; existing paths/attempts give no space credit.
+ * Capacity is an observation, not reserved backing. No filesystem calls. */
+bool install_esp_payload_space(const struct install_esp_payload_request *request,
+    uint64_t cluster_bytes, uint64_t *required_clusters);
+
 /* Initialize *result to NULL. The request, source descriptors and bytes stay
  * unchanged through stage. Retain the hash_init() context through the final
  * verify call. Root/control are borrowed and must outlive the result. The helper verifies the

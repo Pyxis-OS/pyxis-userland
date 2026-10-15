@@ -340,6 +340,31 @@ static bool inspect_esp(handle_t issuer, struct install_review_esp *esp,
   }
 }
 
+static bool final_capacity(struct install_review_esp *esp, struct install_review *review)
+{
+  if (esp->control == HANDLE_INVALID || !esp->identity_matches) {
+    return true;
+  }
+  /* Later menu/content reads can invalidate admission's allocation evidence. */
+  struct mount_state_reply current;
+  esp->observe_status = mount_observe(esp->control, &current);
+  bool same = esp->observe_status == CALL_OK &&
+      identity_matches(&current, &esp->selection) && current.domain == esp->observed.domain;
+  if (same) {
+    esp->observed = current;
+  } else {
+    esp->identity_matches = esp->available = false;
+    esp->observed.flags &= ~MOUNT_STATE_CAPACITY_VALID;
+    esp->observed.cluster_bytes = esp->observed.total_clusters = esp->observed.free_clusters = 0;
+  }
+  return text(review, "  Final capacity: OBSERVE status=%u identity_matches=%u valid=%u cluster_bytes=%llu total_clusters=%llu free_clusters=%llu\n",
+      esp->observe_status, esp->identity_matches,
+      !!(esp->observed.flags & MOUNT_STATE_CAPACITY_VALID),
+      (unsigned long long)esp->observed.cluster_bytes,
+      (unsigned long long)esp->observed.total_clusters,
+      (unsigned long long)esp->observed.free_clusters);
+}
+
 static bool close_reference(handle_t *handle)
 {
   if (*handle == HANDLE_INVALID) {
@@ -474,7 +499,8 @@ bool install_review_prepare(const struct install_disk *disk, handle_t issuer,
   }
   collect_esps(disk, review);
   for (size_t i = 0; success && i < review->esp_count; ++i) {
-    success = inspect_esp(issuer, &review->esps[i], review);
+    success = inspect_esp(issuer, &review->esps[i], review) &&
+        final_capacity(&review->esps[i], review);
   }
   bool cleaned = install_review_cleanup(review, clock, deadline_ns);
   for (size_t i = 0; success && i < review->esp_count; ++i) {

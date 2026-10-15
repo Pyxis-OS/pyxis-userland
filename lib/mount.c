@@ -168,6 +168,20 @@ static bool mount_identity_valid(const struct mount_state_reply *reply)
       guid_nonzero(reply->partition_type);
 }
 
+static bool mount_capacity_valid(const struct mount_state_reply *reply)
+{
+  if (!(reply->flags & MOUNT_STATE_IDENTITY_VALID) || !mount_identity_valid(reply) ||
+      (reply->flags & (MOUNT_STATE_RETIRED | MOUNT_STATE_FAILED | MOUNT_STATE_ALLOCATION_INVALID)) ||
+      !reply->cluster_bytes || reply->cluster_bytes % reply->device_block_size ||
+      !reply->total_clusters || reply->free_clusters > reply->total_clusters ||
+      reply->total_clusters > UINT64_MAX / reply->cluster_bytes) {
+    return false;
+  }
+  uint64_t sectors = reply->cluster_bytes / reply->device_block_size;
+  return sectors && sectors <= 128 && !(sectors & (sectors - 1)) &&
+      reply->total_clusters <= reply->block_count / sectors;
+}
+
 enum call_status mount_observe(handle_t control, struct mount_state_reply *state)
 {
   if (!state) {
@@ -185,6 +199,9 @@ enum call_status mount_observe(handle_t control, struct mount_state_reply *state
     return result.status;
   }
   if ((reply.flags & MOUNT_STATE_IDENTITY_VALID) && !mount_identity_valid(&reply)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if ((reply.flags & MOUNT_STATE_CAPACITY_VALID) && !mount_capacity_valid(&reply)) {
     return CALL_OUTCOME_UNKNOWN;
   }
   *state = reply;

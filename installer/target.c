@@ -184,8 +184,16 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
   const struct install_plan_record *record = &target->record;
   struct install_update update = {0};
   if (record->coexist) {
-    target->reason = "coexistence selections differ from healthy GPT or the selected ESP is unavailable";
-    if (!selected_gpt(target) || !selected_esp_available(target) || !selected_esp_clean(target)) {
+    target->reason = "coexistence selections differ from the reviewed healthy GPT";
+    if (!selected_gpt(target)) {
+      return false;
+    }
+    target->reason = "coexistence requires a readable supported FAT32 ESP; FAT12/FAT16 are unsupported and never rebuilt";
+    if (!selected_esp_available(target)) {
+      return false;
+    }
+    target->reason = "coexistence requires a clean ESP without filesystem errors; it never rebuilds the ESP";
+    if (!selected_esp_clean(target)) {
       return false;
     }
     if (!record->updating) {

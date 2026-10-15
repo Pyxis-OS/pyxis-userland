@@ -144,6 +144,12 @@ existing selected pool. Every volume operation uses that actual GPT entry.
 Coexistence stages only immutable `EFI/pyxis/REVISION/ATTEMPT/` payloads through
 the shared stager and prints their saved manual entry after verified sync.
 It edits no existing boot menu or firmware and never reports activation.
+Review requires a supported clean FAT32 ESP; FAT12/FAT16 refuse without a
+rebuild. Checked free clusters must cover the fresh attempt's independently
+rounded payloads, ownership record and conservative directory allowance before
+Apply is offered. Unknown or insufficient capacity refuses without target writes.
+The final read-only observation is fingerprinted and revalidated before effects;
+it is not a space reservation. Existing attempts are never credited or deleted.
 
 Copies run outside the final publication interval. BEGIN is followed immediately
 by CHECK; final held-object/hash verification and classic menu/revision changes
