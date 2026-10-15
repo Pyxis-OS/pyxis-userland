@@ -230,7 +230,9 @@ static enum call_status publish_description(struct loop *loop,
     }
     enum call_status status = endpoint_describe_publish(loop->receiver, object_id(slot),
         &description, NULL, 0);
-    if (status != CALL_OK) {
+    /* Last-client close can precede its queued RETIRE notice. There is no
+     * reader to publish to, but keep the slot live until retirement is acked. */
+    if (status != CALL_OK && status != CALL_ENDPOINT_CLOSED) {
       return status;
     }
   }
