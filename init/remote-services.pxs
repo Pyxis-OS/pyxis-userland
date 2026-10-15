@@ -1,6 +1,6 @@
 #!boot://shell.pxe
 service start http boot://httpfs.pxb
-env copy json+http http
+export json+http=$http
 service start --optional --read-only https boot://httpfs.pxb --https
 env copy --optional json+https https
 session boot://session.pxe --remote-server 2323

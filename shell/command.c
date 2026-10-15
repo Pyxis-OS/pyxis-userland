@@ -429,21 +429,18 @@ static enum command_result builtin_command(struct shell *shell,
     return shell_launch_selected(shell, &selected, SHELL_SESSION, NULL);
   }
   if (!strcmp(arguments[0], "env")) {
-    if (count == 3 && !strcmp(arguments[1], "unset")) {
-      enum call_status status = environment_unset(shell->environment, arguments[2]);
-      return status == CALL_OK ? COMMAND_OK :
-          shell_directory_error(shell, "env: unset", arguments[2], status);
+    /* The optional HTTPS bootstrap still needs a conditional alias until B8.
+     * General environment editing uses typed assignment/export and unset. */
+    if (count != 5 || strcmp(arguments[1], "copy") ||
+        strcmp(arguments[2], "--optional")) {
+      return shell_error(shell, "env: only private bootstrap copy --optional remains; use assignment/export or unset\n");
     }
-    bool optional = count == 5 && !strcmp(arguments[2], "--optional");
-    if ((count != 4 && !optional) || strcmp(arguments[1], "copy")) {
-      return shell_error(shell, "usage: env copy [--optional] NAME SOURCE | env unset NAME\n");
-    }
-    const char *name = arguments[optional ? 3 : 2];
-    const char *source = arguments[optional ? 4 : 3];
+    const char *name = arguments[3];
+    const char *source = arguments[4];
     struct environment_entry_reply entry;
     char *text = NULL;
     enum call_status status = environment_lookup(shell->environment, source, &entry, NULL, 0);
-    if (optional && status == CALL_NOT_FOUND) {
+    if (status == CALL_NOT_FOUND) {
       return COMMAND_OK;
     }
     if (status == CALL_BUFFER_TOO_SMALL) {
