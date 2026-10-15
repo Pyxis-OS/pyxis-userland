@@ -2443,7 +2443,9 @@ enum command_result shell_launch_capture(struct shell *shell,
     return shell_directory_error(shell, "shell: capture output", "", status);
   }
   struct launch_scope scope = {.capture = true, .producer = stdout_producer,
-      .append = producer_status.mode == OUTPUT_MODE_BYTES};
+      /* Child FILE descriptors do not share a userspace cursor. The append
+       * policy also follows descendant launch, avoiding offset-zero overwrite. */
+      .append = producer_status.mode != OUTPUT_MODE_VALUE};
   handle_t launcher = shell->child_launcher != HANDLE_INVALID ?
       shell->child_launcher : shell->launcher;
   status = launcher_create_group(launcher, &scope.group);
