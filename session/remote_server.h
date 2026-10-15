@@ -6,6 +6,6 @@
 #include <stdint.h>
 
 int launch_remote_server(const struct session_config *config,
-    const struct network_config *network, uint16_t port);
+    const struct network_config *network, uint16_t port, handle_t retention_account);
 
 #endif

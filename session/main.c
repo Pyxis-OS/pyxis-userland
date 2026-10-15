@@ -3,6 +3,7 @@
 #include <pyxis/environment.h>
 #include <pyxis/working_path.h>
 #include "config.h"
+#include "retention.h"
 #include "network.h"
 #include "remote_server.h"
 #include "tcp_server.h"
@@ -48,7 +49,7 @@
 
 static int launch_session(const struct session_config *config, const struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
-    bool start_services, bool start_remote_services)
+    bool start_services, bool start_remote_services, handle_t retention_account)
 {
   struct terminal terminal = {bootstrap_capability("input"), bootstrap_capability("output")};
   handle_t launcher = bootstrap_capability("launcher");
@@ -91,7 +92,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 30 };
+  enum { OPTIONAL_RESOURCE_COUNT = 31 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -174,6 +175,8 @@ static int launch_session(const struct session_config *config, const struct netw
     PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"launcher", LAUNCHER),
   };
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
+  resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
+  grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
   handle_t threads = bootstrap_capability("threads");
   if (threads != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", grant_count);
@@ -683,8 +686,16 @@ int main(int argc, char **argv)
   if (!session_config_read(&config)) {
     return EXIT_FAILURE;
   }
+  handle_t retention_account;
+  enum call_status retention = session_retention_init(&config, &retention_account);
+  if (retention != CALL_OK) {
+    fprintf(stderr, "session: cannot establish retention account (status %u)\n", retention);
+    session_config_free(&config);
+    return EXIT_FAILURE;
+  }
   struct network_config network;
   if (!network_config_read(&network)) {
+    handle_close(retention_account);
     session_config_free(&config);
     return EXIT_FAILURE;
   }
@@ -693,11 +704,14 @@ int main(int argc, char **argv)
   if (remote_server) {
     if (!configure_network || (network_config_apply(&network, &runtime) &&
         network_config_wait_address(&network, &runtime))) {
-      result = launch_remote_server(&config, &network, (uint16_t)port);
+      result = launch_remote_server(&config, &network, (uint16_t)port, retention_account);
     }
   } else {
     result = launch_session(&config, &network, &runtime, configure_network,
-        start_services, start_remote_services);
+        start_services, start_remote_services, retention_account);
+  }
+  if (handle_close(retention_account) != 0) {
+    result = EXIT_FAILURE;
   }
   session_config_free(&config);
   result = finish_network(&network, &runtime, result);

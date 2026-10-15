@@ -10,6 +10,7 @@
 #include <abi/memory.h>
 #include <abi/thread.h>
 #include <abi/pipe.h>
+#include <abi/retention.h>
 #include <abi/power.h>
 #include <abi/profile.h>
 #include <abi/random.h>
@@ -136,7 +137,7 @@ static bool directory_grant(handle_t source, bool read_only, struct launch_grant
 }
 
 int launch_remote_server(const struct session_config *config,
-    const struct network_config *network, uint16_t port)
+    const struct network_config *network, uint16_t port, handle_t retention_account)
 {
   const char *beacon = getenv("PYXIS_REMOTE_BEACON");
   handle_t udp_beacons = bootstrap_capability("udp_beacons");
@@ -174,7 +175,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 18, RESOURCE_CAPACITY = 22 };
+  enum { OPTIONAL_COUNT = 19, RESOURCE_CAPACITY = 23 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -194,6 +195,8 @@ int launch_remote_server(const struct session_config *config,
     PROFILE_CAP((uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT),
   };
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
+  resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
+  grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
   handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", grant_count);

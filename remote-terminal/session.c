@@ -34,6 +34,7 @@
 #include <clock.h>
 #include <remote/terminal.h>
 #include <abi/execution_group.h>
+#include <abi/retention.h>
 
 static const struct {
   const char *name;
@@ -188,7 +189,18 @@ static enum call_status context_init(struct remote_context *context, bool multip
       goto done;
     }
   }
-  const struct environment_value *value = context_capability(&selection, "job_provisioner");
+  const struct environment_value *value = context_capability(&selection, "retention_account");
+  if (!value || value->flags) {
+    status = value ? CALL_DENIED : CALL_NOT_FOUND;
+    goto done;
+  }
+  size_t account_index;
+  status = context_add(context, "retention_account", value->handle,
+      RETENTION_RIGHT_CAPTURE, 0, 0, &account_index);
+  if (status != CALL_OK) {
+    goto done;
+  }
+  value = context_capability(&selection, "job_provisioner");
   if (value) {
     status = handle_copy_restricted(value->handle, JOB_PROVISIONER_RIGHTS, 0,
         &context->job_provisioner);
