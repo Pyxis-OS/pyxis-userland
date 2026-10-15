@@ -131,7 +131,9 @@ there is no host libc, formatter, firmware updater or compiler-container change.
 Classic keeps its fixed EFI loader and `boot/{caelum.elf,initrd.cpio,revision}`
 paths, plus the allowlisted `boot/limine/limine.conf`. Healthy ESPs are written
 through native FAT files without formatting; a damaged/missing classic ESP
-requires its separately reviewed one-use rebuild grant. Program sync and
+requires its separately reviewed one-use rebuild grant. A readable but unclean
+ESP also requires that recovery route; read-only admission does not establish
+writable health, and any readable foreign menu binding still refuses it. Program sync and
 verification precede boot-payload publication. No classic attempt directories
 are created until installer task 5 adds committed boot-binding evidence.
 

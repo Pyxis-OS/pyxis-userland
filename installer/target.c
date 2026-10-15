@@ -212,12 +212,21 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
         update.revision, &reason);
     target->reason = reason ? reason : "classic ESP recovery choice or previous revision changed";
     bool native = selected_esp_available(target);
-    if (state == INSTALL_ESP_REFUSED || (native && !selected_esp_clean(target)) ||
-        (record->esp_rebuild ? native || state != INSTALL_ESP_REBUILD ||
-            !selected_esp_recovery_failure(target) : !native)) {
+    bool clean = native && selected_esp_clean(target);
+    if (state == INSTALL_ESP_REFUSED) {
       return false;
     }
-    if (!record->esp_rebuild && !selected_menu_binding(target)) {
+    if (record->esp_rebuild) {
+      /* A readable dirty filesystem still refuses native RW admission. Its
+       * separate recovery grant may initialize it; clean native media may not. */
+      if (state != INSTALL_ESP_REBUILD || clean ||
+          (!native && !selected_esp_recovery_failure(target))) {
+        return false;
+      }
+    } else if (!clean) {
+      return false;
+    }
+    if (native && !selected_menu_binding(target)) {
       return false;
     }
   } else {
