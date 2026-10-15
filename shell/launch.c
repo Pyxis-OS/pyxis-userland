@@ -536,6 +536,22 @@ static enum call_status validate_scope(const struct launch_request *request,
   return CALL_OK;
 }
 
+/* The grant an ordinary foreground command receives as launcher. A capture's
+ * stages and a script's commands receive one bound to their own subgroup, so
+ * stopping that group stops everything they start. A session successor receives
+ * the shell's own, which must outlive a script's group. */
+static handle_t delegated_launcher(const struct shell *shell, enum shell_launch_mode mode,
+    const struct launch_scope *scope)
+{
+  if (scope && scope->capture && shell->child_launcher != HANDLE_INVALID) {
+    return scope->group.launcher;
+  }
+  if (mode == SHELL_FOREGROUND && shell->script_group.launcher != HANDLE_INVALID) {
+    return shell->script_group.launcher;
+  }
+  return shell->child_launcher;
+}
+
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], handle_t publication,
@@ -551,8 +567,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     return retired;
   }
   bool session = mode == SHELL_SESSION;
-  handle_t child_launcher = scope && scope->capture && shell->child_launcher != HANDLE_INVALID ?
-      scope->group.launcher : shell->child_launcher;
+  handle_t child_launcher = delegated_launcher(shell, mode, scope);
   handle_t retention_factory = session ? bootstrap_capability("retention_factory") : HANDLE_INVALID;
   handle_t retention_account = session ? bootstrap_capability("retention_account") : HANDLE_INVALID;
   bool has_retention_factory = retention_factory != HANDLE_INVALID;
@@ -566,10 +581,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
   handle_t threads = session ? bootstrap_capability("threads") : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
-  bool pass_child_launcher = session && child_launcher != HANDLE_INVALID;
-  bool has_launcher = session ||
-      (mode == SHELL_FOREGROUND && !stage->http_producer &&
-       child_launcher != HANDLE_INVALID);
+  /* Foreground commands carry the same grant under both names. A script shell
+   * recognizes delegated child launch by the second one, as init's does. */
+  bool delegate = mode == SHELL_FOREGROUND && !stage->http_producer &&
+      child_launcher != HANDLE_INVALID;
+  bool pass_child_launcher = (session && child_launcher != HANDLE_INVALID) || delegate;
+  bool has_launcher = session || delegate;
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   handle_t mux_terminal = session ? bootstrap_capability("mux_terminal") : HANDLE_INVALID;
   bool has_mux_terminal = mux_terminal != HANDLE_INVALID;
@@ -2022,7 +2039,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (scope) {
     scope->evaluated = true;
   }
-  handle_t launcher = scope && scope->capture ? scope->group.launcher : shell->launcher;
+  handle_t launcher = scope && scope->capture ? scope->group.launcher :
+      mode == SHELL_FOREGROUND && shell->script_group.launcher != HANDLE_INVALID ?
+      shell->script_group.launcher : shell->launcher;
   if (stage_count == 1) {
     status = program_launch(launcher, &requests[0], &interpreter_context,
         &children[0]);
@@ -2620,7 +2639,8 @@ enum command_result shell_launch_capture(struct shell *shell,
       /* Child FILE descriptors do not share a userspace cursor. The append
        * policy also follows descendant launch, avoiding offset-zero overwrite. */
       .append = producer_status.mode != OUTPUT_MODE_VALUE};
-  handle_t launcher = shell->child_launcher != HANDLE_INVALID ?
+  handle_t launcher = shell->script_group.launcher != HANDLE_INVALID ?
+      shell->script_group.launcher : shell->child_launcher != HANDLE_INVALID ?
       shell->child_launcher : shell->launcher;
   status = launcher_create_group(launcher, &scope.group);
   if (status != CALL_OK) {
@@ -2699,4 +2719,40 @@ enum command_result shell_launch_service_value(struct shell *shell,
     shell_directory_error(shell, "service: close startup", stage->arguments[0], CALL_BAD_HANDLE);
   }
   return result;
+}
+
+enum call_status shell_script_group_open(struct shell *shell)
+{
+  /* Without a child_launcher nothing is delegated, so there is nothing to contain. */
+  if (shell->child_launcher == HANDLE_INVALID) {
+    return CALL_OK;
+  }
+  enum call_status status = launcher_create_group(shell->child_launcher, &shell->script_group);
+  if (status != CALL_OK) {
+    shell_directory_error(shell, "shell", "script group", status);
+  }
+  return status;
+}
+
+bool shell_script_group_close(struct shell *shell)
+{
+  struct execution_group_create_reply *group = &shell->script_group;
+  if (group->supervision == HANDLE_INVALID) {
+    return true;
+  }
+  enum call_status status = execution_group_terminate(group->supervision);
+  if (status == CALL_OK) {
+    status = execution_group_wait(group->supervision);
+  }
+  bool closed = close_handle(&group->launcher);
+  closed = close_handle(&group->supervision) && closed;
+  if (status != CALL_OK) {
+    shell_directory_error(shell, "shell", "script subtree cleanup", status);
+    return false;
+  }
+  if (!closed) {
+    shell_directory_error(shell, "shell", "close script group", CALL_BAD_HANDLE);
+    return false;
+  }
+  return true;
 }

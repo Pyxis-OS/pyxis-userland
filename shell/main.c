@@ -182,7 +182,13 @@ int main(int argc, char **argv)
   }
 
   if (script != HANDLE_INVALID) {
+    if (shell_script_group_open(&shell) != CALL_OK) {
+      goto done;
+    }
     result = shell_script(&shell, script, line);
+    if (!shell_script_group_close(&shell)) {
+      result = EXIT_FAILURE;
+    }
     goto done;
   }
   if (!quiet_input) {

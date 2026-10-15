@@ -106,6 +106,10 @@ struct shell {
   /* Owned home:// capture holding .history; saving stops after one failure. */
   handle_t history_home;
   bool history_saving;
+  /* Script mode with a child_launcher: this shell keeps sole CONTROL, so its exit
+   * or termination stops every foreground command's subtree. Background commands,
+   * services and session successors are launched outside it. */
+  struct execution_group_create_reply script_group;
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_config,
       keyboard, pointer, terminal_service,
@@ -194,6 +198,10 @@ enum command_result shell_launch_capture(struct shell *shell,
 enum command_result shell_launch_service_value(struct shell *shell,
     const struct shell_stage *stage, bool read_only, struct shell_service_value *owned,
     bool *started, enum call_status *error_status);
+/* Create the script's own subgroup of child_launcher, if it holds one. Close
+ * stops its subtree, waits for completion and releases both handles. */
+enum call_status shell_script_group_open(struct shell *shell);
+bool shell_script_group_close(struct shell *shell);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line);
 
