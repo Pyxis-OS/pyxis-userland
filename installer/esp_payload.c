@@ -1,6 +1,7 @@
 #include "esp_payload.h"
 #include "esp_directory.h"
 #include "esp_transfer.h"
+#include "digest.h"
 #include "progress.h"
 
 #include <directory.h>
