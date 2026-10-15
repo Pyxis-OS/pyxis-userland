@@ -3,6 +3,7 @@
 #include "configuration.h"
 #include "publication.h"
 #include "boot_entry.h"
+#include "esp_directory.h"
 #include "digest.h"
 #include "../config-editor/readiness.h"
 #include "../libconfig/handoff.h"
@@ -64,10 +65,11 @@ static bool parent_open(handle_t root, const char *path, bool create, handle_t *
     memcpy(name, cursor, size);
     name[size] = 0;
     handle_t next = HANDLE_INVALID;
-    enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_DIRECTORY,
-        WRITE_RIGHTS, &next);
+    enum call_status status = install_esp_child_open(parent, name,
+        DIRECTORY_KIND_DIRECTORY, WRITE_RIGHTS, false, &next);
     if (create && status == CALL_NOT_FOUND) {
-      status = directory_create(parent, name, DIRECTORY_KIND_DIRECTORY, WRITE_RIGHTS, &next);
+      status = install_esp_child_open(parent, name,
+          DIRECTORY_KIND_DIRECTORY, WRITE_RIGHTS, true, &next);
       if (status == CALL_OK) {
         status = directory_sync(parent);
       }

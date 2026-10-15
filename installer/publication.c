@@ -1,4 +1,5 @@
 #include "publication.h"
+#include "esp_directory.h"
 #include "digest.h"
 #include "progress.h"
 
@@ -278,12 +279,8 @@ static bool manifest_blob(const struct config_boot_binding *binding, struct conf
 static bool directory_child(handle_t parent, const char *name, bool create,
     handle_t *child, struct config_storage_report *report)
 {
-  enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_DIRECTORY,
-      BOOT_DIRECTORY_RIGHTS, child);
-  if (status == CALL_NOT_FOUND && create) {
-    status = directory_create(parent, name, DIRECTORY_KIND_DIRECTORY,
-        BOOT_DIRECTORY_RIGHTS, child);
-  }
+  enum call_status status = install_esp_child_open(parent, name,
+      DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, create, child);
   return status == CALL_OK || fail(report, status);
 }
 
@@ -297,8 +294,8 @@ static bool open_attempt(handle_t root, const struct config_boot_binding *bindin
   if (ok) {
     enum call_status status = create ? directory_create(revision, binding->attempt,
         DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, attempt) :
-        directory_lookup(revision, binding->attempt, DIRECTORY_KIND_DIRECTORY,
-        BOOT_DIRECTORY_RIGHTS, attempt);
+        install_esp_child_open(revision, binding->attempt,
+        DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, false, attempt);
     ok = status == CALL_OK || fail(report, status);
   }
   if (revision != HANDLE_INVALID) {
@@ -354,8 +351,8 @@ bool install_publication_cleanup(const struct install_staged_boot *boot,
       directory_domain(parent, facts->domain, &inspect);
   for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS + 1; ++i) {
     const char *name = i == INSTALL_BOOT_PAYLOADS ? INSTALL_BOOT_MANIFEST_NAME : payload_names[i];
-    enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &files[i]);
+    enum call_status status = install_esp_child_open(parent, name,
+        DIRECTORY_KIND_FILE, FILE_RIGHT_READ, false, &files[i]);
     if (status != CALL_OK) {
       inspect.status = status;
     }
