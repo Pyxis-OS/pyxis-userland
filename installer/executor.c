@@ -4,65 +4,232 @@
 #include <directory.h>
 #include <file.h>
 #include <handle.h>
-#include <stdlib.h>
 #include <string.h>
 
-static bool marker_verify(const struct install_disk *disk)
+#define EXECUTION_CLEANUP_NS UINT64_C(30000000000)
+#define COEXIST_ESP_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES | \
+    DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
+
+static bool close_handle(handle_t *handle)
 {
-  handle_t root = HANDLE_INVALID, marker = HANDLE_INVALID;
-  bool ok = disk_open_volume(disk->handle, 2, "system",
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &root) == CALL_OK &&
-      directory_lookup(root, "SAFE_TO_WIPE", DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &marker) == CALL_OK;
-  uint64_t size;
-  if (ok) {
-    ok = file_size(marker, &size) == CALL_OK && size == 0;
+  if (*handle == HANDLE_INVALID) {
+    return true;
   }
-  if (marker != HANDLE_INVALID) {
-    ok = handle_close(marker) == 0 && ok;
+  if (handle_close(*handle) != 0) {
+    return false;
   }
-  if (root != HANDLE_INVALID) {
-    ok = handle_close(root) == 0 && ok;
+  *handle = HANDLE_INVALID;
+  return true;
+}
+
+static bool release_raw(struct install_disk *disk, bool *claimed)
+{
+  if (!*claimed) {
+    return true;
+  }
+  enum call_status status = disk_release(disk->handle);
+  /* RELEASE ends the claim even on failure; never retry its failed flush. */
+  *claimed = false;
+  if (status != CALL_OK) {
+    install_progress_pause();
+    fprintf(stderr, "installer: raw release failed (status %u); progress may be partial\n", status);
+  }
+  return status == CALL_OK;
+}
+
+static bool finish_disk(struct install_disk *disk, bool *claimed)
+{
+  bool ok = release_raw(disk, claimed);
+  if (!close_handle(&disk->handle)) {
+    fputs("installer: disk handle close failed; handle remains owned\n", stderr);
+    ok = false;
   }
   return ok;
 }
 
-static bool system_verify(const struct install_disk *disk)
+bool install_plan_finish_execution(struct install_plan *plan)
 {
-  handle_t root = HANDLE_INVALID;
-  if (disk_open_volume(disk->handle, 2, "system", DIRECTORY_RIGHT_LOOKUP, &root) != CALL_OK) {
+  if (!plan) {
     return false;
   }
-  return handle_close(root) == 0;
+  bool ok = true;
+  if (plan->payloads) {
+    ok = install_esp_payload_close(plan->payloads) && ok;
+    plan->payloads = NULL;
+  }
+  if (plan->classic_files) {
+    ok = install_esp_classic_close(plan->classic_files) && ok;
+    plan->classic_files = NULL;
+  }
+  if (!ok) {
+    fputs("installer: staged EFI reference cleanup was not confirmed\n", stderr);
+  }
+  enum call_status status = CALL_OK;
+  if (plan->view.control != HANDLE_INVALID) {
+    if (!plan->cleanup_deadline_ns) {
+      uint64_t now;
+      status = clock_now(plan->clock, &now);
+      if (status == CALL_OK) {
+        if (now > UINT64_MAX - EXECUTION_CLEANUP_NS) {
+          status = CALL_LIMIT;
+        } else {
+          plan->cleanup_deadline_ns = now + EXECUTION_CLEANUP_NS;
+        }
+      }
+    }
+    if (status == CALL_OK) {
+      status = install_esp_view_close_and_retire(&plan->view, plan->clock,
+          plan->cleanup_deadline_ns);
+    }
+  } else {
+    status = install_esp_view_close_and_retire(&plan->view, plan->clock,
+        plan->cleanup_deadline_ns);
+  }
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: EFI view cleanup failed (status %u); ownership retained\n", status);
+    ok = false;
+  }
+  ok = finish_disk(&plan->raw_disk, &plan->raw_claimed) && ok;
+  ok = finish_disk(&plan->disk, &plan->disk_claimed) && ok;
+  return ok;
+}
+
+static bool system_verify(const struct install_plan *plan)
+{
+  handle_t root = HANDLE_INVALID, marker = HANDLE_INVALID;
+  bool ok = disk_open_volume(plan->disk.handle, plan->target.pool.partition, "system",
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &root) == CALL_OK;
+  if (ok && !plan->record.updating) {
+    uint64_t size;
+    ok = directory_lookup(root, "SAFE_TO_WIPE", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &marker) == CALL_OK && file_size(marker, &size) == CALL_OK && size == 0;
+  }
+  ok = close_handle(&marker) && ok;
+  ok = close_handle(&root) && ok;
+  return ok;
+}
+
+static bool flush_raw(const struct install_disk *disk)
+{
+  enum call_status status = disk_flush(disk->handle);
+  if (status != CALL_OK) {
+    install_progress_pause();
+    fprintf(stderr, "installer: raw sync failed (status %u)\n", status);
+  }
+  return status == CALL_OK;
+}
+
+static bool open_pool(struct install_plan *plan)
+{
+  enum call_status status = disks_open_pool(plan->disks, &plan->target.pool,
+      &plan->disk.handle);
+  if (status != CALL_OK) {
+    install_progress_pause();
+    fprintf(stderr, "installer: selected pool admission failed (status %u)\n", status);
+    return false;
+  }
+  plan->disk_claimed = true;
+  return release_raw(&plan->disk, &plan->disk_claimed);
+}
+
+static const struct mount_state_reply *reviewed_esp(const struct install_plan *plan)
+{
+  if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
+    return NULL;
+  }
+  for (size_t i = 0; i < plan->target.review.esp_count; ++i) {
+    const struct install_review_esp *esp = &plan->target.review.esps[i];
+    if (esp->available && esp->identity_matches &&
+        esp->selection.id == plan->target.esp.id &&
+        esp->selection.partition == plan->target.esp.partition) {
+      return &esp->observed;
+    }
+  }
+  return NULL;
+}
+
+static bool stage_esp(struct install_plan *plan)
+{
+  enum call_status status = install_esp_view_open(&plan->view, plan->disks,
+      &plan->target.esp, reviewed_esp(plan),
+      plan->record.coexist ? COEXIST_ESP_RIGHTS : INSTALL_ESP_VIEW_RIGHTS);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: selected EFI view admission failed (status %u)\n", status);
+    return false;
+  }
+  struct install_esp_payload_report report = {0};
+  if (plan->record.coexist) {
+    struct install_esp_payload_request *request = &plan->payload_request;
+    request->root = plan->view.root;
+    request->control = plan->view.control;
+    request->expected = plan->view.expected;
+    if (!install_esp_payload_stage(request, &plan->payloads, &report)) {
+      fprintf(stderr, "installer: EFI payload stage failed (status %u, phase %u, artifact %s)\n",
+          report.status, report.phase, report.artifact);
+      return false;
+    }
+  } else {
+    struct install_esp_activation_request *request = &plan->classic_request;
+    request->root = plan->view.root;
+    request->control = plan->view.control;
+    request->expected = plan->view.expected;
+    if (!install_esp_classic_stage(request, &plan->classic_files, &status)) {
+      fprintf(stderr, "installer: classic EFI stage failed (status %u)\n", status);
+      return false;
+    }
+  }
+  status = install_esp_view_begin_checked(&plan->view);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: EFI verification interval failed (status %u)\n", status);
+    return false;
+  }
+  bool verified;
+  if (plan->record.coexist) {
+    verified = install_esp_payload_verify(plan->payloads, &report);
+    status = report.status;
+  } else {
+    verified = install_esp_classic_verify(plan->classic_files, &status);
+    if (verified) {
+      verified = install_esp_activate_classic(&plan->classic_request, &status);
+    }
+  }
+  if (!verified) {
+    fprintf(stderr, "installer: EFI verification/publication failed (status %u)\n", status);
+    return false;
+  }
+  status = install_esp_view_end(&plan->view);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: EFI interval end failed (status %u)\n", status);
+  }
+  return status == CALL_OK;
 }
 
 bool install_plan_execute(struct install_plan *plan, const char *consent)
 {
-  bool updating = plan->record.updating;
-  if (!plan->ready || !consent || strcmp(consent, updating ? "update" : "wipe")) {
-    fputs("installer: plan was not confirmed; nothing was written\n", stderr);
+  if (!plan || !plan->ready || !consent || strcmp(consent,
+        plan->record.updating ? "update" : plan->record.coexist ? "append" : "wipe") ||
+      plan->disk.handle != HANDLE_INVALID || plan->disk_claimed ||
+      plan->raw_disk.handle != HANDLE_INVALID || plan->raw_claimed || plan->view.attempted ||
+      plan->payloads || plan->classic_files) {
+    fputs("installer: plan was not confirmed or has pending execution ownership; nothing was written\n",
+        stderr);
     return false;
   }
-  struct install_disk *disk = &plan->disk;
-  const struct install_layout *layout = &plan->record.layout;
-  const char *revision = plan->record.revision;
-  bool claimed = false, attempted_write = false, esp_attempted = false;
-  int result = EXIT_FAILURE;
-  install_progress_begin("Claiming reviewed target and refusing stale inputs", INSTALL_PROGRESS_NONE, NULL);
-  enum call_status status = disks_open(plan->disks, disk->info.id,
-      DISK_ACCESS_READ_WRITE, &disk->handle);
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot claim disk (status %u); nothing was written\n", status);
-    goto done;
-  }
-  claimed = true;
+  install_progress_begin("Revalidating the reviewed target and frozen inputs", INSTALL_PROGRESS_NONE, NULL);
   if (!install_plan_revalidate(plan)) {
+    plan->ready = false;
     install_progress_pause();
     fputs("installer: plan is stale or cannot be revalidated; nothing was written.\n"
         "Build and review a new plan; this one was not amended.\n", stderr);
-    goto done;
+    return false;
   }
+  plan->ready = false;
+  bool ok = false, raw_cleanup_failed = false;
+  bool updating = plan->record.updating, coexist = plan->record.coexist;
+  struct install_disk *disk = &plan->disk, *raw = &plan->raw_disk;
+  const struct install_layout *layout = &plan->record.layout;
+  const char *revision = plan->record.revision;
+  enum call_status status;
   bool created_valid = false;
   int64_t created_ns = 0;
   if (!updating) {
@@ -70,152 +237,114 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     created_valid = clock_wall_now(plan->clock, &wall) == CALL_OK;
     created_ns = created_valid ? npfs_timestamp(wall.seconds, wall.nanoseconds) : 0;
   }
-  /* Programs first, then the ESP: an interruption before the ESP switch leaves
-   * the old kernel booting the old revision's programs. */
-  attempted_write = true;
-  if (!updating) {
-    if (!install_pool_format(disk, layout, &plan->header, plan->record.volume_id, created_ns, created_valid)) {
-      goto done;
-    }
-    if (!install_gpt_write(disk, layout)) {
-      goto done;
-    }
-    install_progress_begin_major("Flushing pool and GPT", INSTALL_PROGRESS_NONE, NULL);
-    status = disk_flush(disk->handle);
+  if (!updating && coexist) {
+    struct disk_append_reply reply;
+    status = disk_append_pool(plan->target.review_handle, &plan->target.pool, &reply);
     if (status != CALL_OK) {
-      install_progress_pause();
-      fprintf(stderr, "installer: pool sync failed (status %u)\n", status);
+      fprintf(stderr, "installer: pool append failed (status %u, phase %llu, effects possible %s, "
+          "disk %llu, GPT entry %llu, first block %llu, blocks %llu, failed block %llu)\n",
+          status, (unsigned long long)reply.phase,
+          reply.flags & DISK_APPEND_EFFECTS_POSSIBLE ? "yes" : "unknown or none",
+          (unsigned long long)plan->target.pool.id,
+          (unsigned long long)plan->target.pool.partition,
+          (unsigned long long)plan->target.pool.first_block,
+          (unsigned long long)plan->target.pool.block_count,
+          (unsigned long long)reply.failed_block);
+      goto done;
+    }
+    disk->handle = reply.disk;
+    plan->disk_claimed = true;
+    if (!install_pool_format(disk, layout, &plan->header, plan->record.volume_id,
+          created_ns, created_valid) || !flush_raw(disk) ||
+        !release_raw(disk, &plan->disk_claimed)) {
+      goto done;
+    }
+  } else {
+    if (!updating) {
+      status = disk_begin_erase(plan->target.review_handle, "wipe", &raw->handle);
+      if (status != CALL_OK) {
+        fprintf(stderr, "installer: reviewed erase writer admission failed (status %u)\n", status);
+        goto done;
+      }
+      plan->raw_claimed = true;
+      if (!install_pool_format(raw, layout, &plan->header, plan->record.volume_id,
+            created_ns, created_valid) || !install_gpt_write(raw, layout) ||
+          !plan->esp || !install_esp_write(plan->esp) || !flush_raw(raw)) {
+        goto done;
+      }
+      if (!finish_disk(raw, &plan->raw_claimed)) {
+        raw_cleanup_failed = true;
+        goto done;
+      }
+    }
+    if (!open_pool(plan)) {
       goto done;
     }
   }
-  install_progress_begin("Releasing raw claim and rescanning GPT", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_release(disk->handle);
-  claimed = false;
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: raw release/GPT rescan failed (status %u)\n", status);
+  install_progress_begin("Preparing the selected home volume", INSTALL_PROGRESS_NONE, NULL);
+  status = disk_create_volume(disk->handle, plan->target.pool.partition, INSTALL_HOME_VOLUME);
+  if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
+    fprintf(stderr, "installer: home volume preparation failed (status %u)\n", status);
     goto done;
   }
-  install_progress_begin("Checking GPT read-back", INSTALL_PROGRESS_NONE, NULL);
-  struct disk_info verified;
-  if (disk_get_info(disk->handle, &verified) != CALL_OK || verified.gpt_status != DISK_GPT_HEALTHY ||
-      memcmp(verified.gpt_guid, layout->disk_guid, 16)) {
-    install_progress_pause();
-    fputs("installer: GPT read-back failed\n", stderr);
+  if (!install_programs_write(disk, plan->target.pool.partition, plan->boot, &plan->programs,
+        revision, &plan->manifest, plan->manifest_text, plan->manifest_bytes) ||
+      !system_verify(plan)) {
     goto done;
   }
-  /* Update adds home to pools made before it existed and never opens it. */
-  install_progress_begin("Preparing home volume", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_create_volume(disk->handle, INSTALL_POOL_PARTITION, INSTALL_HOME_VOLUME);
-  install_progress_finish();
-  if (status == CALL_OK) {
-    install_progress_detail("Created the home volume.");
-  } else if (status != CALL_ALREADY_EXISTS) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot create the home volume (status %u)\n", status);
+  if (updating && plan->record.esp_rebuild) {
+    status = disk_begin_esp_rebuild(plan->target.rebuild_review, "update", &raw->handle);
+    if (status != CALL_OK) {
+      fprintf(stderr, "installer: reviewed EFI rebuild admission failed (status %u)\n", status);
+      goto done;
+    }
+    plan->raw_claimed = true;
+    if (!plan->esp || !install_esp_write(plan->esp) || !flush_raw(raw)) {
+      goto done;
+    }
+    if (!finish_disk(raw, &plan->raw_claimed)) {
+      raw_cleanup_failed = true;
+      goto done;
+    }
+  }
+  if (!stage_esp(plan)) {
     goto done;
   }
-  if (!install_programs_write(disk, layout->pool_partition, plan->boot, &plan->programs, revision,
-        &plan->manifest, plan->manifest_text, plan->manifest_bytes)) {
-    goto done;
-  }
-  install_progress_begin("Claiming EFI partition", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_claim(disk->handle, INSTALL_ESP_PARTITION);
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: cannot claim the EFI partition (status %u)\n", status);
-    goto done;
-  }
-  claimed = true;
-  esp_attempted = true;
-  if (!install_esp_write(plan->esp)) {
-    goto done;
-  }
-  install_progress_begin_major("Flushing EFI boot files", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_flush(disk->handle);
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: final sync failed (status %u)\n", status);
-    goto done;
-  }
-  install_progress_begin("Releasing EFI partition and rescanning GPT", INSTALL_PROGRESS_NONE, NULL);
-  status = disk_release(disk->handle);
-  claimed = false;
-  if (status != CALL_OK) {
-    install_progress_pause();
-    fprintf(stderr, "installer: EFI partition release failed (status %u)\n", status);
-    goto done;
-  }
-  if (!install_esp_verify(plan->esp)) {
-    install_progress_pause();
-    fputs("installer: read-back check failed\n", stderr);
-    goto done;
-  }
-  install_progress_begin(updating ? "Reopening system read-only" :
-      "Reopening system read-only and checking its marker", INSTALL_PROGRESS_NONE, NULL);
-  if (updating ? !system_verify(disk) : !marker_verify(disk)) {
-    install_progress_pause();
-    fputs("installer: read-back check failed\n", stderr);
-    goto done;
-  }
-  /* Keep the new revision and the one the disk booted until now. When that
-   * one is unknown, as after damaged boot files, nothing is removed. */
-  install_progress_finish();
   const char *previous = updating ? plan->record.previous : NULL;
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
     fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
-  } else {
-    if (!install_programs_cleanup(disk, layout->pool_partition, revision, previous)) {
-      install_progress_pause();
-      fputs("installer: old program directories could not all be removed\n", stderr);
-    }
+  } else if (!install_programs_cleanup(disk, plan->target.pool.partition, revision, previous)) {
+    fputs("installer: old program directory cleanup failed\n", stderr);
+    goto done;
   }
-  install_progress_finish();
-  result = EXIT_SUCCESS;
+  ok = true;
 
 done:
   install_progress_finish();
-  if (claimed) {
-    install_progress_begin("Releasing operation raw claim", INSTALL_PROGRESS_NONE, NULL);
-    status = disk_release(disk->handle);
-    if (status != CALL_OK) {
-      install_progress_pause();
-      fprintf(stderr, "installer: cleanup release failed (status %u)\n", status);
-      result = EXIT_FAILURE;
-    }
+  if (raw_cleanup_failed) {
+    /* No EFI view was opened; do not retry the raw handle's failed close. */
+    finish_disk(disk, &plan->disk_claimed);
+  } else if (!install_plan_finish_execution(plan)) {
+    ok = false;
   }
-  if (disk->handle != HANDLE_INVALID) {
-    if (handle_close(disk->handle) != 0) {
-      result = EXIT_FAILURE;
-    }
-    disk->handle = HANDLE_INVALID;
+  if (!ok) {
+    fputs("Apply failed; the target may contain partial changes. No mutation was retried.\n"
+        "Inspect the target before preparing and reviewing another attempt.\n", stderr);
+    return false;
   }
-  install_progress_finish();
-  if (attempted_write && result != EXIT_SUCCESS) {
-    if (updating && !esp_attempted) {
-      if (strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION) &&
-          strcmp(plan->record.previous, revision)) {
-        fputs("Update failed before the EFI boot files changed; the disk still boots its\n"
-            "previous revision. Boot the live image again, then choose Update.\n", stderr);
-      } else {
-        fputs("Update failed before the EFI boot files changed; its program revision may\n"
-            "be partially rewritten. Boot the live image again, then choose Update.\n", stderr);
-      }
-    } else if (updating) {
-      fputs("Update failed; the EFI boot files may be partially rebuilt.\n"
-          "Boot the live image again, then choose Update to rebuild this disk's boot files.\n", stderr);
-    } else {
-      fputs("Installation failed; the disk may be partially rebuilt.\n"
-          "Boot the live image again, then run the installer and choose Read the room to reinstall this disk.\n", stderr);
+  if (coexist) {
+    fputs("Coexistence payload staged, synchronized and verified. Existing boot menu unchanged.\n"
+        "Review and add these entries to that menu before booting the new payload:\n", stderr);
+    if (fwrite(plan->entry.bytes, 1, plan->entry.size, stderr) != plan->entry.size ||
+        fflush(stderr) != 0) {
+      return false;
     }
+  } else {
+    fputs(updating ? "updated\n" : "installed\n", stderr);
+    fputs("Boot from this disk after removing the live medium.\n", stderr);
   }
-  if (result == EXIT_SUCCESS) {
-    if (updating) {
-      fputs("updated\nBoot from this disk after removing the live medium.\n", stderr);
-    } else {
-      fputs("installed\nBoot from this disk after removing the install medium.\n"
-          "Deleting system://SAFE_TO_WIPE marks this installation as final.\n", stderr);
-    }
+  if (!updating) {
+    fputs("Deleting system://SAFE_TO_WIPE marks this installation as final.\n", stderr);
   }
-  return result == EXIT_SUCCESS;
+  return true;
 }
