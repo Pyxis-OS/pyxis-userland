@@ -21,12 +21,38 @@
 #define INSTALL_BIN_VOLUME "bin"
 #define INSTALL_HOME_VOLUME "home"
 #define INSTALL_UNKNOWN_REVISION "unknown"
+/* Bounds shared by the GPT reader and its complete partition projection. */
+#define INSTALL_GPT_MAX_PARTITIONS 256u
+#define INSTALL_GPT_TABLE_MAX_BYTES 65536u
+#define INSTALL_GPT_NAME_UNITS 36u
 
 struct install_disk {
   handle_t handle;
   struct disk_info info;
   uint64_t bytes;
 };
+
+struct install_gpt_partition {
+  uint64_t entry, first_block, block_count, attributes;
+  uint8_t type_guid[16], guid[16];
+  uint16_t name[INSTALL_GPT_NAME_UNITS];
+};
+
+struct install_gpt {
+  uint64_t first_usable, last_usable;
+  uint32_t slot_count, partition_count;
+  uint8_t disk_guid[16];
+  struct install_gpt_partition partitions[INSTALL_GPT_MAX_PARTITIONS];
+};
+
+/* Read-only projection of both agreeing healthy GPT copies and protective MBR.
+ * Every nonempty slot is represented in entry order; entry is one-based, and
+ * names retain all UTF-16 code units without assuming termination or validity.
+ * Caller owns the complete output, cleared on failure; reason is optional and
+ * borrowed static text, NULL on success. No snapshot or mutation authority is
+ * established, and absent/damaged GPT is refused rather than treated as blank. */
+bool install_gpt_inspect(const struct install_disk *disk, struct install_gpt *gpt,
+    const char **reason);
 
 /* A source is a borrowed file handle, or owned memory when memory is set. */
 struct install_source {

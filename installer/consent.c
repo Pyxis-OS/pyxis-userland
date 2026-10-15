@@ -8,8 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GPT_TABLE_BYTES 65536u
-#define GPT_ENTRIES 256u
 #define GPT_HEADER_BYTES 92u
 #define GPT_ENTRY_BYTES 128u
 #define GPT_RESERVED_ATTRIBUTES UINT64_C(0x0000fffffffffff8)
@@ -22,7 +20,7 @@ struct gpt_copy {
   uint32_t header_bytes, count, entry_bytes, table_bytes;
   uint64_t first, last;
   uint8_t guid[16];
-  uint8_t table[GPT_TABLE_BYTES];
+  uint8_t table[INSTALL_GPT_TABLE_MAX_BYTES];
 };
 
 struct overlay_entry {
@@ -105,7 +103,7 @@ static enum gpt_state read_gpt(const struct install_disk *disk, unsigned copy,
       (copy ? table_lba <= gpt->last : (table_lba < 2 || table_lba + table_blocks > gpt->first))) {
     return GPT_DAMAGED;
   }
-  if (gpt->count > GPT_ENTRIES || table_bytes > GPT_TABLE_BYTES) {
+  if (gpt->count > INSTALL_GPT_MAX_PARTITIONS || table_bytes > INSTALL_GPT_TABLE_MAX_BYTES) {
     return GPT_UNSUPPORTED;
   }
   gpt->table_bytes = (uint32_t)table_bytes;
@@ -168,6 +166,85 @@ static bool gpt_agree(const struct gpt_copy *a, const struct gpt_copy *b)
   return a->header_bytes == b->header_bytes && a->first == b->first && a->last == b->last &&
     a->count == b->count && a->entry_bytes == b->entry_bytes && !memcmp(a->guid, b->guid, 16) &&
     !memcmp(a->table, b->table, a->table_bytes);
+}
+
+bool install_gpt_inspect(const struct install_disk *disk, struct install_gpt *gpt,
+    const char **reason)
+{
+  if (reason) {
+    *reason = "unsupported disk geometry or missing GPT projection output";
+  }
+  if (!gpt) {
+    return false;
+  }
+  memset(gpt, 0, sizeof(*gpt));
+  if (!disk || disk->info.block_size < 512 || disk->info.block_size > NPFS_BLOCK_SIZE ||
+      (disk->info.block_size & (disk->info.block_size - 1)) || disk->info.block_count < 3 ||
+      disk->info.block_count > UINT64_MAX / disk->info.block_size ||
+      disk->bytes != disk->info.block_count * disk->info.block_size) {
+    return false;
+  }
+  struct gpt_copy *maps = calloc(2, sizeof(*maps));
+  uint8_t *block = malloc(NPFS_BLOCK_SIZE);
+  const char *failure = "out of memory during GPT inspection";
+  bool success = false;
+  if (!maps || !block) {
+    goto done;
+  }
+  failure = "I/O failure during GPT inspection";
+  install_progress_begin("Inspecting disk protective MBR", INSTALL_PROGRESS_RAW_READ, NULL);
+  if (!install_read(disk, 0, block, (size_t)disk->info.block_size)) {
+    goto done;
+  }
+  bool mbr = protective_mbr(block, disk);
+  for (unsigned copy = 0; copy < 2; ++copy) {
+    maps[copy].state = read_gpt(disk, copy, block, &maps[copy]);
+    if (maps[copy].state == GPT_FATAL) {
+      goto done;
+    }
+    if (maps[copy].state == GPT_UNSUPPORTED) {
+      failure = "unsupported GPT format or inspection capacity";
+      goto done;
+    }
+  }
+  if (!mbr || maps[0].state != GPT_VALID || maps[1].state != GPT_VALID) {
+    failure = "no healthy validated protective GPT";
+    goto done;
+  }
+  if (!gpt_agree(&maps[0], &maps[1])) {
+    failure = "GPT copies disagree";
+    goto done;
+  }
+  const struct gpt_copy *map = &maps[0];
+  gpt->first_usable = map->first;
+  gpt->last_usable = map->last;
+  gpt->slot_count = map->count;
+  memcpy(gpt->disk_guid, map->guid, sizeof(gpt->disk_guid));
+  for (uint32_t i = 0; i < map->count; ++i) {
+    const uint8_t *entry = map->table + (size_t)i * map->entry_bytes;
+    if (zero_bytes(entry, 16)) {
+      continue;
+    }
+    struct install_gpt_partition *partition = &gpt->partitions[gpt->partition_count++];
+    partition->entry = (uint64_t)i + 1;
+    partition->first_block = npfs_get_u64(entry + 32);
+    partition->block_count = npfs_get_u64(entry + 40) - partition->first_block + 1;
+    partition->attributes = npfs_get_u64(entry + 48);
+    memcpy(partition->type_guid, entry, sizeof(partition->type_guid));
+    memcpy(partition->guid, entry + 16, sizeof(partition->guid));
+    for (unsigned unit = 0; unit < INSTALL_GPT_NAME_UNITS; ++unit) {
+      partition->name[unit] = npfs_get_u16(entry + 56 + unit * 2);
+    }
+  }
+  success = true;
+done:
+  install_progress_finish();
+  free(block);
+  free(maps);
+  if (reason) {
+    *reason = success ? NULL : failure;
+  }
+  return success;
 }
 
 static enum inspection raw_pool_read(struct pool_view *pool, uint64_t block, uint8_t *bytes)
