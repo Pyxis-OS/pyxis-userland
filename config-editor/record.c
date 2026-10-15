@@ -162,7 +162,8 @@ bool config_record_valid(const struct config_record *record)
       !config_boot_binding_valid(&record->previous_boot) ||
       (record->previous_boot.present && !record->boot.present) ||
       (record->previous_boot.present &&
-          !strcmp(record->previous_boot.kernel.path, record->boot.kernel.path))) {    return false;
+          !strcmp(record->previous_boot.kernel.path, record->boot.kernel.path))) {
+    return false;
   }
   for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) {
     bool selected = !record->boot.present || record->boot.source == CONFIG_ACTIVE_ESP;

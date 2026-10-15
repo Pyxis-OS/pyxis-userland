@@ -64,7 +64,6 @@ struct config_record {
 };
 
 const char *config_storage_file_name(enum config_storage_file file);
-bool config_revision_valid(const char *revision);
 bool config_transaction_valid(const char *transaction);
 bool config_digest_valid(const struct config_file_digest *digest);
 /* Boot archives and kernels use native streamed FILE hashing, without the

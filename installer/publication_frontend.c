@@ -15,7 +15,6 @@
 #include <handle.h>
 #include <mount.h>
 #include <random.h>
-#include <pyxis_fs/npfs.h>
 #include <startup.h>
 #include <system_info.h>
 #include <stdlib.h>
@@ -110,73 +109,6 @@ static bool retire(struct mount_fat32_reply *mount)
     mount->control = HANDLE_INVALID;
   }
   return ok;
-}
-
-static bool digest_source(const struct install_source *source, struct config_file_digest *output)
-{
-  struct install_digest digest = {0};
-  unsigned char *buffer = malloc(FILE_READ_MAX_BYTES);
-  bool ok = buffer && source->bytes && install_digest_begin(&digest);
-  install_progress_begin("Freezing boot payload evidence", INSTALL_PROGRESS_SOURCE_READ, NULL);
-  install_progress_bytes_total(source->bytes);
-  for (uint64_t offset = 0; ok && offset < source->bytes;) {
-    size_t count = source->bytes - offset < FILE_READ_MAX_BYTES ?
-        (size_t)(source->bytes - offset) : FILE_READ_MAX_BYTES;
-    ok = install_source_read(source, offset, buffer, count) && install_digest_update(&digest, buffer, count);
-    if (ok) {
-      offset += count;
-    }
-  }
-  ok = ok && install_digest_finish(&digest, output->sha256);
-  output->present = ok;
-  output->size = ok ? source->bytes : 0;
-  install_digest_abort(&digest);
-  free(buffer);
-  return ok;
-}
-
-static bool legacy_kernel_valid(handle_t file, uint64_t bytes)
-{
-  struct install_source source = {.handle = file, .bytes = bytes};
-  uint8_t header[64], program[56];
-  if (bytes < sizeof(header) || !install_source_read(&source, 0, header, sizeof(header)) ||
-      memcmp(header, "\177ELF\2\1\1", 7) || npfs_get_u16(header + 16) != 2 ||
-      npfs_get_u16(header + 18) != 62 || npfs_get_u32(header + 20) != 1 ||
-      npfs_get_u64(header + 24) < UINT64_C(0xffffffff80000000) ||
-      npfs_get_u16(header + 54) != sizeof(program)) {
-    return false;
-  }
-  uint64_t first = npfs_get_u64(header + 32);
-  uint16_t count = npfs_get_u16(header + 56);
-  if (!count || count > 128 || first > bytes || (uint64_t)count * sizeof(program) > bytes - first) {
-    return false;
-  }
-  bool executable = false;
-  for (unsigned i = 0; i < count; ++i) {
-    if (!install_source_read(&source, first + i * sizeof(program), program, sizeof(program))) {
-      return false;
-    }
-    if (npfs_get_u32(program) == 1) {
-      uint64_t offset = npfs_get_u64(program + 8), size = npfs_get_u64(program + 32);
-      if (offset > bytes || size > bytes - offset || size > npfs_get_u64(program + 40)) {
-        return false;
-      }
-      executable |= (npfs_get_u32(program + 4) & 1) != 0;
-    }
-  }
-  return executable;
-}
-
-static bool legacy_revision_valid(const struct config_blob *blob)
-{
-  if (!blob->digest.present || blob->size < 2 || blob->size > 64 || blob->bytes[blob->size - 1] != '\n' ||
-      memchr(blob->bytes, 0, blob->size)) {
-    return false;
-  }
-  char revision[65];
-  memcpy(revision, blob->bytes, blob->size - 1);
-  revision[blob->size - 1] = 0;
-  return config_revision_valid(revision) && strcmp(revision, INSTALL_UNKNOWN_REVISION);
 }
 
 static bool payload_path(struct config_boot_payload *payload, const char *revision,
@@ -289,7 +221,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   struct install_publication_request request = {.esp_root = HANDLE_INVALID,
     .view = {.config_parent = HANDLE_INVALID, .limine_parent = HANDLE_INVALID, .control = HANDLE_INVALID, .clock = clock}};
   struct config_target_facts planned_facts = {0};
-  struct config_file_digest legacy_digests[3] = {0};
+  struct config_file_digest legacy_digests[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
   bool legacy_pair = false;
   uint64_t available_bytes = 0, cluster_bytes = 0;
   int result = EXIT_FAILURE;
@@ -339,44 +271,9 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   if (!install_snapshot_file(mount.root, "EFI/pyxis/config/config.record", CONFIG_RECORD_MAX_BYTES, &record)) {
     goto done;
   }
-  /* Exact legacy menu recognition is additionally bound to existing payloads.
-   * Hash streaming is handled below; no names alone prove ownership. */
-  struct config_blob legacy_revision = {0};
-  handle_t legacy_files[2] = {HANDLE_INVALID, HANDLE_INVALID};
-  handle_t boot_dir = HANDLE_INVALID;
-  if (directory_lookup(mount.root, "boot", DIRECTORY_KIND_DIRECTORY, READ_RIGHTS, &boot_dir) == CALL_OK) {
-    if (directory_lookup(boot_dir, "caelum.elf", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &legacy_files[0]) == CALL_OK &&
-        directory_lookup(boot_dir, "initrd.cpio", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &legacy_files[1]) == CALL_OK &&
-        install_snapshot_file(mount.root, "boot/revision", 64, &legacy_revision)) {
-      uint64_t sizes[2];
-      legacy_pair = file_size(legacy_files[0], &sizes[0]) == CALL_OK && sizes[0] &&
-          file_size(legacy_files[1], &sizes[1]) == CALL_OK && sizes[1] &&
-          legacy_revision_valid(&legacy_revision) && legacy_kernel_valid(legacy_files[0], sizes[0]);
-      if (legacy_pair) {
-        struct install_source legacy_source = {.handle = legacy_files[1], .bytes = sizes[1]};
-        legacy_pair = install_archive_rescue_identity(&legacy_source);
-      }
-      /* Legacy adoption needs explicit Review below. The initial raw snapshot
-       * also binds these payload bytes via their digests before any staging. */
-      struct config_file_digest digests[2] = {0};
-      for (unsigned i = 0; i < 2 && legacy_pair; ++i) {
-        struct install_source source = {.handle = legacy_files[i], .bytes = sizes[i]};
-        legacy_pair = digest_source(&source, &digests[i]);
-      }
-      if (legacy_pair) {
-        legacy_digests[0] = digests[0];
-        legacy_digests[1] = digests[1];
-        legacy_digests[2] = legacy_revision.digest;
-      }
-    }
-    handle_close(boot_dir);
-  }
-  for (unsigned i = 0; i < 2; ++i) {
-    if (legacy_files[i] != HANDLE_INVALID) {
-      handle_close(legacy_files[i]);
-    }
-  }
-  config_blob_destroy(&legacy_revision);
+  /* Evidence remains bound to this planning view and is rechecked under the
+   * initial raw claim and again after writable admission. */
+  legacy_pair = install_boot_legacy_certify(mount.root, legacy_digests);
   if (!install_snapshot_capacity(&disk, &planned_facts, &available_bytes, &cluster_bytes)) {
     fputs("Capacity inspection unavailable; nothing written.\n", stderr);
     goto done;
@@ -443,15 +340,21 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   const char *names[] = {"kernel.elf", "boot.arc", "revision.txt"};
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
     if (!payload_path(payloads[i], revision, attempt, names[i]) ||
-        !digest_source(&request.sources[i], &payloads[i]->digest)) {
+        !install_boot_payload_digest(&request.sources[i], &payloads[i]->digest)) {
       goto done;
     }
   }
   struct config_record previous = {0};
   bool previous_valid = record.digest.present && config_record_parse(record.bytes, record.size, &previous) && previous.committed;
+  const struct install_boot_entry_paths previous_paths = {
+    .kernel = previous.boot.kernel.path, .archive = previous.boot.archive.path};
+  const struct install_boot_entry_paths *previous_pair = previous_valid && previous.boot.present ?
+    &previous_paths : NULL;
+  const struct install_boot_entry_paths next_paths = {
+    .kernel = binding->kernel.path, .archive = binding->archive.path};
   bool adoption, pending;
-  if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_valid ? &previous.boot : NULL,
-        planned_facts.disk_guid, binding, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
+  if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_pair,
+        planned_facts.disk_guid, &next_paths, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
     goto done;
   }
   for (;;) {
@@ -468,7 +371,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
         (unsigned long long)binding->archive.digest.size, pending ? "manual adoption; activation pending" : "owned switch last",
         adoption ? "; legacy adoption pre-selected" : "");
     if (verbose) {
-      install_boot_entry_print(binding, planned_facts.disk_guid, stderr);
+      install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
     }
     fputs("Review actions: confirm, cancel, plan, source archive, source esp, adopt boot|session|network,\n"
         "or change NUMBER keep|apply|adopt|remove.\n", stderr);
@@ -482,7 +385,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     }
     if (!strcmp(text, "plan")) {
       install_configuration_review(&plan, stderr);
-      install_boot_entry_print(binding, planned_facts.disk_guid, stderr);
+      install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
       continue;
     }
     if (!strcmp(text, "confirm")) {
@@ -521,8 +424,8 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
       fputs("Choice refused; plan retained.\n", stderr);
     }
     /* Rebuilding config choices copies the original Limine snapshot. */
-    if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_valid ? &previous.boot : NULL,
-          planned_facts.disk_guid, binding, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
+    if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_pair,
+          planned_facts.disk_guid, &next_paths, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
       goto done;
     }
   }
@@ -635,7 +538,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
       report.boot_activated ? "entry confirmed" : report.committed ?
       "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
   if (report.committed && pending) {
-    install_boot_entry_print(binding, planned_facts.disk_guid, stderr);
+    install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
   }
   if (!ok) {
     fputs("Stopped; retain artifacts for manual disposition. No rollback, retry or reboot offer.\n", stderr);
