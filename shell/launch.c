@@ -587,6 +587,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool delegate = mode == SHELL_FOREGROUND && !stage->http_producer &&
       child_launcher != HANDLE_INVALID;
   bool pass_child_launcher = session && child_launcher != HANDLE_INVALID;
+  bool has_interpreter_root = session && shell->interpreter_root != HANDLE_INVALID;
   bool has_launcher = session || delegate;
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   handle_t mux_terminal = session ? bootstrap_capability("mux_terminal") : HANDLE_INVALID;
@@ -631,7 +632,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       prepared->extras[prepared->extra_count++] = (struct program_script_grant){
         "pipe", shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0, ENVIRONMENT_EXPORTED};
     }
-    if (shell->interpreter_root != HANDLE_INVALID) {
+    /* The root travels only with authority to extend; a shell without a trusted
+     * root withholds all of it. */
+    if (shell->interpreter_root == HANDLE_INVALID) {
+      prepared->extra_count = 0;
+    } else if (prepared->extra_count) {
       uint64_t rights, transport;
       enum call_status queried = handle_rights(shell->interpreter_root, &rights, &transport);
       if (queried != CALL_OK) {
@@ -675,7 +680,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 37 -
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 38 -
       BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -692,7 +697,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t pointer_index = keyboard_index + (has_keyboard ? 1 : 0);
   size_t launcher_index = pointer_index + (has_pointer ? 1 : 0);
   size_t child_launcher_index = launcher_index + (has_launcher ? 1 : 0);
-  size_t net_config_index = child_launcher_index + (pass_child_launcher ? 1 : 0);
+  size_t interpreter_root_index = child_launcher_index + (pass_child_launcher ? 1 : 0);
+  size_t net_config_index = interpreter_root_index + (has_interpreter_root ? 1 : 0);
   size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
   size_t service_index = pipe_index + (has_pipe ? 1 : 0);
   size_t space_index = service_index + (has_service ? 1 : 0);
@@ -811,6 +817,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (pass_child_launcher) {
     grants[child_launcher_index] = (struct launch_grant){child_launcher,
         LAUNCHER_RIGHT_LAUNCH, 0};
+  }
+  if (has_interpreter_root) {
+    struct launch_grant *root = &grants[interpreter_root_index];
+    *root = (struct launch_grant){.source = shell->interpreter_root};
+    enum call_status status = handle_rights(root->source, &root->rights, &root->transport);
+    if (status != CALL_OK) {
+      return status;
+    }
   }
   if (has_terminal) {
     grants[terminal_index] = (struct launch_grant){shell->terminal_service, TERMINAL_SERVICE_RIGHT_CREATE, 0};
@@ -955,6 +969,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (pass_child_launcher) {
     resources[resource_count++] =
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", child_launcher_index);
+  }
+  if (has_interpreter_root) {
+    resources[resource_count++] =
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", interpreter_root_index);
   }
   if (has_net_config) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_config", net_config_index);

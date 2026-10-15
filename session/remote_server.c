@@ -175,7 +175,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 19, RESOURCE_CAPACITY = 23 };
+  enum { OPTIONAL_COUNT = 20, RESOURCE_CAPACITY = 24 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -247,6 +247,14 @@ int launch_remote_server(const struct session_config *config,
   if (child_launcher != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
+  handle_t interpreter_root = bootstrap_capability("interpreter_root");
+  if (interpreter_root != HANDLE_INVALID) {
+    struct launch_grant root = {.source = interpreter_root};
+    if (handle_rights(root.source, &root.rights, &root.transport) == CALL_OK) {
+      resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", grant_count);
+      grants[grant_count++] = root;
+    }
   }
   handle_t system_info = bootstrap_capability("system_info");
   if (system_info != HANDLE_INVALID) {

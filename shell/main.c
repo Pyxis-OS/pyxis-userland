@@ -143,10 +143,8 @@ int main(int argc, char **argv)
     .screen_capture = bootstrap_capability("screen_capture"),
     .audio = bootstrap_capability("audio"),
   };
+  /* Only a trusted launcher supplies it; without it this shell offers no extras. */
   shell.interpreter_root = bootstrap_capability("interpreter_root");
-  if (shell.interpreter_root == HANDLE_INVALID) {
-    shell.interpreter_root = shell.boot;
-  }
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
       shell.boot == HANDLE_INVALID || shell.tmp == HANDLE_INVALID) {

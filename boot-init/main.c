@@ -586,7 +586,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_environment_entry resources[SERVICE_COUNT + 8 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[SERVICE_COUNT + 9 + BUNDLE_SOURCE_LIMIT];
   char source_names[BUNDLE_SOURCE_LIMIT][sizeof(BUNDLE_SOURCE_PREFIX) + BOOT_NAME_MAX];
   handle_t source_handles[BUNDLE_SOURCE_LIMIT];
   struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
@@ -681,7 +681,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 8 + BUNDLE_SOURCE_LIMIT,
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 9 + BUNDLE_SOURCE_LIMIT,
       sizeof(*launch->grants));
   launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
@@ -829,6 +829,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
     };
+    /* The archive root every trusted shell opens its script interpreter from.
+     * Private: it is not a root name and the environment cannot rebind it. */
+    launch->resources[launch->resource_count++] =
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", launch->grant_count);
+    launch->grants[launch->grant_count++] = (struct launch_grant){authority->boot, BOOT_ROOT_RIGHTS, 0};
   }
   if (space->multiplexer) {
     /* The distinct name records opt-in, separate from trusted init authority. */

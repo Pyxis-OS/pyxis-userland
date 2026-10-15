@@ -107,7 +107,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 26 };
+  enum { OPTIONAL_RESOURCE_COUNT = 27 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -216,6 +216,14 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     /* The opt-in controls delegation; only this group's launcher may enter it. */
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP("child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
+  handle_t interpreter_root = bootstrap_capability("interpreter_root");
+  if (interpreter_root != HANDLE_INVALID) {
+    struct launch_grant root = {.source = interpreter_root};
+    if (handle_rights(root.source, &root.rights, &root.transport) == CALL_OK) {
+      entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("interpreter_root", grant_count);
+      grants[grant_count++] = root;
+    }
   }
   static const struct {
     const char *name;

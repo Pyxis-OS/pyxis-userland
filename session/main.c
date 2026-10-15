@@ -92,7 +92,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 31 };
+  enum { OPTIONAL_RESOURCE_COUNT = 32 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -191,6 +191,14 @@ static int launch_session(const struct session_config *config, const struct netw
   if (child_launcher != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
+  handle_t interpreter_root = bootstrap_capability("interpreter_root");
+  if (interpreter_root != HANDLE_INVALID) {
+    struct launch_grant root = {.source = interpreter_root};
+    if (handle_rights(root.source, &root.rights, &root.transport) == CALL_OK) {
+      resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", grant_count);
+      grants[grant_count++] = root;
+    }
   }
   handle_t display = bootstrap_capability("display");
   if (display != HANDLE_INVALID) {

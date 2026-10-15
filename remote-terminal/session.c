@@ -50,6 +50,8 @@ static const struct {
   {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
   {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
   {"net_config", NET_CONFIG_RIGHT_READ},
+  /* Directory rights are copied as held; the entry is private (see below). */
+  {"interpreter_root", UINT64_MAX},
 };
 
 static enum call_status directory_grant(handle_t directory, struct launch_grant *grant)
@@ -184,7 +186,8 @@ static enum call_status context_init(struct remote_context *context, bool multip
     size_t index;
     status = context_add(context, remote_allowed[i].name, value->handle,
         value->rights & remote_allowed[i].rights, 0,
-        !strcmp(remote_allowed[i].name, "service") ? 0 : ENVIRONMENT_EXPORTED, &index);
+        !strcmp(remote_allowed[i].name, "service") ||
+            !strcmp(remote_allowed[i].name, "interpreter_root") ? 0 : ENVIRONMENT_EXPORTED, &index);
     if (status != CALL_OK) {
       goto done;
     }
