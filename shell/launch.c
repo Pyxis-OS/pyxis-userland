@@ -980,8 +980,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           length > sizeof(".control") - 1 &&
           !strcmp(entry->name + length - (sizeof(".control") - 1), ".control") &&
           info.protocol == PROTOCOL_FORWARDER;
+      bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER;
       if (!controller && (!(entry->flags & ENVIRONMENT_EXPORTED) ||
-          info.kind != HANDLE_KIND_EXPORTED)) {
+          (info.kind != HANDLE_KIND_EXPORTED && !value))) {
         continue;
       }
       prepared->entries[entry_count++] = (struct launch_environment_entry){
