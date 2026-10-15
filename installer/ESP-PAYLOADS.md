@@ -40,7 +40,10 @@ verification reopens canonical names and checks their identities and bytes.
 The public record is descriptive evidence: staged_verified records stage-time
 success, not a permanent attestation. Call verify again at the caller's final
 publication boundary. Borrowed root/control must outlive close; original
-sources are no longer needed after stage. Close releases handles/memory only.
+sources are no longer needed after stage. Close always releases the result and
+attempts every owned handle; its boolean reports an invalid/already-absent
+handle. Valid native CLOSE removes the grant synchronously, so this is a
+bookkeeping error, not an uncertain filesystem outcome or a reason to retry.
 Any failed mutation can leave artifacts, regardless of its error status. Stop,
 retain the reported path/phase and inspect manually: no replacement, deletion,
 automatic resume, rollback or repair is performed.
