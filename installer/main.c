@@ -1,5 +1,6 @@
 #include "../common/bootstrap_environment.h"
 #include "plan.h"
+#include "coexist_ui.h"
 #include "../xfer/hash.h"
 
 #include <clock.h>
@@ -408,6 +409,59 @@ static struct target *replay_target(struct target *targets, size_t count,
   return match;
 }
 
+static bool coexist_replay_target(handle_t disks, const struct install_plan_record *record,
+    struct disk_info *target)
+{
+  bool found = false;
+  *target = (struct disk_info){0};
+  for (uint64_t index = 0;; ++index) {
+    struct disk_info info;
+    enum call_status status = disks_enumerate(disks, index, &info);
+    if (status == CALL_NOT_FOUND) {
+      break;
+    }
+    if (status != CALL_OK) {
+      fprintf(stderr, "installer: replay inventory unavailable (status %u)\n", status);
+      return false;
+    }
+    if (memcmp(info.gpt_guid, record->existing_guid, 16) ||
+        info.block_size != record->block_size || info.block_count != record->block_count) {
+      continue;
+    }
+    if (found || info.gpt_status != DISK_GPT_HEALTHY) {
+      say("installer: coexistence replay identity is ambiguous or lacks healthy GPT");
+      return false;
+    }
+    *target = info;
+    found = true;
+  }
+  if (!found) {
+    say("installer: coexistence replay disk GUID and geometry are absent");
+  }
+  return found;
+}
+
+static bool profile_matches(handle_t disks, bool coexist)
+{
+  uint64_t rights, transport;
+  uint64_t required = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY |
+      DISKS_RIGHT_OPEN_POOL | DISKS_RIGHT_MOUNT_READ_ONLY | DISKS_RIGHT_MOUNT_READ_WRITE;
+  required |= coexist ? DISKS_RIGHT_APPEND_POOL : DISKS_RIGHT_ERASE | DISKS_RIGHT_REBUILD_ESP;
+  uint64_t forbidden = coexist ? DISKS_RIGHT_ERASE | DISKS_RIGHT_REBUILD_ESP |
+      DISKS_RIGHT_OPEN | DISKS_RIGHT_OPEN_PARTITION : 0;
+  if (handle_rights(disks, &rights, &transport) != CALL_OK || transport ||
+      (rights & required) != required || (rights & forbidden)) {
+    say("installer: selected behavior does not match delegated installer authority");
+    return false;
+  }
+  return true;
+}
+
+static const char *consent_word(const struct install_plan_record *record)
+{
+  return record->updating ? "update" : record->coexist ? "append" : "wipe";
+}
+
 static bool record_matches(const struct install_plan_record *expected,
     const struct install_plan_record *actual)
 {
@@ -418,7 +472,7 @@ static bool record_matches(const struct install_plan_record *expected,
 
 int main(int argc, char **argv)
 {
-  bool print_only = false, dry_run = false, replay = false, verbose = false;
+  bool print_only = false, dry_run = false, replay = false, verbose = false, coexist = false;
   const char *explicit_consent = NULL;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
@@ -429,16 +483,19 @@ int main(int argc, char **argv)
       dry_run = true;
     } else if (!strcmp(argv[i], "--apply")) {
       replay = true;
+    } else if (!strcmp(argv[i], "--coexist") && !coexist) {
+      coexist = true;
     } else if (!strncmp(argv[i], "--confirm=", 10) && !explicit_consent) {
       explicit_consent = argv[i] + 10;
     } else {
-      fputs("usage: installer [-v | --verbose] [--plan | --apply] [--dry-run] [--confirm=wipe|update]\n", stderr);
+      fputs("usage: installer [--coexist] [-v | --verbose] [--plan | --apply] [--dry-run] [--confirm=wipe|append|update]\n", stderr);
       return EXIT_FAILURE;
     }
   }
   if ((print_only && replay) || (explicit_consent &&
         (!replay || print_only || dry_run ||
-          (strcmp(explicit_consent, "wipe") && strcmp(explicit_consent, "update"))))) {
+          (strcmp(explicit_consent, "wipe") && strcmp(explicit_consent, "append") &&
+              strcmp(explicit_consent, "update"))))) {
     fputs("installer: invalid plan/apply options\n", stderr);
     return EXIT_FAILURE;
   }
@@ -451,6 +508,8 @@ int main(int argc, char **argv)
   struct install_plan plan = {.disk.handle = HANDLE_INVALID,
     .efi.handle = HANDLE_INVALID};
   struct install_plan_record expected = {0};
+  struct install_coexist_choice coexist_choice = {0};
+  struct target coexist_target = {0};
   struct target *targets = NULL;
   size_t count = 0;
   bool updating = false, read_the_room = false, crypto = false;
@@ -459,6 +518,9 @@ int main(int argc, char **argv)
       random == HANDLE_INVALID || kernel == HANDLE_INVALID || archive == HANDLE_INVALID ||
       terminal.input == HANDLE_INVALID || terminal.output == HANDLE_INVALID) {
     fputs("installer: missing install-mode authority\n", stderr);
+    goto done;
+  }
+  if (!profile_matches(disks, coexist)) {
     goto done;
   }
   if (!replay && !choose_action(&terminal, &updating, &replay)) {
@@ -470,9 +532,14 @@ int main(int argc, char **argv)
       fputs("installer: invalid, incomplete or unsupported plan; nothing was written\n", stderr);
       goto done;
     }
+    if (expected.coexist != coexist ||
+        (explicit_consent && strcmp(explicit_consent, consent_word(&expected)))) {
+      say("installer: printed plan profile or confirmation does not match this installer invocation");
+      goto done;
+    }
     updating = expected.updating;
     read_the_room = expected.read_the_room;
-  } else if (!updating && !choose_mode(&terminal, &read_the_room)) {
+  } else if (!updating && !coexist && !choose_mode(&terminal, &read_the_room)) {
     goto done;
   }
   install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"),
@@ -480,8 +547,7 @@ int main(int argc, char **argv)
   install_progress_begin("Initializing revision hashing", INSTALL_PROGRESS_NONE, NULL);
   crypto = hash_init(clock, random);
   if (!crypto || !install_plan_sources(&plan, disks, boot, kernel, archive, clock,
-        bootstrap_capability("system_info")) ||
-      !inventory(disks, read_the_room, updating, &targets, &count)) {
+        bootstrap_capability("system_info"))) {
     install_progress_pause();
     fputs("installer: sources or inventory unavailable; nothing was written\n", stderr);
     goto done;
@@ -489,8 +555,36 @@ int main(int argc, char **argv)
   char revision[64];
   strcpy(revision, plan.record.revision);
   install_progress_pause();
-  struct target *selected = replay ? replay_target(targets, count, &expected) :
-      choose_target(&terminal, targets, count, updating);
+  struct target *selected;
+  if (coexist) {
+    if (replay) {
+      if (!coexist_replay_target(disks, &expected, &coexist_target.info)) {
+        goto done;
+      }
+    } else {
+      struct install_layout fresh_ids = {0};
+      if (!updating && !new_ids(clock, random, &fresh_ids,
+          plan.record.pool_id, plan.record.volume_id)) {
+        goto done;
+      }
+      if (!install_coexist_ui_choose(&terminal, disks, updating,
+          updating ? NULL : fresh_ids.pool_guid, &coexist_choice)) {
+        fprintf(stderr, "installer: coexistence selection unavailable: %s\n",
+            coexist_choice.reason ? coexist_choice.reason : "selection failed");
+        goto done;
+      }
+      coexist_target.info = coexist_choice.info;
+      coexist_target.update = coexist_choice.update;
+    }
+    selected = &coexist_target;
+  } else {
+    if (!inventory(disks, read_the_room, updating, &targets, &count)) {
+      say("installer: target inventory unavailable; nothing was written");
+      goto done;
+    }
+    selected = replay ? replay_target(targets, count, &expected) :
+        choose_target(&terminal, targets, count, updating);
+  }
   if (!selected) {
     goto done;
   }
@@ -499,16 +593,17 @@ int main(int argc, char **argv)
     strcpy(plan.record.revision, revision);
   } else {
     plan.record.updating = updating;
+    plan.record.coexist = coexist;
     plan.record.read_the_room = read_the_room;
-    plan.record.esp_rebuild = updating && selected->boot_rebuild;
+    plan.record.esp_rebuild = !coexist && updating && selected->boot_rebuild;
     if (!new_attempt(clock, random, plan.record.attempt)) {
       say("installer: fresh payload attempt identity unavailable; nothing was written");
       goto done;
     }
     plan.record.block_count = selected->info.block_count;
     plan.record.block_size = selected->info.block_size;
-    const uint8_t *existing_guid = updating ? selected->update.layout.disk_guid :
-        selected->consent.existing_guid;
+    const uint8_t *existing_guid = coexist ? coexist_choice.layout.disk_guid :
+        updating ? selected->update.layout.disk_guid : selected->consent.existing_guid;
     memcpy(plan.record.existing_guid, existing_guid, 16);
     plan.record.portable = npfs_id_valid(existing_guid);
     if (updating) {
@@ -517,9 +612,13 @@ int main(int argc, char **argv)
     } else {
       struct install_disk disk = {.info = selected->info,
         .bytes = selected->info.block_count * selected->info.block_size};
-      if (!install_layout_plan(&disk, &plan.record.layout) ||
-          !new_ids(clock, random, &plan.record.layout, plan.record.pool_id, plan.record.volume_id) ||
-          !show_selected_target(selected) ||
+      if (coexist) {
+        plan.record.layout = coexist_choice.layout;
+      } else if (!install_layout_plan(&disk, &plan.record.layout) ||
+          !new_ids(clock, random, &plan.record.layout, plan.record.pool_id, plan.record.volume_id)) {
+        goto done;
+      }
+      if (!show_selected_target(selected) ||
           !choose_journal(&terminal, &plan.record.layout, plan.record.pool_id, &plan.header)) {
         goto done;
       }
@@ -527,7 +626,7 @@ int main(int argc, char **argv)
     }
   }
   bool prepared = install_plan_prepare(&plan, &selected->info);
-  if (!prepared && plan.prior.needs_legacy && !replay) {
+  if (!prepared && plan.prior.needs_legacy && !replay && !coexist) {
     if (!show_selected_target(selected)) {
       goto done;
     }
@@ -579,12 +678,18 @@ int main(int argc, char **argv)
   }
   char confirmation[16];
   bool interactive_consent = !explicit_consent;
+  const char *required_consent = consent_word(&plan.record);
   if (!explicit_consent) {
-    if (!read_line(&terminal, updating ? "Type update to confirm this plan: " :
-          "Type wipe to confirm this plan: ", "", confirmation, sizeof(confirmation))) {
+    char prompt[64];
+    snprintf(prompt, sizeof(prompt), "Type %s to confirm this plan: ", required_consent);
+    if (!read_line(&terminal, prompt, "", confirmation, sizeof(confirmation))) {
       goto done;
     }
     explicit_consent = confirmation;
+  }
+  if (strcmp(explicit_consent, required_consent)) {
+    say("installer: confirmation does not match the frozen plan's action; nothing was written");
+    goto done;
   }
   if (!install_plan_execute(&plan, explicit_consent)) {
     goto done;
@@ -598,6 +703,11 @@ done:
   install_progress_finish();
   install_plan_destroy(&plan);
   destroy_targets(targets, count);
+  if (coexist_choice.pending_inspection != HANDLE_INVALID &&
+      handle_close(coexist_choice.pending_inspection) != 0) {
+    say("installer: pending read-only inspection handle close failed");
+    result = EXIT_FAILURE;
+  }
   if (crypto) {
     hash_close();
   }
