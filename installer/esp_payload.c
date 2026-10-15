@@ -372,23 +372,29 @@ const struct install_esp_payload_record *install_esp_payload_record(
   return result ? &result->record : NULL;
 }
 
-void install_esp_payload_close(struct install_esp_payloads *result)
+static bool close_owned(handle_t *handle)
+{
+  if (*handle == HANDLE_INVALID) {
+    return true;
+  }
+  bool valid = handle_close(*handle) == 0;
+  *handle = HANDLE_INVALID;
+  return valid;
+}
+
+bool install_esp_payload_close(struct install_esp_payloads *result)
 {
   if (!result) {
-    return;
+    return true;
   }
+  bool complete = true;
   for (unsigned i = 0; i < INSTALL_ESP_PAYLOAD_COUNT; ++i) {
-    if (result->files[i] != HANDLE_INVALID) {
-      handle_close(result->files[i]);
-    }
+    complete = close_owned(&result->files[i]) && complete;
   }
-  if (result->manifest != HANDLE_INVALID) {
-    handle_close(result->manifest);
-  }
-  if (result->parent != HANDLE_INVALID) {
-    handle_close(result->parent);
-  }
+  complete = close_owned(&result->manifest) && complete;
+  complete = close_owned(&result->parent) && complete;
   free(result);
+  return complete;
 }
 
 bool install_esp_payload_stage(const struct install_esp_payload_request *request,

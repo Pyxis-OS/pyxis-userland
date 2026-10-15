@@ -72,7 +72,10 @@ bool install_esp_payload_verify(const struct install_esp_payloads *result,
     struct install_esp_payload_report *report);
 const struct install_esp_payload_record *install_esp_payload_record(
     const struct install_esp_payloads *result);
-/* Releases only held handles and memory; never removes artifacts or retires. */
-void install_esp_payload_close(struct install_esp_payloads *result);
+/* Releases only held handles and memory; never removes artifacts or retires.
+ * Always frees RESULT (NULL succeeds). False reports an invalid/already-absent
+ * owned handle. Native CLOSE has no fallible filesystem operation: valid
+ * handles are removed synchronously; absent handles need no retry. */
+bool install_esp_payload_close(struct install_esp_payloads *result);
 
 #endif
