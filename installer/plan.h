@@ -3,6 +3,10 @@
 
 #include "plan_record.h"
 #include "inventory.h"
+#include "target.h"
+#include "esp_activate.h"
+#include "esp_payload.h"
+#include "esp_view.h"
 #include <pyxis_fs/npfs.h>
 
 /* Owned preparation, immutable after Review. Native source handles and BOOT
@@ -10,6 +14,7 @@
 struct install_plan {
   struct install_plan_record record;
   struct install_disk disk;
+  struct install_target target;
   handle_t disks, boot, clock;
   struct install_source kernel, archive, efi, rescue;
   struct install_programs programs;
@@ -21,6 +26,12 @@ struct install_plan {
   size_t manifest_bytes, configuration_bytes;
   char revision_record[65];
   struct install_esp *esp;
+  struct install_esp_payload_request payload_request;
+  struct install_esp_activation_request classic_request;
+  struct config_blob entry;
+  struct install_esp_view view;
+  struct install_esp_payloads *payloads;
+  struct install_esp_classic_files *classic_files;
   uint64_t available_blocks, required_blocks;
   bool ready;
 };
@@ -30,7 +41,7 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
 /* Rebuilds inspection, hashes and derived assets for the recorded choices;
  * caller compares the result to a serialized expected record before Review. */
 bool install_plan_prepare(struct install_plan *plan, const struct disk_info *target);
-bool install_plan_revalidate(const struct install_plan *plan);
+bool install_plan_revalidate(struct install_plan *plan);
 bool install_plan_report(const struct install_plan *plan, FILE *output, bool verbose);
 void install_plan_destroy(struct install_plan *plan);
 

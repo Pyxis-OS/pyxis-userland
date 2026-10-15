@@ -596,7 +596,9 @@ int main(int argc, char **argv)
     plan.record.coexist = coexist;
     plan.record.read_the_room = read_the_room;
     plan.record.esp_rebuild = !coexist && updating && selected->boot_rebuild;
-    if (!new_attempt(clock, random, plan.record.attempt)) {
+    memset(plan.record.attempt, '0', 32);
+    plan.record.attempt[32] = '\0';
+    if (coexist && !new_attempt(clock, random, plan.record.attempt)) {
       say("installer: fresh payload attempt identity unavailable; nothing was written");
       goto done;
     }
