@@ -722,9 +722,9 @@ static int select_scratch_write(void)
     fputs("fat32 mount: output failed\n", stderr);
     goto done;
   }
-  status = disks_open(disks, id, DISK_ACCESS_READ_WRITE, &opened);
+  status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &opened);
   if (status != CALL_OK) {
-    fprintf(stderr, "fat32 mount: read-write open failed (status %u)\n", status);
+    fprintf(stderr, "fat32 mount: read-only open failed (status %u)\n", status);
     goto done;
   }
   struct disk_info selected_info;
@@ -738,9 +738,23 @@ static int select_scratch_write(void)
     fprintf(stderr, "fat32 mount: selected disk is not eligible (status %u)\n", status);
     goto done;
   }
+  struct disk_partition_selection facts;
+  status = disk_partition_info(opened, partition, &facts);
+  if (status != CALL_OK) {
+    fprintf(stderr, "fat32 mount: selected GPT inspection failed (status %u)\n", status);
+    goto done;
+  }
+  if (!close_handle(&opened)) {
+    goto done;
+  }
+  status = disks_open_partition(disks, &facts, &opened);
+  if (status != CALL_OK) {
+    fprintf(stderr, "fat32 mount: selected GPT claim failed (status %u)\n", status);
+    goto done;
+  }
   status = disk_release(opened);
   if (status != CALL_OK) {
-    fprintf(stderr, "fat32 mount: whole-disk release failed (status %u)\n", status);
+    fprintf(stderr, "fat32 mount: selected GPT release failed (status %u)\n", status);
     goto done;
   }
   status = handle_copy_restricted(opened, DISK_RIGHTS, 0, &selected);
@@ -864,7 +878,8 @@ static int create_browser(bool boot_selected, bool writable)
   enum { GRANT_AUTHORITY, GRANT_MEMORY, GRANT_LAUNCHER, GRANT_BOOT, GRANT_TMP, GRANT_COUNT };
   struct launch_grant grants[GRANT_COUNT] = {
     [GRANT_AUTHORITY] = {sources[AUTHORITY], boot_selected ? MOUNT_RIGHT_OPEN_ROOT :
-        DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN, 0},
+        DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY |
+            (writable ? DISKS_RIGHT_OPEN_PARTITION : 0), 0},
     [GRANT_MEMORY] = {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
     [GRANT_LAUNCHER] = {sources[LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0},
     [GRANT_BOOT] = {sources[BOOT], writable ? ROOT_RIGHTS :

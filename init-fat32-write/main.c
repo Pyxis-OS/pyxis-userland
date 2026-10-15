@@ -130,19 +130,21 @@ static int select_disk(void)
     fputs("fat32 selector: output failed\n", stderr);
     goto done;
   }
-  status = disks_open(disks, id, DISK_ACCESS_READ_WRITE, &opened);
+  status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &opened);
   if (status != CALL_OK) {
-    fprintf(stderr, "fat32 selector: read-write open failed (status %u)\n", status);
+    fprintf(stderr, "fat32 selector: read-only open failed (status %u)\n", status);
     goto done;
   }
-  claimed = true;
-  status = disk_release(opened);
-  claimed = false;
+  struct disk_partition_selection facts;
+  status = disk_partition_info(opened, partition, &facts);
   if (status != CALL_OK) {
-    fprintf(stderr, "fat32 selector: whole-disk release failed (status %u); claim ended\n", status);
+    fprintf(stderr, "fat32 selector: selected GPT inspection failed (status %u)\n", status);
     goto done;
   }
-  status = disk_claim(opened, partition);
+  if (!close_handle(&opened)) {
+    goto done;
+  }
+  status = disks_open_partition(disks, &facts, &opened);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 selector: selected GPT claim failed (status %u)\n", status);
     goto done;
@@ -268,7 +270,8 @@ static int create_selector(void)
     cpus[i / 64] |= UINT64_C(1) << (i % 64);
   }
   struct launch_grant grants[] = {
-    {sources[DISKS], DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN, 0},
+    {sources[DISKS], DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY |
+        DISKS_RIGHT_OPEN_PARTITION, 0},
     {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
     {sources[LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0},
     {sources[BOOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, 0},
