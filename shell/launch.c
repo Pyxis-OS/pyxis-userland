@@ -2060,7 +2060,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   struct program_script_extras extras[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < stage_count; ++i) {
     extras[i] = (struct program_script_extras){
-      .interpreter = SHELL_INTERPRETER, .grants = prepared[i].extras,
+      .interpreter = SHELL_INTERPRETER, .root = shell->boot, .path = SHELL_INTERPRETER_PATH,
+      .grants = prepared[i].extras,
       .count = prepared[i].extra_count,
     };
   }

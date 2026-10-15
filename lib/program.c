@@ -78,7 +78,8 @@ static void release_script(struct script_scratch *scratch)
 
 static bool earns_extras(const struct program_script_extras *extras, const char *interpreter)
 {
-  return extras && extras->count && !strcmp(extras->interpreter, interpreter);
+  return extras && extras->count && extras->root != HANDLE_INVALID &&
+      !strcmp(extras->interpreter, interpreter);
 }
 
 static enum call_status prepare_script(const struct launch_request *source,
@@ -102,8 +103,9 @@ static enum call_status prepare_script(const struct launch_request *source,
       return CALL_BAD_REQUEST;
     }
   }
-  /* The extras are decided by the interpreter string that is opened just below,
-   * parsed once from the prefix read above; no second read can change it. */
+  /* The extras are decided by the interpreter string parsed once from the prefix
+   * read above. The trusted interpreter is then opened from the caller's held
+   * root, never through the environment table, which a script can rebind. */
   size_t extra = earns_extras(extras, interpreter) ? extras->count : 0;
   if (extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) - source->grant_count - 1 ||
       extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) -
@@ -124,8 +126,14 @@ static enum call_status prepare_script(const struct launch_request *source,
   if (!scratch->grants || !scratch->entries || !scratch->arguments) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = open_interpreter(interpreter_context, interpreter,
-      &scratch->image);
+  enum call_status status;
+  if (extra) {
+    handle_t held = extras->root;
+    struct path_context root = {.directories = &held, .count = 1, .capacity = 1};
+    status = open_interpreter(&root, extras->path, &scratch->image);
+  } else {
+    status = open_interpreter(interpreter_context, interpreter, &scratch->image);
+  }
   if (status != CALL_OK) {
     return status;
   }

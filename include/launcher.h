@@ -77,11 +77,14 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
     const struct path_context *interpreter_context, handle_t *child);
 
 /* Grants a caller offers only to one trusted interpreter. When a shebang names
- * exactly INTERPRETER (compared with the URI that is then opened, from the one
- * prefix read), each grant is appended after the script grant with an exported
- * CAP entry of the given name and the stated masks. A native image, or a script
- * naming any other interpreter, receives none of them. A request that already
- * has an entry of one of these names is rejected. Borrowed until return. */
+ * exactly INTERPRETER (compared with the string parsed once from the prefix
+ * read), the interpreter is opened as PATH relative to the held directory ROOT,
+ * not through the environment's scheme bindings, which the caller's own scripts
+ * can rebind; each grant is then appended after the script grant with an
+ * exported CAP entry of the given name and the stated masks. A native image, or
+ * a script naming any other interpreter, receives none of them and resolves
+ * normally. A request that already has an entry of one of these names is
+ * rejected. Everything is borrowed until return. */
 struct program_script_grant {
   const char *name;
   handle_t source;
@@ -90,6 +93,8 @@ struct program_script_grant {
 
 struct program_script_extras {
   const char *interpreter;
+  handle_t root;
+  const char *path;
   const struct program_script_grant *grants;
   size_t count;
 };
