@@ -34,6 +34,7 @@ enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
 
 struct bundle_program;
 struct shell_capability_table;
+struct shell_service_value;
 
 struct shell_redirection {
   enum environment_stream_index stream;
@@ -41,6 +42,7 @@ struct shell_redirection {
   bool capability;
   bool append;
   const struct environment_value *value;
+  const struct environment_value *observation;
 };
 
 struct shell_stage {
@@ -99,7 +101,7 @@ struct shell {
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_config,
       keyboard, pointer, terminal_service,
-      boot, tmp, host_mount, native_mount, power, screen_capture, audio;
+      boot, tmp, host_mount, native_mount, power, screen_capture, audio, retention_account;
   const struct path_context *directory;
   /* Own the original startup chain after libc retains its independent cwd.
    * Clear released slots so handle-number reuse cannot revive stale owners. */
@@ -164,6 +166,7 @@ void shell_history_load(struct shell *shell);
 void shell_history_save(struct shell *shell, const char *line);
 enum command_result shell_command(struct shell *shell, char *line,
     struct shell_outcome *outcome);
+bool shell_builtin(char **arguments, size_t count);
 /* Outcome is NULL for the session builtin, which reports its own result. */
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
     enum shell_launch_mode mode, const struct shell_redirection *redirections,
@@ -175,6 +178,13 @@ enum command_result shell_launch_pipeline(struct shell *shell,
 enum command_result shell_launch_service(struct shell *shell, const char *name,
     bool replace, bool optional, bool read_only, char **arguments, size_t count,
     const struct environment_capture *operands);
+enum command_result shell_launch_capture(struct shell *shell,
+    const struct shell_command_line *command, handle_t stdout_producer,
+    struct shell_outcome *outcome, bool *evaluated, bool *started,
+    enum call_status *error_status);
+enum command_result shell_launch_service_value(struct shell *shell,
+    const struct shell_stage *stage, bool read_only, struct shell_service_value *owned,
+    bool *started, enum call_status *error_status);
 /* Borrows script; line has SHELL_SCRIPT_LINE_MAX + 1 bytes. */
 int shell_script(struct shell *shell, handle_t script, char *line);
 
