@@ -85,6 +85,209 @@ enum call_status disks_open(handle_t disks, uint64_t id, uint64_t access, handle
   return CALL_OK;
 }
 
+static bool guid_nonzero(const uint8_t guid[16])
+{
+  for (size_t i = 0; i < 16; ++i) {
+    if (guid[i]) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool selection_valid(const struct disk_partition_selection *selection)
+{
+  return selection && selection->id && selection->partition &&
+      selection->partition <= UINT32_MAX && selection->first_block &&
+      selection->block_count && selection->device_block_size &&
+      selection->device_block_count &&
+      selection->device_block_count <= UINT64_MAX / selection->device_block_size &&
+      selection->first_block < selection->device_block_count &&
+      selection->block_count <= selection->device_block_count - selection->first_block &&
+      guid_nonzero(selection->disk_guid) && guid_nonzero(selection->partition_guid) &&
+      guid_nonzero(selection->partition_type);
+}
+
+static enum call_status disks_review(handle_t disks, uint64_t operation,
+    const struct disk_info *info, handle_t *review)
+{
+  if (!review) {
+    return CALL_BAD_REQUEST;
+  }
+  *review = HANDLE_INVALID;
+  if (!info || !info->id || !info->block_size || !info->block_count ||
+      info->block_count > UINT64_MAX / info->block_size) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disks_review_request body;
+  } message = {{PROTOCOL_DISKS, operation},
+      {info->id, info->block_size, info->block_count, {0}}};
+  memcpy(message.body.disk_guid, info->gpt_guid, sizeof(message.body.disk_guid));
+  struct disk_open_reply reply = {HANDLE_INVALID};
+  enum call_status status = reply_status(syscall_call(disks, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.disk == HANDLE_INVALID) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *review = reply.disk;
+  return CALL_OK;
+}
+
+enum call_status disks_review_erase(handle_t disks, const struct disk_info *info,
+    handle_t *review)
+{
+  return disks_review(disks, DISKS_REVIEW_ERASE, info, review);
+}
+
+enum call_status disks_review_append(handle_t disks, const struct disk_info *info,
+    handle_t *review)
+{
+  return disks_review(disks, DISKS_REVIEW_APPEND, info, review);
+}
+
+enum call_status disk_begin_erase(handle_t review, const char *confirmation,
+    handle_t *writer)
+{
+  if (!writer) {
+    return CALL_BAD_REQUEST;
+  }
+  *writer = HANDLE_INVALID;
+  size_t length = sizeof(DISK_ERASE_CONFIRMATION) - 1;
+  if (!confirmation || strnlen(confirmation, length + 1) != length ||
+      memcmp(confirmation, DISK_ERASE_CONFIRMATION, length)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_begin_erase_request body;
+  } message = {{PROTOCOL_DISK, DISK_BEGIN_ERASE}, {(uintptr_t)confirmation, length}};
+  struct disk_open_reply reply = {HANDLE_INVALID};
+  enum call_status status = reply_status(syscall_call(review, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.disk == HANDLE_INVALID) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *writer = reply.disk;
+  return CALL_OK;
+}
+
+static enum call_status disks_open_selection(handle_t disks, uint64_t operation,
+    const struct disk_partition_selection *selection, handle_t *disk)
+{
+  if (!disk) {
+    return CALL_BAD_REQUEST;
+  }
+  *disk = HANDLE_INVALID;
+  if (!selection_valid(selection)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_partition_selection body;
+  } message = {{PROTOCOL_DISKS, operation}, *selection};
+  struct disk_open_reply reply = {HANDLE_INVALID};
+  enum call_status status = reply_status(syscall_call(disks, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.disk == HANDLE_INVALID) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *disk = reply.disk;
+  return CALL_OK;
+}
+
+enum call_status disks_open_pool(handle_t disks,
+    const struct disk_partition_selection *selection, handle_t *disk)
+{
+  return disks_open_selection(disks, DISKS_OPEN_POOL, selection, disk);
+}
+
+enum call_status disks_open_partition(handle_t disks,
+    const struct disk_partition_selection *selection, handle_t *disk)
+{
+  return disks_open_selection(disks, DISKS_OPEN_PARTITION, selection, disk);
+}
+
+enum call_status disk_partition_info(handle_t disk, uint64_t entry,
+    struct disk_partition_selection *selection)
+{
+  if (!selection) {
+    return CALL_BAD_REQUEST;
+  }
+  *selection = (struct disk_partition_selection){0};
+  if (!entry || entry > UINT32_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_partition_info_request body;
+  } message = {{PROTOCOL_DISK, DISK_PARTITION_INFO}, {entry}};
+  struct disk_partition_selection reply = {0};
+  enum call_status status = reply_status(syscall_call(disk, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (!selection_valid(&reply) || reply.partition != entry) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *selection = reply;
+  return CALL_OK;
+}
+
+enum call_status disk_append_pool(handle_t review,
+    const struct disk_partition_selection *selection, struct disk_append_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  *reply = (struct disk_append_reply){.disk = HANDLE_INVALID,
+      .phase = DISK_APPEND_PREPARE, .failed_block = UINT64_MAX};
+  if (!selection_valid(selection)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct disk_partition_selection body;
+  } message = {{PROTOCOL_DISK, DISK_APPEND_POOL}, *selection};
+  struct disk_append_reply received = {.disk = HANDLE_INVALID,
+      .phase = DISK_APPEND_PREPARE, .failed_block = UINT64_MAX};
+  struct syscall_result result = syscall_call(review, &message, sizeof(message),
+      &received, sizeof(received));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status != CALL_OK && !result.reply_size) {
+    return result.status;
+  }
+  if (result.reply_size != sizeof(received) ||
+      received.phase > DISK_APPEND_COMPLETE ||
+      (received.flags & ~DISK_APPEND_EFFECTS_POSSIBLE) ||
+      (received.phase <= DISK_APPEND_MATCH && received.flags) ||
+      memcmp(&received.partition, selection, sizeof(*selection)) ||
+      (received.failed_block != UINT64_MAX &&
+          received.failed_block >= selection->device_block_count) ||
+      (result.status == CALL_OK &&
+          (received.disk == HANDLE_INVALID || received.phase != DISK_APPEND_COMPLETE ||
+              received.flags != DISK_APPEND_EFFECTS_POSSIBLE ||
+              received.failed_block != UINT64_MAX)) ||
+      (result.status != CALL_OK && received.disk != HANDLE_INVALID)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *reply = received;
+  return result.status;
+}
+
 enum call_status disks_open_fat32(handle_t disks, uint64_t id, uint64_t partition,
     uint64_t access, uint64_t rights, const uint8_t expected_disk_guid[16],
     struct mount_fat32_reply *mount)

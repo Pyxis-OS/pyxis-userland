@@ -16,6 +16,39 @@ enum call_status disk_get_info(handle_t disk, struct disk_info *info);
  * Malformed replies are outcome unknown; never retry an uncertain open. */
 enum call_status disks_open(handle_t disks, uint64_t id, uint64_t access, handle_t *disk);
 
+/* Retain a reviewed device's geometry and GPT framing without a write claim.
+ * INFO supplies the observed identity; a zero GPT GUID permits damaged/absent
+ * GPT review. Success owns a single-use review; failure clears it. */
+enum call_status disks_review_erase(handle_t disks, const struct disk_info *info,
+    handle_t *review);
+enum call_status disks_review_append(handle_t disks, const struct disk_info *info,
+    handle_t *review);
+
+/* Consume erase review after exact DISK_ERASE_CONFIRMATION consent. Success
+ * owns a separate claimed writer; failure clears it. Never retry an uncertain
+ * begin or append: the review may already be consumed. */
+enum call_status disk_begin_erase(handle_t review, const char *confirmation,
+    handle_t *writer);
+
+/* Open exactly the reviewed GPT extent. OPEN_POOL admits only the native pool
+ * type; OPEN_PARTITION needs separate raw qualification authority. Success
+ * owns an already claimed, permanently partition-bound disk. Failure clears
+ * the output. Malformed replies report outcome unknown; never retry an open.
+ * PARTITION_INFO clears selection on failure. */
+enum call_status disks_open_pool(handle_t disks,
+    const struct disk_partition_selection *selection, handle_t *disk);
+enum call_status disks_open_partition(handle_t disks,
+    const struct disk_partition_selection *selection, handle_t *disk);
+enum call_status disk_partition_info(handle_t disk, uint64_t entry,
+    struct disk_partition_selection *selection);
+
+/* Append one proposed native-pool partition through single-use review.
+ * Full worker failures retain validated phase/identity evidence and no handle;
+ * early failures leave PREPARE, UINT64_MAX failed block and an invalid handle.
+ * Malformed replies leave those defaults and report outcome unknown. */
+enum call_status disk_append_pool(handle_t review,
+    const struct disk_partition_selection *selection, struct disk_append_reply *reply);
+
 /* Admit a selected GPT FAT partition through mount-only inventory authority,
  * without a raw handle or claim. RW authority also permits RO admission.
  * A nonzero expected_disk_guid pins the configured selection under the worker;
