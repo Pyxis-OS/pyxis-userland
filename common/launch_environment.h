@@ -62,8 +62,24 @@ static inline enum call_status profile_directories(const struct environment_capt
   return CALL_OK;
 }
 
-/* Preserve the former service-namespace delegation without broadening a
- * profile's native-resource allowlist. Controllers are explicit trusted copies. */
+static inline bool profile_stdio_name(const char *name)
+{
+  if (!strcmp(name, "stdin.status")) {
+    return true;
+  }
+  for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
+    struct launch_environment_entry entry = profile_stdio_entry(i, 0);
+    if (!strcmp(name, (const char *)(uintptr_t)entry.name) ||
+        !strcmp(name, environment_stdio_append_name(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* Named FILE/controller values preserve explicit export. Other native roles
+ * still require the caller's fixed selection and masks. Private controllers
+ * remain explicit trusted successor copies. */
 static inline enum call_status profile_inherit_services(
     const struct environment_capture *capture, bool trusted,
     struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
@@ -73,8 +89,8 @@ static inline enum call_status profile_inherit_services(
     const struct environment_value *value = &capture->values[i];
     if (value->kind != ENVIRONMENT_CAP ||
         !strncmp(value->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
-        !strcmp(value->name, "stdin") || !strcmp(value->name, "stdin.status") ||
-        !strcmp(value->name, "stdout") || !strcmp(value->name, "stderr")) {
+        !strcmp(value->name, "job_provisioner") || !strcmp(value->name, "job_work") ||
+        !strcmp(value->name, "staging") || profile_stdio_name(value->name)) {
       continue;
     }
     bool selected = false;
@@ -94,8 +110,10 @@ static inline enum call_status profile_inherit_services(
         length > sizeof(".control") - 1 &&
         !strcmp(value->name + length - (sizeof(".control") - 1), ".control") &&
         info.protocol == PROTOCOL_FORWARDER;
+    bool named_value = info.kind == HANDLE_KIND_NATIVE &&
+        (info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER);
     if (!controller && (!(value->flags & ENVIRONMENT_EXPORTED) ||
-        info.kind != HANDLE_KIND_EXPORTED)) {
+        (info.kind != HANDLE_KIND_EXPORTED && !named_value))) {
       continue;
     }
     if (*grant_count == grant_capacity || *entry_count == entry_capacity) {

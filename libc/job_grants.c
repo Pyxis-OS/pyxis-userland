@@ -12,6 +12,7 @@
 #include <abi/endpoint.h>
 #include <abi/execution_group.h>
 #include <abi/file.h>
+#include <abi/forwarder.h>
 #include <abi/keyboard.h>
 #include <abi/log.h>
 #include <abi/memory.h>
@@ -45,6 +46,9 @@ static enum call_status validate_authority(const struct handle_info *info,
     break;
   case PROTOCOL_FILE:
     allowed_rights = FILE_RIGHTS;
+    break;
+  case PROTOCOL_FORWARDER:
+    allowed_rights = FORWARDER_RIGHTS;
     break;
   case PROTOCOL_DIRECTORY:
     allowed_rights = DIRECTORY_RIGHTS;
