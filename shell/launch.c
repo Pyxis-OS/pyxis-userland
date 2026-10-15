@@ -1538,6 +1538,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
 
   /* Open every image before opening or creating any redirect target. */
+  operation = "shell: open image";
   for (size_t i = 0; i < stage_count; ++i) {
     failed_stage = i;
     path = stages[i].arguments[0];
