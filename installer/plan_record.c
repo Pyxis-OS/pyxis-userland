@@ -6,6 +6,7 @@
 #define PLAN_LINE_BYTES 160
 #define PLAN_TEXT_BYTES 2048
 #define PLAN_JOURNAL_MAX_MIB 1024
+#define PLAN_GPT_RESERVED_ATTRIBUTES UINT64_C(0x0000fffffffffff8)
 #define PLAN_HEADER "pyxis-install-plan 1"
 #define PLAN_END "end"
 
@@ -59,6 +60,45 @@ static bool hash_valid(const char hash[65])
   return hash[64] == '\0';
 }
 
+static bool attempt_valid(const char attempt[33])
+{
+  for (size_t index = 0; index < 32; ++index) {
+    if (hex_digit((unsigned char)attempt[index]) < 0) {
+      return false;
+    }
+  }
+  return attempt[32] == '\0';
+}
+
+static bool coexist_layout_valid(const struct install_plan_record *record,
+    const struct install_disk *disk)
+{
+  const struct install_layout *layout = &record->layout;
+  if (!record->portable || record->read_the_room || record->esp_rebuild ||
+      memcmp(record->existing_guid, layout->disk_guid, 16) ||
+      !layout->esp_partition || layout->esp_partition > INSTALL_GPT_MAX_PARTITIONS ||
+      !layout->pool_partition || layout->pool_partition > INSTALL_GPT_MAX_PARTITIONS ||
+      layout->esp_partition == layout->pool_partition ||
+      (layout->esp_attributes & PLAN_GPT_RESERVED_ATTRIBUTES) ||
+      (layout->pool_attributes & PLAN_GPT_RESERVED_ATTRIBUTES) ||
+      (!record->updating && layout->pool_attributes) ||
+      !layout->esp_start || !layout->esp_bytes || !layout->pool_start ||
+      !layout->pool_bytes || layout->esp_start % record->block_size ||
+      layout->esp_bytes % record->block_size ||
+      layout->pool_start % record->block_size ||
+      layout->pool_bytes % record->block_size ||
+      layout->esp_start % NPFS_BLOCK_SIZE || layout->esp_bytes % NPFS_BLOCK_SIZE ||
+      layout->pool_start % NPFS_BLOCK_SIZE || layout->pool_bytes % NPFS_BLOCK_SIZE ||
+      layout->esp_start > disk->bytes ||
+      layout->esp_bytes > disk->bytes - layout->esp_start ||
+      layout->pool_start > disk->bytes ||
+      layout->pool_bytes > disk->bytes - layout->pool_start) {
+    return false;
+  }
+  return layout->esp_start + layout->esp_bytes <= layout->pool_start ||
+      layout->pool_start + layout->pool_bytes <= layout->esp_start;
+}
+
 bool install_plan_record_valid(const struct install_plan_record *record)
 {
   if (!record || record->block_size < 512 || record->block_size > NPFS_BLOCK_SIZE ||
@@ -67,6 +107,7 @@ bool install_plan_record_valid(const struct install_plan_record *record)
       record->portable != nonzero_id(record->existing_guid) ||
       !revision_valid(record->revision, false) ||
       !revision_valid(record->previous, !record->updating) ||
+      !attempt_valid(record->attempt) ||
       !hash_valid(record->source_hash) || !hash_valid(record->target_hash) ||
       !nonzero_id(record->layout.disk_guid) || !nonzero_id(record->layout.esp_guid) ||
       !nonzero_id(record->layout.pool_guid) ||
@@ -79,13 +120,24 @@ bool install_plan_record_valid(const struct install_plan_record *record)
     .info = {.block_count = record->block_count, .block_size = record->block_size},
     .bytes = record->block_count * record->block_size,
   };
-  struct install_layout expected = {0};
-  if (!install_layout_plan(&disk, &expected) ||
-      record->layout.esp_start != expected.esp_start ||
-      record->layout.esp_bytes != expected.esp_bytes ||
-      record->layout.pool_start != expected.pool_start ||
-      record->layout.pool_bytes != expected.pool_bytes) {
-    return false;
+  if (record->coexist) {
+    if (!coexist_layout_valid(record, &disk)) {
+      return false;
+    }
+  } else {
+    struct install_layout expected = {0};
+    if ((record->esp_rebuild && !record->updating) ||
+        !install_layout_plan(&disk, &expected) ||
+        record->layout.esp_partition != expected.esp_partition ||
+        record->layout.pool_partition != expected.pool_partition ||
+        record->layout.esp_start != expected.esp_start ||
+        record->layout.esp_bytes != expected.esp_bytes ||
+        record->layout.pool_start != expected.pool_start ||
+        record->layout.pool_bytes != expected.pool_bytes ||
+        record->layout.esp_attributes != expected.esp_attributes ||
+        record->layout.pool_attributes != expected.pool_attributes) {
+      return false;
+    }
   }
   if (record->updating) {
     return record->portable && !record->read_the_room && !record->journal_mib &&
@@ -222,6 +274,17 @@ static bool read_hash(struct plan_reader *reader, const char *key, char output[6
   return true;
 }
 
+static bool read_attempt(struct plan_reader *reader, char output[33])
+{
+  char value[PLAN_LINE_BYTES];
+  if (!read_value(reader, "attempt", value) || strlen(value) != 32 ||
+      !attempt_valid(value)) {
+    return false;
+  }
+  memcpy(output, value, 33);
+  return true;
+}
+
 bool install_plan_record_parse(FILE *input, struct install_plan_record *output)
 {
   if (!input || !output || ferror(input)) {
@@ -232,6 +295,8 @@ bool install_plan_record_parse(FILE *input, struct install_plan_record *output)
   char line[PLAN_LINE_BYTES];
   if (!read_line(&reader, line) || strcmp(line, PLAN_HEADER) ||
       !read_boolean(&reader, "updating", &record.updating) ||
+      !read_boolean(&reader, "coexist", &record.coexist) ||
+      !read_boolean(&reader, "esp_rebuild", &record.esp_rebuild) ||
       !read_boolean(&reader, "read_the_room", &record.read_the_room) ||
       !read_boolean(&reader, "legacy", &record.legacy) ||
       !read_boolean(&reader, "portable", &record.portable) ||
@@ -241,15 +306,20 @@ bool install_plan_record_parse(FILE *input, struct install_plan_record *output)
       !read_id(&reader, "existing_guid", record.existing_guid) ||
       !read_id(&reader, "pool_id", record.pool_id) ||
       !read_id(&reader, "volume_id", record.volume_id) ||
+      !read_decimal(&reader, "esp_partition", &record.layout.esp_partition) ||
       !read_decimal(&reader, "esp_start", &record.layout.esp_start) ||
       !read_decimal(&reader, "esp_bytes", &record.layout.esp_bytes) ||
+      !read_decimal(&reader, "esp_attributes", &record.layout.esp_attributes) ||
+      !read_decimal(&reader, "pool_partition", &record.layout.pool_partition) ||
       !read_decimal(&reader, "pool_start", &record.layout.pool_start) ||
       !read_decimal(&reader, "pool_bytes", &record.layout.pool_bytes) ||
+      !read_decimal(&reader, "pool_attributes", &record.layout.pool_attributes) ||
       !read_id(&reader, "disk_guid", record.layout.disk_guid) ||
       !read_id(&reader, "esp_guid", record.layout.esp_guid) ||
       !read_id(&reader, "pool_guid", record.layout.pool_guid) ||
       !read_revision(&reader, "revision", record.revision) ||
       !read_revision(&reader, "previous", record.previous) ||
+      !read_attempt(&reader, record.attempt) ||
       !read_hash(&reader, "source_hash", record.source_hash) ||
       !read_hash(&reader, "target_hash", record.target_hash) ||
       !read_line(&reader, line) || strcmp(line, PLAN_END) ||
@@ -288,21 +358,29 @@ bool install_plan_record_format(FILE *output, const struct install_plan_record *
   encode_hex((const uint8_t *)record->previous, strlen(record->previous), previous);
   char text[PLAN_TEXT_BYTES];
   int length = snprintf(text, sizeof(text), PLAN_HEADER "\n"
-      "updating %u\nread_the_room %u\nlegacy %u\nportable %u\n"
+      "updating %u\ncoexist %u\nesp_rebuild %u\n"
+      "read_the_room %u\nlegacy %u\nportable %u\n"
       "block_count %llu\nblock_size %llu\njournal_mib %llu\n"
       "existing_guid %s\npool_id %s\nvolume_id %s\n"
-      "esp_start %llu\nesp_bytes %llu\npool_start %llu\npool_bytes %llu\n"
+      "esp_partition %llu\nesp_start %llu\nesp_bytes %llu\nesp_attributes %llu\n"
+      "pool_partition %llu\npool_start %llu\npool_bytes %llu\npool_attributes %llu\n"
       "disk_guid %s\nesp_guid %s\npool_guid %s\n"
-      "revision %s\nprevious %s\nsource_hash %s\ntarget_hash %s\n" PLAN_END "\n",
-      (unsigned)record->updating, (unsigned)record->read_the_room,
+      "revision %s\nprevious %s\nattempt %s\n"
+      "source_hash %s\ntarget_hash %s\n" PLAN_END "\n",
+      (unsigned)record->updating, (unsigned)record->coexist,
+      (unsigned)record->esp_rebuild, (unsigned)record->read_the_room,
       (unsigned)record->legacy, (unsigned)record->portable,
       (unsigned long long)record->block_count, (unsigned long long)record->block_size,
       (unsigned long long)record->journal_mib, existing_guid, pool_id, volume_id,
+      (unsigned long long)record->layout.esp_partition,
       (unsigned long long)record->layout.esp_start,
       (unsigned long long)record->layout.esp_bytes,
+      (unsigned long long)record->layout.esp_attributes,
+      (unsigned long long)record->layout.pool_partition,
       (unsigned long long)record->layout.pool_start,
-      (unsigned long long)record->layout.pool_bytes, disk_guid, esp_guid, pool_guid,
-      revision, previous, record->source_hash, record->target_hash);
+      (unsigned long long)record->layout.pool_bytes,
+      (unsigned long long)record->layout.pool_attributes, disk_guid, esp_guid, pool_guid,
+      revision, previous, record->attempt, record->source_hash, record->target_hash);
   if (length < 0 || (size_t)length >= sizeof(text) ||
       (uint64_t)length > INSTALL_PLAN_RECORD_MAX_BYTES) {
     return false;

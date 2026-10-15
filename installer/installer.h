@@ -62,8 +62,10 @@ struct install_source {
 };
 
 struct install_layout {
+  uint64_t esp_partition, pool_partition;
   uint64_t esp_start, esp_bytes;
   uint64_t pool_start, pool_bytes;
+  uint64_t esp_attributes, pool_attributes;
   uint8_t disk_guid[16], esp_guid[16], pool_guid[16];
 };
 

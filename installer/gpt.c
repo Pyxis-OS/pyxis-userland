@@ -44,6 +44,10 @@ bool install_layout_plan(const struct install_disk *disk, struct install_layout 
   if (pool_end <= pool_start) {
     return false;
   }
+  layout->esp_partition = INSTALL_ESP_PARTITION;
+  layout->pool_partition = INSTALL_POOL_PARTITION;
+  layout->esp_attributes = 0;
+  layout->pool_attributes = 0;
   layout->esp_start = INSTALL_MIB;
   layout->esp_bytes = INSTALL_ESP_BYTES;
   layout->pool_start = pool_start;
