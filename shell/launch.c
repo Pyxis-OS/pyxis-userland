@@ -2087,7 +2087,8 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
     if (status == CALL_OK) {
       struct handle_info info;
       status = handle_query(held[1], &info);
-      if (status == CALL_OK && info.protocol != PROTOCOL_FORWARDER) {
+      if (status == CALL_OK && (info.protocol != PROTOCOL_FORWARDER ||
+          info.kind != HANDLE_KIND_NATIVE || info.transport)) {
         status = CALL_WRONG_TYPE;
       } else if (status == CALL_OK && !(info.rights & FORWARDER_RIGHT_RETARGET)) {
         status = CALL_DENIED;
