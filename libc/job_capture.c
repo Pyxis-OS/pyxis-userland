@@ -1,6 +1,8 @@
 #include <environment.h>
 #include <pyxis/capture.h>
-#include <abi/directory.h>
+#include <abi/pipe.h>
+#include <output.h>
+#include <pyxis/descriptor.h>
 #include <abi/clock.h>
 #include <clock.h>
 #include <file.h>
@@ -11,12 +13,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "job_internal.h"
-#include "job_capture_files.h"
 
 struct pyxis_capture {
   struct pyxis_job *job;
-  handle_t clock, private_root, launcher, supervision;
-  handle_t files[2];
+  handle_t clock, output_service, launcher, supervision;
+  handle_t values[2], observations[2], collectors[2], producers[2];
+  bool sealed[2], collected[2], take_uncertain[2];
   uint64_t limits[2], deadline, poll_interval, next_poll;
   bool stop_requested, group_complete, uncertain;
   struct pyxis_capture_result result;
@@ -60,8 +62,11 @@ static enum call_status discard_capture(struct pyxis_capture *capture)
   if (capture->job) {
     error = pyxis_job_close(&capture->job);
   }
-  handle_t *handles[] = {&capture->files[0], &capture->files[1],
-    &capture->supervision, &capture->launcher, &capture->private_root, &capture->clock};
+  handle_t *handles[] = {&capture->values[0], &capture->values[1],
+    &capture->observations[0], &capture->observations[1],
+    &capture->collectors[0], &capture->collectors[1],
+    &capture->producers[0], &capture->producers[1],
+    &capture->supervision, &capture->launcher, &capture->output_service, &capture->clock};
   for (size_t i = 0; i < sizeof(handles) / sizeof(*handles); ++i) {
     enum call_status status = close_handle(handles[i]);
     if (error == CALL_OK) {
@@ -91,7 +96,7 @@ static enum call_status request_stop(struct pyxis_capture *capture)
   return status;
 }
 
-static size_t interests(struct pyxis_capture *capture, struct wait_interest waits[2])
+static size_t interests(struct pyxis_capture *capture, struct wait_interest waits[4])
 {
   size_t count = 0;
   if (capture->job && !capture->result.result_valid) {
@@ -100,10 +105,17 @@ static size_t interests(struct pyxis_capture *capture, struct wait_interest wait
   if (capture->supervision && !capture->group_complete) {
     waits[count++] = (struct wait_interest){capture->supervision, WAIT_COMPLETE, 0};
   }
+  if (capture->result.complete) {
+    for (size_t i = 0; i < 2; ++i) {
+      if (capture->sealed[i] && !capture->collected[i] && !capture->take_uncertain[i]) {
+        waits[count++] = (struct wait_interest){capture->collectors[i], WAIT_COMPLETE | WAIT_CLOSED, 0};
+      }
+    }
+  }
   return count;
 }
 
-static enum call_status final_sizes(struct pyxis_capture *capture)
+static enum call_status final_outputs(struct pyxis_capture *capture)
 {
   struct pyxis_capture_output *outputs[] = {
     &capture->result.stdout_output, &capture->result.stderr_output,
@@ -112,13 +124,46 @@ static enum call_status final_sizes(struct pyxis_capture *capture)
     if (outputs[i]->valid) {
       continue;
     }
-    uint64_t size;
-    enum call_status status = file_size(capture->files[i], &size);
+    enum call_status status;
+    if (capture->take_uncertain[i]) {
+      return CALL_OUTCOME_UNKNOWN;
+    }
+    if (!capture->sealed[i]) {
+      status = output_seal(capture->collectors[i]);
+      if (status != CALL_OK) {
+        return remember_error(capture, status);
+      }
+      capture->sealed[i] = true;
+    }
+    struct output_status_reply state;
+    status = output_status(capture->collectors[i], &state);
     if (status != CALL_OK) {
       return remember_error(capture, status);
     }
+    if (!capture->collected[i]) {
+      struct output_take_reply taken;
+      status = output_take(capture->collectors[i], &taken);
+      if (status == CALL_WOULD_BLOCK) {
+        return status;
+      }
+      if (status != CALL_OK) {
+        capture->take_uncertain[i] = status == CALL_OUTCOME_UNKNOWN;
+        return remember_error(capture, status);
+      }
+      capture->values[i] = taken.value;
+      capture->observations[i] = taken.observation;
+      capture->collected[i] = true;
+    }
+    uint64_t size = 0;
+    if (state.mode != OUTPUT_MODE_VALUE) {
+      status = file_size(capture->values[i], &size);
+      if (status != CALL_OK) {
+        return remember_error(capture, status);
+      }
+    }
     *outputs[i] = (struct pyxis_capture_output){
-      .valid = true, .size = size, .truncated = size > capture->limits[i],
+      .valid = true, .mode = state.mode, .size = size,
+      .truncated = state.mode != OUTPUT_MODE_VALUE && size > capture->limits[i],
       .returned_size = size < capture->limits[i] ? size : capture->limits[i],
     };
   }
@@ -128,7 +173,7 @@ static enum call_status final_sizes(struct pyxis_capture *capture)
 static enum call_status advance(struct pyxis_capture *capture)
 {
   if (capture->result.complete) {
-    return final_sizes(capture);
+    return final_outputs(capture);
   }
   if (capture->uncertain && !capture->supervision) {
     return CALL_OUTCOME_UNKNOWN;
@@ -154,8 +199,8 @@ static enum call_status advance(struct pyxis_capture *capture)
     }
   }
 
-  struct wait_interest waits[2];
-  uint64_t events[2] = {0};
+  struct wait_interest waits[4];
+  uint64_t events[4] = {0};
   size_t count = interests(capture, waits);
   if (count) {
     status = wait_many(waits, count, 0, events);
@@ -197,14 +242,24 @@ static enum call_status advance(struct pyxis_capture *capture)
       (!capture->supervision || capture->group_complete)) {
     capture->result.complete = true;
     capture->result.cleanup_unconfirmed = false;
-    return final_sizes(capture);
+    return final_outputs(capture);
   }
 
   if (capture->job && !capture->result.result_valid &&
       capture->result.stop == PYXIS_CAPTURE_STOP_NONE && now >= capture->next_poll) {
     for (size_t i = 0; i < 2; ++i) {
-      uint64_t size;
-      status = file_size(capture->files[i], &size);
+      struct output_status_reply state;
+      status = output_status(capture->collectors[i], &state);
+      if (status == CALL_OK && (state.flags & OUTPUT_FAILED)) {
+        status = CALL_IO;
+      }
+      if (status == CALL_OK && state.mode != OUTPUT_MODE_BYTES) {
+        continue;
+      }
+      uint64_t size = 0;
+      if (status == CALL_OK) {
+        status = file_size(capture->producers[i], &size);
+      }
       if (status != CALL_OK) {
         remember_error(capture, status);
         request_stop(capture);
@@ -257,14 +312,12 @@ static enum call_status validate_options(handle_t launcher,
   if (status != CALL_OK) {
     return status;
   }
-  uint64_t rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
-      DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
-  status = validate_source(options->private_root, PROTOCOL_DIRECTORY, rights);
+  status = validate_source(options->output_service, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE);
   if (status != CALL_OK) {
     return status;
   }
   return libc_job_validate_capture_grants(options->command.grants,
-      options->command.grant_count, options->private_root);
+      options->command.grant_count, options->output_service);
 }
 
 enum call_status pyxis_capture_start(handle_t launcher,
@@ -288,10 +341,8 @@ enum call_status pyxis_capture_start(handle_t launcher,
   owned->limits[0] = options->stdout_limit ? options->stdout_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
   owned->limits[1] = options->stderr_limit ? options->stderr_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
   status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ, 0, &owned->clock);
-  uint64_t root_rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
-      DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->private_root, root_rights, 0, &owned->private_root);
+    status = handle_copy_restricted(options->output_service, PIPE_SERVICE_RIGHT_CREATE, 0, &owned->output_service);
   }
   if (status == CALL_OK) {
     status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
@@ -305,7 +356,21 @@ enum call_status pyxis_capture_start(handle_t launcher,
   }
   int writers[2] = {-1, -1};
   for (size_t i = 0; i < 2 && status == CALL_OK; ++i) {
-    status = libc_capture_file_create(owned->private_root, owned->clock, &owned->files[i], &writers[i]);
+    struct output_create_reply pair;
+    status = output_create(owned->output_service, &pair);
+    if (status == CALL_OK) {
+      owned->collectors[i] = pair.collector;
+      owned->producers[i] = pair.producer;
+      handle_t writer = HANDLE_INVALID;
+      status = handle_copy_restricted(pair.producer, FILE_RIGHT_WRITE, 0, &writer);
+      if (status == CALL_OK) {
+        writers[i] = pyxis_descriptor_adopt(&writer, PYXIS_DESCRIPTOR_WRITE);
+        if (writers[i] < 0) {
+          status = CALL_NO_MEMORY;
+          close_handle(&writer);
+        }
+      }
+    }
   }
   if (status == CALL_OK && options->fresh_group) {
     struct execution_group_create_reply group = {0};
@@ -322,7 +387,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
     struct pyxis_job_options command = options->command;
     command.streams[ENVIRONMENT_STDOUT] = writers[0];
     command.streams[ENVIRONMENT_STDERR] = writers[1];
-    status = libc_job_launch_captured(owned->launcher, &command, owned->private_root, &owned->job);
+    status = libc_job_launch_captured(owned->launcher, &command, owned->output_service, &owned->job);
     if (status == CALL_OUTCOME_UNKNOWN) {
       owned->uncertain = true;
     }
@@ -391,7 +456,8 @@ enum call_status pyxis_capture_wait(struct pyxis_capture *capture,
   }
   for (;;) {
     enum call_status status = pyxis_capture_step(capture, result);
-    if (status != CALL_OK || result->complete) {
+    if ((status != CALL_OK && status != CALL_WOULD_BLOCK) ||
+        (status == CALL_OK && result->complete)) {
       return status;
     }
     uint64_t now;
@@ -416,8 +482,8 @@ enum call_status pyxis_capture_wait(struct pyxis_capture *capture,
     if (until > maximum) {
       until = maximum;
     }
-    struct wait_interest waits[2];
-    uint64_t events[2];
+    struct wait_interest waits[4];
+    uint64_t events[4];
     size_t count = interests(capture, waits);
     status = wait_many(waits, count, until, events);
     if (status != CALL_OK && status != CALL_TIMED_OUT) {
@@ -457,17 +523,40 @@ enum call_status pyxis_capture_read(struct pyxis_capture *capture,
   }
   struct pyxis_capture_output *output = stream == ENVIRONMENT_STDOUT ?
       &capture->result.stdout_output : &capture->result.stderr_output;
-  if (!output->valid) {
+  if (!output->valid || output->taken) {
     return CALL_UNAVAILABLE;
   }
-  if (offset >= output->returned_size) {
+  if (output->mode != OUTPUT_MODE_VALUE && offset >= output->returned_size) {
     capacity = 0;
-  } else if (capacity > output->returned_size - offset) {
+  } else if (output->mode != OUTPUT_MODE_VALUE && capacity > output->returned_size - offset) {
     capacity = output->returned_size - offset;
   }
-  enum call_status status = file_read(capture->files[stream - ENVIRONMENT_STDOUT],
+  enum call_status status = file_read(capture->values[stream - ENVIRONMENT_STDOUT],
       offset, bytes, capacity, read);
-  return status == CALL_OK && capacity && !*read ? CALL_IO : status;
+  return status == CALL_OK && output->mode != OUTPUT_MODE_VALUE && capacity && !*read ? CALL_IO : status;
+}
+
+enum call_status pyxis_capture_take(struct pyxis_capture *capture,
+    enum environment_stream_index stream, struct output_take_reply *owned)
+{
+  if (!capture || !owned ||
+      (stream != ENVIRONMENT_STDOUT && stream != ENVIRONMENT_STDERR)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (!capture->result.complete) {
+    return CALL_BUSY;
+  }
+  size_t index = stream - ENVIRONMENT_STDOUT;
+  struct pyxis_capture_output *output = index ?
+      &capture->result.stderr_output : &capture->result.stdout_output;
+  if (!output->valid || output->taken) {
+    return CALL_UNAVAILABLE;
+  }
+  *owned = (struct output_take_reply){capture->values[index], capture->observations[index]};
+  capture->values[index] = HANDLE_INVALID;
+  capture->observations[index] = HANDLE_INVALID;
+  output->taken = true;
+  return CALL_OK;
 }
 
 enum call_status pyxis_capture_close(struct pyxis_capture **capture)

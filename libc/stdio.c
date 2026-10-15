@@ -499,6 +499,84 @@ int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding)
   return descriptor_object_stream(current->operation, binding);
 }
 
+static enum call_status handoff_destination(FILE *destination, handle_t *producer)
+{
+  if (destination->closed || !destination->writable) {
+    return CALL_BAD_HANDLE;
+  }
+  if (destination->output_count || destination->has_pushback ||
+      destination->has_wide_pushback) {
+    return CALL_BAD_OPERATION;
+  }
+  struct pyxis_stdio_binding binding;
+  if (descriptor_object_stream(destination->operation, &binding) < 0) {
+    return CALL_BAD_HANDLE;
+  }
+  struct output_status_reply state;
+  enum call_status status = output_producer_status(binding.handle, &state);
+  if (status != CALL_OK) {
+    return status;
+  }
+  *producer = binding.handle;
+  return CALL_OK;
+}
+
+enum call_status pyxis_stdio_handoff_owned(FILE *destination,
+    struct output_handoff_request *owned)
+{
+  if (!destination || !owned) {
+    return CALL_BAD_REQUEST;
+  }
+  if (!stream_acquire(destination)) {
+    return CALL_BAD_HANDLE;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {destination};
+  handle_t producer;
+  enum call_status status = handoff_destination(destination, &producer);
+  return status == CALL_OK ? output_handoff(producer, owned) : status;
+}
+
+enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source)
+{
+  if (!destination || !source || source == destination) {
+    return CALL_BAD_REQUEST;
+  }
+  if (!stream_acquire(destination)) {
+    return CALL_BAD_HANDLE;
+  }
+  handle_t producer;
+  enum call_status status = handoff_destination(destination, &producer);
+  stream_end(destination);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (!stream_acquire(source)) {
+    return CALL_BAD_HANDLE;
+  }
+  struct output_handoff_request owned = {0};
+  status = CALL_BAD_OPERATION;
+  if (!source->closed && source->readable && !source->io_started &&
+      !source->has_pushback && !source->has_wide_pushback && !source->output_count) {
+    status = descriptor_object_output_copy(source->operation, &owned);
+  }
+  if (status == CALL_OK) {
+    /* Eligible source objects are read-only, so they cannot also occupy the
+     * writable destination role in a reversed pair of handoff helpers. */
+    status = pyxis_stdio_handoff_owned(destination, &owned);
+    descriptor_file_end(source->operation);
+  }
+  stream_end(source);
+  int saved = errno;
+  if (owned.observation) {
+    descriptor_release_handle(owned.observation);
+  }
+  if (owned.value) {
+    descriptor_release_handle(owned.value);
+  }
+  errno = saved;
+  return status;
+}
+
 static int flush_output(FILE *stream)
 {
   while (stream->output_count) {

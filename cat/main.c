@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pyxis/resource.h>
+#include <pyxis/stdio.h>
 
 /* Bound transfer storage independently of file size. */
 static unsigned char buffer[4096];
@@ -19,13 +21,46 @@ int main(int argc, char **argv)
     const char *path = argc > 1 ? argv[i + 1] : "-";
     bool input = !strcmp(path, "-");
     const char *name = input ? "stdin" : path;
-    FILE *file = input ? stdin : fopen(path, "rb");
+    struct pyxis_open_result opened = {0};
+    FILE *file = input ? stdin : pyxis_fopen(path, "rb", &opened);
     if (!file) {
-      if (report_error(name, errno) < 0) {
+      int open_error = errno;
+      if (operands == 1 && opened.available && opened.resource.resource &&
+          opened.resource.info.description.outcome != RESOURCE_OK) {
+        struct output_handoff_request owned = {opened.resource.resource, HANDLE_INVALID};
+        enum call_status status = pyxis_stdio_handoff_owned(stdout, &owned);
+        opened.resource.resource = owned.value;
+        pyxis_open_result_close(&opened);
+        if (status == CALL_OK) {
+          return EXIT_FAILURE;
+        }
+        if (status != CALL_BAD_OPERATION) {
+          report_error("stdout", EIO);
+          return EXIT_FAILURE;
+        }
+      } else {
+        pyxis_open_result_close(&opened);
+      }
+      if (report_error(name, open_error) < 0) {
         return EXIT_FAILURE;
       }
       result = EXIT_FAILURE;
       continue;
+    }
+
+    if (operands == 1) {
+      enum call_status status = pyxis_stdio_handoff(stdout, file);
+      if (status != CALL_BAD_OPERATION) {
+        if (!input && fclose(file) != 0) {
+          report_error(name, errno);
+          return EXIT_FAILURE;
+        }
+        if (status != CALL_OK) {
+          report_error("stdout", EIO);
+          return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+      }
     }
 
     for (;;) {

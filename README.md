@@ -586,9 +586,14 @@ belongs to the trusted caller; no descendant launch, bundle expansion, capture,
 deadline or implicit inheritance is added. See the header for ownership and
 the uncertain-publication rule.
 
-[pyxis/capture.h](libc/include/pyxis/capture.h) adds private unlinked RAM FILE
-stdout/stderr, an absolute deadline, polled per-stream limits and capped reads.
-The caller supplies an explicitly private work root and audits child reachability.
+[pyxis/capture.h](libc/include/pyxis/capture.h) constructs FILE-compatible output
+producers with process-local collectors using explicit pipe CREATE authority.
+It retains an absolute deadline, interim byte-mode polling/read limits and owned
+result collection; handed-off values bypass byte limits.
+[pyxis/stdio.h](libc/include/pyxis/stdio.h) transfers owned typed results or
+restricted copies of complete unread sources. Single-source `cat` uses this
+helper and ordinary destinations retain byte copying.
+The trusted caller audits child authority and reachability.
 It retains storage through process retirement and, optionally, a fresh root or
 subgroup selected by the supplied LAUNCH-authorized launcher. The library keeps sole CONTROL;
 the direct child receives no descendant launcher.

@@ -303,7 +303,8 @@ static enum call_status final_sizes(struct pyxis_pipeline *pipeline)
       return remember_error(pipeline, status);
     }
     *outputs[i] = (struct pyxis_capture_output){
-      .valid = true, .size = size, .truncated = size > pipeline->limits[i],
+      .valid = true, .mode = size ? OUTPUT_MODE_BYTES : OUTPUT_MODE_EMPTY,
+      .size = size, .truncated = size > pipeline->limits[i],
       .returned_size = size < pipeline->limits[i] ? size : pipeline->limits[i],
     };
   }

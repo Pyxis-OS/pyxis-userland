@@ -5,6 +5,7 @@
 #include <abi/startup.h>
 #include <stdio.h>
 #include <pyxis/response.h>
+#include <output.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +27,18 @@ int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding);
  * and inherited streams report absent metadata. EINVAL for NULL, EBADF for a
  * closed/invalid stream. Failure clears the output; success preserves errno. */
 int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info);
+
+/* Attempt a complete unread READ-only, rereadable source (or held failure)
+ * using owned restricted copies. One-pass successful streams keep byte copying.
+ * Pending output, pushback, read-ahead and consumed input are ineligible.
+ * The descriptor's borrowed handles are never consumed. BAD_OPERATION permits
+ * ordinary byte copying; every other failure is final, including uncertainty.
+ * The source stays open. This helper does not change stdio error indicators. */
+enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source);
+/* Same dispatch for an explicitly owned typed result, including a failed OPEN.
+ * Sources follow output_handoff ownership rules; no borrowed handles allowed. */
+enum call_status pyxis_stdio_handoff_owned(FILE *destination,
+    struct output_handoff_request *owned);
 
 #ifdef __cplusplus
 }

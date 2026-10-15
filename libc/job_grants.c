@@ -224,14 +224,17 @@ enum call_status libc_job_validate_capture_grants(const struct launch_grant *gra
   if (status != CALL_OK) {
     return status;
   }
-  if (root_info.protocol != PROTOCOL_DIRECTORY || root_info.kind != HANDLE_KIND_NATIVE ||
+  if ((root_info.protocol != PROTOCOL_DIRECTORY && root_info.protocol != PROTOCOL_PIPE_SERVICE) ||
+      root_info.kind != HANDLE_KIND_NATIVE ||
       root_info.transport) {
     return CALL_WRONG_TYPE;
   }
-  struct file_info_reply root_identity;
-  status = directory_info(private_root, &root_identity);
-  if (status != CALL_OK) {
-    return status;
+  struct file_info_reply root_identity = {0};
+  if (root_info.protocol == PROTOCOL_DIRECTORY) {
+    status = directory_info(private_root, &root_identity);
+    if (status != CALL_OK) {
+      return status;
+    }
   }
   for (size_t i = 0; i < count; ++i) {
     if (grants[i].source == private_root) {
@@ -242,10 +245,11 @@ enum call_status libc_job_validate_capture_grants(const struct launch_grant *gra
     if (status != CALL_OK) {
       return status;
     }
-    if (capture_protocol_denied(info.protocol)) {
+    if (capture_protocol_denied(info.protocol) ||
+        (root_info.protocol == PROTOCOL_PIPE_SERVICE && info.protocol == PROTOCOL_PIPE_SERVICE)) {
       return CALL_DENIED;
     }
-    if (info.protocol == PROTOCOL_DIRECTORY) {
+    if (root_info.protocol == PROTOCOL_DIRECTORY && info.protocol == PROTOCOL_DIRECTORY) {
       struct file_info_reply identity;
       status = directory_info(grants[i].source, &identity);
       if (status != CALL_OK) {

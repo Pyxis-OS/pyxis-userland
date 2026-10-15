@@ -3,6 +3,7 @@
 #define LIBC_DESCRIPTOR_H
 
 #include <pyxis/response.h>
+#include <output.h>
 
 #include <abi/handle.h>
 #include <abi/startup.h>
@@ -133,6 +134,10 @@ int descriptor_close_expected(int descriptor, struct descriptor_object *expected
     uint64_t generation);
 bool descriptor_object_ready(struct descriptor_object *object, bool writing);
 int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdio_binding *binding);
+/* Caller holds FILE exclusion. Copies eligible unread primary + observation.
+ * Success also holds descriptor read exclusion until descriptor_file_end. */
+enum call_status descriptor_object_output_copy(struct descriptor_object *object,
+    struct output_handoff_request *owned);
 int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
 int descriptor_object_read_complete(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
 int descriptor_object_read_buffered(struct descriptor_object *object, void *buffer, size_t size, size_t *read);

@@ -18,6 +18,7 @@
 #include <handle.h>
 #include <limits.h>
 #include <pipe.h>
+#include <output.h>
 #include <pyxis/descriptor.h>
 #include <startup.h>
 #include <stdint.h>
@@ -62,6 +63,7 @@ struct descriptor_object {
   int final_error;
   uint64_t position;
   bool readable, writable, append;
+  bool input_consumed; /* Any successful read, including explicit-offset reads. */
   bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
   unsigned char *ahead; /* Owned, BUFSIZ bytes, allocated on first fill. */
   size_t ahead_start, ahead_count;
@@ -1105,6 +1107,9 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     *read = 0;
     return fail(libc_call_errno(status));
   }
+  if (*read) {
+    entry->input_consumed = true;
+  }
   if (*read > size) {
     *read = 0;
     return fail(EIO);
@@ -1385,6 +1390,9 @@ static int pread_locked(struct descriptor_object *entry, void *buffer, size_t si
   if (status != CALL_OK) {
     return fail(libc_call_errno(status));
   }
+  if (*read) {
+    entry->input_consumed = true;
+  }
   if (*read > size) {
     *read = 0;
     return fail(EIO);
@@ -1638,6 +1646,43 @@ int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdi
     .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
   };
   return 0;
+}
+
+enum call_status descriptor_object_output_copy(struct descriptor_object *object,
+    struct output_handoff_request *owned)
+{
+  *owned = (struct output_handoff_request){0};
+  if (object_enter(object, false) < 0) {
+    return CALL_BAD_HANDLE;
+  }
+  enum call_status status = CALL_BAD_OPERATION;
+  if ((object->kind == DESCRIPTOR_FILE || object->kind == DESCRIPTOR_RESPONSE) &&
+      object->readable && !object->writable && !object->position &&
+      !object->ahead_count && !object->input_consumed &&
+      (!object->transaction || object->transaction->committed)) {
+    struct describe_reply description;
+    status = handle_describe(object->handle, 0, &description);
+    uint64_t read_right = object->kind == DESCRIPTOR_FILE ? FILE_RIGHT_READ : STREAM_RIGHT_READ;
+    if (status == CALL_OK && description.description.outcome == RESOURCE_OK &&
+        !(description.description.flags & RESOURCE_REREADABLE)) {
+      status = CALL_BAD_OPERATION;
+    }
+    if (status == CALL_OK) {
+      status = handle_copy_restricted(object->handle, description.rights & read_right,
+          description.transport, &owned->value);
+    }
+    if (status == CALL_OK && object->observation) {
+      status = handle_copy(object->observation, &owned->observation);
+    }
+  }
+  if (status != CALL_OK) {
+    unlock_object(object_guard(object, false));
+    if (owned->value) {
+      descriptor_release_handle(owned->value);
+      *owned = (struct output_handoff_request){0};
+    }
+  }
+  return status;
 }
 
 int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read)

@@ -3,6 +3,7 @@
 #define LIBC_PYXIS_CAPTURE_H
 
 #include <pyxis/job.h>
+#include <output.h>
 
 #define PYXIS_CAPTURE_DEFAULT_LIMIT (UINT64_C(1024) * 1024)
 #define PYXIS_CAPTURE_DEFAULT_POLL_NS UINT64_C(10000000)
@@ -13,14 +14,14 @@ struct pyxis_capture_options {
   /* Every stream must be -1. This profile supplies its own separate stdout/
    * stderr FILEs and no stdin; all other command inputs remain explicit. */
   struct pyxis_job_options command;
-  /* Trusted startup must supply a private RAM root, not shared tmp. Neither
-   * metadata nor a path proves privacy/backing. Exclude this tree, credentials
-   * and bypass providers from every child binding for its lifetime. */
-  handle_t private_root;
+  /* Explicit native pipe CREATE authority for producer/collector construction.
+   * Capture retains the process-local collectors and delegates only producers. */
+  handle_t output_service;
   handle_t clock;
   uint64_t deadline_ns; /* Required, absolute monotonic; never refreshed. */
   /* Zero selects the defaults above. Limits are per-stream polled triggers
-   * and returned-byte caps, not hard backing quotas; output can overshoot. */
+   * and byte-mode read caps, not hard backing quotas; output can overshoot.
+   * Handed-off values bypass both policies. Owned take returns full authority. */
   uint64_t stdout_limit, stderr_limit;
   uint64_t poll_interval_ns;
   /* With LAUNCH, an unbound launcher creates a local root for an ungrouped
@@ -42,7 +43,9 @@ enum pyxis_capture_stop {
 };
 
 struct pyxis_capture_output {
-  bool valid; /* Final size/cap, available after confirmed retirement. */
+  bool valid; /* Collected after confirmed retirement. */
+  bool taken;
+  uint64_t mode; /* OUTPUT_MODE_EMPTY/BYTES/VALUE; sizes apply only to bytes. */
   bool truncated;
   uint64_t size;
   uint64_t returned_size;
@@ -64,8 +67,8 @@ extern "C" {
 #endif
 
 /* Single-owner API. Inputs are borrowed valid C storage until return. Creates
- * then unlinks both FILEs before launch. Checks the stricter capture inventory,
- * including unnamed/cwd grants; known private-root aliases are refused. The
+ * both output pairs before launch. Checks the stricter capture inventory,
+ * including unnamed/cwd grants; pipe CREATE service grants are refused. The
  * trusted caller audits credentials, subtree/provider and namespace reachability.
  * Synchronous preparation may exceed the deadline; expiry is checked on return.
  *
@@ -96,12 +99,20 @@ enum call_status pyxis_capture_wait(struct pyxis_capture *capture,
  * Idempotent. A committed native exit/fault stays unchanged. */
 enum call_status pyxis_capture_cancel(struct pyxis_capture *capture);
 
-/* Confirmed retirement only. STDOUT or STDERR, explicit offsets, capped bytes,
- * no chronology between streams. One native read may be short; zero at the cap
- * is EOF. Does not expose a full-backing capability or allocate a byte array. */
+/* Confirmed retirement only. STDOUT or STDERR, explicit offsets. Byte-mode reads
+ * are capped by interim policy; handed-off FILE values are never capped.
+ * No chronology between streams. One native read may be short; zero at the cap
+ * is EOF. A non-FILE handed-off value reports its native read/type failure. */
 enum call_status pyxis_capture_read(struct pyxis_capture *capture,
     enum environment_stream_index stream, uint64_t offset, void *bytes,
     size_t capacity, size_t *read);
+
+/* Move collected owned primary + optional observation exactly once. Never
+ * copies or caps a handed-off value. Byte results expose the complete backing;
+ * interim limits are polled stop/read policy, not retention accounting. Failure
+ * preserves the record and output. After success read/take is unavailable. */
+enum call_status pyxis_capture_take(struct pyxis_capture *capture,
+    enum environment_stream_index stream, struct output_take_reply *owned);
 
 /* BUSY until confirmed process/group retirement, permanently for quarantined
  * direct uncertainty. After retirement releases each owned grant once, clears
