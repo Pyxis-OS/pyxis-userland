@@ -238,7 +238,43 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
   return ok;
 }
 
-int install_publication_scratch(struct terminal *terminal)
+static void configuration_summary(const struct install_configuration *plan, FILE *output)
+{
+  size_t required = 0, selected = 0;
+  for (size_t i = 0; i < plan->delta.count; ++i) {
+    required += plan->delta.changes[i].required;
+    selected += plan->delta.changes[i].choice != CONFIG_CHOICE_KEEP;
+  }
+  fprintf(output, "Configuration source: %s; %s.\nReason: %s.\n",
+      plan->source == CONFIG_ACTIVE_ESP ? "complete ESP set" : "whole archive",
+      plan->applicable ? "applicable" : "blocked", plan->reason ? plan->reason : "not prepared");
+  fprintf(output, "ESP deltas: %zu required, %zu selected / %zu total%s.\n", required,
+      selected, plan->delta.count, plan->source == CONFIG_ACTIVE_ARCHIVE ? "; inactive" : "");
+  for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
+    if (plan->needs_adoption[i]) {
+      fprintf(output, "%s owner bytes: %s%s.\n", config_storage_file_name(i),
+          plan->adopted[i] ? "adoption selected" : "Keep; adoption required for ESP",
+          plan->source == CONFIG_ACTIVE_ARCHIVE ? "; retained inactive" : "");
+    }
+    const struct config_plan_file *file = &plan->delta.files[i];
+    if (file->print_only && file->relevant) {
+      fprintf(output, "%s: %s.\n", config_storage_file_name(i),
+          file->reason ? file->reason : "printed changes only");
+    }
+  }
+  if (plan->pool_override.digest.present) {
+    fprintf(output, "Pool boot override: %s; original kept as inactive recovery after publication.\n",
+        plan->source == CONFIG_ACTIVE_ARCHIVE ? "migration inactive; archive selected" :
+        plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
+        "unsupported/invalid; printed proposals only");
+    if (plan->pool_conflict) {
+      fputs("Pool/ESP boot inputs differ; no silent merge.\n", output);
+    }
+  }
+  fputs("CPU/volume/timezone/network: not checked. Details and numbered choices: plan.\n", output);
+}
+
+int install_publication_scratch(struct terminal *terminal, bool verbose)
 {
   handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
   handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
@@ -286,7 +322,7 @@ int install_publication_scratch(struct terminal *terminal)
     goto done;
   }
   disk.bytes = disk.info.block_count * disk.info.block_size;
-  install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"), false);
+  install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"), verbose);
   if (!install_pool_boot_snapshot(&disk, &pool) ||
       disk_open_fat32(disk.handle, partition, MOUNT_ACCESS_READ_ONLY, READ_RIGHTS, &mount) != CALL_OK ||
       !install_snapshot_facts(mount.control, &planned_facts)) {
@@ -419,7 +455,11 @@ int install_publication_scratch(struct terminal *terminal)
     goto done;
   }
   for (;;) {
-    install_configuration_review(&plan, stderr);
+    if (verbose) {
+      install_configuration_review(&plan, stderr);
+    } else {
+      configuration_summary(&plan, stderr);
+    }
     uint64_t required = required_capacity(&plan, binding, cluster_bytes);
     fprintf(stderr, "Scratch staging requires at most %llu bytes; inspected free %llu (includes namespace reserve).\n",
         (unsigned long long)required, (unsigned long long)available_bytes);
@@ -427,15 +467,23 @@ int install_publication_scratch(struct terminal *terminal)
         "Boot entry: %s%s.\n", attempt, (unsigned long long)binding->kernel.digest.size,
         (unsigned long long)binding->archive.digest.size, pending ? "manual adoption; activation pending" : "owned switch last",
         adoption ? "; legacy adoption pre-selected" : "");
-    if (pending) {
+    if (verbose) {
       install_boot_entry_print(binding, planned_facts.disk_guid, stderr);
     }
-    fputs("Review actions: confirm, cancel, source archive, source esp, adopt boot|session|network,\n"
+    fputs("Review actions: confirm, cancel, plan, source archive, source esp, adopt boot|session|network,\n"
         "or change NUMBER keep|apply|adopt|remove.\n", stderr);
+    if (ferror(stderr)) {
+      goto done;
+    }
     if (!line(terminal, "Review: ", text, sizeof(text)) || !strcmp(text, "cancel")) {
       fputs("Cancelled; nothing written.\n", stderr);
       result = EXIT_SUCCESS;
       goto done;
+    }
+    if (!strcmp(text, "plan")) {
+      install_configuration_review(&plan, stderr);
+      install_boot_entry_print(binding, planned_facts.disk_guid, stderr);
+      continue;
     }
     if (!strcmp(text, "confirm")) {
       if (!plan.applicable || required > available_bytes) {
@@ -586,6 +634,9 @@ int install_publication_scratch(struct terminal *terminal)
       report.status, report.phase, report.committed ? "committed" : "not confirmed",
       report.boot_activated ? "entry confirmed" : report.committed ?
       "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
+  if (report.committed && pending) {
+    install_boot_entry_print(binding, planned_facts.disk_guid, stderr);
+  }
   if (!ok) {
     fputs("Stopped; retain artifacts for manual disposition. No rollback, retry or reboot offer.\n", stderr);
   }

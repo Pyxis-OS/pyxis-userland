@@ -517,6 +517,7 @@ void install_configuration_review(const struct install_configuration *plan, FILE
     review_pool(plan, output);
   }
   for (size_t i = 0; i < plan->delta.count; ++i) {
+    fprintf(output, "%zu. ", i + 1);
     config_delta_plan_review(&plan->delta, i, output);
   }
   fputs("CPU presence, mounted volumes, timezone files and live network availability: not checked\n", output);

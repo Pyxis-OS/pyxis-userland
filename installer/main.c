@@ -473,18 +473,18 @@ static bool record_matches(const struct install_plan_record *expected,
 
 int main(int argc, char **argv)
 {
-#if INSTALLER_PUBLICATION_SCRATCH
-  if (argc == 2 && !strcmp(argv[1], "--scratch-publication")) {
-    struct terminal terminal = {.input = bootstrap_stdio(ENVIRONMENT_STDIN).handle,
-      .output = bootstrap_stdio(ENVIRONMENT_STDOUT).handle};
-    return install_publication_scratch(&terminal);
-  }
-#endif
   bool print_only = false, dry_run = false, replay = false, verbose = false, coexist = false;
+#if INSTALLER_PUBLICATION_SCRATCH
+  bool scratch_publication = false;
+#endif
   const char *explicit_consent = NULL;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
       verbose = true;
+#if INSTALLER_PUBLICATION_SCRATCH
+    } else if (!strcmp(argv[i], "--scratch-publication")) {
+      scratch_publication = true;
+#endif
     } else if (!strcmp(argv[i], "--plan")) {
       print_only = true;
     } else if (!strcmp(argv[i], "--dry-run")) {
@@ -507,6 +507,17 @@ int main(int argc, char **argv)
     fputs("installer: invalid plan/apply options\n", stderr);
     return EXIT_FAILURE;
   }
+#if INSTALLER_PUBLICATION_SCRATCH
+  if (scratch_publication) {
+    if (print_only || dry_run || replay || explicit_consent) {
+      fputs("installer: scratch publication requires its own Review\n", stderr);
+      return EXIT_FAILURE;
+    }
+    struct terminal terminal = {.input = bootstrap_stdio(ENVIRONMENT_STDIN).handle,
+      .output = bootstrap_stdio(ENVIRONMENT_STDOUT).handle};
+    return install_publication_scratch(&terminal, verbose);
+  }
+#endif
   struct terminal terminal = {
     .input = bootstrap_capability("input"), .output = bootstrap_capability("output"),
   };
@@ -540,7 +551,7 @@ int main(int argc, char **argv)
       goto done;
     }
     if (!strcmp(scratch, "scratch")) {
-      return install_publication_scratch(&terminal);
+      return install_publication_scratch(&terminal, verbose);
     }
     if (*scratch) {
       goto done;

@@ -10,11 +10,20 @@ Select the exact disposable disk ID and GPT ESP partition. Preparation opens a
 native read-only FAT view, freezes the config/catalog/record/menu bytes and
 issuer facts, inspects the personal pool override without mounting or replay,
 checks full FAT free capacity through the shared reader, then drains and
-explicitly retires the view. Review shows entry choices, source
-selection, the retained override hash and the fresh boot-payload attempt. It
-uses the same literal/schema/delta planner as `config`; unsupported Lua is data,
-not executed code. `confirm` applies only that owned in-memory plan; `cancel`
-writes nothing. The scratch flow installs no program revision.
+explicitly retires the view. Review normally shows a compact configuration
+summary: selected source, applicability/reason, required/selected delta counts,
+owner-file adoption and pool-migration/refusal state, plus capacity, payload and
+boot-entry status. `plan` prints the full review with numbered choices, source
+hashes and the actual proposed boot entries; `change NUMBER ...` uses those
+numbers. Existing `-v`/`--verbose` prints full details and progress records,
+including with `--scratch-publication` in a scratch build. Review-output failure
+refuses apply.
+
+The scratch flow uses the same literal/schema/delta planner as `config`;
+unsupported Lua is data, not executed code. `confirm` applies only that owned
+in-memory plan; `cancel` writes nothing. It installs no program revision. After
+a committed result whose boot entry still needs manual adoption, the actual
+proposed entry is printed again and remains explicitly pending.
 
 The executor reacquires the existing whole-disk claim and rechecks the frozen
 bytes with the shared FAT reader before staging. It releases that claim before
