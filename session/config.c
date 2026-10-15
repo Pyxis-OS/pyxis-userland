@@ -3,6 +3,7 @@
 #include "../libconfig/handoff.h"
 #include <abi/console.h>
 #include <handle.h>
+#include <environment.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +44,12 @@ static bool check_timezone(const char *name)
 
 bool session_config_read(struct session_config *config)
 {
-  handle_t source = startup_resource("session_config");
+  handle_t source = HANDLE_INVALID;
+  enum call_status source_status = environment_capability(startup_environment_handle(), "session_config", &source);
+  if (source_status != CALL_OK && source_status != CALL_NOT_FOUND) {
+    fprintf(stderr, "session: selected session FILE unavailable (status %u)\n", source_status);
+    return false;
+  }
   if (source == HANDLE_INVALID) {
     if (session_config_read_file(SESSION_CONFIG_PATH, config) == CONFIG_ERROR) {
       return false;

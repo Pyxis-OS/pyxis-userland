@@ -7,6 +7,7 @@
 #include "../config-editor/readiness.h"
 #include "../libconfig/handoff.h"
 #include "../xfer/hash.h"
+#include "../common/bootstrap_environment.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -239,8 +240,8 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
 
 int install_publication_scratch(struct terminal *terminal)
 {
-  handle_t disks = startup_resource("disks"), boot = startup_root("boot");
-  handle_t clock = startup_resource("clock"), random = startup_resource("random");
+  handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
+  handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
   struct install_disk disk = {.handle = HANDLE_INVALID};
   struct mount_fat32_reply mount = {.root = HANDLE_INVALID, .control = HANDLE_INVALID};
   struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0}, archive[CONFIG_LUA_COUNT] = {0};
@@ -285,7 +286,7 @@ int install_publication_scratch(struct terminal *terminal)
     goto done;
   }
   disk.bytes = disk.info.block_count * disk.info.block_size;
-  install_progress_plain_stream(clock, stderr);
+  install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"), false);
   if (!install_pool_boot_snapshot(&disk, &pool) ||
       disk_open_fat32(disk.handle, partition, MOUNT_ACCESS_READ_ONLY, READ_RIGHTS, &mount) != CALL_OK ||
       !install_snapshot_facts(mount.control, &planned_facts)) {
@@ -359,7 +360,7 @@ int install_publication_scratch(struct terminal *terminal)
     goto done;
   }
   struct system_info_identity identity;
-  if (system_info_get_identity(startup_resource("system_info"), &identity) != CALL_OK) {
+  if (system_info_get_identity(bootstrap_capability("system_info"), &identity) != CALL_OK) {
     goto done;
   }
   if (!config_revision_valid(identity.build_revision)) {
@@ -373,8 +374,8 @@ int install_publication_scratch(struct terminal *terminal)
   if (!install_configuration_prepare(&input, &plan) || !ready_preview(&plan, &record)) {
     goto done;
   }
-  struct install_source source_archive = {.handle = startup_resource("boot_archive")};
-  request.sources[0] = (struct install_source){.handle = startup_resource("boot_kernel")};
+  struct install_source source_archive = {.handle = bootstrap_capability("boot_archive")};
+  request.sources[0] = (struct install_source){.handle = bootstrap_capability("boot_kernel")};
   if (file_size(request.sources[0].handle, &request.sources[0].bytes) != CALL_OK ||
       file_size(source_archive.handle, &source_archive.bytes) != CALL_OK ||
       !install_programs_list(boot, &programs) || !install_archive_filter(&source_archive, &programs, &filtered)) {
@@ -478,7 +479,7 @@ int install_publication_scratch(struct terminal *terminal)
     }
   }
   enum call_status handoff_status;
-  if (!config_handoff_create(startup_resource("config_snapshot_parent"), &plan.selection,
+  if (!config_handoff_create(bootstrap_capability("config_snapshot_parent"), &plan.selection,
         &handoff, &handoff_status)) {
     fprintf(stderr, "Private configuration FILE handoff refused (status %u); nothing written.\n", handoff_status);
     goto done;
@@ -531,7 +532,8 @@ int install_publication_scratch(struct terminal *terminal)
   }
   claimed = false;
   status = disk_open_fat32(disk.handle, partition, MOUNT_ACCESS_READ_WRITE, WRITE_RIGHTS, &mount);
-  if (status != CALL_OK || !install_snapshot_facts(mount.control, &request.facts) ||
+  if (status != CALL_OK || mount_observe(mount.control, &request.expected_target) != CALL_OK ||
+      !install_snapshot_facts(mount.control, &request.facts) ||
       !install_snapshot_same_target(&planned_facts, &request.facts)) {
     fprintf(stderr, "Writable view refused (status %u); no publication.\n", status);
     goto done;

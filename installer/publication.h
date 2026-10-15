@@ -3,6 +3,7 @@
 
 #include "../config-editor/storage.h"
 #include "installer.h"
+#include "esp_payload.h"
 
 #define INSTALL_BOOT_PAYLOADS 3u
 #define INSTALL_BOOT_PAYLOAD_MAX_BYTES UINT64_C(1073741824)
@@ -14,6 +15,7 @@
  * the complete config/schema/catalog and supplies the reviewed Limine output. */
 struct install_publication_request {
   handle_t esp_root;
+  struct mount_state_reply expected_target;
   struct config_storage_view view;
   struct config_target_facts facts;
   const struct config_blob *expected;
@@ -30,10 +32,9 @@ struct install_publication_request {
 
 /* Internal retained staging evidence, never caller-authored authority. */
 struct install_staged_boot {
-  handle_t root, parent;
-  handle_t files[INSTALL_BOOT_PAYLOADS], manifest;
+  handle_t root;
+  struct install_esp_payloads *payloads;
   struct config_boot_binding binding;
-  struct config_blob manifest_bytes;
   bool legacy_active;
   handle_t legacy_files[INSTALL_BOOT_PAYLOADS];
   struct config_file_digest legacy_expected[INSTALL_BOOT_PAYLOADS];

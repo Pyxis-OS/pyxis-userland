@@ -323,8 +323,8 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/config.pxe: $(BUILD)/installer/publication.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(BUILD)/installer/publication.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/config.pxe: $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/config-editor/catalog.lua: scripts/config-catalog.lua config-editor/catalog-source.lua config/installed.lua config/session.lua config/network.lua FORCE
 	@mkdir -p $(@D)

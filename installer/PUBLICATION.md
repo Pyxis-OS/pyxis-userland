@@ -19,11 +19,13 @@ writes nothing. The scratch flow installs no program revision.
 The executor reacquires the existing whole-disk claim and rechecks the frozen
 bytes with the shared FAT reader before staging. It releases that claim before
 native FAT32 write admission, repeats the snapshots, and streams fresh kernel,
-filtered rescue archive and revision files (reserving each final extent once,
-then overwriting and verifying every byte) into
-`EFI/pyxis/REVISION/ATTEMPT/`. The immutable ownership record certifies their
+filtered rescue archive and revision files through the shared
+[ESP payload helper](ESP-PAYLOADS.md) into `EFI/pyxis/REVISION/ATTEMPT/`. Bounded
+sequential writes grow each fresh file; no full-file resize is needed. The
+immutable ownership record certifies their
 exact names, sizes and hashes. Files are synchronized and reread before the
-exclusive configuration interval rechecks identity/content and publishes a
+exclusive configuration interval runs one full-volume CHECK immediately after
+BEGIN, rechecks identity/content and publishes a
 prepared, then committed, boot-bound readiness record. Only then may the exact
 owned normal/rescue Limine entries move. Foreign bytes stay unchanged. Exact
 legacy Pyxis menu adoption additionally requires a disk-bound recipe, validated

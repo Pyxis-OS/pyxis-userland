@@ -313,52 +313,22 @@ static bool open_attempt(handle_t root, const struct config_boot_binding *bindin
   return ok;
 }
 
-static bool write_manifest(handle_t parent, struct install_staged_boot *staged,
+static bool payload_result(bool ok, const struct install_esp_payload_report *payload_report,
     struct config_storage_report *report)
 {
-  enum call_status status = directory_create(parent, INSTALL_BOOT_MANIFEST_NAME,
-      DIRECTORY_KIND_FILE, FILE_RIGHT_READ | FILE_RIGHT_WRITE, &staged->manifest);
-  if (status != CALL_OK) {
-    return fail(report, status);
+  if (!ok) {
+    snprintf(report->artifact, sizeof(report->artifact), "%s", payload_report->artifact);
+    return fail(report, payload_report->status);
   }
-  for (size_t offset = 0; offset < staged->manifest_bytes.size;) {
-    size_t written = 0;
-    status = file_write(staged->manifest, offset, staged->manifest_bytes.bytes + offset,
-        staged->manifest_bytes.size - offset, &written);
-    if (status != CALL_OK || !written || written > staged->manifest_bytes.size - offset) {
-      return fail(report, status == CALL_OK ? CALL_OUTCOME_UNKNOWN : status);
-    }
-    offset += written;
-  }
-  status = file_sync(staged->manifest);
-  return status == CALL_OK || fail(report, status);
+  return true;
 }
 
 bool install_publication_verify(const struct install_staged_boot *boot,
     uint64_t domain, struct config_storage_report *report)
 {
-  handle_t parent = HANDLE_INVALID;
-  bool ok = open_attempt(boot->root, &boot->binding, false, &parent, report) &&
-      same_object(boot->parent, parent, true, domain, report);
-  for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS + 1; ++i) {
-    handle_t file = HANDLE_INVALID;
-    const char *name = i == INSTALL_BOOT_PAYLOADS ? INSTALL_BOOT_MANIFEST_NAME : payload_names[i];
-    const struct config_file_digest *digest = i == INSTALL_BOOT_PAYLOADS ?
-        &boot->manifest_bytes.digest : &payload(&boot->binding, i)->digest;
-    enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &file);
-    ok = status == CALL_OK || fail(report, status);
-    if (ok) {
-      ok = same_object(i == INSTALL_BOOT_PAYLOADS ? boot->manifest : boot->files[i],
-          file, false, domain, report) && stream(file, HANDLE_INVALID, digest, report);
-    }
-    if (file != HANDLE_INVALID) {
-      handle_close(file);
-    }
-  }
-  if (parent != HANDLE_INVALID) {
-    handle_close(parent);
-  }
-  return ok && legacy_verify(boot, domain, report);
+  struct install_esp_payload_report payload_report;
+  bool ok = install_esp_payload_verify(boot->payloads, &payload_report);
+  return payload_result(ok, &payload_report, report) && legacy_verify(boot, domain, report);
 }
 
 bool install_publication_cleanup(const struct install_staged_boot *boot,
@@ -475,11 +445,9 @@ bool install_publication_publish(const struct install_publication_request *reque
       &request->selected[CONFIG_LIMINE]), report)) {
     return false;
   }
-  struct install_staged_boot staged = {.root = request->esp_root, .parent = HANDLE_INVALID,
-      .manifest = HANDLE_INVALID, .binding = request->binding,
+  struct install_staged_boot staged = {.root = request->esp_root, .binding = request->binding,
       .legacy_active = request->legacy_active};
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    staged.files[i] = HANDLE_INVALID;
     staged.legacy_files[i] = HANDLE_INVALID;
     if (staged.legacy_active) {
       staged.legacy_expected[i] = request->legacy_expected[i];
@@ -495,57 +463,34 @@ bool install_publication_publish(const struct install_publication_request *reque
   if (ok) {
     report->phase = CONFIG_PHASE_STAGE;
   }
-  ok = ok && (manifest_blob(&staged.binding, &staged.manifest_bytes) ||
-      fail(report, CALL_NO_MEMORY)) &&
-      open_attempt(staged.root, &staged.binding, true, &staged.parent, report);
-  for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS; ++i) {
-    install_progress_begin("Reserving owned boot payload", INSTALL_PROGRESS_NONE, NULL);
-    enum call_status status = directory_create(staged.parent, payload_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ | FILE_RIGHT_WRITE, &staged.files[i]);
-    ok = status == CALL_OK || fail(report, status);
-    if (ok) {
-      /* Reserve the final extent once; every byte is still overwritten and
-       * hash-verified. A failed resize stops with only this fresh artifact. */
-      status = file_resize(staged.files[i], payload(&staged.binding, i)->digest.size);
-      ok = status == CALL_OK || fail(report, status);
-      if (ok) {
-        ok = stream_source(&request->sources[i], staged.files[i], &payload(&staged.binding, i)->digest, report);
-      }
-    }
-    if (ok) {
-      status = file_sync(staged.files[i]);
-      ok = status == CALL_OK || fail(report, status);
-    }
+  struct install_esp_payload_request payload_request = {
+    .root = request->esp_root, .control = request->view.control,
+    .expected = request->expected_target,
+    .revision = request->binding.kernel_revision, .attempt = request->binding.attempt,
+  };
+  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
+    payload_request.sources[i] = request->sources[i];
+    const struct config_file_digest *digest = &payload(&request->binding, i)->digest;
+    payload_request.expected_payloads[i].size = digest->size;
+    strcpy(payload_request.expected_payloads[i].sha256, digest->sha256);
   }
   if (ok) {
-    ok = write_manifest(staged.parent, &staged, report);
-  }
-  if (ok) {
-    enum call_status status = mount_sync(request->view.control);
-    ok = status == CALL_OK || fail(report, status);
+    struct install_esp_payload_report payload_report;
+    bool staged_ok = install_esp_payload_stage(&payload_request, &staged.payloads, &payload_report);
+    ok = payload_result(staged_ok, &payload_report, report);
   }
   if (ok) {
     report->phase = CONFIG_PHASE_VERIFY;
-    ok = install_publication_verify(&staged, request->facts.domain, report) &&
-        config_storage_publish_boot(&request->view, &request->facts, request->expected,
+    ok = config_storage_publish_boot(&request->view, &request->facts, request->expected,
         request->expected_record, request->selected, request->transaction, request->revision,
         &staged, report);
   }
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    if (staged.files[i] != HANDLE_INVALID) {
-      handle_close(staged.files[i]);
-    }
     if (staged.legacy_files[i] != HANDLE_INVALID) {
       handle_close(staged.legacy_files[i]);
     }
   }
-  if (staged.manifest != HANDLE_INVALID) {
-    handle_close(staged.manifest);
-  }
-  if (staged.parent != HANDLE_INVALID) {
-    handle_close(staged.parent);
-  }
-  config_blob_destroy(&staged.manifest_bytes);
+  install_esp_payload_close(staged.payloads);
   install_progress_finish();
   return ok;
 }
