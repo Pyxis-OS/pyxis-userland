@@ -7,6 +7,7 @@
 #include "esp_activate.h"
 #include "esp_payload.h"
 #include "esp_view.h"
+#include "boot_entry.h"
 #include <pyxis_fs/npfs.h>
 
 /* Owned preparation, immutable after Review. Native source handles and BOOT
@@ -32,8 +33,8 @@ struct install_plan {
   struct install_esp_view view;
   struct install_esp_payloads *payloads;
   struct install_esp_classic_files *classic_files;
-  uint64_t available_blocks, required_blocks;
-  bool ready;
+  uint64_t available_blocks, required_blocks, cleanup_deadline_ns;
+  bool ready, disk_claimed;
 };
 
 bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t boot, handle_t kernel,
@@ -48,5 +49,8 @@ void install_plan_destroy(struct install_plan *plan);
 /* The only mutating entry point. Explicit consent must match this ready plan;
  * all frontends pass through the same exclusive revalidation before writing. */
 bool install_plan_execute(struct install_plan *plan, const char *consent);
+/* Releases only execution-owned references/claims and retires its FAT view.
+ * A failed cleanup stays represented in PLAN; it never retries mutation. */
+bool install_plan_finish_execution(struct install_plan *plan);
 
 #endif
