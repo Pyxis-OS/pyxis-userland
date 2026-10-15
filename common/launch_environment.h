@@ -90,7 +90,8 @@ static inline enum call_status profile_inherit_services(
     if (value->kind != ENVIRONMENT_CAP ||
         !strncmp(value->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
         !strcmp(value->name, "job_provisioner") || !strcmp(value->name, "job_work") ||
-        !strcmp(value->name, "staging") || profile_stdio_name(value->name)) {
+        !strcmp(value->name, "staging") || !strcmp(value->name, "script") ||
+        profile_stdio_name(value->name)) {
       continue;
     }
     bool selected = false;
