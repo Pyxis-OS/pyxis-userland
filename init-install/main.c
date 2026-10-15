@@ -71,7 +71,10 @@ static int run_install(int argc, char **argv, bool selector)
       fputs("init-install: selector needs the Install console\n", stderr);
       goto done;
     }
-    sources[ERROR] = error.handle;
+    if (handle_copy_restricted(error.handle, CONSOLE_RIGHT_WRITE, 0, &sources[ERROR]) != CALL_OK) {
+      fputs("init-install: cannot delegate Install error output\n", stderr);
+      goto done;
+    }
   } else if (output.protocol != PROTOCOL_CONSOLE ||
       handle_copy_restricted(output.handle, CONSOLE_RIGHT_WRITE, 0, &sources[DIAGNOSTICS]) != CALL_OK) {
     fputs("init-install: cannot delegate Caelum diagnostic output\n", stderr);
