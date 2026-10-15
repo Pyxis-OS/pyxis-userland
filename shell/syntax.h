@@ -3,12 +3,14 @@
 
 #include "shell.h"
 #include <environment.h>
+#include "capture.h"
 
 enum shell_piece_kind { SHELL_LITERAL, SHELL_VARIABLE, SHELL_SUBSTITUTION };
 
 struct shell_piece {
   enum shell_piece_kind kind;
   char *text;
+  bool management;
 };
 
 struct shell_word {
@@ -50,6 +52,7 @@ struct shell_syntax {
 struct shell_expanded_word {
   const char *assignment_name;
   const struct environment_value *value;
+  struct shell_capture_result *capture;
 };
 
 struct shell_expansion {
@@ -61,14 +64,15 @@ struct shell_expansion {
   size_t word_count;
   /* words and values are parallel in stage/argv order, excluding redirections. */
   struct environment_value *values;
+  struct shell_capture_result *captures;
   char **arguments;
   size_t argument_count;
   size_t value_count;
 };
 
 /* Parse the whole submitted line before expansion or command side effects.
- * Substitutions are recursively validated and then refused until the capture
- * prerequisites exist. On error, output is empty and the diagnostic is static. */
+ * Substitutions are recursively validated; paired management producers require
+ * a named whole-word destination. Errors leave output empty; diagnostics are static. */
 const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax);
 void shell_syntax_close(struct shell_syntax *syntax);
 /* Environment calls report their CALL status; cleanup failure reports

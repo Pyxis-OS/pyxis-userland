@@ -95,12 +95,40 @@ static const char *add_piece(struct shell_word *word, enum shell_piece_kind kind
     return "Out of memory";
   }
   word->pieces = pieces;
-  pieces[word->count++] = (struct shell_piece){kind, copy};
+  pieces[word->count++] = (struct shell_piece){.kind = kind, .text = copy};
   return NULL;
 }
 
 static const char *parse_sequence(const char **cursor, bool nested,
     struct shell_syntax *syntax);
+static bool word_is(const struct shell_word *word, const char *text);
+
+static const char *capture_source(const struct shell_syntax *syntax, bool *management)
+{
+  *management = false;
+  if (!syntax->count) {
+    return "Command substitution requires a command";
+  }
+  for (size_t i = 0; i < syntax->count; ++i) {
+    const struct shell_syntax_command *command = &syntax->commands[i];
+    if (command->background) {
+      return "Command substitution cannot run a background command";
+    }
+    for (size_t j = 0; j < command->stage_count; ++j) {
+      const struct shell_syntax_stage *stage = &command->stages[j];
+      if (word_is(stage->words[0], "revocable") ||
+          (stage->count > 1 && word_is(stage->words[0], "service") &&
+           word_is(stage->words[1], "start"))) {
+        *management = true;
+      }
+    }
+  }
+  if (*management && (syntax->count != 1 || syntax->commands[0].stage_count != 1 ||
+      syntax->commands[0].stages[0].redirection_count || syntax->commands[0].capture)) {
+    return "Management capture requires a single command without redirection";
+  }
+  return NULL;
+}
 
 static const char *parse_word(const char **cursor, struct shell_word **result)
 {
@@ -149,13 +177,16 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
         const char *start = read;
         struct shell_syntax nested = {0};
         error = parse_sequence(&read, true, &nested);
-        bool empty = !nested.count;
-        shell_syntax_close(&nested);
-        if (!error && empty) {
-          error = "Command substitution requires a command";
+        bool management = false;
+        if (!error) {
+          error = capture_source(&nested, &management);
         }
+        shell_syntax_close(&nested);
         if (!error) {
           error = add_piece(word, SHELL_SUBSTITUTION, start, read - start - 1);
+          if (!error) {
+            word->pieces[word->count - 1].management = management;
+          }
         }
       } else if (*read == '{') {
         const char *start = ++read;
@@ -239,11 +270,34 @@ static const char *restore_assignment(struct shell_word *word)
   }
   word->pieces = pieces;
   memmove(pieces + 1, pieces, word->count * sizeof(*pieces));
-  pieces[0] = (struct shell_piece){SHELL_LITERAL, text};
+  pieces[0] = (struct shell_piece){.kind = SHELL_LITERAL, .text = text};
   ++word->count;
   free(word->assignment_name);
   word->assignment_name = NULL;
   return NULL;
+}
+
+static const char *export_name(const struct shell_word *word)
+{
+  if (word->assignment_name) {
+    return word->assignment_name;
+  }
+  if (word->count == 1 && word->pieces[0].kind == SHELL_LITERAL) {
+    return word->pieces[0].text;
+  }
+  return NULL;
+}
+
+static bool management_word(const struct shell_word *word)
+{
+  return word->count == 1 && word->pieces[0].management;
+}
+
+static bool control_name(const char *holder, const char *candidate)
+{
+  size_t length = strlen(holder);
+  return strlen(candidate) == length + strlen(".control") &&
+      !strncmp(holder, candidate, length) && !strcmp(candidate + length, ".control");
 }
 
 static const char *finish_command(struct shell_syntax_command *command)
@@ -273,6 +327,45 @@ static const char *finish_command(struct shell_syntax_command *command)
         const char *error = restore_assignment(stage->words[j]);
         if (error) {
           return error;
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < command->stage_count; ++i) {
+    const struct shell_syntax_stage *stage = &command->stages[i];
+    size_t total = stage->count + stage->redirection_count;
+    for (size_t j = 0; j < total; ++j) {
+      const struct shell_word *word = j < stage->count ? stage->words[j] :
+          stage->redirections[j - stage->count].word;
+      for (size_t k = 0; k < word->count; ++k) {
+        if (word->pieces[k].kind == SHELL_SUBSTITUTION && word->count != 1) {
+          return "A captured CAP must occupy the entire word";
+        }
+        if (word->pieces[k].management &&
+            (!word->assignment_name || word->count != 1)) {
+          return "Management capture requires a named whole-word assignment";
+        }
+      }
+    }
+  }
+  if (exporting) {
+    for (size_t i = 1; i < first->count; ++i) {
+      const struct shell_word *left = first->words[i];
+      const char *left_name = export_name(left);
+      if (!left_name) {
+        continue;
+      }
+      for (size_t j = i + 1; j < first->count; ++j) {
+        const struct shell_word *right = first->words[j];
+        const char *right_name = export_name(right);
+        if (!right_name) {
+          continue;
+        }
+        if (((left->assignment_name || right->assignment_name) &&
+             !strcmp(left_name, right_name)) ||
+            (management_word(left) && control_name(left_name, right_name)) ||
+            (management_word(right) && control_name(right_name, left_name))) {
+          return "export destinations and management companions must not overlap";
         }
       }
     }
@@ -474,26 +567,6 @@ const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax)
   *syntax = (struct shell_syntax){0};
   const char *cursor = line;
   const char *error = parse_sequence(&cursor, false, syntax);
-  if (!error) {
-    /* Refuse dependent forms only after validating the complete submission. */
-    for (size_t i = 0; i < syntax->count && !error; ++i) {
-      const struct shell_syntax_command *command = &syntax->commands[i];
-      for (size_t j = 0; j < command->stage_count && !error; ++j) {
-        const struct shell_syntax_stage *stage = &command->stages[j];
-        size_t total = stage->count + stage->redirection_count;
-        for (size_t k = 0; k < total && !error; ++k) {
-          const struct shell_word *word = k < stage->count ? stage->words[k] :
-              stage->redirections[k - stage->count].word;
-          for (size_t p = 0; p < word->count; ++p) {
-            if (word->pieces[p].kind == SHELL_SUBSTITUTION) {
-              error = "Command substitution requires the pending capture prerequisites";
-              break;
-            }
-          }
-        }
-      }
-    }
-  }
   if (error) {
     shell_syntax_close(syntax);
   }

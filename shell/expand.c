@@ -6,6 +6,11 @@
 bool shell_expansion_close(struct shell_expansion *expansion)
 {
   bool closed = true;
+  for (size_t i = 0; expansion->captures && i < expansion->value_count; ++i) {
+    if (!shell_capture_close(&expansion->captures[i])) {
+      closed = false;
+    }
+  }
   for (size_t i = 0; expansion->values && i < expansion->value_count; ++i) {
     struct environment_value *value = &expansion->values[i];
     if (value->handle && handle_close(value->handle)) {
@@ -22,6 +27,7 @@ bool shell_expansion_close(struct shell_expansion *expansion)
   }
   free(expansion->arguments);
   free(expansion->values);
+  free(expansion->captures);
   free(expansion->words);
   *expansion = (struct shell_expansion){0};
   return closed;
@@ -87,8 +93,9 @@ static const char *append_text(char **text, size_t *length,
   return NULL;
 }
 
-static const char *expand_word(handle_t snapshot, const struct shell_word *word,
-    struct environment_value *value, char **argument, enum call_status *status)
+static const char *expand_word(struct shell *shell, handle_t snapshot,
+    const struct shell_word *word, struct environment_value *value,
+    struct shell_capture_result *capture, char **argument, enum call_status *status)
 {
   char *text = NULL;
   size_t length = 0;
@@ -96,10 +103,6 @@ static const char *expand_word(handle_t snapshot, const struct shell_word *word,
   const char *error = NULL;
   for (size_t i = 0; i < word->count; ++i) {
     const struct shell_piece *piece = &word->pieces[i];
-    if (piece->kind == SHELL_SUBSTITUTION) {
-      error = "Command substitution requires the pending capture prerequisites";
-      break;
-    }
     if (piece->kind == SHELL_LITERAL) {
       if (capability && *piece->text) {
         error = "A CAP expansion must occupy the entire word";
@@ -108,23 +111,40 @@ static const char *expand_word(handle_t snapshot, const struct shell_word *word,
       error = append_text(&text, &length, piece->text, strlen(piece->text));
     } else {
       struct environment_value selected = {0};
-      *status = lookup_value(snapshot, piece->text, &selected);
-      if (*status != CALL_OK) {
-        error = "Environment expansion lookup failed";
-        break;
+      if (piece->kind == SHELL_SUBSTITUTION) {
+        *status = shell_capture_evaluate(shell, piece->text,
+            word->assignment_name, capture);
+        if (*status != CALL_OK) {
+          error = "Command substitution could not prepare its result";
+          break;
+        }
+        *value = capture->value;
+        capture->value = (struct environment_value){0};
+        if (capture->command == COMMAND_FATAL) {
+          *status = CALL_OUTCOME_UNKNOWN;
+          error = "Command substitution could not complete cleanup";
+          break;
+        }
+        if (!word->assignment_name && capture->command != COMMAND_OK) {
+          error = "Inline command substitution failed";
+          break;
+        }
+        selected = *value;
+        *value = (struct environment_value){0};
+      } else {
+        *status = lookup_value(snapshot, piece->text, &selected);
+        if (*status != CALL_OK) {
+          error = "Environment expansion lookup failed";
+          break;
+        }
       }
       if (selected.kind == ENVIRONMENT_CAP) {
+        *value = selected;
         if (capability || length || word->count != 1) {
-          if (handle_close(selected.handle)) {
-            *status = CALL_OUTCOME_UNKNOWN;
-            error = "Could not release a rejected CAP expansion";
-          } else {
-            error = "A CAP expansion must occupy the entire word";
-          }
+          error = "A CAP expansion must occupy the entire word";
           break;
         }
         capability = true;
-        *value = selected;
       } else if (selected.kind == ENVIRONMENT_TEXT) {
         if (capability) {
           error = "A CAP expansion must occupy the entire word";
@@ -133,12 +153,8 @@ static const char *expand_word(handle_t snapshot, const struct shell_word *word,
         }
         free(selected.text);
       } else {
-        if (selected.handle && handle_close(selected.handle)) {
-          *status = CALL_OUTCOME_UNKNOWN;
-          error = "Could not release an unsupported environment value";
-        } else {
-          error = "Unsupported environment value kind";
-        }
+        *value = selected;
+        error = "Unsupported environment value kind";
       }
     }
     if (error) {
@@ -230,9 +246,26 @@ const char *shell_syntax_expand(struct shell *shell,
   expansion->argument_count = expansion->value_count + syntax->stage_count;
   expansion->words = calloc(expansion->word_count, sizeof(*expansion->words));
   expansion->values = calloc(expansion->value_count, sizeof(*expansion->values));
+  expansion->captures = calloc(expansion->value_count, sizeof(*expansion->captures));
   expansion->arguments = calloc(expansion->argument_count, sizeof(*expansion->arguments));
-  if (!expansion->words || !expansion->values || !expansion->arguments) {
+  if (!expansion->words || !expansion->values || !expansion->captures ||
+      !expansion->arguments) {
     return expansion_error(expansion, status, "Out of memory");
+  }
+  for (size_t i = 0; i < syntax->stage_count; ++i) {
+    const struct shell_syntax_stage *stage = &syntax->stages[i];
+    for (size_t j = 0; j < stage->count; ++j) {
+      const struct shell_word *word = stage->words[j];
+      if (word->assignment_name && word->count == 1 &&
+          word->pieces[0].kind == SHELL_SUBSTITUTION) {
+        *status = shell_capture_destination(shell, word->assignment_name,
+            word->pieces[0].management);
+        if (*status != CALL_OK) {
+          return expansion_error(expansion, status,
+              "Command substitution destination admission failed");
+        }
+      }
+    }
   }
   handle_t snapshot = HANDLE_INVALID;
   struct environment_info_reply info = {0};
@@ -259,12 +292,19 @@ const char *shell_syntax_expand(struct shell *shell,
     for (size_t j = 0; j < source->count && !error; ++j) {
       const struct shell_word *word = source->words[j];
       struct environment_value *value = &expansion->values[word_index];
+      struct shell_capture_result *capture = &expansion->captures[word_index];
+      bool substitution = word->count == 1 &&
+          word->pieces[0].kind == SHELL_SUBSTITUTION;
       expansion->words[word_index] = (struct shell_expanded_word){
-          .assignment_name = word->assignment_name, .value = value};
-      error = expand_word(snapshot, word, value,
+          .assignment_name = word->assignment_name, .value = value,
+          .capture = substitution ? capture : NULL};
+      error = expand_word(shell, snapshot, word, value, capture,
           &expansion->arguments[argument_index++], status);
       if (!error && value->kind == ENVIRONMENT_CAP && !word->assignment_name) {
         error = select_capability(&expansion->selected[i], value);
+        if (!error && substitution && capture->observation.kind == ENVIRONMENT_CAP) {
+          error = select_capability(&expansion->selected[i], &capture->observation);
+        }
       }
       ++word_index;
     }
@@ -277,15 +317,17 @@ const char *shell_syntax_expand(struct shell *shell,
     stage->redirection_count = source->redirection_count;
     for (size_t j = 0; j < source->redirection_count && !error; ++j) {
       const struct shell_syntax_redirection *redirection = &source->redirections[j];
-      struct environment_value *value = &expansion->values[value_index++];
+      struct environment_value *value = &expansion->values[value_index];
+      struct shell_capture_result *capture = &expansion->captures[value_index++];
       char **path = &expansion->arguments[argument_index++];
-      error = expand_word(snapshot, redirection->word, value, path, status);
+      error = expand_word(shell, snapshot, redirection->word, value, capture, path, status);
       if (!error && !**path) {
         error = "Redirection requires a filename";
       }
       stage->redirections[j] = (struct shell_redirection){
         .stream = redirection->stream, .path = *path, .append = redirection->append,
         .value = value->kind == ENVIRONMENT_CAP ? value : NULL,
+        .observation = capture->observation.handle ? &capture->observation : NULL,
         .capability = redirection->word->plain && *path && **path == '@',
       };
     }
