@@ -2,7 +2,8 @@
 #include <mount.h>
 #include <syscall.h>
 
-#define FAT32_DEVICE_BLOCK_SIZE UINT64_C(512)
+#define FAT32_DEVICE_BLOCK_SIZE_MIN UINT64_C(512)
+#define FAT32_DEVICE_BLOCK_SIZE_MAX UINT64_C(4096)
 
 static enum call_status mount_reply_status(struct syscall_result result,
     const struct mount_reply *reply, handle_t *root)
@@ -158,7 +159,8 @@ static bool mount_identity_valid(const struct mount_state_reply *reply)
 {
   return reply->domain && reply->device && reply->partition &&
       reply->partition <= UINT32_MAX &&
-      reply->device_block_size == FAT32_DEVICE_BLOCK_SIZE &&
+      (reply->device_block_size == FAT32_DEVICE_BLOCK_SIZE_MIN ||
+       reply->device_block_size == FAT32_DEVICE_BLOCK_SIZE_MAX) &&
       reply->first_block && reply->block_count &&
       reply->first_block < reply->device_block_count &&
       reply->block_count <= reply->device_block_count - reply->first_block &&
