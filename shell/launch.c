@@ -44,6 +44,7 @@
 #include <endpoint.h>
 #include <file.h>
 #include <output.h>
+#include <retention.h>
 #include <launcher.h>
 #include <environment.h>
 #include <forwarder.h>
@@ -51,6 +52,7 @@
 #include <pipe.h>
 #include <directory.h>
 #include <http_transaction.h>
+#include <transaction.h>
 #include <provider_http_private.h>
 #include <process.h>
 #include <startup.h>
@@ -69,6 +71,7 @@ struct prepared_stage {
   handle_t redirected[ENVIRONMENT_STREAM_COUNT];
   handle_t observation[ENVIRONMENT_STREAM_COUNT];
   handle_t staging_leaf;
+  bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
   struct launch_environment_entry resources[37 + BUNDLE_SOURCE_LIMIT];
@@ -90,6 +93,7 @@ struct prepared_stage {
 struct launch_scope {
   bool capture, append;
   handle_t producer;
+  handle_t transaction;
   struct execution_group_create_reply group;
   bool evaluated, started, retired, stop_failed;
   enum call_status error;
@@ -1610,6 +1614,10 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
       if (stages[i].http_producer && legacy_http_redirect(redirect)) {
         continue;
       }
+      /* STAGE storage is private to this transaction, outside native paths. */
+      if (prepared[i].transaction_body && redirect->stream == ENVIRONMENT_STDOUT) {
+        continue;
+      }
       *failed_stage = i;
       *operation = "shell: query output";
       *path = redirect->path;
@@ -1929,11 +1937,27 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
                 HANDLE_TRANSPORT_CALL, &prepared[i].observation[redirect->stream]);
           }
         }
-        if (status == CALL_OK && opened.info.protocol != PROTOCOL_FILE && !response) {
+        if (status == CALL_OK && scope && scope->capture && stages[i].http_worker &&
+            !input && redirect->stream == ENVIRONMENT_STDOUT &&
+            opened.info.protocol == PROTOCOL_TRANSACTION) {
+          scope->transaction = opened.resource;
+          opened.resource = HANDLE_INVALID;
+          status = (opened.info.rights & TRANSACTION_RIGHTS) != TRANSACTION_RIGHTS ?
+              CALL_DENIED : transaction_stage(scope->transaction, 0,
+                  &prepared[i].redirected[ENVIRONMENT_STDOUT]);
+          if (status == CALL_OK) {
+            prepared[i].transaction_body = true;
+            streams[i][ENVIRONMENT_STDOUT] = (struct pyxis_stdio_binding){
+              .protocol = PROTOCOL_FILE,
+              .handle = prepared[i].redirected[ENVIRONMENT_STDOUT],
+            };
+          }
+        } else if (status == CALL_OK && opened.info.protocol != PROTOCOL_FILE && !response) {
           status = CALL_BAD_OPERATION;
           operation = "shell: typed redirect requires a FILE";
         }
-        if (status == CALL_OK) {
+        if (status == CALL_OK && !(prepared[i].transaction_body &&
+            redirect->stream == ENVIRONMENT_STDOUT)) {
           prepared[i].redirected[redirect->stream] = opened.resource;
           opened.resource = HANDLE_INVALID;
           streams[i][redirect->stream] = (struct pyxis_stdio_binding){
@@ -2051,6 +2075,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         continue;
       }
       if (stages[i].http_producer && legacy_http_redirect(redirect)) {
+        continue;
+      }
+      if (prepared[i].transaction_body && redirect->stream == ENVIRONMENT_STDOUT) {
         continue;
       }
       failed_stage = i;
@@ -2654,6 +2681,32 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
 }
 
 
+static enum call_status handoff_transaction_failure(struct shell *shell,
+    struct launch_scope *scope, enum call_status cause)
+{
+  uint64_t outcome;
+  switch (cause) {
+  case CALL_NOT_FOUND: outcome = RESOURCE_NOT_FOUND; break;
+  case CALL_DENIED: outcome = RESOURCE_DENIED; break;
+  case CALL_FILE_TOO_LARGE: outcome = RESOURCE_TOO_LARGE; break;
+  case CALL_ABANDONED: case CALL_TIMED_OUT: outcome = RESOURCE_ABORTED; break;
+  case CALL_OUTCOME_UNKNOWN: outcome = RESOURCE_UNCERTAIN; break;
+  default: outcome = RESOURCE_IO_ERROR; break;
+  }
+  char detail[128];
+  int length = snprintf(detail, sizeof(detail), "transaction capture failed (status %u)", cause);
+  if (length < 0 || (size_t)length >= sizeof(detail)) {
+    return CALL_BAD_REQUEST;
+  }
+  struct output_handoff_request owned = {0};
+  enum call_status status = retention_create_failure(shell->retention_account,
+      outcome, detail, (size_t)length, &owned.value);
+  if (status == CALL_OK) {
+    status = output_handoff(scope->producer, &owned);
+  }
+  return close_handle(&owned.value) ? status : CALL_BAD_HANDLE;
+}
+
 enum command_result shell_launch_capture(struct shell *shell,
     const struct shell_command_line *command, handle_t stdout_producer,
     struct shell_outcome *outcome, bool *evaluated, bool *started,
@@ -2687,6 +2740,42 @@ enum command_result shell_launch_capture(struct shell *shell,
     *error_status = status;
     return shell_directory_error(shell, "shell: capture output", "", status);
   }
+  struct shell_stage stages[LAUNCH_BATCH_MAX];
+  const struct shell_stage *selected = command->stages;
+  size_t stage_count = command->stage_count;
+  char *worker_arguments[] = {"boot://http-stage.pxe", NULL};
+  const struct shell_stage *last = &command->stages[stage_count - 1];
+  for (size_t i = 0; i < last->redirection_count; ++i) {
+    const struct shell_redirection *redirect = &last->redirections[i];
+    if (redirect->stream != ENVIRONMENT_STDOUT || redirect->append ||
+        !redirect->value || redirect->value->kind != ENVIRONMENT_CAP) {
+      continue;
+    }
+    struct handle_info info;
+    status = handle_query(redirect->value->handle, &info);
+    if (status != CALL_OK) {
+      *error_status = status;
+      return shell_directory_error(shell, "shell: capture redirect", redirect->path, status);
+    }
+    if (info.kind != HANDLE_KIND_EXPORTED || info.protocol != PROTOCOL_PROVIDER ||
+        !(info.transport & HANDLE_TRANSPORT_CALL)) {
+      continue;
+    }
+    if (stage_count == LAUNCH_BATCH_MAX) {
+      *error_status = CALL_LIMIT;
+      return shell_error(shell, "shell: transaction staging supports at most seven producer stages\n");
+    }
+    memcpy(stages, command->stages, stage_count * sizeof(*stages));
+    struct shell_stage *producer = &stages[stage_count - 1];
+    memmove(&producer->redirections[i], &producer->redirections[i + 1],
+        (producer->redirection_count - i - 1) * sizeof(*producer->redirections));
+    --producer->redirection_count;
+    stages[stage_count++] = (struct shell_stage){.arguments = worker_arguments,
+      .count = 1, .http_worker = true, .redirection_count = 1,
+      .redirections = {*redirect}};
+    selected = stages;
+    break;
+  }
   struct launch_scope scope = {.capture = true, .producer = stdout_producer,
       /* Child FILE descriptors do not share a userspace cursor. The append
        * policy also follows descendant launch, avoiding offset-zero overwrite. */
@@ -2700,7 +2789,7 @@ enum command_result shell_launch_capture(struct shell *shell,
     return status == CALL_OUTCOME_UNKNOWN ? COMMAND_FATAL :
         shell_directory_error(shell, "shell: capture group", "", status);
   }
-  enum command_result result = launch_stages(shell, command->stages, command->stage_count,
+  enum command_result result = launch_stages(shell, selected, stage_count,
       SHELL_FOREGROUND, NULL, HANDLE_INVALID, false, false, outcome, NULL, false, &scope);
   if (!scope.retired) {
     status = scope.stop_failed ? CALL_OUTCOME_UNKNOWN :
@@ -2708,11 +2797,73 @@ enum command_result shell_launch_capture(struct shell *shell,
     if (status == CALL_OK) {
       status = execution_group_wait(scope.group.supervision);
     }
+    scope.retired = status == CALL_OK;
     if (status != CALL_OK) {
       scope.error = status;
       result = COMMAND_FATAL;
       shell_directory_error(shell, "shell: capture group cleanup", "", status);
     }
+  }
+  if (scope.transaction != HANDLE_INVALID && scope.retired) {
+    if (result == COMMAND_OK && scope.error == CALL_OK) {
+      struct resource_result response = {0};
+      /* Once attempted, COMMIT is never retried or followed by ABORT. */
+      status = transaction_commit(scope.transaction, 0, &response);
+      enum call_status handed = CALL_OK;
+      if (status == CALL_OK) {
+        status = resource_outcome_status(response.info.description.outcome);
+        if (response.resource == HANDLE_INVALID && status != CALL_OK) {
+          handed = retention_create_failure(shell->retention_account,
+              response.info.description.outcome, response.info.description.detail,
+              response.info.description.detail_size, &response.resource);
+        }
+        if (response.resource != HANDLE_INVALID) {
+          struct output_handoff_request owned = {.value = response.resource};
+          handed = output_handoff(scope.producer, &owned);
+          response.resource = owned.value;
+        }
+      } else {
+        handed = handoff_transaction_failure(shell, &scope, status);
+      }
+      if (handed != CALL_OK) {
+        status = handed;
+      }
+      enum call_status closed = resource_result_close(&response);
+      if (closed != CALL_OK) {
+        status = closed;
+      }
+      if (status != CALL_OK) {
+        scope.error = status;
+        result = closed != CALL_OK || handed != CALL_OK ? COMMAND_FATAL : COMMAND_FAILED;
+        set_outcome(outcome, TERMINAL_COMPLETION_EXITED, 1);
+        shell_directory_error(shell, "shell: transaction capture", "", status);
+      }
+    } else {
+      status = transaction_abort(scope.transaction, 0);
+      if (status != CALL_OK) {
+        scope.error = status;
+        if (result != COMMAND_FATAL) {
+          result = COMMAND_FAILED;
+        }
+        shell_directory_error(shell, "shell: transaction abort", "", status);
+      }
+      if (scope.started && result != COMMAND_FATAL) {
+        enum call_status cause = scope.error != CALL_OK ? scope.error :
+            outcome && outcome->kind == TERMINAL_COMPLETION_TERMINATED ? CALL_ABANDONED : CALL_IO;
+        scope.error = cause;
+        status = handoff_transaction_failure(shell, &scope, cause);
+        if (status != CALL_OK) {
+          scope.error = status;
+          result = COMMAND_FATAL;
+          shell_directory_error(shell, "shell: transaction failure capture", "", status);
+        }
+      }
+    }
+  }
+  if (!close_handle(&scope.transaction)) {
+    scope.error = CALL_BAD_HANDLE;
+    result = COMMAND_FATAL;
+    shell_directory_error(shell, "shell: close transaction", "", CALL_BAD_HANDLE);
   }
   bool closed = close_handle(&scope.group.launcher);
   closed = close_handle(&scope.group.supervision) && closed;

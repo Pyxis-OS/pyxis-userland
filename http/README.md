@@ -43,3 +43,12 @@ header input completes.
 Stdout must support owned capability handoff, such as a shell value capture.
 Unsupported output fails and closes the result. The command prints no URI or
 byte substitute, and diagnostics contain no header bytes.
+
+Shell response capture uses the existing bounded staging worker for a held
+provider at the nonappend final stdout. Up to seven producer stages are allowed;
+the shell commits only after all stages and their subgroup retire successfully.
+The worker has staging-WRITE, never COMMIT/ABORT. Failure binds a failed result;
+publication failure keeps the old binding. This is not general capability-pipe
+integration. Plain C/Lua can use `fopen`/`io.open` directly on an exported endpoint.
+Header-file credentials and per-root trust are an interim design accepted
+2026-10-15; credential storage remains a later decision.
