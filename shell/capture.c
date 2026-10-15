@@ -335,7 +335,12 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
           if (earlier) {
             result->command = COMMAND_FAILED;
           } else if (evaluated) {
-            status = failed_value(shell, name, error, result);
+            struct output_status_reply state;
+            status = output_status(output.collector, &state);
+            if (status == CALL_OK && state.mode != OUTPUT_MODE_VALUE) {
+              status = failed_value(shell, name, error, result);
+            }
+            result->command = COMMAND_FAILED;
           } else {
             status = error == CALL_OK ? CALL_BAD_REQUEST : error;
           }

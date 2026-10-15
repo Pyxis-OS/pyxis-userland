@@ -554,7 +554,8 @@ enum command_result shell_command(struct shell *shell, char *line,
     *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
     error = shell_syntax_expand(shell, &syntax.commands[i], &expansion, &status);
     if (error) {
-      result = shell_error(shell, "shell: %s (status %u)\n", error, status);
+      result = status == CALL_OK ? shell_error(shell, "shell: %s\n", error) :
+          shell_error(shell, "shell: %s (status %u)\n", error, status);
       if (status == CALL_OUTCOME_UNKNOWN) {
         result = COMMAND_FATAL;
       } else if (status == CALL_ABANDONED) {

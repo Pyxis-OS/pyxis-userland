@@ -1716,6 +1716,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         if (status == CALL_OK) {
           status = resource_outcome_status(opened.info.description.outcome);
         }
+        if (status != CALL_OK && scope && scope->capture) {
+          scope->evaluated = true;
+          if (opened.resource) {
+            struct output_handoff_request owned = {.value = opened.resource};
+            enum call_status handed = output_handoff(scope->producer, &owned);
+            opened.resource = owned.value;
+            if (handed != CALL_OK) {
+              status = handed;
+            }
+          }
+        }
         bool response = input && opened.info.protocol == PROTOCOL_STREAM && redirect->observation;
         if (status == CALL_OK && (response || redirect->observation)) {
           struct handle_info info;
