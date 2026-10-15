@@ -27,15 +27,16 @@ bool provider_http_uri(const char *path)
 }
 
 static enum call_status binding(const struct path_context *context,
-    enum http_scheme scheme, handle_t *provider)
+    enum http_scheme scheme, bool json, handle_t *provider)
 {
   (void)context;
-  const char *name = scheme == HTTP_SCHEME_HTTPS ? "https" : "http";
+  const char *name = scheme == HTTP_SCHEME_HTTPS ?
+      (json ? "json+https" : "https") : (json ? "json+http" : "http");
   return environment_capability(startup_environment_handle(), name, provider);
 }
 
 static enum call_status prepare_bound(const struct path_context *context,
-    const char *uri, uint64_t method, uint64_t flags, const char *headers,
+    const char *uri, bool json, uint64_t method, uint64_t flags, const char *headers,
     size_t headers_size, uint64_t deadline_ns,
     struct http_prepared *prepared)
 {
@@ -45,7 +46,7 @@ static enum call_status prepare_bound(const struct path_context *context,
     return status;
   }
   handle_t provider = HANDLE_INVALID;
-  status = binding(context, parsed.scheme, &provider);
+  status = binding(context, parsed.scheme, json, &provider);
   if (status != CALL_OK) {
     return status;
   }
@@ -71,11 +72,12 @@ enum call_status http_transaction_prepare_uri(const struct path_context *context
       (flags & ~HTTP_PREPARE_FLAGS) || (headers_size && !headers)) {
     return CALL_BAD_REQUEST;
   }
-  if (!strncmp(uri, "json+", 5)) {
+  bool json = !strncmp(uri, "json+", 5);
+  if (json) {
     uri += 5;
     flags |= HTTP_PREPARE_JSON;
   }
-  return prepare_bound(context, uri, method, flags, headers, headers_size,
+  return prepare_bound(context, uri, json, method, flags, headers, headers_size,
       deadline_ns, prepared);
 }
 
