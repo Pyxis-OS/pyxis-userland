@@ -490,7 +490,15 @@ bool install_publication_publish(const struct install_publication_request *reque
       handle_close(staged.legacy_files[i]);
     }
   }
-  install_esp_payload_close(staged.payloads);
+  bool payloads_closed = install_esp_payload_close(staged.payloads);
+  staged.payloads = NULL;
+  if (!payloads_closed) {
+    if (report->status == CALL_OK) {
+      report->phase = CONFIG_PHASE_CLEANUP;
+      fail(report, CALL_BAD_HANDLE);
+    }
+    ok = false;
+  }
   install_progress_finish();
   return ok;
 }
