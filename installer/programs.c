@@ -4,6 +4,7 @@
 #include "manifest.h"
 #include "digest.h"
 #include "archive_config.h"
+#include "../libconfig/boot.h"
 
 #include <directory.h>
 #include <file.h>
@@ -280,7 +281,7 @@ static bool program_path(const struct install_programs *programs, const char *pa
   return false;
 }
 
-bool install_archive_filter(const struct install_source *archive,
+static bool archive_filter(const struct install_source *archive,
     uint64_t pool_partition, struct install_programs *programs, struct install_source *rescue)
 {
   install_progress_begin("Reading source boot archive", INSTALL_PROGRESS_SOURCE_READ, NULL);
@@ -342,10 +343,24 @@ bool install_archive_filter(const struct install_source *archive,
     if (installed_config) {
       uint32_t mode, links;
       if (config_seen || selected || !newc_field(input + offset, 1, &mode) ||
-          (mode & 0170000) != 0100000 || !newc_field(input + offset, 4, &links) || links != 1 ||
-          !install_archive_config_rebind((const char *)input + data, file_size,
-              pool_partition, &configuration, &configuration_size)) {
+          (mode & 0170000) != 0100000 || !newc_field(input + offset, 4, &links) || links != 1) {
         goto fail;
+      }
+      if (pool_partition) {
+        if (!install_archive_config_rebind((const char *)input + data, file_size,
+            pool_partition, &configuration, &configuration_size)) {
+          goto fail;
+        }
+      } else {
+        /* Identity inspection validates the existing binding without changing
+         * it or selecting a target partition. */
+        struct boot_config config;
+        enum boot_config_result result = boot_config_read_archive_literal_bytes(
+            "config/installed.lua", (const char *)input + data, file_size, &config);
+        boot_config_free(&config);
+        if (result != BOOT_CONFIG_OK) {
+          goto fail;
+        }
       }
       config_seen = true;
     }
@@ -926,11 +941,17 @@ bool install_programs_cleanup(const struct install_disk *disk, uint64_t pool_par
   return ok;
 }
 
+bool install_archive_filter(const struct install_source *archive,
+    uint64_t pool_partition, struct install_programs *programs, struct install_source *rescue)
+{
+  return pool_partition && archive_filter(archive, pool_partition, programs, rescue);
+}
+
 bool install_archive_rescue_identity(const struct install_source *archive)
 {
   struct install_programs none = {0};
   struct install_source checked = {.handle = HANDLE_INVALID};
-  if (!install_archive_filter(archive, &none, &checked)) {
+  if (!archive_filter(archive, 0, &none, &checked)) {
     return false;
   }
   bool initializer = false, defaults = false, duplicate = false;
@@ -943,7 +964,11 @@ bool install_archive_rescue_identity(const struct install_source *archive)
       break;
     }
     const char *name = (char *)header + NEWC_HEADER_BYTES;
-    size_t data = align4(offset + NEWC_HEADER_BYTES + name_size);
+    size_t data;
+    if (!align4(offset + NEWC_HEADER_BYTES + name_size, &data)) {
+      duplicate = true;
+      break;
+    }
     if (!strcmp(name, NEWC_TRAILER)) {
       break;
     }
@@ -967,7 +992,10 @@ bool install_archive_rescue_identity(const struct install_source *archive)
       defaults = config_literal_parse((char *)checked.memory + data, size, &document, &diagnostic);
       config_literal_free(document);
     }
-    offset = align4(data + size);
+    if (!align4(data + size, &offset)) {
+      duplicate = true;
+      break;
+    }
   }
   free(checked.memory);
   return initializer && defaults && !duplicate;
