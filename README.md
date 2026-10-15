@@ -98,8 +98,9 @@ explicit HTTP or HTTPS client; HTTPS borrows a ready libtls runtime and verifies
 the URI's DNS hostname. It accepts authenticated TLS EOF for close-delimited
 bodies and returns structured fetch/cleanup diagnostics. Authority, body-storage
 ownership and result mappings are described in [libhttp/http.h](libhttp/http.h).
-The library loads no trust or startup resources. `httpfs --https` owns its ready
-TLS runtime and loads the packaged public roots before publication.
+The library loads no trust or startup resources. `httpfs` attempts a ready TLS
+runtime and loads the packaged public roots before publication; HTTP roots can
+remain available when explicitly optional TLS roots cannot start.
 
 Kernel option `remote.beacon=NAME` selects reverse mode for the configured
 `remote` space. Boot init forwards `PYXIS_REMOTE_BEACON` and a separate
@@ -459,15 +460,23 @@ separate private `.status` entry. Companion collisions refuse the publication;
 copying, exporting or unsetting the primary does not act on either companion.
 Use `${guarded.control}` or `${x.status}` explicitly. A writable native FILE held
 in `x` accepts `> $x` and `>> $x`; read-only captured FILEs refuse writes.
-Named `service start NAME IMAGE` remains available for bootstrap services, and
-private HTTP request/response handling retains its existing commands.
+Named `service start NAME IMAGE` remains available for bootstrap services.
 
 A provider launched through `service start` receives private endpoint creation
 and a one-use publication CALL endpoint. The shell atomically publishes an
 exported `NAME` slot and private `NAME.control`, then acknowledges startup.
 Either name colliding with any existing entry rejects the complete publication.
 Replacement retargets the same slot through its held controller; it does not
-replace already opened FILE objects. For example:
+replace already opened FILE objects. A named start can also declare up to three
+additional roles using `--root ROLE=NAME`, `--optional-root ROLE=NAME`,
+`--read-only-root ROLE=NAME` or `--optional-read-only-root ROLE=NAME`, before
+`NAME IMAGE`. The primary name selects role `default`. Read-only root options
+cap its provider authority at OPEN_READ; ordinary root options preserve the
+exported masks. The launcher publishes all available declared slot/controller
+pairs in one environment mutation and refuses missing required roles. It never
+accepts provider-chosen environment names. Multi-root starts are leaf-only and
+stop/wait an unpublished provider on failure. Replacement still retargets only
+the explicitly named slot. For example:
 
 ```sh
 service start clicks bin://counter.pxe --provide
@@ -538,21 +547,27 @@ TEXT names and can reuse a capability entry's name. The registry holds HTTP
 operation state and independently owned facets; assignment, `export` and `unset`
 operate on process environment values.
 
-Configured boot sessions use `--start-services` to publish independent `http`
-and `https` instances after selecting `DNS_SERVER`. HTTPS loads
-`boot://share/ca-certificates/cacert.pem` before publication, with bounded entropy
-initialization. Reported HTTPS setup failure leaves HTTP and local startup usable.
-To augment public roots, restart or replace the HTTPS instance:
+Configured boot sessions use `--start-services` to launch one instance after
+selecting `DNS_SERVER`. It publishes independent `http`, `json+http`, `https`
+and `json+https` slots. HTTP is writable; HTTPS slots retain read-only client
+authority. JSON roots omit REMOVE authority. TLS setup failure may omit the
+explicitly optional HTTPS slots while publishing both HTTP roles. Each slot has
+its own private controller, so replacing `http` leaves `json+http` unchanged.
+The provider's explicitly private writable staging leaf remains available to
+assemble snapshots even for read-only client roots.
+
+`--https` or `--ca-bundle URI` selects HTTPS as a manual instance's primary root;
+a custom CA augments public trust. To replace only the HTTPS slot:
 
 ```
 service replace --read-only https boot://httpfs.pxb --https --ca-bundle home://private-ca.pem
 ```
 
-`--read-only` attenuates the launched provider's native filesystem roots and
-working directories. HTTPS accepts only this read-only native trust authority
-and receives only its declared environment grants. `service start --optional --read-only` continues only
-after an acknowledged setup failure with successful cleanup. Unexpected crashes
-before reporting can still leave service startup waiting.
+`--read-only` attenuates native trust roots, working directories and published
+provider authority. It preserves the explicitly provisioned private staging
+leaf. Single-root named bootstrap services retain their launch behavior;
+`--optional` continues only after acknowledged setup failure with successful
+cleanup. Multi-root startup also watches provider exit and a bounded deadline.
 
 Each instance owns immutable trust and independent snapshot budgets. Existing
 snapshots remain readable after replacement until their grants retire. Publication

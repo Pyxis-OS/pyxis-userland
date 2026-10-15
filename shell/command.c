@@ -355,7 +355,7 @@ bool shell_builtin(char **arguments, size_t count)
   const char *name = arguments[0];
   return shell_value_builtin(name) || !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
-      !strcmp(name, "session") || !strcmp(name, "env") ||
+      !strcmp(name, "session") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
       (!strcmp(name, "sync") && count > 1 &&
        (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
@@ -428,55 +428,39 @@ static enum command_result builtin_command(struct shell *shell,
     selected.count = count - 1;
     return shell_launch_selected(shell, &selected, SHELL_SESSION, NULL);
   }
-  if (!strcmp(arguments[0], "env")) {
-    /* The optional HTTPS bootstrap still needs a conditional alias until B8.
-     * General environment editing uses typed assignment/export and unset. */
-    if (count != 5 || strcmp(arguments[1], "copy") ||
-        strcmp(arguments[2], "--optional")) {
-      return shell_error(shell, "env: only private bootstrap copy --optional remains; use assignment/export or unset\n");
-    }
-    const char *name = arguments[3];
-    const char *source = arguments[4];
-    struct environment_entry_reply entry;
-    char *text = NULL;
-    enum call_status status = environment_lookup(shell->environment, source, &entry, NULL, 0);
-    if (status == CALL_NOT_FOUND) {
-      return COMMAND_OK;
-    }
-    if (status == CALL_BUFFER_TOO_SMALL) {
-      if (entry.text_length == SIZE_MAX) {
-        status = CALL_LIMIT;
-      } else {
-        text = malloc(entry.text_length + 1);
-        status = text ? environment_lookup(shell->environment, source, &entry,
-            text, entry.text_length + 1) : CALL_NO_MEMORY;
-      }
-    }
-    if (status == CALL_OK) {
-      if (entry.kind == ENVIRONMENT_CAP) {
-        status = environment_set_capability(shell->environment, name, entry.handle,
-            entry.rights, entry.transport, entry.flags);
-        if (handle_close(entry.handle) != 0 && status == CALL_OK) {
-          status = CALL_BAD_HANDLE;
-        }
-      } else {
-        status = environment_set_text(shell->environment, name, text, entry.flags, 0);
-      }
-    }
-    free(text);
-    return status == CALL_OK ? COMMAND_OK :
-        shell_directory_error(shell, "env: copy", name, status);
-  }
   /* is_builtin leaves only service. */
   bool replace = count > 1 && !strcmp(arguments[1], "replace");
   bool optional = false;
   bool read_only = false;
+  struct shell_service_root roots[PROVIDER_SETUP_ROOT_MAX - 1] = {0};
+  size_t root_count = 0;
   size_t index = 2;
   while (index < count && arguments[index][0] == '-') {
     if (!strcmp(arguments[index], "--optional") && !replace && !optional) {
       optional = true;
     } else if (!strcmp(arguments[index], "--read-only") && !read_only) {
       read_only = true;
+    } else if ((!strcmp(arguments[index], "--root") ||
+        !strcmp(arguments[index], "--optional-root") ||
+        !strcmp(arguments[index], "--read-only-root") ||
+        !strcmp(arguments[index], "--optional-read-only-root")) && !replace &&
+        index + 1 < count && root_count < PROVIDER_SETUP_ROOT_MAX - 1) {
+      const char *binding = arguments[index + 1];
+      const char *equal = strchr(binding, '=');
+      size_t length = equal ? (size_t)(equal - binding) : 0;
+      if (!length || length > PROVIDER_SETUP_ROLE_MAX || !equal[1] ||
+          !environment_name(roots[root_count].name, equal + 1)) {
+        break;
+      }
+      memcpy(roots[root_count].role, binding, length);
+      roots[root_count].optional = !strcmp(arguments[index], "--optional-root") ||
+          !strcmp(arguments[index], "--optional-read-only-root");
+      bool root_read_only = !strcmp(arguments[index], "--read-only-root") ||
+          !strcmp(arguments[index], "--optional-read-only-root");
+      roots[root_count].rights = root_read_only ? PROVIDER_RIGHT_OPEN_READ : UINT64_MAX;
+      roots[root_count].transport = HANDLE_TRANSPORT_CALL;
+      ++root_count;
+      ++index;
     } else {
       break;
     }
@@ -485,11 +469,12 @@ static enum command_result builtin_command(struct shell *shell,
   if (count < index + 2 || (strcmp(arguments[1], "start") && !replace) ||
       arguments[index][0] == '-') {
     return shell_error(shell,
-        "usage: service start [--optional] [--read-only] NAME IMAGE [arguments...]\n"
+        "usage: service start [--optional] [--read-only] [ROOTS...] NAME IMAGE [arguments...]\n"
+        "       ROOTS: --root ROLE=NAME | --optional-root ROLE=NAME | --read-only-root ROLE=NAME | --optional-read-only-root ROLE=NAME\n"
         "       service replace [--read-only] NAME IMAGE [arguments...]\n");
   }
   return shell_launch_service(shell, arguments[index], replace, optional, read_only,
-      arguments + index + 1, count - index - 1, stage->operands);
+      arguments + index + 1, count - index - 1, stage->operands, roots, root_count);
 }
 
 static enum command_result expanded_command(struct shell *shell,

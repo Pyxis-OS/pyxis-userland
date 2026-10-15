@@ -71,7 +71,7 @@ struct prepared_stage {
   handle_t staging_leaf;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[36 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[37 + BUNDLE_SOURCE_LIMIT];
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   struct environment_capture captured;
@@ -91,45 +91,128 @@ struct launch_scope {
   bool evaluated, started, retired, stop_failed;
   enum call_status error;
   struct shell_service_value *service;
+  const struct shell_service_root *roots;
+  size_t root_count;
+  char root_roles[PROVIDER_SETUP_ROOT_MAX * (PROVIDER_SETUP_ROLE_MAX + 1)];
+  bool published;
 };
 
-static enum call_status publish_service(struct shell *shell, const char *name,
-    handle_t replacement_control, handle_t target, uint64_t rights, uint64_t transport)
+static enum call_status publish_service_roots(struct shell *shell,
+    struct launch_scope *scope, handle_t replacement_control,
+    const struct provider_setup *setup, struct endpoint_packet *packet, bool read_only)
 {
+  size_t count = scope->roots ? scope->root_count : 1;
+  size_t selected[PROVIDER_SETUP_ROOT_MAX];
+  for (size_t i = 0; i < PROVIDER_SETUP_ROOT_MAX; ++i) {
+    selected[i] = SIZE_MAX;
+  }
+  for (size_t i = 0; i < setup->root_count; ++i) {
+    const char *role = setup->roles[i];
+    size_t length = 0;
+    while (length <= PROVIDER_SETUP_ROLE_MAX && role[length]) {
+      ++length;
+    }
+    if (!length || length > PROVIDER_SETUP_ROLE_MAX) {
+      return CALL_BAD_REQUEST;
+    }
+    /* Fixed strings are zero padded; reject hidden suffix bytes. */
+    for (size_t j = length + 1; j <= PROVIDER_SETUP_ROLE_MAX; ++j) {
+      if (role[j]) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    size_t match = count;
+    for (size_t j = 0; j < count; ++j) {
+      const char *declared = scope->roots ? scope->roots[j].role : PROVIDER_SETUP_DEFAULT_ROLE;
+      if (!strcmp(role, declared)) {
+        match = j;
+      }
+    }
+    if (match == count || selected[match] != SIZE_MAX) {
+      return CALL_BAD_REQUEST;
+    }
+    struct endpoint_grant *grant = &packet->grants[i];
+    struct handle_info info;
+    enum call_status status = handle_query(grant->handle, &info);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (info.kind != HANDLE_KIND_EXPORTED || grant->transport != HANDLE_TRANSPORT_CALL ||
+        info.rights != grant->rights || info.transport != grant->transport) {
+      return CALL_BAD_REQUEST;
+    }
+    uint64_t rights = scope->roots ? scope->roots[match].rights : UINT64_MAX;
+    uint64_t transport = scope->roots ? scope->roots[match].transport : HANDLE_TRANSPORT_CALL;
+    if (read_only && info.protocol == PROTOCOL_PROVIDER) {
+      rights &= PROVIDER_RIGHT_OPEN_READ;
+    }
+    grant->rights &= rights;
+    grant->transport &= transport;
+    selected[match] = i;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (selected[i] == SIZE_MAX && (!scope->roots || !scope->roots[i].optional)) {
+      return CALL_UNAVAILABLE;
+    }
+  }
   if (replacement_control != HANDLE_INVALID) {
-    return forwarder_retarget(replacement_control, target);
-  }
-  size_t length = strlen(name);
-  if (length > ENVIRONMENT_NAME_MAX - (sizeof(".control") - 1)) {
-    return CALL_BAD_REQUEST;
-  }
-  char control_name[ENVIRONMENT_NAME_MAX + 1];
-  snprintf(control_name, sizeof(control_name), "%s.control", name);
-  struct forwarder_reply slot = {0};
-  enum call_status status = forwarder_slot(target, rights, transport, 0, &slot);
-  if (status != CALL_OK) {
+    struct endpoint_grant *grant = &packet->grants[selected[0]];
+    handle_t target = HANDLE_INVALID;
+    enum call_status status = handle_copy_restricted(grant->handle, grant->rights,
+        grant->transport, &target);
+    if (status == CALL_OK) {
+      status = forwarder_retarget(replacement_control, target);
+      scope->published = status == CALL_OK;
+    }
+    if (target != HANDLE_INVALID && handle_close(target) != 0) {
+      status = CALL_BAD_HANDLE;
+    }
     return status;
   }
-  struct environment_set_entry entries[2] = {0};
-  if (!environment_name(entries[0].name, name) ||
-      !environment_name(entries[1].name, control_name)) {
-    status = CALL_BAD_REQUEST;
-  } else {
-    entries[0].kind = entries[1].kind = ENVIRONMENT_CAP;
-    entries[0].flags = ENVIRONMENT_EXPORTED;
-    entries[0].set_flags = entries[1].set_flags = ENVIRONMENT_SET_REQUIRE_ABSENT;
-    entries[0].handle = slot.holder;
-    entries[0].rights = rights;
-    entries[0].transport = transport;
-    entries[1].handle = slot.controller;
-    entries[1].rights = FORWARDER_RIGHTS;
-    status = environment_set_batch(shell->environment, entries, 2);
+  if (!scope->roots) {
+    struct endpoint_grant *grant = &packet->grants[selected[0]];
+    return forwarder_slot(grant->handle, grant->rights, grant->transport,
+        0, &scope->service->slot);
   }
-  if (handle_close(slot.holder) != 0 && status == CALL_OK) {
-    status = CALL_BAD_HANDLE;
+  struct forwarder_reply slots[PROVIDER_SETUP_ROOT_MAX] = {0};
+  struct environment_set_entry entries[2 * PROVIDER_SETUP_ROOT_MAX] = {0};
+  size_t entry_count = 0;
+  enum call_status status = CALL_OK;
+  for (size_t i = 0; i < count; ++i) {
+    if (selected[i] == SIZE_MAX) {
+      continue;
+    }
+    struct endpoint_grant *grant = &packet->grants[selected[i]];
+    status = forwarder_slot(grant->handle, grant->rights, grant->transport, 0, &slots[i]);
+    if (status != CALL_OK) {
+      break;
+    }
+    char control[ENVIRONMENT_NAME_MAX + 1];
+    snprintf(control, sizeof(control), "%s.control", scope->roots[i].name);
+    struct environment_set_entry *holder = &entries[entry_count++];
+    struct environment_set_entry *controller = &entries[entry_count++];
+    environment_name(holder->name, scope->roots[i].name);
+    environment_name(controller->name, control);
+    holder->kind = controller->kind = ENVIRONMENT_CAP;
+    holder->flags = ENVIRONMENT_EXPORTED;
+    holder->set_flags = controller->set_flags = ENVIRONMENT_SET_REQUIRE_ABSENT;
+    holder->handle = slots[i].holder;
+    holder->rights = grant->rights;
+    holder->transport = grant->transport;
+    controller->handle = slots[i].controller;
+    controller->rights = FORWARDER_RIGHTS;
   }
-  if (handle_close(slot.controller) != 0 && status == CALL_OK) {
-    status = CALL_BAD_HANDLE;
+  if (status == CALL_OK) {
+    status = environment_set_batch(shell->environment, entries, entry_count);
+    scope->published = status == CALL_OK;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (slots[i].holder && handle_close(slots[i].holder)) {
+      status = CALL_BAD_HANDLE;
+    }
+    if (slots[i].controller && handle_close(slots[i].controller)) {
+      status = CALL_BAD_HANDLE;
+    }
   }
   return status;
 }
@@ -435,7 +518,7 @@ static enum call_status select_operands(struct prepared_stage *prepared, bool re
 static enum call_status validate_scope(const struct launch_request *request,
     const struct launch_scope *scope)
 {
-  if (!scope) {
+  if (!scope || (!scope->capture && !scope->service)) {
     return CALL_OK;
   }
   const struct launch_grant *grants = (const void *)(uintptr_t)request->grants;
@@ -847,6 +930,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (provider) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"publication", publication_index);
+    resources[resource_count++] = (struct launch_environment_entry){
+      .name = (uintptr_t)PROVIDER_SETUP_ROOTS_ENTRY, .kind = ENVIRONMENT_TEXT,
+      .value = (uintptr_t)scope->root_roles, .length = strlen(scope->root_roles),
+    };
   }
   if (has_terminal) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal", terminal_index);
@@ -1142,6 +1229,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       static uint64_t sequence;
       char name[64];
       snprintf(name, sizeof(name), "service-%jx-%jx", (uintmax_t)now, (uintmax_t)++sequence);
+      /* Client read-only policy does not remove private backing writes needed
+       * to assemble complete response snapshots. The leaf is never exported. */
       status = directory_create(authority[i].source, name, DIRECTORY_KIND_DIRECTORY,
           DIRECTORY_CONTENT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, &prepared->staging_leaf);
       if (status != CALL_OK) {
@@ -1529,6 +1618,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   struct environment_capture inherited = {0};
 
   if (mode == SHELL_SERVICE) {
+    size_t offset = 0;
+    size_t count = scope->roots ? scope->root_count : 1;
+    for (size_t i = 0; i < count; ++i) {
+      const char *role = scope->roots ? scope->roots[i].role : PROVIDER_SETUP_DEFAULT_ROLE;
+      if (i) {
+        scope->root_roles[offset++] = ',';
+      }
+      size_t length = strlen(role);
+      memcpy(scope->root_roles + offset, role, length + 1);
+      offset += length;
+    }
     status = endpoint_create(shell->service, &publication);
     if (status != CALL_OK) {
       operation = "shell: publication endpoint";
@@ -1608,6 +1708,25 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   status = session_wait_environment(&environment, mode == SHELL_SESSION && shell->session_wait);
   if (status != CALL_OK) {
     goto failed;
+  }
+
+  if (mode == SHELL_SERVICE) {
+    const struct environment_value *conflict =
+        environment_capture_find(&inherited, PROVIDER_SETUP_ROOTS_ENTRY);
+    if (conflict) {
+      operation = "service: automatic startup entry conflicts:";
+      path = PROVIDER_SETUP_ROOTS_ENTRY;
+      status = CALL_ALREADY_EXISTS;
+      goto failed;
+    }
+    for (size_t i = 0; stages[0].operands && i < stages[0].operands->count; ++i) {
+      if (!strcmp(stages[0].operands->values[i].name, PROVIDER_SETUP_ROOTS_ENTRY)) {
+        operation = "service: automatic startup entry conflicts:";
+        path = PROVIDER_SETUP_ROOTS_ENTRY;
+        status = CALL_ALREADY_EXISTS;
+        goto failed;
+      }
+    }
   }
 
   bool has_redirects = false;
@@ -1988,22 +2107,11 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       memcpy(&setup, packet.data, sizeof(setup));
       if (setup.status < CALL_STATUS_COUNT && setup.cleanup_status < CALL_STATUS_COUNT) {
         if (setup.status == CALL_OK && setup.cleanup_status == CALL_OK &&
-            packet.grant_count == 1) {
-          struct endpoint_grant *grant = &packet.grants[0];
-          struct handle_info info;
-          enum call_status queried = handle_query(grant->handle, &info);
-          if (queried == CALL_OK && info.kind == HANDLE_KIND_EXPORTED &&
-              grant->transport == HANDLE_TRANSPORT_CALL &&
-              info.rights == grant->rights && info.transport == grant->transport) {
-            if (scope && scope->service) {
-              published = forwarder_slot(grant->handle, grant->rights, grant->transport,
-                  0, &scope->service->slot);
-            } else {
-              published = publish_service(shell, service_name, replacement_control,
-                  grant->handle, grant->rights, grant->transport);
-            }
-          }
-        } else if (setup.status != CALL_OK && packet.grant_count == 0) {
+            setup.root_count && setup.root_count <= PROVIDER_SETUP_ROOT_MAX &&
+            packet.grant_count == setup.root_count) {
+          published = publish_service_roots(shell, scope, replacement_control,
+              &setup, &packet, read_only);
+        } else if (setup.status != CALL_OK && !setup.root_count && packet.grant_count == 0) {
           reported_failure = true;
           published = CALL_OK;
         }
@@ -2323,10 +2431,52 @@ enum command_result shell_launch_pipeline(struct shell *shell,
       SHELL_FOREGROUND, NULL, HANDLE_INVALID, false, false, outcome, body, !sink->capability, NULL);
 }
 
+static enum command_result launch_named_service(struct shell *shell,
+    const struct shell_stage *stage, const struct shell_service_root *roots,
+    size_t root_count, handle_t replacement_control, bool optional, bool read_only)
+{
+  struct shell_service_value owned = {0};
+  struct launch_scope scope = {.service = root_count > 1 ? &owned : NULL,
+    .roots = roots, .root_count = root_count};
+  enum command_result result = launch_stages(shell, stage, 1, SHELL_SERVICE,
+      roots[0].name, replacement_control, optional, read_only, NULL, NULL, false, &scope);
+  if (!scope.published && owned.process != HANDLE_INVALID) {
+    enum call_status status = process_terminate(owned.process);
+    if (status == CALL_OK) {
+      struct process_result completion;
+      status = process_wait(owned.process, &completion);
+    }
+    if (status != CALL_OK) {
+      shell_directory_error(shell, "service: startup cleanup", roots[0].name, status);
+      result = COMMAND_FATAL;
+    }
+  }
+  if (!close_handle(&owned.process)) {
+    shell_directory_error(shell, "service: close startup", roots[0].name, CALL_BAD_HANDLE);
+    result = COMMAND_FATAL;
+  }
+  return result;
+}
+
 enum command_result shell_launch_service(struct shell *shell, const char *name,
     bool replace, bool optional, bool read_only, char **arguments, size_t count,
-    const struct environment_capture *operands)
+    const struct environment_capture *operands,
+    const struct shell_service_root *additional_roots, size_t additional_count)
 {
+  if (additional_count >= PROVIDER_SETUP_ROOT_MAX || (replace && additional_count)) {
+    return shell_error(shell, "service: invalid root declarations\n");
+  }
+  struct shell_service_root roots[PROVIDER_SETUP_ROOT_MAX] = {0};
+  memcpy(roots[0].role, PROVIDER_SETUP_DEFAULT_ROLE, sizeof(PROVIDER_SETUP_DEFAULT_ROLE));
+  roots[0].rights = UINT64_MAX;
+  roots[0].transport = HANDLE_TRANSPORT_CALL;
+  if (!environment_name(roots[0].name, name)) {
+    return shell_error(shell, "service: invalid name %s\n", name);
+  }
+  if (additional_count) {
+    memcpy(roots + 1, additional_roots, additional_count * sizeof(*additional_roots));
+  }
+  size_t root_count = additional_count + 1;
   if (shell->service == HANDLE_INVALID || shell->clock == HANDLE_INVALID) {
     return shell_error(shell, "service: endpoint or clock authority unavailable\n");
   }
@@ -2376,8 +2526,7 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
     /* Both grants stay owned through startup and its publication reply. A
      * later environment replacement cannot redirect this management operation. */
     enum command_result result = status == CALL_OK ?
-        launch_stages(shell, &stage, 1, SHELL_SERVICE, name, held[1], optional, read_only,
-            NULL, NULL, false, NULL) :
+        launch_named_service(shell, &stage, roots, root_count, held[1], optional, read_only) :
         shell_directory_error(shell, "service: replace", failed_name, status);
     bool closed = close_handle(&held[0]);
     closed = close_handle(&held[1]) && closed;
@@ -2387,25 +2536,47 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
     }
     return result;
   }
-  for (size_t i = 0; i < 2; ++i) {
+  /* Check the complete declaration before image preparation, redirects or child
+   * launch. The atomic SET repeats absence checks against concurrent mutation. */
+  char destinations[2 * PROVIDER_SETUP_ROOT_MAX][ENVIRONMENT_NAME_MAX + 1];
+  for (size_t i = 0; i < root_count; ++i) {
+    char checked_role[ENVIRONMENT_NAME_MAX + 1];
+    if (!environment_name(checked_role, roots[i].role) ||
+        strlen(roots[i].role) > PROVIDER_SETUP_ROLE_MAX ||
+        strlen(roots[i].name) > ENVIRONMENT_NAME_MAX - (sizeof(".control") - 1)) {
+      return shell_error(shell, "service: invalid root declaration\n");
+    }
+    for (size_t j = 0; j < i; ++j) {
+      if (!strcmp(roots[i].role, roots[j].role)) {
+        return shell_error(shell, "service: duplicate root role %s\n", roots[i].role);
+      }
+    }
+    environment_name(destinations[2 * i], roots[i].name);
+    snprintf(destinations[2 * i + 1], sizeof(destinations[0]), "%s.control", roots[i].name);
+  }
+  for (size_t i = 0; i < 2 * root_count; ++i) {
+    for (size_t j = 0; j < i; ++j) {
+      if (!strcmp(destinations[i], destinations[j])) {
+        return shell_error(shell, "service: duplicate destination %s\n", destinations[i]);
+      }
+    }
     struct environment_entry_reply entry;
-    enum call_status status = environment_lookup(shell->environment, names[i], &entry, NULL, 0);
+    enum call_status status = environment_lookup(shell->environment, destinations[i], &entry, NULL, 0);
     bool present = status == CALL_OK || status == CALL_BUFFER_TOO_SMALL;
     if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
       if (handle_close(entry.handle) != 0) {
-        shell_directory_error(shell, "service: close", names[i], CALL_BAD_HANDLE);
+        shell_directory_error(shell, "service: close", destinations[i], CALL_BAD_HANDLE);
         return COMMAND_FATAL;
       }
     }
     if (present) {
-      return shell_directory_error(shell, "service", names[i], CALL_ALREADY_EXISTS);
+      return shell_directory_error(shell, "service", destinations[i], CALL_ALREADY_EXISTS);
     }
-    if (status != CALL_OK && status != CALL_BUFFER_TOO_SMALL && status != CALL_NOT_FOUND) {
-      return shell_directory_error(shell, "service", names[i], status);
+    if (status != CALL_NOT_FOUND) {
+      return shell_directory_error(shell, "service", destinations[i], status);
     }
   }
-  return launch_stages(shell, &stage, 1, SHELL_SERVICE, name, HANDLE_INVALID, optional, read_only,
-      NULL, NULL, false, NULL);
+  return launch_named_service(shell, &stage, roots, root_count, HANDLE_INVALID, optional, read_only);
 }
 
 

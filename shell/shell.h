@@ -10,6 +10,7 @@
 #include "../common/launch_environment.h"
 #include <bundle_launch.h>
 #include <resource.h>
+#include "../common/provider_setup.h"
 
 #define SHELL_LINE_CAPACITY 1024
 /* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
@@ -35,6 +36,13 @@ enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
 struct bundle_program;
 struct shell_capability_table;
 struct shell_service_value;
+
+struct shell_service_root {
+  char role[PROVIDER_SETUP_ROLE_MAX + 1];
+  char name[ENVIRONMENT_NAME_MAX + 1];
+  bool optional;
+  uint64_t rights, transport;
+};
 
 struct shell_redirection {
   enum environment_stream_index stream;
@@ -177,7 +185,8 @@ enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_command_line *command, struct shell_outcome *outcome);
 enum command_result shell_launch_service(struct shell *shell, const char *name,
     bool replace, bool optional, bool read_only, char **arguments, size_t count,
-    const struct environment_capture *operands);
+    const struct environment_capture *operands,
+    const struct shell_service_root *additional_roots, size_t additional_count);
 enum command_result shell_launch_capture(struct shell *shell,
     const struct shell_command_line *command, handle_t stdout_producer,
     struct shell_outcome *outcome, bool *evaluated, bool *started,
