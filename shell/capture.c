@@ -246,6 +246,18 @@ static enum call_status take_value(struct shell *shell, handle_t collector,
   }
   struct describe_reply description;
   status = handle_describe(result->value.handle, 0, &description);
+  if (status == CALL_OK && result->command != COMMAND_OK &&
+      description.description.outcome == RESOURCE_OK) {
+    struct output_status_reply state;
+    status = output_status(collector, &state);
+    if (status == CALL_OK && state.mode != OUTPUT_MODE_VALUE) {
+      /* Exit failure cannot turn absent/partial byte output into success.
+       * Explicitly handed values and native TOO_LARGE keep their own outcome. */
+      bool closed = close_value(&result->value);
+      closed = close_value(&result->observation) && closed;
+      return closed ? failed_value(shell, name, CALL_IO, result) : CALL_OUTCOME_UNKNOWN;
+    }
+  }
   if (status == CALL_OK && description.description.outcome != RESOURCE_OK) {
     result->command = COMMAND_FAILED;
     if (description.description.outcome == RESOURCE_TOO_LARGE) {
