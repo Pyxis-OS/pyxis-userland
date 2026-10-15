@@ -1,6 +1,7 @@
 #include "installer.h"
 #include "inventory.h"
 #include "digest.h"
+#include "review.h"
 
 #include <directory.h>
 #include <pyxis_fs/npfs.h>
@@ -168,6 +169,88 @@ static bool gpt_agree(const struct gpt_copy *a, const struct gpt_copy *b)
     !memcmp(a->table, b->table, a->table_bytes);
 }
 
+static void project_gpt(const struct gpt_copy *map, struct install_gpt *gpt)
+{
+  gpt->first_usable = map->first;
+  gpt->last_usable = map->last;
+  gpt->slot_count = map->count;
+  memcpy(gpt->disk_guid, map->guid, sizeof(gpt->disk_guid));
+  for (uint32_t i = 0; i < map->count; ++i) {
+    const uint8_t *entry = map->table + (size_t)i * map->entry_bytes;
+    if (zero_bytes(entry, 16)) {
+      continue;
+    }
+    struct install_gpt_partition *partition = &gpt->partitions[gpt->partition_count++];
+    partition->entry = (uint64_t)i + 1;
+    partition->first_block = npfs_get_u64(entry + 32);
+    partition->block_count = npfs_get_u64(entry + 40) - partition->first_block + 1;
+    partition->attributes = npfs_get_u64(entry + 48);
+    memcpy(partition->type_guid, entry, sizeof(partition->type_guid));
+    memcpy(partition->guid, entry + 16, sizeof(partition->guid));
+    for (unsigned unit = 0; unit < INSTALL_GPT_NAME_UNITS; ++unit) {
+      partition->name[unit] = npfs_get_u16(entry + 56 + unit * 2);
+    }
+  }
+}
+
+bool install_review_gpt_read(const struct install_disk *disk,
+    struct install_review_gpt *facts, const char **reason)
+{
+  if (reason) {
+    *reason = "unsupported disk geometry or missing GPT review output";
+  }
+  if (!facts) {
+    return false;
+  }
+  memset(facts, 0, sizeof(*facts));
+  facts->status[0] = facts->status[1] = INSTALL_REVIEW_GPT_UNAVAILABLE;
+  if (!disk || disk->info.block_size < 512 || disk->info.block_size > NPFS_BLOCK_SIZE ||
+      (disk->info.block_size & (disk->info.block_size - 1)) || disk->info.block_count < 3 ||
+      disk->info.block_count > UINT64_MAX / disk->info.block_size ||
+      disk->bytes != disk->info.block_count * disk->info.block_size) {
+    return false;
+  }
+  struct gpt_copy *maps = calloc(2, sizeof(*maps));
+  uint8_t *block = malloc(NPFS_BLOCK_SIZE);
+  bool success = false;
+  if (!maps || !block) {
+    if (reason) {
+      *reason = "out of memory during GPT review";
+    }
+    goto done;
+  }
+  install_progress_begin("Inspecting review protective MBR", INSTALL_PROGRESS_RAW_READ, NULL);
+  facts->mbr_read = install_read(disk, 0, block, (size_t)disk->info.block_size);
+  if (facts->mbr_read) {
+    facts->mbr_protective = protective_mbr(block, disk);
+    facts->mbr_zero = zero_bytes(block, (size_t)disk->info.block_size);
+  }
+  for (unsigned copy = 0; copy < 2; ++copy) {
+    maps[copy].state = read_gpt(disk, copy, block, &maps[copy]);
+    switch (maps[copy].state) {
+    case GPT_ABSENT: facts->status[copy] = INSTALL_REVIEW_GPT_ABSENT; break;
+    case GPT_VALID:
+      facts->status[copy] = INSTALL_REVIEW_GPT_VALID;
+      project_gpt(&maps[copy], &facts->maps[copy]);
+      break;
+    case GPT_DAMAGED: facts->status[copy] = INSTALL_REVIEW_GPT_DAMAGED; break;
+    case GPT_UNSUPPORTED: facts->status[copy] = INSTALL_REVIEW_GPT_UNSUPPORTED; break;
+    case GPT_FATAL: facts->status[copy] = INSTALL_REVIEW_GPT_UNAVAILABLE; break;
+    }
+  }
+  facts->copies_agree = maps[0].state == GPT_VALID && maps[1].state == GPT_VALID &&
+      gpt_agree(&maps[0], &maps[1]);
+  success = true;
+  if (reason) {
+    *reason = NULL;
+  }
+done:
+  install_progress_finish();
+  free(block);
+  free(maps);
+  return success;
+}
+
 bool install_gpt_inspect(const struct install_disk *disk, struct install_gpt *gpt,
     const char **reason)
 {
@@ -215,27 +298,7 @@ bool install_gpt_inspect(const struct install_disk *disk, struct install_gpt *gp
     failure = "GPT copies disagree";
     goto done;
   }
-  const struct gpt_copy *map = &maps[0];
-  gpt->first_usable = map->first;
-  gpt->last_usable = map->last;
-  gpt->slot_count = map->count;
-  memcpy(gpt->disk_guid, map->guid, sizeof(gpt->disk_guid));
-  for (uint32_t i = 0; i < map->count; ++i) {
-    const uint8_t *entry = map->table + (size_t)i * map->entry_bytes;
-    if (zero_bytes(entry, 16)) {
-      continue;
-    }
-    struct install_gpt_partition *partition = &gpt->partitions[gpt->partition_count++];
-    partition->entry = (uint64_t)i + 1;
-    partition->first_block = npfs_get_u64(entry + 32);
-    partition->block_count = npfs_get_u64(entry + 40) - partition->first_block + 1;
-    partition->attributes = npfs_get_u64(entry + 48);
-    memcpy(partition->type_guid, entry, sizeof(partition->type_guid));
-    memcpy(partition->guid, entry + 16, sizeof(partition->guid));
-    for (unsigned unit = 0; unit < INSTALL_GPT_NAME_UNITS; ++unit) {
-      partition->name[unit] = npfs_get_u16(entry + 56 + unit * 2);
-    }
-  }
+  project_gpt(&maps[0], gpt);
   success = true;
 done:
   install_progress_finish();
