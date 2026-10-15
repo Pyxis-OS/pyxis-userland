@@ -536,6 +536,14 @@ static enum call_status validate_scope(const struct launch_request *request,
   return CALL_OK;
 }
 
+static bool shebang_script(handle_t image)
+{
+  char prefix[2];
+  size_t count;
+  return image != HANDLE_INVALID && file_read(image, 0, prefix, sizeof(prefix), &count) == CALL_OK &&
+      count == sizeof(prefix) && prefix[0] == '#' && prefix[1] == '!';
+}
+
 /* The grant an ordinary foreground command receives as launcher. A capture's
  * stages and a script's commands receive one bound to their own subgroup, so
  * stopping that group stops everything they start. A session successor receives
@@ -615,7 +623,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
-  bool has_pipe = session && shell->pipe != HANDLE_INVALID;
+  /* A shebang script runs in a shell that needs the pipe creation this one holds,
+   * as a bundle declaring pipe is granted it. Other commands get none. */
+  bool script = mode == SHELL_FOREGROUND && !prepared->bundle && shebang_script(prepared->image);
+  bool has_pipe = (session || script) && shell->pipe != HANDLE_INVALID;
   bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_udp_beacons = session && shell->udp_beacons != HANDLE_INVALID;
