@@ -531,6 +531,11 @@ static enum call_status close_transport(struct http_stream *fetch, bool framed)
 
 static enum http_read_result finish(struct http_stream *fetch, bool framed)
 {
+  if (framed && (fetch->result->status == 204 || fetch->result->status == 205) &&
+      fetch->buffered) {
+    fail(fetch, HTTP_BAD_RESPONSE);
+    framed = false;
+  }
   if (!framed && fetch->result->error == HTTP_OK && (fetch->wanted || fetch->yielded)) {
     return HTTP_READ_WAIT;
   }

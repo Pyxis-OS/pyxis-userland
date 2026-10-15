@@ -1603,7 +1603,8 @@ static bool progress(struct loop *loop)
       transaction->phase = HTTP_TRANSACTION_READING;
     }
   } else if (step == HTTP_STEP_DATA) {
-    if (transaction->error_size < RESOURCE_ERROR_BODY_MAX_BYTES && count) {
+    if (final_http_status(transaction->response.status) != CALL_OK &&
+        transaction->error_size < RESOURCE_ERROR_BODY_MAX_BYTES && count) {
       if (!transaction->error_body) {
         transaction->error_body = malloc(RESOURCE_ERROR_BODY_MAX_BYTES);
       }
