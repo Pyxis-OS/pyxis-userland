@@ -322,6 +322,22 @@ bool install_esp_payload_verify(const struct install_esp_payloads *result,
   return verify_staged(result, report);
 }
 
+bool install_esp_payload_verify_file(const struct install_esp_payloads *result,
+    handle_t source, const struct install_esp_payload_digest *expected,
+    struct install_esp_payload_report *report)
+{
+  if (!report) {
+    return false;
+  }
+  *report = (struct install_esp_payload_report){.phase = INSTALL_ESP_PAYLOAD_VERIFY};
+  if (!result || !result->synchronized || source == HANDLE_INVALID || !expected ||
+      expected->size > INSTALL_ESP_PAYLOAD_MAX_BYTES || !hex_valid(expected->sha256, 64)) {
+    return fail(report, CALL_BAD_REQUEST);
+  }
+  return current_target(result, report) && grant(source, PROTOCOL_FILE, FILE_RIGHT_READ, report) &&
+      transfer_file(source, result->workspace, true, expected, report) && current_target(result, report);
+}
+
 const struct install_esp_payload_record *install_esp_payload_record(
     const struct install_esp_payloads *result)
 {

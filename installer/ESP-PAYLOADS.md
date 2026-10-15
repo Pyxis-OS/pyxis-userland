@@ -15,6 +15,12 @@ combinations refuse without falling back to small FAT operations. Transfers
 grow each fresh empty FAT file; there is no full-file resize whose single
 mutation plan would grow with the entire payload.
 
+`install_esp_payload_verify_file` reuses the result's retained RAM FILE for
+readback of an already opened native FILE, with the same size/hash checks and
+target observation before and after. The publisher uses it to verify the older
+boot pair before cleanup. The caller separately checks canonical traversal,
+owned manifest and recorded hashes; readback alone grants no removal authority.
+
 The trusted caller supplies borrowed native root/control capabilities, retained
 OBSERVE admission identity/geometry, reviewed sources and SHA-256 digests.
 It also supplies a private native RAM directory with

@@ -85,6 +85,12 @@ bool install_esp_payload_stage(const struct install_esp_payload_request *request
  * RAM workspace; no ESP writes or interval management. */
 bool install_esp_payload_verify(const struct install_esp_payloads *result,
     struct install_esp_payload_report *report);
+/* Hash an already opened native FILE through the retained private RAM transfer
+ * workspace. The caller separately proves its namespace/ownership and keeps
+ * the handle and digest stable. This readback grants no deletion authority. */
+bool install_esp_payload_verify_file(const struct install_esp_payloads *result,
+    handle_t source, const struct install_esp_payload_digest *expected,
+    struct install_esp_payload_report *report);
 const struct install_esp_payload_record *install_esp_payload_record(
     const struct install_esp_payloads *result);
 /* Releases only held handles and memory; never removes artifacts or retires.

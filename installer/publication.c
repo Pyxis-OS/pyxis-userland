@@ -355,8 +355,17 @@ bool install_publication_cleanup(const struct install_staged_boot *boot,
     if (status != CALL_OK) {
       inspect.status = status;
     }
-    ok = status == CALL_OK && stream(files[i], HANDLE_INVALID,
-        i == INSTALL_BOOT_PAYLOADS ? &manifest.digest : &payload(obsolete, i)->digest, &inspect);
+    if (status == CALL_OK) {
+      const struct config_file_digest *expected = i == INSTALL_BOOT_PAYLOADS ?
+          &manifest.digest : &payload(obsolete, i)->digest;
+      struct install_esp_payload_digest digest = {.size = expected->size};
+      memcpy(digest.sha256, expected->sha256, sizeof(digest.sha256));
+      struct install_esp_payload_report readback;
+      ok = install_esp_payload_verify_file(boot->payloads, files[i], &digest, &readback);
+      inspect.status = readback.status;
+    } else {
+      ok = false;
+    }
   }
   if (!ok) {
     if (inspect.status != CALL_OK && inspect.status != CALL_NOT_FOUND &&
