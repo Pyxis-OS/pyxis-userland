@@ -248,7 +248,8 @@ int main(int argc, char **argv)
     memcpy(owned_controllers, controllers, sizeof(controllers));
     memset(controllers, 0, sizeof(controllers));
     status = httpfs_serve(service, endpoint.receiver, owned_controllers, &client,
-        custom_bundle != NULL, staging, body_cap, storage_cap);
+        custom_bundle != NULL, staging, staging_type == FILESYSTEM_TYPE_RAM,
+        body_cap, storage_cap);
   }
 
 done:

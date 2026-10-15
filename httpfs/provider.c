@@ -85,7 +85,7 @@ struct loop {
   struct exported exports[EXPORT_SLOTS];
   struct transaction *active;
   uint64_t next_id, next_name;
-  bool custom_trust;
+  bool custom_trust, ram_backing;
   enum call_status fatal;
 };
 
@@ -1066,6 +1066,30 @@ static void body_request(struct loop *loop, struct transaction *transaction,
   clear_packet(packet);
 }
 
+static void snapshot_read_reply(struct loop *loop, struct transaction *transaction,
+    enum call_status status, const void *data, size_t size)
+{
+  struct file_read_reply response;
+  if (status == CALL_OK) {
+    if (size < sizeof(response)) {
+      status = CALL_IO;
+    } else {
+      memcpy(&response, data, sizeof(response));
+      if (response.read > transaction->read_capacity || size - sizeof(response) != response.read ||
+          response.read > transaction->snapshot_size - transaction->read_offset || !response.read ||
+          response.read > UINT64_MAX - transaction->consumed) {
+        status = CALL_IO;
+      } else {
+        transaction->consumed += response.read;
+      }
+    }
+  }
+  if (transaction->work->read.receipt) {
+    reply(loop, &transaction->work->read, status, status == CALL_OK ? data : NULL,
+        status == CALL_OK ? size : 0, NULL, 0);
+  }
+}
+
 static void staging_completion(struct loop *loop, struct transaction *transaction,
     struct endpoint_packet *packet)
 {
@@ -1135,27 +1159,8 @@ static void staging_completion(struct loop *loop, struct transaction *transactio
       transaction->mutation_failure = CALL_OUTCOME_UNKNOWN;
     }
   } else if (kind == SNAPSHOT_READ) {
-    struct file_read_reply response;
-    struct file_read_request request = {.offset = transaction->read_offset,
-      .capacity = transaction->read_capacity};
-    if (status == CALL_OK) {
-      if (packet->size < sizeof(response) || packet->grant_count) {
-        status = CALL_IO;
-      } else {
-        memcpy(&response, packet->data, sizeof(response));
-        if (response.read > request.capacity || packet->size - sizeof(response) != response.read ||
-            response.read > transaction->snapshot_size - request.offset || !response.read ||
-            response.read > UINT64_MAX - transaction->consumed) {
-          status = CALL_IO;
-        } else {
-          transaction->consumed += response.read;
-        }
-      }
-    }
-    if (transaction->work->read.receipt) {
-      reply(loop, &transaction->work->read, status, status == CALL_OK ? packet->data : NULL,
-          status == CALL_OK ? packet->size : 0, NULL, 0);
-    }
+    snapshot_read_reply(loop, transaction, packet->grant_count ? CALL_IO : status,
+        packet->data, packet->size);
   }
   for (size_t i = 0; i < packet->grant_count; ++i) {
     if (packet->grants[i].handle && handle_close(packet->grants[i].handle)) {
@@ -1395,6 +1400,7 @@ static void publish_snapshot(struct loop *loop, struct transaction *transaction,
       FACET_SNAPSHOT, &reader);
   if (status == CALL_OK) {
     status = publish_description(loop, transaction);
+    transaction->terminal_description_published = status == CALL_OK;
   }
   if (status == CALL_OK) {
     response.protocol = PROTOCOL_FILE;
@@ -1471,10 +1477,10 @@ static void settle(struct loop *loop, struct transaction *transaction)
   if (transaction->work->abort.receipt) {
     reply(loop, &transaction->work->abort, transaction->cleanup, NULL, 0, NULL, 0);
   }
-  erase(transaction->work->fields, sizeof(transaction->work->fields));
-  memset(transaction->work->headers_fields, 0, sizeof(transaction->work->headers_fields));
-  transaction->work->field_count = 0;
   if (transaction->queue) {
+    erase(transaction->work->fields, sizeof(transaction->work->fields));
+    memset(transaction->work->headers_fields, 0, sizeof(transaction->work->headers_fields));
+    transaction->work->field_count = 0;
     erase(transaction->queue, RESPONSE_BYTES);
     free(transaction->queue);
     transaction->queue = NULL;
@@ -1500,7 +1506,7 @@ static bool progress(struct loop *loop)
   if (!transaction) {
     return false;
   }
-  if (transaction->phase == HTTP_TRANSACTION_COMPLETE) {
+  if (transaction->phase == HTTP_TRANSACTION_COMPLETE || transaction->aborting) {
     transaction->wait = (struct http_wait){0};
     settle(loop, transaction);
     return false;
@@ -1655,6 +1661,20 @@ static bool progress_reads(struct loop *loop)
       continue;
     }
     struct endpoint_packet *packet = &transaction->work->read;
+    if (loop->ram_backing) {
+      /* Frozen private RAM reads copy without scheduling or allocation. Keep
+       * NPFS reads and all growing writes on the completion path. */
+      struct {
+        struct file_read_reply reply;
+        unsigned char data[FILE_READ_MAX_BYTES];
+      } response;
+      size_t count = 0;
+      enum call_status status = file_read(transaction->snapshot, transaction->read_offset,
+          response.data, transaction->read_capacity, &count);
+      response.reply.read = count;
+      snapshot_read_reply(loop, transaction, status, &response, sizeof(response.reply) + count);
+      return true;
+    }
     enum call_status status = submit(loop, transaction, transaction->snapshot,
         PROTOCOL_FILE, FILE_READ, packet->data, packet->size, SNAPSHOT_READ, true);
     if (status != CALL_OK) {
@@ -1875,11 +1895,12 @@ static bool alive(const struct loop *loop)
 
 enum call_status httpfs_serve(handle_t service, handle_t receiver,
     handle_t root_controllers[HTTPFS_ROOT_COUNT], const struct http_client *client,
-    bool custom_trust, handle_t staging, uint64_t body_cap, uint64_t storage_cap)
+    bool custom_trust, handle_t staging, bool ram_backing, uint64_t body_cap,
+    uint64_t storage_cap)
 {
   struct loop loop = {.service = service, .receiver = receiver,
     .client = *client, .next_id = 1, .staging = staging, .body_cap = body_cap,
-    .storage_cap = storage_cap, .custom_trust = custom_trust};
+    .storage_cap = storage_cap, .custom_trust = custom_trust, .ram_backing = ram_backing};
   for (size_t i = 0; i < HTTPFS_ROOT_COUNT; ++i) {
     loop.roots[i] = root_controllers[i];
     root_controllers[i] = HANDLE_INVALID;

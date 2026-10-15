@@ -23,6 +23,7 @@ enum call_status httpfs_staging_validate(handle_t staging, uint64_t *filesystem_
  * client->tls is ready or NULL, so unavailable TLS roots have no controller. */
 enum call_status httpfs_serve(handle_t service, handle_t receiver,
     handle_t root_controllers[HTTPFS_ROOT_COUNT], const struct http_client *client,
-    bool custom_trust, handle_t staging, uint64_t body_cap, uint64_t storage_cap);
+    bool custom_trust, handle_t staging, bool ram_backing, uint64_t body_cap,
+    uint64_t storage_cap);
 
 #endif
