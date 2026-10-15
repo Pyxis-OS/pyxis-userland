@@ -3,12 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-void shell_expansion_close(struct shell_expansion *expansion)
+bool shell_expansion_close(struct shell_expansion *expansion)
 {
+  bool closed = true;
   for (size_t i = 0; expansion->values && i < expansion->value_count; ++i) {
     struct environment_value *value = &expansion->values[i];
-    if (value->handle) {
-      handle_close(value->handle);
+    if (value->handle && handle_close(value->handle)) {
+      closed = false;
     }
     free(value->text);
   }
@@ -23,6 +24,17 @@ void shell_expansion_close(struct shell_expansion *expansion)
   free(expansion->values);
   free(expansion->words);
   *expansion = (struct shell_expansion){0};
+  return closed;
+}
+
+static const char *expansion_error(struct shell_expansion *expansion,
+    enum call_status *status, const char *diagnostic)
+{
+  if (!shell_expansion_close(expansion)) {
+    *status = CALL_OUTCOME_UNKNOWN;
+    return "Could not release the expansion's owned capabilities";
+  }
+  return diagnostic;
 }
 
 static enum call_status lookup_value(handle_t snapshot, const char *name,
@@ -103,8 +115,12 @@ static const char *expand_word(handle_t snapshot, const struct shell_word *word,
       }
       if (selected.kind == ENVIRONMENT_CAP) {
         if (capability || length || word->count != 1) {
-          handle_close(selected.handle);
-          error = "A CAP expansion must occupy the entire word";
+          if (handle_close(selected.handle)) {
+            *status = CALL_OUTCOME_UNKNOWN;
+            error = "Could not release a rejected CAP expansion";
+          } else {
+            error = "A CAP expansion must occupy the entire word";
+          }
           break;
         }
         capability = true;
@@ -117,10 +133,12 @@ static const char *expand_word(handle_t snapshot, const struct shell_word *word,
         }
         free(selected.text);
       } else {
-        if (selected.handle) {
-          handle_close(selected.handle);
+        if (selected.handle && handle_close(selected.handle)) {
+          *status = CALL_OUTCOME_UNKNOWN;
+          error = "Could not release an unsupported environment value";
+        } else {
+          error = "Unsupported environment value kind";
         }
-        error = "Unsupported environment value kind";
       }
     }
     if (error) {
@@ -214,8 +232,7 @@ const char *shell_syntax_expand(struct shell *shell,
   expansion->values = calloc(expansion->value_count, sizeof(*expansion->values));
   expansion->arguments = calloc(expansion->argument_count, sizeof(*expansion->arguments));
   if (!expansion->words || !expansion->values || !expansion->arguments) {
-    shell_expansion_close(expansion);
-    return "Out of memory";
+    return expansion_error(expansion, status, "Out of memory");
   }
   handle_t snapshot = HANDLE_INVALID;
   struct environment_info_reply info = {0};
@@ -223,8 +240,8 @@ const char *shell_syntax_expand(struct shell *shell,
     *status = environment_snapshot(shell->environment,
         ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &snapshot, &info);
     if (*status != CALL_OK) {
-      shell_expansion_close(expansion);
-      return "Could not snapshot the environment for expansion";
+      return expansion_error(expansion, status,
+          "Could not snapshot the environment for expansion");
     }
   }
   expansion->command.stage_count = syntax->stage_count;
@@ -273,12 +290,9 @@ const char *shell_syntax_expand(struct shell *shell,
       };
     }
   }
-  if (snapshot != HANDLE_INVALID && handle_close(snapshot) && !error) {
+  if (snapshot != HANDLE_INVALID && handle_close(snapshot)) {
     *status = CALL_OUTCOME_UNKNOWN;
     error = "Could not release the expansion snapshot";
   }
-  if (error) {
-    shell_expansion_close(expansion);
-  }
-  return error;
+  return error ? expansion_error(expansion, status, error) : NULL;
 }

@@ -71,11 +71,14 @@ struct shell_expansion {
  * prerequisites exist. On error, output is empty and the diagnostic is static. */
 const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax);
 void shell_syntax_close(struct shell_syntax *syntax);
-/* Lookup failure stores its CALL status in status; other diagnostics leave
- * CALL_OK. Expansion owns every argv string and selected CAP until close. */
+/* Environment calls report their CALL status; cleanup failure reports
+ * CALL_OUTCOME_UNKNOWN. Syntax/type diagnostics leave CALL_OK. Expansion owns
+ * every argv string and selected CAP until close. */
 const char *shell_syntax_expand(struct shell *shell,
     const struct shell_syntax_command *syntax, struct shell_expansion *expansion,
     enum call_status *status);
-void shell_expansion_close(struct shell_expansion *expansion);
+/* Release each owned reference once and always free all storage. False reports
+ * at least one failed CAP close; callers must stop input and must not retry. */
+bool shell_expansion_close(struct shell_expansion *expansion);
 
 #endif
