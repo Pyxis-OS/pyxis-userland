@@ -6,6 +6,8 @@ The plan-time path builder supplies the same layout without opening anything.
 Revision is a portable ASCII FAT component of at most 63 bytes (not config);
 attempt is exactly 32 lowercase hex digits. Collisions refuse, without retry.
 Every payload is nonempty and at most 1 GiB; copying/hashing uses bounded calls.
+Sequential writes grow each fresh empty file; there is no full-file resize
+whose single mutation plan would grow with the entire payload.
 
 The trusted caller supplies borrowed native root/control capabilities, retained
 OBSERVE admission identity/geometry, reviewed sources and SHA-256 digests. The

@@ -448,12 +448,9 @@ bool install_esp_payload_stage(const struct install_esp_payload_request *request
     const struct install_source *source = manifest ? &manifest_source : &request->sources[i];
     handle_t *file = manifest ? &result->manifest : &result->files[i];
     snprintf(report->artifact, sizeof(report->artifact), "%s", path);
-    install_progress_begin("Reserving owned boot payload", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin("Creating owned boot payload", INSTALL_PROGRESS_NONE, NULL);
     enum call_status status = directory_create(result->parent, name, DIRECTORY_KIND_FILE,
         FILE_RIGHT_READ | FILE_RIGHT_WRITE, file);
-    if (status == CALL_OK) {
-      status = file_resize(*file, digest->size);
-    }
     if (status != CALL_OK) {
       return fail(report, status);
     }
