@@ -959,6 +959,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       const struct environment_value *entry = &prepared->captured.values[i];
       if (entry->kind != ENVIRONMENT_CAP ||
           !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
+          !strcmp(entry->name, "script") ||
+          !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
+          !strcmp(entry->name, "staging") ||
           !strcmp(entry->name, "stdin") || !strcmp(entry->name, "stdin.status") ||
           !strcmp(entry->name, "stdout") || !strcmp(entry->name, "stderr")) {
         continue;
