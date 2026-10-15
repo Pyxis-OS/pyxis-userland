@@ -41,6 +41,15 @@ enum call_status file_read(handle_t file, uint64_t offset, void *bytes, size_t c
 enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
                              size_t size, size_t *written);
 
+/* Native FILE-to-FILE transfer: destination requires WRITE, source READ.
+ * Submit at most FILE_TRANSFER_MAX_BYTES and advance both offsets by the
+ * confirmed count. Short successful transfers, including EOF, are allowed.
+ * Unsupported backings refuse before effects. Failure clears the count;
+ * CALL_OUTCOME_UNKNOWN must not be replayed automatically. The full requested
+ * ranges are checked for overflow before limiting the submitted chunk. */
+enum call_status file_transfer(handle_t destination, uint64_t destination_offset,
+    handle_t source, uint64_t source_offset, size_t size, size_t *transferred);
+
 /* Requires WRITE. Growth exposes zeroes, shrinking discards the tail.
  * CALL_OUTCOME_UNKNOWN means the resize may have happened. RAM backing retains
  * its unchanged-on-failure guarantee; resizing to zero releases RAM storage. */

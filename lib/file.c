@@ -28,6 +28,11 @@ struct file_resize_message {
   struct file_resize_request body;
 };
 
+struct file_transfer_message {
+  struct message_header header;
+  struct file_transfer_request body;
+};
+
 _Static_assert(offsetof(struct file_write_message, bytes) ==
     sizeof(struct message_header) + sizeof(struct file_write_request),
     "file write bytes follow the request");
@@ -60,6 +65,10 @@ static struct syscall_result file_call(handle_t file, const void *message,
       return (struct syscall_result){CALL_BAD_REQUEST, 0};
     }
     return syscall_call(file, message, message_size, reply, capacity);
+  }
+  /* Source is a caller-local native handle, never exported transport data. */
+  if (header->operation == FILE_TRANSFER) {
+    return (struct syscall_result){CALL_BAD_OPERATION, 0};
   }
   if ((info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
     return (struct syscall_result){CALL_DENIED, 0};
@@ -235,6 +244,34 @@ enum call_status file_resize(handle_t file, uint64_t size)
     .body = {size},
   };
   return reply_status(file_call(file, &message, sizeof(message), NULL, 0, true), 0, true);
+}
+
+enum call_status file_transfer(handle_t destination, uint64_t destination_offset,
+    handle_t source, uint64_t source_offset, size_t size, size_t *transferred)
+{
+  if (!transferred) {
+    return CALL_BAD_REQUEST;
+  }
+  *transferred = 0;
+  if (size > UINT64_MAX - source_offset || size > UINT64_MAX - destination_offset) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t limit = size < FILE_TRANSFER_MAX_BYTES ? size : FILE_TRANSFER_MAX_BYTES;
+  struct file_transfer_message message = {
+    .header = {PROTOCOL_FILE, FILE_TRANSFER},
+    .body = {source, source_offset, destination_offset, limit},
+  };
+  struct file_transfer_reply reply;
+  enum call_status status = reply_status(file_call(destination, &message, sizeof(message),
+      &reply, sizeof(reply), true), sizeof(reply), true);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.transferred > limit) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *transferred = (size_t)reply.transferred;
+  return CALL_OK;
 }
 
 enum call_status file_sync(handle_t file)
