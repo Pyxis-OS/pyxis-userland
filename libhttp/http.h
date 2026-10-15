@@ -97,6 +97,7 @@ struct http_stream;
 enum http_method {
   HTTP_METHOD_GET,
   HTTP_METHOD_POST,
+  HTTP_METHOD_DELETE,
 };
 
 struct http_request_header {
@@ -107,7 +108,8 @@ struct http_request_header {
 /* Headers are bounded wire fields, not C strings. POST borrows a native FILE
  * with READ and its exact frozen size; read from offset zero without changing
  * any shared position. The caller owns freezing and keeps it valid/unchanged
- * through open. GET has no body. No provider authority is acquired here. */
+ * through open. GET and DELETE have no body. No provider authority is acquired
+ * here. */
 struct http_request {
   enum http_method method;
   const struct http_request_header *headers;
@@ -130,7 +132,7 @@ struct http_stream *http_request_open(const struct http_client *client, const ch
     const struct http_response_limits *limits, struct http_response *response);
 
 /* Local validation only: no native calls, body authority/size check or I/O.
- * POST body fields are ignored here; GET must have no body. */
+ * POST body fields are ignored here; GET and DELETE must have no body. */
 bool http_request_validate(const struct http_client *client, const char *uri,
     const struct http_request *request, struct http_response *response);
 

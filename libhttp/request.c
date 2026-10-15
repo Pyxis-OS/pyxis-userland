@@ -97,9 +97,15 @@ bool http_prepare_request(const struct http_request *request, const struct http_
     struct http_outgoing *outgoing, struct http_response *response, bool check_source)
 {
   *outgoing = (struct http_outgoing){0};
-  if (!request || (request->method != HTTP_METHOD_GET && request->method != HTTP_METHOD_POST) ||
-      (request->header_count && !request->headers)) {
+  if (!request || (request->header_count && !request->headers)) {
     return fail(response, HTTP_BAD_ARGUMENT);
+  }
+  const char *method;
+  switch (request->method) {
+  case HTTP_METHOD_GET: method = "GET"; break;
+  case HTTP_METHOD_POST: method = "POST"; break;
+  case HTTP_METHOD_DELETE: method = "DELETE"; break;
+  default: return fail(response, HTTP_BAD_ARGUMENT);
   }
   bool post = request->method == HTTP_METHOD_POST;
   if (!post && (request->body != HANDLE_INVALID || request->body_length)) {
@@ -112,7 +118,7 @@ bool http_prepare_request(const struct http_request *request, const struct http_
   char initial[HTTP_URI_MAX + 384];
   int written = snprintf(initial, sizeof(initial),
       "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nAccept-Encoding: identity\r\n",
-      post ? "POST" : "GET", uri->target, uri->authority);
+      method, uri->target, uri->authority);
   if (written < 0 || (size_t)written >= sizeof(initial)) {
     return fail(response, HTTP_LIMIT);
   }
