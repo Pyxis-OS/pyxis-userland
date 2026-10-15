@@ -115,6 +115,10 @@ struct shell {
    * or termination stops every foreground command's subtree. Background commands,
    * services and session successors are launched outside it. */
   struct execution_group_create_reply script_group;
+  /* Archive root that opens the trusted script interpreter: the resource passed
+   * down by a trusted shell, else this shell's own startup boot. Never taken from
+   * the mutable boot binding, which a script can rebind and export. */
+  handle_t interpreter_root;
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_config,
       keyboard, pointer, terminal_service,

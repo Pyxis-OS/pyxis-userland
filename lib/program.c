@@ -168,7 +168,7 @@ static enum call_status prepare_script(const struct launch_request *source,
     scratch->entries[source->entry_count + 1 + i] =
         (struct launch_environment_entry){
         .name = (uintptr_t)grant->name, .kind = ENVIRONMENT_CAP,
-        .flags = ENVIRONMENT_EXPORTED, .value = source->grant_count + 1 + i};
+        .flags = grant->flags, .value = source->grant_count + 1 + i};
   }
   scratch->arguments[0] = interpreter;
   memcpy(scratch->arguments + 1, (const void *)(uintptr_t)source->argv,

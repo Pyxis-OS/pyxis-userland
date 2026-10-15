@@ -83,7 +83,7 @@ struct prepared_stage {
   const char *conflict;
   struct launch_request request;
   /* Offered to the shell interpreter only; see program_script_extras. */
-  struct program_script_grant extras[2];
+  struct program_script_grant extras[3];
   size_t extra_count;
 };
 
@@ -618,17 +618,28 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
   /* A script run by the shell interpreter is a shell: it needs the pipe creation
-   * this one holds and recognizes delegated child launch by child_launcher. Only
-   * the library, seeing the interpreter it actually opens, appends these. */
+   * this one holds, recognizes delegated child launch by child_launcher, and
+   * carries the trusted interpreter root on to its own nested scripts. Only the
+   * library, seeing the interpreter it parsed, appends these. */
   prepared->extra_count = 0;
   if (mode == SHELL_FOREGROUND && !prepared->bundle && !stage->http_producer) {
     if (child_launcher != HANDLE_INVALID) {
       prepared->extras[prepared->extra_count++] = (struct program_script_grant){
-        "child_launcher", child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+        "child_launcher", child_launcher, LAUNCHER_RIGHT_LAUNCH, 0, ENVIRONMENT_EXPORTED};
     }
     if (shell->pipe != HANDLE_INVALID) {
       prepared->extras[prepared->extra_count++] = (struct program_script_grant){
-        "pipe", shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
+        "pipe", shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0, ENVIRONMENT_EXPORTED};
+    }
+    if (shell->interpreter_root != HANDLE_INVALID) {
+      uint64_t rights, transport;
+      enum call_status queried = handle_rights(shell->interpreter_root, &rights, &transport);
+      if (queried != CALL_OK) {
+        return queried;
+      }
+      /* Private: an exported directory would also be forwarded as a root. */
+      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+        "interpreter_root", shell->interpreter_root, rights, transport, 0};
     }
   }
   bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
@@ -2060,7 +2071,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   struct program_script_extras extras[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < stage_count; ++i) {
     extras[i] = (struct program_script_extras){
-      .interpreter = SHELL_INTERPRETER, .root = shell->boot, .path = SHELL_INTERPRETER_PATH,
+      .interpreter = SHELL_INTERPRETER, .root = shell->interpreter_root, .path = SHELL_INTERPRETER_PATH,
       .grants = prepared[i].extras,
       .count = prepared[i].extra_count,
     };

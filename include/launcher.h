@@ -80,8 +80,8 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
  * exactly INTERPRETER (compared with the string parsed once from the prefix
  * read), the interpreter is opened as PATH relative to the held directory ROOT,
  * not through the environment's scheme bindings, which the caller's own scripts
- * can rebind; each grant is then appended after the script grant with an
- * exported CAP entry of the given name and the stated masks. A native image, or
+ * can rebind; each grant is then appended after the script grant with a CAP
+ * entry of the given name, flags and masks. A native image, or
  * a script naming any other interpreter, receives none of them and resolves
  * normally. A request that already has an entry of one of these names is
  * rejected. Everything is borrowed until return. */
@@ -89,6 +89,7 @@ struct program_script_grant {
   const char *name;
   handle_t source;
   uint64_t rights, transport;
+  uint64_t flags; /* Entry flags: ENVIRONMENT_EXPORTED, or 0 for a private entry. */
 };
 
 struct program_script_extras {
