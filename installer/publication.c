@@ -462,6 +462,7 @@ bool install_publication_publish(const struct install_publication_request *reque
   }
   struct install_esp_payload_request payload_request = {
     .root = request->esp_root, .control = request->view.control,
+    .workspace = request->workspace,
     .expected = request->expected_target,
     .revision = request->binding.kernel_revision, .attempt = request->binding.attempt,
   };

@@ -30,7 +30,11 @@ bytes with the shared FAT reader before staging. It releases that claim before
 native FAT32 write admission, repeats the snapshots, and streams fresh kernel,
 filtered rescue archive and revision files through the shared
 [ESP payload helper](ESP-PAYLOADS.md) into `EFI/pyxis/REVISION/ATTEMPT/`. Bounded
-sequential writes grow each fresh file; no full-file resize is needed. The
+FILE-to-FILE transfers of at most 1 MiB grow each fresh file; memory-backed
+archive bytes first enter a private unlinked RAM FILE through ordinary writes.
+Full verification transfers FAT bytes into RAM before hashing through small
+READ calls, both after staging and at the final publication boundary.
+No full-file resize is needed. The
 immutable ownership record certifies their
 exact names, sizes and hashes. Files are synchronized and reread before the
 exclusive configuration interval runs one full-volume CHECK immediately after

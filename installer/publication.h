@@ -15,6 +15,7 @@
  * the complete config/schema/catalog and supplies the reviewed Limine output. */
 struct install_publication_request {
   handle_t esp_root;
+  handle_t workspace; /* Borrowed private native RAM parent, stage only. */
   struct mount_state_reply expected_target;
   struct config_storage_view view;
   struct config_target_facts facts;

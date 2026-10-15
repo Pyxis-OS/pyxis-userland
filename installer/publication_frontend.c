@@ -212,6 +212,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
 {
   handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
   handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
+  handle_t workspace = bootstrap_capability("config_snapshot_parent");
   struct install_disk disk = {.handle = HANDLE_INVALID};
   struct mount_fat32_reply mount = {.root = HANDLE_INVALID, .control = HANDLE_INVALID};
   struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0}, archive[CONFIG_LUA_COUNT] = {0};
@@ -221,6 +222,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   struct install_programs programs = {0};
   struct install_source filtered = {.handle = HANDLE_INVALID};
   struct install_publication_request request = {.esp_root = HANDLE_INVALID,
+    .workspace = workspace,
     .view = {.config_parent = HANDLE_INVALID, .limine_parent = HANDLE_INVALID, .control = HANDLE_INVALID, .clock = clock}};
   struct config_target_facts planned_facts = {0};
   struct config_file_digest legacy_digests[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
@@ -432,7 +434,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     }
   }
   enum call_status handoff_status;
-  if (!config_handoff_create(bootstrap_capability("config_snapshot_parent"), &plan.selection,
+  if (!config_handoff_create(workspace, &plan.selection,
         &handoff, &handoff_status)) {
     fprintf(stderr, "Private configuration FILE handoff refused (status %u); nothing written.\n", handoff_status);
     goto done;
