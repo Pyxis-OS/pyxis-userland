@@ -126,6 +126,9 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
           break;
         }
         if (!word->assignment_name && capture->command != COMMAND_OK) {
+          if (capture->outcome.kind == TERMINAL_COMPLETION_TERMINATED) {
+            *status = CALL_ABANDONED;
+          }
           error = "Inline command substitution failed";
           break;
         }
@@ -139,11 +142,14 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
         }
       }
       if (selected.kind == ENVIRONMENT_CAP) {
-        *value = selected;
         if (capability || length || word->count != 1) {
+          if (handle_close(selected.handle)) {
+            *status = CALL_OUTCOME_UNKNOWN;
+          }
           error = "A CAP expansion must occupy the entire word";
           break;
         }
+        *value = selected;
         capability = true;
       } else if (selected.kind == ENVIRONMENT_TEXT) {
         if (capability) {

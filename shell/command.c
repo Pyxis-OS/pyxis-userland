@@ -350,7 +350,7 @@ static enum command_result power_command(struct shell *shell, char **arguments, 
   return shell_error(shell, "%s: failed (status %u); the system stays up\n", name, status);
 }
 
-static bool is_builtin(char **arguments, size_t count)
+bool shell_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
   return shell_value_builtin(name) || !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
@@ -498,8 +498,10 @@ static enum command_result expanded_command(struct shell *shell,
   const struct shell_command_line *command = &expansion->command;
   if (assignment) {
     enum command_result result = shell_assign(shell, &expansion->words[0]);
-    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN,
-        result == COMMAND_FAILED};
+    *outcome = expansion->words[0].capture &&
+        expansion->words[0].capture->outcome.kind == TERMINAL_COMPLETION_TERMINATED ?
+        expansion->words[0].capture->outcome :
+        (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED};
     return result;
   }
   if (!command->stage_count) {
@@ -511,13 +513,13 @@ static enum command_result expanded_command(struct shell *shell,
     if (!stage->count || !stage->arguments[0][0]) {
       return shell_error(shell, "shell: Pipeline stage requires a command name\n");
     }
-    if (command->stage_count > 1 && is_builtin(stage->arguments, stage->count)) {
+    if (command->stage_count > 1 && shell_builtin(stage->arguments, stage->count)) {
       return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
           stage->arguments[0]);
     }
   }
   const struct shell_stage *stage = &command->stages[0];
-  bool builtin = is_builtin(stage->arguments, stage->count);
+  bool builtin = shell_builtin(stage->arguments, stage->count);
   if ((stage->redirection_count || command->capture) && (builtin || command->background)) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }
@@ -555,6 +557,8 @@ enum command_result shell_command(struct shell *shell, char *line,
       result = shell_error(shell, "shell: %s (status %u)\n", error, status);
       if (status == CALL_OUTCOME_UNKNOWN) {
         result = COMMAND_FATAL;
+      } else if (status == CALL_ABANDONED) {
+        *outcome = (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0};
       }
     } else {
       result = expanded_command(shell, &expansion, syntax.commands[i].assignment, outcome);

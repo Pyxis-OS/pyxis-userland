@@ -29,16 +29,47 @@ static enum call_status set_entry(struct environment_set_entry *entry,
   return CALL_OK;
 }
 
+static enum call_status append_value(struct environment_set_entry *entries, size_t *count,
+    const struct shell_expanded_word *word, const char *name, bool exported)
+{
+  enum call_status status = set_entry(&entries[(*count)++], name, word->value, exported);
+  struct shell_capture_result *capture = word->capture;
+  if (status != CALL_OK || !capture) {
+    return status;
+  }
+  const struct environment_value *companions[] = {&capture->observation, &capture->control};
+  for (size_t i = 0; i < sizeof(companions) / sizeof(*companions); ++i) {
+    const struct environment_value *value = companions[i];
+    if (!value->handle) {
+      continue;
+    }
+    struct environment_set_entry *entry = &entries[(*count)++];
+    status = set_entry(entry, value->name, value, false);
+    if (status != CALL_OK) {
+      return status;
+    }
+    entry->set_flags = ENVIRONMENT_SET_REQUIRE_ABSENT;
+  }
+  return CALL_OK;
+}
+
 enum command_result shell_assign(struct shell *shell,
     const struct shell_expanded_word *word)
 {
-  struct environment_set_entry entry;
-  enum call_status status = set_entry(&entry, word->assignment_name, word->value, false);
+  struct environment_set_entry entries[3];
+  size_t count = 0;
+  enum call_status status = append_value(entries, &count, word, word->assignment_name, false);
   if (status == CALL_OK) {
-    status = environment_set_batch(shell->environment, &entry, 1);
+    status = environment_set_batch(shell->environment, entries, count);
   }
-  return status == CALL_OK ? COMMAND_OK :
-      shell_directory_error(shell, "shell: assignment", word->assignment_name, status);
+  if (status != CALL_OK) {
+    return shell_directory_error(shell, "shell: assignment", word->assignment_name, status);
+  }
+  if (word->capture) {
+    word->capture->published = true;
+    return word->capture->command;
+  }
+  return COMMAND_OK;
 }
 
 /* The snapshot fixes both TEXT sizing and the CAP's publication before SET.
@@ -78,7 +109,7 @@ static enum command_result export_values(struct shell *shell,
   if (!count) {
     return shell_error(shell, "usage: export NAME[=VALUE]...\n");
   }
-  struct environment_set_entry *entries = calloc(count, sizeof(*entries));
+  struct environment_set_entry *entries = calloc(count * 3, sizeof(*entries));
   struct environment_value *owned = calloc(count, sizeof(*owned));
   handle_t snapshot = HANDLE_INVALID;
   enum call_status status = entries && owned ? CALL_OK : CALL_NO_MEMORY;
@@ -103,11 +134,25 @@ static enum command_result export_values(struct shell *shell,
       }
     }
     if (status == CALL_OK) {
-      status = set_entry(&entries[used++], name, value, true);
+      struct shell_expanded_word selected = *word;
+      selected.value = value;
+      status = append_value(entries, &used, &selected, name, true);
     }
   }
   if (status == CALL_OK && used) {
     status = environment_set_batch(shell->environment, entries, used);
+  }
+  enum command_result result = COMMAND_OK;
+  if (status == CALL_OK) {
+    for (size_t i = 0; i < count; ++i) {
+      struct shell_capture_result *capture = expansion->words[i + 1].capture;
+      if (capture) {
+        capture->published = true;
+        if (capture->command != COMMAND_OK) {
+          result = COMMAND_FAILED;
+        }
+      }
+    }
   }
   bool closed = true;
   if (snapshot != HANDLE_INVALID && handle_close(snapshot)) {
@@ -125,7 +170,7 @@ static enum command_result export_values(struct shell *shell,
     shell_directory_error(shell, "export: cleanup", name, CALL_OUTCOME_UNKNOWN);
     return COMMAND_FATAL;
   }
-  return status == CALL_OK ? COMMAND_OK :
+  return status == CALL_OK ? result :
       shell_directory_error(shell, "export", name, status);
 }
 

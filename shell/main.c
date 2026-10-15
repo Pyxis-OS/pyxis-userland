@@ -127,6 +127,7 @@ int main(int argc, char **argv)
     .tcp = bootstrap_capability("tcp"),
     .pipe = bootstrap_capability("pipe"),
     .service = bootstrap_capability("service"),
+    .retention_account = bootstrap_capability("retention_account"),
     .environment = startup_environment_handle(),
     .random = bootstrap_capability("random"),
     .net_config = bootstrap_capability("net_config"),
