@@ -587,7 +587,7 @@ deadline or implicit inheritance is added. See the header for ownership and
 the uncertain-publication rule.
 
 [pyxis/capture.h](libc/include/pyxis/capture.h) constructs FILE-compatible output
-producers with process-local collectors using explicit pipe CREATE authority.
+producers with process-local collectors using explicit session account authority.
 It retains an absolute deadline, interim byte-mode polling/read limits and owned
 result collection; handed-off values bypass byte limits.
 [pyxis/stdio.h](libc/include/pyxis/stdio.h) transfers owned typed results or
@@ -598,6 +598,15 @@ It retains storage through process retirement and, optionally, a fresh root or
 subgroup selected by the supplied LAUNCH-authorized launcher. The library keeps sole CONTROL;
 the direct child receives no descendant launcher.
 Unknown direct admission stays quarantined until caller/session teardown.
+
+[retention.h](include/retention.h) provides account creation, status and immutable
+failed FILE construction. The root `session.pxe` creates its account from
+`retention.value_limit_bytes` and `retention.session_limit_bytes` in
+`config/session.lua`; omitted settings default to 64 MiB/value and 512 MiB/session.
+Accounting follows logical FILE length, including sparse holes. Trusted shell,
+mux and Remote successors share the account; ordinary jobs inherit neither
+account nor factory authority. Collected failed values retain their outcome and
+remain available for owned take even when data operations fail.
 
 [pyxis/pipeline.h](libc/include/pyxis/pipeline.h) publishes an explicit native
 stage array atomically and pumps owned finite input, final stdout and combined

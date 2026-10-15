@@ -45,7 +45,7 @@ enum call_status libc_job_launch_captured(handle_t launcher,
     const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job);
 
 /* Capture inventory: private_root is a legacy pipeline directory or a native
- * retention account. The latter excludes child retention grants. This cannot
+ * retention account. Capture profiles exclude child retention grants. This cannot
  * audit mutable environment bindings or effects brokered by trusted providers. */
 enum call_status libc_job_validate_grants(const struct launch_grant *grants, size_t count);
 enum call_status libc_job_validate_capture_grants(const struct launch_grant *grants,

@@ -206,6 +206,8 @@ static bool capture_protocol_denied(uint64_t protocol)
   case PROTOCOL_MOUNT:
   case PROTOCOL_DISKS:
   case PROTOCOL_DISK:
+  case PROTOCOL_RETENTION_FACTORY:
+  case PROTOCOL_RETENTION_ACCOUNT:
     return true;
   default:
     return false;
@@ -245,9 +247,7 @@ enum call_status libc_job_validate_capture_grants(const struct launch_grant *gra
     if (status != CALL_OK) {
       return status;
     }
-    if (capture_protocol_denied(info.protocol) ||
-        (root_info.protocol == PROTOCOL_RETENTION_ACCOUNT &&
-         (info.protocol == PROTOCOL_RETENTION_FACTORY || info.protocol == PROTOCOL_RETENTION_ACCOUNT))) {
+    if (capture_protocol_denied(info.protocol)) {
       return CALL_DENIED;
     }
     if (root_info.protocol == PROTOCOL_DIRECTORY && info.protocol == PROTOCOL_DIRECTORY) {
