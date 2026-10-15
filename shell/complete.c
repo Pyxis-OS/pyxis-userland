@@ -8,8 +8,9 @@
 #define COMPLETION_LIMIT 4096
 
 static const char *const builtins[] = {
-  "affinity", "cd", "describe", "env", "exit", "export", "mount", "request", "revoke", "revocable", "poweroff", "reboot", "release", "service",
-  "session", "sync", "title", "unset",
+  "affinity", "cd", "describe", "env", "exit", "export", "mount", "poweroff",
+  "reboot", "release", "request", "revoke", "revocable", "service", "session",
+  "sync", "title", "unset",
 };
 
 struct names {

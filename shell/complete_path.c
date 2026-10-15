@@ -172,7 +172,8 @@ static bool offerable(const char *name, char quote)
 static bool special_unquoted(char byte)
 {
   return byte == ' ' || byte == '\'' || byte == '"' || byte == '\\' || byte == '|' ||
-         byte == '<' || byte == '>' || byte == '&';
+         byte == '<' || byte == '>' || byte == '&' || byte == ';' || byte == '$' ||
+         byte == '(' || byte == ')';
 }
 
 /* The value as typed in the word's quote state, starting with the open quote. */

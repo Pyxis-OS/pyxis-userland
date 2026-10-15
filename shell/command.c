@@ -567,6 +567,7 @@ enum command_result shell_command(struct shell *shell, char *line,
       }
     }
     if (result == COMMAND_FATAL || result == COMMAND_EXIT ||
+        outcome->kind == TERMINAL_COMPLETION_TERMINATED ||
         (shell->script_name && result == COMMAND_FAILED)) {
       break;
     }
