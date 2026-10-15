@@ -1090,6 +1090,40 @@ static void snapshot_read_reply(struct loop *loop, struct transaction *transacti
   }
 }
 
+static void write_completed(struct loop *loop, struct transaction *transaction,
+    enum staging_operation kind, enum call_status status, uint64_t written)
+{
+  uint64_t requested = kind == SNAPSHOT_WRITE ? transaction->queued : transaction->mutation_size;
+  if (status == CALL_OK) {
+    if (written > requested || (requested && !written)) {
+      status = CALL_OUTCOME_UNKNOWN;
+    } else if (kind == SNAPSHOT_WRITE) {
+      transaction->snapshot_size += written;
+      transaction->queued -= written;
+      if (transaction->queued) {
+        memmove(transaction->queue, transaction->queue + written, transaction->queued);
+      }
+    } else if (written && transaction->mutation_offset + written > transaction->body_length) {
+      transaction->body_length = transaction->mutation_offset + written;
+    }
+  }
+  if (kind == STAGING_WRITE) {
+    if (status != CALL_OK) {
+      transaction->mutation_failure = status;
+    } else {
+      storage_release(loop, &transaction->body_charge, transaction->body_length);
+    }
+    struct file_write_reply response = {written};
+    if (transaction->work->mutation.receipt &&
+        reply(loop, &transaction->work->mutation, status, status == CALL_OK ? &response : NULL,
+            status == CALL_OK ? sizeof(response) : 0, NULL, 0) != CALL_OK) {
+      transaction->mutation_failure = CALL_OUTCOME_UNKNOWN;
+    }
+  } else if (status != CALL_OK) {
+    abort_transaction(loop, transaction, status);
+  }
+}
+
 static void staging_completion(struct loop *loop, struct transaction *transaction,
     struct endpoint_packet *packet)
 {
@@ -1114,38 +1148,13 @@ static void staging_completion(struct loop *loop, struct transaction *transactio
       transaction->cleanup = status;
     }
   } else if (kind == STAGING_WRITE || kind == SNAPSHOT_WRITE) {
-    struct file_write_reply response;
-    uint64_t requested = kind == SNAPSHOT_WRITE ? transaction->queued : transaction->mutation_size;
+    struct file_write_reply response = {0};
     if (status == CALL_OK && packet->size == sizeof(response) && !packet->grant_count) {
       memcpy(&response, packet->data, sizeof(response));
-      if (response.written > requested || (requested && !response.written)) {
-        status = CALL_OUTCOME_UNKNOWN;
-      } else if (kind == SNAPSHOT_WRITE) {
-        transaction->snapshot_size += response.written;
-        transaction->queued -= response.written;
-        if (transaction->queued) {
-          memmove(transaction->queue, transaction->queue + response.written, transaction->queued);
-        }
-      } else if (response.written && transaction->mutation_offset + response.written > transaction->body_length) {
-        transaction->body_length = transaction->mutation_offset + response.written;
-      }
     } else if (status == CALL_OK) {
       status = CALL_OUTCOME_UNKNOWN;
     }
-    if (kind == STAGING_WRITE) {
-      if (status != CALL_OK) {
-        transaction->mutation_failure = status;
-      } else {
-        storage_release(loop, &transaction->body_charge, transaction->body_length);
-      }
-      if (transaction->work->mutation.receipt &&
-          reply(loop, &transaction->work->mutation, status, status == CALL_OK ? packet->data : NULL,
-              status == CALL_OK ? packet->size : 0, NULL, 0) != CALL_OK) {
-        transaction->mutation_failure = CALL_OUTCOME_UNKNOWN;
-      }
-    } else if (status != CALL_OK) {
-      abort_transaction(loop, transaction, status);
-    }
+    write_completed(loop, transaction, kind, status, response.written);
   } else if (kind == STAGING_RESIZE) {
     if (status == CALL_OK && !packet->size && !packet->grant_count) {
       transaction->body_length = transaction->mutation_size;
@@ -1525,6 +1534,17 @@ static bool progress(struct loop *loop)
   }
   if (transaction->mutation_queued) {
     struct endpoint_packet *packet = &transaction->work->mutation;
+    if (loop->ram_backing && transaction->staging_operation == STAGING_WRITE) {
+      /* Only this worker holds the native backing; STAGING ends before the
+       * engine can read it. RAM allocation/copy never waits on a backend. */
+      size_t written = 0;
+      status = file_write(transaction->backing, transaction->mutation_offset,
+          packet->data + sizeof(struct file_write_request), transaction->mutation_size, &written);
+      transaction->mutation_queued = false;
+      transaction->staging_operation = STAGING_NONE;
+      write_completed(loop, transaction, STAGING_WRITE, status, written);
+      return true;
+    }
     status = submit(loop, transaction, transaction->backing, PROTOCOL_FILE, packet->operation,
         packet->data, packet->size, transaction->staging_operation, false);
     if (status == CALL_BUSY) {
@@ -1579,6 +1599,14 @@ static bool progress(struct loop *loop)
     return false;
   }
   if (transaction->queued) {
+    if (loop->ram_backing) {
+      /* The snapshot is private and unpublished until all writes finish. */
+      size_t written = 0;
+      status = file_write(transaction->snapshot, transaction->snapshot_size,
+          transaction->queue, transaction->queued, &written);
+      write_completed(loop, transaction, SNAPSHOT_WRITE, status, written);
+      return true;
+    }
     unsigned char bytes[sizeof(struct file_write_request) + FILE_WRITE_MAX_BYTES];
     struct file_write_request request = {.offset = transaction->snapshot_size,
       .size = transaction->queued};
