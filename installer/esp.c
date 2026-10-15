@@ -222,7 +222,10 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
     const char *configuration, size_t configuration_bytes,
     const char *revision, size_t revision_bytes, uint32_t serial)
 {
-  if (!disk || !layout || !efi || !kernel || !archive || !configuration ||
+  /* Both absent selects the classic bootstrap tree. Payload staging then owns
+   * kernel/archive publication; neither pathname nor FAT chain is fabricated. */
+  bool bootstrap = !kernel && !archive;
+  if (!disk || !layout || !efi || (!bootstrap && (!kernel || !archive)) || !configuration ||
       !revision || !revision_bytes ||
       disk->info.block_size < 512 || disk->info.block_size > ESP_CLUSTER_BYTES ||
       (disk->info.block_size & (disk->info.block_size - 1)) ||
@@ -230,8 +233,8 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
       layout->esp_start % disk->info.block_size || layout->esp_start > disk->bytes ||
       layout->esp_bytes > disk->bytes - layout->esp_start ||
       layout->esp_start / disk->info.block_size > UINT32_MAX ||
-      efi->bytes > UINT32_MAX || kernel->bytes > UINT32_MAX ||
-      archive->bytes > UINT32_MAX || configuration_bytes > UINT32_MAX ||
+      efi->bytes > UINT32_MAX || (kernel && kernel->bytes > UINT32_MAX) ||
+      (archive && archive->bytes > UINT32_MAX) || configuration_bytes > UINT32_MAX ||
       revision_bytes > UINT32_MAX) {
     install_progress_pause();
     fputs("installer: invalid ESP extent, geometry or source size\n", stderr);
@@ -286,14 +289,16 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
     .name = "BOOTX64.EFI", .alias = "BOOTX64 EFI", .parent = ESP_EFI_BOOT,
     .source = efi, .size = efi->bytes,
   };
-  esp->nodes[ESP_KERNEL_FILE] = (struct esp_node){
-    .name = "caelum.elf", .alias = "CAELUM  ELF", .parent = ESP_BOOT,
-    .source = kernel, .size = kernel->bytes,
-  };
-  esp->nodes[ESP_ARCHIVE_FILE] = (struct esp_node){
-    .name = "initrd.cpio", .alias = "INITRD~1CPI", .parent = ESP_BOOT,
-    .source = archive, .size = archive->bytes,
-  };
+  if (!bootstrap) {
+    esp->nodes[ESP_KERNEL_FILE] = (struct esp_node){
+      .name = "caelum.elf", .alias = "CAELUM  ELF", .parent = ESP_BOOT,
+      .source = kernel, .size = kernel->bytes,
+    };
+    esp->nodes[ESP_ARCHIVE_FILE] = (struct esp_node){
+      .name = "initrd.cpio", .alias = "INITRD~1CPI", .parent = ESP_BOOT,
+      .source = archive, .size = archive->bytes,
+    };
+  }
   esp->nodes[ESP_CONFIG_FILE] = (struct esp_node){
     .name = "limine.conf", .alias = "LIMINE~1CON", .parent = ESP_LIMINE,
     .contents = configuration, .size = configuration_bytes,
@@ -305,6 +310,9 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
   esp->next_cluster = 2;
   for (unsigned i = 0; i < ESP_NODE_COUNT; ++i) {
     struct esp_node *node = &esp->nodes[i];
+    if (!node->name) {
+      continue;
+    }
     uint64_t clusters = node->directory ? 1 :
         ((uint64_t)node->size + ESP_CLUSTER_BYTES - 1) / ESP_CLUSTER_BYTES;
     if (clusters > esp->cluster_count - (esp->next_cluster - 2)) {
@@ -348,7 +356,7 @@ static void make_directory(const struct install_esp *esp, unsigned index, uint8_
   }
   for (unsigned i = 1; i < ESP_NODE_COUNT; ++i) {
     const struct esp_node *node = &esp->nodes[i];
-    if (node->parent != index) {
+    if (!node->name || node->parent != index) {
       continue;
     }
     set_long(bytes + offset, node);
@@ -419,6 +427,9 @@ bool install_esp_write(const struct install_esp *esp)
   }
   for (unsigned i = 0; i < ESP_NODE_COUNT; ++i) {
     const struct esp_node *node = &esp->nodes[i];
+    if (!node->name) {
+      continue;
+    }
     if (node->directory) {
       make_directory(esp, i, bytes);
       uint64_t offset = esp->data_offset + (uint64_t)(node->first - 2) * ESP_CLUSTER_BYTES;
@@ -572,7 +583,7 @@ static bool verify_directory(struct esp_reader *reader, unsigned index)
       bool matched = false;
       for (unsigned i = 1; i < ESP_NODE_COUNT; ++i) {
         const struct esp_node *node = &reader->esp->nodes[i];
-        if (node->parent != index || !same_name(name, node->name)) {
+        if (!node->name || node->parent != index || !same_name(name, node->name)) {
           continue;
         }
         if (found[i] || memcmp(entry, node->alias, 11) || size != node->size ||
@@ -599,7 +610,7 @@ static bool verify_directory(struct esp_reader *reader, unsigned index)
     return false;
   }
   for (unsigned i = 1; i < ESP_NODE_COUNT; ++i) {
-    if (reader->esp->nodes[i].parent == index && !found[i]) {
+    if (reader->esp->nodes[i].name && reader->esp->nodes[i].parent == index && !found[i]) {
       return false;
     }
   }
@@ -720,9 +731,18 @@ bool install_esp_verify(const struct install_esp *esp)
   if (success) {
     install_progress_begin_major("Reading back EFI boot paths and file bytes", INSTALL_PROGRESS_RAW_READ,
         "files checked");
-    install_progress_items_total(ESP_NODE_COUNT - ESP_EFI_FILE);
+    uint64_t files = 0;
+    for (unsigned i = 0; i < ESP_NODE_COUNT; ++i) {
+      if (esp->nodes[i].name && !esp->nodes[i].directory) {
+        ++files;
+      }
+    }
+    install_progress_items_total(files);
   }
   for (unsigned i = 0; success && i < ESP_NODE_COUNT; ++i) {
+    if (!esp->nodes[i].name) {
+      continue;
+    }
     success = esp->nodes[i].directory ? verify_directory(&reader, i) : verify_file(&reader, i);
     if (success && !esp->nodes[i].directory) {
       install_progress_advance(0, 1);
