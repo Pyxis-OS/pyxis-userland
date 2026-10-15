@@ -1,11 +1,13 @@
 #include "capture.h"
 #include "syntax.h"
 #include "launch_capture.h"
+#include <clock.h>
 #include <forwarder.h>
 #include <handle.h>
 #include <output.h>
 #include <process.h>
 #include <retention.h>
+#include <wait.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -204,8 +206,23 @@ static enum call_status take_value(struct shell *shell, handle_t collector,
 {
   struct output_take_reply taken = {0};
   enum call_status status = output_seal(collector);
-  if (status == CALL_OK) {
+  while (status == CALL_OK) {
     status = output_take(collector, &taken);
+    if (status != CALL_WOULD_BLOCK) {
+      break;
+    }
+    uint64_t now;
+    status = clock_now(shell->clock, &now);
+    if (status != CALL_OK) {
+      break;
+    }
+    struct wait_interest interest = {.handle = collector, .events = WAIT_COMPLETE};
+    uint64_t events = 0;
+    uint64_t until = now > UINT64_MAX - WAIT_MAX_WAIT_NS ? UINT64_MAX : now + WAIT_MAX_WAIT_NS;
+    status = wait_many(&interest, 1, until, &events);
+    if (status == CALL_TIMED_OUT) {
+      status = CALL_OK;
+    }
   }
   if (status != CALL_OK) {
     if (status == CALL_OUTCOME_UNKNOWN) {
