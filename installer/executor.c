@@ -15,11 +15,9 @@ static bool close_handle(handle_t *handle)
   if (*handle == HANDLE_INVALID) {
     return true;
   }
-  if (handle_close(*handle) != 0) {
-    return false;
-  }
+  bool valid = handle_close(*handle) == 0;
   *handle = HANDLE_INVALID;
-  return true;
+  return valid;
 }
 
 static bool release_raw(struct install_disk *disk, bool *claimed)
@@ -41,7 +39,7 @@ static bool finish_disk(struct install_disk *disk, bool *claimed)
 {
   bool ok = release_raw(disk, claimed);
   if (!close_handle(&disk->handle)) {
-    fputs("installer: disk handle close failed; handle remains owned\n", stderr);
+    fputs("installer: disk handle close found invalid bookkeeping\n", stderr);
     ok = false;
   }
   return ok;

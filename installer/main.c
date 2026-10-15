@@ -628,6 +628,20 @@ int main(int argc, char **argv)
     }
   }
   bool prepared = install_plan_prepare(&plan, &selected->info);
+  if (!replay && updating && !coexist && plan.record.esp_rebuild) {
+    for (size_t i = 0; i < plan.target.review.esp_count; ++i) {
+      const struct install_review_esp *esp = &plan.target.review.esps[i];
+      uint64_t clean = MOUNT_STATE_CLEAN_SHUTDOWN | MOUNT_STATE_NO_HARD_ERROR;
+      if (esp->selection.partition == plan.record.layout.esp_partition &&
+          esp->available && esp->identity_matches && esp->retired &&
+          (esp->observed.flags & clean) == clean) {
+        say("Native ESP validation passed; keeping the existing filesystem.");
+        plan.record.esp_rebuild = false;
+        prepared = install_plan_prepare(&plan, &selected->info);
+        break;
+      }
+    }
+  }
   if (!prepared && plan.prior.needs_legacy && !replay && !coexist) {
     if (!show_selected_target(selected)) {
       goto done;

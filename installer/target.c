@@ -112,6 +112,31 @@ static bool selected_esp_available(const struct install_target *target)
   return false;
 }
 
+static bool selected_esp_clean(const struct install_target *target)
+{
+  for (size_t i = 0; i < target->review.esp_count; ++i) {
+    const struct install_review_esp *esp = &target->review.esps[i];
+    if (!memcmp(&esp->selection, &target->esp, sizeof(target->esp))) {
+      uint64_t flags = MOUNT_STATE_CLEAN_SHUTDOWN | MOUNT_STATE_NO_HARD_ERROR;
+      return (esp->observed.flags & flags) == flags;
+    }
+  }
+  return false;
+}
+
+static bool selected_esp_recovery_failure(const struct install_target *target)
+{
+  for (size_t i = 0; i < target->review.esp_count; ++i) {
+    const struct install_review_esp *esp = &target->review.esps[i];
+    if (!memcmp(&esp->selection, &target->esp, sizeof(target->esp))) {
+      /* BUSY, capacity and authority errors never authorize initialization.
+       * The separate raw recognizer must also prove classic recovery below. */
+      return esp->admission_status == CALL_IO || esp->admission_status == CALL_UNAVAILABLE;
+    }
+  }
+  return false;
+}
+
 static bool fresh_coexist(struct install_target *target)
 {
   struct install_coexist *facts = calloc(1, sizeof(*facts));
@@ -138,7 +163,7 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
   struct install_update update = {0};
   if (record->coexist) {
     target->reason = "coexistence selections differ from healthy GPT or the selected ESP is unavailable";
-    if (!selected_gpt(target) || !selected_esp_available(target)) {
+    if (!selected_gpt(target) || !selected_esp_available(target) || !selected_esp_clean(target)) {
       return false;
     }
     if (!record->updating) {
@@ -164,8 +189,10 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
     enum install_esp_state state = install_esp_inspect(&target->disk, &update.layout,
         update.revision, &reason);
     target->reason = reason ? reason : "classic ESP recovery choice or previous revision changed";
-    if (state == INSTALL_ESP_REFUSED || (state == INSTALL_ESP_REBUILD) != record->esp_rebuild ||
-        (!record->esp_rebuild && !selected_esp_available(target))) {
+    bool native = selected_esp_available(target);
+    if (state == INSTALL_ESP_REFUSED || (native && !selected_esp_clean(target)) ||
+        (record->esp_rebuild ? native || state != INSTALL_ESP_REBUILD ||
+            !selected_esp_recovery_failure(target) : !native)) {
       return false;
     }
   } else {
