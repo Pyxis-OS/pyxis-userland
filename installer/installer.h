@@ -172,12 +172,13 @@ struct install_manifest;
 /* Outside any raw claim on the pool: creates the bin volume if missing, writes
  * complete program trees into bin/REVISION, replacing an earlier partial copy,
  * syncs the pool and verifies names, kinds, structure, sizes and bytes. */
-bool install_programs_write(const struct install_disk *disk, handle_t boot,
+bool install_programs_write(const struct install_disk *disk, uint64_t pool_partition, handle_t boot,
     const struct install_programs *programs, const char *revision,
     const struct install_manifest *manifest, const char *manifest_text, size_t manifest_bytes);
 /* Recursively removes revisions except KEEP and PREVIOUS (which may be NULL).
  * The caller skips this best-effort stage when the previous revision is unknown. */
-bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
+bool install_programs_cleanup(const struct install_disk *disk, uint64_t pool_partition,
+    const char *keep,
     const char *previous);
 
 #endif

@@ -662,16 +662,17 @@ static bool walk_programs(handle_t boot, handle_t directory,
   return ok;
 }
 
-static enum call_status open_bin(const struct install_disk *disk, handle_t *root)
+static enum call_status open_bin(const struct install_disk *disk, uint64_t pool_partition,
+    handle_t *root)
 {
-  enum call_status status = disk_create_volume(disk->handle, INSTALL_POOL_PARTITION,
+  enum call_status status = disk_create_volume(disk->handle, pool_partition,
       INSTALL_BIN_VOLUME);
   if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
     install_progress_pause();
     fprintf(stderr, "installer: cannot create the bin volume (status %u)\n", status);
     return status;
   }
-  status = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION, INSTALL_BIN_VOLUME,
+  status = disk_open_volume(disk->handle, pool_partition, INSTALL_BIN_VOLUME,
       BIN_RIGHTS, root);
   if (status != CALL_OK) {
     install_progress_pause();
@@ -680,14 +681,14 @@ static enum call_status open_bin(const struct install_disk *disk, handle_t *root
   return status;
 }
 
-bool install_programs_write(const struct install_disk *disk, handle_t boot,
+bool install_programs_write(const struct install_disk *disk, uint64_t pool_partition, handle_t boot,
     const struct install_programs *programs, const char *revision,
     const struct install_manifest *manifest, const char *manifest_text, size_t manifest_bytes)
 {
   handle_t root = HANDLE_INVALID, directory = HANDLE_INVALID;
   install_progress_begin("Opening program volume", INSTALL_PROGRESS_NONE, NULL);
   uint8_t *buffers = malloc(2 * COPY_BYTES);
-  enum call_status status = buffers ? open_bin(disk, &root) : CALL_NO_MEMORY;
+  enum call_status status = buffers ? open_bin(disk, pool_partition, &root) : CALL_NO_MEMORY;
   if (status == CALL_OK) {
     install_progress_begin("Preparing bin revision directory", INSTALL_PROGRESS_NONE, NULL);
     status = directory_create(root, revision, DIRECTORY_KIND_DIRECTORY, BIN_RIGHTS, &directory);
@@ -798,14 +799,15 @@ bool install_programs_write(const struct install_disk *disk, handle_t boot,
   return ok;
 }
 
-bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
+bool install_programs_cleanup(const struct install_disk *disk, uint64_t pool_partition,
+    const char *keep,
     const char *previous)
 {
   install_progress_begin("Opening program volume for cleanup", INSTALL_PROGRESS_NONE, NULL);
   handle_t root = HANDLE_INVALID;
   size_t entries = 0;
   bool changed = false;
-  bool ok = disk_open_volume(disk->handle, INSTALL_POOL_PARTITION,
+  bool ok = disk_open_volume(disk->handle, pool_partition,
       INSTALL_BIN_VOLUME, BIN_RIGHTS, &root) == CALL_OK;
   if (ok) {
     install_progress_begin_major("Removing older program revision entries",
