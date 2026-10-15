@@ -134,7 +134,9 @@ bool install_pool_format(const struct install_disk *disk,
     const uint8_t volume_id[16], int64_t created_ns, bool created_valid);
 
 /* The FAT module writes only a new, fixed boot tree; it is not a FAT service.
- * Planning is read-only and rejects sources that cannot fit before mutation. */
+ * Planning is read-only and rejects sources that cannot fit before mutation.
+ * Passing both kernel/archive as NULL selects loader/config/revision bootstrap;
+ * one NULL is invalid. Raw callers need classic erase or reviewed ESP rebuild. */
 struct install_esp;
 struct install_esp *install_esp_plan(const struct install_disk *disk,
     const struct install_layout *layout, const struct install_source *efi,

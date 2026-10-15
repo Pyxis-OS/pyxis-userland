@@ -115,7 +115,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     fprintf(stderr, "installer: cannot create the home volume (status %u)\n", status);
     goto done;
   }
-  if (!install_programs_write(disk, plan->boot, &plan->programs, revision,
+  if (!install_programs_write(disk, layout->pool_partition, plan->boot, &plan->programs, revision,
         &plan->manifest, plan->manifest_text, plan->manifest_bytes)) {
     goto done;
   }
@@ -165,7 +165,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
     fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
   } else {
-    if (!install_programs_cleanup(disk, revision, previous)) {
+    if (!install_programs_cleanup(disk, layout->pool_partition, revision, previous)) {
       install_progress_pause();
       fputs("installer: old program directories could not all be removed\n", stderr);
     }

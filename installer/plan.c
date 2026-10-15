@@ -188,7 +188,7 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
       file_size(kernel, &plan->kernel.bytes) == CALL_OK && plan->kernel.bytes &&
       file_size(archive, &plan->archive.bytes) == CALL_OK && plan->archive.bytes &&
       install_programs_list(boot, &plan->programs) &&
-      install_archive_filter(&plan->archive, &plan->programs, &plan->rescue) &&
+      install_archive_filter(&plan->archive, INSTALL_POOL_PARTITION, &plan->programs, &plan->rescue) &&
       install_manifest_source(boot, &plan->programs, revision, &plan->manifest) == INSTALL_MANIFEST_OK &&
       install_manifest_encode(&plan->manifest, &plan->manifest_text,
         &plan->manifest_bytes) == INSTALL_MANIFEST_OK;

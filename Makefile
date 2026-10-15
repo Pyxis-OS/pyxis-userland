@@ -56,7 +56,7 @@ REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_directory.o esp_payload.o boot_entry.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o coexist.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_directory.o esp_payload.o boot_entry.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o archive_config.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
@@ -295,7 +295,7 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(INSTALLER_OBJECTS): private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
+$(INSTALLER_OBJECTS): private CPPFLAGS += $(MBEDTLS_CPPFLAGS) -I$(LUA_PREFIX)/include
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
 $(BUILD)/installer.pxe: $(INSTALLER_OBJECTS) $(INSTALLER_BOOT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
