@@ -422,6 +422,28 @@ service controllers. Other children receive exported service slots, selected
 filesystem directories and text, with per-child stdio overrides. Relative paths
 retain the independently owned cwd chain.
 
+Shell assignments create private values: `title="two words"; echo "$title"`
+assigns TEXT, then passes one argument. TEXT can concatenate with literals without
+field splitting, globbing or reparsing. Single quotes and escaped `$` stay literal.
+`copy=$clicks` copies a typed capability privately; `export copy=$clicks` or
+`export copy` selects it for inheritance. A CAP expansion must occupy the whole
+word, quoted or unquoted: `$copy` passes `copy://` with that captured entry.
+Use braces for dotted names, as in `${clicks.control}`. A conflicting child binding
+refuses launch; copy the value to another private name. Assignments are standalone
+commands or `export` operands. Sequential `;` commands see earlier assignments.
+
+`describe PATH` or `describe $VALUE` reports resource metadata.
+`revoke ${NAME.control}` uses the explicitly named controller. Foreground external
+commands support typed `<`, `>` and `>>`: `>` truncates output and `>>` appends;
+a whole-word CAP target uses its held value. With a writable destination,
+`cat < text://guide > tmp://guide` saves a readable provider file, and
+`echo extra >> tmp://guide` appends to it.
+
+Command substitution (`$(...)`), including paired `revocable` and service capture,
+waits for kernel capture handoff and retention/failed-value support. Such forms
+refuse before any command in the submitted sequence runs. Continue using
+`service start NAME IMAGE` at this prerequisite boundary.
+
 A provider launched through `service start` receives private endpoint creation
 and a one-use publication CALL endpoint. The shell atomically publishes an
 exported `NAME` slot and private `NAME.control`, then acknowledges startup.
@@ -437,20 +459,20 @@ counter --restrict clicks
 counter --hold clicks &
 service replace clicks bin://counter.pxe --provide
 counter --lookup clicks
-env copy other clicks
+export other=$clicks
 counter --lookup other
-env unset clicks
-env unset clicks.control
+unset clicks
+unset clicks.control
 counter --lookup clicks
 ```
 
 `--restrict` delegates READ alone and checks that ADD is denied. A held service
 slot follows replacement, while a held FILE continues to describe its original
-bytes. `env copy NAME SOURCE` copies a captured capability or text with the same
-flags, masks and lineage; it does not install an alias watcher. `env unset NAME`
-removes this process's publication. Future jobs omit that entry; already launched
-children keep their own entries. Closing a slot controller leaves its target
-retained until the remaining slot holders release it.
+bytes. A typed copy retains the captured masks and lineage; it does not install
+an alias watcher or copy a separate controller. `unset NAME` removes this process's
+publication. Future jobs omit that entry; already launched children keep their
+own entries. Closing a slot controller leaves its target retained until the
+remaining slot holders release it.
 
 The provider's publication CALL expires after ten seconds, but the shell can
 remain waiting if a provider exits before sending it: RECEIVE cannot wait on
@@ -493,10 +515,10 @@ Keyboard and pointer controls follow their own session's focus.
 snapshots; `--https` selects verified HTTPS. Trusted startup declares private RAM
 staging (16 MiB by default), with isolated npfs backing opt-in for large uploads.
 Prepared request, response and status owners retain the existing private shell
-HTTP registry and `@NAME` selectors during task 2. Reservation checks TEXT names
-and can reuse a capability entry's name. Task A5 owns their environment naming
-and assignment migration; the current registry holds HTTP operation state and
-independently owned facets. `env copy` operates on process environment entries.
+HTTP registry and `@NAME` selectors until B8's HTTP migration. Reservation checks
+TEXT names and can reuse a capability entry's name. The registry holds HTTP
+operation state and independently owned facets; assignment, `export` and `unset`
+operate on process environment values.
 
 Configured boot sessions use `--start-services` to publish independent `http`
 and `https` instances after selecting `DNS_SERVER`. HTTPS loads
