@@ -11,6 +11,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define CLEANUP_WAIT_NS UINT64_C(30000000000)
+
+static bool cleanup_deadline(handle_t clock, uint64_t *deadline)
+{
+  uint64_t now;
+  if (clock_now(clock, &now) != CALL_OK || now > UINT64_MAX - CLEANUP_WAIT_NS) {
+    return false;
+  }
+  *deadline = now + CLEANUP_WAIT_NS;
+  return true;
+}
+
 static bool source_open(const char *path, struct install_source *source)
 {
   install_progress_begin("Inspecting installation sources", INSTALL_PROGRESS_NONE, NULL);
@@ -70,38 +82,6 @@ static char *boot_configuration(const uint8_t guid[16], size_t *bytes)
   }
   *bytes = (size_t)length;
   return output;
-}
-
-static bool inspect_target(const struct install_plan *plan, struct install_disk *disk,
-    struct install_prior *prior, struct install_consent *consent, uint64_t *free_blocks,
-    char fingerprint[65])
-{
-  bool ok = install_read_fingerprint_begin();
-  if (ok && plan->record.updating) {
-    struct install_update update;
-    ok = install_scan_update(disk, &update) && update.eligible;
-    const char *reason = NULL;
-    if (ok) {
-      enum install_esp_state state = install_esp_inspect(disk, &update.layout,
-          update.revision, &reason);
-      ok = state != INSTALL_ESP_REFUSED &&
-          !memcmp(&update.layout, &plan->record.layout, sizeof(update.layout)) &&
-          !strcmp(update.revision, plan->record.previous);
-      *free_blocks = update.free_blocks;
-    }
-    if (ok) {
-      ok = install_prior_read(disk, &update, plan->record.legacy, prior);
-    }
-  } else if (ok) {
-    ok = install_scan_consent(disk, plan->record.read_the_room, consent) && consent->eligible &&
-        !memcmp(consent->existing_guid, plan->record.existing_guid, 16);
-  }
-  if (ok) {
-    ok = install_read_fingerprint_finish(fingerprint);
-  } else {
-    install_read_fingerprint_abort();
-  }
-  return ok;
 }
 
 static bool hash_source(struct install_digest *digest, const struct install_source *source)
@@ -165,6 +145,8 @@ static bool source_fingerprint(const struct install_plan *plan, char output[65])
       hash_source(&digest, &plan->rescue) &&
       install_digest_update(&digest, plan->manifest_text, plan->manifest_bytes) &&
       install_digest_update(&digest, plan->configuration, plan->configuration_bytes) &&
+      hash_source(&digest, &(struct install_source){.memory = plan->entry.bytes,
+        .bytes = plan->entry.size}) &&
       install_digest_finish(&digest, output);
   install_digest_abort(&digest);
   install_progress_finish();
@@ -176,6 +158,7 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
 {
   *plan = (struct install_plan){.disks = disks, .boot = boot, .clock = clock,
     .disk.handle = HANDLE_INVALID,
+    .raw_disk.handle = HANDLE_INVALID,
     .kernel.handle = kernel, .archive.handle = archive,
     .efi.handle = HANDLE_INVALID,
     .rescue.handle = HANDLE_INVALID};
@@ -223,18 +206,69 @@ static bool space_budget(struct install_plan *plan)
   return plan->required_blocks <= plan->available_blocks;
 }
 
+static bool payload_plan(struct install_plan *plan)
+{
+  if (!plan->record.coexist) {
+    plan->classic_request = (struct install_esp_activation_request){
+      .configuration = plan->configuration, .configuration_bytes = plan->configuration_bytes,
+      .revision = plan->revision_record, .revision_bytes = strlen(plan->revision_record),
+      .payloads = {plan->efi, plan->kernel, plan->rescue},
+    };
+    for (size_t i = 0; i < 3; ++i) {
+      if (!install_boot_payload_digest(&plan->classic_request.payloads[i],
+          &plan->classic_request.expected_payloads[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  char kernel_path[INSTALL_ESP_PAYLOAD_PATH_BYTES];
+  char archive_path[INSTALL_ESP_PAYLOAD_PATH_BYTES];
+  struct install_boot_entry_paths paths = {.kernel = kernel_path, .archive = archive_path};
+  if (!install_esp_payload_path(plan->record.revision, plan->record.attempt,
+        INSTALL_ESP_KERNEL, kernel_path) ||
+      !install_esp_payload_path(plan->record.revision, plan->record.attempt,
+        INSTALL_ESP_ARCHIVE, archive_path) ||
+      !install_boot_entry_render(&paths, plan->record.layout.disk_guid,
+        plan->record.layout.esp_guid, &plan->entry)) {
+    return false;
+  }
+  plan->payload_request = (struct install_esp_payload_request){
+    .revision = plan->record.revision, .attempt = plan->record.attempt,
+    .sources = {plan->kernel, plan->rescue,
+      {.memory = (uint8_t *)plan->revision_record, .bytes = strlen(plan->revision_record)},
+      {.memory = plan->entry.bytes, .bytes = plan->entry.size}},
+    .entry_present = true,
+  };
+  for (size_t i = 0; i < INSTALL_ESP_PAYLOAD_COUNT; ++i) {
+    struct config_file_digest digest;
+    if (!install_boot_payload_digest(&plan->payload_request.sources[i], &digest) ||
+        !digest.present || !digest.size || digest.size > INSTALL_ESP_PAYLOAD_MAX_BYTES) {
+      return false;
+    }
+    plan->payload_request.expected_payloads[i].size = digest.size;
+    memcpy(plan->payload_request.expected_payloads[i].sha256, digest.sha256, sizeof(digest.sha256));
+  }
+  return true;
+}
+
 bool install_plan_prepare(struct install_plan *plan, const struct disk_info *target)
 {
   plan->ready = false;
+  uint64_t deadline;
+  if (!cleanup_deadline(plan->clock, &deadline) ||
+      !install_target_destroy(&plan->target, deadline)) {
+    return false;
+  }
   install_prior_destroy(&plan->prior);
   install_consent_destroy(&plan->consent);
   install_esp_destroy(plan->esp);
   plan->esp = NULL;
   free(plan->configuration);
   plan->configuration = NULL;
-  if (!target->block_size || target->block_size < 512 ||
-      target->block_size > NPFS_BLOCK_SIZE ||
-      (target->block_size & (target->block_size - 1)) ||
+  plan->configuration_bytes = 0;
+  config_blob_destroy(&plan->entry);
+  if (!target || (target->block_size != 512 && target->block_size != 4096) ||
       target->block_count != plan->record.block_count ||
       target->block_size != plan->record.block_size ||
       target->block_count > UINT64_MAX / target->block_size) {
@@ -242,9 +276,18 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   }
   plan->disk.info = *target;
   plan->disk.bytes = target->block_count * target->block_size;
-  if (plan->record.updating) {
-    plan->available_blocks = 0;
-  } else {
+  plan->raw_disk.info = *target;
+  plan->raw_disk.bytes = plan->disk.bytes;
+  install_progress_begin("Preparing complete target Review read-only", INSTALL_PROGRESS_NONE, NULL);
+  if (!install_target_prepare(&plan->target, plan->disks, plan->clock, target,
+      &plan->record, deadline, &plan->prior, &plan->consent,
+      &plan->available_blocks, plan->record.target_hash)) {
+    install_progress_pause();
+    fprintf(stderr, "installer: target Review unavailable: %s (status %u)\n",
+        plan->target.reason ? plan->target.reason : "inspection failed", plan->target.status);
+    return false;
+  }
+  if (!plan->record.updating) {
     if (npfs_header_layout(plan->record.layout.pool_bytes / NPFS_BLOCK_SIZE,
           plan->record.journal_mib * INSTALL_MIB / NPFS_BLOCK_SIZE,
           plan->record.pool_id, &plan->header) != NPFS_OK) {
@@ -254,63 +297,49 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
         plan->header.journal_blocks;
     plan->available_blocks = plan->header.pool_blocks - reserved;
   }
-  install_progress_begin("Rechecking reviewed target read-only", INSTALL_PROGRESS_NONE, NULL);
-  enum call_status status = disks_open(plan->disks, target->id,
-      DISK_ACCESS_READ_ONLY, &plan->disk.handle);
-  if (status != CALL_OK) {
-    return false;
-  }
-  bool ok = inspect_target(plan, &plan->disk, &plan->prior, &plan->consent,
-      &plan->available_blocks, plan->record.target_hash);
-  bool closed = handle_close(plan->disk.handle) == 0;
-  plan->disk.handle = HANDLE_INVALID;
-  if (!ok || !closed || plan->prior.needs_legacy) {
-    return false;
-  }
   free(plan->rescue.memory);
   plan->rescue = (struct install_source){.handle = HANDLE_INVALID};
   if (!install_archive_filter(&plan->archive, plan->record.layout.pool_partition,
         &plan->programs, &plan->rescue)) {
     return false;
   }
-  plan->configuration = boot_configuration(plan->record.layout.disk_guid,
-      &plan->configuration_bytes);
-  if (!plan->configuration || !source_fingerprint(plan, plan->record.source_hash) || !space_budget(plan) ||
-      !install_plan_record_valid(&plan->record)) {
-    return false;
+  if (!plan->record.coexist) {
+    plan->configuration = boot_configuration(plan->record.layout.disk_guid,
+        &plan->configuration_bytes);
+    if (!plan->configuration) {
+      return false;
+    }
   }
   size_t revision_bytes = strlen(plan->record.revision);
   memcpy(plan->revision_record, plan->record.revision, revision_bytes);
   plan->revision_record[revision_bytes++] = '\n';
-  /* The ESP plan borrows these held text and source views until execution and
-   * verification finish. */
-  plan->esp = install_esp_plan(&plan->disk, &plan->record.layout, &plan->efi,
-      &plan->kernel, &plan->rescue, plan->configuration, plan->configuration_bytes,
-      plan->revision_record, revision_bytes, npfs_get_u32(plan->record.layout.esp_guid));
-  plan->ready = plan->esp != NULL;
+  plan->revision_record[revision_bytes] = '\0';
+  if (!payload_plan(plan) || !source_fingerprint(plan, plan->record.source_hash) ||
+      !space_budget(plan) || !install_plan_record_valid(&plan->record)) {
+    return false;
+  }
+  if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
+    /* Initialization is confined by reviewed erase/ESP-rebuild authority.
+     * Kernel/archive are subsequently written through the native FAT view. */
+    plan->esp = install_esp_plan(&plan->raw_disk, &plan->record.layout, &plan->efi,
+        NULL, NULL, plan->configuration, plan->configuration_bytes,
+        plan->revision_record, revision_bytes, npfs_get_u32(plan->record.layout.esp_guid));
+    if (!plan->esp) {
+      return false;
+    }
+  }
+  plan->ready = true;
   install_progress_finish();
-  return plan->ready;
+  return true;
 }
 
-bool install_plan_revalidate(const struct install_plan *plan)
+bool install_plan_revalidate(struct install_plan *plan)
 {
-  struct install_disk disk = plan->disk;
-  struct disk_info current = {0};
-  struct install_prior prior = {0};
-  struct install_consent consent = {0};
-  char fingerprint[65], source_hash[65];
-  uint64_t free_blocks = plan->available_blocks;
-  bool ok = disk_get_info(disk.handle, &current) == CALL_OK;
-  disk.info = current;
-  ok = ok && current.block_count == plan->record.block_count && current.block_size == plan->record.block_size &&
-      inspect_target(plan, &disk, &prior, &consent, &free_blocks, fingerprint) &&
-      !prior.needs_legacy && !strcmp(fingerprint, plan->record.target_hash) &&
-      (!plan->record.updating || free_blocks >= plan->required_blocks);
-  ok = ok && source_fingerprint(plan, source_hash) &&
-      !strcmp(source_hash, plan->record.source_hash);
-  install_prior_destroy(&prior);
-  install_consent_destroy(&consent);
-  return ok;
+  uint64_t deadline;
+  char source_hash[65];
+  return plan->ready && cleanup_deadline(plan->clock, &deadline) &&
+      install_target_revalidate(&plan->target, deadline) &&
+      source_fingerprint(plan, source_hash) && !strcmp(source_hash, plan->record.source_hash);
 }
 
 static void report_name(FILE *output, const char *name)
@@ -341,6 +370,15 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
       plan->record.updating ? "Update" : "Install", (unsigned long long)plan->disk.info.id,
       (unsigned long long)(plan->disk.bytes / INSTALL_MIB),
       plan->record.portable ? guid : "unavailable (interactive apply only)");
+  if (plan->target.review.text_bytes &&
+      fwrite(plan->target.review.text, 1, plan->target.review.text_bytes, output) !=
+        plan->target.review.text_bytes) {
+    return false;
+  }
+  fprintf(output, "Mode: %s; ESP entry %llu; pool entry %llu.\n",
+      plan->record.coexist ? "coexistence" : "classic",
+      (unsigned long long)plan->record.layout.esp_partition,
+      (unsigned long long)plan->record.layout.pool_partition);
   if (verbose) {
     fprintf(output, "ESP: byte %llu, length %llu; pool: byte %llu, length %llu.\n",
         (unsigned long long)plan->record.layout.esp_start,
@@ -385,9 +423,28 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
   }
   fprintf(output, "Staging reserve: %llu blocks; available %llu.\n",
       (unsigned long long)plan->required_blocks, (unsigned long long)plan->available_blocks);
+  if (plan->record.coexist) {
+    fputs(plan->record.updating ?
+        "The selected pool is updated; GPT and all other partitions stay.\n" :
+        "Only the reviewed unused GPT slot and required CRCs are appended, then\n"
+        "only the new pool is formatted. A failed append can leave partial GPT effects.\n", output);
+    fprintf(output, "ESP payloads use EFI/pyxis/%s/%s/.\n",
+        plan->record.revision, plan->record.attempt);
+    fputs("No firmware, Fedora, Windows or Limine configuration is changed.\n"
+        "The verified entry is saved and printed for manual addition.\n", output);
+  } else if (plan->record.updating) {
+    fputs(plan->record.esp_rebuild ?
+        "RECOVERY: the explicitly reviewed ESP will be initialized; other partitions stay.\n" :
+        "GPT and volumes stay; fixed boot files are replaced through native FAT files.\n"
+        "The healthy ESP is not formatted.\n", output);
+  } else {
+    fputs("ERASE: the entire disk will be rebuilt; every existing partition and volume\n"
+        "will be destroyed, including any Fedora or Windows installation.\n", output);
+    if (plan->consent.volume_labels) {
+      fprintf(output, "Existing volumes:\n%s\n", plan->consent.volume_labels);
+    }
+  }
   if (plan->record.updating) {
-    fputs("GPT and volumes stay; the whole ESP will be replaced.\n"
-        "Removed programs are absent from the new revision.\n", output);
     if (!strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
       fputs("Previous program revision unknown; old revision cleanup is skipped.\n", output);
     } else if (!strcmp(plan->record.previous, plan->record.revision)) {
@@ -397,26 +454,30 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
     }
     if (!strcmp(plan->record.previous, plan->record.revision) ||
         !strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
-      fputs("A failed program stage can leave the previously used revision incomplete.\n", output);
-    }
-  } else {
-    fputs("The entire disk will be rebuilt; all existing volumes will be destroyed.\n", output);
-    if (verbose) {
-      fputs("Existing volumes:\n", output);
-      fprintf(output, "%s\n", plan->consent.volume_labels ? plan->consent.volume_labels : "  none readable");
+      fputs("A failed program stage can leave a previously used revision incomplete.\n", output);
     }
   }
   if (!verbose) {
-    fputs("Details: use -v or Print plan for programs and existing volumes.\n", output);
+    fputs("Details: use -v or Print plan for program changes.\n", output);
   }
-  fputs("Programs are synced/verified before replacing EFI. Failure is partial,\n"
-      "with no whole-install rollback; use live-media recovery.\n", output);
+  fputs("Programs are synced/verified before EFI payload changes. Failure is partial,\n"
+      "with no whole-install rollback or automatic retry.\n", output);
   return !ferror(output);
 }
 
 void install_plan_destroy(struct install_plan *plan)
 {
   install_read_fingerprint_abort();
+  if (!install_plan_finish_execution(plan)) {
+    fputs("installer: execution cleanup remains pending; inspect the reported handles before retrying\n", stderr);
+  }
+  if (plan->target.initialized) {
+    uint64_t deadline;
+    if (!cleanup_deadline(plan->clock, &deadline) ||
+        !install_target_destroy(&plan->target, deadline)) {
+      fputs("installer: target Review cleanup remains pending\n", stderr);
+    }
+  }
   install_esp_destroy(plan->esp);
   install_prior_destroy(&plan->prior);
   install_consent_destroy(&plan->consent);
@@ -424,6 +485,7 @@ void install_plan_destroy(struct install_plan *plan)
   install_programs_destroy(&plan->programs);
   free(plan->manifest_text);
   free(plan->configuration);
+  config_blob_destroy(&plan->entry);
   free(plan->rescue.memory);
   if (plan->efi.handle != HANDLE_INVALID) {
     handle_close(plan->efi.handle);

@@ -14,7 +14,7 @@
  * are borrowed except EFI; no target mount or write occurs here. */
 struct install_plan {
   struct install_plan_record record;
-  struct install_disk disk;
+  struct install_disk disk, raw_disk;
   struct install_target target;
   handle_t disks, boot, clock;
   struct install_source kernel, archive, efi, rescue;
@@ -34,7 +34,7 @@ struct install_plan {
   struct install_esp_payloads *payloads;
   struct install_esp_classic_files *classic_files;
   uint64_t available_blocks, required_blocks, cleanup_deadline_ns;
-  bool ready, disk_claimed;
+  bool ready, disk_claimed, raw_claimed;
 };
 
 bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t boot, handle_t kernel,
