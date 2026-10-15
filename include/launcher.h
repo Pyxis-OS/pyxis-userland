@@ -84,7 +84,7 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
  * entry of the given name, flags and masks. A native image, or
  * a script naming any other interpreter, receives none of them and resolves
  * normally. A request that already has an entry of one of these names is
- * rejected. Everything is borrowed until return. */
+ * rejected with CALL_ALREADY_EXISTS. Everything is borrowed until return. */
 struct program_script_grant {
   const char *name;
   handle_t source;

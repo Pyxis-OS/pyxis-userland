@@ -115,7 +115,8 @@ static enum call_status prepare_script(const struct launch_request *source,
   for (size_t i = 0; i < extra; ++i) {
     for (size_t j = 0; j < source->entry_count; ++j) {
       if (!strcmp((const char *)(uintptr_t)original_entries[j].name, extras->grants[i].name)) {
-        return CALL_BAD_REQUEST;
+        /* Distinct from a malformed request, so a name clash is identifiable. */
+        return CALL_ALREADY_EXISTS;
       }
     }
   }
