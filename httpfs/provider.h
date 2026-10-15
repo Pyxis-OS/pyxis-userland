@@ -2,6 +2,7 @@
 #define HTTPFS_PROVIDER_H
 
 #include "../libhttp/http.h"
+#include <abi/provider.h>
 
 enum httpfs_root {
   HTTPFS_ROOT_HTTP,

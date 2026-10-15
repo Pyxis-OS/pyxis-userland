@@ -174,6 +174,7 @@ int main(int argc, char **argv)
   }
   if (staging_type != FILESYSTEM_TYPE_RAM) {
     body_cap = 0;
+    storage_cap = 0;
   }
   {
     /* Public TLS is optional for an HTTP-primary instance. */
