@@ -2,6 +2,7 @@
 #define LIBC_PYXIS_DESCRIPTOR_H
 
 #include <abi/handle.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
 
@@ -17,6 +18,7 @@ struct pyxis_descriptor_binding {
   struct handle_info observation_info;
   unsigned int access;
   size_t buffered_read;
+  bool append; /* FILE write policy; does not transfer a cursor. */
 };
 
 #ifdef __cplusplus
@@ -24,8 +26,8 @@ extern "C" {
 #endif
 
 /* Borrow for native queries, waits or delegation, without changing descriptor
- * input or position. Never close or perform data I/O through the borrowed
- * handle: libc owns its lifetime, cursor and read-ahead. The handle expires on
+ * input, position or append policy. Never close or perform data I/O through
+ * the borrowed handle: libc owns its lifetime, cursor and read-ahead. The handle expires on
  * descriptor close or replacement; buffered_read is a snapshot, not a reservation. Failure
  * clears binding. No descriptor entry pointer escapes libc. */
 int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *binding);

@@ -83,6 +83,10 @@ struct launch_environment_entry *session_environment(const struct session_config
   const struct environment_value *source = snapshot->capture.values;
   for (size_t i = 0; i < inherited; ++i) {
     const char *name = source[i].name;
+    if (!strcmp(name, "stdin.append") || !strcmp(name, "stdout.append") ||
+        !strcmp(name, "stderr.append")) {
+      continue;
+    }
     /* The boot-carried discovery name cannot be shadowed by configuration. */
     if (!strcmp(name, "PYXIS_REMOTE_BEACON") ||
         (!session_variable_reserved(name) && !configured_variable(config, name))) {

@@ -12,14 +12,15 @@ extern "C" {
 #endif
 
 /* Borrow the current FILE owner's protocol/handle without changing indicators,
- * position, pushback or read-ahead. Zero includes NONE/invalid for absent or
+ * position, pushback, read-ahead or append policy. Zero includes NONE/invalid for absent or
  * closed standard streams. Null arguments fail with EINVAL; invalid FILEs or
  * broken descriptor associations fail with EBADF. Failure clears *binding
  * when nonnull. Success preserves errno and acquires no native reference.
  *
  * The handle remains borrowed until its descriptor closes or is replaced: never close it or
  * retain it past fclose/close/dup2 replacement. Delegation does not transfer the process's private
- * file cursor, read-ahead or pushback. File-backed children start at offset zero;
+ * file cursor, read-ahead or pushback. Preserve append with the environment
+ * companion when staging children. File-backed children start at offset zero;
  * pipe children cannot receive bytes already fetched into this process. */
 int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding);
 

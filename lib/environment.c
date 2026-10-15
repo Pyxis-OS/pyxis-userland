@@ -1,4 +1,5 @@
 #include <environment.h>
+#include <file.h>
 #include <syscall.h>
 #include <abi/console.h>
 #include <abi/file.h>
@@ -330,6 +331,51 @@ enum call_status environment_capability(handle_t table, const char *name, handle
   return CALL_OK;
 }
 
+const char *environment_stdio_append_name(enum environment_stream_index index)
+{
+  static const char *const names[ENVIRONMENT_STREAM_COUNT] = {
+    "stdin.append", "stdout.append", "stderr.append",
+  };
+  return (unsigned)index < ENVIRONMENT_STREAM_COUNT ? names[index] : NULL;
+}
+
+struct launch_environment_entry environment_stdio_append_entry(enum environment_stream_index index)
+{
+  return (struct launch_environment_entry){
+    .name = (uintptr_t)environment_stdio_append_name(index), .kind = ENVIRONMENT_TEXT,
+    .flags = ENVIRONMENT_EXPORTED, .value = (uintptr_t)"1", .length = 1,
+  };
+}
+
+static enum call_status stdio_append(handle_t snapshot, enum environment_stream_index index,
+    bool *append)
+{
+  struct environment_entry_reply entry;
+  char text[2];
+  enum call_status status = environment_lookup(snapshot, environment_stdio_append_name(index),
+      &entry, text, sizeof(text));
+  *append = false;
+  if (status == CALL_NOT_FOUND) {
+    return CALL_OK;
+  }
+  if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
+    handle_close(entry.handle);
+    return CALL_WRONG_TYPE;
+  }
+  if (status == CALL_BUFFER_TOO_SMALL) {
+    return CALL_BAD_REQUEST;
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (index == ENVIRONMENT_STDIN || entry.kind != ENVIRONMENT_TEXT ||
+      entry.text_length != 1 || text[0] != '1') {
+    return CALL_BAD_REQUEST;
+  }
+  *append = true;
+  return CALL_OK;
+}
+
 enum call_status environment_stdio(handle_t snapshot, enum environment_stream_index index,
     struct pyxis_stdio_binding *binding, uint64_t *identity, uint64_t *observation_identity)
 {
@@ -358,6 +404,12 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
     handle_close(entry.handle);
     return status;
   }
+  bool append;
+  status = stdio_append(snapshot, index, &append);
+  if (status != CALL_OK) {
+    handle_close(entry.handle);
+    return status;
+  }
   bool input = index == ENVIRONMENT_STDIN;
   uint64_t required = 0;
   bool valid = false;
@@ -375,12 +427,24 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
     required = STREAM_RIGHT_READ;
     valid = info.transport & HANDLE_TRANSPORT_CALL;
   }
+  if (append) {
+    valid = valid && info.protocol == PROTOCOL_FILE;
+  }
   if (!valid || (info.rights & required) != required) {
     handle_close(entry.handle);
     return valid ? CALL_DENIED : CALL_WRONG_TYPE;
   }
+  if (append) {
+    uint64_t size;
+    status = file_size(entry.handle, &size);
+    if (status != CALL_OK) {
+      handle_close(entry.handle);
+      return status;
+    }
+  }
   binding->handle = entry.handle;
   binding->protocol = info.protocol;
+  binding->append = append;
   if (identity) {
     *identity = entry.identity;
   }

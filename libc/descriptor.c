@@ -271,7 +271,7 @@ void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream
             binding.protocol == PROTOCOL_STREAM ? DESCRIPTOR_RESPONSE : DESCRIPTOR_CONSOLE,
     .handle = binding.handle, .observation = binding.observation,
     .readable = index == ENVIRONMENT_STDIN,
-    .writable = index != ENVIRONMENT_STDIN,
+    .writable = index != ENVIRONMENT_STDIN, .append = binding.append,
   };
   entries[index] = (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
@@ -606,6 +606,7 @@ int descriptor_stream(FILE *stream, struct pyxis_stdio_binding *binding)
           object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
       .handle = object->handle,
+      .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
       .observation_protocol = object->kind == DESCRIPTOR_RESPONSE && object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
       .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
     };
@@ -634,6 +635,7 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
     .access = (object->readable && (!object->transaction || object->transaction->committed) ? PYXIS_DESCRIPTOR_READ : 0) |
         (object->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
     .buffered_read = object->ahead_count,
+    .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
     .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
   };
   unlock_object(&object->read_guard);
@@ -1642,6 +1644,7 @@ int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdi
         object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
     .handle = object->handle,
+    .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
     .observation_protocol = object->kind == DESCRIPTOR_RESPONSE && object->observation ? PROTOCOL_HTTP_TRANSACTION : 0,
     .observation = object->kind == DESCRIPTOR_RESPONSE ? object->observation : HANDLE_INVALID,
   };

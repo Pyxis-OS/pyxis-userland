@@ -16,6 +16,7 @@ struct pyxis_stdio_binding {
   handle_t handle;
   uint64_t observation_protocol;
   handle_t observation;
+  bool append;
 };
 
 #ifdef __cplusplus
@@ -76,6 +77,14 @@ void environment_capture_close(struct environment_capture *capture);
 const struct environment_value *environment_capture_find(
     const struct environment_capture *capture, const char *name);
 enum call_status environment_capability(handle_t table, const char *name, handle_t *handle);
+/* Append is output FILE policy, not a resource right or atomicity guarantee.
+ * Launch it as the optional TEXT companion stdout.append/stderr.append="1";
+ * an absent companion selects ordinary writes. Stage an entry only for an
+ * output stream with append set; it borrows static bytes. */
+const char *environment_stdio_append_name(enum environment_stream_index index);
+struct launch_environment_entry environment_stdio_append_entry(enum environment_stream_index index);
+/* Captures owned stream grants from one snapshot. Append rejects stdin,
+ * malformed companions, non-FILEs and FILEs without WRITE or working SIZE. */
 enum call_status environment_stdio(handle_t snapshot, enum environment_stream_index index,
     struct pyxis_stdio_binding *binding, uint64_t *identity, uint64_t *observation_identity);
 

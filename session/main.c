@@ -424,7 +424,7 @@ static int launch_session(const struct session_config *config, const struct netw
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
   const char *arguments[] = {image_uri, "--tab-width", tab_width};
   size_t entry_capacity = resource_count + root_count + environment_count +
-      captured.count + ENVIRONMENT_STREAM_COUNT + 2;
+      captured.count + ENVIRONMENT_STREAM_COUNT + 4;
   entries = calloc(entry_capacity, sizeof(*entries));
   if (!entries) {
     goto done;
@@ -461,6 +461,9 @@ static int launch_session(const struct session_config *config, const struct netw
         response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     entries[request.entry_count++] = profile_stdio_entry(i, request.grant_count);
+    if (stream.append) {
+      entries[request.entry_count++] = environment_stdio_append_entry(i);
+    }
     uint64_t transport = 0;
     if (stream.protocol == PROTOCOL_FILE || response) {
       struct handle_info info;

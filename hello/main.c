@@ -236,7 +236,21 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
     entries[request.entry_count++] = profile_stdio_entry(i, request.grant_count);
-    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, 0};
+    if (stream.append) {
+      entries[request.entry_count++] = environment_stdio_append_entry(i);
+    }
+    uint64_t transport = 0;
+    if (stream.protocol == PROTOCOL_FILE) {
+      struct handle_info info;
+      if (handle_query(stream.handle, &info) != CALL_OK) {
+        handle_close(image);
+        return -1;
+      }
+      if (info.kind == HANDLE_KIND_EXPORTED) {
+        transport = HANDLE_TRANSPORT_CALL;
+      }
+    }
+    grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
   handle_t child;
   int result = launcher_launch(launcher, &request, &child) == CALL_OK ? 0 : -1;

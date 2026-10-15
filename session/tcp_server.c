@@ -80,6 +80,9 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
     size_t grant = i == ENVIRONMENT_STDOUT ? OUTPUT : ERROR;
     grants[grant] = (struct launch_grant){stream.handle, rights, transport};
     entries[request.entry_count++] = profile_stdio_entry(i, grant);
+    if (stream.append) {
+      entries[request.entry_count++] = environment_stdio_append_entry(i);
+    }
   }
 
   struct tcp_listen_reply reply;

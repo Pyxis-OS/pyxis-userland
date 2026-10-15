@@ -16,13 +16,14 @@ struct pyxis_job_options {
   const struct launch_grant *grants;
   size_t grant_count;
   /* Explicit selected entries; caller captures and stages its chosen values.
-   * Descriptor selection overrides stdin/stdout/stderr and stdin.status only
-   * for this child. No implicit environment inheritance. */
+   * Descriptor selection overrides stdin/stdout/stderr, stdin.status and their
+   * append policy companions for this child. No implicit inheritance. */
   const struct launch_environment_entry *entries;
   size_t entry_count;
   const struct pyxis_working_snapshot *working;
   /* Live descriptors, stdin/stdout/stderr order. -1 deliberately omits a
-   * stream. FILE cursors and private input read-ahead are not transferred. */
+   * stream. FILE append policy is preserved; cursors and private input
+   * read-ahead are not transferred. */
   int streams[ENVIRONMENT_STREAM_COUNT];
   uint64_t initial_stack_bytes;
 };

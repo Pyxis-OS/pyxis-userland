@@ -72,7 +72,9 @@ static char *capture_string(struct job_preparation *prepared, const char *source
 static bool stream_name(const char *name)
 {
   return !strcmp(name, "stdin") || !strcmp(name, "stdout") ||
-      !strcmp(name, "stderr") || !strcmp(name, "stdin.status");
+      !strcmp(name, "stderr") || !strcmp(name, "stdin.status") ||
+      !strcmp(name, "stdin.append") || !strcmp(name, "stdout.append") ||
+      !strcmp(name, "stderr.append");
 }
 
 static enum call_status validate_startup_size(const struct launch_request *request)
@@ -102,6 +104,9 @@ static void stage_streams(struct job_preparation *prepared)
         .name = (uintptr_t)names[i], .kind = ENVIRONMENT_CAP,
         .flags = ENVIRONMENT_EXPORTED, .value = stream->grant,
       };
+      if (stream->append) {
+        prepared->entries[request->entry_count++] = environment_stdio_append_entry(i);
+      }
       if (stream->observation_protocol) {
         prepared->entries[request->entry_count++] = (struct launch_environment_entry){
           .name = (uintptr_t)"stdin.status", .kind = ENVIRONMENT_CAP,
@@ -130,7 +135,7 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
   }
   size_t limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
   size_t grant_count = options->grant_count;
-  if (grant_count > limit || depth > limit - grant_count || options->entry_count > limit - 4) {
+  if (grant_count > limit || depth > limit - grant_count || options->entry_count > limit - 6) {
     return CALL_BAD_REQUEST;
   }
   grant_count += depth;
@@ -158,7 +163,7 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
   }
   struct launch_request *request = &prepared->request;
   prepared->grants = capture_array(prepared, NULL, grant_count, sizeof(*prepared->grants));
-  prepared->entries = capture_array(prepared, NULL, options->entry_count + 4, sizeof(*prepared->entries));
+  prepared->entries = capture_array(prepared, NULL, options->entry_count + 6, sizeof(*prepared->entries));
   if (prepared->error != CALL_OK) {
     return prepared->error;
   }
@@ -253,6 +258,9 @@ static enum call_status capture_stream(struct job_preparation *prepared,
   if (!(binding.access & (input ? PYXIS_DESCRIPTOR_READ : PYXIS_DESCRIPTOR_WRITE))) {
     return CALL_DENIED;
   }
+  if (binding.append && (input || binding.info.protocol != PROTOCOL_FILE)) {
+    return CALL_BAD_REQUEST;
+  }
   uint64_t rights, transport = 0;
   if (binding.info.protocol == PROTOCOL_FILE) {
     rights = input ? FILE_RIGHT_READ : FILE_RIGHT_WRITE;
@@ -293,6 +301,7 @@ static enum call_status capture_stream(struct job_preparation *prepared,
     return CALL_BAD_REQUEST;
   }
   stream->protocol = binding.info.protocol;
+  stream->append = binding.append;
   prepared->grants[stream->grant] = (struct launch_grant){binding.handle, rights, transport};
   return CALL_OK;
 }
