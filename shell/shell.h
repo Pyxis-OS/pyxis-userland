@@ -68,9 +68,17 @@ struct shell_fat_mount {
   bool bound;
 };
 
+struct shell_initial_entry {
+  char name[ENVIRONMENT_NAME_MAX + 1];
+  uint64_t identity;
+};
+
 struct shell {
   struct bundle_jobs jobs;
   struct shell_capability_table *capabilities;
+  /* Immutable startup provenance only; no capability or table ownership. */
+  struct shell_initial_entry *initial_entries;
+  size_t initial_entry_count;
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
   /* Root-shell options only; never forwarded to children. */
@@ -102,6 +110,9 @@ struct shell {
   struct shell_fat_mount fat_mounts[SHELL_FAT_MOUNT_LIMIT];
 };
 
+enum call_status shell_environment_init(struct shell *shell);
+void shell_environment_close(struct shell *shell);
+bool shell_environment_initial(const struct shell *shell, const struct environment_value *value);
 enum call_status shell_directory_init(struct shell *shell);
 void shell_directory_close(struct shell *shell);
 enum call_status shell_change_directory(struct shell *shell, const char *path);

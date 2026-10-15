@@ -76,6 +76,8 @@ struct prepared_stage {
   struct launch_environment_entry *entries;
   struct launch_grant *selected_grants;
   struct launch_environment_entry *selected_entries;
+  const struct environment_value **selection;
+  size_t selection_count;
   const char *conflict;
   struct launch_request request;
 };
@@ -227,6 +229,7 @@ static void free_preparation(struct prepared_stage *stages, size_t stage_count)
     free(stages[i].entries);
     free(stages[i].selected_grants);
     free(stages[i].selected_entries);
+    free(stages[i].selection);
     environment_capture_close(&stages[i].captured);
   }
   free(stages);
@@ -300,15 +303,43 @@ static enum call_status prepare_http_worker(struct shell *shell,
   return CALL_OK;
 }
 
-static enum call_status select_operands(struct prepared_stage *prepared,
-    const struct shell_stage *stage, bool read_only)
+static enum call_status capture_selection(const struct shell *shell,
+    struct prepared_stage *prepared, const struct shell_stage *stage,
+    const struct environment_capture *exported)
 {
-  const struct environment_capture *operands = stage->operands;
-  if (!operands || !operands->count) {
+  size_t operands = stage->operands ? stage->operands->count : 0;
+  size_t limit = SIZE_MAX / sizeof(*prepared->selection);
+  if (exported->count > limit || operands > limit - exported->count) {
+    return CALL_LIMIT;
+  }
+  size_t capacity = exported->count + operands;
+  if (!capacity) {
+    return CALL_OK;
+  }
+  prepared->selection = malloc(capacity * sizeof(*prepared->selection));
+  if (!prepared->selection) {
+    return CALL_NO_MEMORY;
+  }
+  for (size_t i = 0; i < exported->count; ++i) {
+    const struct environment_value *value = &exported->values[i];
+    if (value->kind == ENVIRONMENT_CAP && (value->flags & ENVIRONMENT_EXPORTED) &&
+        !shell_environment_initial(shell, value)) {
+      prepared->selection[prepared->selection_count++] = value;
+    }
+  }
+  for (size_t i = 0; i < operands; ++i) {
+    prepared->selection[prepared->selection_count++] = &stage->operands->values[i];
+  }
+  return CALL_OK;
+}
+
+static enum call_status select_operands(struct prepared_stage *prepared, bool read_only)
+{
+  size_t count = prepared->selection_count;
+  if (!count) {
     return CALL_OK;
   }
   struct launch_request *request = &prepared->request;
-  size_t count = operands->count;
   if (request->grant_count > SIZE_MAX / sizeof(struct launch_grant) ||
       count > SIZE_MAX / sizeof(struct launch_grant) - request->grant_count ||
       request->entry_count > SIZE_MAX / sizeof(struct launch_environment_entry) ||
@@ -329,13 +360,13 @@ static enum call_status select_operands(struct prepared_stage *prepared,
   request->grants = (uintptr_t)prepared->selected_grants;
   request->entries = (uintptr_t)prepared->selected_entries;
   for (size_t i = 0; i < count; ++i) {
-    const struct environment_value *value = &operands->values[i];
+    const struct environment_value *value = prepared->selection[i];
     if (value->kind != ENVIRONMENT_CAP) {
       return CALL_BAD_REQUEST;
     }
     bool repeated = false;
     for (size_t j = 0; j < i; ++j) {
-      const struct environment_value *earlier = &operands->values[j];
+      const struct environment_value *earlier = prepared->selection[j];
       if (strcmp(value->name, earlier->name)) {
         continue;
       }
@@ -401,7 +432,8 @@ static enum call_status select_operands(struct prepared_stage *prepared,
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], handle_t publication,
-    bool read_only, const struct network_environment *environment, bool preflight)
+    bool read_only, const struct network_environment *environment,
+    const struct environment_capture *exported, bool preflight)
 {
   if (stage->http_worker) {
     return prepare_http_worker(shell, prepared, stage, streams);
@@ -467,6 +499,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_display = shell->display != HANDLE_INVALID;
   enum call_status captured = environment_capture_init(shell->environment,
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &prepared->captured);
+  if (captured != CALL_OK) {
+    return captured;
+  }
+  captured = capture_selection(shell, prepared, stage, exported);
   if (captured != CALL_OK) {
     return captured;
   }
@@ -1087,18 +1123,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     *request = *bundle_launch_request(prepared->bundle_launch);
   }
-  return select_operands(prepared, stage, read_only);
+  return select_operands(prepared, read_only);
 }
 
-static const char *selected_stream_conflict(const struct shell_stage *stage,
+static const char *selected_stream_conflict(const struct prepared_stage *prepared,
+    const struct shell_stage *stage,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT],
     size_t index, size_t count)
 {
-  if (!stage->operands) {
-    return NULL;
-  }
-  for (size_t i = 0; i < stage->operands->count; ++i) {
-    const char *name = stage->operands->values[i].name;
+  for (size_t i = 0; i < prepared->selection_count; ++i) {
+    const char *name = prepared->selection[i]->name;
     for (size_t stream = 0; stream < ENVIRONMENT_STREAM_COUNT; ++stream) {
       bool bound = streams[stream].protocol ||
           (stream == ENVIRONMENT_STDIN && index) ||
@@ -1129,6 +1163,7 @@ static enum call_status preflight_operands(struct shell *shell,
     enum shell_launch_mode mode, bool named_input,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT],
     handle_t publication, bool read_only, const struct network_environment *environment,
+    const struct environment_capture *exported, size_t index, size_t count,
     const char **conflict)
 {
   *conflict = NULL;
@@ -1139,8 +1174,14 @@ static enum call_status preflight_operands(struct shell *shell,
   prepared->image = image->image;
   prepared->bundle = image->bundle;
   enum call_status status = prepare_stage(shell, prepared, stage, mode, named_input,
-      streams, publication, read_only, environment, true);
+      streams, publication, read_only, environment, exported, true);
   *conflict = prepared->conflict;
+  if (status == CALL_OK) {
+    *conflict = selected_stream_conflict(prepared, stage, streams, index, count);
+    if (*conflict) {
+      status = CALL_ALREADY_EXISTS;
+    }
+  }
   /* The image/bundle belong to the real launch, not this temporary selection. */
   prepared->image = HANDLE_INVALID;
   prepared->bundle = NULL;
@@ -1345,6 +1386,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   struct pyxis_stdio_binding streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT] = {0};
   const char *operation = "shell: open";
   const char *path = stages[0].arguments[0];
+  char conflicting_entry[ENVIRONMENT_NAME_MAX + 1];
   size_t failed_stage = 0;
   enum call_status status = CALL_OK;
   handle_t children[LAUNCH_BATCH_MAX] = {0};
@@ -1355,7 +1397,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   bool cancelled = false, response_input = false;
   struct endpoint_create_reply publication = {0};
   struct network_environment environment = {0};
-  struct pyxis_environment_snapshot inherited = {0};
+  struct environment_capture inherited = {0};
 
   if (mode == SHELL_SERVICE) {
     status = endpoint_create(shell->service, &publication);
@@ -1410,12 +1452,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
 
   operation = "shell: network environment";
   path = stages[0].arguments[0];
-  status = pyxis_environment_snapshot_init(&inherited);
+  status = environment_capture_init(shell->environment, 0, &inherited);
   if (status != CALL_OK) {
     goto failed;
   }
   status = network_environment_from_capture(&environment, shell->net_config,
-      &inherited.capture, NULL);
+      &inherited, NULL);
   if (status != CALL_OK) {
     goto failed;
   }
@@ -1428,36 +1470,40 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   for (size_t i = 0; i < stage_count; ++i) {
     has_redirects |= stages[i].redirection_count != 0;
   }
-  /* Validate every explicit selection before any redirect target is opened. */
+  bool selected_exports = false;
+  for (size_t i = 0; i < inherited.count; ++i) {
+    const struct environment_value *value = &inherited.values[i];
+    selected_exports |= value->kind == ENVIRONMENT_CAP &&
+        !shell_environment_initial(shell, value);
+  }
+  /* Validate every selected CAP before any redirect target is opened. */
   for (size_t i = 0; has_redirects && i < stage_count; ++i) {
-    if (!stages[i].operands || !stages[i].operands->count) {
+    if (!selected_exports && (!stages[i].operands || !stages[i].operands->count)) {
       continue;
     }
     failed_stage = i;
     operation = "shell: prepare";
     path = stages[i].arguments[0];
-    const char *conflict = selected_stream_conflict(&stages[i], streams[i], i, stage_count);
-    if (!conflict) {
-      bool input_redirect = false;
-      for (size_t j = 0; j < stages[i].redirection_count; ++j) {
-        input_redirect |= stages[i].redirections[j].stream == ENVIRONMENT_STDIN;
-      }
-      bool console_stdin = streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
-      bool pager_input = mode == SHELL_FOREGROUND && i + 1 == stage_count &&
-          streams[i][ENVIRONMENT_STDOUT].protocol == PROTOCOL_CONSOLE &&
-          (i || input_redirect || streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_FILE ||
-           streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_PIPE ||
-           streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_STREAM);
-      bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
-          ((i == 0 && console_stdin) || pager_input);
-      status = preflight_operands(shell, &stages[i], &prepared[i], mode, named_input,
-          streams[i], publication.caller, read_only, &environment, &conflict);
-    } else {
-      status = CALL_ALREADY_EXISTS;
+    const char *conflict = NULL;
+    bool input_redirect = false;
+    for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+      input_redirect |= stages[i].redirections[j].stream == ENVIRONMENT_STDIN;
     }
+    bool console_stdin = streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
+    bool pager_input = mode == SHELL_FOREGROUND && i + 1 == stage_count &&
+        streams[i][ENVIRONMENT_STDOUT].protocol == PROTOCOL_CONSOLE &&
+        (i || input_redirect || streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_FILE ||
+         streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_PIPE ||
+         streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_STREAM);
+    bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
+        ((i == 0 && console_stdin) || pager_input);
+    status = preflight_operands(shell, &stages[i], &prepared[i], mode, named_input,
+        streams[i], publication.caller, read_only, &environment, &inherited,
+        i, stage_count, &conflict);
     if (conflict) {
       operation = "shell: CAP entry conflicts; copy the value to a different name:";
-      path = conflict;
+      memcpy(conflicting_entry, conflict, strlen(conflict) + 1);
+      path = conflicting_entry;
     }
     if (status != CALL_OK) {
       goto failed;
@@ -1622,11 +1668,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool named_input = mode != SHELL_BACKGROUND && mode != SHELL_SERVICE &&
         ((i == 0 && console_stdin) || pager_input);
     status = prepare_stage(shell, &prepared[i], &stages[i], mode, named_input,
-        streams[i], publication.caller, read_only, &environment, false);
+        streams[i], publication.caller, read_only, &environment, &inherited, false);
     if (status != CALL_OK) {
       if (prepared[i].conflict) {
         operation = "shell: CAP entry conflicts; copy the value to a different name:";
-        path = prepared[i].conflict;
+        memcpy(conflicting_entry, prepared[i].conflict, strlen(prepared[i].conflict) + 1);
+        path = conflicting_entry;
       }
       goto failed;
     }
@@ -1693,7 +1740,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
    * could prevent EOF, and holding one reader could prevent EPIPE. */
   bool closed_sources = release_sources(prepared, stage_count, pipes);
   network_environment_free(&environment);
-  pyxis_environment_snapshot_close(&inherited);
+  environment_capture_close(&inherited);
   free(requests);
   free_preparation(prepared, stage_count);
   if (!closed_sources) {
@@ -1913,7 +1960,7 @@ failed:
   close_handle(&publication.caller);
   close_handle(&publication.receiver);
   network_environment_free(&environment);
-  pyxis_environment_snapshot_close(&inherited);
+  environment_capture_close(&inherited);
   free(requests);
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
