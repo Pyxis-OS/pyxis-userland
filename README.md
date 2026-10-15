@@ -543,6 +543,9 @@ one-shot POST transactions; independently authorized REMOVE sends DELETE.
 Trusted startup declares private RAM backing (64 MiB aggregate logical bytes by
 default, including retained replies and staged bodies; POST bodies also have a
 16 MiB cap). Isolated npfs backing is the explicit large-transfer option.
+Completed RAM snapshots attach a sealed kernel READ backing without exposing a
+native grant; export revocation, descriptions and quota retirement remain intact.
+STATUS collects cumulative copied bytes without per-READ provider work.
 Known private RAM uses bounded native reads/writes; persistent backing uses
 completions. Native directory operations and resize remain completion-based.
 Prepared request, response and status owners retain the existing private shell

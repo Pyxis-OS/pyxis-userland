@@ -224,7 +224,7 @@ static enum call_status open_file(struct provider *provider,
     error_body_size = sizeof(not_found_body) - 1;
   }
   status = endpoint_describe_publish(provider->receiver, FILE_FIRST_ID + slot,
-      &response.description, error_body, error_body_size);
+      &response.description, error_body, error_body_size, HANDLE_INVALID);
   if (status != CALL_OK) {
     enum call_status cut = forwarder_cut(provider->files[slot].controller);
     enum call_status closed = close_handle(&client);

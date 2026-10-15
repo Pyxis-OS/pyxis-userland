@@ -35,7 +35,7 @@ struct exported {
   handle_t controller;
   struct transaction *owner;
   enum facet facet;
-  bool live;
+  bool live, kernel_reads;
 };
 
 struct transaction_work {
@@ -245,9 +245,14 @@ static enum call_status publish_description(struct loop *loop,
     if (!entry->live || (entry->facet != FACET_CONTROL && entry->facet != FACET_SNAPSHOT)) {
       continue;
     }
+    handle_t read_file = entry->facet == FACET_SNAPSHOT && loop->ram_backing &&
+        description.outcome == RESOURCE_OK ? transaction->snapshot : HANDLE_INVALID;
     enum call_status status = endpoint_describe_publish(loop->receiver, object_id(slot),
         &description, description.outcome == RESOURCE_OK ? NULL : transaction->error_body,
-        description.outcome == RESOURCE_OK ? 0 : transaction->error_size);
+        description.outcome == RESOURCE_OK ? 0 : transaction->error_size, read_file);
+    if (status == CALL_OK && read_file) {
+      entry->kernel_reads = true;
+    }
     /* Last-client close can precede its queued RETIRE notice. There is no
      * reader to publish to, but keep the slot live until retirement is acked. */
     if (status != CALL_OK && status != CALL_ENDPOINT_CLOSED) {
@@ -889,9 +894,26 @@ static void open_resource(struct loop *loop, size_t root, struct endpoint_packet
     transaction->phase = HTTP_TRANSACTION_OPENING;
   }
 }
+static enum call_status collect_read_bytes(struct loop *loop, struct transaction *transaction)
+{
+  for (size_t i = 0; i < transaction->slot_count; ++i) {
+    size_t slot = transaction->slots[i];
+    struct exported *entry = &loop->exports[slot];
+    if (entry->live && entry->kernel_reads) {
+      return endpoint_read_bytes(loop->receiver, object_id(slot), &transaction->consumed);
+    }
+  }
+  return CALL_OK;
+}
+
 static void publish_status(struct loop *loop, struct transaction *transaction,
     struct endpoint_packet *packet)
 {
+  enum call_status collected = collect_read_bytes(loop, transaction);
+  if (collected != CALL_OK) {
+    reply(loop, packet, collected, NULL, 0, NULL, 0);
+    return;
+  }
   struct http_response *response = &transaction->response;
   struct http_transaction_status status = {
     .phase = transaction->phase,
@@ -1777,6 +1799,13 @@ static void retired(struct loop *loop, const struct endpoint_packet *packet)
     return;
   }
   enum facet facet = entry->facet;
+  if (entry->kernel_reads) {
+    enum call_status status = collect_read_bytes(loop, transaction);
+    if (status != CALL_OK) {
+      loop->fatal = status;
+      return;
+    }
+  }
   if (facet == FACET_CONTROL) {
     release_body_source(loop, transaction);
   }

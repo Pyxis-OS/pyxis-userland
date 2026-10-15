@@ -216,7 +216,7 @@ enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id)
 
 enum call_status endpoint_describe_publish(handle_t receiver, uint64_t object_id,
     const struct resource_description *description, const void *error_body,
-    size_t error_body_size)
+    size_t error_body_size, handle_t read_file)
 {
   if (!object_id || !resource_description_valid(description) ||
       error_body_size > RESOURCE_ERROR_BODY_MAX_BYTES ||
@@ -230,10 +230,31 @@ enum call_status endpoint_describe_publish(handle_t receiver, uint64_t object_id
     .description = *description,
     .error_body_address = (uintptr_t)error_body,
     .error_body_size = error_body_size,
+    .read_file = read_file,
   };
   struct syscall_result result = syscall_call(receiver, &request, sizeof(request), NULL, 0);
   enum call_status status = checked_status(result);
   return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
+}
+
+enum call_status endpoint_read_bytes(handle_t receiver, uint64_t object_id, uint64_t *bytes)
+{
+  if (!object_id || !bytes) {
+    return CALL_BAD_REQUEST;
+  }
+  struct endpoint_control_message request = {
+    .header = {PROTOCOL_ENDPOINT_RECEIVER, ENDPOINT_READ_BYTES}, .object_id = object_id};
+  uint64_t result_bytes = 0;
+  struct syscall_result result = syscall_call(receiver, &request, sizeof(request),
+      &result_bytes, sizeof(result_bytes));
+  enum call_status status = checked_status(result);
+  if (result.reply_size != (status == CALL_OK ? sizeof(result_bytes) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (status == CALL_OK) {
+    *bytes = result_bytes;
+  }
+  return status;
 }
 
 enum call_status endpoint_invoke(handle_t caller, uint64_t protocol,

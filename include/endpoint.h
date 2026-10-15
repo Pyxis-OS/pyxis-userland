@@ -21,10 +21,15 @@ enum call_status endpoint_retire_ack(handle_t receiver, uint64_t object_id);
 /* Publish an immutable description on the issuer-owned CONTROL receiver.
  * Optional bounded body bytes are copied into an independent native snapshot;
  * ERROR_BODY includes a zero-byte body. Failure preserves the prior snapshot.
- * No body grant is accepted and no provider-owned capability is retained. */
+ * read_file may lend raw native RAM with READ|WRITE for a completed READ-only
+ * FILE export. Publication seals it and enables kernel-serviced READ; export
+ * lifetime, metadata and revocation remain unchanged. Error bodies never use
+ * this backing. Zero leaves byte operations with the provider. */
 enum call_status endpoint_describe_publish(handle_t receiver, uint64_t object_id,
     const struct resource_description *description, const void *error_body,
-    size_t error_body_size);
+    size_t error_body_size, handle_t read_file);
+/* Owner CONTROL query; cumulative successful local READ bytes until RETIRE_ACK. */
+enum call_status endpoint_read_bytes(handle_t receiver, uint64_t object_id, uint64_t *bytes);
 
 /* CALL, SEND and REPLY borrow bytes and source grants until return. A successful CALL
  * returns an owned packet with reply grants; size is the actual payload length,
