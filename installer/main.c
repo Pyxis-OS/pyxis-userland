@@ -339,6 +339,23 @@ static bool new_ids(handle_t clock, handle_t random, struct install_layout *layo
   return true;
 }
 
+static bool new_attempt(handle_t clock, handle_t random, char attempt[33])
+{
+  uint64_t now;
+  uint8_t bytes[16];
+  if (clock_now(clock, &now) != CALL_OK || now > UINT64_MAX - RANDOM_MAX_WAIT_NS ||
+      random_read(random, bytes, sizeof(bytes), now + RANDOM_MAX_WAIT_NS) != CALL_OK) {
+    return false;
+  }
+  static const char digits[] = "0123456789abcdef";
+  for (size_t i = 0; i < sizeof(bytes); ++i) {
+    attempt[i * 2] = digits[bytes[i] >> 4];
+    attempt[i * 2 + 1] = digits[bytes[i] & 15];
+  }
+  attempt[32] = '\0';
+  return true;
+}
+
 static bool choose_journal(struct terminal *terminal, const struct install_layout *layout,
     const uint8_t pool_id[16], struct npfs_header *header)
 {
@@ -483,6 +500,11 @@ int main(int argc, char **argv)
   } else {
     plan.record.updating = updating;
     plan.record.read_the_room = read_the_room;
+    plan.record.esp_rebuild = updating && selected->boot_rebuild;
+    if (!new_attempt(clock, random, plan.record.attempt)) {
+      say("installer: fresh payload attempt identity unavailable; nothing was written");
+      goto done;
+    }
     plan.record.block_count = selected->info.block_count;
     plan.record.block_size = selected->info.block_size;
     const uint8_t *existing_guid = updating ? selected->update.layout.disk_guid :

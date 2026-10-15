@@ -127,8 +127,9 @@ static bool hash_source(struct install_digest *digest, const struct install_sour
 static bool hash_choices(struct install_digest *digest, const struct install_plan_record *record)
 {
   static const char domain[] = "pyxis-install-plan-choices-1";
-  uint8_t flags[] = {record->updating, record->read_the_room, record->legacy, record->portable};
-  uint8_t numbers[7 * 8];
+  uint8_t flags[] = {record->updating, record->coexist, record->esp_rebuild,
+    record->read_the_room, record->legacy, record->portable};
+  uint8_t numbers[11 * 8];
   npfs_put_u64(numbers, record->block_count);
   npfs_put_u64(numbers + 8, record->block_size);
   npfs_put_u64(numbers + 16, record->journal_mib);
@@ -136,6 +137,10 @@ static bool hash_choices(struct install_digest *digest, const struct install_pla
   npfs_put_u64(numbers + 32, record->layout.esp_bytes);
   npfs_put_u64(numbers + 40, record->layout.pool_start);
   npfs_put_u64(numbers + 48, record->layout.pool_bytes);
+  npfs_put_u64(numbers + 56, record->layout.esp_partition);
+  npfs_put_u64(numbers + 64, record->layout.pool_partition);
+  npfs_put_u64(numbers + 72, record->layout.esp_attributes);
+  npfs_put_u64(numbers + 80, record->layout.pool_attributes);
   return install_digest_update(digest, domain, sizeof(domain)) &&
       install_digest_update(digest, flags, sizeof(flags)) &&
       install_digest_update(digest, numbers, sizeof(numbers)) &&
@@ -146,7 +151,8 @@ static bool hash_choices(struct install_digest *digest, const struct install_pla
       install_digest_update(digest, record->layout.esp_guid, 16) &&
       install_digest_update(digest, record->layout.pool_guid, 16) &&
       install_digest_update(digest, record->revision, strlen(record->revision) + 1) &&
-      install_digest_update(digest, record->previous, strlen(record->previous) + 1);
+      install_digest_update(digest, record->previous, strlen(record->previous) + 1) &&
+      install_digest_update(digest, record->attempt, sizeof(record->attempt));
 }
 
 static bool source_fingerprint(const struct install_plan *plan, char output[65])
@@ -188,7 +194,6 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
       file_size(kernel, &plan->kernel.bytes) == CALL_OK && plan->kernel.bytes &&
       file_size(archive, &plan->archive.bytes) == CALL_OK && plan->archive.bytes &&
       install_programs_list(boot, &plan->programs) &&
-      install_archive_filter(&plan->archive, INSTALL_POOL_PARTITION, &plan->programs, &plan->rescue) &&
       install_manifest_source(boot, &plan->programs, revision, &plan->manifest) == INSTALL_MANIFEST_OK &&
       install_manifest_encode(&plan->manifest, &plan->manifest_text,
         &plan->manifest_bytes) == INSTALL_MANIFEST_OK;
@@ -260,6 +265,12 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   bool closed = handle_close(plan->disk.handle) == 0;
   plan->disk.handle = HANDLE_INVALID;
   if (!ok || !closed || plan->prior.needs_legacy) {
+    return false;
+  }
+  free(plan->rescue.memory);
+  plan->rescue = (struct install_source){.handle = HANDLE_INVALID};
+  if (!install_archive_filter(&plan->archive, plan->record.layout.pool_partition,
+        &plan->programs, &plan->rescue)) {
     return false;
   }
   plan->configuration = boot_configuration(plan->record.layout.disk_guid,
