@@ -1,4 +1,5 @@
 #include "esp_payload.h"
+#include "esp_directory.h"
 #include "digest.h"
 #include "progress.h"
 
@@ -10,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BOOT_DIRECTORY_READ (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES)
+#define BOOT_DIRECTORY_READ (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 #define BOOT_DIRECTORY_WRITE (BOOT_DIRECTORY_READ | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
 #define BOOT_CONTROL_READ (MOUNT_RIGHT_OPEN_ROOT | MOUNT_RIGHT_OBSERVE)
 #define BOOT_CONTROL_WRITE (BOOT_CONTROL_READ | MOUNT_RIGHT_WRITE)
@@ -255,10 +256,8 @@ static bool directory_child(handle_t parent, const char *name, bool create,
     handle_t *child, struct install_esp_payload_report *report)
 {
   uint64_t rights = create ? BOOT_DIRECTORY_WRITE : BOOT_DIRECTORY_READ;
-  enum call_status status = directory_lookup(parent, name, DIRECTORY_KIND_DIRECTORY, rights, child);
-  if (status == CALL_NOT_FOUND && create) {
-    status = directory_create(parent, name, DIRECTORY_KIND_DIRECTORY, rights, child);
-  }
+  enum call_status status = install_esp_child_open(parent, name,
+      DIRECTORY_KIND_DIRECTORY, rights, create, child);
   return status == CALL_OK || fail(report, status);
 }
 
@@ -272,8 +271,8 @@ static bool open_attempt(const struct install_esp_payloads *result, bool create,
   if (ok) {
     enum call_status status = create ? directory_create(revision, result->record.attempt,
         DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_WRITE, attempt) :
-        directory_lookup(revision, result->record.attempt, DIRECTORY_KIND_DIRECTORY,
-        BOOT_DIRECTORY_READ, attempt);
+        install_esp_child_open(revision, result->record.attempt,
+        DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_READ, false, attempt);
     ok = status == CALL_OK || fail(report, status);
   }
   if (revision != HANDLE_INVALID) {

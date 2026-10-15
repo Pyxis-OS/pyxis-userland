@@ -18,8 +18,12 @@ OBSERVE admission identity/geometry, reviewed sources and SHA-256 digests. The
 helper re-observes immutable target facts and lifecycle state; it also reopens
 the control's root to compare held domain/object identity. It never accepts a
 path as authority or substitutes another target. Stage requires native
-LOOKUP|READ_FILES|CREATE|WRITE_FILES on the root and OPEN_ROOT|OBSERVE|WRITE on
-the control. No REMOVE grant is needed. Verification traverses with read rights.
+LOOKUP|ENUMERATE|READ_FILES|CREATE|WRITE_FILES on the root and
+OPEN_ROOT|OBSERVE|WRITE on the control. No REMOVE grant is needed. Verification
+traverses with read/enumeration rights. Each reused parent is selected from its
+enumerated canonical name with ASCII FAT case folding, at stage-open and each
+verification. An 8.3 alias of a different canonical name is never admitted;
+creating a missing canonical name refuses an existing alias collision.
 After a planning view is retired, the caller matches the newly admitted RW
 instance to Review and supplies that instance's OBSERVE facts: its live domain
 is not assumed to survive retirement/re-admission.
@@ -47,6 +51,17 @@ bookkeeping error, not an uncertain filesystem outcome or a reason to retry.
 Any failed mutation can leave artifacts, regardless of its error status. Stop,
 retain the reported path/phase and inspect manually: no replacement, deletion,
 automatic resume, rollback or repair is performed.
+
+The current caller accepts Cancel before confirming Apply. Stage and verify are
+synchronous and do not poll cancellation input during hashing/copying or sync.
+Progress reports observation, not a cancellation channel. Interruption after
+confirmation can leave the unreferenced partial attempt; it does not roll back
+or undo already confirmed writes. This is not a cancellable Apply interface.
+
+`esp_directory.h` shares the canonical-name child open/create check with trusted
+classic ESP writers for both files and directories. Callers retain exclusive
+mount ownership and propagate ENUMERATE on directory handles. The helper never
+restarts changed enumeration or retries a failed create.
 
 The caller owns admission, plan/consent, BEGIN/CHECK/END and interval deadlines,
 retirement and later ownership-based cleanup. The helper neither acquires nor

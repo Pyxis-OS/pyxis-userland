@@ -60,6 +60,9 @@ bool install_esp_payload_path(const char *revision, const char *attempt,
  * bound root and reviewed target, creates one fresh attempt, syncs and reopens
  * each retained object before checking its exact extent/hash. No REMOVE rights,
  * raw access, admission, BEGIN/CHECK/END, configuration or activation.
+ * Root and traversal handles need ENUMERATE to check canonical parent names;
+ * an 8.3 alias of another name is refused. Stage is synchronous and does not
+ * poll cancellation input after the caller confirms Apply.
  *
  * On failure *result may still own partial evidence: close it before retiring
  * the caller's mount. A failed create can have effects regardless of status.
