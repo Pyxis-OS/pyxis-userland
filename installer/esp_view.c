@@ -199,6 +199,34 @@ enum call_status install_esp_view_end(struct install_esp_view *view)
   return status;
 }
 
+enum call_status install_esp_view_end_checked(struct install_esp_view *view, handle_t clock)
+{
+  if (!view || !view->interval_id) {
+    return CALL_BAD_REQUEST;
+  }
+  uint64_t deadline = view->interval_deadline_ns;
+  struct mount_state_reply state;
+  enum call_status status = observe_current(view, &state, true);
+  if (status == CALL_OK && (!(state.flags & MOUNT_STATE_INTERVAL) ||
+      state.interval_id != view->interval_id || state.interval_deadline_ns != deadline)) {
+    status = CALL_TIMED_OUT;
+  }
+  if (status == CALL_OK) {
+    status = install_esp_view_end(view);
+  }
+  if (status == CALL_OK) {
+    uint64_t now;
+    status = clock_now(clock, &now);
+    if (status == CALL_OK && now >= deadline) {
+      status = CALL_TIMED_OUT;
+    }
+  }
+  if (status != CALL_OK) {
+    view->failure_status = status;
+  }
+  return status;
+}
+
 enum call_status install_esp_view_close_and_retire(struct install_esp_view *view,
     handle_t clock, uint64_t deadline_ns)
 {

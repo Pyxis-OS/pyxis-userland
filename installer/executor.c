@@ -195,7 +195,7 @@ static bool stage_esp(struct install_plan *plan)
     fprintf(stderr, "installer: EFI verification/publication failed (status %u)\n", status);
     return false;
   }
-  status = install_esp_view_end(&plan->view);
+  status = install_esp_view_end_checked(&plan->view, plan->clock);
   if (status != CALL_OK) {
     fprintf(stderr, "installer: EFI interval end failed (status %u)\n", status);
   }

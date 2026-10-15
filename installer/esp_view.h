@@ -30,6 +30,9 @@ enum call_status install_esp_view_open(struct install_esp_view *view, handle_t d
 /* BEGIN then CHECK immediately, in this process. A failed CHECK retains the
  * known interval for END. Any failure stops further BEGIN attempts on the view. */
 enum call_status install_esp_view_begin_checked(struct install_esp_view *view);
+/* Successful verification must finish within the original interval. Cleanup
+ * uses plain END so an expired interval can still be released. */
+enum call_status install_esp_view_end_checked(struct install_esp_view *view, handle_t clock);
 enum call_status install_esp_view_end(struct install_esp_view *view);
 /* Caller first closes all staged file/directory handles. END, root close,
  * RETIRE and control close occur in that order. Only RETIRE BUSY is retried,

@@ -318,6 +318,19 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
       !space_budget(plan) || !install_plan_record_valid(&plan->record)) {
     return false;
   }
+  if (!plan->record.coexist) {
+    /* Preserve the complete fixed-tree fit check even though raw initialization
+     * writes only the bootstrap tree. Native staging must not discover a known
+     * oversized payload after erase or recovery has begun. */
+    struct install_esp *complete = install_esp_plan(&plan->raw_disk, &plan->record.layout,
+        &plan->efi, &plan->kernel, &plan->rescue, plan->configuration,
+        plan->configuration_bytes, plan->revision_record, revision_bytes,
+        npfs_get_u32(plan->record.layout.esp_guid));
+    if (!complete) {
+      return false;
+    }
+    install_esp_destroy(complete);
+  }
   if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
     /* Initialization is confined by reviewed erase/ESP-rebuild authority.
      * Kernel/archive are subsequently written through the native FAT view. */
