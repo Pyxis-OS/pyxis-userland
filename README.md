@@ -102,6 +102,10 @@ The library loads no trust or startup resources. `httpfs` attempts a ready TLS
 runtime and loads the packaged public roots before publication; HTTP roots can
 remain available when explicitly optional TLS roots cannot start.
 
+[`http prepare`](http/README.md) issues a reusable POST, PUT or PATCH endpoint
+from one inherited HTTP root through ordinary capability output. Its optional
+headers come from a bounded native FILE, and each use starts a fresh timeout.
+
 Kernel option `remote.beacon=NAME` selects reverse mode for the configured
 `remote` space. Boot init forwards `PYXIS_REMOTE_BEACON` and a separate
 BROADCAST-only `udp_beacons` grant through the trusted session bootstrap.

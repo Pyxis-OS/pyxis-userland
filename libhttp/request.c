@@ -105,13 +105,15 @@ bool http_prepare_request(const struct http_request *request, const struct http_
   case HTTP_METHOD_GET: method = "GET"; break;
   case HTTP_METHOD_POST: method = "POST"; break;
   case HTTP_METHOD_DELETE: method = "DELETE"; break;
+  case HTTP_METHOD_PUT: method = "PUT"; break;
+  case HTTP_METHOD_PATCH: method = "PATCH"; break;
   default: return fail(response, HTTP_BAD_ARGUMENT);
   }
-  bool post = request->method == HTTP_METHOD_POST;
-  if (!post && (request->body != HANDLE_INVALID || request->body_length)) {
+  bool has_body = http_method_has_body(request->method);
+  if (!has_body && (request->body != HANDLE_INVALID || request->body_length)) {
     return fail(response, HTTP_BAD_ARGUMENT);
   }
-  size_t generated = post ? 4 : 3;
+  size_t generated = has_body ? 4 : 3;
   if (request->header_count > HTTP_REQUEST_FIELDS_MAX - generated) {
     return fail(response, HTTP_LIMIT);
   }
@@ -123,7 +125,7 @@ bool http_prepare_request(const struct http_request *request, const struct http_
     return fail(response, HTTP_LIMIT);
   }
   size_t length = (size_t)written;
-  if (post) {
+  if (has_body) {
     written = snprintf(initial + length, sizeof(initial) - length,
         "Content-Length: %llu\r\n", (unsigned long long)request->body_length);
     if (written < 0 || (size_t)written >= sizeof(initial) - length) {
@@ -164,7 +166,7 @@ bool http_prepare_request(const struct http_request *request, const struct http_
     }
     length += header->name_length + header->value_length + 4;
   }
-  if (post && check_source) {
+  if (has_body && check_source) {
     struct handle_info info;
     if (!source(response, handle_query(request->body, &info))) {
       return false;

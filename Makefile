@@ -17,7 +17,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
+INSTALL_PROGRAMS := mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -36,7 +36,7 @@ THREADPROBE_CXXFLAGS := $(PYXIS_CXXFLAGS) -fno-exceptions -fno-rtti -ftls-model=
 export CXX THREADPROBE_CXX_CPPFLAGS THREADPROBE_CXXFLAGS
 export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX ZLIB_PREFIX LIBPNG_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/threadprobe/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/threadprobe/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/cp/main.o $(BUILD)/echo/main.o $(BUILD)/head/main.o $(BUILD)/log/main.o $(BUILD)/hostname/main.o $(BUILD)/lspci/main.o $(BUILD)/lsusb/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -82,7 +82,7 @@ LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
+.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
 .PHONY: fat32ctl config
 all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
@@ -143,6 +143,7 @@ $(BUILD)/threadprobe/entry.o: threadprobe/entry.S Makefile $(SDK)/share/pyxis.mk
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+http: $(BUILD)/http.pxe
 httpfs: $(BUILD)/httpfs.pxe
 libhttp: $(HTTP_LIBRARY)
 libtls: $(TLS_LIBRARY)

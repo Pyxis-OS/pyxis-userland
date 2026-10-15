@@ -1,5 +1,6 @@
 #include <endpoint.h>
 #include <handle.h>
+#include <http_prepare.h>
 #include <provider.h>
 #include <string.h>
 
@@ -87,6 +88,74 @@ static enum call_status finish_reply(struct endpoint_packet *packet, bool remova
     if (packet->grants[i].handle != HANDLE_INVALID) {
       handle_close(packet->grants[i].handle);
     }
+  }
+  return status;
+}
+
+enum call_status http_prepare_endpoint(handle_t root, uint64_t method,
+    const void *target, size_t target_size, const void *headers, size_t headers_size,
+    uint64_t timeout_ns, uint64_t deadline_ns, struct resource_result *result)
+{
+  if (!result) {
+    return CALL_BAD_REQUEST;
+  }
+  *result = (struct resource_result){0};
+  if ((method != HTTP_ENDPOINT_POST && method != HTTP_ENDPOINT_PUT &&
+      method != HTTP_ENDPOINT_PATCH) || !timeout_ns || !deadline_ns ||
+      (target_size && !target) || (headers_size && !headers)) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t capacity = ENDPOINT_DATA_MAX - sizeof(struct http_endpoint_request);
+  if (target_size > capacity || headers_size > capacity - target_size) {
+    return CALL_FILE_TOO_LARGE;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(root, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.kind != HANDLE_KIND_EXPORTED || info.protocol != PROTOCOL_PROVIDER) {
+    return CALL_WRONG_TYPE;
+  }
+  if (!(info.rights & PROVIDER_RIGHT_OPEN_WRITE) ||
+      (info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
+    return CALL_DENIED;
+  }
+  struct {
+    struct http_endpoint_request body;
+    unsigned char bytes[ENDPOINT_DATA_MAX - sizeof(struct http_endpoint_request)];
+  } request = {
+    .body = {method, timeout_ns, deadline_ns, target_size, headers_size},
+  };
+  if (target_size) {
+    memcpy(request.bytes, target, target_size);
+  }
+  if (headers_size) {
+    memcpy(request.bytes + target_size, headers, headers_size);
+  }
+  struct endpoint_packet packet = {0};
+  status = endpoint_invoke(root, PROTOCOL_PROVIDER, HTTP_PREPARE_ENDPOINT,
+      &request, sizeof(request.body) + target_size + headers_size, NULL, 0,
+      deadline_ns, &packet);
+  volatile unsigned char *private_bytes = (volatile unsigned char *)&request;
+  for (size_t i = 0; i < sizeof(request); ++i) {
+    private_bytes[i] = 0;
+  }
+  result->delivery = packet.delivery;
+  if (status != CALL_OK) {
+    return status;
+  }
+  status = finish_reply(&packet, false, result);
+  if (status == CALL_OK && result->resource != HANDLE_INVALID &&
+      (result->info.kind != HANDLE_KIND_EXPORTED ||
+      result->info.protocol != PROTOCOL_PROVIDER ||
+      (result->info.rights & ~info.rights) ||
+      (result->info.transport & ~info.transport) ||
+      (result->info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL)) {
+    uint64_t delivery = result->delivery;
+    resource_result_close(result);
+    result->delivery = delivery;
+    status = CALL_BAD_REQUEST;
   }
   return status;
 }

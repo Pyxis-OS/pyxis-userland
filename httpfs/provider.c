@@ -2,6 +2,7 @@
 #include <abi/completion.h>
 #include <abi/directory.h>
 #include <abi/http_transaction.h>
+#include <abi/http_prepare.h>
 #include <abi/transaction.h>
 #include <clock.h>
 #include <completion.h>
@@ -26,14 +27,22 @@ _Static_assert((unsigned)HTTP_RESPONSE_PENDING == (unsigned)HTTP_FRAMING_PENDING
     (unsigned)HTTP_RESPONSE_FAILED == (unsigned)HTTP_FRAMING_FAILED, "HTTP framing ABI encoding");
 
 enum facet { FACET_RESERVED, FACET_CONTROL, FACET_BODY, FACET_OBSERVATION,
-  FACET_SNAPSHOT };
+  FACET_SNAPSHOT, FACET_ENDPOINT };
 enum staging_operation { STAGING_NONE, STAGING_CREATE, STAGING_UNLINK,
   STAGING_WRITE, STAGING_RESIZE, SNAPSHOT_WRITE, SNAPSHOT_READ };
+
+struct configured_endpoint {
+  uint64_t method, timeout, rights;
+  size_t root, fields_size;
+  char uri[HTTP_URI_MAX + 1];
+  char fields[ENDPOINT_DATA_MAX];
+};
 
 struct transaction;
 struct exported {
   handle_t controller;
   struct transaction *owner;
+  struct configured_endpoint *config;
   enum facet facet;
   bool live, kernel_reads;
 };
@@ -129,7 +138,8 @@ static uint64_t object_id(size_t slot)
 
 static uint64_t facet_protocol(enum facet facet)
 {
-  return facet == FACET_BODY || facet == FACET_SNAPSHOT ? PROTOCOL_FILE :
+  return facet == FACET_ENDPOINT ? PROTOCOL_PROVIDER :
+      facet == FACET_BODY || facet == FACET_SNAPSHOT ? PROTOCOL_FILE :
       facet == FACET_CONTROL ? PROTOCOL_TRANSACTION : PROTOCOL_HTTP_TRANSACTION;
 }
 
@@ -386,7 +396,7 @@ static enum call_status reserve(struct loop *loop, size_t count,
   }
   size_t slots[5], found = 0;
   for (size_t i = 0; i < EXPORT_SLOTS && found < count; ++i) {
-    if (!loop->exports[i].owner) {
+    if (!loop->exports[i].owner && !loop->exports[i].config) {
       slots[found++] = i;
     }
   }
@@ -617,13 +627,125 @@ static bool parse_fields(struct transaction *transaction, size_t size)
   return true;
 }
 
+static void configure_endpoint(struct loop *loop, size_t root,
+    struct endpoint_packet *packet)
+{
+  struct http_endpoint_request request;
+  if (packet->size < sizeof(request)) {
+    reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
+    return;
+  }
+  memcpy(&request, packet->data, sizeof(request));
+  if ((request.method != HTTP_ENDPOINT_POST && request.method != HTTP_ENDPOINT_PUT &&
+      request.method != HTTP_ENDPOINT_PATCH) || !request.timeout_ns || !request.deadline_ns ||
+      !request.target_size || request.target_size > packet->size - sizeof(request) ||
+      request.headers_size != packet->size - sizeof(request) - request.target_size ||
+      memchr(packet->data + sizeof(request), 0, packet->size - sizeof(request))) {
+    reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
+    return;
+  }
+  if (!(packet->rights & PROVIDER_RIGHT_OPEN_WRITE)) {
+    reply(loop, packet, CALL_DENIED, NULL, 0, NULL, 0);
+    return;
+  }
+  uint64_t deadline;
+  enum call_status status = default_deadline(loop, request.deadline_ns, &deadline);
+  size_t slot = EXPORT_SLOTS;
+  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+    if (!loop->exports[i].owner && !loop->exports[i].config) {
+      slot = i;
+      break;
+    }
+  }
+  if (status == CALL_OK && slot == EXPORT_SLOTS) {
+    status = CALL_LIMIT;
+  }
+  if (status != CALL_OK) {
+    reply(loop, packet, status, NULL, 0, NULL, 0);
+    return;
+  }
+  struct configured_endpoint *config = calloc(1, sizeof(*config));
+  struct transaction_work *work = calloc(1, sizeof(*work));
+  if (!config || !work) {
+    free(config);
+    free(work);
+    reply(loop, packet, CALL_NO_MEMORY, NULL, 0, NULL, 0);
+    return;
+  }
+  config->root = root;
+  config->method = request.method;
+  config->timeout = request.timeout_ns;
+  config->rights = packet->rights & PROVIDER_RIGHTS;
+  config->fields_size = request.headers_size;
+  bool https = root == HTTPFS_ROOT_HTTPS || root == HTTPFS_ROOT_JSON_HTTPS;
+  int length = snprintf(config->uri, sizeof(config->uri), "%s://%.*s",
+      https ? "https" : "http", (int)request.target_size, packet->data + sizeof(request));
+  if (length < 0 || (size_t)length >= sizeof(config->uri)) {
+    status = CALL_FILE_TOO_LARGE;
+  }
+  memcpy(config->fields, packet->data + sizeof(request) + request.target_size, request.headers_size);
+  struct transaction validation = {.work = work,
+    .flags = HTTP_PREPARE_CREDENTIALS | (root >= HTTPFS_ROOT_JSON_HTTP ? HTTP_PREPARE_JSON : 0)};
+  memcpy(work->fields, config->fields, config->fields_size);
+  if (status == CALL_OK && !parse_fields(&validation, config->fields_size)) {
+    status = CALL_BAD_REQUEST;
+  }
+  struct http_client client = loop->client;
+  client.scheme = https ? HTTP_SCHEME_HTTPS : HTTP_SCHEME_HTTP;
+  struct http_request outgoing = {.method = request.method,
+    .headers = work->headers_fields, .header_count = work->field_count};
+  if (status == CALL_OK &&
+      !http_request_validate(&client, config->uri, &outgoing, &validation.response)) {
+    status = response_status(&validation.response);
+  }
+  erase(work, sizeof(*work));
+  free(work);
+  if (status != CALL_OK) {
+    erase(config, sizeof(*config));
+    free(config);
+    reply(loop, packet, status, NULL, 0, NULL, 0);
+    return;
+  }
+  struct exported *entry = &loop->exports[slot];
+  *entry = (struct exported){.config = config, .facet = FACET_ENDPOINT};
+  handle_t client_handle = HANDLE_INVALID;
+  status = endpoint_export(loop->service, loop->receiver, object_id(slot),
+      PROTOCOL_PROVIDER, config->rights, HANDLE_TRANSPORT_CALL,
+      &client_handle, &entry->controller);
+  if (status != CALL_OK) {
+    if (status == CALL_OUTCOME_UNKNOWN) {
+      loop->fatal = status;
+    } else {
+      erase(config, sizeof(*config));
+      free(config);
+      *entry = (struct exported){0};
+    }
+    reply(loop, packet, status, NULL, 0, NULL, 0);
+    return;
+  }
+  entry->live = true;
+  struct provider_open_reply response = {.protocol = PROTOCOL_PROVIDER};
+  status = endpoint_describe_publish(loop->receiver, object_id(slot),
+      &response.description, NULL, 0, HANDLE_INVALID);
+  if (status == CALL_OK) {
+    struct endpoint_grant grant = {client_handle, config->rights, HANDLE_TRANSPORT_CALL};
+    status = reply(loop, packet, CALL_OK, &response, sizeof(response), &grant, 1);
+  } else {
+    reply(loop, packet, status, NULL, 0, NULL, 0);
+  }
+  if (handle_close(client_handle) != CALL_OK) {
+    loop->fatal = CALL_BAD_HANDLE;
+  }
+  /* An undelivered client has no holder; its ordinary RETIRE releases config. */
+}
+
 static void preparation_ready(struct loop *loop, struct transaction *transaction)
 {
   if (transaction->aborting || !transaction->work->preparation.receipt) {
     return;
   }
   handle_t handles[3] = {0};
-  bool post = transaction->method == HTTP_PREPARE_POST;
+  bool post = http_method_has_body(transaction->method);
   enum facet facets[] = {FACET_CONTROL, post ? FACET_BODY : FACET_OBSERVATION, FACET_OBSERVATION};
   size_t count = post ? 3 : 2;
   if (transaction->generic) {
@@ -811,7 +933,8 @@ static void prepare(struct loop *loop, size_t root, struct endpoint_packet *pack
 }
 
 
-static void open_resource(struct loop *loop, size_t root, struct endpoint_packet *packet)
+static void open_resource(struct loop *loop, size_t root,
+    const struct configured_endpoint *config, struct endpoint_packet *packet)
 {
   struct provider_open_request request = {0};
   size_t prefix;
@@ -842,7 +965,8 @@ static void open_resource(struct loop *loop, size_t root, struct endpoint_packet
     reply(loop, packet, CALL_DENIED, NULL, 0, NULL, 0);
     return;
   }
-  if (request.target_size != packet->size - prefix || !request.target_size ||
+  if (request.target_size != packet->size - prefix ||
+      (config ? request.target_size != 0 : request.target_size == 0) ||
       memchr(packet->data + prefix, 0, request.target_size)) {
     reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
     return;
@@ -864,17 +988,36 @@ static void open_resource(struct loop *loop, size_t root, struct endpoint_packet
   }
   transaction->generic = true;
   transaction->removing = removing;
-  transaction->method = removing ? HTTP_METHOD_DELETE : write ? HTTP_METHOD_POST : HTTP_METHOD_GET;
+  transaction->method = removing ? HTTP_METHOD_DELETE :
+      write ? (config ? config->method : HTTP_METHOD_POST) : HTTP_METHOD_GET;
   transaction->flags = root >= HTTPFS_ROOT_JSON_HTTP ? HTTP_PREPARE_JSON : 0;
-  bool https = root == HTTPFS_ROOT_HTTPS || root == HTTPFS_ROOT_JSON_HTTPS;
-  int length = snprintf(transaction->work->uri, sizeof(transaction->work->uri), "%s://%.*s",
-      https ? "https" : "http", (int)request.target_size, packet->data + prefix);
-  status = length < 0 || (size_t)length >= sizeof(transaction->work->uri) ? CALL_FILE_TOO_LARGE :
-      default_deadline(loop, request.deadline_ns, &transaction->deadline);
+  size_t fields_size = config ? config->fields_size : 0;
+  if (config) {
+    memcpy(transaction->work->uri, config->uri, sizeof(config->uri));
+    memcpy(transaction->work->fields, config->fields, fields_size);
+    transaction->flags |= HTTP_PREPARE_CREDENTIALS;
+    uint64_t now;
+    status = clock_now(loop->client.authority.clock, &now);
+    if (status == CALL_OK) {
+      if (now > UINT64_MAX - config->timeout) {
+        status = CALL_LIMIT;
+      } else {
+        uint64_t limit = now + config->timeout;
+        status = default_deadline(loop, request.deadline_ns && request.deadline_ns < limit ?
+            request.deadline_ns : limit, &transaction->deadline);
+      }
+    }
+  } else {
+    bool https = root == HTTPFS_ROOT_HTTPS || root == HTTPFS_ROOT_JSON_HTTPS;
+    int length = snprintf(transaction->work->uri, sizeof(transaction->work->uri), "%s://%.*s",
+        https ? "https" : "http", (int)request.target_size, packet->data + prefix);
+    status = length < 0 || (size_t)length >= sizeof(transaction->work->uri) ? CALL_FILE_TOO_LARGE :
+        default_deadline(loop, request.deadline_ns, &transaction->deadline);
+  }
   if (status == CALL_OK) {
     status = chain_initialize(transaction);
   }
-  if (status == CALL_OK && !parse_fields(transaction, 0)) {
+  if (status == CALL_OK && !parse_fields(transaction, fields_size)) {
     status = CALL_BAD_REQUEST;
   }
   if (status != CALL_OK) {
@@ -1239,8 +1382,8 @@ static void start_engine(struct loop *loop, struct transaction *transaction)
   struct http_client client = loop->client;
   client.scheme = uri.scheme;
   struct http_request request = {.method = transaction->method,
-    .body = transaction->method == HTTP_METHOD_POST ? transaction->backing : HANDLE_INVALID,
-    .body_length = transaction->method == HTTP_METHOD_POST ? transaction->body_length : 0,
+    .body = http_method_has_body(transaction->method) ? transaction->backing : HANDLE_INVALID,
+    .body_length = http_method_has_body(transaction->method) ? transaction->body_length : 0,
     .headers = transaction->work->headers_fields, .header_count = transaction->work->field_count};
   struct http_response_limits limits = {
     transaction->prepare_context.remaining.header_bytes,
@@ -1793,6 +1936,17 @@ static void retired(struct loop *loop, const struct endpoint_packet *packet)
     return;
   }
   struct exported *entry = &loop->exports[packet->object_id - HTTPFS_TRANSACTION_OBJECT_BASE];
+  if (entry->live && entry->config && packet->protocol == PROTOCOL_PROVIDER) {
+    enum call_status status = endpoint_retire_ack(loop->receiver, packet->object_id);
+    if (status != CALL_OK || handle_close(entry->controller) != CALL_OK) {
+      loop->fatal = status != CALL_OK ? status : CALL_BAD_HANDLE;
+      return;
+    }
+    erase(entry->config, sizeof(*entry->config));
+    free(entry->config);
+    *entry = (struct exported){0};
+    return;
+  }
   struct transaction *transaction = entry->owner;
   if (!entry->live || !transaction || packet->protocol != facet_protocol(entry->facet)) {
     loop->fatal = CALL_BAD_REQUEST;
@@ -1869,10 +2023,12 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
   if (packet->object_id >= HTTPFS_ROOT_OBJECT_BASE &&
       packet->object_id < HTTPFS_TRANSACTION_OBJECT_BASE && packet->protocol == PROTOCOL_PROVIDER &&
       loop->roots[packet->object_id - HTTPFS_ROOT_OBJECT_BASE]) {
-    if (packet->operation == PROVIDER_PREPARE) {
+    if (packet->operation == HTTP_PREPARE_ENDPOINT) {
+      configure_endpoint(loop, packet->object_id - HTTPFS_ROOT_OBJECT_BASE, packet);
+    } else if (packet->operation == PROVIDER_PREPARE) {
       prepare(loop, packet->object_id - HTTPFS_ROOT_OBJECT_BASE, packet);
     } else if (packet->operation == PROVIDER_OPEN || packet->operation == PROVIDER_REMOVE) {
-      open_resource(loop, packet->object_id - HTTPFS_ROOT_OBJECT_BASE, packet);
+      open_resource(loop, packet->object_id - HTTPFS_ROOT_OBJECT_BASE, NULL, packet);
     } else {
       reply(loop, packet, CALL_BAD_OPERATION, NULL, 0, NULL, 0);
     }
@@ -1884,6 +2040,14 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
     return;
   }
   struct exported *entry = &loop->exports[packet->object_id - HTTPFS_TRANSACTION_OBJECT_BASE];
+  if (entry->live && entry->config && packet->protocol == PROTOCOL_PROVIDER) {
+    if (packet->operation == PROVIDER_OPEN || packet->operation == PROVIDER_REMOVE) {
+      open_resource(loop, entry->config->root, entry->config, packet);
+    } else {
+      reply(loop, packet, CALL_BAD_OPERATION, NULL, 0, NULL, 0);
+    }
+    return;
+  }
   struct transaction *transaction = entry->owner;
   if (!entry->live || !transaction || packet->protocol != facet_protocol(entry->facet)) {
     reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
@@ -1943,7 +2107,7 @@ static bool alive(const struct loop *loop)
     }
   }
   for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
-    if (loop->exports[i].owner) {
+    if (loop->exports[i].owner || loop->exports[i].config) {
       return true;
     }
   }
@@ -2009,6 +2173,10 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
     }
   }
   for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+    if (loop.exports[i].config) {
+      erase(loop.exports[i].config, sizeof(*loop.exports[i].config));
+      free(loop.exports[i].config);
+    }
     if (loop.exports[i].controller && handle_close(loop.exports[i].controller) != 0) {
       loop.fatal = CALL_BAD_HANDLE;
     }

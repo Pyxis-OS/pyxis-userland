@@ -1043,7 +1043,7 @@ struct http_stream *http_request_start(const struct http_client *client, const c
     result->network_status = CALL_TIMED_OUT;
     return NULL;
   }
-  if (request->method == HTTP_METHOD_POST) {
+  if (http_method_has_body(request->method)) {
     struct handle_info info;
     enum call_status status = handle_query(request->body, &info);
     if (status == CALL_OK && (info.kind != HANDLE_KIND_NATIVE ||
@@ -1079,7 +1079,7 @@ struct http_stream *http_request_start(const struct http_client *client, const c
     free(stream);
     return NULL;
   }
-  stream->exchange_stage = request->method == HTTP_METHOD_POST ? EXCHANGE_SIZE : EXCHANGE_RESOLVE;
+  stream->exchange_stage = http_method_has_body(request->method) ? EXCHANGE_SIZE : EXCHANGE_RESOLVE;
   result->state = HTTP_RESPONSE_PENDING;
   return stream;
 }
