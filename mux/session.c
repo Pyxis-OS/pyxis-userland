@@ -17,6 +17,7 @@
 #include <abi/keyboard.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
+#include <abi/retention.h>
 #include <abi/pointer.h>
 #include <abi/power.h>
 #include <abi/profile.h>
@@ -106,7 +107,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 25 };
+  enum { OPTIONAL_RESOURCE_COUNT = 26 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -231,6 +232,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     /* Store grants permit owned graphics actions, never terminal CONTROL. */
     {"clipboard_local", CLIPBOARD_RIGHTS}, {"clipboard_shared", CLIPBOARD_RIGHTS},
     {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
+    {"retention_account", RETENTION_RIGHT_CAPTURE},
     {"tcp", TCP_SERVICE_RIGHTS}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
@@ -249,7 +251,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     grants[grant_count].rights &= allowed[i].rights;
     entries[entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
-      .flags = !strcmp(allowed[i].name, "service") ? 0 : ENVIRONMENT_EXPORTED,
+      .flags = !strcmp(allowed[i].name, "service") || !strcmp(allowed[i].name, "retention_account") ?
+          0 : ENVIRONMENT_EXPORTED,
       .value = grant_count++,
     };
   }

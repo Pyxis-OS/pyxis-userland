@@ -19,6 +19,7 @@
 #include <abi/udp.h>
 #include <abi/tcp.h>
 #include <abi/pipe.h>
+#include <abi/retention.h>
 #include <abi/http_transaction.h>
 #include <abi/power.h>
 #include <abi/screen_capture.h>
@@ -68,7 +69,7 @@ struct prepared_stage {
   handle_t staging_leaf;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[34 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[36 + BUNDLE_SOURCE_LIMIT];
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   struct environment_capture captured;
@@ -302,6 +303,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     return retired;
   }
   bool session = mode == SHELL_SESSION;
+  handle_t retention_factory = session ? bootstrap_capability("retention_factory") : HANDLE_INVALID;
+  handle_t retention_account = session ? bootstrap_capability("retention_account") : HANDLE_INVALID;
+  bool has_retention_factory = retention_factory != HANDLE_INVALID;
+  bool has_retention_account = retention_account != HANDLE_INVALID;
+  if (has_retention_factory && has_retention_account) {
+    return CALL_DENIED;
+  }
   /* Only the explicit trusted init/session successor receives this ancestor;
    * ordinary clients receive a newly declared leaf through bundle preparation. */
   handle_t job_provisioner = session ? bootstrap_capability("job_provisioner") : HANDLE_INVALID;
@@ -370,7 +378,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 35 -
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 37 -
       BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -406,7 +414,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
-  size_t grant_count = job_provisioner_index + (has_job_provisioner ? 1 : 0);
+  size_t retention_factory_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
+  size_t retention_account_index = retention_factory_index + (has_retention_factory ? 1 : 0);
+  size_t grant_count = retention_account_index + (has_retention_account ? 1 : 0);
   size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
@@ -585,6 +595,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       job_provisioner, JOB_PROVISIONER_RIGHTS, 0,
     };
   }
+  if (has_retention_factory) {
+    grants[retention_factory_index] = (struct launch_grant){
+      retention_factory, RETENTION_FACTORY_RIGHT_CREATE, 0,
+    };
+  }
+  if (has_retention_account) {
+    grants[retention_account_index] = (struct launch_grant){
+      retention_account, RETENTION_RIGHT_CAPTURE, 0,
+    };
+  }
   struct launch_environment_entry *resources = prepared->resources;
   resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", CHILD_OUTPUT);
   resources[1] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
@@ -686,6 +706,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_clipboard_shared) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clipboard_shared", clipboard_shared_index);
+  }
+  if (has_retention_factory) {
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_factory", retention_factory_index);
+  }
+  if (has_retention_account) {
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", retention_account_index);
   }
   if (session) {
     struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];

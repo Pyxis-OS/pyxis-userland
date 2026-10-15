@@ -4,6 +4,7 @@
 #include "config.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #define SESSION_CONFIG_PATH "boot://config/session.lua"
 
@@ -17,6 +18,7 @@ struct session_variable {
 struct session_config {
   char *timezone;
   size_t tab_width;
+  uint64_t value_limit_bytes, session_limit_bytes;
   struct session_variable *environment;
   size_t environment_count;
 };

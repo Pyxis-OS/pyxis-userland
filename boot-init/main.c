@@ -7,6 +7,7 @@
 #include <abi/endpoint.h>
 #include <abi/file.h>
 #include <abi/launcher.h>
+#include <abi/retention.h>
 #include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/thread.h>
@@ -77,6 +78,7 @@ enum service {
   SERVICE_PIPE,
   SERVICE_ENDPOINT,
   SERVICE_TERMINAL,
+  SERVICE_RETENTION_FACTORY,
   SERVICE_COUNT,
 };
 
@@ -100,6 +102,7 @@ static const struct {
   [SERVICE_PIPE] = {"pipe", PIPE_SERVICE_RIGHT_CREATE, 0},
   [SERVICE_ENDPOINT] = {"service", ENDPOINT_SERVICE_RIGHT_CREATE, 0},
   [SERVICE_TERMINAL] = {"terminal", TERMINAL_SERVICE_RIGHT_CREATE, 0},
+  [SERVICE_RETENTION_FACTORY] = {"retention_factory", RETENTION_FACTORY_RIGHT_CREATE, 0},
 };
 
 /* Grant order after the services: the boot, tmp and bin roots, then volumes. */
@@ -688,7 +691,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     uint64_t rights = services[i].rights | (space->network ? services[i].owner_rights : 0);
     launch->grants[i] = (struct launch_grant){authority->services[i], rights, 0};
     launch->resources[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)services[i].name, i);
-    if (i == SERVICE_ENDPOINT) {
+    if (i == SERVICE_ENDPOINT || i == SERVICE_RETENTION_FACTORY) {
       launch->resources[i].flags = 0;
     }
   }

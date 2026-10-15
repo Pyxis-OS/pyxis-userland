@@ -114,13 +114,48 @@ bool session_timezone_valid(const char *name)
   return true;
 }
 
+static void read_retention(lua_State *state, struct session_config *config)
+{
+  config_field(state, 1, "retention");
+  if (lua_isnil(state, 2)) {
+    lua_pop(state, 1);
+    return;
+  }
+  const char *keys[] = {"value_limit_bytes", "session_limit_bytes"};
+  config_keys(state, 2, keys, sizeof(keys) / sizeof(*keys));
+  uint64_t *limits[] = {&config->value_limit_bytes, &config->session_limit_bytes};
+  for (size_t i = 0; i < sizeof(keys) / sizeof(*keys); ++i) {
+    config_field(state, 2, keys[i]);
+    if (!lua_isnil(state, 3)) {
+      int integer;
+      lua_Integer value = lua_tointegerx(state, 3, &integer);
+      if (lua_type(state, 3) != LUA_TNUMBER || !integer || value <= 0) {
+        luaL_error(state, "retention.%s must be a positive integer", keys[i]);
+      }
+      *limits[i] = (uint64_t)value;
+    }
+    lua_pop(state, 1);
+  }
+  lua_pop(state, 1);
+}
+
+static struct session_config default_config(void)
+{
+  return (struct session_config){
+    .tab_width = 8,
+    .value_limit_bytes = UINT64_C(64) * 1024 * 1024,
+    .session_limit_bytes = UINT64_C(512) * 1024 * 1024,
+  };
+}
+
 static int decode_config(lua_State *state)
 {
   struct session_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"timezone", "terminal", "environment"};
+  const char *keys[] = {"timezone", "terminal", "environment", "retention"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
   read_environment(state, config);
+  read_retention(state, config);
 
   config_field(state, 1, "terminal");
   if (!lua_isnil(state, 2)) {
@@ -181,21 +216,21 @@ static enum config_result session_result(enum config_result result,
 
 enum config_result session_config_read_file(const char *path, struct session_config *config)
 {
-  *config = (struct session_config){.tab_width = 8};
+  *config = default_config();
   return session_result(config_read(path, decode_config, config), config);
 }
 
 enum config_result session_config_read_bytes(const char *name, const char *bytes,
     size_t size, struct session_config *config)
 {
-  *config = (struct session_config){.tab_width = 8};
+  *config = default_config();
   return session_result(config_read_bytes(name, bytes, size, decode_config, config), config);
 }
 
 enum config_result session_config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, struct session_config *config)
 {
-  *config = (struct session_config){.tab_width = 8};
+  *config = default_config();
   return session_result(config_read_literal_bytes(name, bytes, size, decode_config, config), config);
 }
 
