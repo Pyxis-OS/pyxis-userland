@@ -37,7 +37,7 @@ enum call_status log_get_snapshot(handle_t log, struct log_snapshot *snapshot)
 enum call_status log_read(handle_t log, struct log_cursor cursor,
     struct log_cursor end, void *bytes, size_t capacity, struct log_read_reply *reply)
 {
-  if (!bytes || !reply || !capacity || capacity > LOG_READ_MAX ||
+  if (!bytes || !reply || capacity <= sizeof(struct log_record) || capacity > LOG_READ_MAX ||
       cursor_after(cursor, end)) {
     return CALL_BAD_REQUEST;
   }
@@ -76,18 +76,36 @@ enum call_status log_read(handle_t log, struct log_cursor cursor,
       expected.line += response.header.dropped_lines;
       expected.offset = 0;
     }
-    for (size_t i = 0; i < response.header.size; ++i) {
-      if (response.bytes[i] == '\n') {
+    size_t offset = 0;
+    while (offset < response.header.size) {
+      struct log_record record;
+      if (response.header.size - offset <= sizeof(record)) {
+        return CALL_BAD_REQUEST;
+      }
+      memcpy(&record, response.bytes + offset, sizeof(record));
+      offset += sizeof(record);
+      if (!record.length || record.length > response.header.size - offset ||
+          record.level < LOG_LEVEL_ERROR || record.level > LOG_LEVEL_TRACE ||
+          record.reserved) {
+        return CALL_BAD_REQUEST;
+      }
+      const unsigned char *text = response.bytes + offset;
+      offset += record.length;
+      if (memchr(text, '\n', record.length - 1u)) {
+        return CALL_BAD_REQUEST;
+      }
+      if (text[record.length - 1u] == '\n') {
         if (expected.line == UINT64_MAX) {
           return CALL_BAD_REQUEST;
         }
         ++expected.line;
         expected.offset = 0;
       } else {
-        if (expected.offset == UINT64_MAX) {
+        /* An unfinished piece ends the reply. */
+        if (offset != response.header.size || expected.offset > UINT64_MAX - record.length) {
           return CALL_BAD_REQUEST;
         }
-        ++expected.offset;
+        expected.offset += record.length;
       }
     }
     if (expected.line != response.header.next.line ||
@@ -102,4 +120,17 @@ enum call_status log_read(handle_t log, struct log_cursor cursor,
   memcpy(bytes, response.bytes, response.header.size);
   *reply = response.header;
   return CALL_OK;
+}
+
+bool log_next_record(const void *bytes, size_t size, size_t *offset,
+    struct log_record *record, const char **text)
+{
+  if (*offset >= size) {
+    return false;
+  }
+  const char *position = (const char *)bytes + *offset;
+  memcpy(record, position, sizeof(*record));
+  *text = position + sizeof(*record);
+  *offset += sizeof(*record) + record->length;
+  return true;
 }

@@ -174,12 +174,15 @@ unavailable information. Memory is allocator capacity, labeled **Memory (allocat
 and NUL, and returns `ENAMETOOLONG` without changing the buffer when too small.
 There is no runtime rename; an installed key change applies at the next boot.
 
-[log.h](include/log.h) snapshots and reads retained kernel text through a borrowed
-read-only `log` grant, preserving caller output on failure. Each reader owns its
-cursor; reads never consume another reader's text. `log` prints through its initial
-snapshot end and exits. `log -f` prints retained history, then polls every 100 ms
-using the clock service; Ctrl+C uses the shell's foreground stop behavior. Both
-report overwritten lines on stderr. Boot init forwards the grant to every space;
+[log.h](include/log.h) snapshots and reads retained kernel lines through a borrowed
+read-only `log` grant, preserving caller output on failure. Each read returns
+validated records, one line piece and its level each; `log_next_record` walks them.
+Each reader owns its cursor; reads never consume another reader's text. `log`
+prints through its initial snapshot end and exits, starting each line with its
+level letter: `E`, `W`, `I`, `D` or `T`. `log -l LEVEL` prints only that level and
+more severe ones (error, warn, info, debug, trace). `log -f` prints retained history,
+then polls every 100 ms using the clock service; Ctrl+C uses the shell's foreground
+stop behavior. Both report overwritten lines on stderr. Boot init forwards the grant to every space;
 sessions and local/remote shells forward it to ordinary children when supplied.
 Provider launches and restricted launchers may omit it. The ring is volatile;
 panic capture remains best effort.
