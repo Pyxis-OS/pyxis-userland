@@ -16,8 +16,13 @@
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <space.h>
 #include <system_info.h>
+#include <term.h>
+
+#define INSTALL_COMMON_DISK_RIGHTS (DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY | \
+    DISKS_RIGHT_OPEN_POOL | DISKS_RIGHT_MOUNT_READ_ONLY | DISKS_RIGHT_MOUNT_READ_WRITE)
 
 static bool close_sources(const handle_t *sources, size_t count)
 {
@@ -37,61 +42,111 @@ static bool close_sources(const handle_t *sources, size_t count)
   return success;
 }
 
-int main(int argc, char **argv)
+static int run_install(int argc, char **argv, bool selector)
 {
-
-  /* The kernel adds the install space's console, input devices and display. */
   enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, DIAGNOSTICS, POWER,
-    FACTORY, SOURCE_COUNT, GRANT_COUNT = FACTORY };
+    LAUNCHER, INPUT, OUTPUT, ERROR, FACTORY, SOURCE_COUNT, GRANT_COUNT = FACTORY };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
-    "clock", "random", "system_info", "log", "boot", "installer_diagnostics", "power", "space_factory"};
+    "clock", "random", "system_info", "log", "boot", "installer_diagnostics", "power",
+    "launcher", "input", "output", "stderr", "space_factory"};
   handle_t sources[SOURCE_COUNT] = {
     bootstrap_capability("disks"), bootstrap_capability("boot_kernel"), bootstrap_capability("boot_archive"),
     bootstrap_capability("memory"), bootstrap_capability("clock"), bootstrap_capability("random"),
     bootstrap_capability("system_info"), bootstrap_capability("log"), bootstrap_capability("boot"),
-    HANDLE_INVALID, bootstrap_capability("power"), bootstrap_take_capability("space_factory"),
+    selector ? bootstrap_capability("installer_diagnostics") : HANDLE_INVALID,
+    bootstrap_capability("power"), bootstrap_capability("launcher"),
+    selector ? bootstrap_capability("input") : HANDLE_INVALID,
+    selector ? bootstrap_capability("output") : HANDLE_INVALID,
+    HANDLE_INVALID, selector ? HANDLE_INVALID : bootstrap_take_capability("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
   const char **arguments = NULL;
   int result = EXIT_FAILURE;
+  bool coexist = false;
   struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
-  if (output.protocol != PROTOCOL_CONSOLE ||
+  struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
+  if (selector) {
+    if (output.protocol != PROTOCOL_CONSOLE || error.protocol != PROTOCOL_CONSOLE) {
+      fputs("init-install: selector needs the Install console\n", stderr);
+      goto done;
+    }
+    sources[ERROR] = error.handle;
+  } else if (output.protocol != PROTOCOL_CONSOLE ||
       handle_copy_restricted(output.handle, CONSOLE_RIGHT_WRITE, 0, &sources[DIAGNOSTICS]) != CALL_OK) {
     fputs("init-install: cannot delegate Caelum diagnostic output\n", stderr);
     goto done;
   }
   for (unsigned i = 0; i < SOURCE_COUNT; i++) {
     /* Without power the installer simply offers no restart. */
-    if (sources[i] == HANDLE_INVALID && i != POWER) {
+    bool required = i != POWER && (selector ? i != FACTORY :
+        i != INPUT && i != OUTPUT && i != ERROR);
+    if (sources[i] == HANDLE_INVALID && required) {
       fprintf(stderr, "init-install: missing resource %s; use the Install Pyxis boot entry\n", names[i]);
       goto done;
     }
   }
-  enum call_status status = directory_lookup(sources[BOOT_ROOT], "installer.pxe",
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--coexist") || !strcmp(argv[i], "--select-profile")) {
+      fputs("init-install: installer profile is selected by the trusted prompt\n", stderr);
+      goto done;
+    }
+  }
+  if (selector) {
+    struct terminal terminal = {.input = sources[INPUT], .output = sources[OUTPUT]};
+    puts("Choose installer authority: coexist preserves other partitions; classic permits whole-disk erase.");
+    for (;;) {
+      char line[32];
+      if (fflush(stdout) != 0) {
+        goto done;
+      }
+      struct term_line_result selected = term_read_line(&terminal,
+          "Profile (coexist/classic/cancel): ", line, sizeof(line));
+      if (selected.status != TERM_LINE_OK || selected.limit_reached) {
+        fputs("init-install: profile selection interrupted; installer not launched\n", stderr);
+        goto done;
+      }
+      if (!strcmp(line, "cancel")) {
+        puts("Installation cancelled; installer not launched.");
+        result = EXIT_SUCCESS;
+        goto done;
+      }
+      if (!strcmp(line, "coexist") || !strcmp(line, "classic")) {
+        coexist = !strcmp(line, "coexist");
+        break;
+      }
+      puts("Enter coexist, classic or cancel.");
+    }
+  }
+  const char *image_name = selector ? "installer.pxe" : "init-install.pxe";
+  enum call_status status = directory_lookup(sources[BOOT_ROOT], image_name,
       DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
-    if (status == CALL_NOT_FOUND) {
-      fputs("init-install: boot://installer.pxe is not packaged; installation unavailable\n", stderr);
-    } else {
-      fprintf(stderr, "init-install: cannot open boot://installer.pxe (status %u)\n", status);
+    fprintf(stderr, "init-install: cannot open boot://%s (status %u)\n", image_name, status);
+    goto done;
+  }
+  struct system_info_cpu cpu = {0};
+  if (!selector) {
+    status = system_info_get_cpu(sources[SYSTEM_INFO], &cpu);
+    if (status != CALL_OK || !cpu.online_count || cpu.online_count > UINT64_MAX - 63 ||
+        (cpu.online_count + 63) / 64 > SIZE_MAX / sizeof(*cpus)) {
+      fprintf(stderr, "init-install: cannot read the CPU count (status %u)\n", status);
+      goto done;
     }
-    goto done;
-  }
-  struct system_info_cpu cpu;
-  status = system_info_get_cpu(sources[SYSTEM_INFO], &cpu);
-  cpus = status == CALL_OK && cpu.online_count ?
-      calloc((cpu.online_count + 63) / 64, sizeof(*cpus)) : NULL;
-  if (!cpus) {
-    fprintf(stderr, "init-install: cannot read the CPU count (status %u)\n", status);
-    goto done;
-  }
-  for (uint64_t i = 0; i < cpu.online_count; i++) {
-    cpus[i / 64] |= UINT64_C(1) << (i % 64);
+    cpus = calloc((cpu.online_count + 63) / 64, sizeof(*cpus));
+    if (!cpus) {
+      fputs("init-install: cannot allocate CPU selection\n", stderr);
+      goto done;
+    }
+    for (uint64_t i = 0; i < cpu.online_count; i++) {
+      cpus[i / 64] |= UINT64_C(1) << (i % 64);
+    }
   }
 
   struct launch_grant grants[GRANT_COUNT] = {
-    [DISKS] = {sources[DISKS], DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN, 0},
+    [DISKS] = {sources[DISKS], INSTALL_COMMON_DISK_RIGHTS |
+        (!selector || coexist ? DISKS_RIGHT_APPEND_POOL : 0) |
+        (!selector || !coexist ? DISKS_RIGHT_ERASE : 0), 0},
     [KERNEL] = {sources[KERNEL], FILE_RIGHT_READ, 0},
     [ARCHIVE] = {sources[ARCHIVE], FILE_RIGHT_READ, 0},
     [MEMORY] = {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
@@ -103,6 +158,10 @@ int main(int argc, char **argv)
     [BOOT_ROOT] = {sources[BOOT_ROOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES, 0},
     [POWER] = {sources[POWER], POWER_RIGHT_RESTART, 0},
+    [LAUNCHER] = {sources[LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0},
+    [INPUT] = {sources[INPUT], CONSOLE_RIGHT_READ, 0},
+    [OUTPUT] = {sources[OUTPUT], CONSOLE_RIGHT_WRITE, 0},
+    [ERROR] = {sources[ERROR], CONSOLE_RIGHT_WRITE, 0},
   };
   struct launch_environment_entry resources[] = {
     PROFILE_CAP((uintptr_t)"disks", DISKS), PROFILE_CAP((uintptr_t)"boot_kernel", KERNEL),
@@ -114,42 +173,68 @@ int main(int argc, char **argv)
   };
   bool has_power = sources[POWER] != HANDLE_INVALID;
   struct launch_environment_entry roots[] = {PROFILE_CAP((uintptr_t)"boot", BOOT_ROOT)};
-  arguments = argc > 0 ? calloc((size_t)argc, sizeof(*arguments)) : NULL;
+  size_t argument_count = 1 + (!selector || coexist);
+  if (argc > 1) {
+    argument_count += (size_t)argc - 1;
+  }
+  arguments = calloc(argument_count, sizeof(*arguments));
   if (!arguments) {
     fputs("init-install: cannot prepare installer arguments\n", stderr);
     goto done;
   }
-  arguments[0] = "boot://installer.pxe";
-  for (int i = 1; i < argc; i++) {
-    arguments[i] = argv[i];
+  arguments[0] = selector ? "boot://installer.pxe" : "boot://init-install.pxe";
+  size_t argument_index = 1;
+  if (!selector || coexist) {
+    arguments[argument_index++] = selector ? "--coexist" : "--select-profile";
   }
-    struct launch_environment_entry entries[128];
+  for (int i = 1; i < argc; i++) {
+    arguments[argument_index++] = argv[i];
+  }
+  struct launch_environment_entry entries[128];
   size_t entry_count = 0;
   memcpy(entries + entry_count, resources, (sizeof(resources) / sizeof(resources[0]) - !has_power) * sizeof(*entries));
   entry_count += sizeof(resources) / sizeof(resources[0]) - !has_power;
   memcpy(entries + entry_count, roots, (sizeof(roots) / sizeof(roots[0])) * sizeof(*entries));
   entry_count += sizeof(roots) / sizeof(roots[0]);
+  if (selector) {
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"input", INPUT);
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", OUTPUT);
+    entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDIN, INPUT);
+    entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDOUT, OUTPUT);
+    entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDERR, ERROR);
+  } else {
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"launcher", LAUNCHER);
+  }
+  struct launch_grant selected_grants[sizeof(entries) / sizeof(entries[0])];
+  for (size_t i = 0; i < entry_count; ++i) {
+    selected_grants[i] = grants[entries[i].value];
+    entries[i].value = i;
+  }
   struct launch_request request = {
     .image = image,
-    .grants = (uintptr_t)grants,
+    .grants = (uintptr_t)selected_grants,
     .entries = (uintptr_t)entries,
     .entry_count = entry_count,
-    .grant_count = GRANT_COUNT - !has_power,
+    .grant_count = entry_count,
     .argv = (uintptr_t)arguments,
-    .argc = (uint64_t)argc,
+    .argc = argument_count,
   };
   struct space_definition space = {.name = "install", .title = "Install"};
-  status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,
-      &request, &child);
+  status = selector ? launcher_launch(sources[LAUNCHER], &request, &child) :
+      space_create_started(sources[FACTORY], &space, cpus, cpu.online_count, &request, &child);
   if (status != CALL_OK) {
-    fprintf(stderr, "init-install: cannot start boot://installer.pxe (status %u)\n", status);
+    fprintf(stderr, "init-install: cannot start boot://%s (status %u)\n", image_name, status);
     goto done;
   }
-  /* Only the installer's space may be created; drop the factory before waiting. */
-  if (handle_close(sources[FACTORY]) != 0) {
-    goto done;
+  /* Neither child can create another space or recover its issuer's disk grant. */
+  for (unsigned i = 0; i < SOURCE_COUNT; ++i) {
+    if ((i == DISKS || i == LAUNCHER || i == FACTORY) && sources[i] != HANDLE_INVALID) {
+      if (handle_close(sources[i]) != 0) {
+        goto done;
+      }
+      sources[i] = HANDLE_INVALID;
+    }
   }
-  sources[FACTORY] = HANDLE_INVALID;
   struct process_result completion;
   status = process_wait(child, &completion);
   if (status != CALL_OK) {
@@ -177,4 +262,10 @@ done:
     result = EXIT_FAILURE;
   }
   return result;
+}
+
+int main(int argc, char **argv)
+{
+  bool selector = argc > 1 && !strcmp(argv[1], "--select-profile");
+  return selector ? run_install(argc - 1, argv + 1, true) : run_install(argc, argv, false);
 }
