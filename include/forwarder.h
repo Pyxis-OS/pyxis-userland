@@ -18,5 +18,8 @@ enum call_status forwarder_slot(handle_t target, uint64_t rights,
  * An invalid RETARGET target empties a slot; later holder use is NOT_FOUND. */
 enum call_status forwarder_cut(handle_t controller);
 enum call_status forwarder_retarget(handle_t controller, handle_t target);
+/* RETARGET-authorized read-only check of this exact slot/holder pair. No target
+ * identity or authority is returned; mismatched holders report WRONG_TYPE. */
+enum call_status forwarder_match(handle_t controller, handle_t holder);
 
 #endif

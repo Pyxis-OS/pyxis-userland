@@ -57,3 +57,12 @@ enum call_status forwarder_retarget(handle_t controller, handle_t target)
   struct syscall_result result = syscall_call(controller, &request, sizeof(request), NULL, 0);
   return result.reply_size == 0 ? checked_status(result) : CALL_OUTCOME_UNKNOWN;
 }
+
+enum call_status forwarder_match(handle_t controller, handle_t holder)
+{
+  struct forwarder_match request = {
+    .header = {PROTOCOL_FORWARDER, FORWARDER_MATCH}, .holder = holder,
+  };
+  struct syscall_result result = syscall_call(controller, &request, sizeof(request), NULL, 0);
+  return result.reply_size == 0 ? checked_status(result) : CALL_OUTCOME_UNKNOWN;
+}
