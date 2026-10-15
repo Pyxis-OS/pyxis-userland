@@ -29,6 +29,14 @@ enum call_status provider_open_typed(handle_t provider, const char *target,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
     struct resource_result *result);
 
+/* Name-based REMOVE uses independent REMOVE authority and the same typed
+ * outcomes. Success has no owned resource; failure may own one for description
+ * and error-body access. A delivered operation whose reply is lost reports
+ * OUTCOME_UNKNOWN with delivery preserved. The deadline is never restarted;
+ * no retry, name lookup or fallback occurs here. */
+enum call_status provider_remove_typed(handle_t provider, const char *target,
+    uint64_t deadline_ns, struct resource_result *result);
+
 /* Existing FILE consumers adapt the same typed OPEN, with no second wire ABI.
  * CALL_OK makes result->status meaningful. A successful outcome must be a FILE
  * with the intent's access and usable transport; other types are unsupported.

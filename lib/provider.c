@@ -8,16 +8,25 @@ struct provider_open_payload {
   unsigned char target[PROVIDER_TARGET_MAX_BYTES];
 };
 
+struct provider_remove_payload {
+  struct provider_remove_request body;
+  unsigned char target[PROVIDER_TARGET_MAX_BYTES];
+};
+
 _Static_assert(offsetof(struct provider_open_payload, target) ==
     sizeof(struct provider_open_request), "provider target follows the request");
+_Static_assert(offsetof(struct provider_remove_payload, target) ==
+    sizeof(struct provider_remove_request), "provider remove target follows the request");
 
 static enum call_status capture_reply(struct endpoint_packet *packet,
-    const struct provider_open_reply *reply, struct resource_result *result)
+    const struct provider_open_reply *reply, bool removal,
+    struct resource_result *result)
 {
   if (!resource_description_valid(&reply->description) ||
       packet->grant_count != (reply->protocol ? 1u : 0u) ||
-      (!reply->protocol && (reply->description.outcome == RESOURCE_OK ||
-      (reply->description.flags & RESOURCE_ERROR_BODY)))) {
+      (!reply->protocol && (reply->description.flags & RESOURCE_ERROR_BODY)) ||
+      (reply->description.outcome == RESOURCE_OK &&
+      (removal ? reply->protocol != 0 : reply->protocol == 0))) {
     return CALL_BAD_REQUEST;
   }
   if (!reply->protocol) {
@@ -56,6 +65,30 @@ static enum call_status capture_reply(struct endpoint_packet *packet,
   result->info = info;
   packet->grants[0].handle = HANDLE_INVALID;
   return CALL_OK;
+}
+
+static enum call_status finish_reply(struct endpoint_packet *packet, bool removal,
+    struct resource_result *result)
+{
+  enum call_status status;
+  if (packet->result >= CALL_STATUS_COUNT) {
+    status = CALL_BAD_REQUEST;
+  } else if (packet->result != CALL_OK) {
+    status = packet->size || packet->grant_count ? CALL_BAD_REQUEST :
+        (enum call_status)packet->result;
+  } else if (packet->size != sizeof(struct provider_open_reply)) {
+    status = CALL_BAD_REQUEST;
+  } else {
+    struct provider_open_reply reply;
+    memcpy(&reply, packet->data, sizeof(reply));
+    status = capture_reply(packet, &reply, removal, result);
+  }
+  for (size_t i = 0; i < packet->grant_count; ++i) {
+    if (packet->grants[i].handle != HANDLE_INVALID) {
+      handle_close(packet->grants[i].handle);
+    }
+  }
+  return status;
 }
 
 enum call_status provider_open_typed(handle_t provider, const char *target,
@@ -112,24 +145,50 @@ enum call_status provider_open_typed(handle_t provider, const char *target,
         ((intent & PROVIDER_INTENT_WRITE) || (flags & PROVIDER_OPEN_CREATE)) ?
         CALL_OUTCOME_UNKNOWN : status;
   }
-  if (packet.result >= CALL_STATUS_COUNT) {
-    status = CALL_BAD_REQUEST;
-  } else if (packet.result != CALL_OK) {
-    status = packet.size || packet.grant_count ? CALL_BAD_REQUEST :
-        (enum call_status)packet.result;
-  } else if (packet.size != sizeof(struct provider_open_reply)) {
-    status = CALL_BAD_REQUEST;
-  } else {
-    struct provider_open_reply reply;
-    memcpy(&reply, packet.data, sizeof(reply));
-    status = capture_reply(&packet, &reply, result);
+  return finish_reply(&packet, false, result);
+}
+
+enum call_status provider_remove_typed(handle_t provider, const char *target,
+    uint64_t deadline_ns, struct resource_result *result)
+{
+  if (!result) {
+    return CALL_BAD_REQUEST;
   }
-  for (size_t i = 0; i < packet.grant_count; ++i) {
-    if (packet.grants[i].handle != HANDLE_INVALID) {
-      handle_close(packet.grants[i].handle);
+  *result = (struct resource_result){0};
+  if (!target) {
+    return CALL_BAD_REQUEST;
+  }
+  size_t target_size = 0;
+  while (target[target_size]) {
+    if (target_size == PROVIDER_TARGET_MAX_BYTES) {
+      return CALL_FILE_TOO_LARGE;
     }
+    ++target_size;
   }
-  return status;
+  struct handle_info info;
+  enum call_status status = handle_query(provider, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.kind != HANDLE_KIND_EXPORTED || info.protocol != PROTOCOL_PROVIDER) {
+    return CALL_WRONG_TYPE;
+  }
+  if (!(info.rights & PROVIDER_RIGHT_REMOVE) ||
+      !(info.transport & HANDLE_TRANSPORT_CALL)) {
+    return CALL_DENIED;
+  }
+  struct provider_remove_payload request = {
+    .body = {target_size, deadline_ns},
+  };
+  memcpy(request.target, target, target_size);
+  struct endpoint_packet packet = {0};
+  status = endpoint_invoke(provider, PROTOCOL_PROVIDER, PROVIDER_REMOVE,
+      &request, sizeof(request.body) + target_size, NULL, 0, deadline_ns, &packet);
+  result->delivery = packet.delivery;
+  if (status != CALL_OK) {
+    return packet.delivery == ENDPOINT_DELIVERED ? CALL_OUTCOME_UNKNOWN : status;
+  }
+  return finish_reply(&packet, true, result);
 }
 
 enum call_status provider_open(handle_t provider, const char *target, uint64_t intent,

@@ -90,9 +90,14 @@ enum call_status path_open_file(const struct path_context *context, const char *
 enum call_status path_create_file(const struct path_context *context, const char *path,
     uint64_t rights, struct path_workspace *workspace, handle_t *handle);
 
-/* Resolve the parent and remove its final component in one directory operation.
- * kind is FILE, DIRECTORY or ANY. A trailing / requires DIRECTORY; a FILE
- * request with trailing / fails. Roots and final . or .. cannot be removed.
+/* Capture an exact environment name once, dispatching by its attested protocol.
+ * PROVIDER receives the opaque tail and workspace deadline unchanged, requiring
+ * its independent REMOVE right. FILE and ANY allow provider removal; DIRECTORY
+ * refuses it. Held FILE removal is unsupported. No relookup, fallback or retry.
+ * A delivered provider mutation may report OUTCOME_UNKNOWN.
+ * Native paths resolve the parent and remove its final component in one
+ * directory operation. kind is FILE, DIRECTORY or ANY. A trailing / requires
+ * DIRECTORY; a FILE request with trailing / fails. Roots and final . or .. cannot be removed.
  * Intermediate components retain normal ordered resolution/boundary checks.
  * Requires REMOVE on the parent, never READ/WRITE on the child. No allocation;
  * scratch storage is caller-owned and all temporary handles are closed. */

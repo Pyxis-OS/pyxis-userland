@@ -129,6 +129,7 @@ enum walk_target {
   WALK_FILE,
   WALK_DIRECTORY,
   WALK_PARENT,
+  WALK_REMOVE,
 };
 
 static enum call_status walk(const struct path_context *context, const char *path,
@@ -158,6 +159,20 @@ static enum call_status walk(const struct path_context *context, const char *pat
     status = handle_query(provider, &binding);
     if (status == CALL_OK && native_only && binding.kind != HANDLE_KIND_NATIVE) {
       status = CALL_BAD_OPERATION;
+    }
+    if (status == CALL_OK && target == WALK_REMOVE) {
+      if (binding.protocol != PROTOCOL_PROVIDER) {
+        status = CALL_BAD_OPERATION;
+      } else {
+        struct resource_result result;
+        status = provider_remove_typed(provider, path, workspace->deadline_ns, &result);
+        if (status == CALL_OK) {
+          status = resource_outcome_status(result.info.description.outcome);
+        }
+        resource_result_close(&result);
+      }
+      enum call_status closed = handle_close(provider);
+      return status == CALL_OK ? closed : status;
     }
     if (status == CALL_OK && target != WALK_FILE) {
       status = CALL_BAD_OPERATION;
@@ -210,7 +225,7 @@ static enum call_status walk(const struct path_context *context, const char *pat
       ++path;
     }
     if (!*path) {
-      if (target == WALK_PARENT) {
+      if (target == WALK_PARENT || target == WALK_REMOVE) {
         return CALL_BAD_REQUEST;
       }
       return target == WALK_DIRECTORY ? CALL_OK : CALL_WRONG_TYPE;
@@ -225,13 +240,13 @@ static enum call_status walk(const struct path_context *context, const char *pat
       ++path;
     }
     if (length == 1 && start[0] == '.') {
-      if (target == WALK_PARENT && !*path) {
+      if ((target == WALK_PARENT || target == WALK_REMOVE) && !*path) {
         return CALL_BAD_REQUEST;
       }
       continue;
     }
     if (length == 2 && start[0] == '.' && start[1] == '.') {
-      if (target == WALK_PARENT && !*path) {
+      if ((target == WALK_PARENT || target == WALK_REMOVE) && !*path) {
         return CALL_BAD_REQUEST;
       }
       if (*count == 1) {
@@ -247,7 +262,7 @@ static enum call_status walk(const struct path_context *context, const char *pat
       return status;
     }
     handle_t parent = workspace->directories[*count - 1];
-    if (!*path && target == WALK_PARENT) {
+    if (!*path && (target == WALK_PARENT || target == WALK_REMOVE)) {
       return CALL_OK;
     }
     if (!*path && !trailing_separator && target == WALK_FILE) {
@@ -416,9 +431,12 @@ enum call_status path_remove(const struct path_context *context, const char *pat
   bool trailing_separator = end[-1] == '/';
   size_t count = 0;
   handle_t unused;
-  enum call_status status = walk(context, path, WALK_PARENT, 0,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, false, workspace, &count, &unused, NULL, false);
-  if (status == CALL_OK) {
+  bool provider_route = false;
+  enum walk_target target = kind == DIRECTORY_KIND_DIRECTORY ? WALK_PARENT : WALK_REMOVE;
+  enum call_status status = walk(context, path, target, 0,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, false, workspace, &count,
+      &unused, &provider_route, false);
+  if (status == CALL_OK && !provider_route) {
     if (trailing_separator && kind == DIRECTORY_KIND_FILE) {
       status = CALL_WRONG_TYPE;
     } else {
