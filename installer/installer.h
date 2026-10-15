@@ -10,6 +10,7 @@
 
 #define INSTALL_MIB UINT64_C(1048576)
 #define INSTALL_ESP_BYTES (UINT64_C(512) * INSTALL_MIB)
+#define INSTALL_ESP_CONFIGURATION_MAX_BYTES (64u * 1024u)
 /* The installed boot entries: normal, and rescue, which ignores the pool's
  * boot configuration. The menu waits so the rescue entry stays reachable. */
 #define INSTALL_BOOT_INIT_OPTION "init=boot://boot-init.pxe"
@@ -129,6 +130,12 @@ bool install_scan_pool_update(const struct install_disk *disk,
  * nonvalid results also supply a borrowed, static reason. */
 enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     const struct install_layout *layout, char revision[64], const char **reason);
+/* Pure fixed-menu binding veto shared with raw inspection. Missing canonical
+ * normal/rescue entries remain replaceable; any foreign, repeated or invalid
+ * mount.disk binding refuses. Bytes are counted and may contain no terminator.
+ * Reason is optional borrowed static text, NULL when no repair is needed. */
+bool install_esp_configuration_binding(const uint8_t disk_guid[16], const char *bytes,
+    size_t size, const char **reason);
 
 struct npfs_header;
 /* The decoded, prevalidated header supplies the new pool identity and layout.

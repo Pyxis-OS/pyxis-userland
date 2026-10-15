@@ -26,8 +26,17 @@ struct install_review_esp {
   struct mount_state_reply observed;
   bool identity_matches, available, efi_absent, retired, retirement_attempted;
   enum call_status admission_status, observe_status, content_status, retire_status;
+  /* Optional fixed-menu bytes sampled through this same native RO instance.
+   * menu_absent means lookup found an absent component; OK requires
+   * menu_bytes == menu_size. A later read failure is never treated as absence.
+   * Errors retain the observed size and any partial bytes, never menu validity. */
+  enum call_status menu_status;
+  bool menu_absent;
+  uint64_t menu_size;
+  size_t menu_bytes;
+  char *menu;
   /* Owned only when cleanup remains pending. Never discard these handles. */
-  handle_t root, efi, control;
+  handle_t root, efi, control, menu_boot, menu_limine, menu_file;
 };
 
 struct install_review {
@@ -56,9 +65,10 @@ bool install_review_prepare(const struct install_disk *disk, handle_t issuer,
     handle_t clock, uint64_t deadline_ns, const struct install_gpt *cache,
     struct install_review *review);
 
-/* Only BUSY retirement is retried, bounded by caller's deadline. All reference
- * and control failures remain owned in review. Destroy refuses pending handles
- * and preserves the complete object; it never silently abandons exclusion. */
+/* Only BUSY retirement is retried, bounded by caller's deadline. Unretired
+ * controls remain owned; a native CLOSE failure means already-absent handle
+ * bookkeeping and is reported. Destroy refuses pending handles and preserves
+ * the complete object; it never silently abandons exclusion. */
 bool install_review_cleanup(struct install_review *review, handle_t clock, uint64_t deadline_ns);
 bool install_review_destroy(struct install_review *review);
 

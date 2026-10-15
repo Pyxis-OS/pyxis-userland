@@ -23,7 +23,7 @@
 #define ESP_FSINFO_STRUCTURE UINT32_C(0x61417272)
 #define ESP_FSINFO_TRAIL UINT32_C(0xaa550000)
 /* Recognition reads authored boot configuration, not arbitrary FAT files. */
-#define ESP_CONFIG_MAX_BYTES 65536u
+#define ESP_CONFIG_MAX_BYTES INSTALL_ESP_CONFIGURATION_MAX_BYTES
 #define ESP_REVISION_MAX_BYTES 64u
 
 struct esp_inspection {
@@ -460,6 +460,25 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
     return rebuild(esp, "ESP boot configuration lacks this disk's normal and rescue entries");
   }
   return esp->state == INSTALL_ESP_VALID;
+}
+
+bool install_esp_configuration_binding(const uint8_t disk_guid[16], const char *bytes,
+    size_t size, const char **reason)
+{
+  const char *diagnostic = NULL;
+  if (!reason) {
+    reason = &diagnostic;
+  }
+  *reason = NULL;
+  if (!disk_guid || (!bytes && size) || size > INSTALL_ESP_CONFIGURATION_MAX_BYTES) {
+    *reason = "fixed-menu binding inspection input is absent or exceeds its bound";
+    return false;
+  }
+  struct install_layout layout = {0};
+  memcpy(layout.disk_guid, disk_guid, sizeof(layout.disk_guid));
+  struct esp_inspection esp = {.layout = &layout, .reason = reason, .state = INSTALL_ESP_VALID};
+  configuration_matches(&esp, bytes, size);
+  return esp.state != INSTALL_ESP_REFUSED;
 }
 
 static void revision_text(const uint8_t *bytes, size_t size, char revision[64])

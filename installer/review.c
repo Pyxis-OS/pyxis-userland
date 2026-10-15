@@ -3,6 +3,7 @@
 
 #include <clock.h>
 #include <directory.h>
+#include <file.h>
 #include <handle.h>
 #include <mount.h>
 #include <pyxis_fs/fat32.h>
@@ -11,7 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define REVIEW_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE)
+#define REVIEW_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
+#define REVIEW_MENU_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES)
 
 static const uint8_t esp_type[16] = {
   0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
@@ -171,6 +173,7 @@ static void collect_esps(const struct install_disk *disk, struct install_review 
         esp->selection = selection;
         esp->admission_status = esp->observe_status = esp->content_status =
             esp->retire_status = CALL_UNAVAILABLE;
+        esp->menu_status = CALL_UNAVAILABLE;
       }
     }
   }
@@ -189,6 +192,61 @@ static bool identity_matches(const struct mount_state_reply *state,
       !memcmp(state->disk_guid, selection->disk_guid, 16) &&
       !memcmp(state->partition_guid, selection->partition_guid, 16) &&
       !memcmp(state->partition_type, selection->partition_type, 16);
+}
+
+static void capture_menu(struct install_review_esp *esp)
+{
+  esp->menu_status = directory_lookup(esp->root, "boot", DIRECTORY_KIND_DIRECTORY,
+      REVIEW_MENU_DIRECTORY_RIGHTS, &esp->menu_boot);
+  if (esp->menu_status == CALL_OK) {
+    esp->menu_status = directory_lookup(esp->menu_boot, "limine", DIRECTORY_KIND_DIRECTORY,
+        REVIEW_MENU_DIRECTORY_RIGHTS, &esp->menu_limine);
+  }
+  if (esp->menu_status == CALL_OK) {
+    esp->menu_status = directory_lookup(esp->menu_limine, "limine.conf", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &esp->menu_file);
+  }
+  if (esp->menu_status != CALL_OK) {
+    esp->menu_absent = esp->menu_status == CALL_NOT_FOUND;
+    return;
+  }
+  esp->menu_status = file_size(esp->menu_file, &esp->menu_size);
+  if (esp->menu_status != CALL_OK) {
+    return;
+  }
+  if (esp->menu_size > INSTALL_ESP_CONFIGURATION_MAX_BYTES) {
+    esp->menu_status = CALL_LIMIT;
+    return;
+  }
+  if (esp->menu_size) {
+    esp->menu = malloc((size_t)esp->menu_size);
+    if (!esp->menu) {
+      esp->menu_status = CALL_NO_MEMORY;
+      return;
+    }
+  }
+  while (esp->menu_bytes < esp->menu_size) {
+    size_t wanted = (size_t)esp->menu_size - esp->menu_bytes;
+    if (wanted > FILE_READ_MAX_BYTES) {
+      wanted = FILE_READ_MAX_BYTES;
+    }
+    size_t read = 0;
+    esp->menu_status = file_read(esp->menu_file, esp->menu_bytes,
+        esp->menu + esp->menu_bytes, wanted, &read);
+    if (esp->menu_status != CALL_OK) {
+      return;
+    }
+    if (!read || read > wanted) {
+      esp->menu_status = CALL_IO;
+      return;
+    }
+    esp->menu_bytes += read;
+  }
+  uint64_t current_size;
+  esp->menu_status = file_size(esp->menu_file, &current_size);
+  if (esp->menu_status == CALL_OK && current_size != esp->menu_size) {
+    esp->menu_status = CALL_IO;
+  }
 }
 
 static bool inspect_esp(handle_t issuer, struct install_review_esp *esp,
@@ -239,6 +297,11 @@ static bool inspect_esp(handle_t issuer, struct install_review_esp *esp,
   if (!esp->identity_matches) {
     return text(review, "  EFI entries unavailable: bound identity or RO instance state did not match\n");
   }
+  capture_menu(esp);
+  if (!text(review, "  Fixed menu capture: status=%u absent=%u size=%llu captured=%zu\n",
+      esp->menu_status, esp->menu_absent, (unsigned long long)esp->menu_size, esp->menu_bytes)) {
+    return false;
+  }
   esp->content_status = directory_lookup(esp->root, "EFI", DIRECTORY_KIND_DIRECTORY,
       REVIEW_DIRECTORY_RIGHTS, &esp->efi);
   if (esp->content_status == CALL_NOT_FOUND) {
@@ -282,11 +345,11 @@ static bool close_reference(handle_t *handle)
   if (*handle == HANDLE_INVALID) {
     return true;
   }
-  if (handle_close(*handle) != 0) {
-    return false;
-  }
+  /* These are native references: a failed CLOSE means BAD_HANDLE, so no live
+   * reference remains to retain or close again. Report the bookkeeping error. */
+  bool closed = handle_close(*handle) == 0;
   *handle = HANDLE_INVALID;
-  return true;
+  return closed;
 }
 
 bool install_review_cleanup(struct install_review *review, handle_t clock, uint64_t deadline_ns)
@@ -298,9 +361,12 @@ bool install_review_cleanup(struct install_review *review, handle_t clock, uint6
   for (size_t i = 0; i < review->esp_count; ++i) {
     struct install_review_esp *esp = &review->esps[i];
     bool closed = close_reference(&esp->efi);
+    closed = close_reference(&esp->menu_file) && closed;
+    closed = close_reference(&esp->menu_limine) && closed;
+    closed = close_reference(&esp->menu_boot) && closed;
     closed = close_reference(&esp->root) && closed;
     if (!closed) {
-      review->reason = "RO FAT data reference close failed; caller retains cleanup ownership";
+      review->reason = "RO FAT reference close found invalid bookkeeping; retirement remains pending";
       complete = false;
       continue;
     }
@@ -334,7 +400,7 @@ bool install_review_cleanup(struct install_review *review, handle_t clock, uint6
       }
     }
     if (esp->retired && !close_reference(&esp->control)) {
-      review->reason = "retired FAT control close failed; caller retains its control";
+      review->reason = "retired FAT control close found invalid bookkeeping";
       complete = false;
     }
   }
@@ -349,9 +415,13 @@ bool install_review_destroy(struct install_review *review)
   for (size_t i = 0; i < review->esp_count; ++i) {
     const struct install_review_esp *esp = &review->esps[i];
     if (esp->root != HANDLE_INVALID || esp->efi != HANDLE_INVALID ||
-        esp->control != HANDLE_INVALID) {
+        esp->control != HANDLE_INVALID || esp->menu_file != HANDLE_INVALID ||
+        esp->menu_limine != HANDLE_INVALID || esp->menu_boot != HANDLE_INVALID) {
       return false;
     }
+  }
+  for (size_t i = 0; i < review->esp_count; ++i) {
+    free(review->esps[i].menu);
   }
   free(review->text);
   free(review->gpt);
@@ -412,7 +482,8 @@ bool install_review_prepare(const struct install_disk *disk, handle_t issuer,
     success = text(review, "ESP entry=%llu: available=%u retire_status=%u retired=%u cleanup_pending=%u\n",
         (unsigned long long)esp->selection.partition, esp->available, esp->retire_status,
         esp->retired, esp->root != HANDLE_INVALID || esp->efi != HANDLE_INVALID ||
-            esp->control != HANDLE_INVALID);
+            esp->control != HANDLE_INVALID || esp->menu_file != HANDLE_INVALID ||
+            esp->menu_limine != HANDLE_INVALID || esp->menu_boot != HANDLE_INVALID);
   }
   if (!review->esp_count && success) {
     success = text(review, "No ESP among known valid GPT entries%s\n",

@@ -3,6 +3,7 @@
 #include "digest.h"
 
 #include <handle.h>
+#include <pyxis_fs/npfs.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -137,6 +138,27 @@ static bool selected_esp_recovery_failure(const struct install_target *target)
   return false;
 }
 
+static bool selected_menu_binding(struct install_target *target)
+{
+  for (size_t i = 0; i < target->review.esp_count; ++i) {
+    const struct install_review_esp *esp = &target->review.esps[i];
+    if (memcmp(&esp->selection, &target->esp, sizeof(target->esp))) {
+      continue;
+    }
+    if (esp->menu_absent && esp->menu_status == CALL_NOT_FOUND) {
+      return true;
+    }
+    if (esp->menu_status != CALL_OK || esp->menu_bytes != esp->menu_size) {
+      target->reason = "native fixed-menu inspection failed or exceeded its read bound";
+      return false;
+    }
+    return install_esp_configuration_binding(target->record.layout.disk_guid,
+        esp->menu, esp->menu_bytes, &target->reason);
+  }
+  target->reason = "selected ESP has no native fixed-menu inspection evidence";
+  return false;
+}
+
 static bool fresh_coexist(struct install_target *target)
 {
   struct install_coexist *facts = calloc(1, sizeof(*facts));
@@ -193,6 +215,9 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
     if (state == INSTALL_ESP_REFUSED || (native && !selected_esp_clean(target)) ||
         (record->esp_rebuild ? native || state != INSTALL_ESP_REBUILD ||
             !selected_esp_recovery_failure(target) : !native)) {
+      return false;
+    }
+    if (!record->esp_rebuild && !selected_menu_binding(target)) {
       return false;
     }
   } else {
@@ -252,6 +277,32 @@ static bool hash_review(struct install_digest *digest, const struct install_revi
   return true;
 }
 
+static bool hash_menus(struct install_digest *digest, const struct install_review *review)
+{
+  uint8_t count[8];
+  npfs_put_u64(count, review->esp_count);
+  if (!install_digest_update(digest, count, sizeof(count))) {
+    return false;
+  }
+  for (size_t i = 0; i < review->esp_count; ++i) {
+    const struct install_review_esp *esp = &review->esps[i];
+    uint8_t fields[40];
+    npfs_put_u64(fields, esp->selection.partition);
+    npfs_put_u64(fields + 8, esp->menu_status);
+    npfs_put_u64(fields + 16, esp->menu_size);
+    npfs_put_u64(fields + 24, esp->menu_bytes);
+    npfs_put_u64(fields + 32, esp->menu_absent);
+    if (esp->menu_bytes > INSTALL_ESP_CONFIGURATION_MAX_BYTES ||
+        (esp->menu_bytes && !esp->menu) ||
+        !install_digest_update(digest, fields, sizeof(fields)) ||
+        !install_digest_update(digest, esp->selection.partition_guid, 16) ||
+        !install_digest_update(digest, esp->menu, esp->menu_bytes)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool fingerprint(struct install_target *target, const char raw[65], char output[65])
 {
   static const char domain[] = "pyxis-install-target-1";
@@ -259,6 +310,7 @@ static bool fingerprint(struct install_target *target, const char raw[65], char 
   bool ok = install_digest_begin(&digest) &&
       install_digest_update(&digest, domain, sizeof(domain)) &&
       install_digest_update(&digest, raw, 64) && hash_review(&digest, &target->review) &&
+      hash_menus(&digest, &target->review) &&
       install_digest_finish(&digest, output);
   install_digest_abort(&digest);
   return ok;
