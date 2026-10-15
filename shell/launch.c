@@ -82,6 +82,9 @@ struct prepared_stage {
   size_t selection_count;
   const char *conflict;
   struct launch_request request;
+  /* Offered to the shell interpreter only; see program_script_extras. */
+  struct program_script_grant extras[2];
+  size_t extra_count;
 };
 
 struct launch_scope {
@@ -536,14 +539,6 @@ static enum call_status validate_scope(const struct launch_request *request,
   return CALL_OK;
 }
 
-static bool shebang_script(handle_t image)
-{
-  char prefix[2];
-  size_t count;
-  return image != HANDLE_INVALID && file_read(image, 0, prefix, sizeof(prefix), &count) == CALL_OK &&
-      count == sizeof(prefix) && prefix[0] == '#' && prefix[1] == '!';
-}
-
 /* The grant an ordinary foreground command receives as launcher. A capture's
  * stages and a script's commands receive one bound to their own subgroup, so
  * stopping that group stops everything they start. A session successor receives
@@ -589,11 +584,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
   handle_t threads = session ? bootstrap_capability("threads") : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
-  /* Foreground commands carry the same grant under both names. A script shell
-   * recognizes delegated child launch by the second one, as init's does. */
   bool delegate = mode == SHELL_FOREGROUND && !stage->http_producer &&
       child_launcher != HANDLE_INVALID;
-  bool pass_child_launcher = (session && child_launcher != HANDLE_INVALID) || delegate;
+  bool pass_child_launcher = session && child_launcher != HANDLE_INVALID;
   bool has_launcher = session || delegate;
   bool has_terminal = session && shell->terminal_service != HANDLE_INVALID;
   handle_t mux_terminal = session ? bootstrap_capability("mux_terminal") : HANDLE_INVALID;
@@ -623,10 +616,21 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_net_config = session && shell->net_config != HANDLE_INVALID;
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
-  /* A shebang script runs in a shell that needs the pipe creation this one holds,
-   * as a bundle declaring pipe is granted it. Other commands get none. */
-  bool script = mode == SHELL_FOREGROUND && !prepared->bundle && shebang_script(prepared->image);
-  bool has_pipe = (session || script) && shell->pipe != HANDLE_INVALID;
+  bool has_pipe = session && shell->pipe != HANDLE_INVALID;
+  /* A script run by the shell interpreter is a shell: it needs the pipe creation
+   * this one holds and recognizes delegated child launch by child_launcher. Only
+   * the library, seeing the interpreter it actually opens, appends these. */
+  prepared->extra_count = 0;
+  if (mode == SHELL_FOREGROUND && !prepared->bundle && !stage->http_producer) {
+    if (child_launcher != HANDLE_INVALID) {
+      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+        "child_launcher", child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+    }
+    if (shell->pipe != HANDLE_INVALID) {
+      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+        "pipe", shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
+    }
+  }
   bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
   bool has_udp = shell->udp != HANDLE_INVALID;
   bool has_udp_beacons = session && shell->udp_beacons != HANDLE_INVALID;
@@ -2053,12 +2057,19 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   handle_t launcher = scope && scope->capture ? scope->group.launcher :
       mode == SHELL_FOREGROUND && shell->script_group.launcher != HANDLE_INVALID ?
       shell->script_group.launcher : shell->launcher;
+  struct program_script_extras extras[LAUNCH_BATCH_MAX];
+  for (size_t i = 0; i < stage_count; ++i) {
+    extras[i] = (struct program_script_extras){
+      .interpreter = SHELL_INTERPRETER, .grants = prepared[i].extras,
+      .count = prepared[i].extra_count,
+    };
+  }
   if (stage_count == 1) {
-    status = program_launch(launcher, &requests[0], &interpreter_context,
+    status = program_launch_extras(launcher, &requests[0], &interpreter_context, &extras[0],
         &children[0]);
   } else {
-    status = program_launch_batch(launcher, requests, stage_count,
-        &interpreter_context, children, &failed_index);
+    status = program_launch_batch_extras(launcher, requests, stage_count,
+        &interpreter_context, extras, children, &failed_index);
   }
   for (size_t i = 0; i < stage_count; ++i) {
     bundle_launch_admitted(prepared[i].bundle_launch, status, children[i]);

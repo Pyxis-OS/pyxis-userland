@@ -12,6 +12,9 @@
 #include <resource.h>
 #include "../common/provider_setup.h"
 
+/* The one interpreter that runs scripts as a shell; it alone is offered pipe
+ * creation and child_launcher by name. Resolved through the boot archive. */
+#define SHELL_INTERPRETER "boot://shell.pxe"
 #define SHELL_LINE_CAPACITY 1024
 /* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
 #define SHELL_SCRIPT_LINE_MAX 1024

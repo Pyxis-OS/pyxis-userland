@@ -69,11 +69,35 @@ enum call_status launcher_launch_batch(handle_t launcher, const struct launch_re
  * Script launches require argv[0] as a diagnostic script name and no existing
  * resource named "script". Append a READ grant for the original image and use
  * interpreter URI, original argv[0], then original arguments as the child argv.
- * No other authority is added. Native requests pass through unchanged.
+ * No other authority is added, except extras offered through program_launch_extras
+ * to one named interpreter. Native requests pass through unchanged.
  * On failure no child is returned; request and source grants are preserved.
  * Reads do not snapshot mutable files; the interpreter receives the same file. */
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
     const struct path_context *interpreter_context, handle_t *child);
+
+/* Grants a caller offers only to one trusted interpreter. When a shebang names
+ * exactly INTERPRETER (compared with the URI that is then opened, from the one
+ * prefix read), each grant is appended after the script grant with an exported
+ * CAP entry of the given name and the stated masks. A native image, or a script
+ * naming any other interpreter, receives none of them. A request that already
+ * has an entry of one of these names is rejected. Borrowed until return. */
+struct program_script_grant {
+  const char *name;
+  handle_t source;
+  uint64_t rights, transport;
+};
+
+struct program_script_extras {
+  const char *interpreter;
+  const struct program_script_grant *grants;
+  size_t count;
+};
+
+/* As program_launch, with optional extras (NULL for none). */
+enum call_status program_launch_extras(handle_t launcher, const struct launch_request *request,
+    const struct path_context *interpreter_context, const struct program_script_extras *extras,
+    handle_t *child);
 
 /* As program_launch, but the child becomes the first process of a new space
  * created through FACTORY; see space_create_started for the space's rules. */
@@ -87,6 +111,12 @@ enum call_status program_create_space(handle_t factory, const struct space_defin
  * released on every path; caller requests and source grants are preserved. */
 enum call_status program_launch_batch(handle_t launcher, const struct launch_request *requests,
     size_t count, const struct path_context *interpreter_context,
+    handle_t *children, uint64_t *failed_index);
+
+/* As program_launch_batch; extras is NULL or an array with one entry per request. */
+enum call_status program_launch_batch_extras(handle_t launcher,
+    const struct launch_request *requests, size_t count,
+    const struct path_context *interpreter_context, const struct program_script_extras *extras,
     handle_t *children, uint64_t *failed_index);
 
 #endif

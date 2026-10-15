@@ -76,9 +76,15 @@ static void release_script(struct script_scratch *scratch)
   free(scratch->prefix);
 }
 
+static bool earns_extras(const struct program_script_extras *extras, const char *interpreter)
+{
+  return extras && extras->count && !strcmp(extras->interpreter, interpreter);
+}
+
 static enum call_status prepare_script(const struct launch_request *source,
     const char *interpreter, const struct path_context *interpreter_context,
-    struct launch_request *request, struct script_scratch *scratch)
+    const struct program_script_extras *extras, struct launch_request *request,
+    struct script_scratch *scratch)
 {
   if (!source->argc || !source->argv ||
       (source->grant_count && !source->grants) ||
@@ -96,9 +102,24 @@ static enum call_status prepare_script(const struct launch_request *source,
       return CALL_BAD_REQUEST;
     }
   }
+  /* The extras are decided by the interpreter string that is opened just below,
+   * parsed once from the prefix read above; no second read can change it. */
+  size_t extra = earns_extras(extras, interpreter) ? extras->count : 0;
+  if (extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) - source->grant_count - 1 ||
+      extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) -
+          source->entry_count - 1) {
+    return CALL_LIMIT;
+  }
+  for (size_t i = 0; i < extra; ++i) {
+    for (size_t j = 0; j < source->entry_count; ++j) {
+      if (!strcmp((const char *)(uintptr_t)original_entries[j].name, extras->grants[i].name)) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+  }
 
-  scratch->grants = malloc((source->grant_count + 1) * sizeof(*scratch->grants));
-  scratch->entries = malloc((source->entry_count + 1) * sizeof(*scratch->entries));
+  scratch->grants = malloc((source->grant_count + 1 + extra) * sizeof(*scratch->grants));
+  scratch->entries = malloc((source->entry_count + 1 + extra) * sizeof(*scratch->entries));
   scratch->arguments = malloc((source->argc + 2) * sizeof(*scratch->arguments));
   if (!scratch->grants || !scratch->entries || !scratch->arguments) {
     return CALL_NO_MEMORY;
@@ -132,6 +153,15 @@ static enum call_status prepare_script(const struct launch_request *source,
       (struct launch_environment_entry){
       .name = (uintptr_t)"script", .kind = ENVIRONMENT_CAP,
       .flags = ENVIRONMENT_EXPORTED, .value = source->grant_count};
+  for (size_t i = 0; i < extra; ++i) {
+    const struct program_script_grant *grant = &extras->grants[i];
+    scratch->grants[source->grant_count + 1 + i] =
+        (struct launch_grant){grant->source, grant->rights, grant->transport};
+    scratch->entries[source->entry_count + 1 + i] =
+        (struct launch_environment_entry){
+        .name = (uintptr_t)grant->name, .kind = ENVIRONMENT_CAP,
+        .flags = ENVIRONMENT_EXPORTED, .value = source->grant_count + 1 + i};
+  }
   scratch->arguments[0] = interpreter;
   memcpy(scratch->arguments + 1, (const void *)(uintptr_t)source->argv,
       source->argc * sizeof(*scratch->arguments));
@@ -139,9 +169,9 @@ static enum call_status prepare_script(const struct launch_request *source,
 
   request->image = scratch->image;
   request->grants = (uintptr_t)scratch->grants;
-  request->grant_count++;
+  request->grant_count += 1 + extra;
   request->entries = (uintptr_t)scratch->entries;
-  request->entry_count++;
+  request->entry_count += 1 + extra;
   request->argv = (uintptr_t)scratch->arguments;
   request->argc++;
   /* The low-level launcher accepts only PXE, so another script cannot recurse.
@@ -151,7 +181,8 @@ static enum call_status prepare_script(const struct launch_request *source,
 }
 
 static enum call_status prepare_program(const struct launch_request *source,
-    const struct path_context *interpreter_context, struct launch_request *request,
+    const struct path_context *interpreter_context,
+    const struct program_script_extras *extras, struct launch_request *request,
     struct script_scratch *scratch)
 {
   *request = *source;
@@ -173,7 +204,7 @@ static enum call_status prepare_program(const struct launch_request *source,
        * when EOF rather than LF ends a maximum-length shebang. */
       scratch->prefix[script.interpreter - scratch->prefix + script.length] = '\0';
       status = prepare_script(source, script.interpreter, interpreter_context,
-          request, scratch);
+          extras, request, scratch);
     } else {
       status = format == SHEBANG_TOO_LONG ? CALL_LIMIT : CALL_BAD_REQUEST;
     }
@@ -183,6 +214,13 @@ static enum call_status prepare_program(const struct launch_request *source,
 
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
     const struct path_context *interpreter_context, handle_t *child)
+{
+  return program_launch_extras(launcher, request, interpreter_context, NULL, child);
+}
+
+enum call_status program_launch_extras(handle_t launcher, const struct launch_request *request,
+    const struct path_context *interpreter_context, const struct program_script_extras *extras,
+    handle_t *child)
 {
   if (!child) {
     return CALL_BAD_REQUEST;
@@ -194,7 +232,7 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
 
   struct script_scratch scratch = {0};
   struct launch_request prepared;
-  enum call_status status = prepare_program(request, interpreter_context,
+  enum call_status status = prepare_program(request, interpreter_context, extras,
       &prepared, &scratch);
   if (status == CALL_OK) {
     status = launcher_launch(launcher, &prepared, child);
@@ -217,7 +255,7 @@ enum call_status program_create_space(handle_t factory, const struct space_defin
 
   struct script_scratch scratch = {0};
   struct launch_request prepared;
-  enum call_status status = prepare_program(request, interpreter_context,
+  enum call_status status = prepare_program(request, interpreter_context, NULL,
       &prepared, &scratch);
   if (status == CALL_OK) {
     status = space_create_started(factory, space, cpus, cpu_count, &prepared, child);
@@ -228,6 +266,15 @@ enum call_status program_create_space(handle_t factory, const struct space_defin
 
 enum call_status program_launch_batch(handle_t launcher, const struct launch_request *requests,
     size_t count, const struct path_context *interpreter_context,
+    handle_t *children, uint64_t *failed_index)
+{
+  return program_launch_batch_extras(launcher, requests, count, interpreter_context, NULL,
+      children, failed_index);
+}
+
+enum call_status program_launch_batch_extras(handle_t launcher,
+    const struct launch_request *requests, size_t count,
+    const struct path_context *interpreter_context, const struct program_script_extras *extras,
     handle_t *children, uint64_t *failed_index)
 {
   if (failed_index) {
@@ -249,7 +296,7 @@ enum call_status program_launch_batch(handle_t launcher, const struct launch_req
   struct script_scratch scratch[LAUNCH_BATCH_MAX] = {0};
   enum call_status status = CALL_OK;
   for (size_t i = 0; i < count; ++i) {
-    status = prepare_program(&requests[i], interpreter_context,
+    status = prepare_program(&requests[i], interpreter_context, extras ? &extras[i] : NULL,
         &prepared[i], &scratch[i]);
     if (status != CALL_OK) {
       *failed_index = i;
