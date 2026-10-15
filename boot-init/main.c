@@ -16,6 +16,7 @@
 #include <abi/power.h>
 #include <abi/profile.h>
 #include <abi/random.h>
+#include <abi/acpi_tables.h>
 #include <abi/screen_capture.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
@@ -125,6 +126,8 @@ struct authority {
   handle_t input_policy; /* Boot-only, never forwarded through services. */
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
+  /* The read-only ACPI table root, bound as acpi only for spaces that set acpi_tables. */
+  handle_t acpi_tables;
   /* Granted only to spaces that set power or remote_power. */
   handle_t power;
   uint64_t cpu_count;
@@ -155,6 +158,7 @@ static bool take_authority(struct authority *authority)
   authority->esp_mount = bootstrap_capability("esp_mount");
   authority->fat_mounts = bootstrap_capability("fat_mounts");
   authority->screen_capture = bootstrap_capability("screen_capture");
+  authority->acpi_tables = bootstrap_capability("acpi_tables");
   authority->power = bootstrap_capability("power");
   authority->input_policy = bootstrap_capability("input_policy");
   bool complete = authority->factory != HANDLE_INVALID &&
@@ -681,9 +685,12 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 9 + BUNDLE_SOURCE_LIMIT,
+  if (space->acpi_tables && authority->acpi_tables == HANDLE_INVALID) {
+    return "acpi_tables requested but the ACPI table root is unavailable";
+  }
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 10 + BUNDLE_SOURCE_LIMIT,
       sizeof(*launch->grants));
-  launch->roots = calloc(3 + space->root_count, sizeof(*launch->roots));
+  launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   if (!launch->grants || !launch->roots) {
     return "boot init is out of memory";
   }
@@ -725,6 +732,13 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
     launch->roots[launch->root_count++] =
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->volume, launch->grant_count++);
+  }
+  /* A root like any configured one: session, remote and shell handoffs carry it on. */
+  if (space->acpi_tables) {
+    launch->grants[launch->grant_count] =
+        (struct launch_grant){authority->acpi_tables, ACPI_TABLES_RIGHTS, 0};
+    launch->roots[launch->root_count++] =
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"acpi", launch->grant_count++);
   }
   size_t source_count = 0;
   for (size_t i = 0; i < space->grant_count; ++i) {

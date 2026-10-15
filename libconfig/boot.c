@@ -426,7 +426,7 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
     "network", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
-    "screenshot", "power", "remote_power", "grants", "fat32_mount"};
+    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -542,6 +542,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: screenshot must be a boolean", space->name);
   }
   space->screenshot = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "acpi_tables");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: acpi_tables must be a boolean", space->name);
+  }
+  space->acpi_tables = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "power");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {

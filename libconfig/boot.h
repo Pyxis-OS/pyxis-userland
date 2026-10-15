@@ -82,6 +82,7 @@ struct boot_space {
   bool clipboard_local; /* Explicit space-local graphics/store delegation. */
   bool clipboard_shared; /* Independent cross-space graphics/store delegation. */
   bool screenshot; /* Receives whole-screen capture authority. */
+  bool acpi_tables; /* Receives the read-only ACPI table root as acpi://. */
   bool power; /* Receives power-off and restart authority. */
   bool remote_power; /* Opts remote root shells into power authority. */
 };

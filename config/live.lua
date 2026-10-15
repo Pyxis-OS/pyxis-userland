@@ -16,7 +16,7 @@ return {
   spaces = {
     { name = "development", title = "Development", init = "boot://init",
       network = true, focus = true, launch = true, jobs = true, screenshot = true, power = true,
-      clipboard_local = true, clipboard_shared = true,
+      acpi_tables = true, clipboard_local = true, clipboard_shared = true,
       grants = { http_staging = { volume = "http-work", kind = "directory",
                                  access = "read-write", optional = true } },
       roots = { host = { access = "read-write", optional = true }, home = "read-write" } },
@@ -34,6 +34,7 @@ return {
       roots = { host = { access = "read-only", optional = true }, home = "read-only" } },
     { name = "remote", title = "Remote", init = "boot://init-remote",
       launch = true, remote_multiplexer = true, screenshot = true, remote_power = true,
+      acpi_tables = true,
       grants = { http_staging = { volume = "http-work", kind = "directory",
                                  access = "read-write", optional = true } },
       roots = { host = { access = "read-write", optional = true }, home = "read-write" },
