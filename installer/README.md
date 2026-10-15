@@ -10,10 +10,11 @@ adding authority; optional RESTART authority remains narrowed.
 
 The plain frontend and later TUI share `plan.h`: source inventory, read-only
 preparation, Review and one confirmed executor. Preparing, printing, cancellation
-and dry-run never claim write access, mount a target, persist replay, format or
-clean up. The only frontend apply call is `install_plan_execute`, after explicit
-`wipe`/`update` consent. It repeats consumed-input checks under exclusive raw
-ownership before the first write and refuses stale plans without amending them.
+and dry-run never claim write access, persist replay, format or clean up.
+Temporary native RO ESP views are inspected and retired before mutation. The only frontend apply call is `install_plan_execute`, after explicit
+`wipe`/`append`/`update` consent. Fresh read-only revalidation checks consumed
+inputs; one-use kernel grants then revalidate the exact reviewed GPT before
+mutation. Stale plans refuse without amendment.
 
 ## Plans and Programs report
 
@@ -37,7 +38,8 @@ hex IDs/revision bytes/hashes. Missing, duplicated, unknown or malformed fields,
 unsupported layouts and oversized input refuse. Parsing stops at the end marker;
 following bytes cannot execute or change that plan. Each plan is capped at 16 MiB.
 Source hashes bind recorded choices and all immutable source assets/inventory;
-target hashes bind successful raw read extents and consumed bytes.
+target hashes bind successful raw read extents, consumed bytes and complete
+partition/EFI-directory Review, excluding boot-scoped numeric device IDs.
 
 Serialized apply resolves a uniquely observed validated existing GPT GUID plus
 geometry and inspected state, never an enumeration number. Duplicate GUIDs
@@ -91,10 +93,11 @@ ESP, explicit sync and current/previous retention. Its staging reserve overcount
 mapping/entry metadata and credits no cleanup; it is not a guarantee against all
 allocation limits. It copies programs, syncs, compares exact tree structure and
 source bytes, and hashes actual destination bytes against the inventory. Only
-then does it create, sync and byte-verify the manifest, before replacing the ESP.
+then does it create, sync and byte-verify the manifest, before changing boot payloads.
 Program/manifest verification uses ordinary filesystem reads and may return
-cached pages. It is not guaranteed fresh device read-back. EFI verification uses
-raw disk reads after flush/release, without a physical-media/power-loss claim.
+cached pages. It is not guaranteed fresh device read-back. EFI verification
+syncs and reopens native FAT files, compares held-object identity and hashes
+all bytes, without a cache-bypass or physical-media/power-loss claim.
 
 The shared whole-ESP writer generates exactly the installed normal and rescue
 menu entries, with a three-second timeout and the selected disk binding. Live
@@ -122,3 +125,26 @@ success or durability. Human output is stderr; stdout remains plan data only.
 Build with `make installer SDK=/path/to/sdk MBEDTLS_PREFIX=/path/to/mbedtls`.
 Use the configured export's headers/libraries and native npfs codec archive;
 there is no host libc, formatter, firmware updater or compiler-container change.
+
+## Classic and coexistence ESP paths
+
+Classic keeps its fixed EFI loader and `boot/{caelum.elf,initrd.cpio,revision}`
+paths, plus the allowlisted `boot/limine/limine.conf`. Healthy ESPs are written
+through native FAT files without formatting; a damaged/missing classic ESP
+requires its separately reviewed one-use rebuild grant. Program sync and
+verification precede boot-payload publication. No classic attempt directories
+are created until installer task 5 adds committed boot-binding evidence.
+
+The explicit coexistence profile receives APPEND rather than ERASE or ESP
+rebuild authority. `--coexist` selects that behaviour without adding grants.
+New Install appends the reviewed native-pool slot first; Update opens its
+existing selected pool. Every volume operation uses that actual GPT entry.
+Coexistence stages only immutable `EFI/pyxis/REVISION/ATTEMPT/` payloads through
+the shared stager and prints their saved manual entry after verified sync.
+It edits no existing boot menu or firmware and never reports activation.
+
+Copies run outside the final publication interval. BEGIN is followed immediately
+by CHECK; final held-object/hash verification and classic menu/revision changes
+use the original non-extending 30-second lease. All staged references close
+before root drainage, RETIRE and control close; END names the returned interval. Failure reports partial
+effects without automatic retry, deletion or rollback.

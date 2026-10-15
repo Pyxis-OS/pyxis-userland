@@ -150,7 +150,7 @@ static int run_install(int argc, char **argv, bool selector)
     [KERNEL] = {sources[KERNEL], FILE_RIGHT_READ, 0},
     [ARCHIVE] = {sources[ARCHIVE], FILE_RIGHT_READ, 0},
     [MEMORY] = {sources[MEMORY], MEMORY_RIGHT_MANAGE, 0},
-    [CLOCK] = {sources[CLOCK], CLOCK_RIGHT_READ, 0},
+    [CLOCK] = {sources[CLOCK], CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0},
     [RANDOM] = {sources[RANDOM], RANDOM_RIGHT_READ, 0},
     [SYSTEM_INFO] = {sources[SYSTEM_INFO], SYSTEM_INFO_RIGHT_READ, 0},
     [LOG] = {sources[LOG], LOG_RIGHT_READ, 0},
