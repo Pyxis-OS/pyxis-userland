@@ -5,9 +5,11 @@ optional entry.txt, in one freshly created EFI/pyxis/REVISION/ATTEMPT directory.
 The plan-time path builder supplies the same layout without opening anything.
 Revision is a portable ASCII FAT component of at most 63 bytes (not config);
 attempt is exactly 32 lowercase hex digits. Collisions refuse, without retry.
-Every payload is nonempty and at most 1 GiB. Verification reads use
-`FILE_READ_MAX_BYTES`; copy chunks fit both that buffer and
-`FILE_WRITE_MAX_BYTES`, so a full chunk does not require an extra tail write.
+Every payload is nonempty and at most 1 GiB. Target verification rounds
+`FILE_READ_MAX_BYTES` down to the trusted OBSERVE device block size when that
+block fits the transport (512-byte blocks use 3,584-byte requests). Larger
+blocks keep the transport maximum. Source checks use `FILE_READ_MAX_BYTES`;
+copy chunks also fit `FILE_WRITE_MAX_BYTES`, avoiding an extra tail write.
 Sequential writes grow each fresh empty file; there is no full-file resize
 whose single mutation plan would grow with the entire payload.
 
@@ -49,3 +51,22 @@ renews an interval, and successful verification does not certify lease validity.
 It never opens raw storage, formats, writes EFI/BOOT, changes Limine/config,
 selects an active boot source or activates installed Update. Coexistence can
 retain entry.txt as the exact printed entry; it is not installed automatically.
+
+
+`boot_entry.h` shares the existing pure normal/rescue planner and read-only
+legacy certifier with the coexistence caller. The planner accepts frozen menu
+bytes, caller-certified previous paths (or no previous binding), reviewed new
+paths and the disk GUID. Only exact owned entries backed by that previous
+binding, or the exact fully certified legacy pair, can change. Missing or
+ambiguous menus stay untouched and report activation pending; outside bytes
+are preserved. Legacy certification hashes all three existing payloads and
+checks the kernel, rescue archive and revision; failure clears all evidence.
+Its borrowed RO root stays with the caller and no file handle escapes.
+
+The pure manual renderer emits unmarked normal/rescue entries only. An optional
+reviewed ESP GUID selects `guid(ESP_GUID):/`; otherwise it uses `boot():/`, per
+[pinned Limine v12.9.3](https://github.com/Limine-Bootloader/Limine/blob/v12.9.3/CONFIG.md#paths).
+This is entry text, never ownership, readiness or activation authority. The
+planner's recognition remains the existing `boot():/` contract. The caller owns
+target identity, Review, adoption consent and final revalidation/publication;
+no additional durable boot-binding record is introduced here.

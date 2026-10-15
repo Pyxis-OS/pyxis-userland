@@ -56,7 +56,7 @@ REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_payload.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_payload.o boot_entry.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
@@ -72,6 +72,7 @@ TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o literal.o boot.o session.o network.o selection.o)
 CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o)
+INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
@@ -240,8 +241,8 @@ $(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $
 $(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT): private CPPFLAGS += -I$(LUA_PREFIX)/include
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT): $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
 $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)
@@ -296,8 +297,8 @@ $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 $(INSTALLER_OBJECTS): private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/installer.pxe: $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/installer.pxe: $(INSTALLER_OBJECTS) $(INSTALLER_BOOT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_BOOT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/fat32-inspect/main.o: $(SDK)/sysroot/usr/include/pyxis_fs/fat32.h
 $(BUILD)/fat32-inspect.pxe: $(BUILD)/fat32-inspect/main.o $(FAT32_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config

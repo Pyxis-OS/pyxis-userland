@@ -76,8 +76,11 @@ static bool recovery_valid(const struct config_recovery_file *file,
       !strcmp(file->name, expected);
 }
 
-static bool revision_valid(const char *revision)
+bool config_revision_valid(const char *revision)
 {
+  if (!revision) {
+    return false;
+  }
   size_t count = strnlen(revision, 65);
   if (!count || count > 63 || !strcmp(revision, ".") || !strcmp(revision, "..")) {
     return false;
@@ -94,7 +97,7 @@ static bool revision_valid(const char *revision)
 static bool record_valid(const struct config_record *record)
 {
   if (!record || !config_transaction_valid(record->transaction) ||
-      !revision_valid(record->revision)) {
+      !config_revision_valid(record->revision)) {
     return false;
   }
   for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) {
@@ -224,7 +227,7 @@ bool config_record_parse(const void *bytes, size_t size, struct config_record *r
   }
   ok = ok && word(&cursor, "revision", ' ');
   char *revision = ok ? token(&cursor, '\n') : NULL;
-  ok = revision && revision_valid(revision);
+  ok = revision && config_revision_valid(revision);
   if (ok) {
     strcpy(parsed.revision, revision);
   }

@@ -1,4 +1,6 @@
 #include "installer.h"
+#include "../libconfig/literal.h"
+#include <pxe/p1f.h>
 #include "manifest.h"
 #include "digest.h"
 
@@ -851,4 +853,51 @@ bool install_programs_cleanup(const struct install_disk *disk, const char *keep,
   }
   install_progress_finish();
   return ok;
+}
+
+bool install_archive_rescue_identity(const struct install_source *archive)
+{
+  struct install_programs none = {0};
+  struct install_source checked = {.handle = HANDLE_INVALID};
+  if (!install_archive_filter(archive, &none, &checked)) {
+    return false;
+  }
+  bool initializer = false, defaults = false, duplicate = false;
+  bool seen_initializer = false, seen_defaults = false;
+  for (size_t offset = 0; offset < checked.bytes;) {
+    uint32_t size, name_size;
+    const uint8_t *header = checked.memory + offset;
+    if (!newc_field(header, 6, &size) || !newc_field(header, 11, &name_size)) {
+      duplicate = true;
+      break;
+    }
+    const char *name = (char *)header + NEWC_HEADER_BYTES;
+    size_t data = align4(offset + NEWC_HEADER_BYTES + name_size);
+    if (!strcmp(name, NEWC_TRAILER)) {
+      break;
+    }
+    if (!strncmp(name, "./", 2)) {
+      name += 2;
+    }
+    if (!strcmp(name, "boot-init.pxe")) {
+      duplicate |= seen_initializer;
+      seen_initializer = true;
+      struct p1f_header image = {0};
+      if (size >= sizeof(image)) {
+        memcpy(&image, checked.memory + data, sizeof(image));
+      }
+      initializer = image.magic == P1F_MAGIC && image.segment_count &&
+          image.segment_count <= (size - sizeof(image)) / sizeof(struct p1f_segment);
+    } else if (!strcmp(name, "config/installed.lua")) {
+      duplicate |= seen_defaults;
+      seen_defaults = true;
+      struct config_literal *document = NULL;
+      struct config_literal_diagnostic diagnostic;
+      defaults = config_literal_parse((char *)checked.memory + data, size, &document, &diagnostic);
+      config_literal_free(document);
+    }
+    offset = align4(data + size);
+  }
+  free(checked.memory);
+  return initializer && defaults && !duplicate;
 }
