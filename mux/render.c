@@ -165,8 +165,9 @@ static enum call_status compose(struct mux *mux)
     snprintf(footer, sizeof(footer), "Scrollback %zu/%zu | Page Up/Down, Home/End, Esc returns to live",
         focused->scrollback, mux_emulator_history_rows(&focused->emulator));
   } else {
-    snprintf(footer, sizeof(footer), "%s%s | Ctrl+B %s %%/\" split, digits/arrows focus, b/e layout, [ history, x close%s",
-        mux->layout.kind == MUX_BSP ? "BSP" : "Equal", mux->collapsed ? " (focused only)" : "",
+    snprintf(footer, sizeof(footer), "%s%s | Ctrl+B %s %%/\" split, digits/arrows focus, b/e layout, z zoom, [ history, x close%s",
+        mux->layout.kind == MUX_BSP ? "BSP" : "Equal",
+        mux->zoomed ? " (zoomed)" : mux->collapsed ? " (focused only)" : "",
         mux->prefix ? "command:" : "then", mux->notice[0] ? " | " : "");
     size_t used = strlen(footer);
     snprintf(footer + used, sizeof(footer) - used, "%s", mux->notice);

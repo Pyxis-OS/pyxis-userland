@@ -51,7 +51,7 @@ struct mux {
   struct mux_rect rectangles[MUX_PANES];
   struct mux_pane panes[MUX_PANES];
   unsigned focused, tab_width;
-  bool collapsed, prefix, confirm, dirty;
+  bool collapsed, zoomed, prefix, confirm, dirty;
   enum call_status error;
   char notice[128];
   unsigned char input[256];

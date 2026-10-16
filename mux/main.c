@@ -42,7 +42,9 @@ static enum call_status place(struct mux *mux)
   struct mux_rect view = mux_viewport(mux);
   size_t columns = view.width, rows = view.height;
   size_t area_rows = rows > 1 ? rows - 1 : 0;
-  mux->collapsed = !mux_layout_place(&mux->layout, columns, area_rows, mux->rectangles);
+  /* A zoomed pane uses the same focused-only presentation as a display too small
+   * for the layout; the layout tree is untouched and returns on unzoom. */
+  mux->collapsed = mux->zoomed || !mux_layout_place(&mux->layout, columns, area_rows, mux->rectangles);
   if (mux->collapsed) {
     memset(mux->rectangles, 0, sizeof(mux->rectangles));
     mux->rectangles[mux->focused] = (struct mux_rect){.width = columns, .height = area_rows};
@@ -127,6 +129,7 @@ static void split(struct mux *mux, enum mux_axis axis)
   pyxis_working_snapshot_close(&cwd);
   if (started) {
     mux->layout = next;
+    mux->zoomed = false;
     mux->focused = slot;
     mux->notice[0] = 0;
     mux->error = place(mux);
@@ -150,6 +153,7 @@ static void dismiss(struct mux *mux, unsigned slot)
   mux_emulator_destroy(&pane->emulator);
   *pane = (struct mux_pane){0};
   mux_layout_remove(&mux->layout, (int)slot);
+  mux->zoomed = false;
   if (slot == mux->focused) {
     for (unsigned i = 0; i < MUX_PANES; ++i) {
       if (mux->panes[i].used) {
@@ -195,6 +199,23 @@ static void focus(struct mux *mux, enum mux_axis axis, bool forward)
     }
   }
   focus_pane(mux, (unsigned)selected);
+}
+
+static void zoom(struct mux *mux)
+{
+  if (!mux->zoomed) {
+    unsigned panes = 0;
+    for (unsigned i = 0; i < MUX_PANES; ++i) {
+      panes += mux->panes[i].used;
+    }
+    if (panes < 2) {
+      notice(mux, "Nothing to zoom: only one pane");
+      return;
+    }
+  }
+  mux->zoomed = !mux->zoomed;
+  mux->notice[0] = 0;
+  mux->error = place(mux);
 }
 
 static void command(struct mux *mux, unsigned key)
@@ -247,9 +268,11 @@ static void command(struct mux *mux, unsigned key)
   case '"': split(mux, MUX_TOP_BOTTOM); break;
   case 'b': case 'e':
     mux->layout.kind = key == 'b' ? MUX_BSP : MUX_EQUAL;
+    mux->zoomed = false;
     mux->notice[0] = 0;
     mux->error = place(mux);
     break;
+  case 'z': zoom(mux); break;
   case TERM_KEY_LEFT: focus(mux, MUX_LEFT_RIGHT, false); break;
   case TERM_KEY_RIGHT: focus(mux, MUX_LEFT_RIGHT, true); break;
   case TERM_KEY_UP: focus(mux, MUX_TOP_BOTTOM, false); break;
