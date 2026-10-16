@@ -11,6 +11,7 @@
 
 #define POLL_INTERVAL_NS 10000000ull
 #define SCROLL_SHOWN_NS 500000000ull
+#define SCROLL_AGE_REFRESH_MS 100
 #define PANEL_PERCENT 30
 #define GLYPH_WIDTH 5
 #define GLYPH_HEIGHT 7
@@ -42,11 +43,16 @@ static const uint8_t glyph_c[GLYPH_HEIGHT] = {0x0e, 0x11, 0x10, 0x10, 0x10, 0x11
 static const uint8_t glyph_d[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e};
 static const uint8_t glyph_e[GLYPH_HEIGHT] = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f};
 static const uint8_t glyph_f[GLYPH_HEIGHT] = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10};
+static const uint8_t glyph_g[GLYPH_HEIGHT] = {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e};
 static const uint8_t glyph_i[GLYPH_HEIGHT] = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f};
 static const uint8_t glyph_k[GLYPH_HEIGHT] = {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
 static const uint8_t glyph_o[GLYPH_HEIGHT] = {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e};
+static const uint8_t glyph_n[GLYPH_HEIGHT] = {0x11, 0x19, 0x19, 0x15, 0x13, 0x13, 0x11};
+static const uint8_t glyph_p[GLYPH_HEIGHT] = {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10};
 static const uint8_t glyph_t[GLYPH_HEIGHT] = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
+static const uint8_t glyph_u[GLYPH_HEIGHT] = {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e};
 static const uint8_t glyph_w[GLYPH_HEIGHT] = {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a};
+static const uint8_t glyph_z[GLYPH_HEIGHT] = {0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f};
 
 struct colors {
   uint32_t panel, idle, left, middle, right, text, ink, paper;
@@ -68,6 +74,8 @@ struct mouse_state {
   uint32_t buttons;
   int32_t scroll_x, scroll_y;
   uint64_t scroll_until;
+  uint64_t pointer_events_received, scroll_events_received;
+  uint64_t last_scroll_ns, scroll_age_ms;
   bool keyboard_focused;
   bool pointer_focused;
   bool locked;
@@ -115,17 +123,22 @@ static const uint8_t *glyph(char character)
   case 'D': return glyph_d;
   case 'E': return glyph_e;
   case 'F': return glyph_f;
+  case 'G': return glyph_g;
   case 'I': return glyph_i;
   case 'K': return glyph_k;
   case 'L': return glyph_l;
   case 'M': return glyph_m;
+  case 'N': return glyph_n;
   case 'O': return glyph_o;
+  case 'P': return glyph_p;
   case 'R': return glyph_r;
   case 'S': return glyph_s;
   case 'T': return glyph_t;
+  case 'U': return glyph_u;
   case 'W': return glyph_w;
   case 'X': return glyph_x;
   case 'Y': return glyph_y;
+  case 'Z': return glyph_z;
   case '-': return glyph_minus;
   default: return NULL;
   }
@@ -217,11 +230,16 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
       state->scroll_y > 0 ? colors->left : colors->idle);
 
   y += 3 * arrow + 2 * gap + margin;
-  int64_t scale = (width - 2 * margin) / (16 * (GLYPH_WIDTH + 1));
+  /* Fit the longest label, full uint64 values and all thirteen text rows. */
+  int64_t scale = (width - 2 * margin) / (22 * (GLYPH_WIDTH + 1));
+  int64_t height_scale = (screen->height - y - margin) / (13 * (GLYPH_HEIGHT + 3));
+  if (scale > height_scale) {
+    scale = height_scale;
+  }
   if (scale < 1) {
     scale = 1;
   }
-  char line[24];
+  char line[32];
   snprintf(line, sizeof(line), "SX %ld", (long)state->scroll_x);
   draw_text(screen, margin, y, scale, line, colors->text);
   y += (GLYPH_HEIGHT + 3) * scale;
@@ -241,6 +259,25 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
   draw_text(screen, margin, y, scale, line, colors->text);
   y += (GLYPH_HEIGHT + 3) * scale;
   snprintf(line, sizeof(line), "DY %ld", (long)state->dy);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  draw_text(screen, margin, y, scale, "RX ALL", colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "%llu", (unsigned long long)state->pointer_events_received);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  draw_text(screen, margin, y, scale, "RX INPUT SCROLL NONZERO", colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  snprintf(line, sizeof(line), "%llu", (unsigned long long)state->scroll_events_received);
+  draw_text(screen, margin, y, scale, line, colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  draw_text(screen, margin, y, scale, "SCROLL AGE MS", colors->text);
+  y += (GLYPH_HEIGHT + 3) * scale;
+  if (state->scroll_events_received) {
+    snprintf(line, sizeof(line), "%llu", (unsigned long long)state->scroll_age_ms);
+  } else {
+    strcpy(line, "-");
+  }
   draw_text(screen, margin, y, scale, line, colors->text);
 }
 
@@ -511,6 +548,18 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
     }
     struct pointer_event event;
     while ((status = pointer_read(pointer, POINTER_READ_POLL, &event)) == CALL_OK) {
+      /* Count receipt before focus, lock and geometry decide whether to apply it. */
+      if (state.pointer_events_received != UINT64_MAX) {
+        ++state.pointer_events_received;
+      }
+      if (event.type == POINTER_INPUT && (event.scroll_x || event.scroll_y)) {
+        if (state.scroll_events_received != UINT64_MAX) {
+          ++state.scroll_events_received;
+        }
+        state.last_scroll_ns = now;
+        state.scroll_age_ms = 0;
+      }
+      state.dirty = true;
       bool locked_geometry = event.type == POINTER_GEOMETRY_CHANGED &&
           state.locked && (event.flags & POINTER_EVENT_LOCKED);
       if (event.type != POINTER_INPUT && !locked_geometry) {
@@ -560,6 +609,13 @@ static enum call_status run(struct screen *screen, struct display_buffer *buffer
       state.scroll_x = state.scroll_y = 0;
       state.scroll_until = 0;
       state.dirty = true;
+    }
+    if (state.scroll_events_received) {
+      uint64_t age_ms = (now - state.last_scroll_ns) / UINT64_C(1000000);
+      if (age_ms / SCROLL_AGE_REFRESH_MS != state.scroll_age_ms / SCROLL_AGE_REFRESH_MS) {
+        state.scroll_age_ms = age_ms;
+        state.dirty = true;
+      }
     }
 
     if (state.dirty) {

@@ -531,8 +531,14 @@ Once the view is complete it idles until input or a resize needs another draw.
 surface-local position, with a drawing pad for the left button and a custom system cursor.
 Buttons 1/2/3 are left/right/middle. `SX`/`SY` show the latest scroll report in
 120 units per detent; positive means viewport right/down. The four-arrow cluster
-follows `SX` left/right and `SY` up/down. The indicators expire after 500 ms and clear on reset, geometry or focus
-changes. Direction policy has already been applied by the kernel.
+follows `SX` left/right and `SY` up/down. The indicators expire after 500 ms and
+clear on reset, geometry or focus changes. Direction policy has already been
+applied by the kernel. `RX ALL` counts every received pointer event;
+`RX INPUT SCROLL NONZERO` counts received `POINTER_INPUT` events with a nonzero
+scroll axis. Both session counters saturate and count before focus, lock or
+geometry filtering. `SCROLL AGE MS` shows milliseconds since the last such scroll
+event, refreshing every 100 ms without input; it shows `-` before the first one.
+These diagnostics persist across focus, geometry and input resets.
 `H` toggles cursor visibility, `D` restores the default image, `C` restores the
 custom image and `W` warps to the surface center. Escape returns to the TTY.
 `L` requests pointer lock or cancels it. The panel shows `FREE` when unlocked,
