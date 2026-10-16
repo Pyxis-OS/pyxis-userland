@@ -181,6 +181,7 @@ struct install_programs {
 };
 bool install_programs_list(handle_t boot, struct install_programs *programs);
 void install_programs_destroy(struct install_programs *programs);
+bool install_archive_rescue_identity(const struct install_source *archive);
 /* The rescue archive: newc without selected roots or their descendants, as
  * owned memory. Descendant matching respects component boundaries. Exactly one
  * normalized config/installed.lua is rebound to the selected pool as literal
