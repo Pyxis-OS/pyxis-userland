@@ -17,7 +17,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
+INSTALL_PROGRAMS := mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -40,7 +40,7 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/cp/main.o $(BUILD)/echo/main.o $(BUILD)/head/main.o $(BUILD)/log/main.o $(BUILD)/hostname/main.o $(BUILD)/lspci/main.o $(BUILD)/lsusb/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
-                   $(BUILD)/mv/main.o $(BUILD)/tree/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/ping/main.o \
+                   $(BUILD)/mv/main.o $(BUILD)/tree/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/sleep/main.o $(BUILD)/ping/main.o \
                    $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o $(BUILD)/tcp/main.o \
                    $(BUILD)/ttcp/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
@@ -82,7 +82,7 @@ LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
+.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
 .PHONY: fat32ctl config
 all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
@@ -194,6 +194,7 @@ mv: $(BUILD)/mv.pxe
 tree: $(BUILD)/tree.pxe
 sync: $(BUILD)/sync.pxe
 date: $(BUILD)/date.pxe
+sleep: $(BUILD)/sleep.pxe
 ping: $(BUILD)/ping.pxe
 dig: $(BUILD)/dig.pxe
 tcp: $(BUILD)/tcp.pxe
