@@ -77,13 +77,19 @@ the stored key accepts one trailing LF or none. Boot init sets the kernel's
 name once before creating spaces. `system://config/boot.lua` cannot set it.
 The archive's `input` table selects `mouse_scroll_direction` and
 `touchpad_scroll_direction`, each `natural` or `traditional` (natural by default).
+`input.touchpad_speed` is a finite number from -1 to 1, defaulting to 0. It is
+rounded to the nearest normalized permille, with halfway values rounded away
+from zero. An applied installed `system://config/boot.lua` override may set only
+`touchpad_speed` in its `input` table; an omitted value keeps the archive default,
+and an invalid or ignored override cannot change it.
 Installed boots read `system://config/machine/input/mouse/scroll-direction` and
 `system://config/machine/input/touchpad/scroll-direction`, accepting the exact
 lowercase value with one trailing LF or none. Missing, unreadable or invalid
 keys keep their respective archive defaults. `input.diagnostics = true` in the
 archive enables fallback reports; it defaults false. Stock boot init installs
-both directions once before starting spaces, including rescue. The `input_policy`
-grant stays in boot init. `system://config/boot.lua` cannot override input policy.
+both directions and touchpad speed once before starting spaces, including rescue.
+The `input_policy` grant stays in boot init. `system://config/boot.lua` cannot
+override scroll directions, diagnostics or hostname.
 Store changes apply next boot; explicitly sync
 edited keys before reboot. No settings writer or live policy update is provided.
 `clipboard_local` and `clipboard_shared` independently request the named

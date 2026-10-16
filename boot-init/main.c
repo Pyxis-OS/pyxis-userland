@@ -531,10 +531,12 @@ static enum call_status read_scroll_direction(handle_t system, const char *path,
 }
 
 static bool set_input_policy(const struct authority *authority, const struct boot_config *defaults,
-    struct mounts *mounts, bool installed)
+    const struct boot_config *override, struct mounts *mounts, bool installed)
 {
   bool mouse = defaults->mouse_scroll_natural;
   bool touchpad = defaults->touchpad_scroll_natural;
+  int32_t touchpad_speed = override && override->touchpad_speed_present ?
+      override->touchpad_speed : defaults->touchpad_speed;
   if (installed) {
     struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
     const char *paths[] = {"system://" MACHINE_MOUSE_SCROLL_PATH,
@@ -552,7 +554,7 @@ static bool set_input_policy(const struct authority *authority, const struct boo
   }
   enum call_status status = input_policy_install_once(authority->input_policy,
       mouse ? INPUT_SCROLL_NATURAL : INPUT_SCROLL_TRADITIONAL,
-      touchpad ? INPUT_SCROLL_NATURAL : INPUT_SCROLL_TRADITIONAL);
+      touchpad ? INPUT_SCROLL_NATURAL : INPUT_SCROLL_TRADITIONAL, touchpad_speed);
   if (status != CALL_OK) {
     fprintf(stderr, "boot-init: cannot install input policy (status %u); no spaces started\n", status);
     return false;
@@ -1107,6 +1109,7 @@ int main(int argc, char **argv)
   }
 
   struct boot_config defaults, override = {0};
+  const struct boot_config *applied_override = NULL;
   struct boot_plan plan = {0};
   enum boot_plan_error plan_error;
   bool suppress_boot_focus = false;
@@ -1147,6 +1150,7 @@ int main(int argc, char **argv)
           if (boot_plan_build(&defaults, &override, &merged, &plan_error)) {
             boot_plan_free(&plan);
             plan = merged;
+            applied_override = &override;
             puts("boot-init: applied " OVERRIDE_NAME);
           } else {
             suppress_boot_focus |= plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
@@ -1164,7 +1168,7 @@ int main(int argc, char **argv)
     exit_status = EXIT_FAILURE;
     goto finish;
   }
-  if (!set_input_policy(&authority, &defaults, &mounts, installed)) {
+  if (!set_input_policy(&authority, &defaults, applied_override, &mounts, installed)) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }

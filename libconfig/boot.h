@@ -89,10 +89,12 @@ struct boot_space {
 
 /* One parsed file. Owns every string and array. */
 struct boot_config {
-  /* Archive-only machine defaults; pool boot overrides contain volumes/spaces. */
+  /* Hostname, directions and diagnostics remain archive-only machine defaults. */
   char hostname[MACHINE_HOSTNAME_MAX + 1];
   bool mouse_scroll_natural, touchpad_scroll_natural;
   bool input_diagnostics;
+  bool touchpad_speed_present;
+  int32_t touchpad_speed; /* Normalized permille; absent means zero in defaults. */
   struct boot_volume *volumes;
   size_t volume_count;
   struct boot_space *spaces;
@@ -126,13 +128,14 @@ enum boot_plan_error {
 };
 
 /* Reads archive defaults through libc, including hostname/input policy, or a pool
- * boot override from SIZE bytes. The override accepts only volumes and spaces.
+ * boot override from SIZE bytes. The override accepts volumes, spaces and
+ * input.touchpad_speed; no other machine policy may be overridden.
  * Schema errors go to stderr. CONFIG is cleared first and must be freed. */
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config);
 enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
 /* Trusted archive bytes include machine defaults. Literal ESP bytes use the
- * same volumes/spaces override schema and never evaluate executable Lua. */
+ * same override schema and never evaluate executable Lua. */
 enum boot_config_result boot_config_read_archive_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
 enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,

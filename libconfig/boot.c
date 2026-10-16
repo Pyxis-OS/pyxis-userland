@@ -1,5 +1,6 @@
 #include "boot.h"
 #include "config.h"
+#include <abi/input_policy.h>
 #include <bundle_launch.h>
 #include <lauxlib.h>
 #include <lua.h>
@@ -580,17 +581,6 @@ static void read_spaces(lua_State *state, struct boot_config *config)
   lua_pop(state, 1);
 }
 
-static int decode_override(lua_State *state)
-{
-  struct boot_config *config = lua_touserdata(state, 2);
-  lua_settop(state, 1);
-  static const char *const keys[] = {"volumes", "spaces"};
-  config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
-  read_volumes(state, config);
-  read_spaces(state, config);
-  return 0;
-}
-
 static bool read_scroll_direction(lua_State *state, int input, const char *key)
 {
   config_field(state, input, key);
@@ -607,25 +597,60 @@ static bool read_scroll_direction(lua_State *state, int input, const char *key)
   return natural;
 }
 
-static void read_input(lua_State *state, struct boot_config *config)
+static void read_touchpad_speed(lua_State *state, int input, struct boot_config *config)
 {
-  config->mouse_scroll_natural = config->touchpad_scroll_natural = true;
-  config_field(state, 1, "input");
+  config_field(state, input, "touchpad_speed");
   if (!lua_isnil(state, -1)) {
-    static const char *const keys[] = {"mouse_scroll_direction", "touchpad_scroll_direction",
-        "diagnostics"};
-    config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
-    int input = lua_absindex(state, -1);
-    config->mouse_scroll_natural = read_scroll_direction(state, input, keys[0]);
-    config->touchpad_scroll_natural = read_scroll_direction(state, input, keys[1]);
-    config_field(state, input, "diagnostics");
-    if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
-      luaL_error(state, "input.diagnostics must be a boolean");
+    lua_Number speed = lua_tonumber(state, -1);
+    if (lua_type(state, -1) != LUA_TNUMBER || !__builtin_isfinite(speed) ||
+        speed < -1 || speed > 1) {
+      luaL_error(state, "input.touchpad_speed must be a finite number from -1 to 1");
     }
-    config->input_diagnostics = lua_toboolean(state, -1);
-    lua_pop(state, 1);
+    lua_Number permille = speed * INPUT_TOUCHPAD_SPEED_MAX;
+    config->touchpad_speed = (int32_t)(permille + (permille < 0 ? -0.5 : 0.5));
+    config->touchpad_speed_present = true;
   }
   lua_pop(state, 1);
+}
+
+static void read_input(lua_State *state, struct boot_config *config, bool archive)
+{
+  config_field(state, 1, "input");
+  if (!lua_isnil(state, -1)) {
+    static const char *const archive_keys[] = {"mouse_scroll_direction", "touchpad_scroll_direction",
+        "diagnostics", "touchpad_speed"};
+    static const char *const override_keys[] = {"touchpad_speed"};
+    if (archive) {
+      config_keys(state, -1, archive_keys, sizeof(archive_keys) / sizeof(archive_keys[0]));
+    } else {
+      config_keys(state, -1, override_keys, sizeof(override_keys) / sizeof(override_keys[0]));
+    }
+    int input = lua_absindex(state, -1);
+    read_touchpad_speed(state, input, config);
+    if (archive) {
+      config->mouse_scroll_natural = read_scroll_direction(state, input, archive_keys[0]);
+      config->touchpad_scroll_natural = read_scroll_direction(state, input, archive_keys[1]);
+      config_field(state, input, "diagnostics");
+      if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
+        luaL_error(state, "input.diagnostics must be a boolean");
+      }
+      config->input_diagnostics = lua_toboolean(state, -1);
+      lua_pop(state, 1);
+    }
+  }
+  lua_pop(state, 1);
+}
+
+static int decode_override(lua_State *state)
+{
+  struct boot_config *config = lua_touserdata(state, 2);
+  lua_settop(state, 1);
+  static const char *const keys[] = {"input", "volumes", "spaces"};
+  config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
+  read_input(state, config, false);
+  read_volumes(state, config);
+  read_spaces(state, config);
+  return 0;
 }
 
 static int decode_archive(lua_State *state)
@@ -647,7 +672,7 @@ static int decode_archive(lua_State *state)
   memcpy(config->hostname, name, length);
   config->hostname[length] = '\0';
   lua_pop(state, 1);
-  read_input(state, config);
+  read_input(state, config, true);
   read_volumes(state, config);
   read_spaces(state, config);
   return 0;

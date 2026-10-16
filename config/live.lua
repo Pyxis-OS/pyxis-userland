@@ -6,6 +6,7 @@ return {
   input = {
     mouse_scroll_direction = "natural",
     touchpad_scroll_direction = "natural",
+    touchpad_speed = 0,
     diagnostics = false,
   },
   volumes = {
