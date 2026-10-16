@@ -276,38 +276,32 @@ static bool manifest_blob(const struct config_boot_binding *binding, struct conf
   return used < sizeof(bytes) && config_blob_set(blob, bytes, used);
 }
 
-static bool directory_child(handle_t parent, const char *name, bool create,
-    handle_t *child, struct config_storage_report *report)
-{
-  enum call_status status = install_esp_child_open(parent, name,
-      DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, create, child);
-  return status == CALL_OK || fail(report, status);
-}
-
+/* Cleanup traverses only canonical components. FAT short aliases confer no
+ * ownership, including for revision/attempt directories inside EFI/pyxis. */
 static bool open_attempt(handle_t root, const struct config_boot_binding *binding,
-    bool create, handle_t *attempt, struct config_storage_report *report)
+    handle_t *attempt, struct config_storage_report *report)
 {
-  handle_t efi = HANDLE_INVALID, pyxis = HANDLE_INVALID, revision = HANDLE_INVALID;
-  bool ok = directory_child(root, "EFI", create, &efi, report) &&
-      directory_child(efi, "pyxis", create, &pyxis, report) &&
-      directory_child(pyxis, binding->kernel_revision, create, &revision, report);
-  if (ok) {
-    enum call_status status = create ? directory_create(revision, binding->attempt,
-        DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, attempt) :
-        install_esp_child_open(revision, binding->attempt,
-        DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, false, attempt);
-    ok = status == CALL_OK || fail(report, status);
+  const char *components[] = {"EFI", "pyxis", binding->kernel_revision, binding->attempt};
+  handle_t parent = root;
+  bool owned = false;
+  for (unsigned i = 0; i < sizeof(components) / sizeof(components[0]); ++i) {
+    handle_t child = HANDLE_INVALID;
+    enum call_status status = install_esp_child_open(parent, components[i],
+        DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, false, &child);
+    if (owned && handle_close(parent) != CALL_OK) {
+      status = CALL_OUTCOME_UNKNOWN;
+    }
+    if (status != CALL_OK) {
+      if (child != HANDLE_INVALID) {
+        handle_close(child);
+      }
+      return fail(report, status);
+    }
+    parent = child;
+    owned = true;
   }
-  if (revision != HANDLE_INVALID) {
-    handle_close(revision);
-  }
-  if (pyxis != HANDLE_INVALID) {
-    handle_close(pyxis);
-  }
-  if (efi != HANDLE_INVALID) {
-    handle_close(efi);
-  }
-  return ok;
+  *attempt = parent;
+  return true;
 }
 
 static bool payload_result(bool ok, const struct install_esp_payload_report *payload_report,
@@ -346,7 +340,7 @@ bool install_publication_cleanup(const struct install_staged_boot *boot,
   }
   bool ok = config_boot_binding_valid(obsolete) &&
       (manifest_blob(obsolete, &manifest) || fail(&inspect, CALL_NO_MEMORY)) &&
-      open_attempt(boot->root, obsolete, false, &parent, &inspect) &&
+      open_attempt(boot->root, obsolete, &parent, &inspect) &&
       directory_domain(parent, facts->domain, &inspect);
   for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS + 1; ++i) {
     const char *name = i == INSTALL_BOOT_PAYLOADS ? INSTALL_BOOT_MANIFEST_NAME : payload_names[i];
