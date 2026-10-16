@@ -530,8 +530,8 @@ Once the view is complete it idles until input or a resize needs another draw.
 `mousetest` shows numbered buttons 1–32, both precise scroll axes and the kernel's
 surface-local position, with a drawing pad for the left button and a custom system cursor.
 Buttons 1/2/3 are left/right/middle. `SX`/`SY` show the latest scroll report in
-120 units per detent; positive means viewport right/down. Vertical arrows follow
-`SY`. The indicators expire after 500 ms and clear on reset, geometry or focus
+120 units per detent; positive means viewport right/down. The four-arrow cluster
+follows `SX` left/right and `SY` up/down. The indicators expire after 500 ms and clear on reset, geometry or focus
 changes. Direction policy has already been applied by the kernel.
 `H` toggles cursor visibility, `D` restores the default image, `C` restores the
 custom image and `W` warps to the surface center. Escape returns to the TTY.

@@ -149,14 +149,28 @@ static void draw_text(const struct screen *screen, int64_t x, int64_t y, int64_t
   }
 }
 
-/* An isosceles triangle in a size x size box, pointing up or down. */
+enum arrow_direction { ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT };
+
+/* An isosceles triangle in a size x size box. */
 static void draw_arrow(const struct screen *screen, int64_t x, int64_t y, int64_t size,
-    bool up, uint32_t color)
+    enum arrow_direction direction, uint32_t color)
 {
-  for (int64_t row = 0; row < size; ++row) {
-    int64_t depth = up ? row : size - 1 - row;
+  for (int64_t depth = 0; depth < size; ++depth) {
     int64_t half = depth / 2;
-    fill_rect(screen, x + size / 2 - half, y + row, 2 * half + 1, 1, color);
+    switch (direction) {
+    case ARROW_UP:
+      fill_rect(screen, x + size / 2 - half, y + depth, 2 * half + 1, 1, color);
+      break;
+    case ARROW_DOWN:
+      fill_rect(screen, x + size / 2 - half, y + size - 1 - depth, 2 * half + 1, 1, color);
+      break;
+    case ARROW_LEFT:
+      fill_rect(screen, x + depth, y + size / 2 - half, 1, 2 * half + 1, color);
+      break;
+    case ARROW_RIGHT:
+      fill_rect(screen, x + size - 1 - depth, y + size / 2 - half, 1, 2 * half + 1, color);
+      break;
+    }
   }
 }
 
@@ -190,12 +204,19 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
 
   y += 4 * box + margin;
   int64_t arrow = 2 * box;
-  draw_arrow(screen, margin, y, arrow, true,
+  int64_t gap = box / 2;
+  int64_t left = (width - 3 * arrow - 2 * gap) / 2;
+  int64_t center = left + arrow + gap;
+  draw_arrow(screen, center, y, arrow, ARROW_UP,
       state->scroll_y < 0 ? colors->left : colors->idle);
-  draw_arrow(screen, width - margin - arrow, y, arrow, false,
+  draw_arrow(screen, left, y + arrow + gap, arrow, ARROW_LEFT,
+      state->scroll_x < 0 ? colors->left : colors->idle);
+  draw_arrow(screen, center + arrow + gap, y + arrow + gap, arrow, ARROW_RIGHT,
+      state->scroll_x > 0 ? colors->left : colors->idle);
+  draw_arrow(screen, center, y + 2 * (arrow + gap), arrow, ARROW_DOWN,
       state->scroll_y > 0 ? colors->left : colors->idle);
 
-  y += arrow + margin;
+  y += 3 * arrow + 2 * gap + margin;
   int64_t scale = (width - 2 * margin) / (16 * (GLYPH_WIDTH + 1));
   if (scale < 1) {
     scale = 1;
