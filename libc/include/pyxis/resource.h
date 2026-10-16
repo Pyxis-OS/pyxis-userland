@@ -14,6 +14,10 @@ struct pyxis_open_result {
 extern "C" {
 #endif
 
+/* Translate a native call status without changing errno. Resource outcomes
+ * first use resource_outcome_status; unknown statuses map to EIO. */
+int pyxis_resource_errno(enum call_status status);
+
 /* Use a zero-initialized/closed output. Failure can retain an owned typed failure
  * and its immutable error body; no hidden last-error state or fresh OPEN is used. */
 FILE *pyxis_fopen(const char *path, const char *mode, struct pyxis_open_result *result);

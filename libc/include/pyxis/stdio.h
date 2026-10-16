@@ -4,7 +4,6 @@
 
 #include <abi/startup.h>
 #include <stdio.h>
-#include <pyxis/response.h>
 #include <output.h>
 
 #ifdef __cplusplus
@@ -23,11 +22,6 @@ extern "C" {
  * companion when staging children. File-backed children start at offset zero;
  * pipe children cannot receive bytes already fetched into this process. */
 int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding);
-
-/* Copy response metadata without changing indicators or position. Valid local
- * and inherited streams report absent metadata. EINVAL for NULL, EBADF for a
- * closed/invalid stream. Failure clears the output; success preserves errno. */
-int pyxis_stdio_response(FILE *stream, struct pyxis_response_info *info);
 
 /* Attempt a complete unread READ-only, rereadable source (or held failure)
  * using owned restricted copies. One-pass successful streams keep byte copying.

@@ -161,7 +161,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     status = CALL_NOT_FOUND;
     goto done;
   }
-  status = directory_lookup(boot, "shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
+  status = directory_lookup(boot, "init-shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     goto done;
   }
@@ -319,7 +319,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
   }
-  const char *arguments[] = {"boot://shell.pxe"};
+  const char *arguments[] = {"boot://init-shell.pxe"};
   struct launch_request request = {
     .image = image,
     .grants = (uintptr_t)grants, .grant_count = grant_count,

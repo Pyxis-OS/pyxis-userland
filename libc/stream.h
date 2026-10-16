@@ -22,7 +22,7 @@ struct pyxis_file {
   int descriptor; /* Non-owning association; descriptor close sets this to -1. */
   bool readable, writable; /* FILE selection can narrow descriptor access. */
   bool eof, error, closed, allocated;
-  bool http_read_blocked; /* Only a refused pre-commit read, never a failed producer. */
+  bool transaction_read_blocked; /* Only a refused pre-commit read, never a failed producer. */
   bool has_pushback; /* One ungetc byte, returned before any descriptor input. */
   unsigned char pushback;
   enum stream_orientation orientation;

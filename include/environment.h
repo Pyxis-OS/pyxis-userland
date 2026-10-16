@@ -14,8 +14,6 @@ enum environment_stream_index {
 struct pyxis_stdio_binding {
   uint64_t protocol;
   handle_t handle;
-  uint64_t observation_protocol;
-  handle_t observation;
   bool append;
 };
 
@@ -86,7 +84,7 @@ struct launch_environment_entry environment_stdio_append_entry(enum environment_
 /* Captures owned stream grants from one snapshot. Append rejects stdin,
  * malformed companions, non-FILEs and FILEs without WRITE or working SIZE. */
 enum call_status environment_stdio(handle_t snapshot, enum environment_stream_index index,
-    struct pyxis_stdio_binding *binding, uint64_t *identity, uint64_t *observation_identity);
+    struct pyxis_stdio_binding *binding, uint64_t *identity);
 
 #ifdef __cplusplus
 }

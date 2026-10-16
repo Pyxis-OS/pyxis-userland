@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "org.pyxis.shell",
+  "entry": "bin/shell.pxe",
+  "commands": {"shell": "bin/shell.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "sleep"], "required": true},
+    {"name": "input", "resource": "input", "rights": ["read"], "required": true},
+    {"name": "output", "resource": "output", "rights": ["write"], "required": true},
+    {"name": "pipe", "resource": "pipe", "rights": ["create"], "required": true},
+    {"name": "launcher", "resource": "launcher", "rights": ["launch"], "required": true},
+    {"name": "retention_account", "resource": "retention_account", "rights": ["retain"], "required": true}
+  ]
+}

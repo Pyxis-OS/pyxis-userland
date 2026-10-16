@@ -17,6 +17,7 @@
 #include <abi/pointer.h>
 #include <abi/profile.h>
 #include <abi/random.h>
+#include <abi/retention.h>
 #include <abi/screen_capture.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
@@ -104,6 +105,7 @@ static const struct grant_right grant_rights[] = {
   {"tcp", "connect", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_CONNECT},
   {"tcp", "listen", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_LISTEN},
   {"pipe", "create", PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE},
+  {"retention_account", "retain", PROTOCOL_RETENTION_ACCOUNT, RETENTION_RIGHT_CAPTURE},
   {"udp", "open", PROTOCOL_UDP_SERVICE, UDP_SERVICE_RIGHT_OPEN},
   {"display", "draw", PROTOCOL_DISPLAY, DISPLAY_RIGHT_DRAW},
   {"audio", "create", PROTOCOL_AUDIO, AUDIO_RIGHT_PLAYBACK},

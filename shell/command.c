@@ -1,6 +1,5 @@
 #include <pyxis/working_path.h>
 #include "shell.h"
-#include "capabilities.h"
 #include "syntax.h"
 #include "values.h"
 #include "../common/directory.h"
@@ -353,7 +352,7 @@ static enum command_result power_command(struct shell *shell, char **arguments, 
 bool shell_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
-  return shell_value_builtin(name) || !strcmp(name, "request") || !strcmp(name, "exit") || !strcmp(name, "cd") ||
+  return shell_value_builtin(name) || !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
@@ -369,9 +368,6 @@ static enum command_result builtin_command(struct shell *shell,
   size_t count = stage->count;
   if (shell_value_builtin(arguments[0])) {
     return shell_values_command(shell, expansion);
-  }
-  if (!strcmp(arguments[0], "request")) {
-    return shell_request_command(shell, arguments, count);
   }
   if (strcmp(arguments[0], "exit") == 0) {
     if (count != 1) {
@@ -505,7 +501,7 @@ static enum command_result expanded_command(struct shell *shell,
   }
   const struct shell_stage *stage = &command->stages[0];
   bool builtin = shell_builtin(stage->arguments, stage->count);
-  if ((stage->redirection_count || command->capture) && (builtin || command->background)) {
+  if ((stage->redirection_count) && (builtin || command->background)) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }
   if (command->background && builtin) {

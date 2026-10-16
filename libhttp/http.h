@@ -3,7 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/endpoint.h>
-#include <abi/http_types.h>
+#include <http_types.h>
 #include <abi/syscall.h>
 #include <http_url.h>
 #include <stddef.h>

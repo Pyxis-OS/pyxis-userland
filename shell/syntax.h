@@ -37,7 +37,6 @@ struct shell_syntax_command {
   struct shell_syntax_stage stages[LAUNCH_BATCH_MAX];
   size_t stage_count;
   bool background;
-  char *capture;
   bool assignment;
 };
 

@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <pyxis/resource.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,11 @@ int libc_call_errno(enum call_status status)
   case CALL_NAME_TOO_LONG: return ENAMETOOLONG;
   default: return EIO;
   }
+}
+
+int pyxis_resource_errno(enum call_status status)
+{
+  return libc_call_errno(status);
 }
 
 /* Well-formed UTF-8, as mbtowc decodes it: shortest forms only, no surrogates,

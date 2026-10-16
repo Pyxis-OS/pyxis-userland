@@ -6,7 +6,8 @@
 #include <file.h>
 #include <forwarder.h>
 #include <handle.h>
-#include <http_transaction.h>
+#include <resource.h>
+#include <transaction.h>
 #include <launcher.h>
 #include <environment.h>
 #include <provider.h>
@@ -46,10 +47,21 @@ static bool http_lineage_deadline(handle_t clock, uint64_t *deadline)
   return true;
 }
 
-/* The selected URI is the owner's CI-jobs fixture. Each exchange gets one
- * deadline covering preparation, staging, submission and response consumption. */
+struct lineage_result {
+  handle_t control, body;
+  struct resource_result response;
+};
+
+static bool lineage_close(struct lineage_result *result)
+{
+  bool ok = close_owned(&result->control);
+  ok = close_owned(&result->body) && ok;
+  return resource_result_close(&result->response) == CALL_OK && ok;
+}
+
+/* Each exchange gets one deadline covering OPEN, staging and submission. */
 static bool http_lineage_exchange(handle_t provider, handle_t clock, const char *uri,
-    uint64_t method, struct http_prepared *prepared, const char *label)
+    bool post, struct lineage_result *result, const char *label)
 {
   static const char body[] = "{\"repo\":\"pyxis-os\",\"ref\":\"main\",\"steps\":[\"build\",\"test\"]}";
   uint64_t deadline;
@@ -57,18 +69,40 @@ static bool http_lineage_exchange(handle_t provider, handle_t clock, const char 
     fprintf(stderr, "HTTP lineage %s: clock deadline unavailable\n", label);
     return false;
   }
-  const char *phase = "PREPARE";
-  enum call_status status = http_transaction_prepare(provider, uri, method,
-      HTTP_PREPARE_JSON, NULL, 0, deadline, prepared);
+  const char *separator = strstr(uri, "://");
+  if (!separator || !separator[3]) {
+    fputs("HTTP lineage: expected a named endpoint\n", stderr);
+    return false;
+  }
+  const char *phase = "typed OPEN";
+  struct resource_result opened = {0};
+  enum call_status status = resource_open_held(provider, separator + 3,
+      post ? PROVIDER_INTENT_WRITE : PROVIDER_INTENT_READ, 0, deadline, &opened);
+  if (status == CALL_OK) {
+    status = resource_outcome_status(opened.info.description.outcome);
+  }
   if (status != CALL_OK) {
+    resource_result_close(&opened);
     goto failed;
   }
-  if (method == HTTP_PREPARE_POST) {
-    phase = "stage POST body";
+  if (post) {
+    if (opened.info.protocol != PROTOCOL_TRANSACTION) {
+      resource_result_close(&opened);
+      status = CALL_WRONG_TYPE;
+      goto failed;
+    }
+    result->control = opened.resource;
+    opened.resource = HANDLE_INVALID;
+    resource_result_close(&opened);
+    phase = "STAGE";
+    status = transaction_stage(result->control, deadline, &result->body);
+    if (status != CALL_OK) {
+      goto failed;
+    }
     size_t offset = 0;
     while (offset < sizeof(body) - 1) {
       size_t written;
-      status = file_write(prepared->body, offset, body + offset,
+      status = file_write(result->body, offset, body + offset,
           sizeof(body) - 1 - offset, &written);
       if (status != CALL_OK) {
         goto failed;
@@ -79,79 +113,68 @@ static bool http_lineage_exchange(handle_t provider, handle_t clock, const char 
       }
       offset += written;
     }
-  }
-  phase = "COMMIT handoff";
-  struct http_commit_reply committed;
-  status = http_transaction_commit(prepared, deadline, &committed);
-  if (status != CALL_OK) {
-    goto failed;
-  }
-  if (committed.flags != HTTP_COMMIT_RESPONSE || !prepared->response ||
-      !prepared->observation || committed.http_status !=
-      (method == HTTP_PREPARE_POST ? 201u : 200u)) {
-    status = CALL_BAD_REQUEST;
-    goto failed;
-  }
-  if (method == HTTP_PREPARE_POST) {
+    phase = "COMMIT";
+    status = transaction_commit(result->control, deadline, &result->response);
+    if (status == CALL_OK) {
+      status = resource_outcome_status(result->response.info.description.outcome);
+    }
+    if (status != CALL_OK) {
+      goto failed;
+    }
     phase = "COMMIT freezes body mutation";
     size_t written;
-    status = file_write(prepared->body, 0, body, 1, &written);
+    status = file_write(result->body, 0, body, 1, &written);
     if (status != CALL_DENIED || written != 0) {
       status = CALL_BAD_REQUEST;
       goto failed;
     }
+  } else {
+    result->response = opened;
   }
-  phase = "response through EOF";
+  phase = "completed FILE result";
+  if (result->response.info.protocol != PROTOCOL_FILE ||
+      (result->response.info.description.flags & (RESOURCE_COMPLETE | RESOURCE_REREADABLE)) !=
+      (RESOURCE_COMPLETE | RESOURCE_REREADABLE)) {
+    status = CALL_BAD_REQUEST;
+    goto failed;
+  }
+  uint64_t size;
+  status = file_size(result->response.resource, &size);
+  if (status != CALL_OK) {
+    goto failed;
+  }
   unsigned char bytes[256];
   uint64_t consumed = 0;
   for (;;) {
-    size_t read;
-    status = file_read(prepared->response, consumed, bytes, sizeof(bytes), &read);
+    size_t count;
+    status = file_read(result->response.resource, consumed, bytes, sizeof(bytes), &count);
     if (status != CALL_OK) {
       goto failed;
     }
-    if (!read) {
+    if (!count) {
       break;
     }
-    if (read > sizeof(bytes) || consumed > UINT64_MAX - read) {
+    if (count > size - consumed) {
       status = CALL_BAD_REQUEST;
       goto failed;
     }
-    consumed += read;
+    consumed += count;
   }
-  phase = "final STATUS";
-  struct http_transaction_status final;
-  status = http_transaction_status(prepared->observation, deadline, &final);
-  if (status != CALL_OK) {
+  struct describe_reply final;
+  status = handle_describe(result->response.resource, 0, &final);
+  if (status != CALL_OK || final.description.outcome != RESOURCE_OK ||
+      !(final.description.flags & RESOURCE_COMPLETE) || !consumed || consumed != size) {
+    status = status == CALL_OK ? CALL_BAD_REQUEST : status;
     goto failed;
   }
-  if (!consumed || final.phase != HTTP_TRANSACTION_COMPLETE ||
-      final.framing != HTTP_FRAMING_COMPLETE || final.status != CALL_OK ||
-      final.source_status != CALL_OK || final.cleanup_status != CALL_OK ||
-      final.http_status != committed.http_status || final.received != consumed ||
-      (method == HTTP_PREPARE_POST && final.uploaded != sizeof(body) - 1)) {
-    status = CALL_BAD_REQUEST;
-    goto failed;
-  }
-  phase = "METADATA";
-  struct http_response_metadata metadata;
-  status = http_transaction_metadata(prepared->observation, deadline, &metadata);
-  if (status != CALL_OK) {
-    goto failed;
-  }
-  const char *endpoint = !strncmp(uri, "json+", 5) ? uri + 5 : uri;
-  if (strcmp(metadata.uri, endpoint)) {
-    status = CALL_BAD_REQUEST;
-    goto failed;
-  }
-  printf("HTTP lineage %s: response EOF, final STATUS and METADATA complete (%ju bytes)\n",
-      label, (uintmax_t)consumed);
+  printf("HTTP lineage %s: completed FILE, %llu bytes\n", label,
+      (unsigned long long)consumed);
   return true;
 
 failed:
   fprintf(stderr, "HTTP lineage %s: %s failed (status %u)\n", label, phase, status);
-  if (prepared->control) {
-    enum call_status aborted = http_transaction_abort(prepared->control, deadline);
+  if (result->control) {
+    enum call_status aborted = transaction_abort(result->control, deadline);
     if (aborted != CALL_OK) {
       fprintf(stderr, "HTTP lineage %s: ABORT cleanup failed (status %u)\n", label, aborted);
     }
@@ -160,11 +183,11 @@ failed:
 }
 
 static bool http_lineage_method(handle_t provider, handle_t clock, const char *uri,
-    uint64_t method)
+    bool post)
 {
-  const char *label = method == HTTP_PREPARE_POST ? "POST" : "GET";
+  const char *label = post ? "POST" : "GET";
   struct forwarder_reply source = {0};
-  struct http_prepared prepared = {0}, independent = {0};
+  struct lineage_result prepared = {0}, independent = {0};
   enum call_status created = forwarder_revocable(provider, 0, 0,
       FORWARDER_CREATE_SAME_RIGHTS, &source);
   bool ok = created == CALL_OK;
@@ -172,30 +195,26 @@ static bool http_lineage_method(handle_t provider, handle_t clock, const char *u
     fprintf(stderr, "HTTP lineage %s: source copy failed (status %u)\n", label, created);
   }
   if (ok) {
-    ok = http_lineage_exchange(source.holder, clock, uri, method, &prepared, label);
+    ok = http_lineage_exchange(source.holder, clock, uri, post, &prepared, label);
   }
   if (ok) {
-    uint64_t deadline;
-    struct http_transaction_status final;
-    struct http_response_metadata metadata;
+    struct describe_reply description;
     unsigned char byte;
-    size_t read;
-    ok = http_lineage_deadline(clock, &deadline) &&
-        forwarder_cut(source.controller) == CALL_OK &&
-        file_read(prepared.response, 0, &byte, sizeof(byte), &read) == CALL_DENIED &&
-        read == 0 &&
-        http_transaction_status(prepared.observation, deadline, &final) == CALL_DENIED &&
-        http_transaction_metadata(prepared.observation, deadline, &metadata) == CALL_DENIED;
+    size_t count;
+    ok = forwarder_cut(source.controller) == CALL_OK &&
+        file_read(prepared.response.resource, 0, &byte, sizeof(byte), &count) == CALL_DENIED &&
+        count == 0 &&
+        handle_describe(prepared.response.resource, 0, &description) == CALL_OK &&
+        description.description.outcome == RESOURCE_DENIED;
     if (ok) {
-      printf("HTTP lineage %s: source CUT denied response READ, STATUS and METADATA\n", label);
-      ok = http_lineage_exchange(provider, clock, uri, HTTP_PREPARE_GET,
-          &independent, "independent GET");
+      printf("HTTP lineage %s: source CUT denied response READ and describe reports DENIED\n", label);
+      ok = http_lineage_exchange(provider, clock, uri, false, &independent, "independent GET");
     } else {
       fprintf(stderr, "HTTP lineage %s: source CUT qualification failed\n", label);
     }
   }
-  bool cleanup = http_prepared_close(&prepared) == CALL_OK;
-  cleanup = (http_prepared_close(&independent) == CALL_OK) && cleanup;
+  bool cleanup = lineage_close(&prepared);
+  cleanup = lineage_close(&independent) && cleanup;
   cleanup = close_pair(&source) && cleanup;
   if (!cleanup) {
     fprintf(stderr, "HTTP lineage %s: owned handle cleanup failed\n", label);
@@ -216,12 +235,12 @@ int counter_http_lineage_main(const char *scheme, const char *uri)
   if (!ok) {
     fputs("HTTP lineage: selected provider or clock authority unavailable\n", stderr);
   } else {
-    ok = http_lineage_method(provider, clock, uri, HTTP_PREPARE_GET);
+    ok = http_lineage_method(provider, clock, uri, false);
     if (ok && !(info.rights & PROVIDER_RIGHT_OPEN_WRITE)) {
       fputs("HTTP lineage POST: selected provider lacks OPEN_WRITE authority\n", stderr);
       ok = false;
     } else if (ok) {
-      ok = http_lineage_method(provider, clock, uri, HTTP_PREPARE_POST);
+      ok = http_lineage_method(provider, clock, uri, true);
     }
   }
   bool cleanup = close_owned(&provider);

@@ -313,7 +313,7 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
         !strcmp(stage->arguments[0], "service"));
     if (management) {
       if (!destination || syntax.count != 1 || expansion.command.stage_count != 1 ||
-          command->assignment || command->background || command->capture || stage->redirection_count) {
+          command->assignment || command->background || stage->redirection_count) {
         status = CALL_BAD_REQUEST;
       } else {
         status = shell_capture_destination(shell, destination, true);
@@ -321,7 +321,7 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
           status = paired_value(shell, stage, destination, result);
         }
       }
-    } else if (command->assignment || command->background || command->capture) {
+    } else if (command->assignment || command->background) {
       status = CALL_BAD_OPERATION;
     } else {
       for (size_t j = 0; j < expansion.command.stage_count; ++j) {

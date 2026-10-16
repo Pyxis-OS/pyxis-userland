@@ -2,8 +2,11 @@
 #include <pyxis/working_path.h>
 #include <pyxis/environment.h>
 #include "shell.h"
-#include "capabilities.h"
 #include <abi/console.h>
+#include <abi/clock.h>
+#include <abi/memory.h>
+#include <abi/pipe.h>
+#include <abi/retention.h>
 #include "../common/directory.h"
 #include "../common/session_wait.h"
 #include "../common/pane_cwd.h"
@@ -94,21 +97,23 @@ static bool report_completion(struct shell *shell, handle_t events,
 int main(int argc, char **argv)
 {
   handle_t script = bootstrap_capability("script");
-  /* Kept outside launch state: only this interactive shell can report events. */
-  handle_t events = script == HANDLE_INVALID ? bootstrap_capability("terminal_events") :
-      HANDLE_INVALID;
   if (script != HANDLE_INVALID && argc < 2) {
     fputs("shell: Missing script diagnostic name\n", stderr);
     return EXIT_FAILURE;
   }
   bool quiet_input = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--no-echo");
   bool remote_prompt = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-prompt");
-  if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt) {
-    fputs("usage: shell [--no-echo | --remote-prompt]\n", stderr);
+  bool positional = script == HANDLE_INVALID && argc == 2 && !quiet_input && !remote_prompt;
+  if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt && !positional) {
+    fputs("usage: shell [script.pxs | --no-echo | --remote-prompt]\n", stderr);
     return EXIT_FAILURE;
   }
+  /* Script shells never claim their launcher's interactive completion channel. */
+  handle_t events = script == HANDLE_INVALID && !positional ?
+      bootstrap_capability("terminal_events") : HANDLE_INVALID;
   struct shell shell = {
-    .script_name = script != HANDLE_INVALID ? argv[1] : NULL,
+    .script_name = script != HANDLE_INVALID || positional ? argv[1] : NULL,
+    .positional_script = positional,
     .script_line = 1,
     .quiet_input = quiet_input,
     .remote_prompt = remote_prompt,
@@ -145,6 +150,29 @@ int main(int argc, char **argv)
   };
   /* Only a trusted launcher supplies it; without it this shell offers no extras. */
   shell.interpreter_root = bootstrap_capability("interpreter_root");
+  if (positional) {
+    struct {
+      handle_t handle;
+      uint64_t protocol, rights;
+    } required[] = {
+      {shell.terminal.input, PROTOCOL_CONSOLE, CONSOLE_RIGHT_READ},
+      {shell.terminal.output, PROTOCOL_CONSOLE, CONSOLE_RIGHT_WRITE},
+      {shell.memory, PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
+      {shell.clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP},
+      {shell.launcher, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
+      {shell.pipe, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE},
+      {shell.retention_account, PROTOCOL_RETENTION_ACCOUNT, RETENTION_RIGHT_CAPTURE},
+    };
+    for (size_t i = 0; i < sizeof(required) / sizeof(*required); ++i) {
+      struct handle_info info;
+      if (handle_query(required[i].handle, &info) != CALL_OK ||
+          info.kind != HANDLE_KIND_NATIVE || info.protocol != required[i].protocol ||
+          (info.rights & required[i].rights) != required[i].rights) {
+        fputs("shell: Missing declared script authority\n", stderr);
+        return EXIT_FAILURE;
+      }
+    }
+  }
   if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
       shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
       shell.boot == HANDLE_INVALID || shell.tmp == HANDLE_INVALID) {
@@ -167,7 +195,9 @@ int main(int argc, char **argv)
 
   int result = EXIT_FAILURE;
   struct shell_cwd_service cwd_service = {0};
-  char *line = malloc(script != HANDLE_INVALID ? SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
+  bool own_script = false;
+  char *line = malloc(script != HANDLE_INVALID || positional ?
+      SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
   if (!line) {
     shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
@@ -183,9 +213,32 @@ int main(int argc, char **argv)
     goto done;
   }
 
+  if (positional) {
+    struct resource_result opened = {0};
+    status = resource_open_path(shell.directory, argv[1], PROVIDER_INTENT_READ, 0, 0, &opened);
+    if (status == CALL_OK) {
+      status = resource_outcome_status(opened.info.description.outcome);
+    }
+    if (status == CALL_OK && opened.info.protocol != PROTOCOL_FILE) {
+      status = CALL_WRONG_TYPE;
+    }
+    if (status == CALL_OK) {
+      script = opened.resource;
+      opened.resource = HANDLE_INVALID;
+      own_script = true;
+    }
+    enum call_status closed = resource_result_close(&opened);
+    if (status != CALL_OK || closed != CALL_OK) {
+      shell_directory_error(&shell, "shell", argv[1], status != CALL_OK ? status : closed);
+      goto done;
+    }
+  }
   if (script != HANDLE_INVALID) {
     if (shell_script_group_open(&shell) != CALL_OK) {
       goto done;
+    }
+    if (positional) {
+      shell.child_launcher = shell.script_group.launcher;
     }
     result = shell_script(&shell, script, line);
     if (!shell_script_group_close(&shell)) {
@@ -265,8 +318,10 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (own_script && handle_close(script) != 0) {
+    result = EXIT_FAILURE;
+  }
   shell_environment_close(&shell);
-  shell_capabilities_close(&shell);
   if (bundle_jobs_close(&shell.jobs) != CALL_OK) {
     result = EXIT_FAILURE;
   }

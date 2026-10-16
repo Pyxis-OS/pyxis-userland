@@ -380,7 +380,7 @@ static bool held_command(handle_t root, handle_t *files, char *line)
 static void run_reader(handle_t boot, handle_t launcher, handle_t root,
     const char *program, const char *path)
 {
-  bool shell = !strcmp(program, "shell.pxe");
+  bool shell = !strcmp(program, "init-shell.pxe");
   char uri[COMMAND_BYTES];
   if (!shell && !volume_path(path, uri, sizeof(uri))) {
     return;
@@ -631,7 +631,7 @@ static int browse(bool boot_selected, bool writable, uint64_t selected_partition
       printf("RENAME status %u\n", change_name(mounted.root, line + (replace ? 8 : 7),
           DIRECTORY_RENAME, DIRECTORY_KIND_FILE, replace ? DIRECTORY_RENAME_REPLACE : DIRECTORY_RENAME_NO_REPLACE));
     } else if (writable && !strcmp(line, "shell")) {
-      run_reader(boot, launcher, mounted.root, "shell.pxe", NULL);
+      run_reader(boot, launcher, mounted.root, "init-shell.pxe", NULL);
     } else if (!strncmp(line, "ls ", 3)) {
       run_reader(boot, launcher, mounted.root, "ls.pxe", line + 3);
     } else if (!strncmp(line, "cat ", 4)) {

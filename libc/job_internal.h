@@ -9,7 +9,7 @@ struct pyxis_job_options;
 struct pyxis_job;
 
 struct job_stream_selection {
-  uint64_t protocol, grant, observation_protocol, observation_grant;
+  uint64_t protocol, grant;
   bool append;
 };
 

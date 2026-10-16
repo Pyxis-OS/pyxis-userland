@@ -1,3 +1,3 @@
-#!boot://shell.pxe
+#!boot://init-shell.pxe
 service start --root json-http=json+http --optional-read-only-root https=https --optional-read-only-root json-https=json+https http boot://httpfs.pxb
 session boot://session.pxe --remote-server 2323

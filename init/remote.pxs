@@ -1,3 +1,3 @@
-#!boot://shell.pxe
+#!boot://init-shell.pxe
 service start text boot://textfs.pxe
 session boot://session.pxe --start-remote-services

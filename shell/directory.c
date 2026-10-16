@@ -134,6 +134,17 @@ enum call_status shell_open_redirect_value(struct shell *shell,
   bool input = redirect->stream == ENVIRONMENT_STDIN;
   uint64_t intent = input ? PROVIDER_INTENT_READ : PROVIDER_INTENT_WRITE;
   uint64_t flags = redirect->append ? PROVIDER_OPEN_APPEND : 0;
+  if (redirect->root != HANDLE_INVALID) {
+    struct handle_info info;
+    enum call_status status = handle_query(redirect->root, &info);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (!input && (info.protocol == PROTOCOL_PROVIDER || info.protocol == PROTOCOL_DIRECTORY)) {
+      flags |= PROVIDER_OPEN_CREATE;
+    }
+    return resource_open_held(redirect->root, redirect->remainder, intent, flags, 0, result);
+  }
   if (redirect->value) {
     if (redirect->value->kind != ENVIRONMENT_CAP) {
       return CALL_BAD_REQUEST;

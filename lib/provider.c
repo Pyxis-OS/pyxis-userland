@@ -92,16 +92,19 @@ static enum call_status finish_reply(struct endpoint_packet *packet, bool remova
   return status;
 }
 
-enum call_status http_prepare_endpoint(handle_t root, uint64_t method,
+enum call_status http_prepare_endpoint(handle_t root, uint64_t method, uint64_t response_flags,
     const void *target, size_t target_size, const void *headers, size_t headers_size,
-    uint64_t timeout_ns, uint64_t deadline_ns, struct resource_result *result)
+    uint64_t timeout_ns, uint64_t deadline_ns, struct resource_result *result, bool *unsupported)
 {
+  if (unsupported) {
+    *unsupported = false;
+  }
   if (!result) {
     return CALL_BAD_REQUEST;
   }
   *result = (struct resource_result){0};
-  if ((method != HTTP_ENDPOINT_POST && method != HTTP_ENDPOINT_PUT &&
-      method != HTTP_ENDPOINT_PATCH) || !timeout_ns || !deadline_ns ||
+  if ((method != HTTP_ENDPOINT_GET && method != HTTP_ENDPOINT_POST && method != HTTP_ENDPOINT_PUT &&
+      method != HTTP_ENDPOINT_PATCH) || (response_flags & ~HTTP_ENDPOINT_RESPONSE_FLAGS) || !timeout_ns || !deadline_ns ||
       (target_size && !target) || (headers_size && !headers)) {
     return CALL_BAD_REQUEST;
   }
@@ -117,7 +120,8 @@ enum call_status http_prepare_endpoint(handle_t root, uint64_t method,
   if (info.kind != HANDLE_KIND_EXPORTED || info.protocol != PROTOCOL_PROVIDER) {
     return CALL_WRONG_TYPE;
   }
-  if (!(info.rights & PROVIDER_RIGHT_OPEN_WRITE) ||
+  uint64_t required = method == HTTP_ENDPOINT_GET ? PROVIDER_RIGHT_OPEN_READ : PROVIDER_RIGHT_OPEN_WRITE;
+  if (!(info.rights & required) ||
       (info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
     return CALL_DENIED;
   }
@@ -125,7 +129,7 @@ enum call_status http_prepare_endpoint(handle_t root, uint64_t method,
     struct http_endpoint_request body;
     unsigned char bytes[ENDPOINT_DATA_MAX - sizeof(struct http_endpoint_request)];
   } request = {
-    .body = {method, timeout_ns, deadline_ns, target_size, headers_size},
+    .body = {method, response_flags, timeout_ns, deadline_ns, target_size, headers_size},
   };
   if (target_size) {
     memcpy(request.bytes, target, target_size);
@@ -144,6 +148,10 @@ enum call_status http_prepare_endpoint(handle_t root, uint64_t method,
   result->delivery = packet.delivery;
   if (status != CALL_OK) {
     return status;
+  }
+  if (unsupported && packet.delivery == ENDPOINT_DELIVERED &&
+      packet.result == CALL_BAD_OPERATION && !packet.size && !packet.grant_count) {
+    *unsupported = true;
   }
   status = finish_reply(&packet, false, result);
   if (status == CALL_OK && result->resource != HANDLE_INVALID &&

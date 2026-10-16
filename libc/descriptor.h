@@ -2,7 +2,6 @@
 #ifndef LIBC_DESCRIPTOR_H
 #define LIBC_DESCRIPTOR_H
 
-#include <pyxis/response.h>
 #include <output.h>
 
 #include <abi/handle.h>
@@ -12,7 +11,6 @@
 #include <stdio.h>
 #include <abi/describe.h>
 #include <sys/stat.h>
-#include <pyxis/http.h>
 
 struct descriptor_object;
 
@@ -26,14 +24,9 @@ struct descriptor_mode {
  * Admitted operations retain storage only. Final alias CLOSE releases native
  * authority immediately, outside exclusion; storage outlives admitted calls. */
 void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream,
-    struct pyxis_stdio_binding binding, uint64_t identity, uint64_t observation_identity);
+    struct pyxis_stdio_binding binding, uint64_t identity);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
-int descriptor_http_open(const char *path, const struct descriptor_mode *mode,
-    FILE *stream, const struct pyxis_http_options *options, bool submit);
-int descriptor_object_http_status(struct descriptor_object *object,
-    struct http_transaction_status *status);
-int descriptor_object_http_abort(struct descriptor_object *object);
 /* Reserve before exclusive creation, remove the name through the held parent,
  * then publish the FILE association. Parent has CREATE/REMOVE and file rights. */
 int descriptor_tmpfile(FILE *stream, handle_t parent);
@@ -100,10 +93,7 @@ int libc_stdio_stage_close_descriptor(int descriptor, struct descriptor_object *
 int libc_stdio_close_descriptor(int descriptor, struct descriptor_object *expected,
     uint64_t generation);
 
-int descriptor_response(int descriptor, struct pyxis_response_info *info);
 
-enum call_status file_open_path_response(const char *path, uint64_t rights,
-    bool create, struct pyxis_response_info *info, handle_t *handle);
 
 /* Return one owned file handle. Allocates path workspace; never truncates. */
 enum call_status file_open_path(const char *path, uint64_t rights,
@@ -134,7 +124,7 @@ int descriptor_close_expected(int descriptor, struct descriptor_object *expected
     uint64_t generation);
 bool descriptor_object_ready(struct descriptor_object *object, bool writing);
 int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdio_binding *binding);
-/* Caller holds FILE exclusion. Copies eligible unread primary + observation.
+/* Caller holds FILE exclusion. Copies eligible unread primary.
  * Success also holds descriptor read exclusion until descriptor_file_end. */
 enum call_status descriptor_object_output_copy(struct descriptor_object *object,
     struct output_handoff_request *owned);
@@ -151,7 +141,6 @@ int descriptor_object_stat(struct descriptor_object *object, struct stat *result
 int descriptor_object_terminal(struct descriptor_object *object);
 long descriptor_object_tell_output(struct descriptor_object *object, size_t pending);
 long descriptor_object_tell(struct descriptor_object *object);
-int descriptor_object_response(struct descriptor_object *object, struct pyxis_response_info *info);
 void descriptor_object_discard_input(struct descriptor_object *object);
 long descriptor_seek_position(int descriptor, long offset, int origin);
 

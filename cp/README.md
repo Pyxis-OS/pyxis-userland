@@ -1,7 +1,9 @@
 # cp
 
 `cp [-r] [--] source... destination` copies files through the caller's native
-roots and working directory. A directory destination receives each source's
+roots and working directory. Provider source names use typed OPEN and must
+return a readable FILE; complete HTTP snapshots use the same held-file copy
+path as native files, without URL spelling checks or observation companions. A directory destination receives each source's
 literal basename; multiple sources require an existing directory. Existing
 destination files are replaced. `-r` also copies directory trees (below); there
 are no metadata options, and `--` permits option-looking names. Success is quiet. Ordinary source/copy

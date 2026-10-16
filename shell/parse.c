@@ -62,7 +62,6 @@ void shell_syntax_close(struct shell_syntax *syntax)
         close_word(stage->redirections[k].word);
       }
     }
-    free(command->capture);
   }
   free(syntax->commands);
   *syntax = (struct shell_syntax){0};
@@ -124,7 +123,7 @@ static const char *capture_source(const struct shell_syntax *syntax, bool *manag
     }
   }
   if (*management && (syntax->count != 1 || syntax->commands[0].stage_count != 1 ||
-      syntax->commands[0].stages[0].redirection_count || syntax->commands[0].capture)) {
+      syntax->commands[0].stages[0].redirection_count)) {
     return "Management capture requires a single command without redirection";
   }
   return NULL;
@@ -310,11 +309,11 @@ static const char *finish_command(struct shell_syntax_command *command)
   command->assignment = first->words[0]->assignment_name != NULL;
   bool exporting = word_is(first->words[0], "export");
   if (command->assignment && (command->stage_count != 1 || first->count != 1 ||
-      first->redirection_count || command->background || command->capture)) {
+      first->redirection_count || command->background)) {
     return "Assignments must be standalone commands";
   }
   if (exporting && (command->stage_count != 1 || first->redirection_count ||
-      command->background || command->capture)) {
+      command->background)) {
     return "export must be a standalone foreground command";
   }
   if (!command->assignment && !exporting) {
@@ -379,7 +378,6 @@ static const char *parse_sequence(const char **cursor, bool nested,
   const char *read = *cursor;
   struct shell_syntax_command *command = NULL;
   struct shell_syntax_redirection *pending = NULL;
-  bool capture_pending = false;
   for (;;) {
     while (separator(*read)) {
       ++read;
@@ -387,9 +385,6 @@ static const char *parse_sequence(const char **cursor, bool nested,
     if (!*read || (nested && *read == ')')) {
       if (pending) {
         return "Redirection requires a filename";
-      }
-      if (capture_pending) {
-        return "=> requires a name";
       }
       if (command) {
         const char *error = finish_command(command);
@@ -410,8 +405,8 @@ static const char *parse_sequence(const char **cursor, bool nested,
       if (!command) {
         return "Semicolon requires a preceding command";
       }
-      if (pending || capture_pending) {
-        return pending ? "Redirection requires a filename" : "=> requires a name";
+      if (pending) {
+        return "Redirection requires a filename";
       }
       const char *error = finish_command(command);
       if (error) {
@@ -435,14 +430,11 @@ static const char *parse_sequence(const char **cursor, bool nested,
     if (command->background) {
       return "& must end the line";
     }
-    if (command->capture) {
-      return "=> name must end the foreground command";
-    }
     if (*read == '&') {
       if (read[1] == '&') {
         return "Unsupported operator";
       }
-      if (pending || capture_pending || !stage->count || command->stage_count > 1) {
+      if (pending || !stage->count || command->stage_count > 1) {
         return "& requires one completed command";
       }
       command->background = true;
@@ -459,7 +451,7 @@ static const char *parse_sequence(const char **cursor, bool nested,
       if (read[1] == '|' || read[1] == '&') {
         return "Unsupported operator";
       }
-      if (pending || capture_pending || !stage->count) {
+      if (pending || !stage->count) {
         return "Pipeline stage requires a command";
       }
       if (command->stage_count == LAUNCH_BATCH_MAX) {
@@ -470,19 +462,14 @@ static const char *parse_sequence(const char **cursor, bool nested,
       continue;
     }
     if (*read == '=' && read[1] == '>') {
-      if (pending || capture_pending || !stage->count) {
-        return "=> requires a completed foreground command";
-      }
-      capture_pending = true;
-      read += 2;
-      continue;
+      return "=> is retired; use name=$(command > $api)";
     }
     const char *operator = read;
     while (digit(*operator)) {
       ++operator;
     }
     if (*operator == '<' || *operator == '>') {
-      if (pending || capture_pending || !stage->count) {
+      if (pending || !stage->count) {
         return "Redirection requires a preceding command and filename";
       }
       enum environment_stream_index stream = *operator == '<' ?
@@ -513,35 +500,12 @@ static const char *parse_sequence(const char **cursor, bool nested,
       close_word(word);
       return error;
     }
-    if (capture_pending) {
-      char name[ENVIRONMENT_NAME_MAX + 1];
-      size_t length = 0;
-      if (!word->plain || word->assignment_name) {
+    if (pending) {
+      if (word->plain && word->count && word->pieces[0].kind == SHELL_LITERAL &&
+          word->pieces[0].text[0] == '@') {
         close_word(word);
-        return "=> requires an unquoted capability name";
+        return "@name redirects are retired; use $name";
       }
-      for (size_t i = 0; i < word->count; ++i) {
-        size_t size = strlen(word->pieces[i].text);
-        if (size > ENVIRONMENT_NAME_MAX - length) {
-          close_word(word);
-          return "=> capability name is too long";
-        }
-        memcpy(name + length, word->pieces[i].text, size);
-        length += size;
-      }
-      name[length] = 0;
-      char checked[ENVIRONMENT_NAME_MAX + 1];
-      if (!environment_name(checked, name)) {
-        close_word(word);
-        return "=> requires a valid capability name";
-      }
-      command->capture = copy_text(name, length);
-      close_word(word);
-      if (!command->capture) {
-        return "Out of memory";
-      }
-      capture_pending = false;
-    } else if (pending) {
       error = restore_assignment(word);
       if (error) {
         close_word(word);

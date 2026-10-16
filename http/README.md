@@ -1,6 +1,6 @@
 # HTTP endpoint preparation
 
-`http prepare POST|PUT|PATCH URI [--headers-file PATH] [--timeout SECONDS]`
+`http prepare GET|POST|PUT|PATCH URI [--headers-file PATH] [--timeout SECONDS] [--navigation]`
 issues a reusable endpoint through capability output:
 
 ```text
@@ -16,10 +16,10 @@ unset api
 
 The exact name before `://` selects one inherited environment capability.
 Renamed roots and `json+http` work the same way; the command receives no network
-authority. Preparing performs no network request. It requires a writable HTTP
+authority. Preparing performs no network request. GET preparation requires OPEN_READ; write methods require OPEN_WRITE on the
 root and retains only that root's READ, WRITE and REMOVE authority. Stock HTTPS
 is read-only, and stock JSON roots omit REMOVE. A captured endpoint refuses
-suffixes and further preparation.
+suffixes and further preparation. A GET-configured endpoint refuses WRITE.
 
 Reading the endpoint performs GET. Writing starts a new transaction with the
 selected method, and removing performs DELETE when the root grants REMOVE.
@@ -29,7 +29,7 @@ DELETE therefore requires a root provisioned with REMOVE authority.
 Header input must resolve to a finite native READ FILE; TEXT bindings are refused.
 The command checks its size, copies it once and checks EOF; partial input, extra
 bytes, providers and streams fail. Supply CRLF-terminated HTTP header fields.
-The complete private request, including the target and 40-byte prefix, must fit 4096 bytes. Temporary
+The complete private request, including the target and 48-byte prefix, must fit 4096 bytes. Temporary
 header buffers are erased. Supplied fields are treated as credentials and are
 dropped on cross-origin redirects. The endpoint keeps its root's existing trust
 profile. Put credentials in the file rather than command arguments.
@@ -52,3 +52,10 @@ publication failure keeps the old binding. This is not general capability-pipe
 integration. Plain C/Lua can use `fopen`/`io.open` directly on an exported endpoint.
 Header-file credentials and per-root trust are an interim design accepted
 2026-10-15; credential storage remains a later decision.
+
+`--navigation` selects an explicit response FILE prefix: a little-endian 32-bit
+metadata length (at most 4 KiB), UTF-8 JSON `effective_url`, `media_type` and
+`status`, then the raw response body. Ordinary reads stay raw. Links and TCC opt
+into and validate this content; generic describe stays URI-free. The complete
+encoded snapshot counts against the selected private backing budget. HTTP
+failures remain failed outcomes, with framed diagnostics in their error body.

@@ -5,7 +5,6 @@
 #include <path.h>
 #include <resource.h>
 #include <provider.h>
-#include <pyxis/response.h>
 #include <startup.h>
 #include <string.h>
 
@@ -186,15 +185,6 @@ static enum call_status walk(const struct path_context *context, const char *pat
         if (status == CALL_OK) {
           *file = result.resource;
           result.resource = HANDLE_INVALID;
-          if (workspace->response) {
-            struct pyxis_response_info *info = workspace->response;
-            info->flags = binding.kind == HANDLE_KIND_EXPORTED ? PYXIS_RESPONSE_PROVIDER : 0;
-            if (result.info.description.media_type_size) {
-              info->flags |= PYXIS_RESPONSE_MEDIA_TYPE;
-              memcpy(info->media_type, result.info.description.media_type,
-                  result.info.description.media_type_size + 1);
-            }
-          }
         }
         resource_result_close(&result);
       }
@@ -206,9 +196,6 @@ static enum call_status walk(const struct path_context *context, const char *pat
     if (status != CALL_OK && file && *file != HANDLE_INVALID) {
       handle_close(*file);
       *file = HANDLE_INVALID;
-    }
-    if (status != CALL_OK && workspace->response) {
-      *workspace->response = (struct pyxis_response_info){0};
     }
     return status;
   }
@@ -287,9 +274,6 @@ static enum call_status resolve(const struct path_context *context, const char *
     return CALL_BAD_REQUEST;
   }
   *handle = HANDLE_INVALID;
-  if (workspace && workspace->response) {
-    *workspace->response = (struct pyxis_response_info){0};
-  }
   uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP;
   if (kind == DIRECTORY_KIND_FILE) {
     if (rights & ~FILE_RIGHTS) {

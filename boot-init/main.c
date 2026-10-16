@@ -47,7 +47,7 @@
 #define OVERRIDE_NAME "system://" OVERRIDE_PATH
 #define OVERRIDE_MAX_BYTES (64 * 1024)
 #define HOSTNAME_NAME "system://" MACHINE_HOSTNAME_PATH
-#define RESCUE_INIT "boot://shell.pxe"
+#define RESCUE_INIT "boot://init-shell.pxe"
 /* The bin volume shares the system volume's pool; see the installer. */
 #define BIN_VOLUME "bin"
 #define BIN_UNKNOWN_REVISION "unknown"

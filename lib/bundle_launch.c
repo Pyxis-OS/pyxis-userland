@@ -188,7 +188,7 @@ static enum call_status prepare_context(struct context_grants *context,
       if (status != CALL_OK) {
         return status;
       }
-      bool stream = !strcmp(name, "stdin") || !strcmp(name, "stdin.status") ||
+      bool stream = !strcmp(name, "stdin") ||
           !strcmp(name, "stdout") || !strcmp(name, "stderr");
       bool directory = info.protocol == PROTOCOL_DIRECTORY && (entry->flags & ENVIRONMENT_EXPORTED);
       bool provider = info.kind == HANDLE_KIND_EXPORTED && (entry->flags & ENVIRONMENT_EXPORTED);

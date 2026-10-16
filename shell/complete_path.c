@@ -1,7 +1,6 @@
 #include "shell.h"
 #include <directory.h>
 #include <handle.h>
-#include <provider_http_private.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -173,7 +172,7 @@ static bool special_unquoted(char byte)
 {
   return byte == ' ' || byte == '\'' || byte == '"' || byte == '\\' || byte == '|' ||
          byte == '<' || byte == '>' || byte == '&' || byte == ';' || byte == '$' ||
-         byte == '(' || byte == ')';
+         byte == '(' || byte == ')' || byte == '@';
 }
 
 /* The value as typed in the word's quote state, starting with the open quote. */
@@ -290,7 +289,7 @@ bool shell_complete_path(struct shell *shell, const struct completion_word *word
     struct term_candidates *result)
 {
   const char *value = word->value;
-  if (provider_http_uri(value) || (word->quote == '\'' && strchr(value, '\''))) {
+  if (word->quote == '\'' && strchr(value, '\'')) {
     return false;
   }
   const char *slash = strrchr(value, '/');

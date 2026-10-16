@@ -4,7 +4,7 @@
 #include <abi/file.h>
 #include <abi/memory.h>
 #include <abi/pipe.h>
-#include <abi/http_transaction.h>
+#include <abi/stream.h>
 #include <errno.h>
 #include <handle.h>
 #include <pyxis/descriptor.h>
@@ -72,7 +72,7 @@ static char *capture_string(struct job_preparation *prepared, const char *source
 static bool stream_name(const char *name)
 {
   return !strcmp(name, "stdin") || !strcmp(name, "stdout") ||
-      !strcmp(name, "stderr") || !strcmp(name, "stdin.status") ||
+      !strcmp(name, "stderr") ||
       !strcmp(name, "stdin.append") || !strcmp(name, "stdout.append") ||
       !strcmp(name, "stderr.append");
 }
@@ -106,12 +106,6 @@ static void stage_streams(struct job_preparation *prepared)
       };
       if (stream->append) {
         prepared->entries[request->entry_count++] = environment_stdio_append_entry(i);
-      }
-      if (stream->observation_protocol) {
-        prepared->entries[request->entry_count++] = (struct launch_environment_entry){
-          .name = (uintptr_t)"stdin.status", .kind = ENVIRONMENT_CAP,
-          .flags = ENVIRONMENT_EXPORTED, .value = stream->observation_grant,
-        };
       }
     }
   }
@@ -151,12 +145,6 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
       if (options->streams[i] >= 0) {
         if (pyxis_descriptor_borrow(options->streams[i], &prepared->streams[i]) < 0) {
           return errno == EBADF ? CALL_BAD_HANDLE : CALL_IO;
-        }
-        if (prepared->streams[i].observation != HANDLE_INVALID) {
-          if (grant_count == limit) {
-            return CALL_BAD_REQUEST;
-          }
-          ++grant_count;
         }
       }
     }
@@ -219,9 +207,6 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     struct job_stream_selection *stream = &prepared->selected_streams[i];
     if (options->streams[i] >= 0 || (pipe_streams && pipe_streams[i])) {
       stream->grant = next++;
-      if (options->streams[i] >= 0 && prepared->streams[i].observation != HANDLE_INVALID) {
-        stream->observation_grant = next++;
-      }
       if (pipe_streams && pipe_streams[i]) {
         stream->protocol = PROTOCOL_PIPE;
       }
@@ -284,22 +269,6 @@ static enum call_status capture_stream(struct job_preparation *prepared,
   if ((binding.info.rights & rights) != rights ||
       (binding.info.transport & transport) != transport) {
     return CALL_DENIED;
-  }
-  if (binding.observation != HANDLE_INVALID) {
-    if (!input || (binding.info.protocol != PROTOCOL_FILE &&
-        binding.info.protocol != PROTOCOL_STREAM) || binding.observation == binding.handle ||
-        binding.observation_info.protocol != PROTOCOL_HTTP_TRANSACTION ||
-        binding.observation_info.kind != HANDLE_KIND_EXPORTED ||
-        !(binding.observation_info.rights & HTTP_TRANSACTION_RIGHT_STATUS) ||
-        (binding.observation_info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
-      return CALL_WRONG_TYPE;
-    }
-    stream->observation_protocol = PROTOCOL_HTTP_TRANSACTION;
-    prepared->grants[stream->observation_grant] = (struct launch_grant){
-      binding.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
-    };
-  } else if (binding.info.protocol == PROTOCOL_STREAM) {
-    return CALL_WRONG_TYPE;
   }
   stream->protocol = binding.info.protocol;
   stream->append = binding.append;

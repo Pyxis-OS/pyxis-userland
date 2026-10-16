@@ -20,7 +20,7 @@
 #include <abi/audio.h>
 #include <abi/file.h>
 #include <abi/pipe.h>
-#include <abi/http_transaction.h>
+#include <abi/stream.h>
 #include <abi/power.h>
 #include <abi/keyboard.h>
 #include <abi/pointer.h>
@@ -77,9 +77,9 @@ static int launch_session(const struct session_config *config, const struct netw
   handle_t mux_terminal = bootstrap_capability("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
-      start_services ? "init-services" : multiplex ? "mux.pxe" : "shell.pxe";
+      start_services ? "init-services" : multiplex ? "mux.pxe" : "init-shell.pxe";
   const char *image_uri = start_remote_services ? "boot://init-remote-services" :
-      start_services ? "boot://init-services" : multiplex ? "bin://mux.pxe" : "boot://shell.pxe";
+      start_services ? "boot://init-services" : multiplex ? "bin://mux.pxe" : "boot://init-shell.pxe";
   handle_t image;
   /* Installed archives retain only recovery programs; mux belongs to the
    * running revision's bin directory, which aliases boot on live images. */
@@ -456,10 +456,8 @@ static int launch_session(const struct session_config *config, const struct netw
     }
     bool input = i == ENVIRONMENT_STDIN;
     bool response = stream.protocol == PROTOCOL_STREAM;
-    if ((response && (!input || stream.observation_protocol != PROTOCOL_HTTP_TRANSACTION ||
-          stream.observation == HANDLE_INVALID || stream.observation == stream.handle)) ||
-        (!response && (stream.observation_protocol || stream.observation))) {
-      fputs("session: invalid stream observation\n", stderr);
+    if (response && !input) {
+      fputs("session: invalid output stream\n", stderr);
       goto done;
     }
     uint64_t rights = stream.protocol == PROTOCOL_FILE ?
@@ -490,13 +488,6 @@ static int launch_session(const struct session_config *config, const struct netw
       }
     }
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
-    if (response) {
-      entries[request.entry_count++] = (struct launch_environment_entry)
-          PROFILE_CAP("stdin.status", request.grant_count);
-      grants[request.grant_count++] = (struct launch_grant){
-        stream.observation, HTTP_TRANSACTION_RIGHT_STATUS, HANDLE_TRANSPORT_CALL,
-      };
-    }
   }
 
   status = network_environment_read(&refreshed_environment, net_config,

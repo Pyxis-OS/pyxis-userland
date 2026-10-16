@@ -5,7 +5,6 @@
 #include <abi/file.h>
 #include <abi/pipe.h>
 #include <abi/stream.h>
-#include <abi/http_transaction.h>
 
 static enum call_status checked_status(struct syscall_result result)
 {
@@ -377,7 +376,7 @@ static enum call_status stdio_append(handle_t snapshot, enum environment_stream_
 }
 
 enum call_status environment_stdio(handle_t snapshot, enum environment_stream_index index,
-    struct pyxis_stdio_binding *binding, uint64_t *identity, uint64_t *observation_identity)
+    struct pyxis_stdio_binding *binding, uint64_t *identity)
 {
   static const char *const names[ENVIRONMENT_STREAM_COUNT] = {"stdin", "stdout", "stderr"};
   if (!binding || (unsigned)index >= ENVIRONMENT_STREAM_COUNT) {
@@ -386,9 +385,6 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
   *binding = (struct pyxis_stdio_binding){0};
   if (identity) {
     *identity = 0;
-  }
-  if (observation_identity) {
-    *observation_identity = 0;
   }
   struct environment_entry_reply entry;
   enum call_status status = environment_lookup(snapshot, names[index], &entry, NULL, 0);
@@ -447,38 +443,6 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
   binding->append = append;
   if (identity) {
     *identity = entry.identity;
-  }
-  if (index == ENVIRONMENT_STDIN &&
-      (info.protocol == PROTOCOL_STREAM || info.protocol == PROTOCOL_FILE)) {
-    bool optional = info.protocol == PROTOCOL_FILE;
-    status = environment_lookup(snapshot, "stdin.status", &entry, NULL, 0);
-    if (status == CALL_OK && entry.kind == ENVIRONMENT_CAP) {
-      binding->observation = entry.handle;
-      status = handle_query(entry.handle, &info);
-      if (status == CALL_OK &&
-          (info.protocol != PROTOCOL_HTTP_TRANSACTION || info.kind != HANDLE_KIND_EXPORTED ||
-           (info.rights & HTTP_TRANSACTION_RIGHT_STATUS) != HTTP_TRANSACTION_RIGHT_STATUS ||
-           (info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL)) {
-        status = CALL_WRONG_TYPE;
-      }
-      if (status == CALL_OK) {
-        binding->observation_protocol = info.protocol;
-        if (observation_identity) {
-          *observation_identity = entry.identity;
-        }
-      }
-    } else if (status == CALL_NOT_FOUND && optional) {
-      status = CALL_OK;
-    } else if (status == CALL_OK) {
-      status = CALL_WRONG_TYPE;
-    }
-  }
-  if (status != CALL_OK) {
-    handle_close(binding->handle);
-    if (binding->observation) {
-      handle_close(binding->observation);
-    }
-    *binding = (struct pyxis_stdio_binding){0};
   }
   return status;
 }

@@ -285,7 +285,6 @@ const char *shell_syntax_expand(struct shell *shell,
   }
   expansion->command.stage_count = syntax->stage_count;
   expansion->command.background = syntax->background;
-  expansion->command.capture = syntax->capture;
   size_t word_index = 0, argument_index = 0;
   const char *error = NULL;
   for (size_t i = 0; i < syntax->stage_count && !error; ++i) {
@@ -333,8 +332,6 @@ const char *shell_syntax_expand(struct shell *shell,
       stage->redirections[j] = (struct shell_redirection){
         .stream = redirection->stream, .path = *path, .append = redirection->append,
         .value = value->kind == ENVIRONMENT_CAP ? value : NULL,
-        .observation = capture->observation.handle ? &capture->observation : NULL,
-        .capability = redirection->word->plain && *path && **path == '@',
       };
     }
   }

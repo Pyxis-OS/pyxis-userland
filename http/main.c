@@ -223,7 +223,7 @@ static enum call_status read_headers(const char *path, unsigned char *bytes,
 
 static int usage(void)
 {
-  fputs("usage: http prepare POST|PUT|PATCH URI [--headers-file PATH] [--timeout SECONDS]\n",
+  fputs("usage: http prepare GET|POST|PUT|PATCH URI [--headers-file PATH] [--timeout SECONDS] [--navigation]\n",
       stderr);
   return EXIT_FAILURE;
 }
@@ -234,7 +234,9 @@ int main(int argc, char **argv)
     return usage();
   }
   uint64_t method;
-  if (!strcmp(argv[2], "POST")) {
+  if (!strcmp(argv[2], "GET")) {
+    method = HTTP_ENDPOINT_GET;
+  } else if (!strcmp(argv[2], "POST")) {
     method = HTTP_ENDPOINT_POST;
   } else if (!strcmp(argv[2], "PUT")) {
     method = HTTP_ENDPOINT_PUT;
@@ -246,7 +248,13 @@ int main(int argc, char **argv)
   const char *headers_path = NULL;
   uint64_t timeout_ns = DEFAULT_TIMEOUT_NS;
   bool timeout_given = false;
+  uint64_t response_flags = 0;
   for (int i = 4; i < argc; i += 2) {
+    if (!strcmp(argv[i], "--navigation") && !response_flags) {
+      response_flags = HTTP_ENDPOINT_NAVIGATION;
+      --i;
+      continue;
+    }
     if (i + 1 == argc) {
       return usage();
     }
@@ -284,8 +292,8 @@ int main(int argc, char **argv)
   }
   struct resource_result result = {0};
   if (status == CALL_OK) {
-    status = http_prepare_endpoint(root, method, target, target_size, headers, headers_size,
-        timeout_ns, now + DEFAULT_TIMEOUT_NS, &result);
+    status = http_prepare_endpoint(root, method, response_flags, target, target_size, headers, headers_size,
+        timeout_ns, now + DEFAULT_TIMEOUT_NS, &result, NULL);
   }
   erase(headers, sizeof(headers));
   if (clock != HANDLE_INVALID && handle_close(clock) != 0 && status == CALL_OK) {

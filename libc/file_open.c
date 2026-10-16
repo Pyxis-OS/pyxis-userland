@@ -22,11 +22,8 @@
 /* Shared by file opens and metadata queries: create applies only to files. */
 static enum call_status open_path(const char *path, uint64_t kind, uint64_t rights,
                                   bool create, bool exclusive, bool native_only,
-                                  struct pyxis_response_info *info, handle_t *handle)
+                                  handle_t *handle)
 {
-  if (info) {
-    *info = (struct pyxis_response_info){0};
-  }
   *handle = HANDLE_INVALID;
   if (!path || !*path) {
     return CALL_BAD_REQUEST;
@@ -58,7 +55,6 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   struct path_workspace workspace = {
     .directories = directories, .directory_capacity = slots,
     .component = component, .component_capacity = length + 1,
-    .response = info,
   };
   /* The owned cwd remains valid through blocking provider calls. */
   if (native_only) {
@@ -76,26 +72,20 @@ static enum call_status open_path(const char *path, uint64_t kind, uint64_t righ
   return status;
 }
 
-enum call_status file_open_path_response(const char *path, uint64_t rights,
-    bool create, struct pyxis_response_info *info, handle_t *handle)
-{
-  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, false, info, handle);
-}
-
 enum call_status file_open_path(const char *path, uint64_t rights,
                                bool create, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, false, NULL, handle);
+  return open_path(path, DIRECTORY_KIND_FILE, rights, create, false, false, handle);
 }
 
 enum call_status file_create_path(const char *path, uint64_t rights, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_FILE, rights, true, true, false, NULL, handle);
+  return open_path(path, DIRECTORY_KIND_FILE, rights, true, true, false, handle);
 }
 
 enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle)
 {
-  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, false, false, NULL, handle);
+  return open_path(path, DIRECTORY_KIND_DIRECTORY, rights, false, false, false, handle);
 }
 
 int access(const char *path, int mode)
@@ -116,7 +106,7 @@ int access(const char *path, int mode)
   /* Identify without child rights first: directory enumeration/mutation grants
    * are independent of the READ_FILES/WRITE_FILES needed for a file lookup. */
   enum call_status status = open_path(path, DIRECTORY_KIND_FILE, 0,
-      false, false, true, NULL, &handle);
+      false, false, true, &handle);
   if (status == CALL_OK) {
     if (descriptor_release_handle(handle) < 0) {
       return -1;
@@ -125,10 +115,10 @@ int access(const char *path, int mode)
       return 0;
     }
     status = open_path(path, DIRECTORY_KIND_FILE, file_rights,
-        false, false, true, NULL, &handle);
+        false, false, true, &handle);
   } else if (status == CALL_WRONG_TYPE) {
     status = open_path(path, DIRECTORY_KIND_DIRECTORY, directory_rights,
-        false, false, true, NULL, &handle);
+        false, false, true, &handle);
   }
   if (status != CALL_OK) {
     errno = status == CALL_WRONG_TYPE ? ENOTDIR : libc_path_errno(status, path, NULL);

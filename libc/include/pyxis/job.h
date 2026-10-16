@@ -16,7 +16,7 @@ struct pyxis_job_options {
   const struct launch_grant *grants;
   size_t grant_count;
   /* Explicit selected entries; caller captures and stages its chosen values.
-   * Descriptor selection overrides stdin/stdout/stderr, stdin.status and their
+   * Descriptor selection overrides stdin/stdout/stderr and their
    * append policy companions for this child. No implicit inheritance. */
   const struct launch_environment_entry *entries;
   size_t entry_count;

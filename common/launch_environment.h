@@ -64,9 +64,6 @@ static inline enum call_status profile_directories(const struct environment_capt
 
 static inline bool profile_stdio_name(const char *name)
 {
-  if (!strcmp(name, "stdin.status")) {
-    return true;
-  }
   for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     struct launch_environment_entry entry = profile_stdio_entry(i, 0);
     if (!strcmp(name, (const char *)(uintptr_t)entry.name) ||

@@ -353,7 +353,7 @@ static enum call_status broker_launch(struct remote_context *context,
       image_root = context->grants[context->entries[i].value].source;
     }
   }
-  status = directory_lookup(image_root, mux ? "mux.pxe" : "shell.pxe", DIRECTORY_KIND_FILE,
+  status = directory_lookup(image_root, mux ? "mux.pxe" : "init-shell.pxe", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     goto done;
@@ -420,7 +420,7 @@ static enum call_status broker_launch(struct remote_context *context,
   }
   char width[sizeof("32")];
   snprintf(width, sizeof(width), "%u", tab_width);
-  const char *arguments[] = {mux ? "bin://mux.pxe" : "boot://shell.pxe",
+  const char *arguments[] = {mux ? "bin://mux.pxe" : "boot://init-shell.pxe",
     legacy_root ? (no_echo ? "--no-echo" : "--remote-prompt") : "--tab-width", width};
   for (size_t i = 0; i < context->environment.count; ++i) {
     bool selected = false;

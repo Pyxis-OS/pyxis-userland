@@ -15,8 +15,8 @@
 /* The one interpreter that runs scripts as a shell; it alone is offered pipe
  * creation and child_launcher by name. It is opened from the shell's held boot
  * root, so rebinding boot:// in the environment cannot substitute another file. */
-#define SHELL_INTERPRETER "boot://shell.pxe"
-#define SHELL_INTERPRETER_PATH "shell.pxe"
+#define SHELL_INTERPRETER "boot://init-shell.pxe"
+#define SHELL_INTERPRETER_PATH "init-shell.pxe"
 #define SHELL_LINE_CAPACITY 1024
 /* Bytes before LF, including CR in CRLF; storage also needs a trailing NUL. */
 #define SHELL_SCRIPT_LINE_MAX 1024
@@ -39,7 +39,6 @@ enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,
     SHELL_SERVICE };
 
 struct bundle_program;
-struct shell_capability_table;
 struct shell_service_value;
 
 struct shell_service_root {
@@ -52,18 +51,17 @@ struct shell_service_root {
 struct shell_redirection {
   enum environment_stream_index stream;
   const char *path;
-  bool capability;
   bool append;
+  handle_t root; /* Owned by the redirect coordinator, borrowed during launch. */
+  const char *remainder;
   const struct environment_value *value;
-  const struct environment_value *observation;
 };
 
 struct shell_stage {
   char **arguments;
   size_t count;
   size_t redirection_count;
-  bool http_worker;
-  bool http_producer;
+  bool transaction_worker;
   const struct environment_capture *operands;
   struct shell_redirection redirections[ENVIRONMENT_STREAM_COUNT];
 };
@@ -71,7 +69,6 @@ struct shell_stage {
 struct shell_command_line {
   size_t stage_count;
   bool background;
-  const char *capture;
   struct shell_stage stages[LAUNCH_BATCH_MAX];
 };
 
@@ -90,7 +87,6 @@ struct shell_initial_entry {
 
 struct shell {
   struct bundle_jobs jobs;
-  struct shell_capability_table *capabilities;
   /* Immutable startup provenance only; no capability or table ownership. */
   struct shell_initial_entry *initial_entries;
   size_t initial_entry_count;
@@ -99,6 +95,7 @@ struct shell {
   /* Root-shell options only; never forwarded to children. */
   bool quiet_input;
   bool remote_prompt;
+  bool positional_script;
   /* Keep the supervised remote root alive through session successors. */
   bool session_wait;
   int exit_status;
@@ -112,8 +109,9 @@ struct shell {
   handle_t history_home;
   bool history_saving;
   /* Script mode with a child_launcher: this shell keeps sole CONTROL, so its exit
-   * or termination stops every foreground command's subtree. Background commands,
-   * services and session successors are launched outside it. */
+   * or termination stops every foreground command's subtree. Trusted pre-granted
+   * scripts leave background/services/successors outside; positional scripts
+   * launch all their children through this subgroup. */
   struct execution_group_create_reply script_group;
   /* Archive root that opens the trusted script interpreter, supplied by the
    * trusted launch chain (boot init, session, remote and multiplexer launchers,

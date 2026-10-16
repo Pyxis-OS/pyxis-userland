@@ -17,7 +17,6 @@ struct path_context {
 /* Scratch storage must be disjoint from the context, inputs and outputs.
  * directories holds temporary owned handles; component holds one name plus NUL
  * (also used for the scheme). No handles remain here after any public call. */
-struct pyxis_response_info;
 
 struct path_workspace {
   handle_t *directories;
@@ -25,7 +24,6 @@ struct path_workspace {
   char *component;
   size_t component_capacity;
   /* Optional copied metadata, borrowed READ clock and earlier deadline. */
-  struct pyxis_response_info *response;
   handle_t clock;
   uint64_t deadline_ns;
 };

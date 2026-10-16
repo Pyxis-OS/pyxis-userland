@@ -9,7 +9,7 @@
 
 static const char *const builtins[] = {
   "affinity", "cd", "describe", "exit", "export", "mount", "poweroff",
-  "reboot", "release", "request", "revoke", "revocable", "service", "session",
+  "reboot", "release", "revoke", "revocable", "service", "session",
   "sync", "title", "unset",
 };
 
