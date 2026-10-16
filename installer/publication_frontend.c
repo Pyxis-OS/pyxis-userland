@@ -214,8 +214,16 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
     plan->current[CONFIG_CATALOG].size};
   struct config_selection frozen = {0};
   const char *reason = NULL;
+  struct config_file_digest loaded[2] = {0};
+  const char *names[] = {"boot_kernel", "boot_archive"};
+  for (unsigned i = 0; i < 2; ++i) {
+    struct install_source source = {.handle = bootstrap_capability(names[i])};
+    if (source.handle != HANDLE_INVALID && file_size(source.handle, &source.bytes) == CALL_OK) {
+      install_boot_payload_digest(&source, &loaded[i]);
+    }
+  }
   bool ok = config_readiness_choose(archive, &catalog, plan->kernel_revision, plan->program_revision,
-      &completion, esp, &current_catalog, true, false, &frozen, &reason);
+      &loaded[0], &loaded[1], &completion, esp, &current_catalog, true, false, &frozen, &reason);
   fprintf(stderr, "Frozen handoff preview: %s (%s); installed loader unchanged.\n",
       ok && frozen.from_esp ? "ESP" : "archive", reason ? reason : "unavailable");
   config_selection_free(&frozen);

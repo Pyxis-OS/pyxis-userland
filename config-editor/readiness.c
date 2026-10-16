@@ -20,15 +20,25 @@ static bool bytes_match(const struct config_bytes *bytes,
   return ok && !strcmp(hash, expected->sha256);
 }
 
+static bool payload_matches(const struct config_file_digest *loaded,
+    const struct config_file_digest *expected)
+{
+  return loaded && loaded->present && config_payload_digest_valid(loaded) &&
+      loaded->size == expected->size && !strcmp(loaded->sha256, expected->sha256);
+}
+
 static bool compatible(const struct config_record *record,
     const struct config_bytes *archive_catalog, const char *kernel_revision,
-    const char *program_revision)
+    const char *program_revision, const struct config_file_digest *loaded_kernel,
+    const struct config_file_digest *loaded_archive)
 {
   if (!record->committed || !record->boot.present ||
       !config_revision_valid(kernel_revision) || !config_revision_valid(program_revision) ||
       strcmp(kernel_revision, record->boot.kernel_revision) ||
       strcmp(program_revision, record->boot.program_revision) ||
-      !bytes_match(archive_catalog, &record->boot.archive_catalog)) {
+      !bytes_match(archive_catalog, &record->boot.archive_catalog) ||
+      !payload_matches(loaded_kernel, &record->boot.kernel.digest) ||
+      !payload_matches(loaded_archive, &record->boot.archive.digest)) {
     return false;
   }
   struct config_catalog *catalog = NULL;
@@ -40,7 +50,8 @@ static bool compatible(const struct config_record *record,
 
 bool config_readiness_choose(const struct config_bytes archive[CONFIG_LUA_COUNT],
     const struct config_bytes *archive_catalog, const char *kernel_revision,
-    const char *program_revision, const struct config_bytes *completion,
+    const char *program_revision, const struct config_file_digest *loaded_kernel,
+    const struct config_file_digest *loaded_archive, const struct config_bytes *completion,
     const struct config_bytes esp[CONFIG_LUA_COUNT], const struct config_bytes *esp_catalog,
     bool provenance_valid, bool rescue, struct config_selection *selection,
     const char **reason)
@@ -51,7 +62,8 @@ bool config_readiness_choose(const struct config_bytes archive[CONFIG_LUA_COUNT]
   struct config_record record = {0};
   bool ready = !rescue && provenance_valid && completion &&
       config_record_parse(completion->bytes, completion->size, &record) &&
-      compatible(&record, archive_catalog, kernel_revision, program_revision);
+      compatible(&record, archive_catalog, kernel_revision, program_revision,
+          loaded_kernel, loaded_archive);
   if (ready && record.boot.source == CONFIG_ACTIVE_ARCHIVE) {
     bool ok = config_selection_choose(archive, NULL, false, false, selection, reason);
     *reason = "committed boot-bound archive selection";
