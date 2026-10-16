@@ -334,8 +334,12 @@ bool install_esp_payload_verify_file(const struct install_esp_payloads *result,
       expected->size > INSTALL_ESP_PAYLOAD_MAX_BYTES || !hex_valid(expected->sha256, 64)) {
     return fail(report, CALL_BAD_REQUEST);
   }
-  return current_target(result, report) && grant(source, PROTOCOL_FILE, FILE_RIGHT_READ, report) &&
-      transfer_file(source, result->workspace, true, expected, report) && current_target(result, report);
+  if (!current_target(result, report) || !grant(source, PROTOCOL_FILE, FILE_RIGHT_READ, report)) {
+    return false;
+  }
+  enum call_status status = install_esp_transfer_file(source, result->workspace, true,
+      expected->size, expected->sha256, INSTALL_ESP_PAYLOAD_MAX_BYTES);
+  return (status == CALL_OK || fail(report, status)) && current_target(result, report);
 }
 
 const struct install_esp_payload_record *install_esp_payload_record(

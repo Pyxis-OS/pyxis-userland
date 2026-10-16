@@ -365,7 +365,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   request.sources[0] = (struct install_source){.handle = bootstrap_capability("boot_kernel")};
   if (file_size(request.sources[0].handle, &request.sources[0].bytes) != CALL_OK ||
       file_size(source_archive.handle, &source_archive.bytes) != CALL_OK ||
-      !install_programs_list(boot, &programs) || !install_archive_filter(&source_archive, &programs, &filtered)) {
+      !install_programs_list(boot, &programs) || !install_archive_filter(&source_archive, INSTALL_POOL_PARTITION, &programs, &filtered)) {
     goto done;
   }
   request.sources[1] = filtered;
