@@ -203,8 +203,8 @@ static void draw_panel(const struct screen *screen, const struct mouse_state *st
   }
 
   y += 4 * box + margin;
-  int64_t arrow = 2 * box;
-  int64_t gap = box / 2;
+  int64_t arrow = box;
+  int64_t gap = box / 3;
   int64_t left = (width - 3 * arrow - 2 * gap) / 2;
   int64_t center = left + arrow + gap;
   draw_arrow(screen, center, y, arrow, ARROW_UP,
