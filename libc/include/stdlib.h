@@ -68,6 +68,7 @@ int unsetenv(const char *name);
  * Failure returns -1 with errno and unspecified template contents; uncertain
  * native creation may leave a file. Success preserves errno. */
 int mkstemp(char *name_template);
+char *mkdtemp(char *name_template);
 
 /* The absolute value must be representable (the type's minimum is excluded). */
 int abs(int value);

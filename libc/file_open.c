@@ -194,6 +194,37 @@ int mkstemp(char *template)
   return -1;
 }
 
+char *mkdtemp(char *template)
+{
+  if (!template) {
+    errno = EINVAL;
+    return NULL;
+  }
+  size_t length = strlen(template);
+  if (length < TEMPORARY_NAME_LENGTH ||
+      memcmp(template + length - TEMPORARY_NAME_LENGTH, "XXXXXX", TEMPORARY_NAME_LENGTH)) {
+    errno = EINVAL;
+    return NULL;
+  }
+  int saved_errno = errno;
+  for (int attempt = 0; attempt < TEMPORARY_CREATE_ATTEMPTS; ++attempt) {
+    enum call_status status = file_temporary_name(template + length - TEMPORARY_NAME_LENGTH);
+    if (status != CALL_OK) {
+      errno = libc_call_errno(status);
+      return NULL;
+    }
+    if (!mkdir(template, 0700)) {
+      errno = saved_errno;
+      return template;
+    }
+    if (errno != EEXIST) {
+      return NULL;
+    }
+  }
+  errno = EEXIST;
+  return NULL;
+}
+
 static int remove_kind(const char *path, uint64_t kind)
 {
   if (!path || !*path) {
