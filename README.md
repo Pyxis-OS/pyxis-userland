@@ -42,6 +42,10 @@ actual-grant preparation; plain FILE paths keep ordinary launch behavior.
 Logical `bin://NAME` aliases retain literal FILE lookup before the same bin
 candidates and catalog, without rescue fallback. ZIP launch remains unavailable.
 
+[examples/pointer-min](examples/pointer-min/main.c) is a minimal commented pointer
+program for people writing their own. It is built as the `pointer-min` program, and
+the image ships its source as `boot://share/examples/pointer-min.c` for TCC.
+
 `tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
 Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping
 can split a UTF-8 branch. `--ascii` selects ASCII branches and continuation

@@ -17,7 +17,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest screenshot pcm
+INSTALL_PROGRAMS := mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest pointer-min screenshot pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -43,7 +43,7 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
                    $(BUILD)/mv/main.o $(BUILD)/tree/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/sleep/main.o $(BUILD)/ping/main.o \
                    $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o $(BUILD)/tcp/main.o \
                    $(BUILD)/ttcp/main.o \
-                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
+                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/examples/pointer-min/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
                    $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/capture.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
@@ -82,7 +82,7 @@ LS_OBJECTS := $(BUILD)/ls/listing.o $(BUILD)/ls/output.o
 SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest screenshot pcm clean FORCE
+.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest pointer-min screenshot pcm clean FORCE
 .PHONY: fat32ctl config
 all: $(INSTALL_PROGRAMS) fat32ctl config $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
@@ -96,7 +96,7 @@ install: all
 	  staging="$(DESTDIR).tmp"; \
 	  trap 'rm -rf -- "$$staging"' EXIT; \
 	  rm -rf -- "$$staging"; \
-	  mkdir -p "$$staging/share/checks" "$$staging/config"; \
+	  mkdir -p "$$staging/share/checks" "$$staging/share/examples" "$$staging/config"; \
 	  for program in $(INSTALL_PROGRAMS); do \
 	    name=$$program; \
 	    if [ "$$program" = shell ]; then name=init-shell; fi; \
@@ -114,6 +114,7 @@ install: all
 	  install -m 644 config/live.lua "$$staging/config/live.lua"; \
 	  install -m 644 config/installed.lua "$$staging/config/installed.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
+	  install -m 644 examples/pointer-min/main.c "$$staging/share/examples/pointer-min.c"; \
 	  install -m 644 "$(BUILD)/share/iobench.bin" "$$staging/share/iobench.bin"; \
 	  install -m 644 "$(BUILD)/share/iobench-small.bin" "$$staging/share/iobench-small.bin"; \
 	  for script in $(CHECK_SCRIPTS); do \
@@ -207,6 +208,7 @@ fat32ctl: $(BUILD)/fat32ctl.pxb/manifest.json
 config: $(BUILD)/config.pxb/manifest.json
 mandelbrot: $(BUILD)/mandelbrot.pxe
 mousetest: $(BUILD)/mousetest.pxe
+pointer-min: $(BUILD)/pointer-min.pxe
 screenshot: $(BUILD)/screenshot.pxe
 pcm: $(BUILD)/pcm.pxe
 
@@ -339,6 +341,10 @@ $(BUILD)/share/iobench-small.bin: iobench/fixture.lua Makefile
 	@mkdir -p $(@D)
 	$(LUA) $< 32768 > $@.tmp
 	mv $@.tmp $@
+
+# The example lives under examples/ so it is not mistaken for an installed tool.
+$(BUILD)/pointer-min.pxe: $(BUILD)/examples/pointer-min/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(LDLIBS)
 
 # Runtime objects and libraries come from the selected SDK.
 $(BUILD)/%.pxe: $(BUILD)/%/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
