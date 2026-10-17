@@ -51,11 +51,14 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
 
 /* A trusted launcher supplies a private provisioning tree separately from
  * ordinary resource inventory. Client job_work sources in that inventory are
- * never forwarded. JOBS owns contexts beyond transient preparation storage. */
+ * never forwarded. JOBS owns contexts beyond transient preparation storage.
+ * When a required grant cannot be supplied, absent or with too few rights, the
+ * result is CALL_DENIED and MISSING (optional) borrows its manifest name from
+ * PROGRAM; otherwise MISSING is NULL. */
 enum call_status bundle_launch_prepare_jobs(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
     size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
-    struct bundle_launch **prepared);
+    struct bundle_launch **prepared, const char **missing);
 /* Call once after the admission attempt, before releasing preparation. Unknown
  * admission pins the context; never invent retirement or replay admission. */
 void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status status,

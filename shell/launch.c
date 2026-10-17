@@ -80,9 +80,11 @@ struct prepared_stage {
   const struct environment_value **selection;
   size_t selection_count;
   const char *conflict;
+  /* Borrowed from bundle: the required grant this shell could not supply. */
+  const char *missing;
   struct launch_request request;
   /* Offered to the shell interpreter only; see program_script_extras. */
-  struct program_script_grant extras[3];
+  struct program_script_grant extras[4];
   size_t extra_count;
 };
 
@@ -316,8 +318,16 @@ static void set_outcome(struct shell_outcome *outcome, uint64_t kind, int64_t st
 
 static enum command_result launch_error(struct shell *shell, const struct shell_stage *stages,
     size_t stage_count, size_t stage, const char *operation, const char *path,
-    enum call_status status)
+    const char *missing, enum call_status status)
 {
+  if (*missing && stage_count > 1 && stage < stage_count) {
+    return shell_error(shell, "shell: stage %zu (%s): Missing required resource %s\n",
+        stage + 1, stages[stage].arguments[0], missing);
+  }
+  if (*missing) {
+    return shell_error(shell, "shell: %s: Missing required resource %s\n",
+        stages[0].arguments[0], missing);
+  }
   if (stage_count > 1 && stage < stage_count) {
     return shell_error(shell, "shell: stage %zu (%s): %s %s failed (status %u)\n",
         stage + 1, stages[stage].arguments[0], operation, path, status);
@@ -604,8 +614,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
   /* A script run by the shell interpreter is a shell: it needs the pipe creation
    * this one holds, recognizes delegated child launch by child_launcher, and
-   * carries the trusted interpreter root on to its own nested scripts. Only the
-   * library, seeing the interpreter it parsed, appends these. */
+   * carries the trusted interpreter root on to its own nested scripts. It also
+   * receives threads, which a plain program does not, so its foreground bundles
+   * get the same runtime grants as at the prompt. Only the library, seeing the
+   * interpreter it parsed, appends these. */
   prepared->extra_count = 0;
   if (mode == SHELL_FOREGROUND && !prepared->bundle) {
     if (child_launcher != HANDLE_INVALID) {
@@ -629,6 +641,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       /* Private: an exported directory would also be forwarded as a root. */
       prepared->extras[prepared->extra_count++] = (struct program_script_grant){
         "interpreter_root", shell->interpreter_root, rights, transport, 0};
+    }
+    handle_t own_threads = bootstrap_capability("threads");
+    if (shell->interpreter_root != HANDLE_INVALID && own_threads != HANDLE_INVALID) {
+      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+        "threads", own_threads, THREAD_RIGHT_MANAGE, 0, ENVIRONMENT_EXPORTED};
     }
   }
   bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
@@ -1276,7 +1293,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
         ordinary_count + source_count, bootstrap_capability("job_provisioner"),
-        &shell->jobs, &prepared->bundle_launch);
+        &shell->jobs, &prepared->bundle_launch, &prepared->missing);
     if (status != CALL_OK) {
       return status;
     }
@@ -1333,6 +1350,7 @@ static enum call_status preflight_operands(struct shell *shell,
   enum call_status status = prepare_stage(shell, prepared, stage, mode, named_input,
       streams, publication, read_only, environment, exported, true, scope);
   *conflict = prepared->conflict;
+  image->missing = prepared->missing;
   if (status == CALL_OK) {
     *conflict = selected_stream_conflict(prepared, stage, streams, index, count);
     if (*conflict) {
@@ -1634,6 +1652,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   const char *operation = "shell: open";
   const char *path = stages[0].arguments[0];
   char conflicting_entry[ENVIRONMENT_NAME_MAX + 1];
+  char missing[ENVIRONMENT_NAME_MAX + 1] = "";
   size_t failed_stage = 0;
   enum call_status status = CALL_OK;
   handle_t children[LAUNCH_BATCH_MAX] = {0};
@@ -1798,6 +1817,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       memcpy(conflicting_entry, conflict, strlen(conflict) + 1);
       path = conflicting_entry;
     }
+    if (prepared[i].missing) {
+      snprintf(missing, sizeof(missing), "%s", prepared[i].missing);
+    }
     if (status != CALL_OK) {
       goto failed;
     }
@@ -1936,6 +1958,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         operation = "shell: CAP entry conflicts; copy the value to a different name:";
         memcpy(conflicting_entry, prepared[i].conflict, strlen(prepared[i].conflict) + 1);
         path = conflicting_entry;
+      }
+      if (prepared[i].missing) {
+        snprintf(missing, sizeof(missing), "%s", prepared[i].missing);
       }
       goto failed;
     }
@@ -2178,7 +2203,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       close_handle(&armed);
       launch_error(shell, stages, stage_count, i,
           status != CALL_OK ? "shell: wait" : "shell: close",
-          stages[i].arguments[0], status != CALL_OK ? status : CALL_BAD_HANDLE);
+          stages[i].arguments[0], "", status != CALL_OK ? status : CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
   }
@@ -2284,7 +2309,7 @@ failed:
   free(requests);
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
-      operation, path, status);
+      operation, path, missing, status);
   set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
   if (!closed_sources || cleanup_failure || status == CALL_OUTCOME_UNKNOWN) {
     return COMMAND_FATAL;

@@ -224,7 +224,7 @@ static enum call_status prepare_context(struct context_grants *context,
 
 static enum call_status prepare_resources(struct bundle_launch *prepared,
     const struct bundle_grant_request *requests, size_t count,
-    const struct bundle_authority *authority, size_t authority_count)
+    const struct bundle_authority *authority, size_t authority_count, const char **missing)
 {
   for (size_t i = 0; i < count; ++i) {
     if (has_entry(prepared, requests[i].name) ||
@@ -250,6 +250,7 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     if (source == HANDLE_INVALID) {
       if (requests[i].required) {
+        *missing = requests[i].name;
         return CALL_DENIED;
       }
       continue;
@@ -274,6 +275,7 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     if ((requests[i].rights & info.rights) != requests[i].rights ||
         (transport & info.transport) != transport) {
       if (requests[i].required) {
+        *missing = requests[i].name;
         return CALL_DENIED;
       }
       continue;
@@ -317,13 +319,16 @@ static bool has_selected(const struct bundle_launch *prepared,
 
 static enum call_status prepare_job_work(struct bundle_launch *prepared,
     const struct bundle_grant_request *requests, size_t count,
-    handle_t provisioner, struct bundle_jobs *jobs)
+    handle_t provisioner, struct bundle_jobs *jobs, const char **missing)
 {
-  bool declared = false, required = false;
+  bool declared = false;
+  const char *required = NULL;
   for (size_t i = 0; i < count; ++i) {
     if (!strcmp(requests[i].resource, "job_work")) {
       declared = true;
-      required |= requests[i].required;
+      if (requests[i].required && !required) {
+        required = requests[i].name;
+      }
     }
   }
   if (!declared) {
@@ -335,6 +340,7 @@ static enum call_status prepare_job_work(struct bundle_launch *prepared,
       has_selected(prepared, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE, NULL) &&
       has_selected(prepared, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH, NULL);
   if (!usable) {
+    *missing = required;
     return required ? CALL_DENIED : CALL_OK;
   }
   struct bundle_job_context *context = calloc(1, sizeof(*context));
@@ -365,8 +371,13 @@ static enum call_status prepare_job_work(struct bundle_launch *prepared,
 static enum call_status prepare_bundle(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
     size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
-    struct bundle_launch **result)
+    struct bundle_launch **result, const char **missing)
 {
+  const char *unused;
+  if (!missing) {
+    missing = &unused;
+  }
+  *missing = NULL;
   if (!result) {
     return CALL_BAD_REQUEST;
   }
@@ -426,10 +437,11 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   };
   enum call_status status = prepare_context(&context, source, bundle_entries, bundle_count);
   if (status == CALL_OK) {
-    status = prepare_resources(prepared, resources, resource_count, authority, authority_count);
+    status = prepare_resources(prepared, resources, resource_count, authority, authority_count,
+        missing);
   }
   if (status == CALL_OK) {
-    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs);
+    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs, missing);
   }
   for (size_t i = 0; status == CALL_OK && i < bundle_count; ++i) {
     if (has_entry(prepared, bundle_entries[i].name)) {
@@ -458,15 +470,16 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
     size_t authority_count, struct bundle_launch **result)
 {
   return prepare_bundle(program, source, authority, authority_count,
-      HANDLE_INVALID, NULL, result);
+      HANDLE_INVALID, NULL, result, NULL);
 }
 
 enum call_status bundle_launch_prepare_jobs(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
     size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
-    struct bundle_launch **result)
+    struct bundle_launch **result, const char **missing)
 {
-  return prepare_bundle(program, source, authority, authority_count, provisioner, jobs, result);
+  return prepare_bundle(program, source, authority, authority_count, provisioner, jobs, result,
+      missing);
 }
 
 void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status status,
