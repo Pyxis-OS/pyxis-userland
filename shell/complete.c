@@ -127,7 +127,8 @@ static bool complete_command(struct shell *shell, const struct completion_word *
     }
   }
   ok = ok && add_programs(shell, "bin://", prefix, prefix_length, &names) &&
-      add_programs(shell, "boot://", prefix, prefix_length, &names);
+      add_programs(shell, "boot://", prefix, prefix_length, &names) &&
+      add_programs(shell, "home://bin", prefix, prefix_length, &names);
 
   size_t unique = 0;
   if (ok) {

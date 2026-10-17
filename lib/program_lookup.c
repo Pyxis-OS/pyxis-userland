@@ -35,36 +35,53 @@ static enum call_status open_catalog(const struct path_context *context,
   return status;
 }
 
+static void candidate(char *path, const char *root, const char *name, size_t length,
+    const char *ending)
+{
+  size_t root_length = strlen(root);
+  memcpy(path, root, root_length);
+  memcpy(path + root_length, name, length);
+  memcpy(path + root_length + length, ending, 5);
+}
+
+/* User programs come last: on installed systems boot:// holds system programs
+ * such as ls and cp, not only a rescue fallback, so home://bin must not shadow
+ * them. A missing home root or bin directory is an absent candidate. */
 static enum call_status open_name(const struct path_context *context,
-    const char *name, bool rescue, struct path_workspace *workspace, handle_t *image,
+    const char *name, bool bare, struct path_workspace *workspace, handle_t *image,
     struct bundle_program **bundle)
 {
   size_t length = strlen(name);
-  if (length > SIZE_MAX - sizeof("boot://.pxe")) {
+  if (length > SIZE_MAX - PROGRAM_LOOKUP_EXTRA) {
     return CALL_LIMIT;
   }
-  char *path = malloc(length + sizeof("boot://.pxe"));
+  char *path = malloc(length + PROGRAM_LOOKUP_EXTRA);
   if (!path) {
     return CALL_NO_MEMORY;
   }
-  memcpy(path, "bin://", 6);
-  memcpy(path + 6, name, length);
-  memcpy(path + 6 + length, ".pxe", 5);
+  candidate(path, "bin://", name, length, ".pxe");
   enum call_status status = path_resolve(context, path, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, workspace, image);
   if (status == CALL_NOT_FOUND) {
-    memcpy(path + 6 + length, ".pxb", 5);
+    candidate(path, "bin://", name, length, ".pxb");
     status = open_bundle(context, path, image, bundle);
   }
   if (status == CALL_NOT_FOUND) {
     status = open_catalog(context, name, image, bundle);
   }
-  if (status == CALL_NOT_FOUND && rescue) {
-    memcpy(path, "boot://", 7);
-    memcpy(path + 7, name, length);
-    memcpy(path + 7 + length, ".pxe", 5);
+  if (status == CALL_NOT_FOUND && bare) {
+    candidate(path, "boot://", name, length, ".pxe");
     status = path_resolve(context, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
         workspace, image);
+  }
+  if (status == CALL_NOT_FOUND && bare) {
+    candidate(path, "home://bin/", name, length, ".pxe");
+    status = path_resolve(context, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        workspace, image);
+  }
+  if (status == CALL_NOT_FOUND && bare) {
+    candidate(path, "home://bin/", name, length, ".pxb");
+    status = open_bundle(context, path, image, bundle);
   }
   free(path);
   return status;

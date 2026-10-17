@@ -102,10 +102,10 @@ enum call_status shell_open_image(struct shell *shell, const char *command, hand
   *image = HANDLE_INVALID;
   *bundle = NULL;
   size_t length = strlen(command);
-  if (length > SIZE_MAX - sizeof("boot://.pxe")) {
+  if (length > SIZE_MAX - PROGRAM_LOOKUP_EXTRA) {
     return CALL_LIMIT;
   }
-  enum call_status status = prepare_workspace(shell, length + sizeof("boot://.pxe") - 1);
+  enum call_status status = prepare_workspace(shell, length + PROGRAM_LOOKUP_EXTRA - 1);
   if (status == CALL_OK) {
     status = prepare_open_workspace(shell, command);
   }
