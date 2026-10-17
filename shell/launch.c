@@ -58,7 +58,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { CHILD_OUTPUT, CHILD_MEMORY, CHILD_ROOT };
+enum { CHILD_MEMORY, CHILD_ROOT };
 
 struct prepared_stage {
   handle_t image;
@@ -720,7 +720,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
   size_t retention_factory_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
   size_t retention_account_index = retention_factory_index + (has_retention_factory ? 1 : 0);
-  size_t grant_count = retention_account_index + (has_retention_account ? 1 : 0);
+  /* A script or -c shell started without the console passes none on. */
+  bool has_output = shell->terminal.output != HANDLE_INVALID;
+  size_t output_index = retention_account_index + (has_retention_account ? 1 : 0);
+  size_t grant_count = output_index + (has_output ? 1 : 0);
   size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
@@ -742,7 +745,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     grants[input_index] = (struct launch_grant){shell->terminal.input, input_rights, 0};
   }
-  grants[CHILD_OUTPUT] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
+  if (has_output) {
+    grants[output_index] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
+  }
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
   for (size_t i = 0; i < root_count; ++i) {
     grants[CHILD_ROOT + i] = (struct launch_grant){selected_roots[i].handle, 0, 0};
@@ -918,9 +923,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     };
   }
   struct launch_environment_entry *resources = prepared->resources;
-  resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", CHILD_OUTPUT);
-  resources[1] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
-  size_t resource_count = 2;
+  resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
+  size_t resource_count = 1;
+  if (has_output) {
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", output_index);
+  }
   if (has_job_provisioner) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", job_provisioner_index);
   }
@@ -2228,7 +2235,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     shell_directory_error(shell, "shell: close", "Ctrl+C arming", CALL_BAD_HANDLE);
     return COMMAND_FATAL;
   }
-  status = scope && scope->capture ? CALL_OK : term_fresh_line(&shell->terminal);
+  /* Without the console, output went to the shell's own standard streams. */
+  status = (scope && scope->capture) || shell->terminal.output == HANDLE_INVALID ? CALL_OK :
+      term_fresh_line(&shell->terminal);
   if (status != CALL_OK) {
     shell_directory_error(shell, "shell", "terminal", status);
     return COMMAND_FATAL;

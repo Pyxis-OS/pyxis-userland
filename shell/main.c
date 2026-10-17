@@ -6,13 +6,13 @@
 #include <abi/clock.h>
 #include <abi/memory.h>
 #include <abi/pipe.h>
-#include <abi/retention.h>
 #include "../common/directory.h"
 #include "../common/session_wait.h"
 #include "../common/pane_cwd.h"
 #include <startup.h>
 #include <handle.h>
 #include <terminal.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,6 +94,36 @@ static bool report_completion(struct shell *shell, handle_t events,
   return true;
 }
 
+/* The exit status of a -c line: a failed foreground command's own nonzero
+ * status, failure for anything else that stopped the line, otherwise success
+ * (exit takes no status). */
+static int run_command_line(struct shell *shell, const char *source, char *line)
+{
+  size_t length = strlen(source);
+  if (length > SHELL_SCRIPT_LINE_MAX) {
+    shell_error(shell, "shell: Line limit reached; command not executed\n");
+    return EXIT_FAILURE;
+  }
+  if (strpbrk(source, "\r\n")) {
+    shell_error(shell, "shell: -c takes a single line\n");
+    return EXIT_FAILURE;
+  }
+  memcpy(line, source, length + 1);
+  struct shell_outcome outcome;
+  enum command_result result = shell_command(shell, line, &outcome);
+  if (result == COMMAND_EXIT) {
+    return shell->exit_status;
+  }
+  if (result == COMMAND_OK) {
+    return EXIT_SUCCESS;
+  }
+  if (result == COMMAND_FAILED && outcome.kind == TERMINAL_COMPLETION_EXITED &&
+      outcome.status > 0 && outcome.status <= INT_MAX) {
+    return (int)outcome.status;
+  }
+  return EXIT_FAILURE;
+}
+
 int main(int argc, char **argv)
 {
   handle_t script = bootstrap_capability("script");
@@ -101,25 +131,30 @@ int main(int argc, char **argv)
     fputs("shell: Missing script diagnostic name\n", stderr);
     return EXIT_FAILURE;
   }
-  bool option = argc >= 2 &&
-      (!strcmp(argv[1], "--no-echo") || !strcmp(argv[1], "--remote-prompt"));
+  bool option = argc >= 2 && (!strcmp(argv[1], "--no-echo") ||
+      !strcmp(argv[1], "--remote-prompt") || !strcmp(argv[1], "-c"));
   bool quiet_input = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--no-echo");
   bool remote_prompt = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-prompt");
+  bool command_line = script == HANDLE_INVALID && argc >= 3 && !strcmp(argv[1], "-c");
   bool positional = script == HANDLE_INVALID && argc >= 2 && !option;
-  if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt && !positional) {
-    fputs("usage: shell [script.pxs [argument...] | --no-echo | --remote-prompt]\n", stderr);
+  if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt && !positional &&
+      !command_line) {
+    fputs("usage: shell [script.pxs [argument...] | -c LINE [argument...] | --no-echo | "
+        "--remote-prompt]\n", stderr);
     return EXIT_FAILURE;
   }
+  /* A -c line runs as a one-line script: no prompt, script launch rules, and
+   * its arguments follow the line. */
+  bool interactive = script == HANDLE_INVALID && !positional && !command_line;
   /* Script shells never claim their launcher's interactive completion channel. */
-  handle_t events = script == HANDLE_INVALID && !positional ?
-      bootstrap_capability("terminal_events") : HANDLE_INVALID;
+  handle_t events = interactive ? bootstrap_capability("terminal_events") : HANDLE_INVALID;
   struct shell shell = {
-    .script_name = script != HANDLE_INVALID || positional ? argv[1] : NULL,
-    .positional_script = positional,
+    .script_name = command_line ? "-c" : interactive ? NULL : argv[1],
+    .positional_script = positional || command_line,
     .script_line = 1,
-    /* After the interpreter or command name and the script name. */
-    .arguments = script != HANDLE_INVALID || positional ? argv + 2 : NULL,
-    .argument_count = script != HANDLE_INVALID || positional ? (size_t)argc - 2 : 0,
+    /* After the interpreter or command name and the script name or line. */
+    .arguments = command_line ? argv + 3 : interactive ? NULL : argv + 2,
+    .argument_count = command_line ? (size_t)argc - 3 : interactive ? 0 : (size_t)argc - 2,
     .quiet_input = quiet_input,
     .remote_prompt = remote_prompt,
     .terminal = {bootstrap_capability("input"), bootstrap_capability("output")},
@@ -155,18 +190,15 @@ int main(int argc, char **argv)
   };
   /* Only a trusted launcher supplies it; without it this shell offers no extras. */
   shell.interpreter_root = bootstrap_capability("interpreter_root");
-  if (positional) {
+  if (shell.positional_script) {
     struct {
       handle_t handle;
       uint64_t protocol, rights;
     } required[] = {
-      {shell.terminal.input, PROTOCOL_CONSOLE, CONSOLE_RIGHT_READ},
-      {shell.terminal.output, PROTOCOL_CONSOLE, CONSOLE_RIGHT_WRITE},
       {shell.memory, PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
       {shell.clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP},
       {shell.launcher, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
       {shell.pipe, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE},
-      {shell.retention_account, PROTOCOL_RETENTION_ACCOUNT, RETENTION_RIGHT_CAPTURE},
     };
     for (size_t i = 0; i < sizeof(required) / sizeof(*required); ++i) {
       struct handle_info info;
@@ -178,8 +210,10 @@ int main(int argc, char **argv)
       }
     }
   }
-  if (shell.terminal.input == HANDLE_INVALID || shell.terminal.output == HANDLE_INVALID ||
-      shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
+  /* Only an interactive shell needs the console; scripts and -c lines use the
+   * standard streams they were given. */
+  if ((interactive && (shell.terminal.input == HANDLE_INVALID ||
+      shell.terminal.output == HANDLE_INVALID)) || shell.launcher == HANDLE_INVALID || shell.memory == HANDLE_INVALID ||
       shell.boot == HANDLE_INVALID || shell.tmp == HANDLE_INVALID) {
     shell_error(&shell, "shell: Missing startup resource or filesystem root\n");
     return EXIT_FAILURE;
@@ -201,8 +235,7 @@ int main(int argc, char **argv)
   int result = EXIT_FAILURE;
   struct shell_cwd_service cwd_service = {0};
   bool own_script = false;
-  char *line = malloc(script != HANDLE_INVALID || positional ?
-      SHELL_SCRIPT_LINE_MAX + 1 : SHELL_LINE_CAPACITY);
+  char *line = malloc(interactive ? SHELL_LINE_CAPACITY : SHELL_SCRIPT_LINE_MAX + 1);
   if (!line) {
     shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
@@ -237,6 +270,17 @@ int main(int argc, char **argv)
       shell_directory_error(&shell, "shell", argv[1], status != CALL_OK ? status : closed);
       goto done;
     }
+  }
+  if (command_line) {
+    if (shell_script_group_open(&shell) != CALL_OK) {
+      goto done;
+    }
+    shell.child_launcher = shell.script_group.launcher;
+    result = run_command_line(&shell, argv[2], line);
+    if (!shell_script_group_close(&shell)) {
+      result = EXIT_FAILURE;
+    }
+    goto done;
   }
   if (script != HANDLE_INVALID) {
     if (shell_script_group_open(&shell) != CALL_OK) {

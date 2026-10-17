@@ -9,10 +9,10 @@
     {"name": "clock", "resource": "clock", "rights": ["read", "sleep"], "required": true},
     {"name": "threads", "resource": "threads", "rights": ["manage"], "required": false},
     {"name": "random", "resource": "random", "rights": ["read"], "required": false},
-    {"name": "input", "resource": "input", "rights": ["read"], "required": true},
-    {"name": "output", "resource": "output", "rights": ["write"], "required": true},
+    {"name": "input", "resource": "input", "rights": ["read"], "required": false},
+    {"name": "output", "resource": "output", "rights": ["write"], "required": false},
     {"name": "pipe", "resource": "pipe", "rights": ["create"], "required": true},
     {"name": "launcher", "resource": "launcher", "rights": ["launch"], "required": true},
-    {"name": "retention_account", "resource": "retention_account", "rights": ["retain"], "required": true}
+    {"name": "retention_account", "resource": "retention_account", "rights": ["retain"], "required": false}
   ]
 }
