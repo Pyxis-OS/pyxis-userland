@@ -21,10 +21,11 @@ enum { mtx_plain = 0, mtx_recursive = 1, mtx_timed = 2 };
 extern "C" {
 #endif
 
-/* Selected C11 profile: joinable siblings, synchronization and runtime keys.
- * No detach or explicit scheduler-yield operation is advertised. */
+/* Selected C11 profile: siblings that are joined or detached, synchronization
+ * and runtime keys. No explicit scheduler-yield operation is advertised. */
 int thrd_create(thrd_t *thread, thrd_start_t start, void *argument);
 int thrd_join(thrd_t thread, int *result);
+int thrd_detach(thrd_t thread);
 thrd_t thrd_current(void);
 int thrd_equal(thrd_t left, thrd_t right);
 __attribute__((noreturn)) void thrd_exit(int result);

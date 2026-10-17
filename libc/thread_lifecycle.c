@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <thread.h>
 #include <threads.h>
+#include <wait.h>
 #include "errors.h"
 #include "thread_platform.h"
 #include "thread_private.h"
@@ -31,6 +32,7 @@ struct lifecycle_record {
   uint32_t generation;
   enum lifecycle_state state;
   bool joining;
+  bool detached;
   uint32_t published;
   enum entry_kind kind;
   union {
@@ -47,6 +49,9 @@ static struct lifecycle_record records[LIBC_THREAD_LIMIT];
 static struct libc_lock registry_lock;
 static handle_t service, clock_read, clock_sleep, memory;
 static bool creations_closed;
+/* Records marked detached and not yet collected; lets the collection scan skip
+ * the common case of none. Guarded by registry_lock. */
+static size_t detached_live;
 
 _Static_assert(LIBC_THREAD_LIMIT > 0 && LIBC_THREAD_LIMIT <= UINT32_MAX,
     "thread registry identity capacity");
@@ -134,11 +139,16 @@ void libc_thread_once_pop(struct libc_once_frame *frame)
   record->once_frames = frame->previous;
 }
 
+static void collect_detached(void);
+
 bool libc_thread_shutdown_ready(void)
 {
   /* Orderly finalizers require the initial thread and collected workers. A
    * forced process exit cannot wait for a stopped lock owner to run callbacks. */
   bool ready = libc_thread_self() == identity(&records[0]);
+  if (ready) {
+    collect_detached();
+  }
   libc_lock_acquire(&registry_lock);
   for (size_t index = 1; ready && index < LIBC_THREAD_LIMIT; index++) {
     ready = records[index].state == THREAD_FREE;
@@ -209,8 +219,51 @@ static int release_record(struct lifecycle_record *record)
    * not reuse an identity or retry an operation with an unknown effect. */
   record->state = error ? THREAD_QUARANTINED : THREAD_FREE;
   record->joining = false;
+  if (record->detached) {
+    record->detached = false;
+    --detached_live;
+  }
   libc_lock_release(&registry_lock);
   return error;
+}
+
+/* A detached thread has no joiner, so its record, stack and observer are
+ * collected here instead, once its native completion is ready. The exiting
+ * thread never frees its own stack; the next create, join or orderly exit does.
+ * Called without registry_lock. The joining flag is the exclusive claim, as for
+ * join, so a record is collected at most once. */
+static void collect_detached(void)
+{
+  libc_lock_acquire(&registry_lock);
+  bool any = detached_live != 0;
+  libc_lock_release(&registry_lock);
+  if (!any) {
+    return;
+  }
+  for (size_t index = 1; index < LIBC_THREAD_LIMIT; index++) {
+    struct lifecycle_record *record = &records[index];
+    libc_lock_acquire(&registry_lock);
+    bool claimed = record->state == THREAD_ACTIVE && record->detached && !record->joining;
+    handle_t completion = claimed ? record->completion : HANDLE_INVALID;
+    if (claimed) {
+      record->joining = true;
+    }
+    libc_lock_release(&registry_lock);
+    if (!claimed) {
+      continue;
+    }
+    struct wait_interest interest = {.handle = completion, .events = WAIT_COMPLETE};
+    uint64_t events = 0;
+    struct thread_result result;
+    if (wait_many(&interest, 1, 0, &events) == CALL_OK && (events & WAIT_COMPLETE) &&
+        thread_wait(completion, &result) == CALL_OK) {
+      release_record(record);
+      continue;
+    }
+    libc_lock_acquire(&registry_lock);
+    record->joining = false;
+    libc_lock_release(&registry_lock);
+  }
 }
 
 static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind kind,
@@ -224,6 +277,7 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
   if (service == HANDLE_INVALID || memory == HANDLE_INVALID || !libc_thread_self()) {
     return EPERM;
   }
+  collect_detached();
   struct lifecycle_record *record = reserve_record();
   if (!record) {
     return EAGAIN;
@@ -298,6 +352,7 @@ static int join_record(uint64_t value, enum entry_kind kind, uint64_t *result)
   if (value == libc_thread_self()) {
     return EDEADLK;
   }
+  collect_detached();
   libc_lock_acquire(&registry_lock);
   struct lifecycle_record *record = find_record(value);
   if (!record) {
@@ -305,7 +360,7 @@ static int join_record(uint64_t value, enum entry_kind kind, uint64_t *result)
     return ESRCH;
   }
   if (record == &records[0] || record->state != THREAD_ACTIVE ||
-      record->kind != kind || record->joining) {
+      record->kind != kind || record->joining || record->detached) {
     libc_lock_release(&registry_lock);
     return EINVAL;
   }
@@ -330,6 +385,27 @@ static int join_record(uint64_t value, enum entry_kind kind, uint64_t *result)
   if (result) {
     *result = exit_value;
   }
+  return 0;
+}
+
+/* A thread may detach itself. Its record stays ACTIVE until collected, so the
+ * identity is valid, and refused as a join target, until then. */
+static int detach_record(uint64_t value, enum entry_kind kind)
+{
+  libc_lock_acquire(&registry_lock);
+  struct lifecycle_record *record = find_record(value);
+  if (!record) {
+    libc_lock_release(&registry_lock);
+    return ESRCH;
+  }
+  if (record == &records[0] || record->state != THREAD_ACTIVE ||
+      record->kind != kind || record->joining || record->detached) {
+    libc_lock_release(&registry_lock);
+    return EINVAL;
+  }
+  record->detached = true;
+  ++detached_live;
+  libc_lock_release(&registry_lock);
   return 0;
 }
 
@@ -371,9 +447,6 @@ int pthread_attr_setdetachstate(pthread_attr_t *attributes, int state)
   if (!attributes || (state != PTHREAD_CREATE_JOINABLE && state != PTHREAD_CREATE_DETACHED)) {
     return EINVAL;
   }
-  if (state == PTHREAD_CREATE_DETACHED) {
-    return ENOTSUP;
-  }
   attributes->detach_state = state;
   return 0;
 }
@@ -390,11 +463,13 @@ int pthread_attr_getdetachstate(const pthread_attr_t *attributes, int *state)
 int pthread_create(pthread_t *thread, const pthread_attr_t *attributes,
     void *(*start)(void *), void *argument)
 {
-  if (attributes && attributes->detach_state != PTHREAD_CREATE_JOINABLE) {
-    return attributes->detach_state == PTHREAD_CREATE_DETACHED ? ENOTSUP : EINVAL;
-  }
-  return create_record(thread, attributes ? attributes->stack_size :
+  int error = create_record(thread, attributes ? attributes->stack_size :
       LIBC_THREAD_STACK_DEFAULT, ENTRY_PTHREAD, start, NULL, argument);
+  if (!error && attributes && attributes->detach_state == PTHREAD_CREATE_DETACHED) {
+    /* The child may already have finished; its record outlives that. */
+    error = detach_record(*thread, ENTRY_PTHREAD);
+  }
+  return error;
 }
 
 int pthread_join(pthread_t thread, void **result)
@@ -409,8 +484,7 @@ int pthread_join(pthread_t thread, void **result)
 
 int pthread_detach(pthread_t thread)
 {
-  (void)thread;
-  return ENOTSUP;
+  return detach_record(thread, ENTRY_PTHREAD);
 }
 
 pthread_t pthread_self(void)
@@ -472,6 +546,11 @@ int thrd_join(thrd_t thread, int *result)
     *result = (int)(int64_t)value;
   }
   return c11_error(error);
+}
+
+int thrd_detach(thrd_t thread)
+{
+  return c11_error(detach_record(thread, ENTRY_C11));
 }
 
 thrd_t thrd_current(void)
