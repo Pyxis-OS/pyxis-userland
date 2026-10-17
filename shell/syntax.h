@@ -5,7 +5,12 @@
 #include <environment.h>
 #include "capture.h"
 
-enum shell_piece_kind { SHELL_LITERAL, SHELL_VARIABLE, SHELL_SUBSTITUTION };
+/* Script arguments: $N or ${N} is one argument as TEXT, $# their count, and
+ * "$@", only as an entire quoted word, every argument as a separate word. */
+enum shell_piece_kind {
+  SHELL_LITERAL, SHELL_VARIABLE, SHELL_SUBSTITUTION,
+  SHELL_POSITIONAL, SHELL_ARGUMENT_COUNT, SHELL_ALL_ARGUMENTS,
+};
 
 struct shell_piece {
   enum shell_piece_kind kind;

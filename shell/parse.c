@@ -25,6 +25,26 @@ static bool name_character(char character)
       character == '+' || character == '-';
 }
 
+static bool word_end(const char *read)
+{
+  return !*read || separator(*read) || *read == '<' || *read == '>' ||
+      *read == '&' || *read == '|' || *read == ';' || *read == ')' ||
+      (*read == '=' && read[1] == '>');
+}
+
+static bool positional_name(const char *start, const char *end)
+{
+  if (end == start || *start == '0') {
+    return false;
+  }
+  for (const char *read = start; read < end; ++read) {
+    if (!digit(*read)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static char *copy_text(const char *text, size_t length)
 {
   char *copy = malloc(length + 1);
@@ -152,11 +172,10 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
     }
     read = name_end + 1;
   }
+  const char *start_of_word = read;
   char quote = 0;
   const char *error = NULL;
-  while (*read && (quote || (!separator(*read) && *read != '<' && *read != '>' &&
-      *read != '&' && *read != '|' && *read != ';' && *read != ')' &&
-      !(*read == '=' && read[1] == '>')))) {
+  while (*read && (quote || !word_end(read))) {
     char character = *read++;
     if (character == '\\' && quote != '\'') {
       word->plain = false;
@@ -196,7 +215,11 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
             (size_t)(read - start) > ENVIRONMENT_NAME_MAX) {
           return "Invalid braced environment name";
         }
-        error = add_piece(word, SHELL_VARIABLE, start, read - start);
+        if (digit(*start) && !positional_name(start, read)) {
+          return "Positional arguments start at ${1}";
+        }
+        error = add_piece(word, digit(*start) ? SHELL_POSITIONAL : SHELL_VARIABLE,
+            start, read - start);
         ++read;
       } else if (letter(*read)) {
         const char *start = read++;
@@ -208,7 +231,27 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
         }
         error = add_piece(word, SHELL_VARIABLE, start, read - start);
       } else if (digit(*read)) {
-        return "Positional expansion is unsupported";
+        if (*read == '0') {
+          return "$0 is unsupported; positional arguments start at $1";
+        }
+        if (digit(read[1])) {
+          return "Positional arguments after $9 need braces, as in ${10}";
+        }
+        error = add_piece(word, SHELL_POSITIONAL, read++, 1);
+      } else if (*read == '#') {
+        ++read;
+        error = add_piece(word, SHELL_ARGUMENT_COUNT, "#", 1);
+      } else if (*read == '@') {
+        /* Only "$@" itself: the opening quote begins the word and the closing
+         * quote ends it, so no other text can join the separate words. */
+        if (quote != '"' || word->assignment_name || word->count ||
+            read - 2 != start_of_word || read[1] != '"' || !word_end(read + 2)) {
+          return "\"$@\" must be an entire quoted word";
+        }
+        ++read;
+        error = add_piece(word, SHELL_ALL_ARGUMENTS, "@", 1);
+      } else if (*read == '*') {
+        return "$* is unsupported; use \"$@\"";
       } else {
         error = add_piece(word, SHELL_LITERAL, "$", 1);
       }

@@ -101,11 +101,13 @@ int main(int argc, char **argv)
     fputs("shell: Missing script diagnostic name\n", stderr);
     return EXIT_FAILURE;
   }
+  bool option = argc >= 2 &&
+      (!strcmp(argv[1], "--no-echo") || !strcmp(argv[1], "--remote-prompt"));
   bool quiet_input = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--no-echo");
   bool remote_prompt = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-prompt");
-  bool positional = script == HANDLE_INVALID && argc == 2 && !quiet_input && !remote_prompt;
+  bool positional = script == HANDLE_INVALID && argc >= 2 && !option;
   if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt && !positional) {
-    fputs("usage: shell [script.pxs | --no-echo | --remote-prompt]\n", stderr);
+    fputs("usage: shell [script.pxs [argument...] | --no-echo | --remote-prompt]\n", stderr);
     return EXIT_FAILURE;
   }
   /* Script shells never claim their launcher's interactive completion channel. */
@@ -115,6 +117,9 @@ int main(int argc, char **argv)
     .script_name = script != HANDLE_INVALID || positional ? argv[1] : NULL,
     .positional_script = positional,
     .script_line = 1,
+    /* After the interpreter or command name and the script name. */
+    .arguments = script != HANDLE_INVALID || positional ? argv + 2 : NULL,
+    .argument_count = script != HANDLE_INVALID || positional ? (size_t)argc - 2 : 0,
     .quiet_input = quiet_input,
     .remote_prompt = remote_prompt,
     .terminal = {bootstrap_capability("input"), bootstrap_capability("output")},

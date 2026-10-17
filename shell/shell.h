@@ -92,6 +92,9 @@ struct shell {
   size_t initial_entry_count;
   const char *script_name; /* Borrowed diagnostic name, NULL for interactive input. */
   size_t script_line;
+  /* Script arguments borrowed from argv, read only; none interactively. */
+  char **arguments;
+  size_t argument_count;
   /* Root-shell options only; never forwarded to children. */
   bool quiet_input;
   bool remote_prompt;

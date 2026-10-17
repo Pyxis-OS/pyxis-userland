@@ -1,5 +1,6 @@
 #include "syntax.h"
 #include <handle.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -93,6 +94,26 @@ static const char *append_text(char **text, size_t *length,
   return NULL;
 }
 
+/* ${N} digits were validated by the parser; an index beyond the arguments,
+ * including one too large to represent, is missing. */
+static const char *positional_argument(const struct shell *shell, const char *digits,
+    const char **argument)
+{
+  size_t index = 0;
+  for (const char *read = digits; *read; ++read) {
+    size_t digit = (size_t)(*read - '0');
+    if (index > (SIZE_MAX - digit) / 10) {
+      return "Missing positional argument";
+    }
+    index = index * 10 + digit;
+  }
+  if (index > shell->argument_count) {
+    return "Missing positional argument";
+  }
+  *argument = shell->arguments[index - 1];
+  return NULL;
+}
+
 static const char *expand_word(struct shell *shell, handle_t snapshot,
     const struct shell_word *word, struct environment_value *value,
     struct shell_capture_result *capture, char **argument, enum call_status *status)
@@ -103,12 +124,28 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
   const char *error = NULL;
   for (size_t i = 0; i < word->count; ++i) {
     const struct shell_piece *piece = &word->pieces[i];
-    if (piece->kind == SHELL_LITERAL) {
-      if (capability && *piece->text) {
+    if (piece->kind == SHELL_LITERAL || piece->kind == SHELL_POSITIONAL ||
+        piece->kind == SHELL_ARGUMENT_COUNT) {
+      const char *addition = piece->text;
+      char count[24];
+      if (piece->kind == SHELL_POSITIONAL) {
+        error = positional_argument(shell, piece->text, &addition);
+      } else if (piece->kind == SHELL_ARGUMENT_COUNT) {
+        snprintf(count, sizeof(count), "%zu", shell->argument_count);
+        addition = count;
+      }
+      if (!error && capability && *addition) {
         error = "A CAP expansion must occupy the entire word";
+      }
+      if (!error) {
+        error = append_text(&text, &length, addition, strlen(addition));
+      }
+      if (error) {
         break;
       }
-      error = append_text(&text, &length, piece->text, strlen(piece->text));
+    } else if (piece->kind == SHELL_ALL_ARGUMENTS) {
+      error = "\"$@\" can only supply command arguments";
+      break;
     } else {
       struct environment_value selected = {0};
       if (piece->kind == SHELL_SUBSTITUTION) {
@@ -203,6 +240,29 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
   return error;
 }
 
+static bool all_arguments(const struct shell_word *word)
+{
+  return word->count == 1 && word->pieces[0].kind == SHELL_ALL_ARGUMENTS;
+}
+
+/* Each argument becomes its own TEXT word; arguments are never CAPs. */
+static const char *expand_all_arguments(const struct shell *shell,
+    struct environment_value *values, char **arguments)
+{
+  for (size_t i = 0; i < shell->argument_count; ++i) {
+    size_t length = strlen(shell->arguments[i]);
+    values[i] = (struct environment_value){.kind = ENVIRONMENT_TEXT,
+        .text = malloc(length + 1), .length = length};
+    arguments[i] = malloc(length + 1);
+    if (!values[i].text || !arguments[i]) {
+      return "Out of memory";
+    }
+    memcpy(values[i].text, shell->arguments[i], length + 1);
+    memcpy(arguments[i], shell->arguments[i], length + 1);
+  }
+  return NULL;
+}
+
 static const char *select_capability(struct environment_capture *capture,
     const struct environment_value *value)
 {
@@ -234,7 +294,14 @@ const char *shell_syntax_expand(struct shell *shell,
   bool needs_environment = false;
   for (size_t i = 0; i < syntax->stage_count; ++i) {
     const struct shell_syntax_stage *stage = &syntax->stages[i];
-    expansion->word_count += stage->count;
+    size_t stage_words = 0;
+    for (size_t j = 0; j < stage->count; ++j) {
+      stage_words += all_arguments(stage->words[j]) ? shell->argument_count : 1;
+    }
+    if (!stage_words) {
+      return "Command expanded to no words";
+    }
+    expansion->word_count += stage_words;
     redirections += stage->redirection_count;
     size_t total = stage->count + stage->redirection_count;
     for (size_t j = 0; j < total && !needs_environment; ++j) {
@@ -291,11 +358,24 @@ const char *shell_syntax_expand(struct shell *shell,
     const struct shell_syntax_stage *source = &syntax->stages[i];
     struct shell_stage *stage = &expansion->command.stages[i];
     stage->arguments = expansion->arguments + argument_index;
-    stage->count = source->count;
+    stage->count = 0;
     stage->operands = &expansion->selected[i];
     expansion->selected[i].generation = info.generation;
     for (size_t j = 0; j < source->count && !error; ++j) {
       const struct shell_word *word = source->words[j];
+      if (all_arguments(word)) {
+        error = expand_all_arguments(shell, &expansion->values[word_index],
+            &expansion->arguments[argument_index]);
+        for (size_t k = 0; k < shell->argument_count; ++k) {
+          expansion->words[word_index + k] = (struct shell_expanded_word){
+              .value = &expansion->values[word_index + k]};
+        }
+        word_index += shell->argument_count;
+        argument_index += shell->argument_count;
+        stage->count += shell->argument_count;
+        continue;
+      }
+      ++stage->count;
       struct environment_value *value = &expansion->values[word_index];
       struct shell_capture_result *capture = &expansion->captures[word_index];
       bool substitution = word->count == 1 &&
