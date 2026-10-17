@@ -8,6 +8,7 @@ return {
     mouse_scroll_direction = "natural",
     touchpad_scroll_direction = "natural",
     touchpad_speed = 0,
+    num_lock = false,
     diagnostics = false,
   },
   volumes = {

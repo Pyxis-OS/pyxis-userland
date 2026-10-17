@@ -3,7 +3,7 @@
 
 enum call_status input_policy_install_once(handle_t input_policy,
     enum input_scroll_direction mouse, enum input_scroll_direction touchpad,
-    int32_t touchpad_speed)
+    int32_t touchpad_speed, bool num_lock)
 {
   if ((mouse != INPUT_SCROLL_NATURAL && mouse != INPUT_SCROLL_TRADITIONAL) ||
       (touchpad != INPUT_SCROLL_NATURAL && touchpad != INPUT_SCROLL_TRADITIONAL) ||
@@ -15,7 +15,7 @@ enum call_status input_policy_install_once(handle_t input_policy,
     .mouse_scroll_direction = mouse,
     .touchpad_scroll_direction = touchpad,
     .touchpad_speed = touchpad_speed,
-    .reserved0 = 0,
+    .num_lock = num_lock,
   };
   struct syscall_result result = syscall_call(input_policy, &request, sizeof(request), NULL, 0);
   if (result.status >= CALL_STATUS_COUNT) {

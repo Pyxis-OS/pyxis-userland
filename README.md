@@ -84,14 +84,16 @@ The archive's `input` table selects `mouse_scroll_direction` and
 `input.touchpad_speed` is a finite number from -1 to 1, defaulting to 0. It is
 rounded to the nearest normalized permille, with halfway values rounded away
 from zero. An applied installed `system://config/boot.lua` override may set only
-`touchpad_speed` in its `input` table; an omitted value keeps the archive default,
-and an invalid or ignored override cannot change it.
+`touchpad_speed` and `num_lock` in its `input` table; an omitted value keeps the
+archive default, and an invalid or ignored override cannot change it.
+`input.num_lock` is a boolean, the initial Num Lock state (default false).
 Installed boots read `system://config/machine/input/mouse/scroll-direction` and
 `system://config/machine/input/touchpad/scroll-direction`, accepting the exact
 lowercase value with one trailing LF or none. Missing, unreadable or invalid
 keys keep their respective archive defaults. `input.diagnostics = true` in the
 archive enables fallback reports; it defaults false. Stock boot init installs
-both directions and touchpad speed once before starting spaces, including rescue.
+both directions, touchpad speed and initial Num Lock once before starting spaces,
+including rescue.
 The `input_policy` grant stays in boot init. `system://config/boot.lua` cannot
 override scroll directions, diagnostics or hostname.
 Store changes apply next boot; explicitly sync

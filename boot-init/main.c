@@ -537,6 +537,8 @@ static bool set_input_policy(const struct authority *authority, const struct boo
   bool touchpad = defaults->touchpad_scroll_natural;
   int32_t touchpad_speed = override && override->touchpad_speed_present ?
       override->touchpad_speed : defaults->touchpad_speed;
+  bool num_lock = override && override->num_lock_present ?
+      override->num_lock : defaults->num_lock;
   if (installed) {
     struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
     const char *paths[] = {"system://" MACHINE_MOUSE_SCROLL_PATH,
@@ -554,7 +556,7 @@ static bool set_input_policy(const struct authority *authority, const struct boo
   }
   enum call_status status = input_policy_install_once(authority->input_policy,
       mouse ? INPUT_SCROLL_NATURAL : INPUT_SCROLL_TRADITIONAL,
-      touchpad ? INPUT_SCROLL_NATURAL : INPUT_SCROLL_TRADITIONAL, touchpad_speed);
+      touchpad ? INPUT_SCROLL_NATURAL : INPUT_SCROLL_TRADITIONAL, touchpad_speed, num_lock);
   if (status != CALL_OK) {
     fprintf(stderr, "boot-init: cannot install input policy (status %u); no spaces started\n", status);
     return false;

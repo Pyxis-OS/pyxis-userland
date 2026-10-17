@@ -613,13 +613,26 @@ static void read_touchpad_speed(lua_State *state, int input, struct boot_config 
   lua_pop(state, 1);
 }
 
+static void read_num_lock(lua_State *state, int input, struct boot_config *config)
+{
+  config_field(state, input, "num_lock");
+  if (!lua_isnil(state, -1)) {
+    if (lua_type(state, -1) != LUA_TBOOLEAN) {
+      luaL_error(state, "input.num_lock must be a boolean");
+    }
+    config->num_lock = lua_toboolean(state, -1);
+    config->num_lock_present = true;
+  }
+  lua_pop(state, 1);
+}
+
 static void read_input(lua_State *state, struct boot_config *config, bool archive)
 {
   config_field(state, 1, "input");
   if (!lua_isnil(state, -1)) {
     static const char *const archive_keys[] = {"mouse_scroll_direction", "touchpad_scroll_direction",
-        "diagnostics", "touchpad_speed"};
-    static const char *const override_keys[] = {"touchpad_speed"};
+        "diagnostics", "touchpad_speed", "num_lock"};
+    static const char *const override_keys[] = {"touchpad_speed", "num_lock"};
     if (archive) {
       config_keys(state, -1, archive_keys, sizeof(archive_keys) / sizeof(archive_keys[0]));
     } else {
@@ -627,6 +640,7 @@ static void read_input(lua_State *state, struct boot_config *config, bool archiv
     }
     int input = lua_absindex(state, -1);
     read_touchpad_speed(state, input, config);
+    read_num_lock(state, input, config);
     if (archive) {
       config->mouse_scroll_natural = read_scroll_direction(state, input, archive_keys[0]);
       config->touchpad_scroll_natural = read_scroll_direction(state, input, archive_keys[1]);
