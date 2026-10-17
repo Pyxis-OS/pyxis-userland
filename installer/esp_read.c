@@ -9,6 +9,10 @@
 #define ESP_FAT_MASK UINT32_C(0x0fffffff)
 #define ESP_FAT_EOC_MIN UINT32_C(0x0ffffff8)
 #define ESP_MEDIA 0xf8u
+#define ESP_MEDIA_REMOVABLE 0xf0u
+#define ESP_SECTOR_MIN_BYTES 512u
+#define ESP_SECTOR_MAX_BYTES 4096u
+#define ESP_BPB_RESERVED_BYTES 12u
 #define ESP_DIRECTORY 0x10u
 #define ESP_VOLUME_LABEL 0x08u
 #define ESP_INVALID_ATTRIBUTES 0xc0u
@@ -143,6 +147,36 @@ static bool fsinfo_valid(const uint8_t *bytes, uint32_t clusters)
       (next == UINT32_MAX || (next >= 2 && next - 2 < clusters));
 }
 
+static bool zero_bytes(const uint8_t *bytes, size_t length)
+{
+  for (size_t i = 0; i < length; ++i) {
+    if (bytes[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool power_of_two(uint32_t value)
+{
+  return value && !(value & (value - 1));
+}
+
+/* A self-consistent FAT boot sector of any FAT type. Its absence or damage
+ * permits the reviewed rebuild. Native admission reports a valid FAT12/FAT16
+ * volume as corrupt, so this recognizer must refuse it. */
+static bool plausible_fat(const uint8_t *boot, uint64_t partition_bytes)
+{
+  uint32_t sector_bytes = get16(boot + 11);
+  uint32_t sectors = get16(boot + 19) ? get16(boot + 19) : get32(boot + 32);
+  return get16(boot + 510) == ESP_BOOT_SIGNATURE && power_of_two(sector_bytes) &&
+      sector_bytes >= ESP_SECTOR_MIN_BYTES && sector_bytes <= ESP_SECTOR_MAX_BYTES &&
+      power_of_two(boot[13]) && get16(boot + 14) && boot[16] &&
+      (boot[21] == ESP_MEDIA_REMOVABLE || boot[21] >= ESP_MEDIA) &&
+      (get16(boot + 22) || get32(boot + 36)) && sectors &&
+      sectors <= partition_bytes / sector_bytes;
+}
+
 static bool read_metadata(struct esp_inspection *esp)
 {
   uint8_t boot[ESP_CLUSTER_BYTES], backup[ESP_CLUSTER_BYTES];
@@ -156,12 +190,27 @@ static bool read_metadata(struct esp_inspection *esp)
   esp->fat_offset = (uint64_t)reserved * sector_bytes;
   esp->fat_bytes = (uint64_t)fat_sectors * sector_bytes;
   esp->data_offset = esp->fat_offset + ESP_FAT_COUNT * esp->fat_bytes;
-  if (get16(boot + 510) != ESP_BOOT_SIGNATURE || get16(boot + 11) != sector_bytes ||
-      (uint64_t)boot[13] * sector_bytes != ESP_CLUSTER_BYTES || !reserved ||
-      boot[16] != ESP_FAT_COUNT || get16(boot + 17) || get16(boot + 19) ||
-      boot[21] != ESP_MEDIA || get16(boot + 22) || get16(boot + 40) || get16(boot + 42) ||
-      get32(boot + 28) != esp->layout->esp_start / sector_bytes ||
-      (uint64_t)sectors * sector_bytes != esp->layout->esp_bytes || !fat_sectors ||
+  if (!plausible_fat(boot, esp->layout->esp_bytes)) {
+    return rebuild(esp, "ESP lacks a valid FAT boot sector");
+  }
+  if (get16(boot + 17) || get16(boot + 19) || get16(boot + 22)) {
+    return refuse(esp, "ESP holds a FAT12/FAT16 filesystem; only FAT32 is supported "
+        "and a valid ESP is never formatted");
+  }
+  /* Mirrors the shared FAT engine's unsupported FAT32 features: native
+   * admission reports UNAVAILABLE for these, and they are never rebuilt. */
+  if (get16(boot + 11) != sector_bytes || boot[16] > ESP_FAT_COUNT || get16(boot + 40) ||
+      get16(boot + 42) || !zero_bytes(boot + 52, ESP_BPB_RESERVED_BYTES)) {
+    return refuse(esp, "ESP holds FAT32 with unsupported sector size or features; "
+        "a valid ESP is never formatted");
+  }
+  /* Other FAT32 outside this recognizer's profile may still be healthy. Native
+   * admission decides: clean keeps it; only native corruption permits rebuild. */
+  if (get16(boot + 11) != sector_bytes ||
+      (uint64_t)boot[13] * sector_bytes != ESP_CLUSTER_BYTES ||
+      boot[16] != ESP_FAT_COUNT || boot[21] != ESP_MEDIA || get16(boot + 40) ||
+      get16(boot + 42) || get32(boot + 28) != esp->layout->esp_start / sector_bytes ||
+      (uint64_t)sectors * sector_bytes != esp->layout->esp_bytes ||
       esp->data_offset >= esp->layout->esp_bytes || !fsinfo || !backup_sector ||
       fsinfo == backup_sector || (uint64_t)fsinfo + backup_sector >= reserved) {
     return rebuild(esp, "ESP has unsupported or damaged FAT32 geometry");

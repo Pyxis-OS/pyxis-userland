@@ -127,9 +127,10 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
 bool install_scan_pool_update(const struct install_disk *disk,
     const struct install_layout *layout, struct install_update *update);
 /* Damaged ESP contents can be rebuilt only after healthy GPT/pool admission.
- * Failed reads, allocation, unsupported extents and explicit foreign or invalid
- * disk bindings refuse recovery. Unreadable revision text remains unknown;
- * nonvalid results also supply a borrowed, static reason. */
+ * Failed reads, allocation, unsupported extents, a valid FAT12/FAT16 volume
+ * and explicit foreign or invalid disk bindings refuse recovery. Unreadable
+ * revision text remains unknown; nonvalid results also supply a borrowed,
+ * static reason. */
 enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     const struct install_layout *layout, char revision[64], const char **reason);
 /* Pure fixed-menu binding veto shared with raw inspection. Missing canonical

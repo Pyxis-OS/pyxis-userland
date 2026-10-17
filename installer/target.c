@@ -130,9 +130,10 @@ static bool selected_esp_recovery_failure(const struct install_target *target)
   for (size_t i = 0; i < target->review.esp_count; ++i) {
     const struct install_review_esp *esp = &target->review.esps[i];
     if (!memcmp(&esp->selection, &target->esp, sizeof(target->esp))) {
-      /* BUSY, capacity and authority errors never authorize initialization.
-       * The separate raw recognizer must also prove classic recovery below. */
-      return esp->admission_status == CALL_IO || esp->admission_status == CALL_UNAVAILABLE;
+      /* Only native corruption or I/O may authorize initialization. BUSY,
+       * capacity, authority and UNAVAILABLE (unsupported device or FAT
+       * features) never do. The raw recognizer must also prove damage below. */
+      return esp->admission_status == CALL_IO;
     }
   }
   return false;
