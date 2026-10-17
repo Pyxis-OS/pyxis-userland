@@ -75,6 +75,7 @@ static bool coexist_layout_valid(const struct install_plan_record *record,
 {
   const struct install_layout *layout = &record->layout;
   if (!record->portable || record->read_the_room || record->esp_rebuild ||
+      record->block_size != INSTALL_COEXIST_BLOCK_SIZE ||
       memcmp(record->existing_guid, layout->disk_guid, 16) ||
       !layout->esp_partition || layout->esp_partition > INSTALL_GPT_MAX_PARTITIONS ||
       !layout->pool_partition || layout->pool_partition > INSTALL_GPT_MAX_PARTITIONS ||

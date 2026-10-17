@@ -68,6 +68,12 @@ bool install_coexist_inspect(const struct install_disk *disk,
   if (!disk || !disk->info.id) {
     return false;
   }
+  if (disk->info.block_size != INSTALL_COEXIST_BLOCK_SIZE) {
+    if (reason) {
+      *reason = "coexistence requires 512-byte logical sectors";
+    }
+    return false;
+  }
   if (!install_gpt_inspect(disk, &facts->gpt, reason)) {
     return false;
   }

@@ -15,7 +15,8 @@ struct install_coexist {
 };
 
 /* Caller owns the complete observation, including the GPT projection for
- * Review. False clears it and reports inspection failure. True preserves all
+ * Review. False clears it and reports inspection failure, including a logical
+ * sector size other than INSTALL_COEXIST_BLOCK_SIZE. True preserves all
  * ESP/pool choices even without a new-install candidate; reason then describes
  * missing ESP, gap or slot. Multiple ESPs require explicit UI selection. No
  * existing pool is assumed owned, mounted or eligible for Update. */

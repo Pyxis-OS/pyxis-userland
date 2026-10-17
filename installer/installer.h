@@ -9,6 +9,8 @@
 #include <stdint.h>
 
 #define INSTALL_MIB UINT64_C(1048576)
+/* Coexistence accepts only 512-byte logical sectors; classic also accepts 4096. */
+#define INSTALL_COEXIST_BLOCK_SIZE UINT64_C(512)
 #define INSTALL_ESP_BYTES (UINT64_C(512) * INSTALL_MIB)
 #define INSTALL_ESP_CONFIGURATION_MAX_BYTES (64u * 1024u)
 /* The installed boot entries: normal, and rescue, which ignores the pool's
