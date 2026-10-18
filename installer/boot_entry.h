@@ -37,6 +37,10 @@ bool install_boot_entry_plan(const struct config_blob *current,
  * no ownership, boot readiness or activation authority and performs no I/O. */
 bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
     const uint8_t disk_guid[16], const uint8_t esp_guid[16], struct config_blob *pair);
+/* Fresh, exclusively created menu: owned normal/rescue pair plus the authored
+ * globals. Uses the same boot-relative spelling recognized by later Review. */
+bool install_boot_entry_render_owned(const struct install_boot_entry_paths *paths,
+    const uint8_t disk_guid[16], struct config_blob *menu);
 void install_boot_entry_print(const struct install_boot_entry_paths *paths,
     const uint8_t disk_guid[16], FILE *output);
 

@@ -24,6 +24,8 @@ bool install_snapshot_revalidate(const struct install_disk *disk,
 bool install_snapshot_payload_revalidate(const struct install_disk *disk,
     const struct config_target_facts *facts, const char *path,
     const struct config_file_digest *digest);
+bool install_pool_boot_snapshot_at(const struct install_disk *disk, uint64_t partition,
+    struct config_blob *blob);
 bool install_pool_boot_snapshot(const struct install_disk *disk, struct config_blob *blob);
 
 #endif

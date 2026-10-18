@@ -1793,7 +1793,7 @@ done:
 }
 
 
-bool install_pool_boot_snapshot(const struct install_disk *disk, struct config_blob *blob)
+bool install_pool_boot_snapshot_at(const struct install_disk *disk, uint64_t partition, struct config_blob *blob)
 {
   static const uint8_t pool_type[16] = {
     0xa3, 0x94, 0x81, 0x1a, 0x07, 0x8a, 0xff, 0x4d,
@@ -1811,12 +1811,13 @@ bool install_pool_boot_snapshot(const struct install_disk *disk, struct config_b
       read_gpt(disk, 1, block, &map[1]) != GPT_VALID || !gpt_agree(&map[0], &map[1])) {
     goto done;
   }
-  if (map[0].count < 2 || memcmp(map[0].table + map[0].entry_bytes, pool_type, 16)) {
+  if (!partition || partition > map[0].count ||
+      memcmp(map[0].table + (partition - 1) * map[0].entry_bytes, pool_type, 16)) {
     config_blob_destroy(blob);
     ok = true;
     goto done;
   }
-  const uint8_t *entry = map[0].table + map[0].entry_bytes;
+  const uint8_t *entry = map[0].table + (partition - 1) * map[0].entry_bytes;
   uint64_t first = npfs_get_u64(entry + 32), last = npfs_get_u64(entry + 40);
   if (last < first || last >= disk->info.block_count) {
     goto done;
@@ -1892,4 +1893,9 @@ done:
   free(pool);
   free(map);
   return ok;
+}
+
+bool install_pool_boot_snapshot(const struct install_disk *disk, struct config_blob *blob)
+{
+  return install_pool_boot_snapshot_at(disk, INSTALL_POOL_PARTITION, blob);
 }

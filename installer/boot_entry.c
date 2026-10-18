@@ -162,6 +162,31 @@ bool install_boot_entry_plan(const struct config_blob *current,
   return ok;
 }
 
+bool install_boot_entry_render_owned(const struct install_boot_entry_paths *paths,
+    const uint8_t disk_guid[16], struct config_blob *menu)
+{
+  const char *const ids[] = {"boot.normal", "boot.rescue"};
+  const char *const names[] = {"Pyxis OS (Caelum)", "Pyxis OS (rescue)"};
+  char *entries[2] = {0};
+  size_t sizes[2] = {0};
+  bool ok = true;
+  for (unsigned i = 0; i < 2; ++i) {
+    entries[i] = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, NULL, &sizes[i]);
+    ok &= entries[i] != NULL;
+  }
+  if (ok) {
+    char bytes[4096];
+    int size = snprintf(bytes, sizeof(bytes), "timeout: 3\n\n"
+        "# pyxis:begin %s\n%s# pyxis:end %s\n\n"
+        "# pyxis:begin %s\n%s# pyxis:end %s\n",
+        ids[0], entries[0], ids[0], ids[1], entries[1], ids[1]);
+    ok = size > 0 && (size_t)size < sizeof(bytes) && config_blob_set(menu, bytes, (size_t)size);
+  }
+  free(entries[0]);
+  free(entries[1]);
+  return ok;
+}
+
 bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
     const uint8_t disk_guid[16], const uint8_t esp_guid[16], struct config_blob *pair)
 {
