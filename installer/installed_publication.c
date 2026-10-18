@@ -203,7 +203,7 @@ bool install_installed_prepare(struct install_plan *plan)
         struct config_record inherited = {0};
         bool owned = record.digest.present && config_record_parse(record.bytes, record.size, &inherited) &&
             inherited.committed && inherited.boot.present;
-        if (!owned) legacy = install_boot_legacy_certify(mounted.root, publication->legacy);
+        if (!owned) legacy = install_boot_legacy_certify(mounted.root, plan->workspace, publication->legacy);
       }
     }
     ok = close_planning(plan) && ok;

@@ -330,7 +330,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   if (completion.state == INSTALL_PENDING_NONE ||
       (completion.state == INSTALL_PENDING_REFUSED && inspected.committed &&
       inspected.boot.present && !inspected.previous_boot.present)) {
-    legacy_pair = install_boot_legacy_certify(mount.root, legacy_digests);
+    legacy_pair = install_boot_legacy_certify(mount.root, workspace, legacy_digests);
   }
   if (!install_snapshot_capacity(&disk, &planned_facts, &available_bytes, &cluster_bytes)) {
     fputs("Capacity inspection unavailable; nothing written.\n", stderr);

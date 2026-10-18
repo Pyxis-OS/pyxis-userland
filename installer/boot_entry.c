@@ -3,6 +3,8 @@
 #include "../config-editor/ownership.h"
 #include "digest.h"
 #include "progress.h"
+#include "esp_payload.h"
+#include "esp_transfer.h"
 
 #include <directory.h>
 #include <file.h>
@@ -308,7 +310,46 @@ static bool legacy_revision_valid(const struct config_blob *blob)
   return config_revision_valid(revision) && strcmp(revision, INSTALL_UNKNOWN_REVISION);
 }
 
-bool install_boot_legacy_certify(handle_t root,
+static bool legacy_source_current(handle_t file, const struct file_info_reply *expected,
+    uint64_t size)
+{
+  struct file_info_reply current;
+  uint64_t bytes;
+  return file_info(file, &current) == CALL_OK &&
+      (current.valid & FILE_INFO_OBJECT_VALID) && (current.valid & FILE_INFO_DOMAIN_VALID) &&
+      current.domain == expected->domain && current.object == expected->object &&
+      file_size(file, &bytes) == CALL_OK && bytes == size;
+}
+
+/* Initial certification has no expected digest yet. Copy only confirmed native
+ * extents to private RAM, then run the existing complete hash and semantic
+ * checks there. Publication separately rechecks that reviewed digest on FAT. */
+static bool legacy_materialize(handle_t file, handle_t ram,
+    const struct file_info_reply *identity, uint64_t size)
+{
+  bool ok = size && size <= INSTALL_ESP_PAYLOAD_MAX_BYTES &&
+      legacy_source_current(file, identity, size) && file_resize(ram, 0) == CALL_OK;
+  install_progress_begin("Freezing legacy boot payload", INSTALL_PROGRESS_SOURCE_READ, NULL);
+  install_progress_bytes_total(size);
+  for (uint64_t offset = 0; ok && offset < size;) {
+    size_t wanted = size - offset > FILE_TRANSFER_MAX_BYTES ?
+        FILE_TRANSFER_MAX_BYTES : (size_t)(size - offset);
+    size_t copied = 0;
+    enum call_status status = file_transfer(ram, offset, file, offset, wanted, &copied);
+    ok = status == CALL_OK && copied && copied <= wanted;
+    if (ok) {
+      offset += copied;
+      install_progress_advance(copied, 0);
+    }
+  }
+  uint64_t bytes;
+  ok = ok && legacy_source_current(file, identity, size) &&
+      file_size(ram, &bytes) == CALL_OK && bytes == size;
+  install_progress_finish();
+  return ok;
+}
+
+bool install_boot_legacy_certify(handle_t root, handle_t workspace,
     struct config_file_digest payloads[INSTALL_BOOT_LEGACY_PAYLOADS])
 {
   if (!payloads) {
@@ -317,32 +358,48 @@ bool install_boot_legacy_certify(handle_t root,
   memset(payloads, 0, sizeof(*payloads) * INSTALL_BOOT_LEGACY_PAYLOADS);
   const char *names[INSTALL_BOOT_LEGACY_PAYLOADS] = {"caelum.elf", "initrd.cpio", "revision"};
   const uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
-  handle_t parent = HANDLE_INVALID;
+  handle_t parent = HANDLE_INVALID, ram = HANDLE_INVALID;
   handle_t files[INSTALL_BOOT_LEGACY_PAYLOADS] = {HANDLE_INVALID, HANDLE_INVALID, HANDLE_INVALID};
   struct config_file_digest digests[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
   struct config_blob revision = {0};
   uint64_t sizes[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
-  bool eligible = directory_lookup(root, "boot", DIRECTORY_KIND_DIRECTORY, rights, &parent) == CALL_OK;
+  struct file_info_reply identities[INSTALL_BOOT_LEGACY_PAYLOADS] = {0}, root_info;
+  bool eligible = directory_info(root, &root_info) == CALL_OK &&
+      (root_info.valid & FILE_INFO_DOMAIN_VALID) && root_info.domain &&
+      directory_lookup(root, "boot", DIRECTORY_KIND_DIRECTORY, rights, &parent) == CALL_OK;
   for (unsigned i = 0; eligible && i < INSTALL_BOOT_LEGACY_PAYLOADS; ++i) {
+    struct handle_info grant;
     eligible = directory_lookup(parent, names[i], DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &files[i]) == CALL_OK &&
-        file_size(files[i], &sizes[i]) == CALL_OK && sizes[i];
+        handle_query(files[i], &grant) == CALL_OK && grant.kind == HANDLE_KIND_NATIVE && !grant.transport &&
+        grant.protocol == PROTOCOL_FILE && (grant.rights & FILE_RIGHT_READ) &&
+        file_info(files[i], &identities[i]) == CALL_OK &&
+        (identities[i].valid & FILE_INFO_OBJECT_VALID) && (identities[i].valid & FILE_INFO_DOMAIN_VALID) &&
+        identities[i].domain == root_info.domain &&
+        file_size(files[i], &sizes[i]) == CALL_OK && sizes[i] && sizes[i] <= INSTALL_ESP_PAYLOAD_MAX_BYTES;
+  }
+  if (eligible) {
+    eligible = sizes[2] <= 64 && install_esp_transfer_workspace(workspace, &ram) == CALL_OK;
   }
   if (eligible) {
     unsigned char bytes[64];
     uint64_t final_size;
-    struct install_source source = {.handle = files[2], .bytes = sizes[2]};
-    eligible = sizes[2] <= sizeof(bytes) && install_source_read(&source, 0, bytes, (size_t)sizes[2]) &&
-        file_size(files[2], &final_size) == CALL_OK && final_size == sizes[2] &&
-        config_blob_set(&revision, bytes, (size_t)sizes[2]) && legacy_revision_valid(&revision) &&
-        legacy_kernel_valid(files[0], sizes[0]);
-  }
-  if (eligible) {
-    struct install_source archive = {.handle = files[1], .bytes = sizes[1]};
-    eligible = install_archive_rescue_identity(&archive);
+    struct install_source source = {.handle = ram, .bytes = sizes[2]};
+    eligible = legacy_materialize(files[2], ram, &identities[2], sizes[2]) &&
+        install_source_read(&source, 0, bytes, (size_t)sizes[2]) &&
+        file_size(ram, &final_size) == CALL_OK && final_size == sizes[2] &&
+        config_blob_set(&revision, bytes, (size_t)sizes[2]) && legacy_revision_valid(&revision);
   }
   for (unsigned i = 0; eligible && i < 2; ++i) {
-    struct install_source source = {.handle = files[i], .bytes = sizes[i]};
-    eligible = install_boot_payload_digest(&source, &digests[i]);
+    struct install_source source = {.handle = ram, .bytes = sizes[i]};
+    eligible = legacy_materialize(files[i], ram, &identities[i], sizes[i]) &&
+        (i == 0 ? legacy_kernel_valid(ram, sizes[i]) : install_archive_rescue_identity(&source)) &&
+        install_boot_payload_digest(&source, &digests[i]);
+  }
+  for (unsigned i = 0; eligible && i < INSTALL_BOOT_LEGACY_PAYLOADS; ++i) {
+    eligible = legacy_source_current(files[i], &identities[i], sizes[i]);
+  }
+  if (ram != HANDLE_INVALID && handle_close(ram) != CALL_OK) {
+    eligible = false;
   }
   if (parent != HANDLE_INVALID && handle_close(parent) != CALL_OK) {
     eligible = false;

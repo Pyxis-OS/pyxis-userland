@@ -52,12 +52,16 @@ bool install_boot_payload_digest(const struct install_source *source,
 /* Borrow an already admitted native read-only root. Certify exactly
  * boot/caelum.elf, boot/initrd.cpio and boot/revision using the existing ELF,
  * rescue archive and revision checks plus complete hashes, in that order.
+ * WORKSPACE is a borrowed private native RAM parent. Each complete source is
+ * materialized through bounded FILE transfers to one owned unlinked RAM FILE;
+ * semantics and full hashes run on those frozen bytes. Original native object
+ * identities and sizes are checked around copying and before return.
  * True means eligible content; missing, invalid or failed inspection returns
  * false with every digest absent. No file handles escape. This is sampled
  * content evidence, not mount identity, ownership/adoption consent or authority;
  * the caller binds the root/GUID and revalidates before its own publication.
  * The caller keeps the shared hash context initialized throughout inspection. */
-bool install_boot_legacy_certify(handle_t root,
+bool install_boot_legacy_certify(handle_t root, handle_t workspace,
     struct config_file_digest payloads[INSTALL_BOOT_LEGACY_PAYLOADS]);
 
 #endif
