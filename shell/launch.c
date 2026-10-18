@@ -23,6 +23,7 @@
 #include <abi/retention.h>
 #include <abi/power.h>
 #include <abi/screen_capture.h>
+#include <abi/screenshot_saver.h>
 #include <abi/audio.h>
 #include <abi/endpoint.h>
 #include <abi/random.h>
@@ -70,7 +71,8 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[37 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[38 + BUNDLE_SOURCE_LIMIT];
+  uint64_t screenshot_saver_identity;
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   struct environment_capture captured;
@@ -778,7 +780,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 38 -
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 39 -
       BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -1138,6 +1140,24 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", retention_account_index);
   }
   if (session) {
+    /* Only init's explicit trusted SESSION handoff carries the initial
+     * registration. Ordinary programs, providers and later shells do not. */
+    for (size_t i = 0; i < prepared->captured.count; ++i) {
+      const struct environment_value *entry = &prepared->captured.values[i];
+      if (entry->kind != ENVIRONMENT_CAP || strcmp(entry->name, "screenshot_saver")) {
+        continue;
+      }
+      if (grant_count == grant_capacity ||
+          resource_count == sizeof(prepared->resources) / sizeof(*resources)) {
+        return CALL_LIMIT;
+      }
+      resources[resource_count++] = (struct launch_environment_entry)
+          PROFILE_PRIVATE_CAP("screenshot_saver", grant_count);
+      grants[grant_count++] = (struct launch_grant){entry->handle,
+          SCREENSHOT_SAVER_RIGHT_SERVE, 0};
+      prepared->screenshot_saver_identity = entry->identity;
+      break;
+    }
     struct bundle_authority sources[BUNDLE_SOURCE_LIMIT];
     size_t source_count;
     enum call_status status = bundle_sources_from_capture(&prepared->captured, sources, BUNDLE_SOURCE_LIMIT,
@@ -1241,7 +1261,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
           !strcmp(entry->name, "script") ||
           !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
-          !strcmp(entry->name, "staging") ||
+          !strcmp(entry->name, "staging") || !strcmp(entry->name, "screenshot_saver") ||
           !strcmp(entry->name, "stdin") ||
           !strcmp(entry->name, "stdout") || !strcmp(entry->name, "stderr")) {
         continue;
@@ -2359,6 +2379,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   /* Release all source endpoints before waiting. Holding one writer here
    * could prevent EOF, and holding one reader could prevent EPIPE. */
   bool closed_sources = release_sources(prepared, stage_count, pipes);
+  if (mode == SHELL_SESSION && prepared[0].screenshot_saver_identity) {
+    struct environment_unset_entry removed = {
+      .identity = prepared[0].screenshot_saver_identity,
+    };
+    environment_name(removed.name, "screenshot_saver");
+    closed_sources = environment_unset_batch(shell->environment, &removed, 1) == CALL_OK &&
+        closed_sources;
+  }
   network_environment_free(&environment);
   environment_capture_close(&inherited);
   free(requests);
