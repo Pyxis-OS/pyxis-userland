@@ -838,9 +838,14 @@ static bool pending_snapshot(const struct install_pending_request *request,
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     ok = expected_name(parent_for(view, i), config_storage_file_name(i), &request->current[i], report);
   }
-  if (ok && plan->menu_changed) {
-    ok = expected_name(view->limine_parent, plan->record.previous[CONFIG_LIMINE].name,
-        request->previous_limine, report);
+  const struct config_recovery_file *previous_menu = &plan->record.previous[CONFIG_LIMINE];
+  if (ok && previous_menu->digest.present) {
+    ok = digest_equal(&request->previous_limine->digest, &previous_menu->digest) ||
+        failed(report, CALL_BAD_REQUEST);
+    if (ok) {
+      ok = expected_name(view->limine_parent, previous_menu->name,
+          request->previous_limine, report);
+    }
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     const struct config_recovery_file *old = &plan->record.obsolete[i];
@@ -878,7 +883,7 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   if (ok && !install_pending_selection(request, plan, boot.payloads)) {
     ok = failed(report, CALL_BAD_REQUEST);
   }
-  if (ok && plan->menu_changed && plan->record.previous_boot.present) {
+  if (ok && plan->record.previous_boot.present) {
     ok = pending_payload_open(request, &plan->record.previous_boot, &inherited, report);
   }
   if (ok && plan->legacy_active) {
