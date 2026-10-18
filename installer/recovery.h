@@ -17,7 +17,7 @@ struct install_recovery {
  * Frozen read-only Review requires exact canonical names, a GUID-bound manifest,
  * both full payload hashes and an unchanged fallback before reusing recovery.
  * A wholly absent recovery directory proposes first provision; any incomplete or
- * unrecognized namespace, foreign fallback or EFI/BOOT config shadow refuses.
+ * unrecognized namespace, foreign fallback or an EFI/BOOT or EFI/pyxis config shadow refuses.
  * Workspace borrows a private native RAM parent; existing payload readback uses
  * an unlinked bulk-transfer FILE, closed before returning on every outcome. */
 bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kernel,

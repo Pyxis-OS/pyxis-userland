@@ -183,10 +183,14 @@ static bool fallback_absent(handle_t root)
 
 static bool no_efi_shadow(handle_t root)
 {
-  struct config_blob bytes = {0};
-  enum call_status status = snapshot_file(root, "EFI/BOOT/limine.conf", CONFIG_FILE_MAX_BYTES, &bytes);
-  config_blob_destroy(&bytes);
-  return status == CALL_NOT_FOUND;
+  const char *const paths[] = {"EFI/BOOT/limine.conf", "EFI/pyxis/limine.conf"};
+  for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+    struct config_blob bytes = {0};
+    enum call_status status = snapshot_file(root, paths[i], CONFIG_FILE_MAX_BYTES, &bytes);
+    config_blob_destroy(&bytes);
+    if (status != CALL_NOT_FOUND) return false;
+  }
+  return true;
 }
 
 static bool manifest_render(const struct install_recovery *recovery, struct config_blob *output)
