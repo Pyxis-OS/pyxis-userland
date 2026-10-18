@@ -45,4 +45,8 @@ void install_recovery_destroy(struct install_recovery *recovery);
 bool install_recovery_menu_review(handle_t root, const struct config_blob *record,
     const struct config_target_facts *facts);
 
+/* New publication refuses retained recorded cleanup; repeat this check at
+ * writable admission before any program or recovery mutation. */
+bool install_recovery_resolved(handle_t root, const struct config_blob *record);
+
 #endif

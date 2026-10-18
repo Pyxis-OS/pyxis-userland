@@ -58,39 +58,6 @@ static bool read_current(handle_t root, struct config_blob current[CONFIG_ALL_FI
   return ok && install_snapshot_file(root, "EFI/pyxis/config/config.record", CONFIG_RECORD_MAX_BYTES, record);
 }
 
-static bool recovery_resolved(handle_t root, const struct config_blob *record)
-{
-  struct config_record parsed = {0};
-  if (!record->digest.present) return true;
-  if (!config_record_parse(record->bytes, record->size, &parsed) || !parsed.committed) return false;
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!parsed.obsolete[i].digest.present) continue;
-    char path[256];
-    snprintf(path, sizeof(path), "%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
-        parsed.obsolete[i].name);
-    struct config_blob artifact = {0};
-    bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);
-    bool present = artifact.digest.present;
-    config_blob_destroy(&artifact);
-    if (!ok || present) {
-      fputs("installer: retained recovery needs a fresh pending completion Review or manual disposition\n", stderr);
-      return false;
-    }
-  }
-  char staged[CONFIG_ARTIFACT_NAME_BYTES], path[256];
-  if (!config_record_artifact_name(parsed.transaction, CONFIG_LIMINE, "new", staged)) return false;
-  snprintf(path, sizeof(path), "boot/limine/%s", staged);
-  struct config_blob artifact = {0};
-  bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);
-  bool present = artifact.digest.present;
-  config_blob_destroy(&artifact);
-  if (!ok || present) {
-    fputs("installer: retained recovery needs a fresh pending completion Review or manual disposition\n", stderr);
-    return false;
-  }
-  return true;
-}
-
 static bool close_planning(struct install_plan *plan)
 {
   uint64_t now;
@@ -199,7 +166,7 @@ bool install_installed_prepare(struct install_plan *plan)
     plan->view.control = mounted.control;
     ok = status == CALL_OK && install_snapshot_facts(mounted.control, &publication->facts) &&
         facts_match(plan, &publication->facts) && read_current(mounted.root, current, &record) &&
-        recovery_resolved(mounted.root, &record) &&
+        install_recovery_resolved(mounted.root, &record) &&
         install_recovery_menu_review(mounted.root, &record, &publication->facts) &&
         install_recovery_prepare(mounted.root, plan->boot, plan->kernel.handle, plan->workspace,
             &publication->facts, &publication->recovery);
@@ -373,7 +340,8 @@ bool install_installed_admit(struct install_plan *plan)
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     ok = config_blob_equal(&current[i], &publication->configuration.current[i]);
   }
-  ok = ok && config_blob_equal(&record, &publication->configuration.record);
+  ok = ok && config_blob_equal(&record, &publication->configuration.record) &&
+      install_recovery_resolved(plan->view.root, &record);
   if (ok && plan->record.updating) {
     /* Pool admission is already selected and released. Open only its existing
      * native system root for this consumed override; never raw-read a mount. */

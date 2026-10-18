@@ -660,3 +660,36 @@ bool install_recovery_menu_review(handle_t root, const struct config_blob *recor
   }
   return handle_close(parent) == CALL_OK && ok;
 }
+
+bool install_recovery_resolved(handle_t root, const struct config_blob *record)
+{
+  struct config_record parsed = {0};
+  if (!record->digest.present) return true;
+  if (!config_record_parse(record->bytes, record->size, &parsed) || !parsed.committed) return false;
+  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
+    if (!parsed.obsolete[i].digest.present) continue;
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
+        parsed.obsolete[i].name);
+    struct config_blob artifact = {0};
+    bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);
+    bool present = artifact.digest.present;
+    config_blob_destroy(&artifact);
+    if (!ok || present) {
+      fputs("installer: retained recovery needs a fresh pending completion Review or manual disposition\n", stderr);
+      return false;
+    }
+  }
+  char staged[CONFIG_ARTIFACT_NAME_BYTES], path[256];
+  if (!config_record_artifact_name(parsed.transaction, CONFIG_LIMINE, "new", staged)) return false;
+  snprintf(path, sizeof(path), "boot/limine/%s", staged);
+  struct config_blob artifact = {0};
+  bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);
+  bool present = artifact.digest.present;
+  config_blob_destroy(&artifact);
+  if (!ok || present) {
+    fputs("installer: retained recovery needs a fresh pending completion Review or manual disposition\n", stderr);
+    return false;
+  }
+  return true;
+}

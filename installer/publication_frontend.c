@@ -626,7 +626,7 @@ admit:
   bool same_record = install_snapshot_file(mount.root, "EFI/pyxis/config/config.record", CONFIG_RECORD_MAX_BYTES,
       &fresh_record) && config_blob_equal(&fresh_record, &record);
   config_blob_destroy(&fresh_record);
-  if (!same_record) {
+  if (!same_record || (!completing && !install_recovery_resolved(mount.root, &record))) {
     goto done;
   }
   if (request.legacy_active) {
