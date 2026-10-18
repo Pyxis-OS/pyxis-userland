@@ -12,9 +12,9 @@
 #include <resource.h>
 #include "../common/provider_setup.h"
 
-/* The one interpreter that runs scripts as a shell; it alone is offered pipe
- * creation and child_launcher by name. It is opened from the shell's held boot
- * root, so rebinding boot:// in the environment cannot substitute another file. */
+/* Only this exact parsed interpreter receives shell runtime grants. Trusted
+ * shells open it beneath their held archive root; rootless shells select their
+ * retained bundle image. Mutable scheme bindings select neither source. */
 #define SHELL_INTERPRETER "boot://init-shell.pxe"
 #define SHELL_INTERPRETER_PATH "init-shell.pxe"
 #define SHELL_LINE_CAPACITY 1024
@@ -120,8 +120,12 @@ struct shell {
   /* Archive root that opens the trusted script interpreter, supplied by the
    * trusted launch chain (boot init, session, remote and multiplexer launchers,
    * or a shell's own extras). Never taken from the mutable boot binding, which a
-   * script can rebind and export; without it a shell offers no script extras. */
+   * script can rebind and export. Only this root extends interpreter trust. */
   handle_t interpreter_root;
+  /* Owned READ-only code selection for rootless script re-entry. Never a root
+   * or proof of trust; nested scripts receive a private source-lineage copy. */
+  handle_t interpreter_image;
+  handle_t threads; /* Retained before commands can rebind the startup table. */
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_config,
       keyboard, pointer, terminal_service,

@@ -549,6 +549,28 @@ static handle_t delegated_launcher(const struct shell *shell, enum shell_launch_
   return shell->child_launcher;
 }
 
+static enum call_status offer_runtime_grant(struct prepared_stage *prepared,
+    const char *name, handle_t source, uint64_t protocol, uint64_t rights, uint64_t flags)
+{
+  if (source == HANDLE_INVALID) {
+    return CALL_OK;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(source, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.protocol != protocol) {
+    return CALL_WRONG_TYPE;
+  }
+  rights &= info.rights;
+  if (rights) {
+    prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+      name, source, rights, 0, flags};
+  }
+  return CALL_OK;
+}
+
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], handle_t publication,
@@ -559,6 +581,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (stage->transaction_worker) {
     return prepare_transaction_worker(shell, prepared, stage, streams);
   }
+  named_input = named_input && shell->terminal.input != HANDLE_INVALID;
   enum call_status retired = bundle_jobs_reap(&shell->jobs);
   if (retired != CALL_OK) {
     shell_directory_error(shell, "shell: job context cleanup", "", retired);
@@ -577,7 +600,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
    * ordinary clients receive a newly declared leaf through bundle preparation. */
   handle_t job_provisioner = session ? bootstrap_capability("job_provisioner") : HANDLE_INVALID;
   bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
-  handle_t threads = session ? bootstrap_capability("threads") : HANDLE_INVALID;
+  handle_t threads = session ? shell->threads : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
   bool delegate = mode == SHELL_FOREGROUND &&
       child_launcher != HANDLE_INVALID;
@@ -613,40 +636,50 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
-  /* A script run by the shell interpreter is a shell: it needs the pipe creation
-   * this one holds, recognizes delegated child launch by child_launcher, and
-   * carries the trusted interpreter root on to its own nested scripts. It also
-   * receives threads, which a plain program does not, so its foreground bundles
-   * get the same runtime grants as at the prompt. Only the library, seeing the
-   * interpreter it parsed, appends these. */
+  /* Only the library, seeing the exact parsed interpreter, appends these.
+   * A trusted root extends that chain; a rootless image carries runtime alone. */
   prepared->extra_count = 0;
   if (mode == SHELL_FOREGROUND && !prepared->bundle) {
-    if (child_launcher != HANDLE_INVALID) {
-      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
-        "child_launcher", child_launcher, LAUNCHER_RIGHT_LAUNCH, 0, ENVIRONMENT_EXPORTED};
-    }
-    if (shell->pipe != HANDLE_INVALID) {
-      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
-        "pipe", shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0, ENVIRONMENT_EXPORTED};
-    }
-    /* The root travels only with authority to extend; a shell without a trusted
-     * root withholds all of it. */
-    if (shell->interpreter_root == HANDLE_INVALID) {
-      prepared->extra_count = 0;
-    } else if (prepared->extra_count) {
-      uint64_t rights, transport;
-      enum call_status queried = handle_rights(shell->interpreter_root, &rights, &transport);
-      if (queried != CALL_OK) {
-        return queried;
+    if (shell->interpreter_root != HANDLE_INVALID) {
+      if (child_launcher != HANDLE_INVALID) {
+        prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+          "child_launcher", child_launcher, LAUNCHER_RIGHT_LAUNCH, 0, ENVIRONMENT_EXPORTED};
       }
-      /* Private: an exported directory would also be forwarded as a root. */
-      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
-        "interpreter_root", shell->interpreter_root, rights, transport, 0};
-    }
-    handle_t own_threads = bootstrap_capability("threads");
-    if (shell->interpreter_root != HANDLE_INVALID && own_threads != HANDLE_INVALID) {
-      prepared->extras[prepared->extra_count++] = (struct program_script_grant){
-        "threads", own_threads, THREAD_RIGHT_MANAGE, 0, ENVIRONMENT_EXPORTED};
+      if (shell->pipe != HANDLE_INVALID) {
+        prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+          "pipe", shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0, ENVIRONMENT_EXPORTED};
+      }
+      if (prepared->extra_count) {
+        uint64_t rights, transport;
+        enum call_status queried = handle_rights(shell->interpreter_root, &rights, &transport);
+        if (queried != CALL_OK) {
+          return queried;
+        }
+        prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+          "interpreter_root", shell->interpreter_root, rights, transport, 0};
+      }
+      if (shell->threads != HANDLE_INVALID) {
+        prepared->extras[prepared->extra_count++] = (struct program_script_grant){
+          "threads", shell->threads, THREAD_RIGHT_MANAGE, 0, ENVIRONMENT_EXPORTED};
+      }
+    } else {
+      enum call_status status = offer_runtime_grant(prepared, "child_launcher", child_launcher,
+          PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH, ENVIRONMENT_EXPORTED);
+      if (status == CALL_OK) {
+        status = offer_runtime_grant(prepared, "pipe", shell->pipe,
+            PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE, ENVIRONMENT_EXPORTED);
+      }
+      if (status == CALL_OK) {
+        status = offer_runtime_grant(prepared, "threads", shell->threads,
+            PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE, ENVIRONMENT_EXPORTED);
+      }
+      if (status == CALL_OK) {
+        status = offer_runtime_grant(prepared, "interpreter_image", shell->interpreter_image,
+            PROTOCOL_FILE, FILE_RIGHT_READ, 0);
+      }
+      if (status != CALL_OK) {
+        return status;
+      }
     }
   }
   bool has_service = (session || provider) && shell->service != HANDLE_INVALID;
@@ -1238,7 +1271,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"input", shell->terminal.input, PROTOCOL_CONSOLE},
       {"output", shell->terminal.output, PROTOCOL_CONSOLE},
       {"memory", shell->memory, PROTOCOL_MEMORY},
-      {"threads", bootstrap_capability("threads"), PROTOCOL_THREAD_SERVICE},
+      {"threads", shell->threads, PROTOCOL_THREAD_SERVICE},
       {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID, PROTOCOL_KEYBOARD},
       {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID, PROTOCOL_POINTER},
       {"clock", shell->clock, PROTOCOL_CLOCK},
@@ -2020,7 +2053,12 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   struct program_script_extras extras[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < stage_count; ++i) {
     extras[i] = (struct program_script_extras){
-      .interpreter = SHELL_INTERPRETER, .root = shell->interpreter_root, .path = SHELL_INTERPRETER_PATH,
+      .selection = mode == SHELL_FOREGROUND && !prepared[i].bundle &&
+          shell->interpreter_root == HANDLE_INVALID ?
+          PROGRAM_INTERPRETER_IMAGE : PROGRAM_INTERPRETER_ROOT,
+      .interpreter = SHELL_INTERPRETER,
+      .root = shell->interpreter_root, .path = SHELL_INTERPRETER_PATH,
+      .image = shell->interpreter_image,
       .grants = prepared[i].extras,
       .count = prepared[i].extra_count,
     };

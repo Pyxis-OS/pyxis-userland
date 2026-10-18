@@ -76,10 +76,11 @@ static void release_script(struct script_scratch *scratch)
   free(scratch->prefix);
 }
 
-static bool earns_extras(const struct program_script_extras *extras, const char *interpreter)
+static bool selects_interpreter(const struct program_script_extras *extras, const char *interpreter)
 {
-  return extras && extras->count && extras->root != HANDLE_INVALID &&
-      !strcmp(extras->interpreter, interpreter);
+  return extras && !strcmp(extras->interpreter, interpreter) &&
+      (extras->selection == PROGRAM_INTERPRETER_IMAGE ||
+       (extras->count && extras->root != HANDLE_INVALID));
 }
 
 static enum call_status prepare_script(const struct launch_request *source,
@@ -103,10 +104,10 @@ static enum call_status prepare_script(const struct launch_request *source,
       return CALL_BAD_REQUEST;
     }
   }
-  /* The extras are decided by the interpreter string parsed once from the prefix
-   * read above. The trusted interpreter is then opened from the caller's held
-   * root, never through the environment table, which a script can rebind. */
-  size_t extra = earns_extras(extras, interpreter) ? extras->count : 0;
+  /* Code selection and extras use the same string parsed once from the prefix.
+   * A selected held image must refuse on failure, never use mutable bindings. */
+  bool selected = selects_interpreter(extras, interpreter);
+  size_t extra = selected ? extras->count : 0;
   if (extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) - source->grant_count - 1 ||
       extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) -
           source->entry_count - 1) {
@@ -128,7 +129,20 @@ static enum call_status prepare_script(const struct launch_request *source,
     return CALL_NO_MEMORY;
   }
   enum call_status status;
-  if (extra) {
+  if (selected && extras->selection == PROGRAM_INTERPRETER_IMAGE) {
+    if (extras->image == HANDLE_INVALID) {
+      return CALL_NOT_FOUND;
+    }
+    struct handle_info info;
+    status = handle_query(extras->image, &info);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_FILE) {
+      return CALL_WRONG_TYPE;
+    }
+    status = handle_copy_restricted(extras->image, FILE_RIGHT_READ, 0, &scratch->image);
+  } else if (extra) {
     handle_t held = extras->root;
     struct path_context root = {.directories = &held, .count = 1, .capacity = 1};
     status = open_interpreter(&root, extras->path, &scratch->image);

@@ -6,6 +6,8 @@
 #include <abi/clock.h>
 #include <abi/memory.h>
 #include <abi/pipe.h>
+#include <abi/file.h>
+#include <directory.h>
 #include "../common/directory.h"
 #include "../common/session_wait.h"
 #include "../common/pane_cwd.h"
@@ -124,6 +126,31 @@ static int run_command_line(struct shell *shell, const char *source, char *line)
   return EXIT_FAILURE;
 }
 
+static void retain_interpreter_image(struct shell *shell)
+{
+  if (shell->interpreter_root != HANDLE_INVALID) {
+    return;
+  }
+  handle_t inherited = bootstrap_capability("interpreter_image");
+  if (inherited != HANDLE_INVALID) {
+    struct handle_info info;
+    if (handle_query(inherited, &info) == CALL_OK &&
+        info.kind == HANDLE_KIND_NATIVE && info.protocol == PROTOCOL_FILE) {
+      handle_copy_restricted(inherited, FILE_RIGHT_READ, 0, &shell->interpreter_image);
+    }
+    return;
+  }
+  handle_t app = bootstrap_capability("app");
+  handle_t bin = HANDLE_INVALID;
+  if (app != HANDLE_INVALID && directory_lookup(app, "bin", DIRECTORY_KIND_DIRECTORY,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &bin) == CALL_OK) {
+    directory_lookup(bin, "shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        &shell->interpreter_image);
+    handle_close(bin);
+  }
+  /* Failure leaves re-entry unavailable; ordinary native commands still run. */
+}
+
 int main(int argc, char **argv)
 {
   handle_t script = bootstrap_capability("script");
@@ -162,6 +189,7 @@ int main(int argc, char **argv)
     .child_launcher = bootstrap_capability("child_launcher"),
     .terminal_service = bootstrap_capability("terminal"),
     .memory = bootstrap_capability("memory"),
+    .threads = bootstrap_capability("threads"),
     .display = bootstrap_capability("display"),
     .clock = bootstrap_capability("clock"),
     .system_info = bootstrap_capability("system_info"),
@@ -188,7 +216,7 @@ int main(int argc, char **argv)
     .screen_capture = bootstrap_capability("screen_capture"),
     .audio = bootstrap_capability("audio"),
   };
-  /* Only a trusted launcher supplies it; without it this shell offers no extras. */
+  /* Only a trusted launcher supplies authority to extend interpreter trust. */
   shell.interpreter_root = bootstrap_capability("interpreter_root");
   if (shell.positional_script) {
     struct {
@@ -240,6 +268,7 @@ int main(int argc, char **argv)
     shell_directory_error(&shell, "shell", "command storage", CALL_NO_MEMORY);
     goto done;
   }
+  retain_interpreter_image(&shell);
   enum call_status status = shell_environment_init(&shell);
   if (status != CALL_OK) {
     shell_directory_error(&shell, "shell", "initial environment", status);
@@ -367,6 +396,10 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (shell.interpreter_image != HANDLE_INVALID && handle_close(shell.interpreter_image) != 0) {
+    shell_directory_error(&shell, "shell: cleanup", "interpreter image", CALL_BAD_HANDLE);
+    result = EXIT_FAILURE;
+  }
   if (own_script && handle_close(script) != 0) {
     shell_directory_error(&shell, "shell: cleanup", "script input", CALL_BAD_HANDLE);
     result = EXIT_FAILURE;

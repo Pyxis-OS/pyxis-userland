@@ -76,13 +76,14 @@ enum call_status launcher_launch_batch(handle_t launcher, const struct launch_re
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
     const struct path_context *interpreter_context, handle_t *child);
 
-/* Grants a caller offers only to one trusted interpreter. When a shebang names
- * exactly INTERPRETER (compared with the string parsed once from the prefix
- * read), the interpreter is opened as PATH relative to the held directory ROOT,
- * not through the environment's scheme bindings, which the caller's own scripts
- * can rebind; each grant is then appended after the script grant with a CAP
- * entry of the given name, flags and masks. A native image, or
- * a script naming any other interpreter, receives none of them and resolves
+/* Grants a caller offers only to one exact parsed interpreter. ROOT selection
+ * opens PATH beneath the held ROOT when grants are offered, preserving the
+ * trusted interpreter chain. IMAGE selection uses only a READ-restricted copy
+ * of the held native file IMAGE, even when no grants are offered. An absent or
+ * unusable IMAGE refuses launch; no scheme lookup substitutes for it. IMAGE
+ * selects code, not trust, and never creates a trusted root. Each offered grant
+ * is appended after the script grant with its name, flags and masks. Native
+ * images and scripts naming any other interpreter receive none and resolve
  * normally. A request that already has an entry of one of these names is
  * rejected with CALL_ALREADY_EXISTS. Everything is borrowed until return. */
 struct program_script_grant {
@@ -92,10 +93,17 @@ struct program_script_grant {
   uint64_t flags; /* Entry flags: ENVIRONMENT_EXPORTED, or 0 for a private entry. */
 };
 
+enum program_interpreter_selection {
+  PROGRAM_INTERPRETER_ROOT,
+  PROGRAM_INTERPRETER_IMAGE,
+};
+
 struct program_script_extras {
+  enum program_interpreter_selection selection;
   const char *interpreter;
   handle_t root;
   const char *path;
+  handle_t image;
   const struct program_script_grant *grants;
   size_t count;
 };
