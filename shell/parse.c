@@ -415,9 +415,17 @@ static const char *finish_command(struct shell_syntax_command *command)
   return NULL;
 }
 
+bool shell_condition_selected(enum shell_condition condition, enum command_result result)
+{
+  return condition == SHELL_ALWAYS ||
+      (condition == SHELL_ON_SUCCESS && result == COMMAND_OK) ||
+      (condition == SHELL_ON_FAILURE && result == COMMAND_FAILED);
+}
+
 static const char *parse_sequence(const char **cursor, bool nested,
     struct shell_syntax *syntax)
 {
+  enum shell_condition condition = SHELL_ALWAYS;
   const char *read = *cursor;
   struct shell_syntax_command *command = NULL;
   struct shell_syntax_redirection *pending = NULL;
@@ -426,6 +434,9 @@ static const char *parse_sequence(const char **cursor, bool nested,
       ++read;
     }
     if (!*read || (nested && *read == ')')) {
+      if (!command && condition != SHELL_ALWAYS) {
+        return "Conditional operator requires a command";
+      }
       if (pending) {
         return "Redirection requires a filename";
       }
@@ -444,6 +455,19 @@ static const char *parse_sequence(const char **cursor, bool nested,
     if (*read == ')') {
       return "Unexpected closing parenthesis";
     }
+    if ((*read == '&' && read[1] == '&') || (*read == '|' && read[1] == '|')) {
+      if (!command || pending) {
+        return "Conditional operator requires a completed command";
+      }
+      const char *error = finish_command(command);
+      if (error) {
+        return error;
+      }
+      condition = *read == '&' ? SHELL_ON_SUCCESS : SHELL_ON_FAILURE;
+      command = NULL;
+      read += 2;
+      continue;
+    }
     if (*read == ';') {
       if (!command) {
         return "Semicolon requires a preceding command";
@@ -456,6 +480,7 @@ static const char *parse_sequence(const char **cursor, bool nested,
         return error;
       }
       command = NULL;
+      condition = SHELL_ALWAYS;
       ++read;
       continue;
     }
@@ -467,15 +492,15 @@ static const char *parse_sequence(const char **cursor, bool nested,
       }
       syntax->commands = commands;
       command = &commands[syntax->count++];
-      *command = (struct shell_syntax_command){.stage_count = 1};
+      *command = (struct shell_syntax_command){.stage_count = 1, .condition = condition};
     }
     struct shell_syntax_stage *stage = &command->stages[command->stage_count - 1];
     if (command->background) {
       return "& must end the line";
     }
     if (*read == '&') {
-      if (read[1] == '&') {
-        return "Unsupported operator";
+      if (command->condition != SHELL_ALWAYS) {
+        return "Conditional lists must be foreground commands";
       }
       if (pending || !stage->count || command->stage_count > 1) {
         return "& requires one completed command";

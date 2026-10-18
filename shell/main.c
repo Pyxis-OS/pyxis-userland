@@ -95,8 +95,8 @@ static bool report_completion(struct shell *shell, handle_t events,
 }
 
 /* The exit status of a -c line: a failed foreground command's own nonzero
- * status, failure for anything else that stopped the line, otherwise success
- * (exit takes no status). */
+ * status, failure for anything else that stopped the line, otherwise success.
+ * Explicit exit status is kept separately. */
 static int run_command_line(struct shell *shell, const char *source, char *line)
 {
   size_t length = strlen(source);
@@ -368,10 +368,13 @@ int main(int argc, char **argv)
 
 done:
   if (own_script && handle_close(script) != 0) {
+    shell_directory_error(&shell, "shell: cleanup", "script input", CALL_BAD_HANDLE);
     result = EXIT_FAILURE;
   }
   shell_environment_close(&shell);
-  if (bundle_jobs_close(&shell.jobs) != CALL_OK) {
+  enum call_status jobs_closed = bundle_jobs_close(&shell.jobs);
+  if (jobs_closed != CALL_OK) {
+    shell_directory_error(&shell, "shell: cleanup", "job contexts", jobs_closed);
     result = EXIT_FAILURE;
   }
   pane_cwd_provider_close(&cwd_service.provider);
@@ -379,6 +382,11 @@ done:
   shell_directory_close(&shell);
   term_history_free(&shell.history);
   free(line);
+  /* Cleanup reports failure, but cannot replace an explicitly requested nonzero
+   * native status. A requested zero still becomes failure when cleanup fails. */
+  if (shell.exit_requested && shell.exit_status != 0) {
+    result = shell.exit_status;
+  }
   /* Runtime exit releases the original startup grants, which may alias. */
   return result;
 }

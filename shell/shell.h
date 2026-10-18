@@ -102,6 +102,7 @@ struct shell {
   /* Keep the supervised remote root alive through session successors. */
   bool session_wait;
   int exit_status;
+  bool exit_requested;
   /* Input carries Ctrl+C arming and a clock bounds the waits. Only a root
    * shell or session successor is granted it; commands get READ alone. */
   bool interrupts;

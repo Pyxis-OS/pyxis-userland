@@ -37,7 +37,18 @@ bool shell_expansion_close(struct shell_expansion *expansion)
 static const char *expansion_error(struct shell_expansion *expansion,
     enum call_status *status, const char *diagnostic)
 {
-  if (!shell_expansion_close(expansion)) {
+  struct shell_outcome outcome = {0};
+  for (size_t i = 0; expansion->captures && i < expansion->value_count; ++i) {
+    struct shell_outcome captured = expansion->captures[i].outcome;
+    if (captured.kind == TERMINAL_COMPLETION_TERMINATED ||
+        captured.kind == TERMINAL_COMPLETION_FAULTED) {
+      outcome = captured;
+      break;
+    }
+  }
+  bool closed = shell_expansion_close(expansion);
+  expansion->failure_outcome = outcome;
+  if (!closed) {
     *status = CALL_OUTCOME_UNKNOWN;
     return "Could not release the expansion's owned capabilities";
   }

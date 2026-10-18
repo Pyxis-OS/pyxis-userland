@@ -38,7 +38,11 @@ struct shell_syntax_stage {
   size_t redirection_count;
 };
 
+enum shell_condition { SHELL_ALWAYS, SHELL_ON_SUCCESS, SHELL_ON_FAILURE };
+
 struct shell_syntax_command {
+  /* ALWAYS starts a new list; other connectors bind to its accumulated result. */
+  enum shell_condition condition;
   struct shell_syntax_stage stages[LAUNCH_BATCH_MAX];
   size_t stage_count;
   bool background;
@@ -61,6 +65,8 @@ struct shell_expanded_word {
 
 struct shell_expansion {
   struct shell_command_line command;
+  /* A failed inline capture's stop reason survives expansion cleanup. */
+  struct shell_outcome failure_outcome;
   /* Borrowed records with separately allocated arrays; close only through
    * shell_expansion_close, which owns their per-word CAP references. */
   struct environment_capture selected[LAUNCH_BATCH_MAX];
@@ -79,6 +85,7 @@ struct shell_expansion {
  * a named whole-word destination. Errors leave output empty; diagnostics are static. */
 const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax);
 void shell_syntax_close(struct shell_syntax *syntax);
+bool shell_condition_selected(enum shell_condition condition, enum command_result result);
 /* Environment calls report their CALL status; cleanup failure reports
  * CALL_OUTCOME_UNKNOWN. Syntax/type diagnostics leave CALL_OK. Expansion owns
  * every argv string and selected CAP until close. */

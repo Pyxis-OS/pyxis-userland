@@ -202,7 +202,7 @@ static enum call_status paired_value(struct shell *shell, const struct shell_sta
 }
 
 static enum call_status take_value(struct shell *shell, handle_t collector,
-    const char *name, struct shell_capture_result *result)
+    const char *name, enum call_status failure, struct shell_capture_result *result)
 {
   struct output_take_reply taken = {0};
   enum call_status status = output_seal(collector);
@@ -255,7 +255,8 @@ static enum call_status take_value(struct shell *shell, handle_t collector,
        * Explicitly handed values and native TOO_LARGE keep their own outcome. */
       bool closed = close_value(&result->value);
       closed = close_value(&result->observation) && closed;
-      return closed ? failed_value(shell, name, CALL_IO, result) : CALL_OUTCOME_UNKNOWN;
+      return closed ? failed_value(shell, name, failure != CALL_OK ? failure : CALL_IO, result) :
+          CALL_OUTCOME_UNKNOWN;
     }
   }
   if (status == CALL_OK && description.description.outcome != RESOURCE_OK) {
@@ -294,19 +295,47 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
     return status;
   }
   struct output_create_reply output = {0};
+  bool failed_lists = false;
+  enum call_status preparation = CALL_OK, failure = CALL_OK;
   for (size_t i = 0; i < syntax.count && status == CALL_OK; ++i) {
     struct shell_syntax_command *command = &syntax.commands[i];
+    if (command->condition == SHELL_ALWAYS) {
+      if (i && result->command != COMMAND_OK) {
+        failed_lists = true;
+        if (failure == CALL_OK) {
+          failure = preparation;
+        }
+        if (shell->script_name) {
+          break;
+        }
+      }
+    } else if (!shell_condition_selected(command->condition, result->command)) {
+      continue;
+    }
+    result->command = COMMAND_OK;
+    preparation = CALL_OK;
+    result->outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
     struct shell_expansion expansion = {0};
     enum call_status expanded;
     diagnostic = shell_syntax_expand(shell, command, &expansion, &expanded);
     if (diagnostic) {
       status = expanded == CALL_OK ? CALL_BAD_REQUEST : expanded;
-      if (result->evaluated && status != CALL_OUTCOME_UNKNOWN) {
-        shell_error(shell, "capture: %s (status %u)\n", diagnostic, status);
-        result->command = COMMAND_FAILED;
-        status = CALL_OK;
+      result->command = shell_error(shell, "capture: %s (status %u)\n", diagnostic, status);
+      preparation = status;
+      if (result->command == COMMAND_FATAL || status == CALL_OUTCOME_UNKNOWN) {
+        status = CALL_OUTCOME_UNKNOWN;
+        break;
       }
-      break;
+      if (expansion.failure_outcome.kind == TERMINAL_COMPLETION_TERMINATED ||
+          expansion.failure_outcome.kind == TERMINAL_COMPLETION_FAULTED ||
+          status == CALL_ABANDONED) {
+        result->outcome = expansion.failure_outcome.kind ? expansion.failure_outcome :
+            (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0};
+        status = CALL_OK;
+        break;
+      }
+      status = CALL_OK;
+      continue;
     }
     const struct shell_stage *stage = &expansion.command.stages[0];
     bool management = stage->count && (!strcmp(stage->arguments[0], "revocable") ||
@@ -336,7 +365,6 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
       }
       if (status == CALL_OK) {
         bool started = false, evaluated = false;
-        bool earlier = result->evaluated;
         enum call_status error = CALL_OK;
         enum command_result command_result = shell_launch_capture(shell, &expansion.command,
             output.producer, &result->outcome, &evaluated, &started, &error);
@@ -344,24 +372,8 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
         if (command_result == COMMAND_FATAL) {
           status = CALL_OUTCOME_UNKNOWN;
         } else if (!started) {
-          if (earlier) {
-            result->command = COMMAND_FAILED;
-          } else if (evaluated) {
-            struct output_status_reply state;
-            status = output_status(output.collector, &state);
-            if (status == CALL_OK && state.mode != OUTPUT_MODE_VALUE) {
-              status = failed_value(shell, name, error, result);
-            }
-            result->command = COMMAND_FAILED;
-          } else {
-            status = error == CALL_OK ? CALL_BAD_REQUEST : error;
-          }
-          /* Keep earlier output; only an attempted OPEN/launch with no prior
-           * result needs an immutable failure instead of successful emptiness. */
-          if (!shell_expansion_close(&expansion)) {
-            status = CALL_OUTCOME_UNKNOWN;
-          }
-          break;
+          preparation = error == CALL_OK ? CALL_BAD_REQUEST : error;
+          result->command = COMMAND_FAILED;
         } else if (command_result != COMMAND_OK) {
           result->command = COMMAND_FAILED;
         }
@@ -370,18 +382,29 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
     if (!shell_expansion_close(&expansion)) {
       status = CALL_OUTCOME_UNKNOWN;
     }
-    if (status != CALL_OK && status != CALL_OUTCOME_UNKNOWN && result->evaluated &&
-        !result->value.handle) {
-      result->command = COMMAND_FAILED;
-      status = CALL_OK;
-      break;
+    if (status != CALL_OK && status != CALL_OUTCOME_UNKNOWN && !management) {
+      preparation = status;
+      result->command = shell_directory_error(shell, "shell: capture", "", status);
+      status = result->command == COMMAND_FATAL ? CALL_OUTCOME_UNKNOWN : CALL_OK;
     }
     if (management || status != CALL_OK ||
         result->outcome.kind == TERMINAL_COMPLETION_TERMINATED ||
-        result->outcome.kind == TERMINAL_COMPLETION_FAULTED ||
-        (shell->script_name && result->command != COMMAND_OK)) {
+        result->outcome.kind == TERMINAL_COMPLETION_FAULTED) {
       break;
     }
+  }
+  /* Only failures left unhandled at a list boundary invalidate byte output.
+   * The collector independently latches mutation, retention and handoff failure;
+   * a successful handler cannot clear those resource outcomes. */
+  if (result->command != COMMAND_OK && failure == CALL_OK) {
+    failure = preparation;
+  }
+  if (failed_lists) {
+    result->command = COMMAND_FAILED;
+  }
+  if (status == CALL_OK && !result->evaluated && result->command != COMMAND_OK &&
+      failure != CALL_OK) {
+    status = failure;
   }
   shell_syntax_close(&syntax);
   if (output.producer && handle_close(output.producer)) {
@@ -392,14 +415,18 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
         result->outcome.kind == TERMINAL_COMPLETION_FAULTED) {
       status = failed_value(shell, name, CALL_ABANDONED, result);
     } else {
-      status = take_value(shell, output.collector, name, result);
+      status = take_value(shell, output.collector, name, failure, result);
     }
   }
   if (output.collector && handle_close(output.collector)) {
     status = CALL_OUTCOME_UNKNOWN;
   }
-  if (status != CALL_OK && !shell_capture_close(result)) {
-    status = CALL_OUTCOME_UNKNOWN;
+  if (status != CALL_OK) {
+    struct shell_outcome outcome = result->outcome;
+    if (!shell_capture_close(result)) {
+      status = CALL_OUTCOME_UNKNOWN;
+    }
+    result->outcome = outcome;
   }
   return status;
 }

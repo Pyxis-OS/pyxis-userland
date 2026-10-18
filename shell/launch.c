@@ -561,7 +561,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   enum call_status retired = bundle_jobs_reap(&shell->jobs);
   if (retired != CALL_OK) {
-    return retired;
+    shell_directory_error(shell, "shell: job context cleanup", "", retired);
+    return CALL_OUTCOME_UNKNOWN;
   }
   bool session = mode == SHELL_SESSION;
   handle_t child_launcher = delegated_launcher(shell, mode, scope);
@@ -2155,7 +2156,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           "service: %s setup failed (status %ju, cleanup %ju)\n",
           service_name, setup.status, setup.cleanup_status);
       if (diagnostic == COMMAND_FATAL || setup.cleanup_status != CALL_OK) {
-        return diagnostic;
+        return COMMAND_FATAL;
       }
       return optional ? COMMAND_OK : diagnostic;
     }
@@ -2232,7 +2233,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   status = bundle_jobs_reap(&shell->jobs);
   if (status != CALL_OK) {
     close_handle(&armed);
-    return shell_directory_error(shell, "shell: job context cleanup", "", status);
+    shell_directory_error(shell, "shell: job context cleanup", "", status);
+    return COMMAND_FATAL;
   }
   /* Disarm only after every stage finished, so no press reaches the editor. */
   if (!close_handle(&armed)) {

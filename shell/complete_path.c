@@ -59,7 +59,11 @@ bool completion_scan(const char *line, size_t cursor, struct completion_word *wo
         command_position = false;
       }
       in_word = false;
-      if (byte == '|' || byte == ';') {
+      if ((byte == '&' || byte == '|') && i + 1 < cursor && line[i + 1] == byte) {
+        ++i;
+        command_position = true;
+        redirect_pending = false;
+      } else if (byte == '|' || byte == ';') {
         command_position = true;
         redirect_pending = false;
       } else if (byte == '<' || byte == '>') {

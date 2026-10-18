@@ -360,6 +360,27 @@ bool shell_builtin(char **arguments, size_t count)
        (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
 }
 
+static bool exit_status(const char *text, int *status)
+{
+  bool negative = *text == '-';
+  if (negative) {
+    ++text;
+  }
+  if (!*text) {
+    return false;
+  }
+  uint32_t value = 0;
+  uint32_t limit = negative ? (uint32_t)INT32_MAX + 1 : INT32_MAX;
+  for (; *text; ++text) {
+    if (*text < '0' || *text > '9' || value > (limit - (*text - '0')) / 10) {
+      return false;
+    }
+    value = value * 10 + (*text - '0');
+  }
+  *status = negative ? (int)(-(int64_t)value) : (int)value;
+  return true;
+}
+
 static enum command_result builtin_command(struct shell *shell,
     const struct shell_expansion *expansion)
 {
@@ -370,9 +391,12 @@ static enum command_result builtin_command(struct shell *shell,
     return shell_values_command(shell, expansion);
   }
   if (strcmp(arguments[0], "exit") == 0) {
-    if (count != 1) {
-      return shell_error(shell, "usage: exit\n");
+    int status = 0;
+    if (count > 2 || (count == 2 && !exit_status(arguments[1], &status))) {
+      return shell_error(shell, "usage: exit [signed-32-bit decimal status]\n");
     }
+    shell->exit_status = status;
+    shell->exit_requested = true;
     return COMMAND_EXIT;
   }
   if (strcmp(arguments[0], "cd") == 0) {
@@ -480,7 +504,8 @@ static enum command_result expanded_command(struct shell *shell,
   if (assignment) {
     enum command_result result = shell_assign(shell, &expansion->words[0]);
     *outcome = expansion->words[0].capture &&
-        expansion->words[0].capture->outcome.kind == TERMINAL_COMPLETION_TERMINATED ?
+        (expansion->words[0].capture->outcome.kind == TERMINAL_COMPLETION_TERMINATED ||
+         expansion->words[0].capture->outcome.kind == TERMINAL_COMPLETION_FAULTED) ?
         expansion->words[0].capture->outcome :
         (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED};
     return result;
@@ -529,7 +554,17 @@ enum command_result shell_command(struct shell *shell, char *line,
   if (!syntax.count) {
     *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0};
   }
+  bool faulted = false;
   for (size_t i = 0; i < syntax.count; ++i) {
+    enum shell_condition condition = syntax.commands[i].condition;
+    if (condition == SHELL_ALWAYS) {
+      if (i && shell->script_name && result == COMMAND_FAILED) {
+        break;
+      }
+      faulted = false;
+    } else if (faulted || !shell_condition_selected(condition, result)) {
+      continue;
+    }
     struct shell_expansion expansion = {0};
     enum call_status status;
     *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
@@ -539,6 +574,9 @@ enum command_result shell_command(struct shell *shell, char *line,
           shell_error(shell, "shell: %s (status %u)\n", error, status);
       if (status == CALL_OUTCOME_UNKNOWN) {
         result = COMMAND_FATAL;
+      } else if (expansion.failure_outcome.kind == TERMINAL_COMPLETION_TERMINATED ||
+          expansion.failure_outcome.kind == TERMINAL_COMPLETION_FAULTED) {
+        *outcome = expansion.failure_outcome;
       } else if (status == CALL_ABANDONED) {
         *outcome = (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0};
       }
@@ -550,10 +588,10 @@ enum command_result shell_command(struct shell *shell, char *line,
       }
     }
     if (result == COMMAND_FATAL || result == COMMAND_EXIT ||
-        outcome->kind == TERMINAL_COMPLETION_TERMINATED ||
-        (shell->script_name && result == COMMAND_FAILED)) {
+        outcome->kind == TERMINAL_COMPLETION_TERMINATED) {
       break;
     }
+    faulted = outcome->kind == TERMINAL_COMPLETION_FAULTED;
   }
   shell_syntax_close(&syntax);
   return result;

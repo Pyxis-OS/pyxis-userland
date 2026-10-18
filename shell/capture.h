@@ -15,6 +15,7 @@ struct shell_capture_result {
   bool evaluated, published;
 };
 
+/* Failure releases owned values but preserves a fault/interruption outcome. */
 enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
     const char *destination, struct shell_capture_result *result);
 bool shell_capture_close(struct shell_capture_result *result);
