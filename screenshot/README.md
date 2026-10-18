@@ -38,11 +38,12 @@ first use. A complete PNG is encoded in an exclusively created temporary file,
 closed, then atomically renamed without replacement. Confirmed destination
 collisions select `-2`, `-3`, etc., through `-1000`; exhausting that bounded
 candidate set fails with LIMIT. The saver validates the request immediately
-before each rename attempt. Definite failures remove the confirmed temporary;
-OUTCOME_UNKNOWN and a failed reply copy preserve the uncertain names without
-retrying or speculatively removing either candidate. Known partial temporaries
-are removed on encoding failure. A failure never publishes a successful prefix. RAM-backed
-home works with its usual reboot-loss semantics; no extra durability is promised.
+before each rename attempt. Definite failures remove the confirmed temporary,
+including BAD_BUFFER because rename has no reply buffer. Only OUTCOME_UNKNOWN
+preserves uncertain names without retrying or speculatively removing either
+candidate. Known partial temporaries are removed on encoding failure. A failure
+never publishes a successful prefix. RAM-backed home works with its usual
+reboot-loss semantics; no extra durability is promised.
 
 The private request identity accompanies capture and completion. Switching the
 shown space before capture cancels the request; after capture, saving stays in
@@ -54,6 +55,7 @@ failures to its existing stderr; the saver still receives no console authority.
 
 Admission expires after 30 seconds. Validation cannot reserve or roll back a
 filesystem rename: a rename already submitted when timeout wins may finish
-late, so that timeout reports an unconfirmed save and asks the user to check
-the directory. The saver never replays the request, ignores a denied stale
-completion and re-establishes availability with NEXT.
+late. Timeout or saver death asks the user to check screenshots only if an
+image was captured; before capture, no storage work can have started. The saver
+never replays the request, ignores a denied stale completion and re-establishes
+availability with NEXT.

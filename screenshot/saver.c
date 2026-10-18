@@ -113,9 +113,8 @@ static uint64_t save(handle_t saver, handle_t capture, handle_t home,
     status = directory_rename(directory, temporary, directory, filename,
         DIRECTORY_RENAME_NO_REPLACE, DIRECTORY_KIND_FILE);
     if (status != CALL_ALREADY_EXISTS) {
-      /* Definite failures leave our confirmed temporary owned. Only a lost
-       * completion or reply-copy failure makes publication ambiguous. */
-      if (status == CALL_OK || status == CALL_OUTCOME_UNKNOWN || status == CALL_BAD_BUFFER) {
+      /* Rename has no reply buffer: BAD_BUFFER is a definite refusal too. */
+      if (status == CALL_OK || status == CALL_OUTCOME_UNKNOWN) {
         reserved = false;
       }
       goto done;
