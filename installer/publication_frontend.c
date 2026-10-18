@@ -1,5 +1,7 @@
 #include "publication_frontend.h"
 #include "battery.h"
+#include "pending.h"
+#include "recovery.h"
 #include "publication_snapshot.h"
 #include "configuration.h"
 #include "publication.h"
@@ -106,7 +108,8 @@ static bool retire(struct mount_fat32_reply *mount)
     enum call_status status = mount_retire(mount->control);
     ok = status == CALL_OK && ok;
     if (status != CALL_OK) {
-      fprintf(stderr, "installer publication: view retirement refused (status %u); no revocation\n", status);
+      fprintf(stderr, "installer publication: view retirement refused (status %u); retained, no revocation\n", status);
+      return false;
     }
     ok = handle_close(mount->control) == CALL_OK && ok;
     mount->control = HANDLE_INVALID;
@@ -288,7 +291,12 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   bool legacy_pair = false;
   uint64_t available_bytes = 0, cluster_bytes = 0;
   int result = EXIT_FAILURE;
-  bool crypto = hash_init(clock, random), claimed = false;
+  bool crypto = hash_init(clock, random);
+  bool completing = false;
+  struct disk_partition_selection target_selection = {0};
+  struct config_blob previous_limine = {0};
+  struct install_pending_plan completion = {0};
+  struct install_recovery recovery = {.sources = {{.handle = HANDLE_INVALID}, {.handle = HANDLE_INVALID}}};
   char text[128], revision[65], attempt[33], revision_text[66];
   if (!crypto || !install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
@@ -319,7 +327,8 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   disk.bytes = disk.info.block_count * disk.info.block_size;
   install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"), verbose);
   if (!install_pool_boot_snapshot(&disk, &pool) ||
-      disk_open_fat32(disk.handle, partition, MOUNT_ACCESS_READ_ONLY, READ_RIGHTS, &mount) != CALL_OK ||
+      disk_partition_info(disk.handle, partition, &target_selection) != CALL_OK ||
+      disks_open_owned_esp(disks, &target_selection, MOUNT_ACCESS_READ_ONLY, READ_RIGHTS, &mount) != CALL_OK ||
       !install_snapshot_facts(mount.control, &planned_facts)) {
     fputs("Planning view/identity unavailable; nothing written.\n", stderr);
     goto done;
@@ -334,17 +343,77 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   if (!install_snapshot_file(mount.root, "EFI/pyxis/config/config.record", CONFIG_RECORD_MAX_BYTES, &record)) {
     goto done;
   }
-  /* Evidence remains bound to this planning view and is rechecked under the
-   * initial raw claim and again after writable admission. */
+  /* Bind Review to canonical owned names and one complete prior record. */
+  struct config_record inspected = {0};
+  if (record.digest.present && config_record_parse(record.bytes, record.size, &inspected) &&
+      inspected.previous[CONFIG_LIMINE].digest.present) {
+    char path[256];
+    int length = snprintf(path, sizeof(path), "boot/limine/%s", inspected.previous[CONFIG_LIMINE].name);
+    if (length <= 0 || (size_t)length >= sizeof(path) ||
+        !install_snapshot_file(mount.root, path, CONFIG_FILE_MAX_BYTES, &previous_limine)) goto done;
+  }
+  if (!install_recovery_menu_review(mount.root, &record) ||
+      !install_recovery_prepare(mount.root, boot, bootstrap_capability("boot_kernel"),
+          workspace, &planned_facts, &recovery)) {
+    fputs("Static recovery or menu ownership is unrecognized; nothing written.\n", stderr);
+    goto done;
+  }
+  /* Recheck frozen bytes after exclusive scoped writable admission. */
   legacy_pair = install_boot_legacy_certify(mount.root, legacy_digests);
   if (!install_snapshot_capacity(&disk, &planned_facts, &available_bytes, &cluster_bytes)) {
     fputs("Capacity inspection unavailable; nothing written.\n", stderr);
     goto done;
   }
+  if (!install_pending_inspect(&record, current, &previous_limine, planned_facts.disk_guid,
+        legacy_pair ? legacy_digests : NULL, &completion)) goto done;
+  if (completion.state == INSTALL_PENDING_REFUSED) {
+    fputs("Readiness/menu state is ambiguous; explicit manual disposition required.\n", stderr);
+    goto done;
+  }
+  completing = completion.state == INSTALL_PENDING_ACTIVATION;
+  if (completion.available) {
+    for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
+      const struct config_recovery_file *old = &completion.record.obsolete[i];
+      if (!old->digest.present) continue;
+      char path[256];
+      int length = snprintf(path, sizeof(path), "%s/%s", i == CONFIG_LIMINE ?
+          "boot/limine" : "EFI/pyxis/config", old->name);
+      struct config_blob bytes = {0};
+      bool ok = length > 0 && (size_t)length < sizeof(path) &&
+          install_snapshot_file(mount.root, path, CONFIG_FILE_MAX_BYTES, &bytes);
+      if (ok && bytes.digest.present) {
+        ok = bytes.digest.size == old->digest.size && !strcmp(bytes.digest.sha256, old->digest.sha256);
+        completing = true;
+      }
+      config_blob_destroy(&bytes);
+      if (!ok) {
+        fputs("Recorded obsolete artifact differs; explicit manual disposition required.\n", stderr);
+        goto done;
+      }
+    }
+  }
   if (!retire(&mount) || handle_close(disk.handle) != CALL_OK) {
     goto done;
   }
   disk.handle = HANDLE_INVALID;
+  if (completing) {
+    uint64_t required = install_recovery_space(&recovery, cluster_bytes);
+    fprintf(stderr, "Pending activation: %s. Reuse attempt %s; readiness and retention stay unchanged.\n"
+        "Immutable rescue: %s; %llu bytes free, %llu bytes required.\n"
+        "Review actions: complete, cancel.\n", completion.menu_changed ? "publish recorded menu" :
+        "finish recorded cleanup", completion.record.boot.attempt, recovery.present ? "verify existing" :
+        "provision small rescue first", (unsigned long long)available_bytes, (unsigned long long)required);
+    if (!line(terminal, "Review: ", text, sizeof(text)) || !strcmp(text, "cancel")) {
+      fputs("Cancelled; nothing written.\n", stderr);
+      result = EXIT_SUCCESS;
+      goto done;
+    }
+    if (strcmp(text, "complete") || required > available_bytes) {
+      fputs("Pending completion not confirmed or insufficient capacity; nothing written.\n", stderr);
+      goto done;
+    }
+    goto admit;
+  }
   const char *defaults[CONFIG_LUA_COUNT] = {"config/installed.lua", "config/session.lua", "config/network.lua"};
   for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
     if (!install_snapshot_file(boot, defaults[i], CONFIG_FILE_MAX_BYTES, &archive[i]) || !archive[i].digest.present) {
@@ -426,9 +495,14 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     } else {
       configuration_summary(&plan, stderr);
     }
-    uint64_t required = required_capacity(&plan, binding, cluster_bytes);
+    uint64_t payload_required = required_capacity(&plan, binding, cluster_bytes);
+    uint64_t rescue_required = install_recovery_space(&recovery, cluster_bytes);
+    uint64_t required = payload_required > UINT64_MAX - rescue_required ? UINT64_MAX :
+        payload_required + rescue_required;
     fprintf(stderr, "Scratch staging requires at most %llu bytes; inspected free %llu (includes namespace reserve).\n",
         (unsigned long long)required, (unsigned long long)available_bytes);
+    fprintf(stderr, "Immutable rescue: %s; independent lower-priority /boot/limine.conf.\n",
+        recovery.present ? "verify existing pinned pair" : "provision small non-game pair first");
     fprintf(stderr, "Boot payload attempt: %s; %llu bytes kernel, %llu bytes archive.\n"
         "Boot entry: %s%s.\n", attempt, (unsigned long long)binding->kernel.digest.size,
         (unsigned long long)binding->archive.digest.size, pending ? "manual adoption; activation pending" : "owned switch last",
@@ -518,41 +592,31 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   binding->source = plan.source;
   binding->legacy_override = pool.digest;
   binding->legacy_disposition = plan.pool_disposition;
-  install_progress_begin("Exclusive initial revalidation (no writes yet)", INSTALL_PROGRESS_RAW_READ, NULL);
-  enum call_status status = disks_open(disks, id, DISK_ACCESS_READ_WRITE, &disk.handle);
-  claimed = status == CALL_OK;
+admit:
+  if (!install_battery_check(bootstrap_capability("system_info"), stderr)) goto done;
+  install_progress_begin("Scoped exclusive revalidation (no owned writes yet)", INSTALL_PROGRESS_RAW_READ, NULL);
+  enum call_status status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle);
+  if (status == CALL_OK) status = disk_get_info(disk.handle, &disk.info);
+  if (status == CALL_OK) status = disks_open_owned_esp(disks, &target_selection,
+      MOUNT_ACCESS_READ_WRITE, WRITE_RIGHTS, &mount);
   struct config_blob current_pool = {0};
-  if (!claimed || disk_get_info(disk.handle, &disk.info) != CALL_OK ||
-      !install_snapshot_revalidate(&disk, &planned_facts, current, &record) ||
+  if (status != CALL_OK ||
       !install_pool_boot_snapshot(&disk, &current_pool) || !config_blob_equal(&pool, &current_pool)) {
     config_blob_destroy(&current_pool);
-    fputs("Stale/unavailable input; nothing staged; no retry.\n", stderr);
+    fprintf(stderr, "Scoped admission/stale input refused (status %u); nothing staged.\n", status);
     goto done;
   }
   config_blob_destroy(&current_pool);
-  uint64_t fresh_available, fresh_cluster;
-  if (!install_snapshot_capacity(&disk, &planned_facts, &fresh_available, &fresh_cluster) ||
-      fresh_cluster != cluster_bytes || required_capacity(&plan, binding, fresh_cluster) > fresh_available) {
-    fputs("Staging capacity changed or unavailable; nothing written.\n", stderr);
-    goto done;
-  }
-  const char *legacy_paths[] = {"/boot/caelum.elf", "/boot/initrd.cpio", "/boot/revision"};
-  for (unsigned i = 0; legacy_pair && i < 3; ++i) {
-    if (!install_snapshot_payload_revalidate(&disk, &planned_facts, legacy_paths[i], &legacy_digests[i])) {
-      fputs("Legacy boot ownership evidence changed; nothing staged.\n", stderr);
-      goto done;
-    }
-  }
-  if (disk_release(disk.handle) != CALL_OK) {
-    claimed = false;
-    goto done;
-  }
-  claimed = false;
-  status = disk_open_fat32(disk.handle, partition, MOUNT_ACCESS_READ_WRITE, WRITE_RIGHTS, &mount);
-  if (status != CALL_OK || mount_observe(mount.control, &request.expected_target) != CALL_OK ||
+  if (mount_observe(mount.control, &request.expected_target) != CALL_OK ||
       !install_snapshot_facts(mount.control, &request.facts) ||
-      !install_snapshot_same_target(&planned_facts, &request.facts)) {
-    fprintf(stderr, "Writable view refused (status %u); no publication.\n", status);
+      !install_snapshot_same_target(&planned_facts, &request.facts)) goto done;
+  uint64_t fresh_available, fresh_cluster;
+  uint64_t required = completing ? 0 : required_capacity(&plan, &request.binding, cluster_bytes);
+  uint64_t rescue_required = install_recovery_space(&recovery, cluster_bytes);
+  if (required > UINT64_MAX - rescue_required ||
+      !install_snapshot_capacity(&disk, &planned_facts, &fresh_available, &fresh_cluster) ||
+      fresh_cluster != cluster_bytes || required + rescue_required > fresh_available) {
+    fputs("Staging capacity changed or unavailable; no owned files changed.\n", stderr);
     goto done;
   }
   request.esp_root = mount.root;
@@ -581,10 +645,28 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
       goto done;
     }
   }
-  /* Creating missing parents is the first owned mutation after initial checks. */
+  if (!install_recovery_menu_review(mount.root, &record) ||
+      !install_recovery_provision(mount.root, mount.control, workspace, &recovery)) {
+    fputs("Static fallback not verified; no readiness/menu publication.\n", stderr);
+    goto done;
+  }
+  /* Static rescue is durable before any readiness/menu publication. */
   if (!parent_open(mount.root, "EFI/pyxis/config", true, &request.view.config_parent) ||
       (current[CONFIG_LIMINE].digest.present &&
        !parent_open(mount.root, "boot/limine", false, &request.view.limine_parent))) {
+    goto done;
+  }
+  if (completing) {
+    struct install_pending_request resume = {.esp_root = mount.root, .workspace = workspace,
+      .view = request.view, .facts = request.facts, .expected_target = request.expected_target,
+      .record = &record, .current = current, .previous_limine = &previous_limine, .fallback_ready = true};
+    memcpy(resume.legacy, legacy_digests, sizeof(resume.legacy));
+    struct config_storage_report report = {0};
+    bool ok = install_pending_complete(&resume, &report);
+    request.binding = completion.record.boot;
+    publication_result(&request, &report, NULL, ok);
+    if (ok) fputs("Pending activation completed. Build and Review a fresh plan for another Update.\n", stderr);
+    result = ok ? EXIT_SUCCESS : EXIT_FAILURE;
     goto done;
   }
   request.expected = current;
@@ -623,15 +705,13 @@ done:
     result = EXIT_FAILURE;
   }
   if (disk.handle != HANDLE_INVALID) {
-    if (claimed) {
-      if (disk_release(disk.handle) != CALL_OK) {
-        result = EXIT_FAILURE;
-      }
-    }
     if (handle_close(disk.handle) != CALL_OK) {
       result = EXIT_FAILURE;
     }
   }
+  install_pending_destroy(&completion);
+  install_recovery_destroy(&recovery);
+  config_blob_destroy(&previous_limine);
   install_configuration_free(&plan);
   install_programs_destroy(&programs);
   free(filtered.memory);

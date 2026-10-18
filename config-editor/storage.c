@@ -842,6 +842,16 @@ static bool pending_snapshot(const struct install_pending_request *request,
     ok = expected_name(view->limine_parent, plan->record.previous[CONFIG_LIMINE].name,
         request->previous_limine, report);
   }
+  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
+    const struct config_recovery_file *old = &plan->record.obsolete[i];
+    if (!old->digest.present) continue;
+    struct config_blob bytes = {0};
+    ok = read_name(parent_for(view, i), old->name, CONFIG_FILE_MAX_BYTES, &bytes, report);
+    if (ok && bytes.digest.present) {
+      ok = digest_equal(&bytes.digest, &old->digest) || failed(report, CALL_BAD_REQUEST);
+    }
+    config_blob_destroy(&bytes);
+  }
   return ok && current_view(view, &request->facts, true, interval, report);
 }
 

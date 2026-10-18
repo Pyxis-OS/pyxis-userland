@@ -29,7 +29,7 @@ void install_pending_destroy(struct install_pending_plan *plan);
 /* Borrowed frozen snapshots and already admitted native target. FALLBACK_READY
  * records the trusted caller's completed static fallback verification; it does
  * not confer authority. The caller must obtain fresh Review consent and perform
- * initial raw-claim revalidation before admitting this writable view. */
+ * initial snapshot revalidation under the exclusive scoped writable view. */
 struct install_pending_request {
   handle_t esp_root, workspace;
   struct config_storage_view view;
