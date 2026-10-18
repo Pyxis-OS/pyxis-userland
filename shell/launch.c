@@ -2565,7 +2565,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   bool helper_failed = false;
   for (size_t i = 0; i < stage_count; ++i) {
     enum command_result diagnostic = COMMAND_OK;
-    if (i >= user_count && cancelled && completion[i].kind == PROCESS_TERMINATED) {
+    if (i >= user_count && cancelled) {
       continue;
     }
     if (i >= user_count && (completion[i].kind != PROCESS_EXITED || completion[i].exit_status)) {
