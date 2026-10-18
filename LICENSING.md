@@ -25,6 +25,11 @@ applied: MPL's standard secondary-license provisions remain available.
 - `libc/include/math.h` includes musl-derived infinity/NaN definitions. Those
   portions retain musl's terms; the original Pyxis portions follow MPL. Preserve
   musl's notice when redistributing this header.
+- `third_party/stb_truetype/`: pinned font rasterizer and local allocation-failure
+  adaptations use the MIT option in [LICENSE](third_party/stb_truetype/LICENSE);
+  source, cache checksum and changes are recorded in
+  [UPSTREAM.md](third_party/stb_truetype/UPSTREAM.md). Its parser is for trusted
+  font files only.
 - The shebang parser, ABI headers and libraries consumed from an external SDK or
   ports installation keep their supplied licenses. They are not relicensed by
   inclusion in a userland build.
