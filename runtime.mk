@@ -24,6 +24,8 @@ LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/shebang.o $(BUILD)/lib/key_layout.o $(BUILD)/lib/terminal_style.o $(BUILD)/lib/terminal_text.o $(BUILD)/lib/wait.o
 LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
+LIBFONT := $(BUILD)/libfont.a
+FONT_OBJECTS := $(BUILD)/libfont/font.o $(BUILD)/libfont/stb_adapter.o $(BUILD)/libfont/blend.o
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
@@ -150,10 +152,11 @@ MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
                 $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(BUILD)/libc/thread_entry.o $(MUSL_OBJECTS)
 
-.PHONY: all libpyxis libterm libc clean FORCE
-all: $(START_OBJECT) libpyxis libterm libc
+.PHONY: all libpyxis libterm libfont libc clean FORCE
+all: $(START_OBJECT) libpyxis libterm libfont libc
 libpyxis: $(LIBPYXIS)
 libterm: $(LIBTERM)
+libfont: $(LIBFONT)
 libc: $(LIBC)
 
 $(LIBPYXIS): $(LIB_OBJECTS) runtime.mk
@@ -166,6 +169,11 @@ $(LIBTERM): $(TERM_OBJECTS) runtime.mk
 	@mkdir -p $(@D)
 	rm -f $@
 	$(AR) rcs $@ $(TERM_OBJECTS)
+
+$(LIBFONT): $(FONT_OBJECTS) runtime.mk
+	@mkdir -p $(@D)
+	rm -f $@
+	$(AR) rcs $@ $(FONT_OBJECTS)
 
 $(LIBC): $(LIBC_OBJECTS) runtime.mk
 	@mkdir -p $(@D)
@@ -235,7 +243,7 @@ $(BUILD)/%.o: %.S runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(START_OBJECT) $(LIB_OBJECTS) $(TERM_OBJECTS) $(LIBC_OBJECTS): runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(START_OBJECT) $(LIB_OBJECTS) $(TERM_OBJECTS) $(FONT_OBJECTS) $(LIBC_OBJECTS): runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
@@ -248,4 +256,4 @@ FORCE:
 clean:
 	rm -rf $(BUILD)
 
--include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d)
+-include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(FONT_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d)
