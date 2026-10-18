@@ -447,7 +447,12 @@ static bool profile_matches(handle_t disks, bool coexist)
 {
   uint64_t rights, transport;
   uint64_t required = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY |
-      DISKS_RIGHT_OPEN_POOL | DISKS_RIGHT_MOUNT_READ_ONLY | DISKS_RIGHT_MOUNT_READ_WRITE;
+      DISKS_RIGHT_OPEN_POOL;
+#if INSTALLER_PUBLICATION_SCRATCH
+  required |= DISKS_RIGHT_OPEN_OWNED_ESP;
+#else
+  required |= DISKS_RIGHT_MOUNT_READ_ONLY | DISKS_RIGHT_MOUNT_READ_WRITE;
+#endif
   required |= coexist ? DISKS_RIGHT_APPEND_POOL : DISKS_RIGHT_ERASE | DISKS_RIGHT_REBUILD_ESP;
   uint64_t forbidden = coexist ? DISKS_RIGHT_ERASE | DISKS_RIGHT_REBUILD_ESP |
       DISKS_RIGHT_OPEN | DISKS_RIGHT_OPEN_PARTITION : 0;
@@ -591,6 +596,9 @@ int main(int argc, char **argv)
     fputs("installer: sources or inventory unavailable; nothing was written\n", stderr);
     goto done;
   }
+#if INSTALLER_PUBLICATION_SCRATCH
+  plan.workspace = payload_workspace;
+#endif
   char revision[64];
   strcpy(revision, plan.record.revision);
   install_progress_pause();
@@ -637,7 +645,7 @@ int main(int argc, char **argv)
     plan.record.esp_rebuild = !coexist && updating && selected->boot_rebuild;
     memset(plan.record.attempt, '0', 32);
     plan.record.attempt[32] = '\0';
-    if (coexist && !new_attempt(clock, random, plan.record.attempt)) {
+    if ((coexist || INSTALLER_PUBLICATION_SCRATCH) && !new_attempt(clock, random, plan.record.attempt)) {
       say("installer: fresh payload attempt identity unavailable; nothing was written");
       goto done;
     }

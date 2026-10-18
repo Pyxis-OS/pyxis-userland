@@ -69,6 +69,12 @@ enum call_status disks_open_fat32(handle_t disks, uint64_t id, uint64_t partitio
     uint64_t access, uint64_t rights, const uint8_t expected_disk_guid[16],
     struct mount_fat32_reply *mount);
 
+/* Scoped ESP issuer, independent of installer erase/append review. The exact
+ * GPT selection is revalidated; only owned publication paths are writable. */
+enum call_status disks_open_owned_esp(handle_t disks,
+    const struct disk_partition_selection *selection, uint64_t access, uint64_t rights,
+    struct mount_fat32_reply *mount);
+
 /* One exact, nonzero transfer of at most DISK_IO_MAX_BYTES. Device alignment
  * and bounds are checked by the native operation. READ returns length bytes
  * only on success; failed reads may have touched the caller's buffer. WRITE

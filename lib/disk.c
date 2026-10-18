@@ -358,6 +358,28 @@ enum call_status disks_open_fat32(handle_t disks, uint64_t id, uint64_t partitio
   return CALL_OK;
 }
 
+enum call_status disks_open_owned_esp(handle_t disks,
+    const struct disk_partition_selection *selection, uint64_t access, uint64_t rights,
+    struct mount_fat32_reply *mount)
+{
+  if (!mount) return CALL_BAD_REQUEST;
+  *mount = (struct mount_fat32_reply){0};
+  if (!selection || !selection->id || !selection->partition ||
+      (access != MOUNT_ACCESS_READ_ONLY && access != MOUNT_ACCESS_READ_WRITE) ||
+      (rights & ~DIRECTORY_CONTENT_RIGHTS)) return CALL_BAD_REQUEST;
+  struct {
+    struct message_header header;
+    struct disks_owned_esp_request body;
+  } message = {{PROTOCOL_DISKS, DISKS_OPEN_OWNED_ESP}, {*selection, access, rights}};
+  struct mount_fat32_reply reply = {0};
+  enum call_status status = reply_status(syscall_call(disks, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status != CALL_OK) return status;
+  if (!reply.root || !reply.control || reply.root == reply.control) return CALL_OUTCOME_UNKNOWN;
+  *mount = reply;
+  return CALL_OK;
+}
+
 enum call_status disk_read(handle_t disk, uint64_t offset, void *bytes, size_t length)
 {
   if (!bytes || !length || length > DISK_IO_MAX_BYTES || length > UINT64_MAX - offset) {

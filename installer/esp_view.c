@@ -117,8 +117,13 @@ enum call_status install_esp_view_open(struct install_esp_view *view, handle_t d
   }
   view->attempted = true;
   struct mount_fat32_reply mounted;
+#if INSTALLER_PUBLICATION_SCRATCH
+  enum call_status status = disks_open_owned_esp(disks, selection,
+      MOUNT_ACCESS_READ_WRITE, root_rights, &mounted);
+#else
   enum call_status status = disks_open_fat32(disks, selection->id, selection->partition,
       MOUNT_ACCESS_READ_WRITE, root_rights, selection->disk_guid, &mounted);
+#endif
   if (status == CALL_OK) {
     view->root = mounted.root;
     view->control = mounted.control;

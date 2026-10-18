@@ -258,8 +258,13 @@ static bool inspect_esp(handle_t issuer, struct install_review_esp *esp,
     return false;
   }
   struct mount_fat32_reply mounted;
+#if INSTALLER_PUBLICATION_SCRATCH
+  esp->admission_status = disks_open_owned_esp(issuer, &esp->selection,
+      MOUNT_ACCESS_READ_ONLY, REVIEW_DIRECTORY_RIGHTS, &mounted);
+#else
   esp->admission_status = disks_open_fat32(issuer, esp->selection.id, esp->selection.partition,
       MOUNT_ACCESS_READ_ONLY, REVIEW_DIRECTORY_RIGHTS, esp->selection.disk_guid, &mounted);
+#endif
   esp->root = mounted.root;
   esp->control = mounted.control;
   if (!text(review, "  RO admission status=%u\n", esp->admission_status)) {
