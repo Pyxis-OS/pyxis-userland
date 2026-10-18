@@ -85,6 +85,50 @@ static bool print_controllers(handle_t authority)
   }
 }
 
+static bool print_interfaces(handle_t authority)
+{
+  uint64_t after_id = 0;
+  puts("Native interfaces:");
+  for (;;) {
+    struct net_interface_reply interface;
+    enum call_status status = net_config_next_interface(authority, after_id, &interface);
+    if (status != CALL_OK) {
+      fprintf(stderr, "net: cannot read the interface inventory (status %u)\n", status);
+      return false;
+    }
+    if (!interface.interface_id) {
+      return true;
+    }
+    printf("%s: id %llu class %s mtu %u epoch %llu route %llu", interface.name,
+        (unsigned long long)interface.interface_id,
+        interface.interface_class == NET_INTERFACE_CLASS_LOOPBACK ? "loopback" : "ethernet",
+        interface.mtu, (unsigned long long)interface.address_epoch,
+        (unsigned long long)interface.route_revision);
+    if (interface.flags & NET_INTERFACE_BOUND) {
+      printf(" controller %u driver %s", interface.controller_id, driver_name(interface.driver));
+    }
+    if (interface.flags & NET_INTERFACE_MAC_VALID) {
+      char mac[18];
+      format_mac(interface.mac, mac);
+      printf(" mac %s", mac);
+    }
+    if (interface.flags & NET_INTERFACE_CARRIER_KNOWN) {
+      printf(" link %s", interface.flags & NET_INTERFACE_LINK_UP ? "up" : "down");
+    }
+    if (interface.flags & NET_INTERFACE_ADDRESS_VALID) {
+      char text[16];
+      format_ipv4(interface.address, text);
+      printf(" ipv4 %s/%u", text, interface.prefix);
+      if (interface.gateway) {
+        format_ipv4(interface.gateway, text);
+        printf(" gateway %s", text);
+      }
+    }
+    putchar('\n');
+    after_id = interface.interface_id;
+  }
+}
+
 static bool print_net0(handle_t authority)
 {
   struct net_config_reply net0;
@@ -131,7 +175,7 @@ int main(int argc, char **argv)
     fputs("net: no net_config grant (the launching shell did not supply one)\n", stderr);
     return EXIT_FAILURE;
   }
-  bool ok = print_controllers(authority) && print_net0(authority);
+  bool ok = print_controllers(authority) && print_interfaces(authority) && print_net0(authority);
   if (fflush(stdout) == EOF) {
     perror("net: output");
     return EXIT_FAILURE;

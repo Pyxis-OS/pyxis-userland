@@ -1,5 +1,6 @@
 #include <net_config.h>
 #include <syscall.h>
+#include <string.h>
 
 static enum call_status snapshot_call(handle_t authority, const void *request,
     size_t request_size, struct net_config_reply *reply)
@@ -49,6 +50,59 @@ enum call_status net_config_next_controller(handle_t authority, uint32_t after_i
     return CALL_BAD_REQUEST;
   }
   if (result.status == CALL_OK) {
+    *reply = response;
+  }
+  return result.status;
+}
+
+static bool interface_reply_valid(uint64_t after_id,
+    const struct net_interface_reply *reply)
+{
+  if (reply->flags & ~NET_INTERFACE_FLAGS || reply->reserved[0] || reply->reserved[1]) {
+    return false;
+  }
+  if (!reply->interface_id) {
+    const struct net_interface_reply end = {.flags = NET_INTERFACE_INVENTORY_COMPLETE};
+    return !memcmp(reply, &end, sizeof(end));
+  }
+  if (reply->interface_id <= after_id || !(reply->flags & NET_INTERFACE_DEFINED)) {
+    return false;
+  }
+  const char *end = memchr(reply->name, 0, sizeof(reply->name));
+  if (!end || end == reply->name) {
+    return false;
+  }
+  for (const char *tail = end + 1; tail < reply->name + sizeof(reply->name); ++tail) {
+    if (*tail) {
+      return false;
+    }
+  }
+  return true;
+}
+
+enum call_status net_config_next_interface(handle_t authority, uint64_t after_id,
+    struct net_interface_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  *reply = (struct net_interface_reply){0};
+  struct net_interface_request request = {
+    .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_NEXT_INTERFACE}, .after_id = after_id,
+  };
+  struct net_interface_reply response;
+  struct syscall_result result = syscall_call(authority, &request, sizeof(request),
+      &response, sizeof(response));
+  if (result.status >= CALL_STATUS_COUNT) {
+    return CALL_UNAVAILABLE;
+  }
+  if (result.reply_size != (result.status == CALL_OK ? sizeof(response) : 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    if (!interface_reply_valid(after_id, &response)) {
+      return CALL_BAD_REQUEST;
+    }
     *reply = response;
   }
   return result.status;
