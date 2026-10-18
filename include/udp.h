@@ -38,4 +38,12 @@ enum call_status udp_send(handle_t endpoint, uint32_t address, uint16_t port,
 enum call_status udp_receive(handle_t endpoint, void *data, size_t capacity,
     uint64_t deadline_ns, struct udp_receive_reply *reply);
 
+/* Inspect only the held factory's immutable scope; zero ID ends the list.
+ * Derivation returns a new one-interface factory with subset operation rights.
+ * Outputs are cleared on failure. No inventory/configuration right is added. */
+enum call_status udp_factory_next_interface(handle_t authority, uint64_t after_id,
+    uint64_t *interface_id);
+enum call_status udp_factory_derive(handle_t authority, uint64_t interface_id,
+    uint64_t rights, handle_t *derived);
+
 #endif

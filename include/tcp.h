@@ -43,4 +43,12 @@ enum call_status tcp_try_read(handle_t stream, void *data, size_t capacity,
 enum call_status tcp_try_write(handle_t stream, const void *data, size_t length,
     struct tcp_write_reply *reply);
 
+/* Inspect only the held factory's immutable scope; zero ID ends the list.
+ * Derivation returns a new one-interface factory with subset operation rights.
+ * Outputs are cleared on failure. No inventory/configuration right is added. */
+enum call_status tcp_factory_next_interface(handle_t authority, uint64_t after_id,
+    uint64_t *interface_id);
+enum call_status tcp_factory_derive(handle_t authority, uint64_t interface_id,
+    uint64_t rights, handle_t *derived);
+
 #endif
