@@ -228,7 +228,7 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
   }
   bool ok = config_readiness_choose(archive, &catalog, plan->kernel_revision, plan->program_revision,
       &loaded[0], &loaded[1], &completion, esp, &current_catalog, true, false, &frozen, &reason);
-  fprintf(stderr, "Frozen handoff preview: %s (%s); installed loader unchanged.\n",
+  fprintf(stderr, "Current loaded-pair readiness: %s (%s).\n",
       ok && frozen.from_esp ? "ESP" : "archive", reason ? reason : "unavailable");
   config_selection_free(&frozen);
   return ok;
