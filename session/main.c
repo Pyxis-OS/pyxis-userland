@@ -97,7 +97,7 @@ static int launch_session(const struct session_config *config, struct network_co
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 34 };
+  enum { OPTIONAL_RESOURCE_COUNT = 36 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -188,6 +188,27 @@ static int launch_session(const struct session_config *config, struct network_co
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
   grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
+  static const char *const configuration_names[] = {"session_config", "network_config"};
+  for (size_t i = 0; i < sizeof(configuration_names) / sizeof(*configuration_names); ++i) {
+    const struct environment_value *value = environment_capture_find(&captured, configuration_names[i]);
+    if (!value) {
+      continue;
+    }
+    struct handle_info info;
+    status = value->kind == ENVIRONMENT_CAP ? handle_query(value->handle, &info) : CALL_WRONG_TYPE;
+    if (status == CALL_OK && (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_FILE ||
+        info.rights != FILE_RIGHT_READ || info.transport)) {
+      status = CALL_DENIED;
+    }
+    if (status != CALL_OK) {
+      fprintf(stderr, "session: cannot retain selected %s FILE (status %u)\n",
+          configuration_names[i], status);
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP(configuration_names[i], grant_count);
+    grants[grant_count++] = (struct launch_grant){value->handle, FILE_RIGHT_READ, 0};
+  }
   handle_t threads = bootstrap_capability("threads");
   if (threads != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", grant_count);

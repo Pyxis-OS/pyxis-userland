@@ -3,6 +3,10 @@
 #include "../libconfig/boot.h"
 #include "../pkg/store.h"
 #include "network.h"
+#include "../libconfig/handoff.h"
+#if INSTALLER_PUBLICATION_SCRATCH
+#include "selection.h"
+#endif
 #include <abi/clock.h>
 #include <abi/directory.h>
 #include <abi/echo.h>
@@ -137,6 +141,8 @@ struct authority {
   handle_t ram_npfs; /* Boot-only pool creation, never forwarded to a space init. */
   uint64_t ram_npfs_bytes; /* Captured from the archive, never from an override. */
   handle_t input_policy; /* Boot-only, never forwarded through services. */
+  handle_t loaded_kernel, loaded_archive; /* Private kernel-issued immutable FILEs. */
+  struct config_handoff configuration;
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
   /* The read-only ACPI table root, bound as acpi only for spaces that set acpi_tables. */
@@ -177,6 +183,10 @@ static bool take_authority(struct authority *authority)
   authority->power = bootstrap_capability("power");
   authority->wifi = bootstrap_capability("wifi");
   authority->input_policy = bootstrap_capability("input_policy");
+#if INSTALLER_PUBLICATION_SCRATCH
+  authority->loaded_kernel = bootstrap_take_capability("boot_kernel");
+  authority->loaded_archive = bootstrap_take_capability("boot_archive");
+#endif
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID &&
       authority->input_policy != HANDLE_INVALID;
@@ -913,8 +923,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
   for (size_t i = 0; space->network && i < authority->network.config.count; ++i) {
     network_entries += authority->network.config.interfaces[i].resolved_controller != 0;
   }
-  launch->resources = calloc(SERVICE_COUNT + 18 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 19 + BUNDLE_SOURCE_LIMIT + network_entries,
+  launch->resources = calloc(SERVICE_COUNT + 20 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 21 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   launch->package_trees = calloc(space->root_count ? space->root_count : 1,
@@ -943,6 +953,18 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (commands_status != CALL_OK) {
     snprintf(reason, size, "command search list unavailable (status %u)", commands_status);
     return reason;
+  }
+  static const char *const configuration_names[CONFIG_LUA_COUNT] = {
+    NULL, "session_config", "network_config"
+  };
+  for (size_t i = CONFIG_LUA_SESSION; i < CONFIG_LUA_COUNT; ++i) {
+    if (authority->configuration.files[i] == HANDLE_INVALID) {
+      continue;
+    }
+    launch->resources[launch->resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP((uintptr_t)configuration_names[i], launch->grant_count);
+    launch->grants[launch->grant_count++] =
+        (struct launch_grant){authority->configuration.files[i], FILE_RIGHT_READ, 0};
   }
   for (size_t i = 0; i < space->root_count; ++i) {
     const struct boot_root *root = &space->roots[i];
@@ -1407,6 +1429,43 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   start_space(authority, mounts, &rescue, true);
 }
 
+#if INSTALLER_PUBLICATION_SCRATCH
+static bool freeze_configuration(struct authority *authority, bool rescue,
+    struct config_selection *selection)
+{
+  struct boot_selection_authority sources = {
+    .boot = authority->boot, .esp_mount = authority->esp_mount, .ram = authority->ram,
+    .system_info = authority->services[SERVICE_SYSTEM_INFO],
+    .clock = authority->services[SERVICE_CLOCK], .random = authority->services[SERVICE_RANDOM],
+    .loaded_kernel = authority->loaded_kernel, .loaded_archive = authority->loaded_archive,
+  };
+  return boot_selection_prepare(&sources, rescue, selection, &authority->configuration);
+}
+
+static bool start_archive_rescue(const struct authority *authority, struct mounts *mounts)
+{
+  static const struct boot_space readonly = {
+    .name = "readonly", .title = "Read-only", .init = "boot://init-readonly", .start = "tmp",
+    .power = true, .clipboard_local = true, .clipboard_shared = true,
+  };
+  puts("boot-init: archive rescue: boot/tmp only; no installed programs or pool override");
+  return start_space(authority, mounts, &readonly, true);
+}
+
+static bool close_boot_payloads(struct authority *authority)
+{
+  bool ok = true;
+  handle_t *files[] = {&authority->loaded_kernel, &authority->loaded_archive};
+  for (size_t i = 0; i < sizeof(files) / sizeof(*files); ++i) {
+    if (*files[i] != HANDLE_INVALID) {
+      ok = handle_close(*files[i]) == 0 && ok;
+      *files[i] = HANDLE_INVALID;
+    }
+  }
+  return ok;
+}
+#endif
+
 int main(int argc, char **argv)
 {
   bool installed = false, default_config = false;
@@ -1437,29 +1496,72 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-  struct boot_config defaults, override = {0};
+  struct boot_config defaults = {0}, override = {0};
   const struct boot_config *applied_override = NULL;
   struct boot_plan plan = {0};
+  struct config_selection selection = {0};
   enum boot_plan_error plan_error;
   bool suppress_boot_focus = false;
   struct mounts mounts = {0};
   int exit_status = EXIT_SUCCESS;
   const char *path = installed ? INSTALLED_CONFIG : LIVE_CONFIG;
-  printf("boot-init: reading %s\n", path);
-  enum boot_config_result result = boot_config_read(path, &defaults);
+  bool frozen_configuration = false, archive_recovery = false;
+  enum boot_config_result result;
+#if INSTALLER_PUBLICATION_SCRATCH
+  if (installed || default_config) {
+    bool prepared = freeze_configuration(&authority, default_config, &selection);
+    bool closed = close_boot_payloads(&authority);
+    if (!prepared || !closed) {
+      exit_status = EXIT_FAILURE;
+      goto finish;
+    }
+    /* This read-only binding happens after selection, before machine effects.
+     * An absent program revision takes archive rescue rather than starting an
+     * ordinary installed session against an incomplete program set. */
+    bind_bin(&authority, &selection.boot, installed && !default_config);
+    archive_recovery = default_config || authority.bin == authority.boot;
+    if (archive_recovery && !default_config) {
+      config_selection_free(&selection);
+      if (!config_handoff_close(&authority.configuration) ||
+          !freeze_configuration(&authority, true, &selection)) {
+        exit_status = EXIT_FAILURE;
+        goto finish;
+      }
+    }
+    defaults = selection.defaults;
+    override = selection.override;
+    plan = selection.boot;
+    applied_override = selection.from_esp ? &override : NULL;
+    selection.defaults = (struct boot_config){0};
+    selection.override = (struct boot_config){0};
+    selection.boot = (struct boot_plan){0};
+    frozen_configuration = true;
+    result = BOOT_CONFIG_OK;
+  } else
+#endif
+  {
+#if INSTALLER_PUBLICATION_SCRATCH
+    if (!close_boot_payloads(&authority)) {
+      exit_status = EXIT_FAILURE;
+      goto finish;
+    }
+#endif
+    printf("boot-init: reading %s\n", path);
+    result = boot_config_read(path, &defaults);
+  }
   if (result != BOOT_CONFIG_OK) {
     fprintf(stderr, "boot-init: %s %s\n", path,
         result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");
-  } else if (!boot_plan_build(&defaults, NULL, &plan, &plan_error)) {
+  } else if (!frozen_configuration && !boot_plan_build(&defaults, NULL, &plan, &plan_error)) {
     suppress_boot_focus = plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
     fprintf(stderr, "boot-init: %s is invalid\n", path);
   }
 
   authority.ram_npfs_bytes = defaults.ram_npfs_bytes;
   const struct boot_volume *system = boot_plan_volume(&plan, BOOT_SYSTEM_VOLUME);
-  if (installed && system) {
-    /* The override is read before the plan is final, so system is mounted
-     * read-write and each space receives only the access its root asks for. */
+  if (installed && system && !archive_recovery) {
+    /* Machine settings retain the system mount. Legacy startup also reads its
+     * boot override here; frozen task-5 startup never reopens that override. */
     mounts.entries = calloc(1, sizeof(*mounts.entries));
     if (mounts.entries) {
       struct mounted_volume *mounted = &mounts.entries[mounts.count++];
@@ -1469,9 +1571,9 @@ int main(int argc, char **argv)
       if (mounted->status != CALL_OK) {
         printf("boot-init: volume %s unavailable (status %u)\n", system->name,
             mounted->status);
-      } else if (plan.space_count && default_config) {
+      } else if (plan.space_count && !frozen_configuration && default_config) {
         puts("boot-init: rescue entry: ignoring " OVERRIDE_NAME);
-      } else if (plan.space_count) {
+      } else if (plan.space_count && !frozen_configuration) {
         result = read_override(mounted->root, &override);
         if (result == BOOT_CONFIG_MISSING) {
           puts("boot-init: no " OVERRIDE_NAME "; using the default");
@@ -1494,11 +1596,12 @@ int main(int argc, char **argv)
     }
   }
 
-  if (!set_hostname(&authority, &defaults, &mounts, installed)) {
+  if (!set_hostname(&authority, &defaults, &mounts, installed && !archive_recovery)) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }
-  if (!set_input_policy(&authority, &defaults, applied_override, &mounts, installed)) {
+  if (!set_input_policy(&authority, &defaults, applied_override, &mounts,
+      installed && !archive_recovery)) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }
@@ -1509,11 +1612,18 @@ int main(int argc, char **argv)
       fprintf(stderr, "boot-init: Wi-Fi country policy refused (status %u); no Wi-Fi TX admitted\n", policy);
     }
   }
-  bind_bin(&authority, &plan, installed);
+  if (!frozen_configuration) {
+    bind_bin(&authority, &plan, installed);
+  }
   if (suppress_boot_focus) {
     puts("boot-init: duplicate focus request; automatic focus disabled for this boot");
   }
   size_t started = 0;
+#if INSTALLER_PUBLICATION_SCRATCH
+  if (archive_recovery) {
+    started = start_archive_rescue(&authority, &mounts);
+  } else
+#endif
   if (mount_plan(&authority, &plan, &mounts)) {
     seed_live_repositories(&authority, &mounts);
     struct mounted_volume *packages = find_mount(&mounts, BOOT_PACKAGES_VOLUME);
@@ -1528,6 +1638,24 @@ int main(int argc, char **argv)
     }
   }
   if (!started) {
+#if INSTALLER_PUBLICATION_SCRATCH
+    if (frozen_configuration && !archive_recovery) {
+      config_selection_free(&selection);
+      if (!config_handoff_close(&authority.configuration) ||
+          !freeze_configuration(&authority, true, &selection)) {
+        exit_status = EXIT_FAILURE;
+        goto finish;
+      }
+      if (authority.bin != authority.boot && handle_close(authority.bin)) {
+        exit_status = EXIT_FAILURE;
+        goto finish;
+      }
+      authority.bin = authority.boot;
+      if (!start_archive_rescue(&authority, &mounts)) {
+        start_rescue(&authority, &mounts);
+      }
+    } else
+#endif
     start_rescue(&authority, &mounts);
   }
 
@@ -1557,6 +1685,8 @@ finish:
   boot_plan_free(&plan);
   boot_config_free(&override);
   boot_config_free(&defaults);
+  config_selection_free(&selection);
+  config_handoff_close(&authority.configuration);
   free(mounts.entries);
   return exit_status;
 }

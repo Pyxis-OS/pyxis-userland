@@ -74,7 +74,7 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[44 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[46 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
@@ -717,6 +717,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   handle_t retention_account = session ? bootstrap_capability("retention_account") : HANDLE_INVALID;
   bool has_retention_factory = retention_factory != HANDLE_INVALID;
   bool has_retention_account = retention_account != HANDLE_INVALID;
+  handle_t session_config = session ? bootstrap_capability("session_config") : HANDLE_INVALID;
+  handle_t network_config = session ? bootstrap_capability("network_config") : HANDLE_INVALID;
+  bool has_session_config = session_config != HANDLE_INVALID;
+  bool has_network_config = network_config != HANDLE_INVALID;
   if (has_retention_factory && has_retention_account) {
     return CALL_DENIED;
   }
@@ -841,7 +845,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 40 -
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 42 -
       BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -880,9 +884,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
   size_t retention_factory_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
   size_t retention_account_index = retention_factory_index + (has_retention_factory ? 1 : 0);
+  size_t session_config_index = retention_account_index + (has_retention_account ? 1 : 0);
+  size_t network_config_index = session_config_index + (has_session_config ? 1 : 0);
   /* A script or -c shell started without the console passes none on. */
   bool has_output = shell->terminal.output != HANDLE_INVALID;
-  size_t output_index = retention_account_index + (has_retention_account ? 1 : 0);
+  size_t output_index = network_config_index + (has_network_config ? 1 : 0);
   size_t grant_count = output_index + (has_output ? 1 : 0);
   size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 3 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
@@ -1082,6 +1088,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       retention_account, RETENTION_RIGHT_CAPTURE, 0,
     };
   }
+  if (has_session_config) {
+    grants[session_config_index] = (struct launch_grant){session_config, FILE_RIGHT_READ, 0};
+  }
+  if (has_network_config) {
+    grants[network_config_index] = (struct launch_grant){network_config, FILE_RIGHT_READ, 0};
+  }
   struct launch_environment_entry *resources = prepared->resources;
   resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
   size_t resource_count = 1;
@@ -1231,6 +1243,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_retention_account) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", retention_account_index);
+  }
+  if (has_session_config) {
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("session_config", session_config_index);
+  }
+  if (has_network_config) {
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("network_config", network_config_index);
   }
   if (session) {
     /* Only init's explicit trusted SESSION handoff carries the initial
