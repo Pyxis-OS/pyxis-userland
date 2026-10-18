@@ -547,9 +547,52 @@ void install_recovery_destroy(struct install_recovery *recovery)
   *recovery = (struct install_recovery){0};
 }
 
-bool install_recovery_menu_review(handle_t root, const struct config_blob *record)
+static bool recorded_menu_read(handle_t root, const struct config_recovery_file *owned,
+    struct config_blob *bytes)
 {
-  if (!record) {
+  if (!owned->digest.present) {
+    return false;
+  }
+  char path[sizeof("boot/limine/") + CONFIG_ARTIFACT_NAME_BYTES];
+  snprintf(path, sizeof(path), "boot/limine/%s", owned->name);
+  return snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, bytes) == CALL_OK &&
+      bytes->size == owned->digest.size && !strcmp(bytes->digest.sha256, owned->digest.sha256);
+}
+
+static bool committed_menu(handle_t root, const struct config_record *record,
+    const uint8_t disk_guid[16], struct config_blob *menu)
+{
+  if (!record->committed || !record->boot.present) {
+    return false;
+  }
+  struct config_blob current = {0}, previous = {0};
+  bool ok = snapshot_file(root, "boot/limine/limine.conf", CONFIG_FILE_MAX_BYTES, &current) == CALL_OK;
+  const struct install_boot_entry_paths active = {
+    record->boot.kernel.path, record->boot.archive.path};
+  bool adoption = false, pending = true;
+  if (ok) {
+    ok = install_boot_entry_plan(&current, &active, disk_guid, &active, false,
+        menu, &adoption, &pending);
+  }
+  if (ok && pending) {
+    ok = recorded_menu_read(root, &record->previous[CONFIG_LIMINE], &previous) &&
+        config_blob_equal(&current, &previous);
+    const struct install_boot_entry_paths inherited = {
+      record->previous_boot.kernel.path, record->previous_boot.archive.path};
+    if (ok) {
+      ok = install_boot_entry_plan(&current, record->previous_boot.present ? &inherited : NULL,
+          disk_guid, &active, !record->previous_boot.present, menu, &adoption, &pending);
+    }
+  }
+  config_blob_destroy(&current);
+  config_blob_destroy(&previous);
+  return ok && !pending;
+}
+
+bool install_recovery_menu_review(handle_t root, const struct config_blob *record,
+    const struct config_target_facts *facts)
+{
+  if (!record || !facts || !config_target_valid(facts) || !root_bound(root, facts)) {
     return false;
   }
   struct config_record parsed = {0};
@@ -589,12 +632,21 @@ bool install_recovery_menu_review(handle_t root, const struct config_blob *recor
       if (!owned[i]->digest.present || !name_equal(name, owned[i]->name)) {
         continue;
       }
-      char path[sizeof("boot/limine/") + CONFIG_ARTIFACT_NAME_BYTES];
-      snprintf(path, sizeof(path), "boot/limine/%s", owned[i]->name);
       struct config_blob bytes = {0};
-      known = snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &bytes) == CALL_OK &&
-          bytes.size == owned[i]->digest.size && !strcmp(bytes.digest.sha256, owned[i]->digest.sha256);
+      known = recorded_menu_read(root, owned[i], &bytes);
       config_blob_destroy(&bytes);
+    }
+    char staged[CONFIG_ARTIFACT_NAME_BYTES];
+    if (!known && parsed.committed && parsed.boot.present &&
+        config_record_artifact_name(parsed.transaction, CONFIG_LIMINE, "new", staged) &&
+        name_equal(name, staged)) {
+      char path[sizeof("boot/limine/") + CONFIG_ARTIFACT_NAME_BYTES];
+      snprintf(path, sizeof(path), "boot/limine/%s", staged);
+      struct config_blob bytes = {0}, menu = {0};
+      known = snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &bytes) == CALL_OK &&
+          committed_menu(root, &parsed, facts->disk_guid, &menu) && config_blob_equal(&bytes, &menu);
+      config_blob_destroy(&bytes);
+      config_blob_destroy(&menu);
     }
     if (!known) {
       ok = false;
