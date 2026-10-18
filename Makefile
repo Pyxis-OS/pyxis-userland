@@ -74,10 +74,14 @@ TLS_OBJECT := $(BUILD)/libtls/tls.o
 TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o selection.o handoff.o)
-CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o
+CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o $(BUILD)/installer/pending_archive.o $(BUILD)/installer/io.o $(BUILD)/config-editor/readiness.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
+INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o) $(addprefix $(BUILD)/installer/,configuration.o publication.o publication_snapshot.o publication_frontend.o pending.o pending_archive.o recovery.o installed_publication.o)
+ifeq ($(INSTALLER_PUBLICATION_SCRATCH),1)
+BOOT_INIT_OBJECTS += $(BUILD)/boot-init/selection.o $(addprefix $(BUILD)/config-editor/,readiness.o record.o catalog.o ownership.o) $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
+BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
+endif
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o progress.o)
-INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o) $(addprefix $(BUILD)/installer/,configuration.o publication.o publication_snapshot.o publication_frontend.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
@@ -273,8 +277,8 @@ $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)
 
-$(BUILD)/boot-init.pxe: $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
+$(BUILD)/boot-init.pxe: $(BOOT_INIT_LIBRARIES) $(TLS_EXPORT_IDENTITY) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BOOT_INIT_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/session.pxe: $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
@@ -320,11 +324,11 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 	install -m 644 wifi/README.md "$(@D)/app/"
 	install -m 644 wifi/manifest.json "$@"
 
-$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(BUILD)/boot-init/selection.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/config.pxe: $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/config.pxe: $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/config-editor/catalog.lua: scripts/config-catalog.lua config-editor/catalog-source.lua config/installed.lua config/session.lua config/network.lua FORCE
 	@mkdir -p $(@D)
@@ -344,7 +348,7 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/boot-init/main.o $(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
 
 $(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)

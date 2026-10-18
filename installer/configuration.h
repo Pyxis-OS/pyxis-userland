@@ -56,6 +56,7 @@ bool install_configuration_source(struct install_configuration *plan,
  * untouched and requires a separately reviewed source disposition. */
 bool install_configuration_pool(struct install_configuration *plan, bool migrate,
     bool reviewed);
+void install_configuration_summary(const struct install_configuration *plan, FILE *output);
 void install_configuration_review(const struct install_configuration *plan, FILE *output);
 /* Compare freshly observed borrowed digests/revisions at the exclusive boundary.
  * This grants no authority and performs no reads or automatic replanning. */

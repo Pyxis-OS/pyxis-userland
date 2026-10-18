@@ -234,41 +234,6 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
   return ok;
 }
 
-static void configuration_summary(const struct install_configuration *plan, FILE *output)
-{
-  size_t required = 0, selected = 0;
-  for (size_t i = 0; i < plan->delta.count; ++i) {
-    required += plan->delta.changes[i].required;
-    selected += plan->delta.changes[i].choice != CONFIG_CHOICE_KEEP;
-  }
-  fprintf(output, "Configuration source: %s; %s.\nReason: %s.\n",
-      plan->source == CONFIG_ACTIVE_ESP ? "complete ESP set" : "whole archive",
-      plan->applicable ? "applicable" : "blocked", plan->reason ? plan->reason : "not prepared");
-  fprintf(output, "ESP deltas: %zu required, %zu selected / %zu total%s.\n", required,
-      selected, plan->delta.count, plan->source == CONFIG_ACTIVE_ARCHIVE ? "; inactive" : "");
-  for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
-    if (plan->needs_adoption[i]) {
-      fprintf(output, "%s owner bytes: %s%s.\n", config_storage_file_name(i),
-          plan->adopted[i] ? "adoption selected" : "Keep; adoption required for ESP",
-          plan->source == CONFIG_ACTIVE_ARCHIVE ? "; retained inactive" : "");
-    }
-    const struct config_plan_file *file = &plan->delta.files[i];
-    if (file->print_only && file->relevant) {
-      fprintf(output, "%s: %s.\n", config_storage_file_name(i),
-          file->reason ? file->reason : "printed changes only");
-    }
-  }
-  if (plan->pool_override.digest.present) {
-    fprintf(output, "Pool boot override: %s; original kept as inactive recovery after publication.\n",
-        plan->source == CONFIG_ACTIVE_ARCHIVE ? "migration inactive; archive selected" :
-        plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
-        "unsupported/invalid; printed proposals only");
-    if (plan->pool_conflict) {
-      fputs("Pool/ESP boot inputs differ; no silent merge.\n", output);
-    }
-  }
-  fputs("CPU/volume/timezone/network: not checked. Details and numbered choices: plan.\n", output);
-}
 
 int install_publication_scratch(struct terminal *terminal, bool verbose)
 {
@@ -352,7 +317,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     if (length <= 0 || (size_t)length >= sizeof(path) ||
         !install_snapshot_file(mount.root, path, CONFIG_FILE_MAX_BYTES, &previous_limine)) goto done;
   }
-  if (!install_recovery_menu_review(mount.root, &record) ||
+  if (!install_recovery_menu_review(mount.root, &record, &planned_facts) ||
       !install_recovery_prepare(mount.root, boot, bootstrap_capability("boot_kernel"),
           workspace, &planned_facts, &recovery)) {
     fputs("Static recovery or menu ownership is unrecognized; nothing written.\n", stderr);
@@ -493,7 +458,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     if (verbose) {
       install_configuration_review(&plan, stderr);
     } else {
-      configuration_summary(&plan, stderr);
+      install_configuration_summary(&plan, stderr);
     }
     uint64_t payload_required = required_capacity(&plan, binding, cluster_bytes);
     uint64_t rescue_required = install_recovery_space(&recovery, cluster_bytes);
@@ -645,7 +610,7 @@ admit:
       goto done;
     }
   }
-  if (!install_recovery_menu_review(mount.root, &record) ||
+  if (!install_recovery_menu_review(mount.root, &record, &request.facts) ||
       !install_recovery_provision(mount.root, mount.control, workspace, &recovery)) {
     fputs("Static fallback not verified; no readiness/menu publication.\n", stderr);
     goto done;

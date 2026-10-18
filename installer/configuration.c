@@ -573,3 +573,40 @@ void install_configuration_free(struct install_configuration *plan)
   config_blob_destroy(&plan->pool_override);
   *plan = (struct install_configuration){0};
 }
+
+void install_configuration_summary(const struct install_configuration *plan, FILE *output)
+{
+  size_t required = 0, selected = 0;
+  for (size_t i = 0; i < plan->delta.count; ++i) {
+    required += plan->delta.changes[i].required;
+    selected += plan->delta.changes[i].choice != CONFIG_CHOICE_KEEP;
+  }
+  fprintf(output, "Configuration source: %s; %s.\nReason: %s.\n",
+      plan->source == CONFIG_ACTIVE_ESP ? "complete ESP set" : "whole archive",
+      plan->applicable ? "applicable" : "blocked", plan->reason ? plan->reason : "not prepared");
+  fprintf(output, "ESP deltas: %zu required, %zu selected / %zu total%s.\n", required,
+      selected, plan->delta.count, plan->source == CONFIG_ACTIVE_ARCHIVE ? "; inactive" : "");
+  for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
+    if (plan->needs_adoption[i]) {
+      fprintf(output, "%s owner bytes: %s%s.\n", config_storage_file_name(i),
+          plan->adopted[i] ? "adoption selected" : "Keep; adoption required for ESP",
+          plan->source == CONFIG_ACTIVE_ARCHIVE ? "; retained inactive" : "");
+    }
+    const struct config_plan_file *file = &plan->delta.files[i];
+    if (file->print_only && file->relevant) {
+      fprintf(output, "%s: %s.\n", config_storage_file_name(i),
+          file->reason ? file->reason : "printed changes only");
+    }
+  }
+  if (plan->pool_override.digest.present) {
+    fprintf(output, "Pool boot override: %s; original kept as inactive recovery after publication.\n",
+        plan->source == CONFIG_ACTIVE_ARCHIVE ? "migration inactive; archive selected" :
+        plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
+        "unsupported/invalid; printed proposals only");
+    if (plan->pool_conflict) {
+      fputs("Pool/ESP boot inputs differ; no silent merge.\n", output);
+    }
+  }
+  fputs("CPU/volume/timezone/network: not checked. Details and numbered choices: plan.\n", output);
+}
+
