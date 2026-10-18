@@ -1,4 +1,5 @@
 #include "publication_frontend.h"
+#include "battery.h"
 #include "publication_snapshot.h"
 #include "configuration.h"
 #include "publication.h"
@@ -289,7 +290,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   int result = EXIT_FAILURE;
   bool crypto = hash_init(clock, random), claimed = false;
   char text[128], revision[65], attempt[33], revision_text[66];
-  if (!crypto) {
+  if (!crypto || !install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
   }
   fputs("SCRATCH configuration publication. Disposable GPT/FAT32 images only.\n"
@@ -490,6 +491,9 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
           planned_facts.disk_guid, &next_paths, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
       goto done;
     }
+  }
+  if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
+    goto done;
   }
   enum call_status handoff_status;
   if (!config_handoff_create(workspace, &plan.selection,

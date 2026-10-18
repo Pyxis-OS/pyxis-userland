@@ -1,4 +1,6 @@
 #include "plan.h"
+#include "battery.h"
+#include "../common/bootstrap_environment.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -276,6 +278,10 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
       plan->payloads || plan->classic_files) {
     fputs("installer: plan was not confirmed or has pending execution ownership; nothing was written\n",
         stderr);
+    return false;
+  }
+  if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
+    plan->ready = false;
     return false;
   }
   install_progress_begin("Revalidating the reviewed target and frozen inputs", INSTALL_PROGRESS_NONE, NULL);

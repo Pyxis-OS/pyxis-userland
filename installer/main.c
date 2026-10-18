@@ -1,5 +1,6 @@
 #include "../common/bootstrap_environment.h"
 #include "plan.h"
+#include "battery.h"
 #include "coexist_ui.h"
 #include "publication_frontend.h"
 #include "../xfer/hash.h"
@@ -542,6 +543,9 @@ int main(int argc, char **argv)
     goto done;
   }
   if (!profile_matches(disks, coexist)) {
+    goto done;
+  }
+  if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
   }
 #if INSTALLER_PUBLICATION_SCRATCH
