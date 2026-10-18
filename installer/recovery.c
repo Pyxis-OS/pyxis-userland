@@ -327,15 +327,8 @@ static bool verify_pair(handle_t parent, handle_t ram, const struct install_reco
     if (child(parent, recovery_names[i], DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &file) != CALL_OK) {
       return false;
     }
-    bool ok;
-    if (ram != HANDLE_INVALID) {
-      ok = install_esp_transfer_file(file, ram, true, expected[i]->size,
-          expected[i]->sha256, RECOVERY_FILE_MAX) == CALL_OK;
-    } else {
-      struct config_file_digest actual = {0};
-      ok = payload_digest(file, &actual) && actual.size == expected[i]->size &&
-          !strcmp(actual.sha256, expected[i]->sha256);
-    }
+    bool ok = install_esp_transfer_file(file, ram, true, expected[i]->size,
+        expected[i]->sha256, RECOVERY_FILE_MAX) == CALL_OK;
     ok = handle_close(file) == CALL_OK && ok;
     if (!ok) {
       return false;
@@ -391,7 +384,7 @@ bool install_recovery_prepare_fresh(handle_t boot, handle_t loaded_kernel,
 }
 
 bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kernel,
-    const struct config_target_facts *facts, struct install_recovery *recovery)
+    handle_t workspace, const struct config_target_facts *facts, struct install_recovery *recovery)
 {
   if (!recovery) {
     return false;
@@ -410,10 +403,15 @@ bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kern
   if (status == CALL_NOT_FOUND) {
     ok = fallback_absent(root) && prepare_sources(boot, loaded_kernel, recovery);
   } else if (status == CALL_OK) {
+    handle_t ram = HANDLE_INVALID;
     recovery->present = true;
     ok = recovery_contents(parent) &&
         snapshot_file(root, RECOVERY_MANIFEST, RECOVERY_MANIFEST_MAX, &recovery->manifest) == CALL_OK &&
-        manifest_parse(recovery) && verify_pair(parent, HANDLE_INVALID, recovery);
+        manifest_parse(recovery) && install_esp_transfer_workspace(workspace, &ram) == CALL_OK &&
+        verify_pair(parent, ram, recovery);
+    if (ram != HANDLE_INVALID) {
+      ok = handle_close(ram) == CALL_OK && ok;
+    }
     ok = handle_close(parent) == CALL_OK && ok;
   } else {
     return false;
