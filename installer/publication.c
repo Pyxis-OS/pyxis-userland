@@ -1,5 +1,6 @@
 #include "publication.h"
 #include "esp_directory.h"
+#include "esp_transfer.h"
 #include "digest.h"
 #include "progress.h"
 
@@ -153,23 +154,19 @@ static bool stream_source(const struct install_source *source, handle_t target,
   return ok || fail(report, status == CALL_OK ? CALL_NO_MEMORY : status);
 }
 
-static bool stream(handle_t source, handle_t target,
-    const struct config_file_digest *expected, struct config_storage_report *report)
-{
-  struct install_source held = {.handle = source, .bytes = expected->size};
-  return stream_source(&held, target, expected, report);
-}
-
-static bool legacy_open(handle_t root,
+static bool legacy_open(handle_t root, handle_t workspace,
     const struct config_file_digest expected[INSTALL_BOOT_PAYLOADS],
     uint64_t domain, handle_t files[INSTALL_BOOT_PAYLOADS],
     struct config_storage_report *report)
 {
-  handle_t parent = HANDLE_INVALID;
+  handle_t parent = HANDLE_INVALID, ram = HANDLE_INVALID;
   strcpy(report->artifact, "boot");
-  enum call_status status = directory_lookup(root, "boot", DIRECTORY_KIND_DIRECTORY,
-      BOOT_DIRECTORY_READ, &parent);
+  enum call_status status = install_esp_transfer_workspace(workspace, &ram);
   bool ok = status == CALL_OK || fail(report, status);
+  if (ok) {
+    status = directory_lookup(root, "boot", DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_READ, &parent);
+    ok = status == CALL_OK || fail(report, status);
+  }
   if (ok) {
     ok = grant(parent, PROTOCOL_DIRECTORY, BOOT_DIRECTORY_READ, report) &&
         directory_domain(parent, domain, report);
@@ -191,18 +188,25 @@ static bool legacy_open(handle_t root,
       if (ok) {
         ok = grant(files[i], PROTOCOL_FILE, FILE_RIGHT_READ, report) &&
             (((info.valid & FILE_INFO_OBJECT_VALID) && info.domain == domain) ||
-            fail(report, CALL_DENIED)) &&
-            stream(files[i], HANDLE_INVALID, &expected[i], report);
+            fail(report, CALL_DENIED));
+        if (ok) {
+          status = install_esp_transfer_file(files[i], ram, true, expected[i].size,
+              expected[i].sha256, INSTALL_BOOT_PAYLOAD_MAX_BYTES);
+          ok = status == CALL_OK || fail(report, status);
+        }
       }
     }
   }
   if (parent != HANDLE_INVALID) {
     handle_close(parent);
   }
+  if (ram != HANDLE_INVALID && handle_close(ram) != CALL_OK && ok) {
+    ok = fail(report, CALL_BAD_HANDLE);
+  }
   return ok;
 }
 
-bool install_publication_legacy_check(handle_t root,
+bool install_publication_legacy_check(handle_t root, handle_t workspace,
     const struct config_file_digest expected[INSTALL_BOOT_PAYLOADS],
     struct config_storage_report *report)
 {
@@ -221,7 +225,7 @@ bool install_publication_legacy_check(handle_t root,
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
     files[i] = HANDLE_INVALID;
   }
-  bool ok = legacy_open(root, expected, info.domain, files, report);
+  bool ok = legacy_open(root, workspace, expected, info.domain, files, report);
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
     if (files[i] != HANDLE_INVALID) {
       handle_close(files[i]);
@@ -230,11 +234,11 @@ bool install_publication_legacy_check(handle_t root,
   return ok;
 }
 
-bool install_publication_legacy_hold(struct install_staged_boot *boot,
+bool install_publication_legacy_hold(struct install_staged_boot *boot, handle_t workspace,
     uint64_t domain, struct config_storage_report *report)
 {
   return boot && boot->legacy_active &&
-      legacy_open(boot->root, boot->legacy_expected, domain, boot->legacy_files, report);
+      legacy_open(boot->root, workspace, boot->legacy_expected, domain, boot->legacy_files, report);
 }
 
 static bool legacy_verify(const struct install_staged_boot *boot, uint64_t domain,
@@ -465,7 +469,7 @@ bool install_publication_publish(const struct install_publication_request *reque
       staged.legacy_expected[i] = request->legacy_expected[i];
     }
   }
-  bool ok = !staged.legacy_active || legacy_open(staged.root, staged.legacy_expected,
+  bool ok = !staged.legacy_active || legacy_open(staged.root, request->workspace, staged.legacy_expected,
       request->facts.domain, staged.legacy_files, report);
   if (ok) {
     ok = config_storage_check(&request->view, &request->facts, request->expected,

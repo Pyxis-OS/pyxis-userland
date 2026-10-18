@@ -384,7 +384,7 @@ bool install_installed_admit(struct install_plan *plan)
   }
   if (ok && publication->legacy_active) {
     struct config_storage_report report = {0};
-    ok = install_publication_legacy_check(plan->view.root, publication->legacy, &report);
+    ok = install_publication_legacy_check(plan->view.root, plan->workspace, publication->legacy, &report);
   }
   struct config_record history = {0};
   struct install_esp_payloads *held = NULL;

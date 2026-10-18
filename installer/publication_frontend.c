@@ -616,7 +616,7 @@ admit:
   }
   if (request.legacy_active) {
     struct config_storage_report legacy_report = {0};
-    if (!install_publication_legacy_check(mount.root, legacy_digests, &legacy_report)) {
+    if (!install_publication_legacy_check(mount.root, workspace, legacy_digests, &legacy_report)) {
       fputs("Legacy ownership evidence changed at writable admission; no owned files changed.\n", stderr);
       goto done;
     }

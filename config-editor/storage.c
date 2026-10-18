@@ -882,7 +882,7 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
     ok = pending_payload_open(request, &plan->record.previous_boot, &inherited, report);
   }
   if (ok && plan->legacy_active) {
-    ok = install_publication_legacy_hold(&boot, request->facts.domain, report);
+    ok = install_publication_legacy_hold(&boot, request->workspace, request->facts.domain, report);
   }
   char staged[CONFIG_ARTIFACT_NAME_BYTES];
   config_record_artifact_name(plan->record.transaction, CONFIG_LIMINE, "new", staged);
