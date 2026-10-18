@@ -362,7 +362,7 @@ static enum call_status check_output_sink(const struct pyxis_stdio_binding *sink
   if (info.protocol != sink->protocol ||
       !((info.kind == HANDLE_KIND_NATIVE && !info.transport) ||
         (sink->protocol == PROTOCOL_FILE && info.kind == HANDLE_KIND_EXPORTED &&
-         (info.transport & HANDLE_TRANSPORT_CALL)))) {
+         (info.transport & HANDLE_TRANSPORT_CALL) == HANDLE_TRANSPORT_CALL))) {
     return CALL_WRONG_TYPE;
   }
   return (info.rights & rights) == rights ? CALL_OK : CALL_DENIED;
@@ -1775,6 +1775,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   char missing[ENVIRONMENT_NAME_MAX + 1] = "";
   size_t failed_stage = 0;
   enum call_status status = CALL_OK;
+  uint64_t failure_kind = TERMINAL_COMPLETION_LAUNCH_FAILED;
   handle_t children[LAUNCH_BATCH_MAX] = {0};
   handle_t armed = HANDLE_INVALID;
   handle_t default_environment = HANDLE_INVALID;
@@ -1957,9 +1958,13 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           shell->child_launcher : shell->launcher;
       failed_stage = user_count;
       path = "";
-      operation = "shell: output group";
+      operation = scope->producer != HANDLE_INVALID ?
+          "shell: capture group" : "shell: output group";
       status = launcher_create_group(launcher, &scope->group);
       if (status != CALL_OK) {
+        if (scope->producer != HANDLE_INVALID) {
+          failure_kind = TERMINAL_COMPLETION_REJECTED;
+        }
         goto failed;
       }
       scope->owned = true;
@@ -1994,7 +1999,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   for (size_t i = user_count; i < stage_count; ++i) {
     failed_stage = owner[i];
     operation = "shell: open output relay image";
-    path = stages[owner[i]].arguments[0];
+    path = stages[i].arguments[0];
     status = shell_open_image(shell, stages[i].arguments[0], &prepared[i].image, &prepared[i].bundle);
     if (status != CALL_OK) {
       if (report_scope) {
@@ -2171,7 +2176,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         }
         if (status != CALL_OK && scope && scope->owned) {
           report_scope->evaluated = true;
-          if (scope->producer != HANDLE_INVALID && opened.resource) {
+          if (scope->producer != HANDLE_INVALID &&
+              scope->producer_mode == OUTPUT_MODE_EMPTY && opened.resource) {
             struct output_handoff_request owned = {.value = opened.resource};
             enum call_status handed = output_handoff(scope->producer, &owned);
             opened.resource = owned.value;
@@ -2656,7 +2662,7 @@ failed:
   free_preparation(prepared, stage_count);
   enum command_result error = launch_error(shell, stages, user_count, failed_stage,
       operation, path, missing, status);
-  set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
+  set_outcome(outcome, failure_kind, 0);
   if (!closed_sources || cleanup_failure || status == CALL_OUTCOME_UNKNOWN) {
     return COMMAND_FATAL;
   }
