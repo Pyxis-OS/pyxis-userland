@@ -11,7 +11,11 @@ enum call_status screenshot_saver_next(handle_t saver,
     struct screenshot_saver_pending *pending);
 enum call_status screenshot_saver_capture(handle_t saver, uint64_t request,
     handle_t capture, struct screen_capture_reply *reply);
+/* Refuse a stale/expired request before publication; no filesystem mutation
+ * is reserved by validation. */
+enum call_status screenshot_saver_validate(handle_t saver, uint64_t request);
+/* status is a call_status or the private NO_CLOCK completion reason. */
 enum call_status screenshot_saver_complete(handle_t saver, uint64_t request,
-    enum call_status status, const char *filename);
+    uint64_t status, const char *filename);
 
 #endif

@@ -8,6 +8,13 @@
 #include <handle.h>
 #include <launcher.h>
 #include <screenshot_saver.h>
+#include <pyxis/resource.h>
+
+static void startup_failure(const char *operation, enum call_status status)
+{
+  fprintf(stderr, "session: screenshot saver: %s: %s (status %u)\n", operation,
+      strerror(pyxis_resource_errno(status)), (unsigned)status);
+}
 
 void session_start_screenshot_saver(void)
 {
@@ -22,14 +29,23 @@ void session_start_screenshot_saver(void)
   handle_t capture = bootstrap_capability("screen_capture");
   handle_t memory = bootstrap_capability("memory");
   handle_t clock = bootstrap_capability("clock");
-  if (bin == HANDLE_INVALID || launcher == HANDLE_INVALID || home == HANDLE_INVALID ||
-      capture == HANDLE_INVALID || memory == HANDLE_INVALID ||
-      clock == HANDLE_INVALID) {
-    goto done;
+  const struct {
+    const char *name;
+    handle_t handle;
+  } required[] = {
+    {"missing bin", bin}, {"missing launcher", launcher}, {"missing home", home},
+    {"missing screen_capture", capture}, {"missing memory", memory}, {"missing clock", clock},
+  };
+  for (size_t i = 0; i < sizeof(required) / sizeof(*required); ++i) {
+    if (required[i].handle == HANDLE_INVALID) {
+      startup_failure(required[i].name, CALL_UNAVAILABLE);
+      goto done;
+    }
   }
   enum call_status status = directory_lookup(bin, "screenshot-saver.pxe",
       DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
+    startup_failure("open bin://screenshot-saver.pxe", status);
     goto done;
   }
   const uint64_t home_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE |
@@ -54,15 +70,19 @@ void session_start_screenshot_saver(void)
   };
   handle_t child;
   status = launcher_launch(launcher, &request, &child);
-  if (status == CALL_OK) {
-    handle_close(child);
+  if (status != CALL_OK) {
+    startup_failure("launch bin://screenshot-saver.pxe", status);
+  } else if (handle_close(child) != 0) {
+    startup_failure("close launch observer", CALL_BAD_HANDLE);
   }
 
 done:
-  if (image != HANDLE_INVALID) {
-    handle_close(image);
+  if (image != HANDLE_INVALID && handle_close(image) != 0) {
+    startup_failure("close image", CALL_BAD_HANDLE);
   }
   /* No accidental successor inheritance, including failure. Last-close lets
    * the system binding report unavailable without affecting ordinary startup. */
-  handle_close(saver);
+  if (handle_close(saver) != 0) {
+    startup_failure("close registration", CALL_BAD_HANDLE);
+  }
 }

@@ -14,6 +14,7 @@
 #define SAVE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE | \
     DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE)
 #define TEMPORARY_ATTEMPTS 64
+#define DESTINATION_ATTEMPTS 1000
 
 static bool close_owned(handle_t *handle)
 {
@@ -38,12 +39,12 @@ static enum call_status screenshots_directory(handle_t home, handle_t *directory
   return status;
 }
 
-static enum call_status timestamp(handle_t clock, char *text, size_t capacity)
+static uint64_t timestamp(handle_t clock, char *text, size_t capacity)
 {
   struct clock_wall_reading wall;
   enum call_status status = clock_wall_now(clock, &wall);
   if (status != CALL_OK) {
-    return status;
+    return status == CALL_UNAVAILABLE ? SCREENSHOT_SAVER_STATUS_NO_CLOCK : status;
   }
   time_t seconds = wall.seconds;
   struct tm calendar;
@@ -55,7 +56,7 @@ static enum call_status timestamp(handle_t clock, char *text, size_t capacity)
   return CALL_OK;
 }
 
-static enum call_status save(handle_t saver, handle_t capture, handle_t home,
+static uint64_t save(handle_t saver, handle_t capture, handle_t home,
     handle_t clock, const struct screenshot_saver_pending *pending,
     char *filename, size_t capacity)
 {
@@ -63,7 +64,7 @@ static enum call_status save(handle_t saver, handle_t capture, handle_t home,
   handle_t directory = HANDLE_INVALID, output = HANDLE_INVALID;
   bool reserved = false;
   char temporary[64], time_text[32];
-  enum call_status status = screenshot_saver_capture(saver, pending->request,
+  uint64_t status = screenshot_saver_capture(saver, pending->request,
       capture, &snapshot);
   if (status != CALL_OK) {
     return status;
@@ -96,7 +97,7 @@ static enum call_status save(handle_t saver, handle_t capture, handle_t home,
     status = CALL_IO;
     goto done;
   }
-  for (uint64_t suffix = 1;; ++suffix) {
+  for (uint64_t suffix = 1; suffix <= DESTINATION_ATTEMPTS; ++suffix) {
     int length = suffix == 1 ?
         snprintf(filename, capacity, "%s-%s.png", pending->space, time_text) :
         snprintf(filename, capacity, "%s-%s-%" PRIu64 ".png", pending->space,
@@ -105,19 +106,22 @@ static enum call_status save(handle_t saver, handle_t capture, handle_t home,
       status = CALL_LIMIT;
       goto done;
     }
+    status = screenshot_saver_validate(saver, pending->request);
+    if (status != CALL_OK) {
+      goto done;
+    }
     status = directory_rename(directory, temporary, directory, filename,
         DIRECTORY_RENAME_NO_REPLACE, DIRECTORY_KIND_FILE);
     if (status != CALL_ALREADY_EXISTS) {
-      /* Unconfirmed publication leaves both names alone: a reply failure may
-       * follow a completed rename. Never retry or remove either candidate. */
-      reserved = false;
-      break;
-    }
-    if (suffix == UINT64_MAX) {
-      status = CALL_LIMIT;
-      break;
+      /* Definite failures leave our confirmed temporary owned. Only a lost
+       * completion or reply-copy failure makes publication ambiguous. */
+      if (status == CALL_OK || status == CALL_OUTCOME_UNKNOWN || status == CALL_BAD_BUFFER) {
+        reserved = false;
+      }
+      goto done;
     }
   }
+  status = CALL_LIMIT;
 
 done:
   bool snapshot_closed_final = close_owned(&snapshot.file);
@@ -168,9 +172,12 @@ int main(void)
       break;
     }
     char filename[SCREENSHOT_SAVER_FILENAME_MAX + 1];
-    status = save(saver, capture, home, clock, &pending, filename, sizeof(filename));
-    if (screenshot_saver_complete(saver, pending.request, status,
-        status == CALL_OK ? filename : NULL) != CALL_OK) {
+    uint64_t completion = save(saver, capture, home, clock, &pending, filename, sizeof(filename));
+    status = screenshot_saver_complete(saver, pending.request, completion,
+        completion == CALL_OK ? filename : NULL);
+    /* A timed-out request can finish I/O late. NEXT re-establishes readiness;
+     * never replay that save or let its stale completion replace feedback. */
+    if (status != CALL_OK && status != CALL_DENIED) {
       break;
     }
   }

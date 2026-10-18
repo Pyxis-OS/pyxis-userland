@@ -38,10 +38,20 @@ enum call_status screenshot_saver_capture(handle_t saver, uint64_t request,
       sizeof(*reply)), sizeof(*reply));
 }
 
-enum call_status screenshot_saver_complete(handle_t saver, uint64_t request,
-    enum call_status status, const char *filename)
+enum call_status screenshot_saver_validate(handle_t saver, uint64_t request)
 {
-  if (status >= CALL_STATUS_COUNT || (status == CALL_OK && !filename)) {
+  struct screenshot_saver_validate_request message = {
+    .header = {PROTOCOL_SCREENSHOT_SAVER, SCREENSHOT_SAVER_VALIDATE},
+    .request = request,
+  };
+  return reply_status(syscall_call(saver, &message, sizeof(message), NULL, 0), 0);
+}
+
+enum call_status screenshot_saver_complete(handle_t saver, uint64_t request,
+    uint64_t status, const char *filename)
+{
+  if ((status >= CALL_STATUS_COUNT && status != SCREENSHOT_SAVER_STATUS_NO_CLOCK) ||
+      (status == CALL_OK && !filename)) {
     return CALL_BAD_REQUEST;
   }
   struct screenshot_saver_complete_request message = {
