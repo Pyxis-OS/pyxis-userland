@@ -178,8 +178,9 @@ static enum call_status write_all(handle_t file, const char *bytes, size_t size)
 
 /* Merge and replace: the newest file contents plus this line go to a new
  * temporary file, renamed over the history. The rename is the commit point;
- * native volumes flush the moved file before replacing, so no sync is needed.
- * Concurrent savers can lose each other's line: the later rename wins. */
+ * native volumes flush the moved file before replacing, and syncing the file
+ * afterwards commits the rename. Concurrent savers can lose each other's line:
+ * the later rename wins. */
 static enum call_status save_line(struct shell *shell, const char *line, char *buffer)
 {
   size_t size, lines;
@@ -200,14 +201,19 @@ static enum call_status save_line(struct shell *shell, const char *line, char *b
     return status;
   }
   status = write_all(file, buffer, size);
-  if (handle_close(file) != 0 && status == CALL_OK) {
-    status = CALL_IO;
-  }
+  bool renamed = false;
   if (status == CALL_OK) {
     status = directory_rename(shell->history_home, name, shell->history_home, HISTORY_NAME,
         DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE);
+    renamed = status == CALL_OK;
   }
-  if (status != CALL_OK) {
+  if (renamed) {
+    status = file_sync(file);
+  }
+  if (handle_close(file) != 0 && status == CALL_OK) {
+    status = CALL_IO;
+  }
+  if (!renamed) {
     directory_remove(shell->history_home, name, DIRECTORY_KIND_FILE);
   }
   return status;
