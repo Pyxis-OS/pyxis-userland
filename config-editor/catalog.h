@@ -19,7 +19,7 @@ enum config_migration_kind {
 };
 struct config_migration {
   enum config_migration_kind kind;
-  const struct config_literal_value *value;
+  const struct literal_value *value;
   enum config_file from_file;
   enum config_entry_kind from_kind;
   char *from_name, *from, *to;
@@ -29,11 +29,11 @@ struct config_catalog_entry {
   enum config_file file;
   enum config_entry_kind kind;
   bool required;
-  const struct config_literal_value *default_value;
+  const struct literal_value *default_value;
   struct config_migration migration;
 };
 struct config_catalog {
-  struct config_literal *document;
+  struct literal *document;
   char *catalog_id, *revision;
   struct config_catalog_entry *entries;
   size_t count;

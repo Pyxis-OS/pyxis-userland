@@ -27,9 +27,13 @@ struct bundle_launch {
   struct launch_grant *grants;
   struct launch_environment_entry *entries;
   uint64_t *directories;
-  /* Package trees opened for this launch; closed with the preparation. */
+  /* Package trees opened for this launch; closed with the preparation. The
+   * set is loaded once, at the first package grant, so they share one set. */
   handle_t *trees;
   size_t tree_count;
+  struct package_set *set;
+  enum call_status set_status;
+  bool set_loaded;
 };
 
 struct context_grants {
@@ -257,9 +261,14 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       /* The set is read now, so a switch is seen by the next launch. A
        * required package that is absent or unreadable is named as missing. */
       const char *reason;
-      handle_t tree;
-      if (package_open_tree(source, requests[i].package, requests[i].rights, &tree,
-            &reason) != CALL_OK) {
+      handle_t tree = HANDLE_INVALID;
+      if (!prepared->set_loaded) {
+        prepared->set_status = package_set_load(source, &prepared->set, &reason);
+        prepared->set_loaded = true;
+      }
+      if (prepared->set_status != CALL_OK ||
+          package_set_open(prepared->set, source, requests[i].package, requests[i].rights,
+            &tree, &reason) != CALL_OK) {
         if (requests[i].required) {
           *missing = requests[i].package;
           return CALL_DENIED;
@@ -607,6 +616,7 @@ void bundle_launch_close(struct bundle_launch *prepared)
       handle_close(prepared->trees[i]);
     }
     free(prepared->trees);
+    package_set_free(prepared->set);
     free(prepared->directories);
     free(prepared->entries);
     free(prepared->grants);

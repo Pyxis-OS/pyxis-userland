@@ -321,13 +321,14 @@ static void check_packages(struct mounts *mounts)
   if (!mounted || mounted->root == HANDLE_INVALID) {
     return;
   }
-  size_t count;
+  struct package_set *set;
   const char *reason;
-  enum call_status status = package_set_check(mounted->root, &count, &reason);
+  enum call_status status = package_set_load(mounted->root, &set, &reason);
   if (status != CALL_OK) {
     printf("boot-init: packages: %s (status %u); package lookups fail until pkg rollback\n",
         reason, status);
   }
+  package_set_free(set);
 }
 
 /* FAT mode is configured independently of views; other backends keep the
@@ -619,6 +620,10 @@ struct space_launch {
   size_t source_handle_count;
   handle_t *package_trees; /* Package roots opened for this space. */
   size_t package_tree_count;
+  struct package_set *package_set; /* Loaded once, at the first package root. */
+  enum call_status package_set_status;
+  const char *package_set_reason;
+  bool package_set_loaded;
   struct job_work *job_provisioner;
   handle_t http_staging;
   handle_t http_staging_parent; /* Borrowed until source handles close. */
@@ -750,10 +755,18 @@ static const char *build_launch(const struct authority *authority, struct mounts
     }
     if (root->package) {
       /* Resolved once here: this space keeps the tree it started with. */
-      const char *missing;
-      handle_t tree;
-      enum call_status status = package_open_tree(mounted->root, root->package,
-          PACKAGE_TREE_RIGHTS, &tree, &missing);
+      if (!launch->package_set_loaded) {
+        launch->package_set_status = package_set_load(mounted->root, &launch->package_set,
+            &launch->package_set_reason);
+        launch->package_set_loaded = true;
+      }
+      const char *missing = launch->package_set_reason;
+      handle_t tree = HANDLE_INVALID;
+      enum call_status status = launch->package_set_status;
+      if (status == CALL_OK) {
+        status = package_set_open(launch->package_set, mounted->root, root->package,
+            PACKAGE_TREE_RIGHTS, &tree, &missing);
+      }
       if (status != CALL_OK) {
         if (root->optional) {
           continue;
@@ -784,7 +797,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count] =
         (struct launch_grant){authority->acpi_tables, ACPI_TABLES_RIGHTS, 0};
     launch->roots[launch->root_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"acpi", launch->grant_count++);
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)BOOT_ACPI_ROOT, launch->grant_count++);
   }
   size_t source_count = 0;
   for (size_t i = 0; i < space->grant_count; ++i) {
@@ -1073,6 +1086,7 @@ cleanup:
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
   for (size_t i = 0; i < launch.package_tree_count; ++i) handle_close(launch.package_trees[i]);
   free(launch.package_trees);
+  package_set_free(launch.package_set);
   free(launch.roots);
   free(launch.grants);
   free(cpus);

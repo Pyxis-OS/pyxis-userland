@@ -39,7 +39,7 @@ static char *entry(const char *name, bool rescue, const char *kernel, const char
 }
 
 static bool find_exact(const struct config_blob *current, const char *text, size_t size,
-    struct config_literal_span *span)
+    struct literal_span *span)
 {
   if (!current->digest.present || !size) {
     return false;
@@ -58,7 +58,7 @@ static bool find_exact(const struct config_blob *current, const char *text, size
       if (end < current->size && current->bytes[end] != '/') {
         return false;
       }
-      *span = (struct config_literal_span){offset, offset + size};
+      *span = (struct literal_span){offset, offset + size};
       found = true;
     }
   }
@@ -88,7 +88,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
   }
   const char *ids[] = {"boot.normal", "boot.rescue"};
   const char *names[] = {"Pyxis OS (Caelum)", "Pyxis OS (rescue)"};
-  struct config_literal_span spans[2];
+  struct literal_span spans[2];
   char *replacement[2] = {0};
   size_t replacement_size[2] = {0};
   bool recognized = true, ok = true;

@@ -391,6 +391,10 @@ static enum call_status parse_grants(struct bundle_program *program,
         if (value->type != BUNDLE_JSON_STRING || !valid_name(value->string)) {
           return CALL_BAD_REQUEST;
         }
+        /* The packages volume is reached per package ID, never as a whole. */
+        if (!strcmp(value->string, PACKAGE_SOURCE)) {
+          return CALL_BAD_REQUEST;
+        }
         request->source = value->string;
       } else if (!strcmp(nodes[key].string, "package")) {
         if (value->type != BUNDLE_JSON_STRING || !package_id_valid(value->string)) {

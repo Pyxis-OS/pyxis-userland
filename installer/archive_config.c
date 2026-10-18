@@ -5,14 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-static struct config_literal_value *field(struct config_literal_value *table, const char *name)
+static struct literal_value *field(struct literal_value *table, const char *name)
 {
-  if (!table || table->kind != CONFIG_LITERAL_TABLE) {
+  if (!table || table->kind != LITERAL_TABLE) {
     return NULL;
   }
   size_t size = strlen(name);
-  for (struct config_literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
-    if (entry->key->kind == CONFIG_LITERAL_STRING && entry->key->as.string.size == size &&
+  for (struct literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
+    if (entry->key->kind == LITERAL_STRING && entry->key->as.string.size == size &&
         !memcmp(entry->key->as.string.bytes, name, size)) {
       return entry->value;
     }
@@ -20,22 +20,32 @@ static struct config_literal_value *field(struct config_literal_value *table, co
   return NULL;
 }
 
-static bool string_is(const struct config_literal_value *value, const char *text)
+static bool string_is(const struct literal_value *value, const char *text)
 {
-  return value && value->kind == CONFIG_LITERAL_STRING &&
+  return value && value->kind == LITERAL_STRING &&
       value->as.string.size == strlen(text) &&
       !memcmp(value->as.string.bytes, text, value->as.string.size);
 }
 
-static struct config_literal_value *native_partition(struct config_literal_value *value,
+static struct literal_value *native_partition(struct literal_value *value,
     const char *volume)
 {
   if (!string_is(field(value, "kind"), "npfs") ||
       !string_is(field(value, "volume"), volume)) {
     return NULL;
   }
-  struct config_literal_value *partition = field(value, "partition");
-  return partition && partition->kind == CONFIG_LITERAL_INTEGER ? partition : NULL;
+  struct literal_value *partition = field(value, "partition");
+  return partition && partition->kind == LITERAL_INTEGER ? partition : NULL;
+}
+
+/* The partition of any npfs volume, whatever its volume name. */
+static struct literal_value *npfs_partition(struct literal_value *value)
+{
+  if (!string_is(field(value, "kind"), "npfs")) {
+    return NULL;
+  }
+  struct literal_value *partition = field(value, "partition");
+  return partition && partition->kind == LITERAL_INTEGER ? partition : NULL;
 }
 
 static bool valid_config(const char *bytes, size_t size)
@@ -56,22 +66,25 @@ bool install_archive_config_rebind(const char *bytes, size_t size, uint64_t pool
       !valid_config(bytes, size)) {
     return false;
   }
-  struct config_literal *document = NULL;
-  struct config_literal_diagnostic diagnostic;
-  if (!config_literal_parse(bytes, size, &document, &diagnostic)) {
+  struct literal *document = NULL;
+  struct literal_diagnostic diagnostic;
+  if (!literal_parse(bytes, size, &document, &diagnostic)) {
     return false;
   }
-  struct config_literal_value *volumes = field(document->root, "volumes");
-  struct config_literal_value *system = native_partition(field(volumes, "system"), "system");
-  struct config_literal_value *home = native_partition(field(volumes, "home"), "home");
+  struct literal_value *volumes = field(document->root, "volumes");
+  struct literal_value *system = native_partition(field(volumes, "system"), "system");
   bool ok = system != NULL;
   bool changed = false;
   if (ok) {
+    /* Every npfs volume on the archive's pool partition (home, packages and any
+     * later one) moves with system; volumes elsewhere are left as configured. */
     int64_t previous = system->as.integer;
-    system->as.integer = (int64_t)pool_partition;
-    changed = previous != system->as.integer;
-    if (home && home->as.integer == previous) {
-      home->as.integer = (int64_t)pool_partition;
+    changed = previous != (int64_t)pool_partition;
+    for (struct literal_entry *entry = volumes->as.table.entries; entry; entry = entry->next) {
+      struct literal_value *partition = npfs_partition(entry->value);
+      if (partition && partition->as.integer == previous) {
+        partition->as.integer = (int64_t)pool_partition;
+      }
     }
   }
   char *value = NULL, *rendered = NULL;
@@ -95,7 +108,7 @@ bool install_archive_config_rebind(const char *bytes, size_t size, uint64_t pool
     }
   }
   free(value);
-  config_literal_free(document);
+  literal_free(document);
   if (!ok) {
     free(rendered);
     return false;

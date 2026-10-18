@@ -15,7 +15,7 @@
 /* current is one small table; a set record lists at most a few thousand
  * packages, well inside the literal parser's own bounds. */
 #define CURRENT_LIMIT 256
-#define SET_LIMIT CONFIG_LITERAL_SOURCE_LIMIT
+#define SET_LIMIT LITERAL_SOURCE_LIMIT
 #define SET_NAME_MAX 32
 
 static bool alphanumeric(char byte)
@@ -93,27 +93,27 @@ static enum call_status read_file(handle_t directory, const char *name, size_t l
   return CALL_OK;
 }
 
-static enum call_status parse(const char *bytes, size_t size, struct config_literal **document)
+static enum call_status parse(const char *bytes, size_t size, struct literal **document)
 {
-  struct config_literal_diagnostic diagnostic;
-  return config_literal_parse(bytes, size, document, &diagnostic) ? CALL_OK : CALL_BAD_REQUEST;
+  struct literal_diagnostic diagnostic;
+  return literal_parse(bytes, size, document, &diagnostic) ? CALL_OK : CALL_BAD_REQUEST;
 }
 
-static bool string_key(const struct config_literal_entry *entry, const char *key)
+static bool string_key(const struct literal_entry *entry, const char *key)
 {
-  return entry->key->kind == CONFIG_LITERAL_STRING &&
+  return entry->key->kind == LITERAL_STRING &&
       entry->key->as.string.size == strlen(key) &&
       !memcmp(entry->key->as.string.bytes, key, entry->key->as.string.size);
 }
 
 /* TABLE has exactly the named string keys, each once (duplicates already refuse). */
-static bool exact_fields(const struct config_literal_value *table, const char *const *keys,
+static bool exact_fields(const struct literal_value *table, const char *const *keys,
     size_t count)
 {
-  if (!table || table->kind != CONFIG_LITERAL_TABLE || table->as.table.count != count) {
+  if (!table || table->kind != LITERAL_TABLE || table->as.table.count != count) {
     return false;
   }
-  for (const struct config_literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
+  for (const struct literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
     bool known = false;
     for (size_t i = 0; i < count && !known; ++i) {
       known = string_key(entry, keys[i]);
@@ -125,20 +125,24 @@ static bool exact_fields(const struct config_literal_value *table, const char *c
   return true;
 }
 
-static bool format_valid(const struct config_literal_value *table)
+static bool format_valid(const struct literal_value *table)
 {
-  const struct config_literal_value *format = config_literal_field(table, "format");
-  return format->kind == CONFIG_LITERAL_INTEGER && format->as.integer == FORMAT;
+  const struct literal_value *format = literal_field(table, "format");
+  return format->kind == LITERAL_INTEGER && format->as.integer == FORMAT;
 }
 
-static bool text(const struct config_literal_value *value)
+static bool text(const struct literal_value *value)
 {
-  return value && value->kind == CONFIG_LITERAL_STRING &&
+  return value && value->kind == LITERAL_STRING &&
       strlen(value->as.string.bytes) == value->as.string.size;
 }
 
+struct package_set {
+  struct literal *record; /* NULL for the empty set. */
+};
+
 /* Read current and its set record. NULL *set with CALL_OK is the empty set. */
-static enum call_status load_set(handle_t packages, struct config_literal **set,
+static enum call_status load_record(handle_t packages, struct literal **set,
     const char **reason)
 {
   *set = NULL;
@@ -152,22 +156,22 @@ static enum call_status load_set(handle_t packages, struct config_literal **set,
     *reason = "cannot read current";
     return status;
   }
-  struct config_literal *current;
+  struct literal *current;
   status = parse(bytes, size, &current);
   free(bytes);
   static const char *const current_keys[] = {"format", "set"};
   if (status != CALL_OK || !exact_fields(current->root, current_keys, 2) ||
       !format_valid(current->root) ||
-      config_literal_field(current->root, "set")->kind != CONFIG_LITERAL_INTEGER ||
-      config_literal_field(current->root, "set")->as.integer < 1) {
-    config_literal_free(current);
+      literal_field(current->root, "set")->kind != LITERAL_INTEGER ||
+      literal_field(current->root, "set")->as.integer < 1) {
+    literal_free(current);
     *reason = "current is not a valid set pointer";
     return CALL_BAD_REQUEST;
   }
   char name[SET_NAME_MAX];
   snprintf(name, sizeof(name), "%lld.lua",
-      (long long)config_literal_field(current->root, "set")->as.integer);
-  config_literal_free(current);
+      (long long)literal_field(current->root, "set")->as.integer);
+  literal_free(current);
 
   handle_t sets;
   status = directory_lookup(packages, SETS_NAME, DIRECTORY_KIND_DIRECTORY,
@@ -180,7 +184,7 @@ static enum call_status load_set(handle_t packages, struct config_literal **set,
     *reason = "cannot read the current set record";
     return status;
   }
-  struct config_literal *record;
+  struct literal *record;
   status = parse(bytes, size, &record);
   free(bytes);
   if (status != CALL_OK) {
@@ -190,26 +194,26 @@ static enum call_status load_set(handle_t packages, struct config_literal **set,
 
   static const char *const set_keys[] = {"format", "packages"};
   static const char *const package_keys[] = {"id", "version"};
-  const struct config_literal_value *list = config_literal_field(record->root, "packages");
+  const struct literal_value *list = literal_field(record->root, "packages");
   bool valid = exact_fields(record->root, set_keys, 2) && format_valid(record->root) &&
-      list->kind == CONFIG_LITERAL_TABLE;
+      list->kind == LITERAL_TABLE;
   int64_t index = 0;
-  for (const struct config_literal_entry *entry = valid ? list->as.table.entries : NULL;
+  for (const struct literal_entry *entry = valid ? list->as.table.entries : NULL;
        valid && entry; entry = entry->next) {
-    const struct config_literal_value *id = config_literal_field(entry->value, "id");
-    const struct config_literal_value *version = config_literal_field(entry->value, "version");
-    valid = entry->key->kind == CONFIG_LITERAL_INTEGER && entry->key->as.integer == ++index &&
+    const struct literal_value *id = literal_field(entry->value, "id");
+    const struct literal_value *version = literal_field(entry->value, "version");
+    valid = entry->key->kind == LITERAL_INTEGER && entry->key->as.integer == ++index &&
         exact_fields(entry->value, package_keys, 2) && text(id) && text(version) &&
         package_id_valid(id->as.string.bytes) &&
         version_valid(version->as.string.bytes, version->as.string.size);
-    for (const struct config_literal_entry *prior = list->as.table.entries;
+    for (const struct literal_entry *prior = list->as.table.entries;
          valid && prior != entry; prior = prior->next) {
-      valid = strcmp(config_literal_field(prior->value, "id")->as.string.bytes,
+      valid = strcmp(literal_field(prior->value, "id")->as.string.bytes,
           id->as.string.bytes) != 0;
     }
   }
   if (!valid) {
-    config_literal_free(record);
+    literal_free(record);
     *reason = "the current set record is invalid";
     return CALL_BAD_REQUEST;
   }
@@ -217,15 +221,36 @@ static enum call_status load_set(handle_t packages, struct config_literal **set,
   return CALL_OK;
 }
 
-enum call_status package_set_check(handle_t packages, size_t *count, const char **reason)
+enum call_status package_set_load(handle_t packages, struct package_set **set,
+    const char **reason)
 {
-  struct config_literal *set;
-  enum call_status status = load_set(packages, &set, reason);
-  if (status == CALL_OK) {
-    *count = set ? config_literal_field(set->root, "packages")->as.table.count : 0;
-    config_literal_free(set);
+  *set = NULL;
+  struct literal *record;
+  enum call_status status = load_record(packages, &record, reason);
+  if (status != CALL_OK) {
+    return status;
   }
-  return status;
+  *set = calloc(1, sizeof(**set));
+  if (!*set) {
+    literal_free(record);
+    *reason = "cannot allocate the package set";
+    return CALL_NO_MEMORY;
+  }
+  (*set)->record = record;
+  return CALL_OK;
+}
+
+size_t package_set_count(const struct package_set *set)
+{
+  return set->record ? literal_field(set->record->root, "packages")->as.table.count : 0;
+}
+
+void package_set_free(struct package_set *set)
+{
+  if (set) {
+    literal_free(set->record);
+    free(set);
+  }
 }
 
 /* Replace an owned intermediate *DIRECTORY with its child NAME. */
@@ -239,29 +264,23 @@ static enum call_status lookup_directory(handle_t *directory, const char *name, 
   return status;
 }
 
-enum call_status package_open_tree(handle_t packages, const char *id, uint64_t rights,
-    handle_t *tree, const char **reason)
+enum call_status package_set_open(const struct package_set *set, handle_t packages,
+    const char *id, uint64_t rights, handle_t *tree, const char **reason)
 {
   *tree = HANDLE_INVALID;
   if (!package_id_valid(id) || !rights || (rights & ~PACKAGE_TREE_RIGHTS)) {
     *reason = "invalid package request";
     return CALL_BAD_REQUEST;
   }
-  struct config_literal *set;
-  enum call_status status = load_set(packages, &set, reason);
-  if (status != CALL_OK) {
-    return status;
-  }
   const char *version = NULL;
-  for (const struct config_literal_entry *entry = set ?
-         config_literal_field(set->root, "packages")->as.table.entries : NULL;
+  for (const struct literal_entry *entry = set->record ?
+         literal_field(set->record->root, "packages")->as.table.entries : NULL;
        entry && !version; entry = entry->next) {
-    if (!strcmp(config_literal_field(entry->value, "id")->as.string.bytes, id)) {
-      version = config_literal_field(entry->value, "version")->as.string.bytes;
+    if (!strcmp(literal_field(entry->value, "id")->as.string.bytes, id)) {
+      version = literal_field(entry->value, "version")->as.string.bytes;
     }
   }
   if (!version) {
-    config_literal_free(set);
     *reason = "the package is not installed";
     return CALL_NOT_FOUND;
   }
@@ -269,8 +288,8 @@ enum call_status package_open_tree(handle_t packages, const char *id, uint64_t r
   /* Each step keeps RIGHTS plus LOOKUP so the tree can still carry RIGHTS. */
   uint64_t path_rights = rights | DIRECTORY_RIGHT_LOOKUP;
   handle_t directory;
-  status = directory_lookup(packages, STORE_NAME, DIRECTORY_KIND_DIRECTORY, path_rights,
-      &directory);
+  enum call_status status = directory_lookup(packages, STORE_NAME, DIRECTORY_KIND_DIRECTORY,
+      path_rights, &directory);
   if (status == CALL_OK) {
     status = lookup_directory(&directory, id, path_rights);
   }
@@ -280,7 +299,6 @@ enum call_status package_open_tree(handle_t packages, const char *id, uint64_t r
   if (status == CALL_OK) {
     status = lookup_directory(&directory, TREE_NAME, rights);
   }
-  config_literal_free(set);
   if (status != CALL_OK) {
     *reason = status == CALL_NOT_FOUND ? "the package's store tree is missing" :
         "cannot open the package's store tree";

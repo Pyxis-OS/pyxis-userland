@@ -22,6 +22,8 @@
 /* Spaces start in this root unless they name another with start. */
 #define BOOT_HOME_ROOT "home"
 #define BOOT_PACKAGES_VOLUME "packages"
+/* Appended for acpi_tables, so no configured root may take the name. */
+#define BOOT_ACPI_ROOT "acpi"
 #define BOOT_HTTP_STAGING_SOURCE "http_staging"
 
 enum boot_volume_kind {

@@ -5,7 +5,7 @@
 
 struct config_owned_span {
   char *id;
-  struct config_literal_span span, content;
+  struct literal_span span, content;
 };
 struct config_owned_set {
   struct config_owned_span *spans;
@@ -17,7 +17,7 @@ struct config_owned_set {
  * means no markers; find returns NULL for a missing ID. Invalid input returns
  * false and a NULL output, requiring printed changes. Marker spans do not prove
  * that their content is the catalog's complete target entry. Errors: stderr. */
-bool config_owned_scan_lua(const char *name, const struct config_literal *document,
+bool config_owned_scan_lua(const char *name, const struct literal *document,
     struct config_owned_set **output);
 bool config_owned_scan_limine(const char *name, const char *bytes, size_t size,
     struct config_owned_set **output);

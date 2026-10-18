@@ -9,9 +9,9 @@
 #define WORK_LIMIT (16 * 1024 * 1024)
 
 struct parser {
-  struct config_literal *document;
+  struct literal *document;
   size_t position, values, entries, work, comment_capacity;
-  struct config_literal_diagnostic *diagnostic;
+  struct literal_diagnostic *diagnostic;
   bool failed;
 };
 
@@ -81,7 +81,7 @@ static size_t bracket(struct parser *parser, size_t start, char delimiter)
   return end < size && source[end] == delimiter ? end + 1 : start;
 }
 
-static bool long_body(struct parser *parser, struct config_literal_span *body)
+static bool long_body(struct parser *parser, struct literal_span *body)
 {
   size_t start = parser->position;
   size_t open_end = bracket(parser, start, '[');
@@ -103,7 +103,7 @@ static bool long_body(struct parser *parser, struct config_literal_span *body)
 
 static bool comment(struct parser *parser)
 {
-  struct config_literal *document = parser->document;
+  struct literal *document = parser->document;
   if (document->comment_count == ITEM_LIMIT) return fail(parser, "too many comments");
   if (document->comment_count == parser->comment_capacity) {
     size_t capacity = parser->comment_capacity ? parser->comment_capacity * 2 : 16;
@@ -112,8 +112,8 @@ static bool comment(struct parser *parser)
     document->comments = comments;
     parser->comment_capacity = capacity;
   }
-  struct config_literal_comment *item = &document->comments[document->comment_count++];
-  *item = (struct config_literal_comment){.span.start = parser->position};
+  struct literal_comment *item = &document->comments[document->comment_count++];
+  *item = (struct literal_comment){.span.start = parser->position};
   parser->position += 2;
   if (bracket(parser, parser->position, '[') != parser->position) {
     item->long_comment = true;
@@ -144,14 +144,14 @@ static bool skip(struct parser *parser)
   return !parser->failed;
 }
 
-static struct config_literal_value *new_value(struct parser *parser,
-    enum config_literal_kind kind)
+static struct literal_value *new_value(struct parser *parser,
+    enum literal_kind kind)
 {
   if (parser->values == ITEM_LIMIT) {
     fail(parser, "too many literal values");
     return NULL;
   }
-  struct config_literal_value *value = calloc(1, sizeof(*value));
+  struct literal_value *value = calloc(1, sizeof(*value));
   if (!value) {
     fail(parser, "cannot allocate literal value");
     return NULL;
@@ -162,15 +162,15 @@ static struct config_literal_value *new_value(struct parser *parser,
   return value;
 }
 
-static void free_value(struct config_literal_value *value)
+static void free_value(struct literal_value *value)
 {
   if (!value) return;
-  if (value->kind == CONFIG_LITERAL_STRING) {
+  if (value->kind == LITERAL_STRING) {
     free(value->as.string.bytes);
-  } else if (value->kind == CONFIG_LITERAL_TABLE) {
-    struct config_literal_entry *entry = value->as.table.entries;
+  } else if (value->kind == LITERAL_TABLE) {
+    struct literal_entry *entry = value->as.table.entries;
     while (entry) {
-      struct config_literal_entry *next = entry->next;
+      struct literal_entry *next = entry->next;
       free_value(entry->key);
       free_value(entry->value);
       free(entry);
@@ -180,7 +180,7 @@ static void free_value(struct config_literal_value *value)
   free(value);
 }
 
-void config_literal_free(struct config_literal *document)
+void literal_free(struct literal *document)
 {
   if (!document) return;
   free_value(document->root);
@@ -189,7 +189,7 @@ void config_literal_free(struct config_literal *document)
   free(document);
 }
 
-static bool text_value(struct parser *parser, struct config_literal_value *value,
+static bool text_value(struct parser *parser, struct literal_value *value,
     size_t start, size_t end)
 {
   value->as.string.bytes = malloc(end - start + 1);
@@ -209,7 +209,7 @@ static void newline(struct parser *parser)
   }
 }
 
-static bool quoted(struct parser *parser, struct config_literal_value *value)
+static bool quoted(struct parser *parser, struct literal_value *value)
 {
   char quote = peek(parser);
   ++parser->position;
@@ -312,10 +312,10 @@ static bool quoted(struct parser *parser, struct config_literal_value *value)
   return fail(parser, "unterminated quoted string");
 }
 
-static bool string_value(struct parser *parser, struct config_literal_value *value)
+static bool string_value(struct parser *parser, struct literal_value *value)
 {
   if (peek(parser) != '[') return quoted(parser, value);
-  struct config_literal_span body;
+  struct literal_span body;
   if (!long_body(parser, &body) || !text_value(parser, value, body.start, body.end)) return false;
   size_t position = body.start, used = 0;
   if (position < body.end && (parser->document->source[position] == '\r' ||
@@ -338,7 +338,7 @@ static bool string_value(struct parser *parser, struct config_literal_value *val
   return true;
 }
 
-static bool numeric(struct parser *parser, struct config_literal_value *value)
+static bool numeric(struct parser *parser, struct literal_value *value)
 {
   size_t start = parser->position;
   bool negative = peek(parser) == '-';
@@ -383,7 +383,7 @@ static bool numeric(struct parser *parser, struct config_literal_value *value)
     if (hexadecimal) {
       unsigned long long number = strtoull(token + (negative ? 1 : 0), &end, 16);
       if (!errno && !*end) {
-        value->kind = CONFIG_LITERAL_INTEGER;
+        value->kind = LITERAL_INTEGER;
         value->as.integer = (int64_t)(negative ? 0ULL - number : number);
         return true;
       }
@@ -391,7 +391,7 @@ static bool numeric(struct parser *parser, struct config_literal_value *value)
     }
     long long number = strtoll(token, &end, 10);
     if (!errno && !*end) {
-      value->kind = CONFIG_LITERAL_INTEGER;
+      value->kind = LITERAL_INTEGER;
       value->as.integer = number;
       return true;
     }
@@ -399,38 +399,38 @@ static bool numeric(struct parser *parser, struct config_literal_value *value)
   errno = 0;
   double number = strtod(token, &end);
   if (*end || !__builtin_isfinite(number)) return fail(parser, "number is not finite or representable");
-  value->kind = CONFIG_LITERAL_NUMBER;
+  value->kind = LITERAL_NUMBER;
   value->as.number = number;
   return true;
 }
 
-static bool number_equal(const struct config_literal_value *a,
-    const struct config_literal_value *b)
+static bool number_equal(const struct literal_value *a,
+    const struct literal_value *b)
 {
-  if (a->kind == CONFIG_LITERAL_INTEGER && b->kind == CONFIG_LITERAL_INTEGER) {
+  if (a->kind == LITERAL_INTEGER && b->kind == LITERAL_INTEGER) {
     return a->as.integer == b->as.integer;
   }
-  if (a->kind == CONFIG_LITERAL_NUMBER && b->kind == CONFIG_LITERAL_NUMBER) {
+  if (a->kind == LITERAL_NUMBER && b->kind == LITERAL_NUMBER) {
     return a->as.number == b->as.number;
   }
-  const struct config_literal_value *integer = a->kind == CONFIG_LITERAL_INTEGER ? a : b;
-  double number = a->kind == CONFIG_LITERAL_NUMBER ? a->as.number : b->as.number;
+  const struct literal_value *integer = a->kind == LITERAL_INTEGER ? a : b;
+  double number = a->kind == LITERAL_NUMBER ? a->as.number : b->as.number;
   /* Upper bound is exclusive: converting LLONG_MAX to double rounds upward. */
   return number >= (double)LLONG_MIN && number < -(double)LLONG_MIN &&
       (double)(int64_t)number == number && (int64_t)number == integer->as.integer;
 }
 
-static bool same_key(const struct config_literal_value *a,
-    const struct config_literal_value *b, size_t *work)
+static bool same_key(const struct literal_value *a,
+    const struct literal_value *b, size_t *work)
 {
-  bool a_number = a->kind == CONFIG_LITERAL_INTEGER || a->kind == CONFIG_LITERAL_NUMBER;
-  bool b_number = b->kind == CONFIG_LITERAL_INTEGER || b->kind == CONFIG_LITERAL_NUMBER;
+  bool a_number = a->kind == LITERAL_INTEGER || a->kind == LITERAL_NUMBER;
+  bool b_number = b->kind == LITERAL_INTEGER || b->kind == LITERAL_NUMBER;
   if (!*work) return false;
   --*work;
   if (a_number && b_number) return number_equal(a, b);
   if (a->kind != b->kind) return false;
-  if (a->kind == CONFIG_LITERAL_BOOLEAN) return a->as.boolean == b->as.boolean;
-  if (a->kind != CONFIG_LITERAL_STRING || a->as.string.size != b->as.string.size) return false;
+  if (a->kind == LITERAL_BOOLEAN) return a->as.boolean == b->as.boolean;
+  if (a->kind != LITERAL_STRING || a->as.string.size != b->as.string.size) return false;
   if (a->as.string.size > *work) {
     *work = 0;
     return false;
@@ -469,18 +469,18 @@ static bool reserved(const char *bytes, size_t size)
   return false;
 }
 
-static struct config_literal_value *parse_value(struct parser *parser, size_t depth);
+static struct literal_value *parse_value(struct parser *parser, size_t depth);
 
-static bool table(struct parser *parser, struct config_literal_value *value, size_t depth)
+static bool table(struct parser *parser, struct literal_value *value, size_t depth)
 {
   if (depth == DEPTH_LIMIT) return fail(parser, "literal table depth limit exceeded");
   ++parser->position;
-  struct config_literal_entry **tail = &value->as.table.entries;
+  struct literal_entry **tail = &value->as.table.entries;
   int64_t array_index = 0;
   if (!skip(parser)) return false;
   while (peek(parser) != '}') {
     if (parser->entries == ITEM_LIMIT) return fail(parser, "too many table entries");
-    struct config_literal_entry *entry = calloc(1, sizeof(*entry));
+    struct literal_entry *entry = calloc(1, sizeof(*entry));
     if (!entry) return fail(parser, "cannot allocate table entry");
     ++parser->entries;
     *tail = entry;
@@ -492,7 +492,7 @@ static bool table(struct parser *parser, struct config_literal_value *value, siz
       if (!skip(parser)) return false;
       entry->key = parse_value(parser, depth + 1);
       if (!entry->key) return false;
-      if (entry->key->kind == CONFIG_LITERAL_TABLE) return fail(parser, "table keys are unsupported");
+      if (entry->key->kind == LITERAL_TABLE) return fail(parser, "table keys are unsupported");
       if (!skip(parser) || peek(parser) != ']') return fail(parser, "explicit key needs closing bracket");
       ++parser->position;
       if (!skip(parser) || peek(parser) != '=') return fail(parser, "explicit key needs equals");
@@ -504,15 +504,15 @@ static bool table(struct parser *parser, struct config_literal_value *value, siz
       if (reserved(parser->document->source + start, parser->position - start)) {
         return fail(parser, "reserved word cannot be a field key");
       }
-      entry->key = new_value(parser, CONFIG_LITERAL_STRING);
+      entry->key = new_value(parser, LITERAL_STRING);
       if (!entry->key) return false;
-      entry->key->span = (struct config_literal_span){start, parser->position};
+      entry->key->span = (struct literal_span){start, parser->position};
       if (!text_value(parser, entry->key, start, parser->position)) return false;
       if (!skip(parser) || peek(parser) != '=') return fail(parser, "literal field needs equals");
       ++parser->position;
     } else {
       entry->implicit = true;
-      entry->key = new_value(parser, CONFIG_LITERAL_INTEGER);
+      entry->key = new_value(parser, LITERAL_INTEGER);
       if (!entry->key) return false;
       entry->key->span.end = entry->key->span.start;
       entry->key->as.integer = ++array_index;
@@ -521,7 +521,7 @@ static bool table(struct parser *parser, struct config_literal_value *value, siz
     entry->value = parse_value(parser, depth + 1);
     if (!entry->value) return false;
     size_t remaining = WORK_LIMIT - parser->work;
-    for (struct config_literal_entry *prior = value->as.table.entries; prior != entry; prior = prior->next) {
+    for (struct literal_entry *prior = value->as.table.entries; prior != entry; prior = prior->next) {
       bool duplicate = same_key(prior->key, entry->key, &remaining);
       if (!remaining) return fail(parser, "literal parsing work limit exceeded");
       if (duplicate) return fail(parser, "duplicate literal table key");
@@ -542,25 +542,25 @@ static bool table(struct parser *parser, struct config_literal_value *value, siz
   return true;
 }
 
-static struct config_literal_value *parse_value(struct parser *parser, size_t depth)
+static struct literal_value *parse_value(struct parser *parser, size_t depth)
 {
-  struct config_literal_value *value = new_value(parser, CONFIG_LITERAL_TABLE);
+  struct literal_value *value = new_value(parser, LITERAL_TABLE);
   if (!value) return NULL;
   bool valid = false;
   if (peek(parser) == '{') {
     valid = table(parser, value, depth);
   } else if (peek(parser) == '\'' || peek(parser) == '"' || peek(parser) == '[') {
-    value->kind = CONFIG_LITERAL_STRING;
+    value->kind = LITERAL_STRING;
     valid = string_value(parser, value);
   } else if (digit(peek(parser)) || peek(parser) == '.' || peek(parser) == '-') {
-    value->kind = CONFIG_LITERAL_NUMBER;
+    value->kind = LITERAL_NUMBER;
     valid = numeric(parser, value);
   } else if (keyword(parser, "true")) {
-    value->kind = CONFIG_LITERAL_BOOLEAN;
+    value->kind = LITERAL_BOOLEAN;
     value->as.boolean = true;
     valid = true;
   } else if (keyword(parser, "false")) {
-    value->kind = CONFIG_LITERAL_BOOLEAN;
+    value->kind = LITERAL_BOOLEAN;
     valid = true;
   } else {
     fail(parser, "unsupported Lua expression; expected literal value");
@@ -573,20 +573,20 @@ static struct config_literal_value *parse_value(struct parser *parser, size_t de
   return value;
 }
 
-bool config_literal_parse(const char *bytes, size_t size,
-    struct config_literal **output, struct config_literal_diagnostic *diagnostic)
+bool literal_parse(const char *bytes, size_t size,
+    struct literal **output, struct literal_diagnostic *diagnostic)
 {
   *output = NULL;
-  if (diagnostic) *diagnostic = (struct config_literal_diagnostic){.line = 1, .column = 1};
+  if (diagnostic) *diagnostic = (struct literal_diagnostic){.line = 1, .column = 1};
   struct parser parser = {.diagnostic = diagnostic};
-  if (size > CONFIG_LITERAL_SOURCE_LIMIT || (!bytes && size)) {
+  if (size > LITERAL_SOURCE_LIMIT || (!bytes && size)) {
     return fail(&parser, "literal source exceeds limit or is unavailable");
   }
   parser.document = calloc(1, sizeof(*parser.document));
   if (!parser.document) return fail(&parser, "cannot allocate literal document");
   parser.document->source = malloc(size + 1);
   if (!parser.document->source) {
-    config_literal_free(parser.document);
+    literal_free(parser.document);
     return fail(&parser, "cannot allocate literal source");
   }
   if (size) memcpy(parser.document->source, bytes, size);
@@ -623,36 +623,36 @@ bool config_literal_parse(const char *bytes, size_t size,
         }
       }
     }
-    config_literal_free(parser.document);
+    literal_free(parser.document);
     return false;
   }
   *output = parser.document;
   return true;
 }
 
-const struct config_literal_value *config_literal_field(
-    const struct config_literal_value *table_value, const char *key)
+const struct literal_value *literal_field(
+    const struct literal_value *table_value, const char *key)
 {
-  if (!table_value || table_value->kind != CONFIG_LITERAL_TABLE) return NULL;
+  if (!table_value || table_value->kind != LITERAL_TABLE) return NULL;
   size_t size = strlen(key);
-  for (const struct config_literal_entry *entry = table_value->as.table.entries; entry; entry = entry->next) {
-    if (entry->key->kind == CONFIG_LITERAL_STRING && entry->key->as.string.size == size &&
+  for (const struct literal_entry *entry = table_value->as.table.entries; entry; entry = entry->next) {
+    if (entry->key->kind == LITERAL_STRING && entry->key->as.string.size == size &&
         !memcmp(entry->key->as.string.bytes, key, size)) return entry->value;
   }
   return NULL;
 }
 
-static bool equal(const struct config_literal_value *a,
-    const struct config_literal_value *b, size_t *work, size_t depth)
+static bool equal(const struct literal_value *a,
+    const struct literal_value *b, size_t *work, size_t depth)
 {
   if (!a || !b || depth > DEPTH_LIMIT) return false;
-  if (a->kind != CONFIG_LITERAL_TABLE || b->kind != CONFIG_LITERAL_TABLE) {
+  if (a->kind != LITERAL_TABLE || b->kind != LITERAL_TABLE) {
     return same_key(a, b, work);
   }
   if (a->as.table.count != b->as.table.count || !*work) return false;
   --*work;
-  for (const struct config_literal_entry *entry = a->as.table.entries; entry; entry = entry->next) {
-    const struct config_literal_entry *other = b->as.table.entries;
+  for (const struct literal_entry *entry = a->as.table.entries; entry; entry = entry->next) {
+    const struct literal_entry *other = b->as.table.entries;
     while (other && !same_key(entry->key, other->key, work)) {
       if (!*work) return false;
       other = other->next;
@@ -662,8 +662,8 @@ static bool equal(const struct config_literal_value *a,
   return true;
 }
 
-bool config_literal_equal(const struct config_literal_value *a,
-    const struct config_literal_value *b)
+bool literal_equal(const struct literal_value *a,
+    const struct literal_value *b)
 {
   size_t work = WORK_LIMIT;
   return equal(a, b, &work, 0);

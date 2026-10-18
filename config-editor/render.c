@@ -8,12 +8,12 @@ struct buffer { char *bytes; size_t size, capacity, work; };
 
 static bool append(struct buffer *buffer, const char *bytes, size_t size)
 {
-  if (size > CONFIG_LITERAL_SOURCE_LIMIT - buffer->size) return false;
+  if (size > LITERAL_SOURCE_LIMIT - buffer->size) return false;
   if (buffer->size + size + 1 > buffer->capacity) {
     size_t capacity = buffer->capacity ? buffer->capacity : 256;
     while (capacity < buffer->size + size + 1) {
       capacity *= 2;
-      if (capacity > CONFIG_LITERAL_SOURCE_LIMIT + 1) capacity = CONFIG_LITERAL_SOURCE_LIMIT + 1;
+      if (capacity > LITERAL_SOURCE_LIMIT + 1) capacity = LITERAL_SOURCE_LIMIT + 1;
     }
     void *grown = realloc(buffer->bytes, capacity);
     if (!grown) return false;
@@ -50,26 +50,26 @@ static bool quote(struct buffer *buffer, const char *bytes, size_t size)
   return text(buffer, "\"");
 }
 
-static bool render(struct buffer *buffer, const struct config_literal_value *value, size_t depth)
+static bool render(struct buffer *buffer, const struct literal_value *value, size_t depth)
 {
   if (!value || depth > 32 || ++buffer->work > 8192) return false;
   char number[64];
   switch (value->kind) {
-    case CONFIG_LITERAL_STRING:
+    case LITERAL_STRING:
       return quote(buffer, value->as.string.bytes, value->as.string.size);
-    case CONFIG_LITERAL_BOOLEAN:
+    case LITERAL_BOOLEAN:
       return text(buffer, value->as.boolean ? "true" : "false");
-    case CONFIG_LITERAL_INTEGER:
+    case LITERAL_INTEGER:
       snprintf(number, sizeof(number), "%lld", (long long)value->as.integer);
       return text(buffer, number);
-    case CONFIG_LITERAL_NUMBER:
+    case LITERAL_NUMBER:
       if (!__builtin_isfinite(value->as.number)) return false;
       snprintf(number, sizeof(number), "%.17g", (double)value->as.number);
       if (!text(buffer, number)) return false;
       return strpbrk(number, ".eE") || text(buffer, ".0");
-    case CONFIG_LITERAL_TABLE:
+    case LITERAL_TABLE:
       if (!text(buffer, "{")) return false;
-      for (const struct config_literal_entry *entry = value->as.table.entries; entry; entry = entry->next) {
+      for (const struct literal_entry *entry = value->as.table.entries; entry; entry = entry->next) {
         if (!text(buffer, " [") || !render(buffer, entry->key, depth + 1) || !text(buffer, "] = ") ||
             !render(buffer, entry->value, depth + 1) || !text(buffer, ",")) return false;
       }
@@ -91,7 +91,7 @@ static bool finish(struct buffer *buffer, bool valid, char **output, size_t *siz
   return true;
 }
 
-bool config_render_value(const struct config_literal_value *value,
+bool config_render_value(const struct literal_value *value,
     char **output, size_t *size)
 {
   struct buffer buffer = {0};
@@ -99,7 +99,7 @@ bool config_render_value(const struct config_literal_value *value,
 }
 
 bool config_render_entry(const struct config_catalog_entry *entry,
-    const struct config_literal_value *value, char **output, size_t *size)
+    const struct literal_value *value, char **output, size_t *size)
 {
   struct buffer buffer = {0};
   bool limine = entry->file == CONFIG_FILE_LIMINE;
@@ -107,7 +107,7 @@ bool config_render_entry(const struct config_catalog_entry *entry,
   bool valid = config_entry_id_valid(entry->id, strlen(entry->id)) &&
       text(&buffer, prefix) && text(&buffer, "begin ") && text(&buffer, entry->id) && text(&buffer, "\n");
   if (valid && limine) {
-    valid = value && value->kind == CONFIG_LITERAL_STRING &&
+    valid = value && value->kind == LITERAL_STRING &&
         config_limine_entry_valid(entry->name, value->as.string.bytes, value->as.string.size) &&
         append(&buffer, value->as.string.bytes, value->as.string.size);
     if (valid && buffer.size && buffer.bytes[buffer.size - 1] != '\r' && buffer.bytes[buffer.size - 1] != '\n') {
@@ -140,7 +140,7 @@ bool config_render_defaults(const struct config_catalog *catalog, enum config_fi
           entry->kind != (group ? CONFIG_ENTRY_SPACE : CONFIG_ENTRY_VOLUME))) {
         continue;
       }
-      const struct config_literal_value *value = replacements &&
+      const struct literal_value *value = replacements &&
           entry->migration.kind == CONFIG_MIGRATION_REPLACE ? entry->migration.value : entry->default_value;
       char *bytes;
       size_t count;

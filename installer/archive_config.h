@@ -4,7 +4,7 @@
 #include "literal.h"
 #include <stdint.h>
 
-#define INSTALL_ARCHIVE_CONFIG_MAX_BYTES CONFIG_LITERAL_SOURCE_LIMIT
+#define INSTALL_ARCHIVE_CONFIG_MAX_BYTES LITERAL_SOURCE_LIMIT
 
 /* Rebind system's npfs selector and a reserved native home sharing its old
  * partition; separate explicit and RAM roots remain unchanged. Literal data

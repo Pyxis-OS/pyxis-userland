@@ -20,7 +20,7 @@ static bool freeze(const struct config_bytes source[CONFIG_LUA_COUNT],
     struct config_selection *selection)
 {
   for (size_t i = 0; i < CONFIG_LUA_COUNT; ++i) {
-    if (!source[i].bytes || !source[i].size || source[i].size > CONFIG_LITERAL_SOURCE_LIMIT) {
+    if (!source[i].bytes || !source[i].size || source[i].size > LITERAL_SOURCE_LIMIT) {
       return false;
     }
     selection->bytes[i] = malloc(source[i].size + 1);

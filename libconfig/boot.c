@@ -282,8 +282,10 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
     lua_pop(state, 1);
     config_field(state, -1, "package");
     if (!lua_isnil(state, -1)) {
-      const char *package = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : NULL;
-      if (!package || !package_id_valid(package)) {
+      size_t length = 0;
+      const char *package = lua_type(state, -1) == LUA_TSTRING ?
+          lua_tolstring(state, -1, &length) : NULL;
+      if (!package || strlen(package) != length || !package_id_valid(package)) {
         luaL_error(state, "space %s: root %s: package must be a package ID", space->name,
             root->name);
       }
@@ -334,7 +336,8 @@ static void read_roots(lua_State *state, struct boot_space *space)
     size_t length;
     const char *name = lua_type(state, -2) == LUA_TSTRING ?
         lua_tolstring(state, -2, &length) : NULL;
-    if (!name || !valid_name(name, length) || reserved_volume(name)) {
+    if (!name || !valid_name(name, length) || reserved_volume(name) ||
+        !strcmp(name, BOOT_ACPI_ROOT)) {
       luaL_error(state, "space %s: roots must name configured volumes or packages", space->name);
     }
     struct boot_root *root = &space->roots[space->root_count++];
@@ -982,6 +985,11 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       if (!volume) {
         return plan_fail(plan, "space %s: root %s names undefined volume %s",
             space->name, space->roots[j].name, space->roots[j].volume);
+      }
+      /* A tree opened from a mount that boot init retires on exit would vanish. */
+      if (space->roots[j].package && volume->kind != BOOT_VOLUME_NPFS) {
+        return plan_fail(plan, "space %s: package root %s needs an npfs %s volume",
+            space->name, space->roots[j].name, BOOT_PACKAGES_VOLUME);
       }
       if (space->roots[j].read_write && (volume->kind == BOOT_VOLUME_FAT32 ||
           volume->kind == BOOT_VOLUME_BOOT_ESP)) {

@@ -9,8 +9,8 @@
 
 static bool quoted(FILE *stream, const char *text)
 {
-  struct config_literal_value value = {
-    .kind = CONFIG_LITERAL_STRING,
+  struct literal_value value = {
+    .kind = LITERAL_STRING,
     .as.string = {.bytes = (char *)text, .size = strlen(text)},
   };
   char *bytes;
@@ -53,13 +53,13 @@ bool config_replay_write(FILE *stream, const char *target,
   return fputs("} }" SUFFIX, stream) != EOF && fflush(stream) == 0;
 }
 
-static bool keys(const struct config_literal_value *table, const char *const *allowed, size_t count)
+static bool keys(const struct literal_value *table, const char *const *allowed, size_t count)
 {
-  if (!table || table->kind != CONFIG_LITERAL_TABLE || table->as.table.count != count) {
+  if (!table || table->kind != LITERAL_TABLE || table->as.table.count != count) {
     return false;
   }
-  for (const struct config_literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
-    if (entry->key->kind != CONFIG_LITERAL_STRING) {
+  for (const struct literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
+    if (entry->key->kind != LITERAL_STRING) {
       return false;
     }
     bool found = false;
@@ -77,9 +77,9 @@ static bool keys(const struct config_literal_value *table, const char *const *al
   return true;
 }
 
-static bool text(const struct config_literal_value *value, char *output, size_t capacity)
+static bool text(const struct literal_value *value, char *output, size_t capacity)
 {
-  if (!value || value->kind != CONFIG_LITERAL_STRING || !value->as.string.size ||
+  if (!value || value->kind != LITERAL_STRING || !value->as.string.size ||
       value->as.string.size >= capacity || memchr(value->as.string.bytes, '\0', value->as.string.size)) {
     return false;
   }
@@ -88,55 +88,55 @@ static bool text(const struct config_literal_value *value, char *output, size_t 
   return true;
 }
 
-static const struct config_literal_value *index_value(const struct config_literal_value *array, size_t index)
+static const struct literal_value *index_value(const struct literal_value *array, size_t index)
 {
-  for (const struct config_literal_entry *entry = array->as.table.entries; entry; entry = entry->next) {
-    if ((entry->key->kind == CONFIG_LITERAL_INTEGER && entry->key->as.integer == (int64_t)index) ||
-        (entry->key->kind == CONFIG_LITERAL_NUMBER && entry->key->as.number == (double)index)) {
+  for (const struct literal_entry *entry = array->as.table.entries; entry; entry = entry->next) {
+    if ((entry->key->kind == LITERAL_INTEGER && entry->key->as.integer == (int64_t)index) ||
+        (entry->key->kind == LITERAL_NUMBER && entry->key->as.number == (double)index)) {
       return entry->value;
     }
   }
   return NULL;
 }
 
-static bool decode(const struct config_literal *document, struct config_replay *replay)
+static bool decode(const struct literal *document, struct config_replay *replay)
 {
   const char *root_keys[] = {"target", "inputs", "choices"};
   if (!keys(document->root, root_keys, 3) ||
-      !text(config_literal_field(document->root, "target"), replay->target, sizeof(replay->target))) {
+      !text(literal_field(document->root, "target"), replay->target, sizeof(replay->target))) {
     return false;
   }
-  const struct config_literal_value *inputs = config_literal_field(document->root, "inputs");
-  if (!inputs || inputs->kind != CONFIG_LITERAL_TABLE || inputs->as.table.count != CONFIG_REPLAY_INPUTS) {
+  const struct literal_value *inputs = literal_field(document->root, "inputs");
+  if (!inputs || inputs->kind != LITERAL_TABLE || inputs->as.table.count != CONFIG_REPLAY_INPUTS) {
     return false;
   }
   for (size_t i = 0; i < CONFIG_REPLAY_INPUTS; ++i) {
-    const struct config_literal_value *item = index_value(inputs, i + 1);
+    const struct literal_value *item = index_value(inputs, i + 1);
     const char *input_keys[] = {"present", "sha256"};
     if (!keys(item, input_keys, 2)) {
       return false;
     }
-    const struct config_literal_value *present = config_literal_field(item, "present");
-    if (!present || present->kind != CONFIG_LITERAL_BOOLEAN ||
-        !text(config_literal_field(item, "sha256"), replay->inputs[i].sha256, 65) ||
+    const struct literal_value *present = literal_field(item, "present");
+    if (!present || present->kind != LITERAL_BOOLEAN ||
+        !text(literal_field(item, "sha256"), replay->inputs[i].sha256, 65) ||
         !digest_valid(replay->inputs[i].sha256)) {
       return false;
     }
     replay->inputs[i].present = present->as.boolean;
   }
-  const struct config_literal_value *choices = config_literal_field(document->root, "choices");
-  if (!choices || choices->kind != CONFIG_LITERAL_TABLE || choices->as.table.count > CONFIG_PLAN_CHANGE_LIMIT) {
+  const struct literal_value *choices = literal_field(document->root, "choices");
+  if (!choices || choices->kind != LITERAL_TABLE || choices->as.table.count > CONFIG_PLAN_CHANGE_LIMIT) {
     return false;
   }
   replay->count = choices->as.table.count;
   for (size_t i = 0; i < replay->count; ++i) {
-    const struct config_literal_value *item = index_value(choices, i + 1);
+    const struct literal_value *item = index_value(choices, i + 1);
     const char *choice_keys[] = {"id", "choice"};
     char choice[16];
     if (!keys(item, choice_keys, 2) ||
-        !text(config_literal_field(item, "id"), replay->choices[i].id, sizeof(replay->choices[i].id)) ||
+        !text(literal_field(item, "id"), replay->choices[i].id, sizeof(replay->choices[i].id)) ||
         !config_entry_id_valid(replay->choices[i].id, strlen(replay->choices[i].id)) ||
-        !text(config_literal_field(item, "choice"), choice, sizeof(choice))) {
+        !text(literal_field(item, "choice"), choice, sizeof(choice))) {
       return false;
     }
     bool known = false;
@@ -162,13 +162,13 @@ static bool decode(const struct config_literal *document, struct config_replay *
 bool config_replay_read(FILE *stream, struct config_replay *replay)
 {
   memset(replay, 0, sizeof(*replay));
-  char *bytes = malloc(CONFIG_LITERAL_SOURCE_LIMIT + 1);
+  char *bytes = malloc(LITERAL_SOURCE_LIMIT + 1);
   if (!bytes) {
     return false;
   }
   size_t size = 0;
   bool framed = false;
-  while (size <= CONFIG_LITERAL_SOURCE_LIMIT) {
+  while (size <= LITERAL_SOURCE_LIMIT) {
     int byte = fgetc(stream);
     if (byte == EOF) {
       break;
@@ -180,16 +180,16 @@ bool config_replay_read(FILE *stream, struct config_replay *replay)
       break;
     }
   }
-  bool ok = framed && !ferror(stream) && size <= CONFIG_LITERAL_SOURCE_LIMIT &&
+  bool ok = framed && !ferror(stream) && size <= LITERAL_SOURCE_LIMIT &&
       size >= strlen(PREFIX) + strlen(SUFFIX) && !memcmp(bytes, PREFIX, strlen(PREFIX)) &&
       !memcmp(bytes + size - strlen(SUFFIX), SUFFIX, strlen(SUFFIX));
-  struct config_literal *document = NULL;
-  struct config_literal_diagnostic diagnostic;
+  struct literal *document = NULL;
+  struct literal_diagnostic diagnostic;
   if (ok) {
-    ok = config_literal_parse(bytes + strlen(PREFIX), size - strlen(PREFIX) - strlen(SUFFIX),
+    ok = literal_parse(bytes + strlen(PREFIX), size - strlen(PREFIX) - strlen(SUFFIX),
         &document, &diagnostic) && decode(document, replay);
   }
-  config_literal_free(document);
+  literal_free(document);
   free(bytes);
   if (!ok) {
     memset(replay, 0, sizeof(*replay));

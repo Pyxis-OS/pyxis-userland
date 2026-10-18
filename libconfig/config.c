@@ -8,19 +8,19 @@
 
 /* Push an already parsed value. The caller protects Lua allocation and errors
  * with lua_pcall; no Lua source is loaded and no libraries are opened. */
-static void push_literal(lua_State *state, const struct config_literal_value *value)
+static void push_literal(lua_State *state, const struct literal_value *value)
 {
   luaL_checkstack(state, 4, "literal table depth");
   switch (value->kind) {
-    case CONFIG_LITERAL_STRING:
+    case LITERAL_STRING:
       lua_pushlstring(state, value->as.string.bytes, value->as.string.size);
       break;
-    case CONFIG_LITERAL_INTEGER: lua_pushinteger(state, value->as.integer); break;
-    case CONFIG_LITERAL_NUMBER: lua_pushnumber(state, value->as.number); break;
-    case CONFIG_LITERAL_BOOLEAN: lua_pushboolean(state, value->as.boolean); break;
-    case CONFIG_LITERAL_TABLE:
+    case LITERAL_INTEGER: lua_pushinteger(state, value->as.integer); break;
+    case LITERAL_NUMBER: lua_pushnumber(state, value->as.number); break;
+    case LITERAL_BOOLEAN: lua_pushboolean(state, value->as.boolean); break;
+    case LITERAL_TABLE:
       lua_createtable(state, 0, (int)value->as.table.count);
-      for (const struct config_literal_entry *entry = value->as.table.entries; entry; entry = entry->next) {
+      for (const struct literal_entry *entry = value->as.table.entries; entry; entry = entry->next) {
         push_literal(state, entry->key);
         push_literal(state, entry->value);
         lua_rawset(state, -3);
@@ -168,7 +168,7 @@ enum config_result config_read_bytes(const char *name, const char *bytes, size_t
 }
 
 struct literal_reader {
-  const struct config_literal *document;
+  const struct literal *document;
   lua_CFunction decode;
   void *output;
 };
@@ -187,9 +187,9 @@ static int decode_literal(lua_State *state)
 enum config_result config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, lua_CFunction decode, void *output)
 {
-  struct config_literal *document;
-  struct config_literal_diagnostic diagnostic;
-  if (!config_literal_parse(bytes, size, &document, &diagnostic)) {
+  struct literal *document;
+  struct literal_diagnostic diagnostic;
+  if (!literal_parse(bytes, size, &document, &diagnostic)) {
     fprintf(stderr, "config: %s:%zu:%zu: %s\n", name,
         diagnostic.line, diagnostic.column, diagnostic.reason);
     return CONFIG_ERROR;
@@ -197,7 +197,7 @@ enum config_result config_read_literal_bytes(const char *name, const char *bytes
   lua_State *state = luaL_newstate();
   if (!state) {
     fprintf(stderr, "config: %s: cannot allocate decoder\n", name);
-    config_literal_free(document);
+    literal_free(document);
     return CONFIG_ERROR;
   }
   struct literal_reader reader = {.document = document, .decode = decode, .output = output};
@@ -210,6 +210,6 @@ enum config_result config_read_literal_bytes(const char *name, const char *bytes
     fprintf(stderr, "config: %s: %s\n", name, error);
   }
   lua_close(state);
-  config_literal_free(document);
+  literal_free(document);
   return status == LUA_OK ? CONFIG_OK : CONFIG_ERROR;
 }

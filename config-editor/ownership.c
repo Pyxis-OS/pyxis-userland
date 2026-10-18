@@ -129,7 +129,7 @@ static bool finish(struct scanner *scanner, bool valid, struct config_owned_set 
   return true;
 }
 
-bool config_owned_scan_lua(const char *name, const struct config_literal *document,
+bool config_owned_scan_lua(const char *name, const struct literal *document,
     struct config_owned_set **output)
 {
   *output = NULL;
@@ -137,7 +137,7 @@ bool config_owned_scan_lua(const char *name, const struct config_literal *docume
   if (!start(&scanner)) return false;
   bool valid = true;
   for (size_t i = 0; i < document->comment_count; ++i) {
-    const struct config_literal_comment *comment = &document->comments[i];
+    const struct literal_comment *comment = &document->comments[i];
     if (!comment->long_comment && !marker(&scanner, comment->span.start,
         comment->content.start, comment->content.end)) {
       valid = false;
@@ -152,7 +152,7 @@ bool config_owned_scan_limine(const char *name, const char *bytes, size_t size,
 {
   *output = NULL;
   struct scanner scanner = {.name = name, .bytes = bytes, .size = size};
-  if (size > CONFIG_LITERAL_SOURCE_LIMIT || (!bytes && size) || (size && memchr(bytes, '\0', size))) {
+  if (size > LITERAL_SOURCE_LIMIT || (!bytes && size) || (size && memchr(bytes, '\0', size))) {
     return fail(&scanner, 0, "invalid or oversized Limine source");
   }
   if (!start(&scanner)) return false;
@@ -172,7 +172,7 @@ bool config_owned_scan_limine(const char *name, const char *bytes, size_t size,
 
 bool config_limine_entry_valid(const char *entry_name, const char *bytes, size_t size)
 {
-  if (!bytes || !size || size > CONFIG_LITERAL_SOURCE_LIMIT) return false;
+  if (!bytes || !size || size > LITERAL_SOURCE_LIMIT) return false;
   bool header = false, protocol = false, path = false;
   for (size_t i = 0; i < size; ++i) {
     unsigned char byte = (unsigned char)bytes[i];

@@ -26,8 +26,8 @@ enum config_plan_choice {
 };
 
 struct config_plan_target {
-  const struct config_literal_value *value;
-  struct config_literal_span span;
+  const struct literal_value *value;
+  struct literal_span span;
   bool present, owned, marked, owns_value;
 };
 
@@ -50,7 +50,7 @@ struct config_plan_file {
   char *before, *after;
   size_t before_size, after_size;
   bool original_present, after_present, print_only, changed, relevant;
-  struct config_literal *document;
+  struct literal *document;
   struct config_owned_set *ownership;
   const char *reason;
 };

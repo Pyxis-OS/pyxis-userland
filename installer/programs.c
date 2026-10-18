@@ -987,10 +987,10 @@ bool install_archive_rescue_identity(const struct install_source *archive)
     } else if (!strcmp(name, "config/installed.lua")) {
       duplicate |= seen_defaults;
       seen_defaults = true;
-      struct config_literal *document = NULL;
-      struct config_literal_diagnostic diagnostic;
-      defaults = config_literal_parse((char *)checked.memory + data, size, &document, &diagnostic);
-      config_literal_free(document);
+      struct literal *document = NULL;
+      struct literal_diagnostic diagnostic;
+      defaults = literal_parse((char *)checked.memory + data, size, &document, &diagnostic);
+      literal_free(document);
     }
     if (!align4(data + size, &offset)) {
       duplicate = true;

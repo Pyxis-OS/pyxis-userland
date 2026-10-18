@@ -6,7 +6,7 @@
 
 struct plan_edit {
   enum config_file file;
-  struct config_literal_span span;
+  struct literal_span span;
   char *bytes;
   size_t size;
   size_t order;
@@ -17,9 +17,9 @@ struct plan_edits {
   size_t count;
 };
 
-static bool string_is(const struct config_literal_value *value, const char *text)
+static bool string_is(const struct literal_value *value, const char *text)
 {
-  return value && value->kind == CONFIG_LITERAL_STRING &&
+  return value && value->kind == LITERAL_STRING &&
       value->as.string.size == strlen(text) &&
       !memcmp(value->as.string.bytes, text, value->as.string.size);
 }
@@ -43,34 +43,34 @@ static bool same_target(const struct config_catalog_entry *a,
   return a && b && a->file == b->file && a->kind == b->kind && !strcmp(a->name, b->name);
 }
 
-static const struct config_literal_value *target_table(
+static const struct literal_value *target_table(
     const struct config_plan_file *file, enum config_entry_kind kind)
 {
   if (!file->document) {
     return NULL;
   }
-  const struct config_literal_value *root = file->document->root;
+  const struct literal_value *root = file->document->root;
   if (kind == CONFIG_ENTRY_VOLUME) {
-    return config_literal_field(root, "volumes");
+    return literal_field(root, "volumes");
   }
   if (kind == CONFIG_ENTRY_SPACE) {
-    return config_literal_field(root, "spaces");
+    return literal_field(root, "spaces");
   }
   return root;
 }
 
-static const struct config_literal_entry *literal_target(
+static const struct literal_entry *literal_target(
     const struct config_plan_file *file, enum config_entry_kind kind, const char *name)
 {
-  const struct config_literal_value *table = target_table(file, kind);
-  if (!table || table->kind != CONFIG_LITERAL_TABLE) {
+  const struct literal_value *table = target_table(file, kind);
+  if (!table || table->kind != LITERAL_TABLE) {
     return NULL;
   }
-  const struct config_literal_entry *found = NULL;
-  for (const struct config_literal_entry *entry = table->as.table.entries;
+  const struct literal_entry *found = NULL;
+  for (const struct literal_entry *entry = table->as.table.entries;
       entry; entry = entry->next) {
     bool matches = kind == CONFIG_ENTRY_SPACE ?
-        string_is(config_literal_field(entry->value, "name"), name) : string_is(entry->key, name);
+        string_is(literal_field(entry->value, "name"), name) : string_is(entry->key, name);
     if (matches) {
       if (found) {
         return NULL;
@@ -82,7 +82,7 @@ static const struct config_literal_entry *literal_target(
 }
 
 /* Only whitespace and parser-recognized comments may surround the one entry. */
-static bool trivia(const struct config_literal *document, size_t start, size_t end)
+static bool trivia(const struct literal *document, size_t start, size_t end)
 {
   while (start < end) {
     unsigned char c = (unsigned char)document->source[start];
@@ -92,7 +92,7 @@ static bool trivia(const struct config_literal *document, size_t start, size_t e
     }
     bool comment = false;
     for (size_t i = 0; i < document->comment_count; ++i) {
-      struct config_literal_span span = document->comments[i].span;
+      struct literal_span span = document->comments[i].span;
       if (span.start == start && span.end <= end) {
         start = span.end;
         comment = true;
@@ -107,7 +107,7 @@ static bool trivia(const struct config_literal *document, size_t start, size_t e
 }
 
 static bool certified_span(const struct config_plan_file *file,
-    const struct config_owned_span *owned, struct config_literal_span entry)
+    const struct config_owned_span *owned, struct literal_span entry)
 {
   return entry.start >= owned->content.start && entry.end <= owned->content.end &&
       trivia(file->document, owned->content.start, entry.start) &&
@@ -133,7 +133,7 @@ static bool limine_header(const char *bytes, size_t start, size_t end, const cha
 }
 
 static bool limine_target(struct config_plan_file *file, const char *name,
-    struct config_literal_span *span)
+    struct literal_span *span)
 {
   bool found = false;
   size_t end = file->before_size;
@@ -175,7 +175,7 @@ static bool find_target(struct config_plan_file *file,
   }
   const struct config_owned_span *owned = config_owned_find(file->ownership, entry->id);
   if (entry->kind == CONFIG_ENTRY_LIMINE) {
-    struct config_literal_span content;
+    struct literal_span content;
     bool present = owned ? true : limine_target(file, entry->name, &content);
     if (!present) {
       return true;
@@ -189,12 +189,12 @@ static bool find_target(struct config_plan_file *file,
       file->reason = "Limine target is not one complete declared entry";
       return true;
     }
-    struct config_literal_value *value = calloc(1, sizeof(*value));
+    struct literal_value *value = calloc(1, sizeof(*value));
     if (!value) {
       return false;
     }
-    *value = (struct config_literal_value){
-      .kind = CONFIG_LITERAL_STRING, .span = content,
+    *value = (struct literal_value){
+      .kind = LITERAL_STRING, .span = content,
       .as.string = {file->before + content.start, content.end - content.start},
     };
     *target = (struct config_plan_target){.value = value, .owns_value = true,
@@ -202,7 +202,7 @@ static bool find_target(struct config_plan_file *file,
         .owned = owned || !file->original_present, .marked = owned != NULL};
     return true;
   }
-  const struct config_literal_entry *literal = literal_target(file, entry->kind, entry->name);
+  const struct literal_entry *literal = literal_target(file, entry->kind, entry->name);
   if (owned && (!literal || !certified_span(file, owned, literal->span))) {
     file->print_only = true;
     file->reason = "ownership marker does not enclose exactly its complete declared entry";
@@ -234,7 +234,7 @@ static bool find_destination(struct config_plan_file *file,
       (entry->migration.from_kind != entry->kind || strcmp(entry->migration.from_name, entry->name))) {
     struct config_catalog_entry destination = *entry;
     const struct config_owned_span *owned = config_owned_find(file->ownership, entry->id);
-    const struct config_literal_entry *literal = entry->kind == CONFIG_ENTRY_LIMINE ? NULL :
+    const struct literal_entry *literal = entry->kind == CONFIG_ENTRY_LIMINE ? NULL :
         literal_target(file, entry->kind, entry->name);
     if (owned && (!literal || !certified_span(file, owned, literal->span))) {
       /* This ID still marks the declared source of a move, not its destination. */
@@ -262,7 +262,7 @@ static enum config_value_origin value_origin(const struct config_delta_plan *pla
   if (!plan->old_catalog || !old_entry) {
     return CONFIG_VALUE_UNKNOWN;
   }
-  return config_literal_equal(target->value, old_entry->default_value) ?
+  return literal_equal(target->value, old_entry->default_value) ?
       CONFIG_VALUE_OLD_DEFAULT : CONFIG_VALUE_OWNER_EDIT;
 }
 
@@ -295,7 +295,7 @@ static bool add_change(struct config_delta_plan *plan,
   change->origin = value_origin(plan, old_entry, &change->current);
   if (change->current.present && entry->migration.kind == CONFIG_MIGRATION_NONE &&
       (change->origin != CONFIG_VALUE_OLD_DEFAULT || (old_entry &&
-       same_target(old_entry, entry) && config_literal_equal(old_entry->default_value, entry->default_value)))) {
+       same_target(old_entry, entry) && literal_equal(old_entry->default_value, entry->default_value)))) {
     /* A changed default does not establish that an existing owner value is
      * invalid. Full typed validation remains the caller's responsibility. */
     change->required = false;
@@ -372,10 +372,10 @@ static bool file_snapshot(struct config_plan_file *file, enum config_file which,
     file->reason = "missing file has no trusted complete revision defaults";
     return true;
   }
-  if (source->size > CONFIG_LITERAL_SOURCE_LIMIT || (!source->bytes && source->size)) {
+  if (source->size > LITERAL_SOURCE_LIMIT || (!source->bytes && source->size)) {
     file->print_only = true;
     file->reason = "source exceeds the bounded configuration size";
-    return source->size <= CONFIG_LITERAL_SOURCE_LIMIT;
+    return source->size <= LITERAL_SOURCE_LIMIT;
   }
   file->before = malloc(source->size + 1);
   if (!file->before) {
@@ -394,8 +394,8 @@ static bool file_snapshot(struct config_plan_file *file, enum config_file which,
     }
     return true;
   }
-  struct config_literal_diagnostic diagnostic;
-  if (!config_literal_parse(file->before, file->before_size, &file->document, &diagnostic)) {
+  struct literal_diagnostic diagnostic;
+  if (!literal_parse(file->before, file->before_size, &file->document, &diagnostic)) {
     file->print_only = true;
     file->reason = "unsupported or invalid Lua stays untouched; use printed changes";
     return true;
@@ -419,7 +419,7 @@ static bool migration_equal(const struct config_migration *a, const struct confi
   }
   switch (a->kind) {
   case CONFIG_MIGRATION_NONE: return true;
-  case CONFIG_MIGRATION_REPLACE: return config_literal_equal(a->value, b->value);
+  case CONFIG_MIGRATION_REPLACE: return literal_equal(a->value, b->value);
   case CONFIG_MIGRATION_MOVE:
     return a->from_file == b->from_file && a->from_kind == b->from_kind &&
         optional_equal(a->from_name, b->from_name);
@@ -433,7 +433,7 @@ static bool declaration_changed(const struct config_catalog_entry *old_entry,
     const struct config_catalog_entry *entry)
 {
   return !old_entry || !same_target(old_entry, entry) ||
-      !config_literal_equal(old_entry->default_value, entry->default_value) ||
+      !literal_equal(old_entry->default_value, entry->default_value) ||
       (!old_entry->required && entry->required) || !migration_equal(&old_entry->migration, &entry->migration);
 }
 
@@ -483,7 +483,7 @@ bool config_delta_plan_build(const struct config_catalog *old_catalog,
     /* Without old defaults, an equal current value needs no replacement; an
      * unowned equal value still requires explicit adoption of its exact bytes. */
     if (!old_entry && target.present && target.owned &&
-        config_literal_equal(target.value, entry->default_value) &&
+        literal_equal(target.value, entry->default_value) &&
         entry->migration.kind == CONFIG_MIGRATION_NONE && plan->files[entry->file].original_present) {
       changed = false;
     }
@@ -510,7 +510,7 @@ fail:
 }
 
 static bool append_edit(struct plan_edits *edits, enum config_file file,
-    struct config_literal_span span, char *bytes, size_t size)
+    struct literal_span span, char *bytes, size_t size)
 {
   struct plan_edit *grown = realloc(edits->items, (edits->count + 1) * sizeof(*grown));
   if (!grown) {
@@ -524,20 +524,20 @@ static bool append_edit(struct plan_edits *edits, enum config_file file,
 }
 
 struct renamed_value {
-  struct config_literal_value value, key, replacement;
-  struct config_literal_entry *entries;
+  struct literal_value value, key, replacement;
+  struct literal_entry *entries;
 };
 
-static bool rename_field(const struct config_literal_value *value, const char *from,
+static bool rename_field(const struct literal_value *value, const char *from,
     const char *to, struct renamed_value *renamed)
 {
   *renamed = (struct renamed_value){0};
-  if (!value || value->kind != CONFIG_LITERAL_TABLE || !config_literal_field(value, from) ||
-      (strcmp(from, to) && config_literal_field(value, to))) {
+  if (!value || value->kind != LITERAL_TABLE || !literal_field(value, from) ||
+      (strcmp(from, to) && literal_field(value, to))) {
     return false;
   }
   renamed->value = *value;
-  renamed->key = (struct config_literal_value){.kind = CONFIG_LITERAL_STRING,
+  renamed->key = (struct literal_value){.kind = LITERAL_STRING,
       .as.string = {(char *)to, strlen(to)}};
   size_t count = value->as.table.count;
   renamed->entries = calloc(count ? count : 1, sizeof(*renamed->entries));
@@ -545,7 +545,7 @@ static bool rename_field(const struct config_literal_value *value, const char *f
     return false;
   }
   size_t i = 0;
-  for (const struct config_literal_entry *entry = value->as.table.entries;
+  for (const struct literal_entry *entry = value->as.table.entries;
       entry; entry = entry->next, ++i) {
     renamed->entries[i] = *entry;
     if (string_is(entry->key, from)) {
@@ -557,15 +557,15 @@ static bool rename_field(const struct config_literal_value *value, const char *f
   return true;
 }
 
-static bool space_move_value(const struct config_literal_value *value, const char *name,
+static bool space_move_value(const struct literal_value *value, const char *name,
     struct renamed_value *renamed)
 {
   if (!rename_field(value, "name", "name", renamed)) {
     return false;
   }
-  renamed->replacement = (struct config_literal_value){.kind = CONFIG_LITERAL_STRING,
+  renamed->replacement = (struct literal_value){.kind = LITERAL_STRING,
       .as.string = {(char *)name, strlen(name)}};
-  for (struct config_literal_entry *entry = renamed->value.as.table.entries;
+  for (struct literal_entry *entry = renamed->value.as.table.entries;
       entry; entry = entry->next) {
     if (string_is(entry->key, "name")) {
       entry->value = &renamed->replacement;
@@ -577,7 +577,7 @@ static bool space_move_value(const struct config_literal_value *value, const cha
 static bool render_change(const struct config_plan_change *change, char **bytes, size_t *size)
 {
   const struct config_catalog_entry *entry = change->entry;
-  const struct config_literal_value *value = change->choice == CONFIG_CHOICE_ADOPT ?
+  const struct literal_value *value = change->choice == CONFIG_CHOICE_ADOPT ?
       change->current.value : entry->default_value;
   struct renamed_value renamed = {0};
   if (change->choice == CONFIG_CHOICE_APPLY && entry->migration.kind == CONFIG_MIGRATION_REPLACE) {
@@ -597,14 +597,14 @@ static bool render_change(const struct config_plan_change *change, char **bytes,
   struct renamed_value moved_space = {0};
   bool shape = value != NULL;
   if (shape && entry->kind == CONFIG_ENTRY_VOLUME) {
-    shape = value->kind == CONFIG_LITERAL_TABLE;
+    shape = value->kind == LITERAL_TABLE;
   } else if (shape && entry->kind == CONFIG_ENTRY_SPACE) {
     if (change->choice == CONFIG_CHOICE_APPLY && change->kind == CONFIG_CHANGE_MIGRATE &&
         entry->migration.kind == CONFIG_MIGRATION_MOVE) {
       shape = space_move_value(value, entry->name, &moved_space);
       value = &moved_space.value;
     } else {
-      shape = string_is(config_literal_field(value, "name"), entry->name);
+      shape = string_is(literal_field(value, "name"), entry->name);
     }
   }
   bool rendered = shape && config_render_entry(entry, value, bytes, size);
@@ -616,29 +616,29 @@ static bool render_change(const struct config_plan_change *change, char **bytes,
 /* Inserts before existing entries, so no separator or other byte belonging to
  * an unowned existing entry needs to change. The rendered entry owns its comma. */
 static bool insertion(struct config_delta_plan *plan, const struct config_catalog_entry *entry,
-    struct config_literal_span *span, bool *needs_container)
+    struct literal_span *span, bool *needs_container)
 {
   struct config_plan_file *file = &plan->files[entry->file];
   *needs_container = false;
   if (entry->kind == CONFIG_ENTRY_LIMINE) {
-    *span = (struct config_literal_span){file->before_size, file->before_size};
+    *span = (struct literal_span){file->before_size, file->before_size};
     return true;
   }
-  const struct config_literal_value *table = target_table(file, entry->kind);
+  const struct literal_value *table = target_table(file, entry->kind);
   if (!table && (entry->kind == CONFIG_ENTRY_VOLUME || entry->kind == CONFIG_ENTRY_SPACE)) {
     table = file->document ? file->document->root : NULL;
     *needs_container = true;
   }
-  if (!table || table->kind != CONFIG_LITERAL_TABLE || table->span.end <= table->span.start + 1) {
+  if (!table || table->kind != LITERAL_TABLE || table->span.end <= table->span.start + 1) {
     return false;
   }
-  *span = (struct config_literal_span){table->span.start + 1, table->span.start + 1};
+  *span = (struct literal_span){table->span.start + 1, table->span.start + 1};
   return true;
 }
 
 static bool with_newline(char **bytes, size_t *size)
 {
-  if (*size >= CONFIG_LITERAL_SOURCE_LIMIT) {
+  if (*size >= LITERAL_SOURCE_LIMIT) {
     return false;
   }
   char *grown = realloc(*bytes, *size + 2);
@@ -653,7 +653,7 @@ static bool with_newline(char **bytes, size_t *size)
 }
 
 static bool container_edit(struct plan_edits *edits, enum config_entry_kind kind,
-    enum config_file file, struct config_literal_span span, char *bytes, size_t size)
+    enum config_file file, struct literal_span span, char *bytes, size_t size)
 {
   const char *prefix = kind == CONFIG_ENTRY_VOLUME ? "\nvolumes = {\n" : "\nspaces = {\n";
   const char suffix[] = "},\n";
@@ -666,7 +666,7 @@ static bool container_edit(struct plan_edits *edits, enum config_entry_kind kind
         edit->size >= prefix_size + sizeof(suffix) - 1 &&
         !memcmp(edit->bytes, prefix, prefix_size)) {
       size_t old_size = edit->size;
-      if (size > CONFIG_LITERAL_SOURCE_LIMIT - old_size) {
+      if (size > LITERAL_SOURCE_LIMIT - old_size) {
         free(bytes);
         return false;
       }
@@ -685,7 +685,7 @@ static bool container_edit(struct plan_edits *edits, enum config_entry_kind kind
     }
   }
   size_t prefix_size = strlen(prefix);
-  if (size > CONFIG_LITERAL_SOURCE_LIMIT - prefix_size - (sizeof(suffix) - 1)) {
+  if (size > LITERAL_SOURCE_LIMIT - prefix_size - (sizeof(suffix) - 1)) {
     free(bytes);
     return false;
   }
@@ -706,15 +706,15 @@ static bool adoption_bytes(const struct config_delta_plan *plan,
     const struct config_plan_change *change, char **output, size_t *size)
 {
   const struct config_plan_file *file = &plan->files[change->entry->file];
-  struct config_literal_span span = change->current.span;
+  struct literal_span span = change->current.span;
   size_t content_size = span.end - span.start;
   const char *prefix = change->entry->kind == CONFIG_ENTRY_LIMINE ? "# pyxis:" : "-- pyxis:";
-  const struct config_literal_entry *literal = change->entry->kind == CONFIG_ENTRY_LIMINE ? NULL :
+  const struct literal_entry *literal = change->entry->kind == CONFIG_ENTRY_LIMINE ? NULL :
       literal_target(file, change->entry->kind, change->entry->name);
   bool separator = literal && literal->span.end == literal->value->span.end;
   size_t id_size = strlen(change->entry->id), prefix_size = strlen(prefix);
   size_t overhead = 2 * (prefix_size + id_size) + 20;
-  if (content_size > CONFIG_LITERAL_SOURCE_LIMIT - overhead) {
+  if (content_size > LITERAL_SOURCE_LIMIT - overhead) {
     return false;
   }
   char *bytes = malloc(content_size + overhead + 1);
@@ -785,7 +785,7 @@ static bool selected_edit(struct config_delta_plan *plan, struct config_plan_cha
     plan->applicable = false;
     return true;
   }
-  struct config_literal_span span = change->current.span;
+  struct literal_span span = change->current.span;
   bool needs_container = false;
   if (!change->current.present) {
     if (!insertion(plan, change->entry, &span, &needs_container)) {
@@ -820,7 +820,7 @@ static bool selected_edit(struct config_delta_plan *plan, struct config_plan_cha
   }
   if (change->choice == CONFIG_CHOICE_APPLY && change->kind == CONFIG_CHANGE_MIGRATE &&
       change->entry->migration.kind == CONFIG_MIGRATION_MOVE) {
-    struct config_literal_span source = change->migration_source.span;
+    struct literal_span source = change->migration_source.span;
     if (change->migration_file != change->entry->file || source.start != span.start || source.end != span.end) {
       if (!append_edit(edits, change->migration_file, source, NULL, 0)) {
         return false;
@@ -869,7 +869,7 @@ static bool file_rebuild(struct config_delta_plan *plan, enum config_file which,
     }
     consumed = edit->span.end;
     size_t removed = edit->span.end - edit->span.start;
-    if (removed > size || edit->size > CONFIG_LITERAL_SOURCE_LIMIT - (size - removed)) {
+    if (removed > size || edit->size > LITERAL_SOURCE_LIMIT - (size - removed)) {
       return false;
     }
     size = size - removed + edit->size;
@@ -970,7 +970,7 @@ void config_delta_plan_free(struct config_delta_plan *plan)
   for (size_t i = 0; i < CONFIG_FILE_COUNT; ++i) {
     struct config_plan_file *file = &plan->files[i];
     config_owned_free(file->ownership);
-    config_literal_free(file->document);
+    literal_free(file->document);
     free(file->before);
     free(file->after);
   }
@@ -988,7 +988,7 @@ const char *config_plan_choice_name(enum config_plan_choice choice)
   return "invalid";
 }
 
-static void review_value(FILE *stream, const char *label, const struct config_literal_value *value)
+static void review_value(FILE *stream, const char *label, const struct literal_value *value)
 {
   fprintf(stream, "  %s: ", label);
   if (!value) {
