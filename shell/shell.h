@@ -51,7 +51,8 @@ struct shell_service_root {
 struct shell_redirection {
   enum environment_stream_index stream;
   const char *path;
-  bool append;
+  bool append, duplicate_stdout;
+  bool staging_output; /* Held provider/transaction stdout; internal planning only. */
   handle_t root; /* Owned by the redirect coordinator, borrowed during launch. */
   const char *remainder;
   const struct environment_value *value;
@@ -61,7 +62,7 @@ struct shell_stage {
   char **arguments;
   size_t count;
   size_t redirection_count;
-  bool transaction_worker;
+  bool byte_worker;
   const struct environment_capture *operands;
   struct shell_redirection redirections[ENVIRONMENT_STREAM_COUNT];
 };

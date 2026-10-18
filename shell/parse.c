@@ -379,7 +379,7 @@ static const char *finish_command(struct shell_syntax_command *command)
     for (size_t j = 0; j < total; ++j) {
       const struct shell_word *word = j < stage->count ? stage->words[j] :
           stage->redirections[j - stage->count].word;
-      for (size_t k = 0; k < word->count; ++k) {
+      for (size_t k = 0; word && k < word->count; ++k) {
         if (word->pieces[k].kind == SHELL_SUBSTITUTION && word->count != 1) {
           return "A captured CAP must occupy the entire word";
         }
@@ -548,9 +548,14 @@ static const char *parse_sequence(const char **cursor, bool nested,
         }
         stream = ENVIRONMENT_STDERR;
       }
+      bool duplicate_stdout = stream == ENVIRONMENT_STDERR && operator[1] == '&' &&
+          operator[2] == '1' && (!operator[3] || separator(operator[3]) ||
+          operator[3] == '|' || operator[3] == ';' || operator[3] == '&' ||
+          operator[3] == '<' || operator[3] == '>' ||
+          (nested && operator[3] == ')'));
       bool append = *operator == '>' && operator[1] == '>';
-      read = operator + (append ? 2 : 1);
-      if (*read == '<' || *read == '>' || *read == '&' || *read == '|') {
+      read = operator + (duplicate_stdout ? 3 : append ? 2 : 1);
+      if (!duplicate_stdout && (*read == '<' || *read == '>' || *read == '&' || *read == '|')) {
         return "Unsupported operator";
       }
       for (size_t i = 0; i < stage->redirection_count; ++i) {
@@ -559,7 +564,11 @@ static const char *parse_sequence(const char **cursor, bool nested,
         }
       }
       pending = &stage->redirections[stage->redirection_count++];
-      *pending = (struct shell_syntax_redirection){.stream = stream, .append = append};
+      *pending = (struct shell_syntax_redirection){.stream = stream, .append = append,
+        .duplicate_stdout = duplicate_stdout};
+      if (duplicate_stdout) {
+        pending = NULL;
+      }
       continue;
     }
     struct shell_word *word = NULL;

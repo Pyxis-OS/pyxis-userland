@@ -27,7 +27,7 @@ struct shell_word {
 
 struct shell_syntax_redirection {
   enum environment_stream_index stream;
-  bool append;
+  bool append, duplicate_stdout;
   struct shell_word *word;
 };
 

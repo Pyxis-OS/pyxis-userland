@@ -11,7 +11,7 @@ int main(void)
   struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
   struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
   if (input.protocol != PROTOCOL_PIPE || output.protocol != PROTOCOL_FILE) {
-    fputs("http-stage: requires declared pipe input and staging writer\n", stderr);
+    fputs("http-stage: requires declared pipe input and FILE writer\n", stderr);
     return 1;
   }
   unsigned char bytes[PIPE_READ_MAX_BYTES];
@@ -25,6 +25,12 @@ int main(void)
     }
     for (size_t done = 0; done < count;) {
       size_t written;
+      if (output.append) {
+        status = file_size(output.handle, &offset);
+        if (status != CALL_OK) {
+          break;
+        }
+      }
       status = file_write(output.handle, offset, bytes + done, count - done, &written);
       if (status != CALL_OK) {
         break;
@@ -36,15 +42,16 @@ int main(void)
       break;
     }
   }
-  if (fflush(stdout) || ferror(stdout) || fclose(stdout)) {
-    if (status == CALL_OK) {
-      status = CALL_IO;
-    }
+  bool failed = fflush(stdout) != 0 || ferror(stdout);
+  failed |= fclose(stdout) != 0;
+  failed |= fclose(stdin) != 0;
+  if (failed && status == CALL_OK) {
+    status = CALL_IO;
   }
   if (status != CALL_OK) {
-    fprintf(stderr, "http-stage: staging failed (status %u)\n", status);
+    fprintf(stderr, "http-stage: byte relay failed (status %u)\n", status);
     if (status == CALL_LIMIT) {
-      fputs("http-stage: staging limit reached; configure private NPFS backing for larger uploads\n",
+      fputs("http-stage: output limit reached; for RAM-staged uploads configure private NPFS backing\n",
           stderr);
     }
   }

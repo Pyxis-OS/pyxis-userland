@@ -313,12 +313,14 @@ const char *shell_syntax_expand(struct shell *shell,
       return "Command expanded to no words";
     }
     expansion->word_count += stage_words;
-    redirections += stage->redirection_count;
+    for (size_t j = 0; j < stage->redirection_count; ++j) {
+      redirections += !stage->redirections[j].duplicate_stdout;
+    }
     size_t total = stage->count + stage->redirection_count;
     for (size_t j = 0; j < total && !needs_environment; ++j) {
       const struct shell_word *word = j < stage->count ? stage->words[j] :
           stage->redirections[j - stage->count].word;
-      for (size_t k = 0; k < word->count; ++k) {
+      for (size_t k = 0; word && k < word->count; ++k) {
         if (word->pieces[k].kind == SHELL_VARIABLE) {
           needs_environment = true;
           break;
@@ -413,6 +415,12 @@ const char *shell_syntax_expand(struct shell *shell,
     stage->redirection_count = source->redirection_count;
     for (size_t j = 0; j < source->redirection_count && !error; ++j) {
       const struct shell_syntax_redirection *redirection = &source->redirections[j];
+      if (redirection->duplicate_stdout) {
+        stage->redirections[j] = (struct shell_redirection){
+          .stream = ENVIRONMENT_STDERR, .duplicate_stdout = true,
+        };
+        continue;
+      }
       struct environment_value *value = &expansion->values[value_index];
       struct shell_capture_result *capture = &expansion->captures[value_index++];
       char **path = &expansion->arguments[argument_index++];

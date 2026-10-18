@@ -13,6 +13,15 @@ selected commands expand and launch. Scripts and `-c` stop after a failed
 conditional list; `;` starts the next list. `exit [N]` accepts a signed 32-bit
 decimal status and defaults to zero.
 
+Foreground external commands accept ordered `2>&1`: `cmd >file 2>&1`
+merges both outputs, while `cmd 2>&1 >file` keeps stderr on the original stdout.
+Pipes and consoles share their endpoint; merged files and captures use one byte
+relay/cursor, including through descendants. Explicit and inherited append are
+preserved without atomic-append guarantees. Merged streams cannot seek or hand
+off capabilities. Relay workers share the eight-process batch bound; their
+failure fails the command, and descendant writers must close before completion.
+Captures without `2>&1` keep typed handoff.
+
 Nested scripts with the exact `#!boot://init-shell.pxe` interpreter use the
 bundle's held `app/bin/shell.pxe` image and forward only held pipe creation,
 subgroup-bound child launch and optional threads. The image stays private and
