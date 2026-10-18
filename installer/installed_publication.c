@@ -200,7 +200,10 @@ bool install_installed_prepare(struct install_plan *plan)
       if (ok) {
         publication->cluster_bytes = state.cluster_bytes;
         publication->available_bytes = state.free_clusters * state.cluster_bytes;
-        legacy = install_boot_legacy_certify(mounted.root, publication->legacy);
+        struct config_record inherited = {0};
+        bool owned = record.digest.present && config_record_parse(record.bytes, record.size, &inherited) &&
+            inherited.committed && inherited.boot.present;
+        if (!owned) legacy = install_boot_legacy_certify(mounted.root, publication->legacy);
       }
     }
     ok = close_planning(plan) && ok;

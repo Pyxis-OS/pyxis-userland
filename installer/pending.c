@@ -46,12 +46,11 @@ bool install_pending_inspect(const struct config_blob *record,
       !digest_equal(&history->boot.archive_catalog, &history->selected[CONFIG_CATALOG])) {
     return true;
   }
+  bool selection_matches = true;
   for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!config_blob_equal(&current[i], &current[i]) ||
-        (i < CONFIG_SET_FILES && history->boot.source == CONFIG_ACTIVE_ESP &&
-        !digest_equal(&history->selected[i], &current[i].digest))) {
-      return true;
-    }
+    if (!config_blob_equal(&current[i], &current[i])) return true;
+    if (i < CONFIG_SET_FILES && history->boot.source == CONFIG_ACTIVE_ESP &&
+        !digest_equal(&history->selected[i], &current[i].digest)) selection_matches = false;
   }
   const struct install_boot_entry_paths active = {
     history->boot.kernel.path, history->boot.archive.path};
@@ -62,9 +61,12 @@ bool install_pending_inspect(const struct config_blob *record,
   }
   if (!pending && config_blob_equal(&plan->menu, &current[CONFIG_LIMINE])) {
     plan->state = INSTALL_PENDING_MENU_CURRENT;
-    plan->available = true;
+    /* A completed menu permits an ordinary new Review of owner edits. Those
+     * edits are not the committed set and cannot authorize pending cleanup. */
+    plan->available = selection_matches;
     return true;
   }
+  if (!selection_matches) return true;
   const struct config_recovery_file *old = &history->previous[CONFIG_LIMINE];
   if (!old->digest.present || !config_blob_equal(previous_limine, &current[CONFIG_LIMINE]) ||
       !digest_equal(&old->digest, &previous_limine->digest)) {

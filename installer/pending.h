@@ -17,7 +17,9 @@ struct install_pending_plan {
   struct config_blob menu;
 };
 
-/* Initialize PLAN with {0}; destroy releases its owned rendered menu. */
+/* Initialize PLAN with {0}; destroy releases its owned rendered menu. A current
+ * menu with edited configuration is MENU_CURRENT but not available for cleanup;
+ * ordinary reconciliation remains possible when no obsolete artifacts remain. */
 
 bool install_pending_inspect(const struct config_blob *record,
     const struct config_blob current[CONFIG_ALL_FILES],

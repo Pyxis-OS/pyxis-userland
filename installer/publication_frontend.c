@@ -323,8 +323,15 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     fputs("Static recovery or menu ownership is unrecognized; nothing written.\n", stderr);
     goto done;
   }
-  /* Recheck frozen bytes after exclusive scoped writable admission. */
-  legacy_pair = install_boot_legacy_certify(mount.root, legacy_digests);
+  /* A current/previous owned binding supersedes legacy fixed files. Only
+   * initial adoption or an old legacy menu needs that additional proof. */
+  if (!install_pending_inspect(&record, current, &previous_limine, planned_facts.disk_guid,
+        NULL, &completion)) goto done;
+  if (completion.state == INSTALL_PENDING_NONE ||
+      (completion.state == INSTALL_PENDING_REFUSED && inspected.committed &&
+      inspected.boot.present && !inspected.previous_boot.present)) {
+    legacy_pair = install_boot_legacy_certify(mount.root, legacy_digests);
+  }
   if (!install_snapshot_capacity(&disk, &planned_facts, &available_bytes, &cluster_bytes)) {
     fputs("Capacity inspection unavailable; nothing written.\n", stderr);
     goto done;
@@ -336,7 +343,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     goto done;
   }
   completing = completion.state == INSTALL_PENDING_ACTIVATION;
-  if (completion.available) {
+  if (completion.available || completion.state == INSTALL_PENDING_MENU_CURRENT) {
     for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
       const struct config_recovery_file *old = &completion.record.obsolete[i];
       if (!old->digest.present) continue;
@@ -356,6 +363,10 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
         goto done;
       }
     }
+  }
+  if (completing && !completion.available) {
+    fputs("Pending cleanup and changed selection need explicit manual disposition; nothing written.\n", stderr);
+    goto done;
   }
   if (!retire(&mount) || handle_close(disk.handle) != CALL_OK) {
     goto done;
