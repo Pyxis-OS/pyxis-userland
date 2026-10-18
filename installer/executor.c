@@ -275,6 +275,29 @@ static bool stage_esp(struct install_plan *plan)
 #endif
 }
 
+static void cleanup_programs(struct install_plan *plan)
+{
+  bool updating = plan->record.updating;
+  const char *previous = updating ? plan->record.previous : NULL;
+#if INSTALLER_PUBLICATION_SCRATCH
+  const struct config_boot_binding *retained = &plan->publication_report.record.previous_boot;
+  bool unknown_previous = updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION);
+  bool retained_conflict = retained->present && previous && !unknown_previous &&
+      strcmp(previous, retained->program_revision);
+  if (retained_conflict) {
+    fputs("Older program directories kept: recorded previous programs and retained boot programs differ.\n", stderr);
+    return;
+  }
+  if (retained->present && !unknown_previous) previous = retained->program_revision;
+#endif
+  if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
+    fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
+  } else if (!install_programs_cleanup(&plan->disk, plan->target.pool.partition,
+      plan->record.revision, previous)) {
+    fputs("installer: old program directory cleanup failed\n", stderr);
+  }
+}
+
 bool install_plan_execute(struct install_plan *plan, const char *consent)
 {
   if (!plan || !plan->ready || !consent || strcmp(consent,
@@ -414,12 +437,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   if (!stage_esp(plan)) {
     goto done;
   }
-  const char *previous = updating ? plan->record.previous : NULL;
-  if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
-    fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
-  } else if (!install_programs_cleanup(disk, plan->target.pool.partition, revision, previous)) {
-    fputs("installer: old program directory cleanup failed\n", stderr);
-  }
+  cleanup_programs(plan);
   ok = true;
 
 done:

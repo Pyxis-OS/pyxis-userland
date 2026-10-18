@@ -22,7 +22,7 @@ struct install_installed_publication {
 
 bool install_installed_prepare(struct install_plan *plan);
 bool install_installed_hash(const struct install_plan *plan, struct install_digest *digest);
-void install_installed_report(const struct install_plan *plan, FILE *output);
+void install_installed_report(const struct install_plan *plan, FILE *output, bool verbose);
 /* Admit/revalidate before the first program write; never create publication
  * parents or provision recovery until all consumed current bytes match. */
 bool install_installed_admit(struct install_plan *plan);

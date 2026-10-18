@@ -500,7 +500,7 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
   fprintf(output, "Staging reserve: %llu blocks; available %llu.\n",
       (unsigned long long)plan->required_blocks, (unsigned long long)plan->available_blocks);
 #if INSTALLER_PUBLICATION_SCRATCH
-  install_installed_report(plan, output);
+  install_installed_report(plan, output, verbose);
   if (!plan->record.updating && !plan->record.coexist) {
     fputs("ERASE: the entire disk will be rebuilt; every existing partition and volume\n"
         "will be destroyed, including any Fedora or Windows installation.\n", output);

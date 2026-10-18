@@ -276,9 +276,10 @@ bool install_installed_hash(const struct install_plan *plan, struct install_dige
   return ok;
 }
 
-void install_installed_report(const struct install_plan *plan, FILE *output)
+void install_installed_report(const struct install_plan *plan, FILE *output, bool verbose)
 {
-  install_configuration_review(&plan->installed.configuration, output);
+  if (verbose) install_configuration_review(&plan->installed.configuration, output);
+  else install_configuration_summary(&plan->installed.configuration, output);
   fprintf(output, "Boot attempt: EFI/pyxis/%s/%s; ESP reserve %llu bytes, capacity bound %llu.\n",
       plan->record.revision, plan->record.attempt,
       (unsigned long long)plan->installed.required_bytes, (unsigned long long)plan->installed.available_bytes);
@@ -367,6 +368,16 @@ bool install_installed_admit(struct install_plan *plan)
     ok = status == CALL_OK && install_snapshot_file(system, "config/boot.lua", CONFIG_FILE_MAX_BYTES, &pool) &&
         config_blob_equal(&pool, &publication->configuration.pool_override);
     if (system != HANDLE_INVALID) ok = handle_close(system) == CALL_OK && ok;
+  }
+  if (ok) {
+    struct install_recovery current_recovery = {0};
+    ok = install_recovery_menu_review(plan->view.root, &record, &facts) &&
+        install_recovery_prepare(plan->view.root, plan->boot, plan->kernel.handle,
+            plan->workspace, &facts, &current_recovery) &&
+        current_recovery.present == publication->recovery.present &&
+        config_blob_equal(&current_recovery.manifest, &publication->recovery.manifest) &&
+        config_blob_equal(&current_recovery.fallback, &publication->recovery.fallback);
+    install_recovery_destroy(&current_recovery);
   }
   if (ok && publication->legacy_active) {
     struct config_storage_report report = {0};
