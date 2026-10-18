@@ -903,7 +903,8 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     .name = space->name, .title = space->title,
     .flags = (space->multiplexer ? SPACE_CREATE_TERMINAL_CONTROL : 0) |
         (space->clipboard_local ? SPACE_CREATE_CLIPBOARD_LOCAL : 0) |
-        (space->clipboard_shared ? SPACE_CREATE_CLIPBOARD_SHARED : 0),
+        (space->clipboard_shared ? SPACE_CREATE_CLIPBOARD_SHARED : 0) |
+        (space->screenshot ? SPACE_CREATE_SCREENSHOT_SAVER : 0),
   };
   char text[SPACE_REASON_MAX + 1];
   uint64_t *cpus = calloc(cpu_words(authority->cpu_count), sizeof(*cpus));

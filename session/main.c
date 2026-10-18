@@ -4,6 +4,7 @@
 #include <pyxis/working_path.h>
 #include "config.h"
 #include "retention.h"
+#include "screenshot.h"
 #include "network.h"
 #include "remote_server.h"
 #include "tcp_server.h"
@@ -663,6 +664,7 @@ int main(int argc, char **argv)
       (start_remote_services && (start_services || tcp_server))) {
     goto usage;
   }
+  session_start_screenshot_saver();
   if (!start_services && !start_remote_services) {
     handle_t staging = bootstrap_take_capability(BUNDLE_SOURCE_PREFIX "http_staging");
     if (staging != HANDLE_INVALID && handle_close(staging)) {

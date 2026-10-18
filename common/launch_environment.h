@@ -88,6 +88,7 @@ static inline enum call_status profile_inherit_services(
         !strncmp(value->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
         !strcmp(value->name, "job_provisioner") || !strcmp(value->name, "job_work") ||
         !strcmp(value->name, "staging") || !strcmp(value->name, "script") ||
+        !strcmp(value->name, "screenshot_saver") ||
         profile_stdio_name(value->name)) {
       continue;
     }

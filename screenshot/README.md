@@ -24,3 +24,24 @@ xfer send tmp://screen.png
 The host client needs `--download-dir`; its confirmation and 16 MiB limit apply.
 See Pyxis's screen-capture and screenshot command references for authority,
 consistency, failure ownership and qualification limits.
+
+Print Screen uses the separate `screenshot-saver.pxe`. The initial session
+consumes its private, space-bound notification grant and starts one saver with
+only that grant, CAPTURE, the selected home directory, clock READ and runtime
+memory authority. It receives no launcher or console streams. The ordinary
+`screenshot PATH` command retains its existing replacement behavior.
+
+The saver freezes the shown composition before doing storage work. UTC wall
+time and the immutable space name form
+`home://screenshots/SPACE-YYYY-MM-DDTHH-MM-SS.png`. The directory is created on
+first use. A complete PNG is encoded in an exclusively created temporary file,
+closed, then atomically renamed without replacement. Confirmed destination
+collisions select `-2`, `-3`, etc.; other unconfirmed publication outcomes are
+not retried or cleaned up speculatively. Known partial temporaries are removed
+on encoding failure. A failure never publishes a successful prefix. RAM-backed
+home works with its usual reboot-loss semantics; no extra durability is promised.
+
+The private request identity accompanies capture and completion. Switching the
+shown space before capture cancels the request; after capture, saving stays in
+the initiating space's home. Missing grants, missing wall time and storage
+failures produce kernel-formatted feedback, rather than fallback authority.

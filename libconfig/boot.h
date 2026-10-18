@@ -81,7 +81,7 @@ struct boot_space {
   bool remote_multiplexer; /* Explicit remote pane-broker opt-in. */
   bool clipboard_local; /* Explicit space-local graphics/store delegation. */
   bool clipboard_shared; /* Independent cross-space graphics/store delegation. */
-  bool screenshot; /* Receives whole-screen capture authority. */
+  bool screenshot; /* Whole-screen capture plus the initial private Print Screen saver. */
   bool acpi_tables; /* Receives the read-only ACPI table root as acpi://. */
   bool power; /* Receives power-off and restart authority. */
   bool remote_power; /* Opts remote root shells into power authority. */
