@@ -1,4 +1,7 @@
 #include "target.h"
+#if INSTALLER_PUBLICATION_SCRATCH
+#include "installed_publication.h"
+#endif
 #include "coexist.h"
 #include "digest.h"
 
@@ -139,6 +142,7 @@ static bool selected_esp_recovery_failure(const struct install_target *target)
   return false;
 }
 
+#if !INSTALLER_PUBLICATION_SCRATCH
 static bool selected_menu_binding(struct install_target *target)
 {
   for (size_t i = 0; i < target->review.esp_count; ++i) {
@@ -159,6 +163,7 @@ static bool selected_menu_binding(struct install_target *target)
   target->reason = "selected ESP has no native fixed-menu inspection evidence";
   return false;
 }
+#endif
 
 static bool fresh_coexist(struct install_target *target)
 {
@@ -207,6 +212,14 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
       }
       return false;
     }
+#if INSTALLER_PUBLICATION_SCRATCH
+    char active[64];
+    const char *reason = NULL;
+    if (install_installed_probe(&target->disk, &record->layout, active, &reason) == INSTALL_INSTALLED_REFUSED) {
+      target->reason = reason;
+      return false;
+    }
+#endif
   } else if (record->updating) {
     target->reason = "classic Update target no longer matches the frozen layout";
     if (!install_scan_update(&target->disk, &update) || !update.eligible ||
@@ -235,9 +248,11 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
     } else if (!clean) {
       return false;
     }
+#if !INSTALLER_PUBLICATION_SCRATCH
     if (native && !selected_menu_binding(target)) {
       return false;
     }
+#endif
   } else {
     target->reason = "classic Install consent facts changed or no longer permit installation";
     if (!install_scan_consent(&target->disk, record->read_the_room, consent) ||

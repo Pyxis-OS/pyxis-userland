@@ -778,6 +778,17 @@ bool install_esp_verify(const struct install_esp *esp)
   return success;
 }
 
+bool install_esp_capacity(const struct install_esp *esp,
+    uint64_t *cluster_bytes, uint64_t *free_bytes)
+{
+  if (!esp || !cluster_bytes || !free_bytes) {
+    return false;
+  }
+  *cluster_bytes = ESP_CLUSTER_BYTES;
+  *free_bytes = (uint64_t)(esp->cluster_count - (esp->next_cluster - 2)) * ESP_CLUSTER_BYTES;
+  return true;
+}
+
 void install_esp_destroy(struct install_esp *esp)
 {
   if (esp) {

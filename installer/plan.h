@@ -8,6 +8,9 @@
 #include "esp_payload.h"
 #include "esp_view.h"
 #include "boot_entry.h"
+#if INSTALLER_PUBLICATION_SCRATCH
+#include "installed_publication.h"
+#endif
 #include <pyxis_fs/npfs.h>
 
 /* Owned preparation, immutable after Review. Native source handles and BOOT
@@ -17,6 +20,9 @@ struct install_plan {
   struct install_disk disk, raw_disk;
   struct install_target target;
   handle_t disks, boot, clock;
+#if INSTALLER_PUBLICATION_SCRATCH
+  handle_t workspace;
+#endif
   struct install_source kernel, archive, efi, rescue;
   struct install_programs programs;
   struct install_manifest manifest;
@@ -33,6 +39,10 @@ struct install_plan {
   struct install_esp_view view;
   struct install_esp_payloads *payloads;
   struct install_esp_classic_files *classic_files;
+#if INSTALLER_PUBLICATION_SCRATCH
+  struct install_installed_publication installed;
+  struct config_storage_report publication_report;
+#endif
   uint64_t available_blocks, required_blocks, cleanup_deadline_ns;
   uint64_t esp_cluster_bytes, esp_required_clusters, esp_free_clusters;
   bool ready, disk_claimed, raw_claimed;

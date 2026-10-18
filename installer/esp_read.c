@@ -1,4 +1,7 @@
 #include "installer.h"
+#if INSTALLER_PUBLICATION_SCRATCH
+#include "installed_publication.h"
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -556,6 +559,11 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
 {
   strcpy(revision, INSTALL_UNKNOWN_REVISION);
   *reason = NULL;
+#if INSTALLER_PUBLICATION_SCRATCH
+  enum install_installed_probe installed = install_installed_probe(disk, layout, revision, reason);
+  if (installed == INSTALL_INSTALLED_READY) return INSTALL_ESP_VALID;
+  if (installed == INSTALL_INSTALLED_REFUSED) return INSTALL_ESP_REFUSED;
+#endif
   struct esp_inspection esp = {
     .disk = disk, .layout = layout, .reason = reason, .state = INSTALL_ESP_VALID,
   };

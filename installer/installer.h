@@ -160,6 +160,9 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
     const char *configuration, size_t configuration_bytes,
     const char *revision, size_t revision_bytes, uint32_t serial);
 bool install_esp_write(const struct install_esp *esp);
+/* Formatter-derived space after the exact planned bootstrap/tree allocation. */
+bool install_esp_capacity(const struct install_esp *esp,
+    uint64_t *cluster_bytes, uint64_t *free_bytes);
 /* Reopens the recorded boot paths through on-disk FAT/directory metadata and
  * compares their contents to the borrowed inputs, rather than planned offsets. */
 bool install_esp_verify(const struct install_esp *esp);

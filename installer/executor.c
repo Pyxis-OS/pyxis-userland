@@ -197,6 +197,7 @@ static bool open_pool(struct install_plan *plan)
   return release_raw(&plan->disk, &plan->disk_claimed);
 }
 
+#if !INSTALLER_PUBLICATION_SCRATCH
 static const struct mount_state_reply *reviewed_esp(const struct install_plan *plan)
 {
   if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
@@ -212,9 +213,13 @@ static const struct mount_state_reply *reviewed_esp(const struct install_plan *p
   }
   return NULL;
 }
+#endif
 
 static bool stage_esp(struct install_plan *plan)
 {
+#if INSTALLER_PUBLICATION_SCRATCH
+  return install_installed_publish(plan);
+#else
   enum call_status status = install_esp_view_open(&plan->view, plan->disks,
       &plan->target.esp, reviewed_esp(plan),
       plan->record.coexist ? COEXIST_ESP_RIGHTS : INSTALL_ESP_VIEW_RIGHTS);
@@ -267,6 +272,7 @@ static bool stage_esp(struct install_plan *plan)
     fprintf(stderr, "installer: EFI interval end failed (status %u)\n", status);
   }
   return status == CALL_OK;
+#endif
 }
 
 bool install_plan_execute(struct install_plan *plan, const char *consent)
@@ -350,6 +356,19 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
       goto done;
     }
   }
+#if INSTALLER_PUBLICATION_SCRATCH
+  if (updating && plan->record.esp_rebuild) {
+    status = disk_begin_esp_rebuild(plan->target.rebuild_review, "update", &raw->handle);
+    if (status != CALL_OK) goto done;
+    plan->raw_claimed = true;
+    if (!plan->esp || !install_esp_write(plan->esp) || !flush_raw(raw) ||
+        !finish_disk(raw, &plan->raw_claimed)) {
+      raw_cleanup_failed = true;
+      goto done;
+    }
+  }
+  if (!install_installed_admit(plan)) goto done;
+#endif
   install_progress_begin("Preparing the selected home volume", INSTALL_PROGRESS_NONE, NULL);
   status = disk_create_volume(disk->handle, plan->target.pool.partition, INSTALL_HOME_VOLUME);
   if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
@@ -375,6 +394,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
       !system_verify(plan)) {
     goto done;
   }
+#if !INSTALLER_PUBLICATION_SCRATCH
   if (updating && plan->record.esp_rebuild) {
     status = disk_begin_esp_rebuild(plan->target.rebuild_review, "update", &raw->handle);
     if (status != CALL_OK) {
@@ -390,6 +410,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
       goto done;
     }
   }
+#endif
   if (!stage_esp(plan)) {
     goto done;
   }
@@ -414,6 +435,10 @@ done:
         "Inspect the target before preparing and reviewing another attempt.\n", stderr);
     return false;
   }
+#if INSTALLER_PUBLICATION_SCRATCH
+  fputs(updating ? "updated\n" : "installed\n", stderr);
+  fputs("Boot-bound configuration and owned menu activation verified.\n", stderr);
+#else
   if (coexist) {
     fputs("Coexistence payload staged, synchronized and verified. Existing boot menu unchanged.\n"
         "Review and add these entries to that menu before booting the new payload:\n", stderr);
@@ -425,6 +450,7 @@ done:
     fputs(updating ? "updated\n" : "installed\n", stderr);
     fputs("Boot from this disk after removing the live medium.\n", stderr);
   }
+#endif
   if (!updating) {
     fputs("Deleting system://SAFE_TO_WIPE marks this installation as final.\n", stderr);
   }

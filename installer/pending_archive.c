@@ -34,7 +34,7 @@ static bool newc_field(const unsigned char *header, unsigned index, uint32_t *va
 
 /* Match the native newc bounds/type rules while retaining only four bounded
  * config files. Duplicate normalized names refuse instead of selecting one. */
-static bool archive_configs(const struct install_source *source,
+bool install_pending_archive_configs(const struct install_source *source,
     struct config_blob files[CONFIG_SET_FILES])
 {
   static const char *const names[] = {
@@ -128,7 +128,7 @@ bool install_pending_selection(const struct install_pending_request *request,
   struct install_source source = {0};
   struct config_blob extracted[CONFIG_SET_FILES] = {0};
   bool ok = install_esp_payload_source(payloads, INSTALL_ESP_ARCHIVE, &source) &&
-      archive_configs(&source, extracted) &&
+      install_pending_archive_configs(&source, extracted) &&
       digest_equal(&extracted[CONFIG_CATALOG].digest, &plan->record.boot.archive_catalog);
   struct config_catalog *declared = NULL;
   ok = ok && config_catalog_read("pending boot archive catalog",
