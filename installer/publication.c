@@ -248,8 +248,14 @@ static bool legacy_verify(const struct install_staged_boot *boot, uint64_t domai
         FILE_RIGHT_READ, &file);
     ok = status == CALL_OK || fail(report, status);
     if (ok) {
-      ok = same_object(boot->legacy_files[i], file, false, domain, report) &&
-          stream(file, HANDLE_INVALID, &boot->legacy_expected[i], report);
+      const struct config_file_digest *expected = &boot->legacy_expected[i];
+      struct install_esp_payload_digest digest = {.size = expected->size};
+      memcpy(digest.sha256, expected->sha256, sizeof(digest.sha256));
+      struct install_esp_payload_report readback;
+      ok = same_object(boot->legacy_files[i], file, false, domain, report);
+      if (ok && !install_esp_payload_verify_file(boot->payloads, file, &digest, &readback)) {
+        ok = fail(report, readback.status);
+      }
     }
     if (file != HANDLE_INVALID) {
       handle_close(file);
