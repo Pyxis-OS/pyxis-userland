@@ -19,8 +19,12 @@ Pipes and consoles share their endpoint; merged files and captures use one byte
 relay/cursor, including through descendants. Explicit and inherited append are
 preserved without atomic-append guarantees. Merged streams cannot seek or hand
 off capabilities. Relay workers share the eight-process batch bound; their
-failure fails the command, and descendant writers must close before completion.
-Captures without `2>&1` keep typed handoff.
+failure fails the command with status 1 without replacing user fault/termination
+outcomes, and descendant writers must close before completion. Direct console
+and pipe merges keep the ordinary command lifetime. Captures without `2>&1`
+keep typed handoff. A captured transaction response requires an empty collector;
+`$(cmd 2>&1 >$api)` is refused before redirect OPEN because stderr bytes would
+conflict with response handoff.
 
 Nested scripts with the exact `#!boot://init-shell.pxe` interpreter use the
 bundle's held `app/bin/shell.pxe` image and forward only held pipe creation,

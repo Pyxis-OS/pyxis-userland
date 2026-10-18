@@ -91,6 +91,7 @@ struct prepared_stage {
 struct launch_scope {
   bool owned, all_stages, append;
   handle_t producer;
+  uint64_t producer_mode;
   handle_t transaction;
   struct execution_group_create_reply group;
   bool evaluated, started, retired, stop_failed;
@@ -343,14 +344,56 @@ static enum command_result launch_error(struct shell *shell, const struct shell_
   return shell_directory_error(shell, operation, path, status);
 }
 
-/* The internal worker's declared profile has only memory and copied streams. */
+/* Known sinks are checked before redirect OPEN, including grants which bypass
+ * environment_stdio (the capture producer and whole-CAP FILE redirects). */
+static enum call_status check_output_sink(const struct pyxis_stdio_binding *sink)
+{
+  uint64_t rights = sink->protocol == PROTOCOL_FILE ? FILE_RIGHT_WRITE :
+      sink->protocol == PROTOCOL_PIPE ? PIPE_RIGHT_WRITE :
+      sink->protocol == PROTOCOL_CONSOLE ? CONSOLE_RIGHT_WRITE : 0;
+  if (!rights || (sink->append && sink->protocol != PROTOCOL_FILE)) {
+    return CALL_BAD_OPERATION;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(sink->handle, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != sink->protocol ||
+      !((info.kind == HANDLE_KIND_NATIVE && !info.transport) ||
+        (sink->protocol == PROTOCOL_FILE && info.kind == HANDLE_KIND_EXPORTED &&
+         (info.transport & HANDLE_TRANSPORT_CALL)))) {
+    return CALL_WRONG_TYPE;
+  }
+  return (info.rights & rights) == rights ? CALL_OK : CALL_DENIED;
+}
+
+/* Allocate and validate known sources before redirect OPEN. A FILE obtained by
+ * OPEN can be bound later using this same allocation; no helper allocation or
+ * unrelated source validation is deferred until redirect side effects. */
 static enum call_status prepare_byte_worker(struct shell *shell,
     struct prepared_stage *prepared, const struct shell_stage *stage,
-    const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT])
+    const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], bool deferred_output)
 {
-  prepared->grants = calloc(1 + ENVIRONMENT_STREAM_COUNT, sizeof(*prepared->grants));
   if (!prepared->grants) {
-    return CALL_NO_MEMORY;
+    if (!deferred_output) {
+      return CALL_BAD_REQUEST;
+    }
+    prepared->grants = calloc(1 + ENVIRONMENT_STREAM_COUNT, sizeof(*prepared->grants));
+    if (!prepared->grants) {
+      return CALL_NO_MEMORY;
+    }
+    struct handle_info memory;
+    enum call_status status = handle_query(shell->memory, &memory);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (memory.kind != HANDLE_KIND_NATIVE || memory.protocol != PROTOCOL_MEMORY || memory.transport) {
+      return CALL_WRONG_TYPE;
+    }
+    if (!(memory.rights & MEMORY_RIGHT_MANAGE)) {
+      return CALL_DENIED;
+    }
   }
   prepared->grants[0] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
   prepared->resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", 0);
@@ -361,7 +404,10 @@ static enum call_status prepare_byte_worker(struct shell *shell,
   };
   for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     const struct pyxis_stdio_binding *stream = &streams[i];
-    if (stream->protocol == 0) {
+    if (!stream->protocol) {
+      if (i == ENVIRONMENT_STDIN || (i == ENVIRONMENT_STDOUT && !deferred_output)) {
+        return CALL_BAD_REQUEST;
+      }
       continue;
     }
     struct handle_info info;
@@ -369,12 +415,26 @@ static enum call_status prepare_byte_worker(struct shell *shell,
     if (status != CALL_OK || info.protocol != stream->protocol) {
       return status != CALL_OK ? status : CALL_WRONG_TYPE;
     }
-    uint64_t rights = stream->protocol == PROTOCOL_FILE ? FILE_RIGHT_WRITE :
-        stream->protocol == PROTOCOL_PIPE ? (i == ENVIRONMENT_STDIN ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
-        stream->protocol == PROTOCOL_CONSOLE ? CONSOLE_RIGHT_WRITE : 0;
-    if (!rights || (i == ENVIRONMENT_STDIN && stream->protocol != PROTOCOL_PIPE) ||
-        (i == ENVIRONMENT_STDOUT && stream->protocol != PROTOCOL_FILE)) {
-      return CALL_BAD_REQUEST;
+    uint64_t rights;
+    if (i == ENVIRONMENT_STDIN) {
+      if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_PIPE ||
+          info.transport || stream->append) {
+        return CALL_WRONG_TYPE;
+      }
+      rights = PIPE_RIGHT_READ;
+    } else {
+      if (i == ENVIRONMENT_STDOUT && stream->protocol != PROTOCOL_FILE) {
+        return CALL_WRONG_TYPE;
+      }
+      status = check_output_sink(stream);
+      if (status != CALL_OK) {
+        return status;
+      }
+      rights = stream->protocol == PROTOCOL_FILE ? FILE_RIGHT_WRITE :
+          stream->protocol == PROTOCOL_PIPE ? PIPE_RIGHT_WRITE : CONSOLE_RIGHT_WRITE;
+    }
+    if ((info.rights & rights) != rights) {
+      return CALL_DENIED;
     }
     uint64_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){stream->handle, rights,
@@ -582,7 +642,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     const struct launch_scope *scope)
 {
   if (stage->byte_worker) {
-    return prepare_byte_worker(shell, prepared, stage, streams);
+    return prepare_byte_worker(shell, prepared, stage, streams, false);
   }
   named_input = named_input && shell->terminal.input != HANDLE_INVALID;
   enum call_status retired = bundle_jobs_reap(&shell->jobs);
@@ -1684,12 +1744,16 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool optional, bool read_only, struct shell_outcome *outcome,
     struct launch_scope *scope)
 {
+  /* Bookkeeping survives normalization of a relay-free policy scope to NULL. */
+  struct launch_scope *report_scope = scope;
   struct shell_stage stages[LAUNCH_BATCH_MAX];
   memcpy(stages, user_stages, user_count * sizeof(*stages));
   size_t stage_count = user_count;
   size_t merge_helper[LAUNCH_BATCH_MAX], staging_helper[LAUNCH_BATCH_MAX];
+  size_t owner[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
     merge_helper[i] = staging_helper[i] = SIZE_MAX;
+    owner[i] = i;
   }
   char *worker_arguments[] = {"boot://http-stage.pxe", NULL};
   struct prepared_stage *prepared = calloc(LAUNCH_BATCH_MAX, sizeof(*prepared));
@@ -1698,8 +1762,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     free(requests);
     free(prepared);
     set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
-    if (scope) {
-      scope->error = CALL_NO_MEMORY;
+    if (report_scope) {
+      report_scope->error = CALL_NO_MEMORY;
     }
     return shell_directory_error(shell, "shell", stages[0].arguments[0], CALL_NO_MEMORY);
   }
@@ -1753,8 +1817,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     path = stages[i].arguments[0];
     status = shell_open_image(shell, path, &prepared[i].image, &prepared[i].bundle);
     if (status != CALL_OK) {
-      if (scope) {
-        scope->evaluated = true;
+      if (report_scope) {
+        report_scope->evaluated = true;
       }
       goto failed;
     }
@@ -1808,41 +1872,108 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   for (size_t i = 0; i < user_count; ++i) {
     uint64_t stdout_protocol = i + 1 < user_count ? PROTOCOL_PIPE :
         streams[i][ENVIRONMENT_STDOUT].protocol;
+    struct pyxis_stdio_binding known_stdout = streams[i][ENVIRONMENT_STDOUT];
+    bool captured_producer = false;
     for (size_t j = 0; j < stages[i].redirection_count; ++j) {
       const struct shell_redirection *redirect = &stages[i].redirections[j];
       size_t *helper = NULL;
+      failed_stage = i;
+      path = stages[i].arguments[0];
       if (redirect->duplicate_stdout) {
+        operation = "shell: duplicate stdout";
         if (!stdout_protocol) {
           status = CALL_NOT_FOUND;
-          operation = "shell: duplicate stdout";
-          failed_stage = i;
           goto failed;
+        }
+        if (stdout_protocol != PROTOCOL_PIPE && stdout_protocol != PROTOCOL_CONSOLE &&
+            stdout_protocol != PROTOCOL_FILE) {
+          status = CALL_BAD_OPERATION;
+          goto failed;
+        }
+        if (known_stdout.handle != HANDLE_INVALID) {
+          status = check_output_sink(&known_stdout);
+          if (status != CALL_OK) {
+            goto failed;
+          }
         }
         if (stdout_protocol == PROTOCOL_FILE) {
           helper = &merge_helper[i];
           stdout_protocol = PROTOCOL_PIPE;
+          captured_producer = scope && scope->producer != HANDLE_INVALID &&
+              known_stdout.handle == scope->producer;
         }
       } else if (redirect->stream == ENVIRONMENT_STDOUT) {
+        if (redirect->staging_output && scope && scope->producer != HANDLE_INVALID &&
+            (captured_producer || scope->producer_mode != OUTPUT_MODE_EMPTY)) {
+          operation = "shell: transaction response conflicts with captured output";
+          status = CALL_BAD_OPERATION;
+          goto failed;
+        }
+        known_stdout = (struct pyxis_stdio_binding){0};
         stdout_protocol = redirect->staging_output ? PROTOCOL_PIPE : PROTOCOL_FILE;
         if (redirect->staging_output) {
           helper = &staging_helper[i];
+        } else if (redirect->value || (redirect->root != HANDLE_INVALID &&
+            redirect->remainder && !*redirect->remainder)) {
+          handle_t target = redirect->value ? redirect->value->handle : redirect->root;
+          struct handle_info info;
+          status = handle_query(target, &info);
+          if (status != CALL_OK) {
+            operation = "shell: query output";
+            path = redirect->path;
+            goto failed;
+          }
+          if (info.protocol != PROTOCOL_FILE) {
+            operation = "shell: typed redirect requires a FILE";
+            path = redirect->path;
+            status = CALL_BAD_OPERATION;
+            goto failed;
+          }
+          known_stdout = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
+            .handle = target, .append = redirect->append};
         }
       }
       if (helper) {
         if (stage_count == LAUNCH_BATCH_MAX) {
           status = CALL_LIMIT;
           operation = "shell: output workers";
-          failed_stage = i;
           goto failed;
         }
         *helper = stage_count;
+        owner[stage_count] = i;
+        if (redirect->duplicate_stdout) {
+          streams[stage_count][ENVIRONMENT_STDOUT] = known_stdout;
+          known_stdout = (struct pyxis_stdio_binding){0};
+        }
         stages[stage_count++] = (struct shell_stage){.arguments = worker_arguments,
           .count = 1, .byte_worker = true};
       }
     }
   }
+  if (mode == SHELL_FOREGROUND && scope) {
+    if (scope->producer != HANDLE_INVALID || stage_count != user_count) {
+      handle_t launcher = shell->script_group.launcher != HANDLE_INVALID ?
+          shell->script_group.launcher : shell->child_launcher != HANDLE_INVALID ?
+          shell->child_launcher : shell->launcher;
+      failed_stage = user_count;
+      path = "";
+      operation = "shell: output group";
+      status = launcher_create_group(launcher, &scope->group);
+      if (status != CALL_OK) {
+        goto failed;
+      }
+      scope->owned = true;
+    } else {
+      /* Sharing an existing PIPE/CONSOLE adds no new ownership or grant policy. */
+      scope = NULL;
+    }
+  }
+
   if (stage_count != user_count) {
     if (!inherited_stream[ENVIRONMENT_STDERR]) {
+      failed_stage = owner[user_count];
+      operation = "shell: capture output relay stderr";
+      path = stages[owner[user_count]].arguments[0];
       inherited_stream[ENVIRONMENT_STDERR] = true;
       status = environment_stdio(default_environment, ENVIRONMENT_STDERR,
           &prepared[0].default_streams[ENVIRONMENT_STDERR], NULL);
@@ -1861,12 +1992,13 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   /* Helper images are also retained before any redirect target. */
   operation = "shell: open image";
   for (size_t i = user_count; i < stage_count; ++i) {
-    failed_stage = i;
-    path = stages[i].arguments[0];
-    status = shell_open_image(shell, path, &prepared[i].image, &prepared[i].bundle);
+    failed_stage = owner[i];
+    operation = "shell: open output relay image";
+    path = stages[owner[i]].arguments[0];
+    status = shell_open_image(shell, stages[i].arguments[0], &prepared[i].image, &prepared[i].bundle);
     if (status != CALL_OK) {
-      if (scope) {
-        scope->evaluated = true;
+      if (report_scope) {
+        report_scope->evaluated = true;
       }
       goto failed;
     }
@@ -1903,6 +2035,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       .protocol = PROTOCOL_PIPE, .handle = pipes[i].reader};
   }
   for (size_t i = user_count; i < stage_count; ++i) {
+    failed_stage = owner[i];
+    path = stages[owner[i]].arguments[0];
     operation = "shell: output relay pipe";
     status = pipe_create(shell->pipe, &pipes[i - 1]);
     if (status != CALL_OK) {
@@ -1910,6 +2044,16 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     streams[i][ENVIRONMENT_STDIN] = (struct pyxis_stdio_binding){
       .protocol = PROTOCOL_PIPE, .handle = pipes[i - 1].reader};
+  }
+
+  for (size_t i = user_count; i < stage_count; ++i) {
+    failed_stage = owner[i];
+    operation = "shell: prepare output relay";
+    path = stages[owner[i]].arguments[0];
+    status = prepare_byte_worker(shell, &prepared[i], &stages[i], streams[i], true);
+    if (status != CALL_OK) {
+      goto failed;
+    }
   }
 
   operation = "shell: network environment";
@@ -2026,7 +2170,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           status = resource_outcome_status(opened.info.description.outcome);
         }
         if (status != CALL_OK && scope && scope->owned) {
-          scope->evaluated = true;
+          report_scope->evaluated = true;
           if (scope->producer != HANDLE_INVALID && opened.resource) {
             struct output_handoff_request owned = {.value = opened.resource};
             enum call_status handed = output_handoff(scope->producer, &owned);
@@ -2101,9 +2245,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   /* A redirected pipe side is absent from every grant, so its peer sees
    * EOF or a broken reader once the remaining owned endpoint closes. */
   for (size_t i = 0; i < stage_count; ++i) {
-    failed_stage = i;
-    operation = "shell: prepare";
-    path = stages[i].arguments[0];
+    failed_stage = owner[i];
+    operation = i < user_count ? "shell: prepare" : "shell: bind output relay";
+    path = stages[owner[i]].arguments[0];
     bool console_stdin = streams[i][ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
     bool pager_input = mode == SHELL_FOREGROUND && i + 1 == user_count &&
         streams[i][ENVIRONMENT_STDOUT].protocol == PROTOCOL_CONSOLE &&
@@ -2159,8 +2303,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     armed = arm_interrupt(shell);
   }
   struct path_context interpreter_context = {0};
-  if (scope) {
-    scope->evaluated = true;
+  if (report_scope) {
+    report_scope->evaluated = true;
   }
   handle_t launcher = scope && scope->owned ? scope->group.launcher :
       (mode == SHELL_FOREGROUND || shell->positional_script) &&
@@ -2190,17 +2334,20 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bundle_launch_admitted(prepared[i].bundle_launch, status, children[i]);
   }
   if (status != CALL_OK) {
-    if (scope && status == CALL_OUTCOME_UNKNOWN) {
-      scope->started = true;
+    if (report_scope && status == CALL_OUTCOME_UNKNOWN) {
+      report_scope->started = true;
     }
-    failed_stage = failed_index == LAUNCH_NO_STAGE ? stage_count : failed_index;
-    if (failed_stage < stage_count) {
+    failed_stage = failed_index < stage_count ? owner[failed_index] : user_count;
+    if (failed_stage < user_count) {
       path = stages[failed_stage].arguments[0];
+      if (failed_index >= user_count) {
+        operation = "shell: launch output relay";
+      }
     }
     goto failed;
   }
-  if (scope) {
-    scope->started = true;
+  if (report_scope) {
+    report_scope->started = true;
   }
 
   /* Release all source endpoints before waiting. Holding one writer here
@@ -2211,10 +2358,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   free(requests);
   free_preparation(prepared, stage_count);
   if (!closed_sources) {
-    if (scope) {
-      scope->error = CALL_BAD_HANDLE;
-      if (scope->service) {
-        scope->service->process = children[0];
+    if (report_scope) {
+      report_scope->error = CALL_BAD_HANDLE;
+      if (report_scope->service) {
+        report_scope->service->process = children[0];
         children[0] = HANDLE_INVALID;
       }
     }
@@ -2338,8 +2485,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       /* Nothing watches the interrupt now; disarm so Ctrl+C is data again
        * rather than silently swallowed. */
       shell_error(shell, "shell: foreground wait failed (status %u)\n", status);
+      if (report_scope) {
+        report_scope->error = status;
+      }
       if (scope && scope->owned) {
-        scope->error = status;
         close_handle(&armed);
         for (size_t i = 0; i < stage_count; ++i) {
           close_handle(&children[i]);
@@ -2360,16 +2509,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     status = process_wait(children[i], &completion[i]);
     bool closed = close_handle(&children[i]);
     if (status != CALL_OK || !closed) {
-      if (scope) {
-        scope->error = status != CALL_OK ? status : CALL_BAD_HANDLE;
+      if (report_scope) {
+        report_scope->error = status != CALL_OK ? status : CALL_BAD_HANDLE;
       }
       for (size_t j = i + 1; j < stage_count; ++j) {
         close_handle(&children[j]);
       }
       close_handle(&armed);
-      launch_error(shell, stages, stage_count, i,
-          status != CALL_OK ? "shell: wait" : "shell: close",
-          stages[i].arguments[0], "", status != CALL_OK ? status : CALL_BAD_HANDLE);
+      launch_error(shell, stages, user_count, owner[i],
+          i < user_count ? (status != CALL_OK ? "shell: wait" : "shell: close") :
+              (status != CALL_OK ? "shell: wait output relay" : "shell: close output relay"),
+          stages[owner[i]].arguments[0], "", status != CALL_OK ? status : CALL_BAD_HANDLE);
       return COMMAND_FATAL;
     }
   }
@@ -2377,7 +2527,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     status = wait_capture_group(shell, scope,
         cancelled ? HANDLE_INVALID : armed, &cancelled);
     if (status != CALL_OK) {
-      scope->error = status;
+      report_scope->error = status;
       close_handle(&armed);
       shell_directory_error(shell, "shell: capture subtree wait", "", status);
       return COMMAND_FATAL;
@@ -2386,12 +2536,18 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
   status = bundle_jobs_reap(&shell->jobs);
   if (status != CALL_OK) {
+    if (report_scope) {
+      report_scope->error = status;
+    }
     close_handle(&armed);
     shell_directory_error(shell, "shell: job context cleanup", "", status);
     return COMMAND_FATAL;
   }
   /* Disarm only after every stage finished, so no press reaches the editor. */
   if (!close_handle(&armed)) {
+    if (report_scope) {
+      report_scope->error = CALL_BAD_HANDLE;
+    }
     shell_directory_error(shell, "shell: close", "Ctrl+C arming", CALL_BAD_HANDLE);
     return COMMAND_FATAL;
   }
@@ -2399,18 +2555,29 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   status = (scope && scope->all_stages) || shell->terminal.output == HANDLE_INVALID ? CALL_OK :
       term_fresh_line(&shell->terminal);
   if (status != CALL_OK) {
+    if (report_scope) {
+      report_scope->error = status;
+    }
     shell_directory_error(shell, "shell", "terminal", status);
     return COMMAND_FATAL;
   }
   enum command_result result = COMMAND_OK;
+  bool helper_failed = false;
   for (size_t i = 0; i < stage_count; ++i) {
     enum command_result diagnostic = COMMAND_OK;
+    if (i >= user_count && cancelled && completion[i].kind == PROCESS_TERMINATED) {
+      continue;
+    }
     if (i >= user_count && (completion[i].kind != PROCESS_EXITED || completion[i].exit_status)) {
-      diagnostic = shell_error(shell, "shell: output relay failed%s\n",
-          completion[i].kind == PROCESS_FAULTED ? " (process faulted)" :
-          completion[i].kind == PROCESS_TERMINATED ? " (process terminated)" : "");
-      if (scope) {
-        scope->error = CALL_IO;
+      helper_failed = true;
+      const char *detail = completion[i].kind == PROCESS_FAULTED ? " (process faulted)" :
+          completion[i].kind == PROCESS_TERMINATED ? " (process terminated)" : "";
+      diagnostic = user_count == 1 ?
+          shell_error(shell, "shell: %s: output relay failed%s\n", stages[owner[i]].arguments[0], detail) :
+          shell_error(shell, "shell: stage %zu (%s): output relay failed%s\n",
+              owner[i] + 1, stages[owner[i]].arguments[0], detail);
+      if (report_scope) {
+        report_scope->error = CALL_IO;
       }
     } else if (completion[i].kind == PROCESS_FAULTED) {
       diagnostic = user_count == 1 ?
@@ -2430,6 +2597,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
               i + 1, stages[i].arguments[0], (intmax_t)completion[i].exit_status);
     }
     if (diagnostic == COMMAND_FATAL) {
+      if (report_scope) {
+        report_scope->error = CALL_IO;
+      }
       return COMMAND_FATAL;
     }
     if (((scope && scope->all_stages) || i >= user_count) && diagnostic != COMMAND_OK) {
@@ -2439,15 +2609,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
   if (scope && scope->owned && cancelled) {
-    scope->error = CALL_ABANDONED;
+    report_scope->error = CALL_ABANDONED;
     set_outcome(outcome, TERMINAL_COMPLETION_TERMINATED, 0);
     return COMMAND_FAILED;
   }
   const struct process_result *last = &completion[user_count - 1];
   if (scope && scope->owned) {
-    for (size_t i = 0; i < stage_count; ++i) {
-      if (((scope && scope->all_stages) || i >= user_count) &&
-          completion[i].kind != PROCESS_EXITED) {
+    for (size_t i = 0; scope->all_stages && i < user_count; ++i) {
+      if (completion[i].kind != PROCESS_EXITED) {
         last = &completion[i];
         break;
       }
@@ -2456,7 +2625,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   switch (last->kind) {
   case PROCESS_EXITED:
     set_outcome(outcome, TERMINAL_COMPLETION_EXITED,
-        result == COMMAND_FAILED && ((scope && scope->all_stages) || !last->exit_status) ?
+        helper_failed || (result == COMMAND_FAILED && scope && scope->all_stages) ?
             1 : last->exit_status);
     break;
   case PROCESS_FAULTED:
@@ -2469,8 +2638,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   return result;
 
 failed:
-  if (scope) {
-    scope->error = status;
+  if (report_scope) {
+    report_scope->error = status;
   }
   if (!close_handle(&default_environment)) {
     cleanup_failure = true;
@@ -2485,7 +2654,7 @@ failed:
   environment_capture_close(&inherited);
   free(requests);
   free_preparation(prepared, stage_count);
-  enum command_result error = launch_error(shell, stages, stage_count, failed_stage,
+  enum command_result error = launch_error(shell, stages, user_count, failed_stage,
       operation, path, missing, status);
   set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
   if (!closed_sources || cleanup_failure || status == CALL_OUTCOME_UNKNOWN) {
@@ -2806,26 +2975,16 @@ static enum command_result launch_output(struct shell *shell,
         HANDLE_INVALID, false, false, outcome, NULL);
     return close_redirect_roots(roots) ? result : COMMAND_FATAL;
   }
-  struct launch_scope scope = {.owned = true, .producer = stdout_producer,
+  struct launch_scope scope = {.producer = stdout_producer, .producer_mode = producer_status.mode,
       /* Transactions retain their existing all-producer commit policy. Owning
        * ordinary merge relays alone does not change user pipeline status. */
       .all_stages = stdout_producer != HANDLE_INVALID || staged,
       /* Child FILE descriptors do not share a userspace cursor. The append
        * policy also follows descendant launch, avoiding offset-zero overwrite. */
       .append = producer_status.mode != OUTPUT_MODE_VALUE};
-  handle_t launcher = shell->script_group.launcher != HANDLE_INVALID ?
-      shell->script_group.launcher : shell->child_launcher != HANDLE_INVALID ?
-      shell->child_launcher : shell->launcher;
-  status = launcher_create_group(launcher, &scope.group);
-  if (status != CALL_OK) {
-    *error_status = status;
-    bool closed = close_redirect_roots(roots);
-    return !closed || status == CALL_OUTCOME_UNKNOWN ? COMMAND_FATAL :
-        shell_directory_error(shell, "shell: capture group", "", status);
-  }
   enum command_result result = launch_stages(shell, stages, stage_count,
       SHELL_FOREGROUND, NULL, HANDLE_INVALID, false, false, outcome, &scope);
-  if (!scope.retired) {
+  if (scope.owned && !scope.retired) {
     status = scope.stop_failed ? CALL_OUTCOME_UNKNOWN :
         execution_group_terminate(scope.group.supervision);
     if (status == CALL_OK) {
