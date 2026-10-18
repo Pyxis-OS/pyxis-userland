@@ -47,6 +47,10 @@ candidates and catalog, without the boot or home candidates. ZIP launch remains 
 program for people writing their own. It is built as the `pointer-min` program, and
 the image ships its source as `boot://share/examples/pointer-min.c` for TCC.
 
+[examples/font-min](examples/font-min/main.c) is pointer-min plus text with libfont:
+one line per font style and the pointer position. It is built as `font-min`, and the
+image ships its source as `boot://share/examples/font-min.c`; TCC needs `-lfont`.
+
 `tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
 Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping
 can split a UTF-8 branch. `--ascii` selects ASCII branches and continuation
