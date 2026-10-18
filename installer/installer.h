@@ -23,6 +23,7 @@
 #define INSTALL_POOL_PARTITION 2
 #define INSTALL_BIN_VOLUME "bin"
 #define INSTALL_HOME_VOLUME "home"
+#define INSTALL_PACKAGES_VOLUME "packages"
 #define INSTALL_UNKNOWN_REVISION "unknown"
 /* Bounds shared by the GPT reader and its complete partition projection. */
 #define INSTALL_GPT_MAX_PARTITIONS 256u

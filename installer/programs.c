@@ -1,5 +1,5 @@
 #include "installer.h"
-#include "../libconfig/literal.h"
+#include "literal.h"
 #include <pxe/p1f.h>
 #include "manifest.h"
 #include "digest.h"

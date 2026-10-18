@@ -8,6 +8,7 @@
 #include <process.h>
 #include <wait.h>
 #include <bundle_launch.h>
+#include <package.h>
 #include <handle.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,9 @@ struct bundle_launch {
   struct launch_grant *grants;
   struct launch_environment_entry *entries;
   uint64_t *directories;
+  /* Package trees opened for this launch; closed with the preparation. */
+  handle_t *trees;
+  size_t tree_count;
 };
 
 struct context_grants {
@@ -237,7 +241,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     if (!strcmp(requests[i].resource, "job_work")) {
       continue;
     }
-    const char *selection = requests[i].source ? requests[i].source : requests[i].resource;
+    const char *selection = requests[i].source ? requests[i].source :
+        requests[i].package ? PACKAGE_SOURCE : requests[i].resource;
     handle_t source = HANDLE_INVALID;
     for (size_t j = 0; j < authority_count; ++j) {
       if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
@@ -248,9 +253,25 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
         source = authority[j].source;
       }
     }
+    if (source != HANDLE_INVALID && requests[i].package) {
+      /* The set is read now, so a switch is seen by the next launch. A
+       * required package that is absent or unreadable is named as missing. */
+      const char *reason;
+      handle_t tree;
+      if (package_open_tree(source, requests[i].package, requests[i].rights, &tree,
+            &reason) != CALL_OK) {
+        if (requests[i].required) {
+          *missing = requests[i].package;
+          return CALL_DENIED;
+        }
+        continue;
+      }
+      prepared->trees[prepared->tree_count++] = tree;
+      source = tree;
+    }
     if (source == HANDLE_INVALID) {
       if (requests[i].required) {
-        *missing = requests[i].name;
+        *missing = requests[i].package ? requests[i].package : requests[i].name;
         return CALL_DENIED;
       }
       continue;
@@ -414,8 +435,10 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   prepared->entries = entry_capacity ? calloc(entry_capacity, sizeof(*prepared->entries)) : NULL;
   prepared->directories = source->working_directory_count ?
       malloc(source->working_directory_count * sizeof(*prepared->directories)) : NULL;
+  prepared->trees = resource_count ? malloc(resource_count * sizeof(*prepared->trees)) : NULL;
   if ((grant_capacity && !prepared->grants) || (entry_capacity && !prepared->entries) ||
-      (source->working_directory_count && !prepared->directories)) {
+      (source->working_directory_count && !prepared->directories) ||
+      (resource_count && !prepared->trees)) {
     free(mapped);
     bundle_launch_close(prepared);
     return CALL_NO_MEMORY;
@@ -580,6 +603,10 @@ void bundle_launch_close(struct bundle_launch *prepared)
         free(prepared->context);
       }
     }
+    for (size_t i = 0; i < prepared->tree_count; ++i) {
+      handle_close(prepared->trees[i]);
+    }
+    free(prepared->trees);
     free(prepared->directories);
     free(prepared->entries);
     free(prepared->grants);

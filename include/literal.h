@@ -1,7 +1,9 @@
-#ifndef LIBCONFIG_LITERAL_H
-#define LIBCONFIG_LITERAL_H
+#ifndef USERSPACE_LITERAL_H
+#define USERSPACE_LITERAL_H
 
-#include "config.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #define CONFIG_LITERAL_SOURCE_LIMIT (1024 * 1024)
 
@@ -32,8 +34,8 @@ struct config_literal_value {
   union {
     struct { struct config_literal_entry *entries; size_t count; } table;
     struct { char *bytes; size_t size; } string;
-    lua_Integer integer;
-    lua_Number number;
+    int64_t integer;
+    double number;
     bool boolean;
   } as;
 };
@@ -71,8 +73,5 @@ const struct config_literal_value *config_literal_field(
  * Exceeding the comparison bound conservatively returns false. */
 bool config_literal_equal(const struct config_literal_value *a,
     const struct config_literal_value *b);
-/* Push an already parsed value. The caller must protect Lua allocation/errors
- * with lua_pcall; no Lua source is loaded and no libraries are opened. */
-void config_literal_push(lua_State *state, const struct config_literal_value *value);
 
 #endif

@@ -23,6 +23,7 @@
 #include <abi/terminal.h>
 #include <abi/udp.h>
 #include <bundle_launch.h>
+#include <package.h>
 #include <clock.h>
 #include <directory.h>
 #include <disk.h>
@@ -312,6 +313,23 @@ static struct mounted_volume *find_mount(struct mounts *mounts, const char *name
   return NULL;
 }
 
+/* A damaged current or set record never stops boot: report it once, and
+ * every package lookup then fails with that reason until pkg rollback. */
+static void check_packages(struct mounts *mounts)
+{
+  struct mounted_volume *mounted = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  if (!mounted || mounted->root == HANDLE_INVALID) {
+    return;
+  }
+  size_t count;
+  const char *reason;
+  enum call_status status = package_set_check(mounted->root, &count, &reason);
+  if (status != CALL_OK) {
+    printf("boot-init: packages: %s (status %u); package lookups fail until pkg rollback\n",
+        reason, status);
+  }
+}
+
 /* FAT mode is configured independently of views; other backends keep the
  * existing aggregate requested access. An already mounted system is kept. */
 static bool mount_plan(const struct authority *authority, const struct boot_plan *plan,
@@ -599,6 +617,8 @@ struct space_launch {
   handle_t source_handles[BUNDLE_SOURCE_LIMIT];
   struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
   size_t source_handle_count;
+  handle_t *package_trees; /* Package roots opened for this space. */
+  size_t package_tree_count;
   struct job_work *job_provisioner;
   handle_t http_staging;
   handle_t http_staging_parent; /* Borrowed until source handles close. */
@@ -695,7 +715,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
   launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 10 + BUNDLE_SOURCE_LIMIT,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
-  if (!launch->grants || !launch->roots) {
+  launch->package_trees = calloc(space->root_count ? space->root_count : 1,
+      sizeof(*launch->package_trees));
+  if (!launch->grants || !launch->roots || !launch->package_trees) {
     return "boot init is out of memory";
   }
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
@@ -726,6 +748,26 @@ static const char *build_launch(const struct authority *authority, struct mounts
           mounted ? mounted->status : CALL_UNAVAILABLE);
       return reason;
     }
+    if (root->package) {
+      /* Resolved once here: this space keeps the tree it started with. */
+      const char *missing;
+      handle_t tree;
+      enum call_status status = package_open_tree(mounted->root, root->package,
+          PACKAGE_TREE_RIGHTS, &tree, &missing);
+      if (status != CALL_OK) {
+        if (root->optional) {
+          continue;
+        }
+        snprintf(reason, size, "package %s unavailable: %s (status %u)", root->package,
+            missing, status);
+        return reason;
+      }
+      launch->package_trees[launch->package_tree_count++] = tree;
+      launch->grants[launch->grant_count] = (struct launch_grant){tree, PACKAGE_TREE_RIGHTS, 0};
+      launch->roots[launch->root_count++] =
+          (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, launch->grant_count++);
+      continue;
+    }
     struct handle_info info;
     enum call_status status = handle_query(mounted->root, &info);
     if (status != CALL_OK) {
@@ -735,7 +777,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     uint64_t rights = info.rights & (root->read_write ? DIRECTORY_RIGHTS : READ_ONLY_ROOT_RIGHTS);
     launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
     launch->roots[launch->root_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->volume, launch->grant_count++);
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, launch->grant_count++);
   }
   /* A root like any configured one: session, remote and shell handoffs carry it on. */
   if (space->acpi_tables) {
@@ -1029,6 +1071,8 @@ cleanup:
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
+  for (size_t i = 0; i < launch.package_tree_count; ++i) handle_close(launch.package_trees[i]);
+  free(launch.package_trees);
   free(launch.roots);
   free(launch.grants);
   free(cpus);
@@ -1181,6 +1225,7 @@ int main(int argc, char **argv)
   }
   size_t started = 0;
   if (mount_plan(&authority, &plan, &mounts)) {
+    check_packages(&mounts);
     for (size_t i = 0; i < plan.space_count; ++i) {
       started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
     }

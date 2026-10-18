@@ -52,7 +52,7 @@ bool install_archive_config_rebind(const char *bytes, size_t size, uint64_t pool
 {
   *output = NULL;
   *output_size = 0;
-  if (!pool_partition || pool_partition > UINT32_MAX || pool_partition > (uint64_t)LUA_MAXINTEGER ||
+  if (!pool_partition || pool_partition > UINT32_MAX || pool_partition > (uint64_t)INT64_MAX ||
       !valid_config(bytes, size)) {
     return false;
   }
@@ -67,11 +67,11 @@ bool install_archive_config_rebind(const char *bytes, size_t size, uint64_t pool
   bool ok = system != NULL;
   bool changed = false;
   if (ok) {
-    lua_Integer previous = system->as.integer;
-    system->as.integer = (lua_Integer)pool_partition;
+    int64_t previous = system->as.integer;
+    system->as.integer = (int64_t)pool_partition;
     changed = previous != system->as.integer;
     if (home && home->as.integer == previous) {
-      home->as.integer = (lua_Integer)pool_partition;
+      home->as.integer = (int64_t)pool_partition;
     }
   }
   char *value = NULL, *rendered = NULL;

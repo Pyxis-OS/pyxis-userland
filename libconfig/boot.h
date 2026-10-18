@@ -21,6 +21,7 @@
 #define BOOT_SYSTEM_VOLUME "system"
 /* Spaces start in this root unless they name another with start. */
 #define BOOT_HOME_ROOT "home"
+#define BOOT_PACKAGES_VOLUME "packages"
 #define BOOT_HTTP_STAGING_SOURCE "http_staging"
 
 enum boot_volume_kind {
@@ -40,8 +41,12 @@ struct boot_volume {
   bool read_write; /* FAT32 admission mode, independent of delegated views. */
 };
 
+/* A root names a volume of the same name, or a package of the current set
+ * resolved through BOOT_PACKAGES_VOLUME when the space starts. */
 struct boot_root {
+  char *name;
   char *volume;
+  char *package; /* NULL for a volume root; package roots are read-only. */
   bool read_write;
   bool optional;
 };

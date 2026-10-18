@@ -1,7 +1,7 @@
 #ifndef USERSPACE_INSTALLER_ARCHIVE_CONFIG_H
 #define USERSPACE_INSTALLER_ARCHIVE_CONFIG_H
 
-#include "../libconfig/literal.h"
+#include "literal.h"
 #include <stdint.h>
 
 #define INSTALL_ARCHIVE_CONFIG_MAX_BYTES CONFIG_LITERAL_SOURCE_LIMIT

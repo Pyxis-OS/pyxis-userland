@@ -91,8 +91,8 @@ static bool text(const struct config_literal_value *value, char *output, size_t 
 static const struct config_literal_value *index_value(const struct config_literal_value *array, size_t index)
 {
   for (const struct config_literal_entry *entry = array->as.table.entries; entry; entry = entry->next) {
-    if ((entry->key->kind == CONFIG_LITERAL_INTEGER && entry->key->as.integer == (lua_Integer)index) ||
-        (entry->key->kind == CONFIG_LITERAL_NUMBER && entry->key->as.number == (lua_Number)index)) {
+    if ((entry->key->kind == CONFIG_LITERAL_INTEGER && entry->key->as.integer == (int64_t)index) ||
+        (entry->key->kind == CONFIG_LITERAL_NUMBER && entry->key->as.number == (double)index)) {
       return entry->value;
     }
   }

@@ -203,8 +203,8 @@ static bool decode(const char *name, struct config_catalog *catalog)
     bool valid_index = source->key->kind == CONFIG_LITERAL_INTEGER && source->key->as.integer >= 1 &&
         (unsigned long long)source->key->as.integer <= entries->as.table.count;
     if (source->key->kind == CONFIG_LITERAL_NUMBER) {
-      lua_Number index = source->key->as.number;
-      valid_index = index >= 1 && index <= entries->as.table.count && (lua_Number)(size_t)index == index;
+      double index = source->key->as.number;
+      valid_index = index >= 1 && index <= entries->as.table.count && (double)(size_t)index == index;
     }
     if (!valid_index) {
       return error(name, NULL, "entries must be a dense integer array");

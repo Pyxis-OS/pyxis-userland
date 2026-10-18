@@ -1,6 +1,7 @@
 #include <bundle.h>
 #include <startup.h>
 #include <bundle_launch.h>
+#include <package.h>
 #include <abi/disk.h>
 #include <abi/mount.h>
 #include <abi/audio.h>
@@ -391,6 +392,11 @@ static enum call_status parse_grants(struct bundle_program *program,
           return CALL_BAD_REQUEST;
         }
         request->source = value->string;
+      } else if (!strcmp(nodes[key].string, "package")) {
+        if (value->type != BUNDLE_JSON_STRING || !package_id_valid(value->string)) {
+          return CALL_BAD_REQUEST;
+        }
+        request->package = value->string;
       } else if (!strcmp(nodes[key].string, "root")) {
         if (value->type != BUNDLE_JSON_STRING || !valid_name(value->string)) {
           return CALL_BAD_REQUEST;
@@ -424,8 +430,11 @@ static enum call_status parse_grants(struct bundle_program *program,
     }
     bool external = !strcmp(request->resource, "directory") ||
         !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks");
-    if (external != (request->source != NULL) ||
-        (request->root && (strcmp(request->resource, "directory") ||
+    bool directory = !strcmp(request->resource, "directory");
+    bool selected = request->source || request->package;
+    if (external != selected || (request->source && request->package) ||
+        (request->package && (!directory || (request->rights & ~PACKAGE_TREE_RIGHTS))) ||
+        (request->root && (!directory ||
          !(request->rights & DIRECTORY_RIGHT_LOOKUP)))) {
       return CALL_BAD_REQUEST;
     }

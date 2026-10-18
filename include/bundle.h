@@ -9,8 +9,11 @@ struct bundle_program;
 struct bundle_grant_request {
   const char *name;
   const char *resource;
-  /* Selected external inventory key and optional directory URI-root alias. */
+  /* Selected external inventory key and optional directory URI-root alias.
+   * A directory grant names either a source or a package ID; a package is
+   * resolved from the launcher's packages source and is always read-only. */
   const char *source;
+  const char *package;
   const char *root;
   uint64_t protocol;
   uint64_t rights;

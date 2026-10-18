@@ -1,7 +1,7 @@
 #ifndef CONFIG_EDITOR_CATALOG_H
 #define CONFIG_EDITOR_CATALOG_H
 
-#include "../libconfig/literal.h"
+#include "literal.h"
 
 #define CONFIG_CATALOG_ENTRY_LIMIT 128
 #define CONFIG_ENTRY_ID_LIMIT 64

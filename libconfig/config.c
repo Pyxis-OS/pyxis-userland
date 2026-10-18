@@ -6,6 +6,29 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Push an already parsed value. The caller protects Lua allocation and errors
+ * with lua_pcall; no Lua source is loaded and no libraries are opened. */
+static void push_literal(lua_State *state, const struct config_literal_value *value)
+{
+  luaL_checkstack(state, 4, "literal table depth");
+  switch (value->kind) {
+    case CONFIG_LITERAL_STRING:
+      lua_pushlstring(state, value->as.string.bytes, value->as.string.size);
+      break;
+    case CONFIG_LITERAL_INTEGER: lua_pushinteger(state, value->as.integer); break;
+    case CONFIG_LITERAL_NUMBER: lua_pushnumber(state, value->as.number); break;
+    case CONFIG_LITERAL_BOOLEAN: lua_pushboolean(state, value->as.boolean); break;
+    case CONFIG_LITERAL_TABLE:
+      lua_createtable(state, 0, (int)value->as.table.count);
+      for (const struct config_literal_entry *entry = value->as.table.entries; entry; entry = entry->next) {
+        push_literal(state, entry->key);
+        push_literal(state, entry->value);
+        lua_rawset(state, -3);
+      }
+      break;
+  }
+}
+
 /* Exactly one source: an open FILE, or caller bytes delivered once. */
 struct config_reader {
   FILE *file;
@@ -155,7 +178,7 @@ static int decode_literal(lua_State *state)
   struct literal_reader *reader = lua_touserdata(state, 1);
   lua_settop(state, 0);
   lua_pushcfunction(state, reader->decode);
-  config_literal_push(state, reader->document->root);
+  push_literal(state, reader->document->root);
   lua_pushlightuserdata(state, reader->output);
   lua_call(state, 2, 0);
   return 0;

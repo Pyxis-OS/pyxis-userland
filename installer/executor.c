@@ -285,6 +285,13 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     fprintf(stderr, "installer: home volume preparation failed (status %u)\n", status);
     goto done;
   }
+  /* Update creates it on systems installed before packages; pkg fills it. */
+  install_progress_begin("Preparing the packages volume", INSTALL_PROGRESS_NONE, NULL);
+  status = disk_create_volume(disk->handle, plan->target.pool.partition, INSTALL_PACKAGES_VOLUME);
+  if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
+    fprintf(stderr, "installer: packages volume preparation failed (status %u)\n", status);
+    goto done;
+  }
   if (!install_programs_write(disk, plan->target.pool.partition, plan->boot, &plan->programs,
         revision, &plan->manifest, plan->manifest_text, plan->manifest_bytes) ||
       !system_verify(plan)) {

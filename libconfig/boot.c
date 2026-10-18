@@ -2,6 +2,7 @@
 #include "config.h"
 #include <abi/input_policy.h>
 #include <bundle_launch.h>
+#include <package.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdarg.h>
@@ -270,14 +271,36 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
 {
   const char *access_name = NULL;
   if (lua_type(state, -1) == LUA_TTABLE) {
-    static const char *const keys[] = {"access", "optional"};
+    static const char *const keys[] = {"access", "optional", "package"};
     config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
     config_field(state, -1, "optional");
     if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
       luaL_error(state, "space %s: root %s: optional must be a boolean", space->name,
-          root->volume);
+          root->name);
     }
     root->optional = lua_toboolean(state, -1);
+    lua_pop(state, 1);
+    config_field(state, -1, "package");
+    if (!lua_isnil(state, -1)) {
+      const char *package = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : NULL;
+      if (!package || !package_id_valid(package)) {
+        luaL_error(state, "space %s: root %s: package must be a package ID", space->name,
+            root->name);
+      }
+      root->package = strdup(package);
+      if (!root->package) {
+        luaL_error(state, "cannot allocate package name");
+      }
+      lua_pop(state, 1);
+      config_field(state, -1, "access");
+      if (!lua_isnil(state, -1) && (lua_type(state, -1) != LUA_TSTRING ||
+          strcmp(lua_tostring(state, -1), "read-only"))) {
+        luaL_error(state, "space %s: root %s: package roots are read-only", space->name,
+            root->name);
+      }
+      lua_pop(state, 1);
+      return;
+    }
     lua_pop(state, 1);
     config_field(state, -1, "access");
     access_name = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : NULL;
@@ -287,7 +310,7 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
   }
   if (!access_name || (strcmp(access_name, "read-only") && strcmp(access_name, "read-write"))) {
     luaL_error(state, "space %s: root %s: access must be \"read-only\" or \"read-write\"",
-        space->name, root->volume);
+        space->name, root->name);
   }
   root->read_write = !strcmp(access_name, "read-write");
   lua_pop(state, 1);
@@ -312,14 +335,18 @@ static void read_roots(lua_State *state, struct boot_space *space)
     const char *name = lua_type(state, -2) == LUA_TSTRING ?
         lua_tolstring(state, -2, &length) : NULL;
     if (!name || !valid_name(name, length) || reserved_volume(name)) {
-      luaL_error(state, "space %s: roots must name configured volumes", space->name);
+      luaL_error(state, "space %s: roots must name configured volumes or packages", space->name);
     }
     struct boot_root *root = &space->roots[space->root_count++];
-    root->volume = strdup(name);
-    if (!root->volume) {
+    root->name = strdup(name);
+    if (!root->name) {
       luaL_error(state, "cannot allocate root name");
     }
     read_root(state, space, root);
+    root->volume = strdup(root->package ? BOOT_PACKAGES_VOLUME : name);
+    if (!root->volume) {
+      luaL_error(state, "cannot allocate root name");
+    }
     lua_pop(state, 1);
   }
 }
@@ -744,7 +771,9 @@ void boot_config_free(struct boot_config *config)
   for (size_t i = 0; i < config->space_count; ++i) {
     struct boot_space *space = &config->spaces[i];
     for (size_t j = 0; j < space->root_count; ++j) {
+      free(space->roots[j].name);
       free(space->roots[j].volume);
+      free(space->roots[j].package);
     }
     free(space->roots);
     for (size_t j = 0; j < space->grant_count; ++j) {
@@ -827,7 +856,7 @@ bool boot_space_has_root(const struct boot_space *space, const char *name)
     return true;
   }
   for (size_t i = 0; i < space->root_count; ++i) {
-    if (!strcmp(space->roots[i].volume, name)) {
+    if (!strcmp(space->roots[i].name, name)) {
       return true;
     }
   }
@@ -951,8 +980,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     for (size_t j = 0; j < space->root_count; ++j) {
       const struct boot_volume *volume = boot_plan_volume(plan, space->roots[j].volume);
       if (!volume) {
-        return plan_fail(plan, "space %s: root names undefined volume %s",
-            space->name, space->roots[j].volume);
+        return plan_fail(plan, "space %s: root %s names undefined volume %s",
+            space->name, space->roots[j].name, space->roots[j].volume);
       }
       if (space->roots[j].read_write && (volume->kind == BOOT_VOLUME_FAT32 ||
           volume->kind == BOOT_VOLUME_BOOT_ESP)) {

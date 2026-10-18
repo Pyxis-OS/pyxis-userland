@@ -1,7 +1,6 @@
 #include "literal.h"
 #include <errno.h>
 #include <limits.h>
-#include <lauxlib.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -385,7 +384,7 @@ static bool numeric(struct parser *parser, struct config_literal_value *value)
       unsigned long long number = strtoull(token + (negative ? 1 : 0), &end, 16);
       if (!errno && !*end) {
         value->kind = CONFIG_LITERAL_INTEGER;
-        value->as.integer = (lua_Integer)(negative ? 0ULL - number : number);
+        value->as.integer = (int64_t)(negative ? 0ULL - number : number);
         return true;
       }
       return fail(parser, "hex integer is out of range");
@@ -415,10 +414,10 @@ static bool number_equal(const struct config_literal_value *a,
     return a->as.number == b->as.number;
   }
   const struct config_literal_value *integer = a->kind == CONFIG_LITERAL_INTEGER ? a : b;
-  lua_Number number = a->kind == CONFIG_LITERAL_NUMBER ? a->as.number : b->as.number;
+  double number = a->kind == CONFIG_LITERAL_NUMBER ? a->as.number : b->as.number;
   /* Upper bound is exclusive: converting LLONG_MAX to double rounds upward. */
-  return number >= (lua_Number)LLONG_MIN && number < -(lua_Number)LLONG_MIN &&
-      (lua_Number)(lua_Integer)number == number && (lua_Integer)number == integer->as.integer;
+  return number >= (double)LLONG_MIN && number < -(double)LLONG_MIN &&
+      (double)(int64_t)number == number && (int64_t)number == integer->as.integer;
 }
 
 static bool same_key(const struct config_literal_value *a,
@@ -477,7 +476,7 @@ static bool table(struct parser *parser, struct config_literal_value *value, siz
   if (depth == DEPTH_LIMIT) return fail(parser, "literal table depth limit exceeded");
   ++parser->position;
   struct config_literal_entry **tail = &value->as.table.entries;
-  lua_Integer array_index = 0;
+  int64_t array_index = 0;
   if (!skip(parser)) return false;
   while (peek(parser) != '}') {
     if (parser->entries == ITEM_LIMIT) return fail(parser, "too many table entries");
@@ -670,23 +669,3 @@ bool config_literal_equal(const struct config_literal_value *a,
   return equal(a, b, &work, 0);
 }
 
-void config_literal_push(lua_State *state, const struct config_literal_value *value)
-{
-  luaL_checkstack(state, 4, "literal table depth");
-  switch (value->kind) {
-    case CONFIG_LITERAL_STRING:
-      lua_pushlstring(state, value->as.string.bytes, value->as.string.size);
-      break;
-    case CONFIG_LITERAL_INTEGER: lua_pushinteger(state, value->as.integer); break;
-    case CONFIG_LITERAL_NUMBER: lua_pushnumber(state, value->as.number); break;
-    case CONFIG_LITERAL_BOOLEAN: lua_pushboolean(state, value->as.boolean); break;
-    case CONFIG_LITERAL_TABLE:
-      lua_createtable(state, 0, (int)value->as.table.count);
-      for (const struct config_literal_entry *entry = value->as.table.entries; entry; entry = entry->next) {
-        config_literal_push(state, entry->key);
-        config_literal_push(state, entry->value);
-        lua_rawset(state, -3);
-      }
-      break;
-  }
-}
