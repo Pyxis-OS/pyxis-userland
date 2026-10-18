@@ -609,4 +609,3 @@ void install_configuration_summary(const struct install_configuration *plan, FIL
   }
   fputs("CPU/volume/timezone/network: not checked. Details and numbered choices: plan.\n", output);
 }
-
