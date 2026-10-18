@@ -41,7 +41,6 @@ void font_open_options_default(struct font_open_options *options)
   if (options) {
     *options = (struct font_open_options){
       .max_file_bytes = 32u * 1024u * 1024u,
-      .scratch_bytes = 4u * 1024u * 1024u,
     };
   }
 }
@@ -68,7 +67,7 @@ enum font_result font_open(const char *path, const struct font_open_options *opt
   if (options) {
     selected = *options;
   }
-  if (!path || !*path || !selected.max_file_bytes || !selected.scratch_bytes) {
+  if (!path || !*path || !selected.max_file_bytes) {
     return FONT_BAD_ARGUMENT;
   }
   errno = 0;
@@ -135,7 +134,7 @@ enum font_result font_open(const char *path, const struct font_open_options *opt
     goto done;
   }
   result = font_backend_init(&face->backend, face->bytes, face->byte_count,
-      selected.face_index, selected.scratch_bytes);
+      selected.face_index);
   if (result == FONT_OK) {
     face->references = 1;
   }

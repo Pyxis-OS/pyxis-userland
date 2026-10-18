@@ -13,7 +13,7 @@ struct font_backend {
 
 /* Font bytes stay owned by the face and must outlive this value. */
 enum font_result font_backend_init(struct font_backend *backend,
-    const uint8_t *bytes, size_t length, uint32_t face_index, size_t scratch_limit);
+    const uint8_t *bytes, size_t length, uint32_t face_index);
 /* The caller checks the raw cmap result against info.numGlyphs before use. */
 int font_backend_find_glyph(const struct font_backend *backend, uint32_t scalar);
 void font_backend_metrics(const struct font_backend *backend, int *ascent,

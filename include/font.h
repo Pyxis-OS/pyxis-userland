@@ -19,7 +19,6 @@ enum font_result {
 
 struct font_open_options {
   size_t max_file_bytes;
-  size_t scratch_bytes;
   uint32_t face_index;
 };
 
@@ -72,7 +71,7 @@ extern "C" {
 
 void font_open_options_default(struct font_open_options *options);
 void font_size_options_default(struct font_size_options *options);
-/* NULL options select defaults. Explicit options must contain nonzero budgets.
+/* NULL options select defaults. Explicit options need nonzero max_file_bytes.
  * Open privately owns the file bytes, and closes its FILE on every path.
  * Creation always sets *output to NULL before validation or allocation. */
 enum font_result font_open(const char *path, const struct font_open_options *options,
@@ -96,7 +95,8 @@ enum font_result font_get_kerning(const struct font_size *size, uint32_t previou
 enum font_result font_run_begin(struct font_size *size, const char *text, size_t bytes,
     font_fixed x, font_fixed baseline, struct font_run *output);
 enum font_result font_run_next(struct font_run *run, struct font_positioned_glyph *output);
-/* RGB is opaque 0xRRGGBB sRGB. Blend coverage in linear light and preserve all
+/* RGB is opaque 0xRRGGBB sRGB; a nonzero high byte is BAD_ARGUMENT.
+ * Blend coverage in linear light and preserve all
  * unused destination bits. Invalid descriptors cause no drawing. A later glyph
  * error leaves the rendered prefix and returns its actual error. Text and live
  * library objects must not overlap writable pixel storage. */

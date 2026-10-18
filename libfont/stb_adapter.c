@@ -152,6 +152,8 @@ static enum font_result recognize_font(const uint8_t *bytes, size_t length,
   if (!has_bytes(length, offset + 12, count * 16)) {
     return FONT_BAD_FONT;
   }
+  bool has_maxp = false, has_glyf = false, has_cff = false;
+  bool unsupported_outlines = false;
   for (size_t i = 0; i < count; ++i) {
     const uint8_t *table = bytes + offset + 12 + i * 16;
     size_t start = read_u32(table + 8);
@@ -159,6 +161,15 @@ static enum font_result recognize_font(const uint8_t *bytes, size_t length,
     if (start > INT_MAX || size > INT_MAX - start ||
         !has_bytes(length, start, size)) {
       return FONT_BAD_FONT;
+    }
+    if (memcmp(table, "glyf", 4) == 0) {
+      has_glyf = true;
+    } else if (memcmp(table, "CFF ", 4) == 0) {
+      has_cff = true;
+    } else if (memcmp(table, "CFF2", 4) == 0 || memcmp(table, "SVG ", 4) == 0 ||
+        memcmp(table, "sbix", 4) == 0 || memcmp(table, "CBDT", 4) == 0 ||
+        memcmp(table, "EBDT", 4) == 0) {
+      unsupported_outlines = true;
     }
     size_t minimum = 0;
     if (memcmp(table, "head", 4) == 0) {
@@ -168,6 +179,7 @@ static enum font_result recognize_font(const uint8_t *bytes, size_t length,
     } else if (memcmp(table, "hmtx", 4) == 0) {
       minimum = 4;
     } else if (memcmp(table, "maxp", 4) == 0) {
+      has_maxp = true;
       minimum = 6;
     } else if (memcmp(table, "cmap", 4) == 0) {
       minimum = 4;
@@ -188,12 +200,19 @@ static enum font_result recognize_font(const uint8_t *bytes, size_t length,
       }
     }
   }
+  /* stb otherwise invents a 65535-glyph bound when maxp is absent. */
+  if (!has_maxp) {
+    return FONT_BAD_FONT;
+  }
+  if (!has_glyf && !has_cff) {
+    return unsupported_outlines ? FONT_UNSUPPORTED : FONT_BAD_FONT;
+  }
   *font_offset = (int)offset;
   return FONT_OK;
 }
 
 enum font_result font_backend_init(struct font_backend *backend,
-    const uint8_t *bytes, size_t length, uint32_t face_index, size_t scratch_limit)
+    const uint8_t *bytes, size_t length, uint32_t face_index)
 {
   if (!backend || !bytes) {
     return FONT_BAD_ARGUMENT;
@@ -204,18 +223,9 @@ enum font_result font_backend_init(struct font_backend *backend,
   if (result != FONT_OK) {
     return result;
   }
-  struct scratch_context scratch = {.limit = scratch_limit};
-  backend->info.userdata = &scratch;
+  /* Font initialization only borrows the validated table directory; no scratch. */
   if (!stbtt_InitFont(&backend->info, bytes, offset)) {
-    result = FONT_BAD_FONT;
-  }
-  backend->info.userdata = NULL;
-  scratch_cleanup(&scratch);
-  if (scratch.result != FONT_OK) {
-    result = scratch.result;
-  }
-  if (result != FONT_OK) {
-    return result;
+    return FONT_BAD_FONT;
   }
   int format = read_u16(bytes + backend->info.index_map);
   if (format != 0 && format != 4 && format != 6 && format != 12 && format != 13) {

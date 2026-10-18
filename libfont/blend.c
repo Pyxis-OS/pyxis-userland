@@ -108,7 +108,7 @@ enum font_result
 font_draw_xrgb8888(struct font_size *size, const struct font_xrgb8888 *surface,
     font_fixed x, font_fixed baseline, const char *text, size_t bytes, uint32_t rgb)
 {
-  if (!surface || !surface_valid(surface)) {
+  if (rgb > UINT32_C(0xffffff) || !surface || !surface_valid(surface)) {
     return FONT_BAD_ARGUMENT;
   }
   struct font_xrgb8888 destination = *surface;
