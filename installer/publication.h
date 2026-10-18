@@ -44,6 +44,10 @@ struct install_staged_boot {
 bool install_publication_legacy_check(handle_t root,
     const struct config_file_digest expected[INSTALL_BOOT_PAYLOADS],
     struct config_storage_report *report);
+/* Internal pending-activation admission: retain exact legacy identities and
+ * verify the reviewed bytes before any ESP mutation. Close returned handles. */
+bool install_publication_legacy_hold(struct install_staged_boot *boot,
+    uint64_t domain, struct config_storage_report *report);
 bool install_publication_publish(const struct install_publication_request *request,
     struct config_storage_report *report);
 bool install_publication_verify(const struct install_staged_boot *boot,

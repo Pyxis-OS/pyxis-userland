@@ -80,6 +80,15 @@ bool install_esp_payload_space(const struct install_esp_payload_request *request
  * Never retry, replace or delete the attempt automatically. */
 bool install_esp_payload_stage(const struct install_esp_payload_request *request,
     struct install_esp_payloads **result, struct install_esp_payload_report *report);
+/* Retain and verify an existing immutable attempt. Only the private unlinked
+ * RAM workspace is created; no ESP names or bytes are changed. Sources are
+ * unused. Expected payload digests and revision/attempt describe the record. */
+bool install_esp_payload_open(const struct install_esp_payload_request *request,
+    struct install_esp_payloads **result, struct install_esp_payload_report *report);
+/* Existing-attempt results only: borrow the retained native READ-only FILE and
+ * extent for bounded content inspection. Valid until the result is closed. */
+bool install_esp_payload_source(const struct install_esp_payloads *result,
+    enum install_esp_payload_index index, struct install_source *source);
 /* Rechecks issuer-bound facts, canonical names, retained identities and bytes.
  * Source handles/memory are no longer needed. Writes only the retained private
  * RAM workspace; no ESP writes or interval management. */

@@ -2,12 +2,15 @@
 #include "../installer/digest.h"
 #include "../installer/progress.h"
 #include "../installer/publication.h"
+#include "../installer/pending.h"
+#include "../installer/pending_archive.h"
 
 #include <clock.h>
 #include <directory.h>
 #include <file.h>
 #include <handle.h>
 #include <mount.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -801,4 +804,184 @@ bool config_storage_publish(const struct config_storage_view *view,
 {
   return config_storage_publish_boot(view, facts, expected, expected_record, selected,
       transaction, revision, NULL, report);
+}
+
+static bool pending_payload_open(const struct install_pending_request *request,
+    const struct config_boot_binding *binding, struct install_esp_payloads **payloads,
+    struct config_storage_report *report)
+{
+  struct install_esp_payload_request open = {.root = request->esp_root,
+    .control = request->view.control, .workspace = request->workspace,
+    .expected = request->expected_target, .revision = binding->kernel_revision,
+    .attempt = binding->attempt};
+  const struct config_boot_payload *files[] = {&binding->kernel, &binding->archive, &binding->revision};
+  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
+    open.expected_payloads[i].size = files[i]->digest.size;
+    memcpy(open.expected_payloads[i].sha256, files[i]->digest.sha256, 65);
+  }
+  struct install_esp_payload_report readback;
+  bool ok = install_esp_payload_open(&open, payloads, &readback);
+  if (!ok) {
+    snprintf(report->artifact, sizeof(report->artifact), "%s", readback.artifact);
+    return failed(report, readback.status);
+  }
+  return true;
+}
+
+static bool pending_snapshot(const struct install_pending_request *request,
+    const struct install_pending_plan *plan, uint64_t interval,
+    struct config_storage_report *report)
+{
+  const struct config_storage_view *view = &request->view;
+  bool ok = current_view(view, &request->facts, true, interval, report) &&
+      expected_name(view->config_parent, CONFIG_RECORD_NAME, request->record, report);
+  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
+    ok = expected_name(parent_for(view, i), config_storage_file_name(i), &request->current[i], report);
+  }
+  if (ok && plan->menu_changed) {
+    ok = expected_name(view->limine_parent, plan->record.previous[CONFIG_LIMINE].name,
+        request->previous_limine, report);
+  }
+  return ok && current_view(view, &request->facts, true, interval, report);
+}
+
+bool config_storage_complete_pending(const struct install_pending_request *request,
+    const struct install_pending_plan *plan, struct config_storage_report *report)
+{
+  if (!request || !plan || !plan->available || !report) {
+    return failed(report, CALL_BAD_REQUEST);
+  }
+  const struct config_storage_view *view = &request->view;
+  struct install_staged_boot boot = {.root = request->esp_root, .binding = plan->record.boot,
+    .legacy_active = plan->legacy_active};
+  report->record = plan->record;
+  report->committed = true;
+  report->boot_activation_pending = plan->menu_changed;
+  struct install_esp_payloads *inherited = NULL;
+  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
+    boot.legacy_files[i] = HANDLE_INVALID;
+    boot.legacy_expected[i] = request->legacy[i];
+  }
+  struct mount_interval_reply interval = {0};
+  bool ok = pending_snapshot(request, plan, 0, report) &&
+      pending_payload_open(request, &plan->record.boot, &boot.payloads, report);
+  if (ok && !install_pending_selection(request, plan, boot.payloads)) {
+    ok = failed(report, CALL_BAD_REQUEST);
+  }
+  if (ok && plan->menu_changed && plan->record.previous_boot.present) {
+    ok = pending_payload_open(request, &plan->record.previous_boot, &inherited, report);
+  }
+  if (ok && plan->legacy_active) {
+    ok = install_publication_legacy_hold(&boot, request->facts.domain, report);
+  }
+  char staged[CONFIG_ARTIFACT_NAME_BYTES];
+  config_record_artifact_name(plan->record.transaction, CONFIG_LIMINE, "new", staged);
+  if (ok && plan->menu_changed) {
+    struct config_blob existing = {0};
+    ok = read_name(view->limine_parent, staged, CONFIG_FILE_MAX_BYTES, &existing, report);
+    if (ok && existing.digest.present) {
+      ok = config_blob_equal(&existing, &plan->menu) || failed(report, CALL_BAD_REQUEST);
+    } else if (ok) {
+      /* Fresh explicit Review may create a known-absent staging name once.
+       * An uncertain write never reaches this branch again in this operation. */
+      ok = pending_snapshot(request, plan, 0, report) &&
+          write_new(view->limine_parent, staged, &plan->menu, report) && sync_mount(view, report);
+    }
+    config_blob_destroy(&existing);
+    if (ok) {
+      ok = expected_name(view->limine_parent, staged, &plan->menu, report);
+    }
+  }
+  if (ok) {
+    report->phase = CONFIG_PHASE_EXCLUSIVE;
+    enum call_status status = mount_begin(view->control, &interval);
+    ok = status == CALL_OK || failed(report, status);
+    if (ok) {
+      status = mount_check(view->control);
+      ok = status == CALL_OK || failed(report, status);
+    }
+  }
+  for (unsigned pass = 0; ok && pass < 2; ++pass) {
+    ok = pending_snapshot(request, plan, interval.id, report) &&
+        install_publication_verify(&boot, request->facts.domain, report);
+    if (ok && !install_pending_selection(request, plan, boot.payloads)) {
+      ok = failed(report, CALL_BAD_REQUEST);
+    }
+    if (ok && inherited) {
+      struct install_esp_payload_report readback;
+      ok = install_esp_payload_verify(inherited, &readback);
+      if (!ok) {
+        failed(report, readback.status);
+      }
+    }
+    if (ok) {
+      ok = current_view(view, &request->facts, true, interval.id, report);
+    }
+  }
+  if (ok) {
+    report->phase = CONFIG_PHASE_ACTIVATE;
+    report->committed = true;
+    report->record = plan->record;
+    report->boot_activation_pending = true;
+    if (plan->menu_changed) {
+      ok = expected_name(view->limine_parent, staged, &plan->menu, report) &&
+          current_view(view, &request->facts, true, interval.id, report) &&
+          rename_file(view->limine_parent, staged, config_storage_file_name(CONFIG_LIMINE), report) &&
+          sync_mount(view, report);
+    }
+    if (ok) {
+      ok = expected_name(view->limine_parent, config_storage_file_name(CONFIG_LIMINE),
+          &plan->menu, report) && current_view(view, &request->facts, true, interval.id, report);
+    }
+    if (ok) {
+      report->boot_activated = true;
+      report->boot_activation_pending = false;
+    }
+  }
+  if (ok) {
+    report->phase = CONFIG_PHASE_CLEANUP;
+  }
+  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
+    const struct config_recovery_file *old = &plan->record.obsolete[i];
+    if (!old->digest.present) {
+      continue;
+    }
+    struct config_blob bytes = {0};
+    ok = current_view(view, &request->facts, true, interval.id, report) &&
+        read_name(parent_for(view, i), old->name, CONFIG_FILE_MAX_BYTES, &bytes, report);
+    if (ok && bytes.digest.present) {
+      ok = digest_equal(&bytes.digest, &old->digest) || failed(report, CALL_BAD_REQUEST);
+      if (ok) {
+        strcpy(report->artifact, old->name);
+        enum call_status status = directory_remove(parent_for(view, i), old->name, DIRECTORY_KIND_FILE);
+        ok = status == CALL_OK || failed(report, status);
+      }
+    }
+    config_blob_destroy(&bytes);
+  }
+  if (ok) {
+    ok = sync_mount(view, report) && current_view(view, &request->facts, true, interval.id, report);
+  }
+  if (interval.id) {
+    enum call_status status = mount_end(view->control, interval.id);
+    if (ok && status != CALL_OK) {
+      ok = failed(report, status);
+    }
+  }
+  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
+    if (boot.legacy_files[i] != HANDLE_INVALID) {
+      handle_close(boot.legacy_files[i]);
+    }
+  }
+  bool closed = install_esp_payload_close(inherited);
+  closed = install_esp_payload_close(boot.payloads) && closed;
+  if (ok && !closed) {
+    ok = failed(report, CALL_BAD_HANDLE);
+  }
+  if (ok) {
+    report->phase = CONFIG_PHASE_DONE;
+    report->artifact[0] = 0;
+  }
+  install_progress_finish();
+  return ok;
 }

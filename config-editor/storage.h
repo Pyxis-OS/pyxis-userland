@@ -48,6 +48,13 @@ struct config_storage_report {
 };
 
 struct install_staged_boot;
+struct install_pending_request;
+struct install_pending_plan;
+
+/* Installer-only explicitly reviewed completion; retains the existing committed
+ * record and its retention generation. See installer/pending.h. */
+bool config_storage_complete_pending(const struct install_pending_request *request,
+    const struct install_pending_plan *plan, struct config_storage_report *report);
 
 bool config_storage_guard(const struct config_storage_view *view,
     const struct config_target_facts *facts, uint64_t interval,

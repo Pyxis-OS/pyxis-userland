@@ -230,6 +230,13 @@ bool install_publication_legacy_check(handle_t root,
   return ok;
 }
 
+bool install_publication_legacy_hold(struct install_staged_boot *boot,
+    uint64_t domain, struct config_storage_report *report)
+{
+  return boot && boot->legacy_active &&
+      legacy_open(boot->root, boot->legacy_expected, domain, boot->legacy_files, report);
+}
+
 static bool legacy_verify(const struct install_staged_boot *boot, uint64_t domain,
     struct config_storage_report *report)
 {

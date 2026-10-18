@@ -28,7 +28,7 @@ struct install_esp_payloads {
   struct mount_state_reply expected;
   struct install_esp_payload_record record;
   char manifest_bytes[BOOT_MANIFEST_BYTES];
-  bool synchronized;
+  bool synchronized, existing;
 };
 
 static bool fail(struct install_esp_payload_report *report, enum call_status status)
@@ -483,5 +483,73 @@ bool install_esp_payload_stage(const struct install_esp_payload_request *request
   }
   record->staged_verified = true;
   report->phase = INSTALL_ESP_PAYLOAD_DONE;
+  return true;
+}
+
+bool install_esp_payload_open(const struct install_esp_payload_request *request,
+    struct install_esp_payloads **output, struct install_esp_payload_report *report)
+{
+  if (!report || !output) {
+    return false;
+  }
+  *report = (struct install_esp_payload_report){.phase = INSTALL_ESP_PAYLOAD_CHECK};
+  if (*output || !request || !revision_valid(request->revision) || !hex_valid(request->attempt, 32)) {
+    return fail(report, CALL_BAD_REQUEST);
+  }
+  struct install_esp_payloads *result = calloc(1, sizeof(*result));
+  if (!result) {
+    return fail(report, CALL_NO_MEMORY);
+  }
+  result->root = request->root;
+  result->control = request->control;
+  result->expected = request->expected;
+  result->parent = result->manifest = result->workspace = HANDLE_INVALID;
+  for (unsigned i = 0; i < INSTALL_ESP_PAYLOAD_COUNT; ++i) {
+    result->files[i] = HANDLE_INVALID;
+  }
+  *output = result;
+  strcpy(result->record.revision, request->revision);
+  strcpy(result->record.attempt, request->attempt);
+  result->record.entry_present = request->entry_present;
+  for (unsigned i = 0; i < payload_count(result); ++i) {
+    const struct install_esp_payload_digest *digest = &request->expected_payloads[i];
+    if (!digest->size || digest->size > INSTALL_ESP_PAYLOAD_MAX_BYTES ||
+        !hex_valid(digest->sha256, 64)) {
+      return fail(report, CALL_BAD_REQUEST);
+    }
+    result->record.payloads[i] = *digest;
+  }
+  if (!grant(result->root, PROTOCOL_DIRECTORY, BOOT_DIRECTORY_READ, report) ||
+      !manifest_prepare(result, report) || !current_target(result, report)) {
+    return false;
+  }
+  enum call_status status = install_esp_transfer_workspace(request->workspace, &result->workspace);
+  if (status != CALL_OK || !open_attempt(result, false, &result->parent, report)) {
+    return status == CALL_OK ? false : fail(report, status);
+  }
+  for (unsigned i = 0; i <= payload_count(result); ++i) {
+    bool manifest = i == payload_count(result);
+    const char *name = manifest ? INSTALL_ESP_PAYLOAD_MANIFEST : payload_names[i];
+    handle_t *file = manifest ? &result->manifest : &result->files[i];
+    status = install_esp_child_open(result->parent, name, DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, false, file);
+    if (status != CALL_OK) {
+      return fail(report, status);
+    }
+  }
+  result->synchronized = true;
+  result->existing = true;
+  return verify_staged(result, report);
+}
+
+bool install_esp_payload_source(const struct install_esp_payloads *result,
+    enum install_esp_payload_index index, struct install_source *source)
+{
+  if (!result || !result->existing || !result->synchronized || !source ||
+      (unsigned)index >= payload_count(result)) {
+    return false;
+  }
+  *source = (struct install_source){.handle = result->files[index],
+    .bytes = result->record.payloads[index].size};
   return true;
 }
