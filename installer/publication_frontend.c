@@ -363,6 +363,21 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
         goto done;
       }
     }
+    char staged[CONFIG_ARTIFACT_NAME_BYTES], path[256];
+    struct config_blob bytes = {0};
+    bool ok = config_record_artifact_name(completion.record.transaction, CONFIG_LIMINE, "new", staged);
+    int length = ok ? snprintf(path, sizeof(path), "boot/limine/%s", staged) : -1;
+    ok = ok && length > 0 && (size_t)length < sizeof(path) &&
+        install_snapshot_file(mount.root, path, CONFIG_FILE_MAX_BYTES, &bytes);
+    if (ok && bytes.digest.present) {
+      ok = config_blob_equal(&bytes, &completion.menu);
+      completing = true;
+    }
+    config_blob_destroy(&bytes);
+    if (!ok) {
+      fputs("Recorded staged menu differs; explicit manual disposition required.\n", stderr);
+      goto done;
+    }
   }
   if (completing && !completion.available) {
     fputs("Pending cleanup and changed selection need explicit manual disposition; nothing written.\n", stderr);

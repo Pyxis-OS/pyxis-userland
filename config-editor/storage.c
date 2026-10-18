@@ -828,6 +828,19 @@ static bool pending_payload_open(const struct install_pending_request *request,
   return true;
 }
 
+static bool pending_staged_menu(const struct config_storage_view *view,
+    const struct install_pending_plan *plan, struct config_blob *bytes,
+    struct config_storage_report *report)
+{
+  char name[CONFIG_ARTIFACT_NAME_BYTES];
+  if (!config_record_artifact_name(plan->record.transaction, CONFIG_LIMINE, "new", name)) {
+    return failed(report, CALL_BAD_REQUEST);
+  }
+  return read_name(view->limine_parent, name, CONFIG_FILE_MAX_BYTES, bytes, report) &&
+      (!bytes->digest.present || config_blob_equal(bytes, &plan->menu) ||
+      failed(report, CALL_BAD_REQUEST));
+}
+
 static bool pending_snapshot(const struct install_pending_request *request,
     const struct install_pending_plan *plan, uint64_t interval,
     struct config_storage_report *report)
@@ -855,6 +868,11 @@ static bool pending_snapshot(const struct install_pending_request *request,
     if (ok && bytes.digest.present) {
       ok = digest_equal(&bytes.digest, &old->digest) || failed(report, CALL_BAD_REQUEST);
     }
+    config_blob_destroy(&bytes);
+  }
+  if (ok) {
+    struct config_blob bytes = {0};
+    ok = pending_staged_menu(view, plan, &bytes, report);
     config_blob_destroy(&bytes);
   }
   return ok && current_view(view, &request->facts, true, interval, report);
@@ -955,6 +973,19 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   }
   if (ok) {
     report->phase = CONFIG_PHASE_CLEANUP;
+    /* A sector prefix can publish the new name before deleting its source. */
+    struct config_blob bytes = {0};
+    ok = current_view(view, &request->facts, true, interval.id, report) &&
+        pending_staged_menu(view, plan, &bytes, report);
+    if (ok && bytes.digest.present) {
+      ok = current_view(view, &request->facts, true, interval.id, report);
+      if (ok) {
+        strcpy(report->artifact, staged);
+        enum call_status status = directory_remove(view->limine_parent, staged, DIRECTORY_KIND_FILE);
+        ok = status == CALL_OK || failed(report, status);
+      }
+    }
+    config_blob_destroy(&bytes);
   }
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     const struct config_recovery_file *old = &plan->record.obsolete[i];

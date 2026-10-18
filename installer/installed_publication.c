@@ -77,6 +77,17 @@ static bool recovery_resolved(handle_t root, const struct config_blob *record)
       return false;
     }
   }
+  char staged[CONFIG_ARTIFACT_NAME_BYTES], path[256];
+  if (!config_record_artifact_name(parsed.transaction, CONFIG_LIMINE, "new", staged)) return false;
+  snprintf(path, sizeof(path), "boot/limine/%s", staged);
+  struct config_blob artifact = {0};
+  bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);
+  bool present = artifact.digest.present;
+  config_blob_destroy(&artifact);
+  if (!ok || present) {
+    fputs("installer: retained recovery needs a fresh pending completion Review or manual disposition\n", stderr);
+    return false;
+  }
   return true;
 }
 
