@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "org.pyxis.net",
+  "entry": "bin/net.pxe",
+  "commands": {"net": "bin/net.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "net_config", "resource": "net_config", "rights": ["read"], "required": false}
+  ]
+}

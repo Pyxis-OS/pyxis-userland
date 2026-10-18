@@ -1248,6 +1248,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"clipboard_shared", clipboard_shared, PROTOCOL_CLIPBOARD},
       {"system_info", shell->system_info, PROTOCOL_SYSTEM_INFO},
       {"echo", shell->echo, PROTOCOL_ECHO},
+      /* Offered only to a bundle that declares it. The declared request is READ
+       * alone, so the shell's own rights never reach the bundle. Plain programs
+       * receive net_config only through a session handoff. */
+      {"net_config", shell->net_config, PROTOCOL_NET_CONFIG},
       {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
       {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
       {"pipe", mode == SHELL_FOREGROUND ? shell->pipe : HANDLE_INVALID, PROTOCOL_PIPE_SERVICE},
