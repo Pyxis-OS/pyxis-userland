@@ -4,6 +4,7 @@
 within one writable NPFS volume. An existing directory destination receives each
 source basename. Multiple-source operation may partially succeed; failure exits
 nonzero. No symbolic-link, force or copying fallback is supported.
+Directory-destination detection never opens a provider FILE or fetches a URL.
 
 Source-parent grants need LOOKUP, READ_FILES and WRITE_FILES; destination-parent
 grants need LOOKUP and CREATE. Links share contents and inode identity. Publication

@@ -1,11 +1,12 @@
 #include <errno.h>
+#include <handle.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
+#include "../common/directory.h"
 
 /* Ignore trailing separators, but a scheme root has no component to append. */
 static const char *base_name(const char *source, size_t *length)
@@ -49,12 +50,7 @@ static char *join(const char *directory, const char *name, size_t length)
 
 static void report_failure(const char *source, const char *target, int error)
 {
-  struct stat info;
-  if (error == ENOENT && stat(source, &info) != 0 && errno == ENOENT) {
-    fprintf(stderr, "ln: %s: %s\n", source, strerror(ENOENT));
-  } else {
-    fprintf(stderr, "ln: %s -> %s: %s\n", source, target, strerror(error));
-  }
+  fprintf(stderr, "ln: %s -> %s: %s\n", source, target, strerror(error));
 }
 
 int main(int argc, char **argv)
@@ -77,13 +73,16 @@ int main(int argc, char **argv)
     }
   }
   const char *destination = argv[argc - 1];
-  struct stat info;
-  int destination_status = stat(destination, &info);
-  int destination_error = errno;
-  bool into_directory = destination_status == 0 && S_ISDIR(info.st_mode);
+  /* Directory-only resolution cannot OPEN a provider FILE as stat would. */
+  handle_t directory;
+  enum call_status destination_status = resolve_directory(destination, 0, &directory);
+  bool into_directory = destination_status == CALL_OK;
+  if (into_directory && handle_close(directory) != 0) {
+    fprintf(stderr, "ln: %s: Could not release destination directory\n", destination);
+    return EXIT_FAILURE;
+  }
   if (argc - first > 2 && !into_directory) {
-    fprintf(stderr, "ln: %s: %s; several sources need a destination directory\n",
-        destination, strerror(destination_status != 0 ? destination_error : ENOTDIR));
+    report_directory_error("ln", destination, destination_status);
     return EXIT_FAILURE;
   }
 

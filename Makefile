@@ -345,7 +345,7 @@ $(BUILD)/cp.pxe: $(CP_OBJECT) $(UTILITY_OBJECT)
 
 $(BUILD)/ls.pxe $(BUILD)/tree.pxe: $(LS_OBJECTS)
 
-$(BUILD)/ls.pxe $(BUILD)/acpidump.pxe $(BUILD)/tree.pxe $(BUILD)/mkdir.pxe $(BUILD)/rm.pxe $(BUILD)/rmdir.pxe $(BUILD)/sync.pxe: $(UTILITY_OBJECT)
+$(BUILD)/ls.pxe $(BUILD)/acpidump.pxe $(BUILD)/tree.pxe $(BUILD)/mkdir.pxe $(BUILD)/rm.pxe $(BUILD)/rmdir.pxe $(BUILD)/sync.pxe $(BUILD)/ln.pxe: $(UTILITY_OBJECT)
 
 $(BUILD)/share/hello.txt: hello/message.txt
 	@mkdir -p $(@D)
