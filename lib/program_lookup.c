@@ -33,11 +33,12 @@ enum call_status program_open_search(const struct path_context *context,
 {
   if (!output) return CALL_BAD_REQUEST;
   *output = NULL;
-  if (!command || !*command || !workspace) return CALL_BAD_REQUEST;
+  if (!command || !*command) return CALL_BAD_REQUEST;
   if (!program_is_explicit(command)) {
     return search && search->list ? command_search_resolve(context, search, command, output) :
         CALL_NOT_FOUND;
   }
+  if (!workspace) return CALL_BAD_REQUEST;
   struct command_selection *selection = calloc(1, sizeof(*selection));
   if (!selection) return CALL_NO_MEMORY;
   selection->explicit_path = strdup(command);
