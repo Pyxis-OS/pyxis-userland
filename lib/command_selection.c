@@ -43,6 +43,7 @@ void command_selection_close(struct command_selection *selection)
   if (selection->package_view) {
     handle_close(selection->package_view);
   }
+  if (selection->commands) handle_close(selection->commands);
   free(selection->explicit_path);
   free(selection);
 }
@@ -228,6 +229,10 @@ enum call_status command_search_resolve(const struct path_context *context,
     handle_close(volumes[i].view);
   }
   free(volumes);
+  if (status == CALL_OK) {
+    status = handle_copy_restricted(search->list, COMMAND_LIST_RIGHT_READ, 0, &selection->commands);
+    selection->commands_exported = search->exported;
+  }
   if (status == CALL_OK) {
     *output = selection;
   } else {

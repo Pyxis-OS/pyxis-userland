@@ -164,7 +164,11 @@ enum call_status command_search_capture_init(handle_t environment,
   if (status == CALL_BUFFER_TOO_SMALL || (status == CALL_OK && entry.kind != ENVIRONMENT_CAP)) {
     return CALL_WRONG_TYPE;
   }
-  return status == CALL_OK ? capture_owned_list(entry.handle, capture) : status;
+  if (status == CALL_OK) {
+    status = capture_owned_list(entry.handle, capture);
+    if (status == CALL_OK) capture->exported = (entry.flags & ENVIRONMENT_EXPORTED) != 0;
+  }
+  return status;
 }
 
 enum call_status command_search_capture_list(handle_t list,
@@ -176,7 +180,11 @@ enum call_status command_search_capture_list(handle_t list,
   *capture = (struct command_search_capture){0};
   handle_t owned;
   enum call_status status = handle_copy_restricted(list, COMMAND_LIST_RIGHT_READ, 0, &owned);
-  return status == CALL_OK ? capture_owned_list(owned, capture) : status;
+  if (status == CALL_OK) {
+    status = capture_owned_list(owned, capture);
+    if (status == CALL_OK) capture->exported = true;
+  }
+  return status;
 }
 
 enum call_status command_search_stage(const struct command_search_capture *capture,

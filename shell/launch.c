@@ -477,6 +477,7 @@ static enum call_status capture_selection(const struct shell *shell,
   for (size_t i = 0; i < exported->count; ++i) {
     const struct environment_value *value = &exported->values[i];
     if (value->kind == ENVIRONMENT_CAP && (value->flags & ENVIRONMENT_EXPORTED) &&
+        !(prepared->program && prepared->program->commands && !strcmp(value->name, "commands")) &&
         !shell_environment_initial(shell, value)) {
       prepared->selection[prepared->selection_count++] = value;
     }
@@ -644,6 +645,46 @@ static enum call_status offer_runtime_grant(struct prepared_stage *prepared,
   return CALL_OK;
 }
 
+/* Code and inherited search use the same captured publication, even if the
+ * shell environment changes between lookup and preparation. */
+static enum call_status retain_selected_commands(struct prepared_stage *prepared)
+{
+  const struct command_selection *program = prepared->program;
+  if (!program || !program->commands) return CALL_OK;
+  struct environment_capture *capture = &prepared->captured;
+  struct environment_value *entry = NULL;
+  for (size_t i = 0; i < capture->count; ++i) {
+    if (!strcmp(capture->values[i].name, "commands")) entry = &capture->values[i];
+  }
+  handle_t held;
+  enum call_status status = handle_copy_restricted(program->commands,
+      COMMAND_LIST_RIGHT_READ, 0, &held);
+  if (status != CALL_OK) return status;
+  if (!entry) {
+    if (capture->count >= SIZE_MAX / sizeof(*capture->values)) {
+      handle_close(held);
+      return CALL_LIMIT;
+    }
+    struct environment_value *values = realloc(capture->values,
+        (capture->count + 1) * sizeof(*capture->values));
+    if (!values) {
+      handle_close(held);
+      return CALL_NO_MEMORY;
+    }
+    capture->values = values;
+    entry = &values[capture->count++];
+    *entry = (struct environment_value){0};
+  } else {
+    if (entry->kind == ENVIRONMENT_CAP) handle_close(entry->handle);
+    free(entry->text);
+  }
+  *entry = (struct environment_value){.kind = ENVIRONMENT_CAP,
+    .flags = program->commands_exported ? ENVIRONMENT_EXPORTED : 0,
+    .handle = held, .rights = COMMAND_LIST_RIGHT_READ};
+  strcpy(entry->name, "commands");
+  return CALL_OK;
+}
+
 static enum call_status prepare_stage(struct shell *shell, struct prepared_stage *prepared,
     const struct shell_stage *stage, enum shell_launch_mode mode, bool named_input,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT], handle_t publication,
@@ -768,6 +809,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (captured != CALL_OK) {
     return captured;
   }
+  captured = retain_selected_commands(prepared);
+  if (captured != CALL_OK) return captured;
   captured = capture_selection(shell, prepared, stage, exported);
   if (captured != CALL_OK) {
     return captured;
@@ -1549,6 +1592,7 @@ static enum call_status preflight_operands(struct shell *shell,
   }
   prepared->image = image->image;
   prepared->bundle = image->bundle;
+  prepared->program = image->program;
   enum call_status status = prepare_stage(shell, prepared, stage, mode, named_input,
       streams, publication, read_only, environment, exported, true, scope);
   *conflict = prepared->conflict;
@@ -1562,6 +1606,7 @@ static enum call_status preflight_operands(struct shell *shell,
   /* The image/bundle belong to the real launch, not this temporary selection. */
   prepared->image = HANDLE_INVALID;
   prepared->bundle = NULL;
+  prepared->program = NULL;
   if (!release_sources(prepared, 1, NULL)) {
     status = CALL_BAD_HANDLE;
   }

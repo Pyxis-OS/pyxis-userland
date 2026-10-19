@@ -11,6 +11,8 @@
  * Diagnostic labels/paths never confer authority. */
 struct command_selection {
   char *explicit_path; /* Full diagnostic path, owned; NULL for a bare name. */
+  handle_t commands; /* Owned originating list; zero for an explicit path. */
+  bool commands_exported;
   handle_t image;
   struct bundle_program *bundle;
   handle_t package_view;
