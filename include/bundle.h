@@ -34,6 +34,23 @@ enum call_status bundle_command_open(const struct path_context *context,
 enum call_status bundle_open(const struct path_context *context,
     const char *bundle_uri, struct bundle_program **program);
 
+/* Open a declared command from an already selected native .pxb directory.
+ * REVISION is borrowed and copied, never reopened by name. Non-NULL COMMAND must
+ * name a manifest command; NULL selects the default. An incomplete bundle or
+ * missing alias refuses. Full stack,
+ * grants and app/resource policy is retained. CONTEXT may be NULL for publisher
+ * validation; actual launch still supplies its held authority separately. */
+enum call_status bundle_open_directory(const struct path_context *context,
+    handle_t revision, const char *command, struct bundle_program **program);
+
+/* Retain the fixed package selection alongside the full bundle policy. Other
+ * package grants still need separately held authority from the same volume. */
+enum call_status bundle_open_package_directory(const struct path_context *context,
+    handle_t revision, const char *command, handle_t fixed_view,
+    struct bundle_program **program);
+/* Borrowed fixed view, or INVALID for an ordinary bundle selection. */
+handle_t bundle_program_package_view(const struct bundle_program *program);
+
 /* Owns the selected revision, image and read-only app/resource directories.
  * Accessors borrow handles, arrays and strings until close; never close them
  * separately. Published development trees must not be changed or deleted:

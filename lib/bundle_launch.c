@@ -11,6 +11,7 @@
 #include <bundle_launch.h>
 #include <command_search.h>
 #include <package.h>
+#include <package_commands.h>
 #include <handle.h>
 #include <stdlib.h>
 #include <string.h>
@@ -295,7 +296,38 @@ static enum call_status provider_source(const struct launch_request *source,
   return CALL_OK;
 }
 
+static enum call_status selected_package_set(const struct bundle_program *program,
+    handle_t source, struct package_set **set, const char **reason)
+{
+  handle_t fixed = bundle_program_package_view(program);
+  if (!fixed) {
+    return package_set_load(source, set, reason);
+  }
+  struct package_command_info selected, origin;
+  enum call_status status = package_commands_info(fixed, &selected);
+  handle_t view = HANDLE_INVALID;
+  if (status == CALL_OK) {
+    status = package_commands_open(source, &view);
+  }
+  if (status == CALL_OK) {
+    status = package_commands_info(view, &origin);
+  }
+  if (view) {
+    handle_close(view);
+  }
+  if (status == CALL_OK && (memcmp(selected.pool_id, origin.pool_id, 16) ||
+      memcmp(selected.volume_id, origin.volume_id, 16))) {
+    status = CALL_DENIED;
+  }
+  if (status != CALL_OK) {
+    *reason = "package source does not match the selected command volume";
+    return status;
+  }
+  return package_set_load_number(source, selected.set, set, reason);
+}
+
 static enum call_status prepare_resources(struct bundle_launch *prepared,
+    const struct bundle_program *program,
     const struct bundle_grant_request *requests, size_t count,
     const struct bundle_authority *authority, size_t authority_count,
     const struct launch_request *launch_source, const char **missing)
@@ -334,12 +366,14 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       }
     }
     if (source != HANDLE_INVALID && requests[i].package) {
-      /* The set is read now, so a switch is seen by the next launch. A
-       * required package that is absent or unreadable is named as missing. */
+      /* A package-selected command keeps its captured set. That snapshot never
+       * supplies authority for another package: SOURCE must independently hold
+       * the matching originating volume. */
       const char *reason;
       handle_t tree = HANDLE_INVALID;
       if (!prepared->set_loaded) {
-        prepared->set_status = package_set_load(source, &prepared->set, &reason);
+        prepared->set_status = selected_package_set(program, source,
+            &prepared->set, &reason);
         prepared->set_loaded = true;
       }
       if (prepared->set_status != CALL_OK ||
@@ -550,7 +584,7 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   enum call_status status = prepare_context(&context, source, bundle_entries, bundle_count,
       explicit_providers);
   if (status == CALL_OK) {
-    status = prepare_resources(prepared, resources, resource_count, authority, authority_count,
+    status = prepare_resources(prepared, program, resources, resource_count, authority, authority_count,
         source, missing);
   }
   if (status == CALL_OK) {

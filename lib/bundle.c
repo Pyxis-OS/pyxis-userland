@@ -2,6 +2,7 @@
 #include <startup.h>
 #include <bundle_launch.h>
 #include <package.h>
+#include <package_commands.h>
 #include <abi/disk.h>
 #include <abi/mount.h>
 #include <abi/audio.h>
@@ -64,6 +65,7 @@ struct bundle_program {
   size_t command_count;
   struct bundle_grant_request grants[BUNDLE_GRANT_LIMIT];
   size_t grant_count;
+  handle_t package_view;
 };
 
 struct grant_right {
@@ -267,9 +269,13 @@ static enum call_status read_json(handle_t file, struct bundle_json *json)
 
 static bool root_conflict(const struct path_context *context, const char *name)
 {
-  (void)context;
   if (!strcmp(name, "app")) {
     return true;
+  }
+  /* Publication validates policy independently of the publisher's namespace.
+   * Launch preparation still checks collisions against the actual child. */
+  if (!context) {
+    return false;
   }
   struct environment_entry_reply reply;
   enum call_status status = environment_lookup(startup_environment_handle(), name,
@@ -585,23 +591,23 @@ void bundle_program_close(struct bundle_program *program)
   if (program->revision != HANDLE_INVALID) {
     handle_close(program->revision);
   }
+  if (program->package_view != HANDLE_INVALID) {
+    handle_close(program->package_view);
+  }
   bundle_json_close(&program->manifest);
   free(program);
 }
 
-static enum call_status open_bundle(const struct path_context *context, const char *uri,
-    const char *command, struct bundle_program **output)
+static enum call_status open_revision(const struct path_context *context,
+    handle_t revision, const char *command, struct bundle_program **output)
 {
   *output = NULL;
-  if (!bundle_suffix(uri)) {
-    return CALL_BAD_REQUEST;
-  }
   struct bundle_program *program = calloc(1, sizeof(*program));
   if (!program) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = resolve(context, uri, DIRECTORY_KIND_DIRECTORY,
-      BUNDLE_DIRECTORY_RIGHTS, &program->revision);
+  enum call_status status = handle_copy_restricted(revision,
+      BUNDLE_DIRECTORY_RIGHTS, 0, &program->revision);
   handle_t manifest = HANDLE_INVALID;
   if (status == CALL_OK) {
     status = require_native(program->revision, PROTOCOL_DIRECTORY);
@@ -639,15 +645,20 @@ static enum call_status open_bundle(const struct path_context *context, const ch
   if (status == CALL_OK) {
     status = open_entry(program, program->entry, &program->image);
   }
+  bool selected = command == NULL;
   for (size_t i = 0; status == CALL_OK && i < program->command_count; ++i) {
     handle_t image = HANDLE_INVALID;
     status = open_entry(program, program->commands[i].path, &image);
     if (status == CALL_OK && command && !strcmp(command, program->commands[i].name)) {
       handle_close(program->image);
       program->image = image;
+      selected = true;
     } else if (image != HANDLE_INVALID) {
       handle_close(image);
     }
+  }
+  if (status == CALL_OK && !selected) {
+    status = CALL_BAD_REQUEST;
   }
   if (status != CALL_OK) {
     /* Once selected, a missing member is a broken bundle, not a lookup miss. */
@@ -659,6 +670,69 @@ static enum call_status open_bundle(const struct path_context *context, const ch
   }
   *output = program;
   return CALL_OK;
+}
+
+static enum call_status open_bundle(const struct path_context *context, const char *uri,
+    const char *command, struct bundle_program **output)
+{
+  *output = NULL;
+  if (!bundle_suffix(uri)) {
+    return CALL_BAD_REQUEST;
+  }
+  handle_t revision = HANDLE_INVALID;
+  enum call_status status = resolve(context, uri, DIRECTORY_KIND_DIRECTORY,
+      BUNDLE_DIRECTORY_RIGHTS, &revision);
+  if (status == CALL_OK) {
+    status = open_revision(context, revision, command, output);
+    handle_close(revision);
+  }
+  return status;
+}
+
+enum call_status bundle_open_directory(const struct path_context *context,
+    handle_t revision, const char *command, struct bundle_program **program)
+{
+  if (!program) {
+    return CALL_BAD_REQUEST;
+  }
+  *program = NULL;
+  if (!revision || (command && !valid_name(command))) {
+    return CALL_BAD_REQUEST;
+  }
+  return open_revision(context, revision, command, program);
+}
+
+enum call_status bundle_open_package_directory(const struct path_context *context,
+    handle_t revision, const char *command, handle_t fixed_view,
+    struct bundle_program **program)
+{
+  if (!program) {
+    return CALL_BAD_REQUEST;
+  }
+  *program = NULL;
+  struct package_command_info info;
+  enum call_status status = package_commands_info(fixed_view, &info);
+  if (status == CALL_OK && ((info.flags & PACKAGE_COMMAND_VIEW_LIVE) || !info.set ||
+      !command || !valid_name(command))) {
+    status = CALL_BAD_REQUEST;
+  }
+  if (status == CALL_OK) {
+    status = open_revision(context, revision, command, program);
+  }
+  if (status == CALL_OK) {
+    status = handle_copy_restricted(fixed_view, BUNDLE_DIRECTORY_RIGHTS, 0,
+        &(*program)->package_view);
+    if (status != CALL_OK) {
+      bundle_program_close(*program);
+      *program = NULL;
+    }
+  }
+  return status;
+}
+
+handle_t bundle_program_package_view(const struct bundle_program *program)
+{
+  return program ? program->package_view : HANDLE_INVALID;
 }
 
 enum call_status bundle_open(const struct path_context *context,

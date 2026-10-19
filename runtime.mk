@@ -18,7 +18,7 @@ LIB_OBJECTS := $(BUILD)/lib/startup.o \
                $(BUILD)/lib/directory.o $(BUILD)/lib/path.o $(BUILD)/lib/resource.o $(BUILD)/lib/mount.o $(BUILD)/lib/transaction.o $(BUILD)/lib/stream.o \
                $(BUILD)/lib/profile.o $(BUILD)/lib/space.o $(BUILD)/lib/keyboard.o $(BUILD)/lib/pointer.o $(BUILD)/lib/clock.o $(BUILD)/lib/echo.o $(BUILD)/lib/net_config.o $(BUILD)/lib/net_factory.o $(BUILD)/lib/udp.o $(BUILD)/lib/tcp.o $(BUILD)/lib/random.o $(BUILD)/lib/power.o $(BUILD)/lib/memory.o $(BUILD)/lib/thread.o $(BUILD)/lib/display.o $(BUILD)/lib/process.o \
                $(BUILD)/lib/screen_capture.o $(BUILD)/lib/screenshot_saver.o $(BUILD)/lib/acpi_tables.o $(BUILD)/lib/terminal_pointer.o $(BUILD)/lib/audio.o \
-               $(BUILD)/lib/launcher.o $(BUILD)/lib/command_search.o $(BUILD)/lib/program.o $(BUILD)/lib/program_lookup.o $(BUILD)/lib/bundle.o \
+               $(BUILD)/lib/launcher.o $(BUILD)/lib/command_search.o $(BUILD)/lib/command_selection.o $(BUILD)/lib/package_commands.o $(BUILD)/lib/program.o $(BUILD)/lib/program_lookup.o $(BUILD)/lib/bundle.o \
                $(BUILD)/lib/bundle_json.o $(BUILD)/lib/bundle_launch.o $(BUILD)/lib/literal.o $(BUILD)/lib/package.o $(BUILD)/lib/job_work.o $(BUILD)/lib/network_environment.o \
                $(BUILD)/lib/system_info.o $(BUILD)/lib/machine_settings.o $(BUILD)/lib/input_policy.o $(BUILD)/lib/log.o \
                $(BUILD)/lib/shebang.o $(BUILD)/lib/key_layout.o $(BUILD)/lib/terminal_style.o $(BUILD)/lib/terminal_text.o $(BUILD)/lib/wait.o
