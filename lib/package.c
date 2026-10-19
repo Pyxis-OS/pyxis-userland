@@ -139,39 +139,49 @@ static bool text(const struct literal_value *value)
 
 struct package_set {
   struct literal *record; /* NULL for the empty set. */
+  uint64_t number;
 };
 
 /* Read current and its set record. NULL *set with CALL_OK is the empty set. */
-static enum call_status load_record(handle_t packages, struct literal **set,
-    const char **reason)
+static enum call_status load_record(handle_t packages, int64_t requested,
+    struct literal **set, uint64_t *number, const char **reason)
 {
   *set = NULL;
+  *number = 0;
+  *reason = NULL;
   char *bytes;
   size_t size;
-  enum call_status status = read_file(packages, CURRENT_NAME, CURRENT_LIMIT, &bytes, &size);
-  if (status == CALL_NOT_FOUND) {
+  enum call_status status;
+  if (requested < 0) {
+    status = read_file(packages, CURRENT_NAME, CURRENT_LIMIT, &bytes, &size);
+    if (status == CALL_NOT_FOUND) {
+      return CALL_OK;
+    }
+    if (status != CALL_OK) {
+      *reason = "cannot read current";
+      return status;
+    }
+    struct literal *current = NULL;
+    status = parse(bytes, size, &current);
+    free(bytes);
+    static const char *const current_keys[] = {"format", "set"};
+    if (status != CALL_OK || !exact_fields(current->root, current_keys, 2) ||
+        !format_valid(current->root) ||
+        literal_field(current->root, "set")->kind != LITERAL_INTEGER ||
+        literal_field(current->root, "set")->as.integer < 1) {
+      literal_free(current);
+      *reason = "current is not a valid set pointer";
+      return CALL_BAD_REQUEST;
+    }
+    requested = literal_field(current->root, "set")->as.integer;
+    literal_free(current);
+  }
+  if (!requested) {
     return CALL_OK;
   }
-  if (status != CALL_OK) {
-    *reason = "cannot read current";
-    return status;
-  }
-  struct literal *current;
-  status = parse(bytes, size, &current);
-  free(bytes);
-  static const char *const current_keys[] = {"format", "set"};
-  if (status != CALL_OK || !exact_fields(current->root, current_keys, 2) ||
-      !format_valid(current->root) ||
-      literal_field(current->root, "set")->kind != LITERAL_INTEGER ||
-      literal_field(current->root, "set")->as.integer < 1) {
-    literal_free(current);
-    *reason = "current is not a valid set pointer";
-    return CALL_BAD_REQUEST;
-  }
+  *number = requested;
   char name[SET_NAME_MAX];
-  snprintf(name, sizeof(name), "%lld.lua",
-      (long long)literal_field(current->root, "set")->as.integer);
-  literal_free(current);
+  snprintf(name, sizeof(name), "%lld.lua", (long long)requested);
 
   handle_t sets;
   status = directory_lookup(packages, SETS_NAME, DIRECTORY_KIND_DIRECTORY,
@@ -226,7 +236,8 @@ enum call_status package_set_load(handle_t packages, struct package_set **set,
 {
   *set = NULL;
   struct literal *record;
-  enum call_status status = load_record(packages, &record, reason);
+  uint64_t number;
+  enum call_status status = load_record(packages, -1, &record, &number, reason);
   if (status != CALL_OK) {
     return status;
   }
@@ -237,7 +248,55 @@ enum call_status package_set_load(handle_t packages, struct package_set **set,
     return CALL_NO_MEMORY;
   }
   (*set)->record = record;
+  (*set)->number = number;
   return CALL_OK;
+}
+
+enum call_status package_set_load_number(handle_t packages, uint64_t number,
+    struct package_set **set, const char **reason)
+{
+  *set = NULL;
+  if (number > INT64_MAX) {
+    *reason = "set number is out of range";
+    return CALL_LIMIT;
+  }
+  struct literal *record;
+  uint64_t selected;
+  enum call_status status = load_record(packages, number, &record, &selected, reason);
+  if (status != CALL_OK) {
+    return status;
+  }
+  *set = calloc(1, sizeof(**set));
+  if (!*set) {
+    literal_free(record);
+    *reason = "cannot allocate the package set";
+    return CALL_NO_MEMORY;
+  }
+  (*set)->record = record;
+  (*set)->number = selected;
+  return CALL_OK;
+}
+
+uint64_t package_set_number(const struct package_set *set)
+{
+  return set->number;
+}
+
+bool package_set_entry(const struct package_set *set, size_t index,
+    const char **id, const char **version)
+{
+  const struct literal_value *list = set->record ?
+      literal_field(set->record->root, "packages") : NULL;
+  const struct literal_entry *entry = list ? list->as.table.entries : NULL;
+  for (size_t i = 0; entry && i < index; ++i) {
+    entry = entry->next;
+  }
+  if (!entry) {
+    return false;
+  }
+  *id = literal_field(entry->value, "id")->as.string.bytes;
+  *version = literal_field(entry->value, "version")->as.string.bytes;
+  return true;
 }
 
 size_t package_set_count(const struct package_set *set)

@@ -26,6 +26,14 @@ bool package_id_valid(const char *id);
  * package of one launch or space start, so they all come from one set. */
 enum call_status package_set_load(handle_t packages, struct package_set **set,
     const char **reason);
+/* Explicit record for management/recovery; number zero is the empty set.
+ * Does not inspect current or select a fallback. */
+enum call_status package_set_load_number(handle_t packages, uint64_t number,
+    struct package_set **set, const char **reason);
+uint64_t package_set_number(const struct package_set *set);
+/* Borrowed strings remain valid until set is freed. */
+bool package_set_entry(const struct package_set *set, size_t index,
+    const char **id, const char **version);
 size_t package_set_count(const struct package_set *set);
 void package_set_free(struct package_set *set);
 
