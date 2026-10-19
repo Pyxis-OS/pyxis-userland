@@ -16,6 +16,8 @@ enum call_status mount_open_root(handle_t mount, uint64_t access, handle_t *root
  * mutation rights additionally require mount WRITE authority. Success returns
  * an owned root, without consuming authority or binding a URI. Failure clears
  * root; malformed replies are outcome unknown. */
+enum call_status mount_open_ram_volume(handle_t mount, uint64_t capacity,
+    const char *name, uint64_t rights, handle_t *root);
 enum call_status mount_open_volume(handle_t mount, uint64_t partition,
     const char *name, uint64_t rights, handle_t *root);
 

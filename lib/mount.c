@@ -69,6 +69,29 @@ enum call_status mount_open_volume(handle_t mount, uint64_t partition,
   return mount_reply_status(result, &reply, root);
 }
 
+enum call_status mount_open_ram_volume(handle_t mount, uint64_t capacity,
+    const char *name, uint64_t rights, handle_t *root)
+{
+  if (!root) return CALL_BAD_REQUEST;
+  *root = HANDLE_INVALID;
+  if (!name || capacity < MOUNT_RAM_MIN_BYTES || capacity > MOUNT_RAM_MAX_BYTES ||
+      capacity % MOUNT_RAM_ALIGNMENT || !(rights & DIRECTORY_RIGHT_LOOKUP) ||
+      (rights & ~DIRECTORY_RIGHTS)) return CALL_BAD_REQUEST;
+  size_t length = 0;
+  while (name[length]) {
+    if (length == MOUNT_VOLUME_NAME_MAX) return CALL_BAD_REQUEST;
+    ++length;
+  }
+  if (!length) return CALL_BAD_REQUEST;
+  struct mount_ram_volume_message message = {
+    .header = {PROTOCOL_MOUNT, MOUNT_OPEN_RAM_VOLUME},
+    .body = {capacity, (uintptr_t)name, length, rights},
+  };
+  struct mount_reply reply = {0};
+  return mount_reply_status(syscall_call(mount, &message, sizeof(message),
+      &reply, sizeof(reply)), &reply, root);
+}
+
 enum call_status mount_sync(handle_t mount)
 {
   struct message_header message = {PROTOCOL_MOUNT, MOUNT_SYNC};
