@@ -103,7 +103,7 @@ static const struct grant_right grant_rights[] = {
   {"launcher", "launch", PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
   {"random", "read", PROTOCOL_RANDOM, RANDOM_RIGHT_READ},
   {"system_info", "read", PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_RIGHT_READ},
-  {"net_config", "read", PROTOCOL_NET_CONFIG, NET_CONFIG_RIGHT_READ},
+  {"net_registry", "read", PROTOCOL_NET_REGISTRY, NET_REGISTRY_RIGHT_READ},
   {"echo", "send", PROTOCOL_ECHO, ECHO_RIGHT_SEND},
   {"tcp", "connect", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_CONNECT},
   {"tcp", "listen", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_LISTEN},

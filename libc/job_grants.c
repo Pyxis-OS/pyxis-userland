@@ -102,8 +102,8 @@ static enum call_status validate_authority(const struct handle_info *info,
   case PROTOCOL_ECHO:
     allowed_rights = ECHO_RIGHT_SEND;
     break;
-  case PROTOCOL_NET_CONFIG:
-    allowed_rights = NET_CONFIG_RIGHT_READ;
+  case PROTOCOL_NET_REGISTRY:
+    allowed_rights = NET_REGISTRY_RIGHT_READ;
     break;
   case PROTOCOL_UDP_SERVICE:
     allowed_rights = UDP_SERVICE_RIGHT_OPEN | UDP_SERVICE_RIGHT_BROADCAST;

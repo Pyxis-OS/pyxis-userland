@@ -1,7 +1,7 @@
 #include <echo.h>
 #include <syscall.h>
 
-enum call_status echo_exchange(handle_t echo, uint32_t destination,
+enum call_status echo_exchange_path(handle_t echo, struct net_path path, uint32_t destination,
     uint64_t deadline_ns, struct echo_reply *reply)
 {
   if (!reply) {
@@ -10,7 +10,7 @@ enum call_status echo_exchange(handle_t echo, uint32_t destination,
   *reply = (struct echo_reply){0};
   struct echo_request request = {
     .header = {PROTOCOL_ECHO, ECHO_EXCHANGE},
-    .destination = destination,
+    .path = path, .destination = destination,
     .deadline_ns = deadline_ns,
   };
   struct echo_reply response;
@@ -29,4 +29,10 @@ enum call_status echo_exchange(handle_t echo, uint32_t destination,
     *reply = response;
   }
   return result.status;
+}
+
+enum call_status echo_exchange(handle_t echo, uint32_t destination,
+    uint64_t deadline_ns, struct echo_reply *reply)
+{
+  return echo_exchange_path(echo, (struct net_path){0}, destination, deadline_ns, reply);
 }

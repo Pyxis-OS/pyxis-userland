@@ -1,26 +1,26 @@
 #ifndef USERSPACE_NET_CONFIG_H
 #define USERSPACE_NET_CONFIG_H
 
-#include <abi/net_config.h>
 #include <abi/handle.h>
-#include <abi/syscall.h>
+#include <abi/net_config.h>
+#include <stddef.h>
 
-/* Snapshot helpers clear output on failure. Addresses are host-order IPv4
- * integers; replacement validates the complete address/prefix/optional gateway together.
- * No helper looks up authority by name or parses userspace configuration. */
-enum call_status net_config_query(handle_t authority, struct net_config_reply *reply);
-enum call_status net_config_next_controller(handle_t authority, uint32_t after_id,
+enum call_status net_registry_next_controller(handle_t registry, uint32_t after_id,
     struct net_controller_reply *reply);
-/* Read-only native inventory; a zero interface ID ends the enumeration. */
-enum call_status net_config_next_interface(handle_t authority, uint64_t after_id,
+enum call_status net_registry_next_interface(handle_t registry, uint64_t after_id,
     struct net_interface_reply *reply);
-enum call_status net_config_bind(handle_t authority, const struct net_selector *selector,
-    struct net_config_reply *reply);
-enum call_status net_config_lookup(handle_t authority, const struct net_selector *selector,
-    struct net_config_reply *reply);
-enum call_status net_config_replace(handle_t authority, uint32_t address,
-    uint32_t prefix, uint32_t gateway, uint32_t dns_server);
-enum call_status net_config_clear(handle_t authority);
-enum call_status net_config_set_dns(handle_t authority, uint32_t dns_server);
+enum call_status net_registry_lookup(handle_t registry, uint64_t interface_id, handle_t *facet);
+enum call_status net_registry_policy(handle_t registry, struct net_policy_reply *reply);
+enum call_status net_interface_query(handle_t facet, struct net_interface_reply *reply);
+enum call_status net_interface_replace(handle_t facet, uint32_t address, uint32_t prefix,
+    uint32_t gateway, uint32_t dns_server);
+enum call_status net_interface_clear(handle_t facet);
+enum call_status net_interface_report_dhcp(handle_t facet, uint64_t address_epoch, uint32_t phase);
+enum call_status net_policy_define(handle_t policy, const struct net_interface_definition *entries, size_t count);
+enum call_status net_policy_bind(handle_t policy, const struct net_interface_binding *entries, size_t count);
+enum call_status net_policy_interface(handle_t policy, uint64_t interface_id, uint64_t rights, handle_t *facet);
+enum call_status net_policy_factory(handle_t policy, uint64_t protocol, uint64_t rights,
+    const uint64_t *interface_ids, size_t count, handle_t *factory);
+enum call_status net_policy_replace(handle_t policy, const struct net_policy_request *settings);
 
 #endif

@@ -12,7 +12,7 @@ static enum call_status response_status(struct syscall_result result, size_t siz
   return result.status;
 }
 
-enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
+enum call_status tcp_connect_path(handle_t service, struct net_path path, uint32_t address, uint16_t port,
     uint64_t deadline_ns, struct tcp_connect_reply *reply)
 {
   if (!reply) {
@@ -20,7 +20,7 @@ enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
   }
   struct tcp_connect_request request = {
     .header = {PROTOCOL_TCP_SERVICE, TCP_CONNECT},
-    .address = address, .port = port, .deadline_ns = deadline_ns,
+    .path = path, .address = address, .port = port, .deadline_ns = deadline_ns,
   };
   struct tcp_connect_reply response;
   struct syscall_result result = syscall_call(service, &request, sizeof(request),
@@ -32,7 +32,7 @@ enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
   return status;
 }
 
-enum call_status tcp_listen(handle_t service, uint32_t address, uint16_t port,
+enum call_status tcp_listen_path(handle_t service, struct net_path path, uint16_t port,
     struct tcp_listen_reply *reply)
 {
   if (!reply) {
@@ -40,7 +40,7 @@ enum call_status tcp_listen(handle_t service, uint32_t address, uint16_t port,
   }
   struct tcp_listen_request request = {
     .header = {PROTOCOL_TCP_SERVICE, TCP_LISTEN},
-    .address = address, .port = port,
+    .path = path, .port = port,
   };
   struct tcp_listen_reply response;
   struct syscall_result result = syscall_call(service, &request, sizeof(request),
@@ -232,4 +232,16 @@ enum call_status tcp_try_write(handle_t stream, const void *data, size_t length,
     *reply = response;
   }
   return status;
+}
+
+enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
+    uint64_t deadline_ns, struct tcp_connect_reply *reply)
+{
+  return tcp_connect_path(service, (struct net_path){0}, address, port, deadline_ns, reply);
+}
+
+enum call_status tcp_listen(handle_t service, uint32_t address, uint16_t port,
+    struct tcp_listen_reply *reply)
+{
+  return tcp_listen_path(service, (struct net_path){.source = address}, port, reply);
 }

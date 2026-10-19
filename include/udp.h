@@ -16,8 +16,8 @@ enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
  * udp_open. This does not connect the endpoint or restrict subsequent peers. */
 enum call_status udp_open_route(handle_t service, uint32_t destination, uint16_t port,
     struct udp_open_reply *reply);
-/* Requires UDP_SERVICE_RIGHT_BROADCAST. Binds wildcard net0 across address
- * changes; sends use the current net0 source, including zero before assignment.
+/* Requires UDP_SERVICE_RIGHT_BROADCAST. Binds one scoped interface across address
+ * changes; sends use the current interface source, including zero before assignment.
  * Same handle ownership and failure output rules as udp_open. */
 enum call_status udp_open_broadcast(handle_t service, uint16_t port,
     struct udp_open_reply *reply);
@@ -45,5 +45,13 @@ enum call_status udp_factory_next_interface(handle_t authority, uint64_t after_i
     uint64_t *interface_id);
 enum call_status udp_factory_derive(handle_t authority, uint64_t interface_id,
     uint64_t rights, handle_t *derived);
+
+/* Explicit restrictions narrow the held immutable factory scope. */
+enum call_status udp_open_path(handle_t service, struct net_path path, uint16_t port,
+    struct udp_open_reply *reply);
+enum call_status udp_open_route_path(handle_t service, struct net_path path,
+    uint32_t destination, uint16_t port, struct udp_open_reply *reply);
+enum call_status udp_open_broadcast_path(handle_t service, struct net_path path, uint16_t port,
+    struct udp_open_reply *reply);
 
 #endif

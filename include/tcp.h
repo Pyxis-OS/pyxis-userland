@@ -51,4 +51,10 @@ enum call_status tcp_factory_next_interface(handle_t authority, uint64_t after_i
 enum call_status tcp_factory_derive(handle_t authority, uint64_t interface_id,
     uint64_t rights, handle_t *derived);
 
+/* Explicit restrictions narrow the held immutable factory scope. */
+enum call_status tcp_connect_path(handle_t service, struct net_path path, uint32_t address,
+    uint16_t port, uint64_t deadline_ns, struct tcp_connect_reply *reply);
+enum call_status tcp_listen_path(handle_t service, struct net_path path, uint16_t port,
+    struct tcp_listen_reply *reply);
+
 #endif

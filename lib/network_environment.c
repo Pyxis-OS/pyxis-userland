@@ -22,8 +22,8 @@ enum call_status network_environment_wait(handle_t authority, handle_t clock)
   }
   uint64_t end = now + DNS_SETUP_WAIT_NS;
   for (;;) {
-    struct net_config_reply snapshot;
-    status = net_config_query(authority, &snapshot);
+    struct net_policy_reply snapshot;
+    status = net_registry_policy(authority, &snapshot);
     if (status != CALL_OK || snapshot.dns_server) {
       return status;
     }
@@ -49,8 +49,8 @@ enum call_status network_environment_read(struct network_environment *environmen
   }
   uint32_t chosen = 0;
   if (authority != HANDLE_INVALID) {
-    struct net_config_reply snapshot;
-    enum call_status status = net_config_query(authority, &snapshot);
+    struct net_policy_reply snapshot;
+    enum call_status status = net_registry_policy(authority, &snapshot);
     if (status != CALL_OK) {
       return status;
     }

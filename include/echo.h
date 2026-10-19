@@ -18,4 +18,8 @@ enum call_status echo_factory_next_interface(handle_t authority, uint64_t after_
 enum call_status echo_factory_derive(handle_t authority, uint64_t interface_id,
     uint64_t rights, handle_t *derived);
 
+/* Explicit restrictions narrow the held immutable factory scope. */
+enum call_status echo_exchange_path(handle_t echo, struct net_path path, uint32_t destination,
+    uint64_t deadline_ns, struct echo_reply *reply);
+
 #endif

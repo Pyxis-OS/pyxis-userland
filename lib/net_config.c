@@ -2,35 +2,36 @@
 #include <syscall.h>
 #include <string.h>
 
-static enum call_status snapshot_call(handle_t authority, const void *request,
-    size_t request_size, struct net_config_reply *reply)
+static enum call_status exchange(handle_t authority, const void *request, size_t request_size,
+    void *reply, size_t reply_size)
 {
-  if (!reply) {
-    return CALL_BAD_REQUEST;
-  }
-  *reply = (struct net_config_reply){0};
-  struct net_config_reply response;
-  struct syscall_result result = syscall_call(authority, request, request_size,
-      &response, sizeof(response));
+  struct syscall_result result = syscall_call(authority, request, request_size, reply, reply_size);
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
   }
-  if (result.reply_size != (result.status == CALL_OK ? sizeof(response) : 0)) {
+  return result.reply_size == (result.status == CALL_OK ? reply_size : 0) ?
+      result.status : CALL_BAD_REQUEST;
+}
+
+static enum call_status returned_handle(handle_t authority, const void *request, size_t size,
+    handle_t *handle)
+{
+  if (!handle) {
     return CALL_BAD_REQUEST;
   }
-  if (result.status == CALL_OK) {
-    *reply = response;
+  *handle = HANDLE_INVALID;
+  struct net_handle_reply reply;
+  enum call_status status = exchange(authority, request, size, &reply, sizeof(reply));
+  if (status == CALL_OK) {
+    if (reply.handle == HANDLE_INVALID) {
+      return CALL_BAD_REQUEST;
+    }
+    *handle = reply.handle;
   }
-  return result.status;
+  return status;
 }
 
-enum call_status net_config_query(handle_t authority, struct net_config_reply *reply)
-{
-  struct message_header request = {PROTOCOL_NET_CONFIG, NET_CONFIG_QUERY};
-  return snapshot_call(authority, &request, sizeof(request), reply);
-}
-
-enum call_status net_config_next_controller(handle_t authority, uint32_t after_id,
+enum call_status net_registry_next_controller(handle_t registry, uint32_t after_id,
     struct net_controller_reply *reply)
 {
   if (!reply) {
@@ -38,34 +39,23 @@ enum call_status net_config_next_controller(handle_t authority, uint32_t after_i
   }
   *reply = (struct net_controller_reply){0};
   struct net_controller_request request = {
-    .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_NEXT_CONTROLLER}, .after_id = after_id,
+    .header = {PROTOCOL_NET_REGISTRY, NET_REGISTRY_NEXT_CONTROLLER}, .after_id = after_id,
   };
   struct net_controller_reply response;
-  struct syscall_result result = syscall_call(authority, &request, sizeof(request),
-      &response, sizeof(response));
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
-  }
-  if (result.reply_size != (result.status == CALL_OK ? sizeof(response) : 0)) {
-    return CALL_BAD_REQUEST;
-  }
-  if (result.status == CALL_OK) {
+  enum call_status status = exchange(registry, &request, sizeof(request), &response, sizeof(response));
+  if (status == CALL_OK) {
+    if (response.controller_id && response.controller_id <= after_id) {
+      return CALL_BAD_REQUEST;
+    }
     *reply = response;
   }
-  return result.status;
+  return status;
 }
 
-static bool interface_reply_valid(uint64_t after_id,
-    const struct net_interface_reply *reply)
+static bool interface_valid(const struct net_interface_reply *reply)
 {
-  if (reply->flags & ~NET_INTERFACE_FLAGS || reply->reserved[0] || reply->reserved[1]) {
-    return false;
-  }
-  if (!reply->interface_id) {
-    const struct net_interface_reply end = {.flags = NET_INTERFACE_INVENTORY_COMPLETE};
-    return !memcmp(reply, &end, sizeof(end));
-  }
-  if (reply->interface_id <= after_id || !(reply->flags & NET_INTERFACE_DEFINED)) {
+  if (!reply->interface_id || reply->flags & ~NET_INTERFACE_FLAGS ||
+      reply->reserved[0] || reply->reserved[1] || !(reply->flags & NET_INTERFACE_DEFINED)) {
     return false;
   }
   const char *end = memchr(reply->name, 0, sizeof(reply->name));
@@ -80,7 +70,7 @@ static bool interface_reply_valid(uint64_t after_id,
   return true;
 }
 
-enum call_status net_config_next_interface(handle_t authority, uint64_t after_id,
+enum call_status net_registry_next_interface(handle_t registry, uint64_t after_id,
     struct net_interface_reply *reply)
 {
   if (!reply) {
@@ -88,86 +78,144 @@ enum call_status net_config_next_interface(handle_t authority, uint64_t after_id
   }
   *reply = (struct net_interface_reply){0};
   struct net_interface_request request = {
-    .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_NEXT_INTERFACE}, .after_id = after_id,
+    .header = {PROTOCOL_NET_REGISTRY, NET_REGISTRY_NEXT_INTERFACE}, .after_id = after_id,
   };
   struct net_interface_reply response;
-  struct syscall_result result = syscall_call(authority, &request, sizeof(request),
-      &response, sizeof(response));
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
-  }
-  if (result.reply_size != (result.status == CALL_OK ? sizeof(response) : 0)) {
-    return CALL_BAD_REQUEST;
-  }
-  if (result.status == CALL_OK) {
-    if (!interface_reply_valid(after_id, &response)) {
+  enum call_status status = exchange(registry, &request, sizeof(request), &response, sizeof(response));
+  if (status == CALL_OK) {
+    if (!response.interface_id) {
+      const struct net_interface_reply end = {.flags = NET_INTERFACE_INVENTORY_COMPLETE};
+      if (memcmp(&response, &end, sizeof(end))) {
+        return CALL_BAD_REQUEST;
+      }
+    } else if (response.interface_id <= after_id || !interface_valid(&response)) {
       return CALL_BAD_REQUEST;
     }
     *reply = response;
   }
-  return result.status;
+  return status;
 }
 
-static enum call_status select_call(handle_t authority, uint64_t operation,
-    const struct net_selector *selector, struct net_config_reply *reply)
+enum call_status net_registry_lookup(handle_t registry, uint64_t interface_id, handle_t *facet)
 {
-  if (!selector) {
-    if (reply) {
-      *reply = (struct net_config_reply){0};
+  struct net_lookup_request request = {
+    .header = {PROTOCOL_NET_REGISTRY, NET_REGISTRY_LOOKUP}, .interface_id = interface_id,
+  };
+  return returned_handle(registry, &request, sizeof(request), facet);
+}
+
+enum call_status net_registry_policy(handle_t registry, struct net_policy_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  *reply = (struct net_policy_reply){0};
+  struct message_header request = {PROTOCOL_NET_REGISTRY, NET_REGISTRY_POLICY};
+  struct net_policy_reply response;
+  enum call_status status = exchange(registry, &request, sizeof(request), &response, sizeof(response));
+  if (status == CALL_OK) {
+    if (response.reserved || response.flags & ~NET_POLICY_DNS_VALID || response.dns_mode > NET_DNS_DHCP) {
+      return CALL_BAD_REQUEST;
+    }
+    *reply = response;
+  }
+  return status;
+}
+
+enum call_status net_interface_query(handle_t facet, struct net_interface_reply *reply)
+{
+  if (!reply) {
+    return CALL_BAD_REQUEST;
+  }
+  *reply = (struct net_interface_reply){0};
+  struct message_header request = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_QUERY};
+  struct net_interface_reply response;
+  enum call_status status = exchange(facet, &request, sizeof(request), &response, sizeof(response));
+  if (status == CALL_OK) {
+    if (!interface_valid(&response)) {
+      return CALL_BAD_REQUEST;
+    }
+    *reply = response;
+  }
+  return status;
+}
+
+enum call_status net_interface_replace(handle_t facet, uint32_t address, uint32_t prefix,
+    uint32_t gateway, uint32_t dns_server)
+{
+  struct net_config_request request = {
+    .header = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_REPLACE},
+    .address = address, .prefix = prefix, .gateway = gateway, .dns_server = dns_server,
+  };
+  return exchange(facet, &request, sizeof(request), NULL, 0);
+}
+
+enum call_status net_interface_clear(handle_t facet)
+{
+  struct message_header request = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_CLEAR};
+  return exchange(facet, &request, sizeof(request), NULL, 0);
+}
+
+enum call_status net_interface_report_dhcp(handle_t facet, uint64_t address_epoch, uint32_t phase)
+{
+  struct net_dhcp_report_request request = {
+    .header = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_REPORT_DHCP},
+    .address_epoch = address_epoch, .phase = phase,
+  };
+  return exchange(facet, &request, sizeof(request), NULL, 0);
+}
+
+static enum call_status batch(handle_t policy, uint64_t operation, const void *entries, size_t count)
+{
+  if (count && !entries) {
+    return CALL_BAD_REQUEST;
+  }
+  struct net_policy_batch_request request = {
+    .header = {PROTOCOL_NET_POLICY, operation}, .entries = (uintptr_t)entries, .count = count,
+  };
+  return exchange(policy, &request, sizeof(request), NULL, 0);
+}
+
+enum call_status net_policy_define(handle_t policy, const struct net_interface_definition *entries, size_t count)
+{
+  return batch(policy, NET_POLICY_DEFINE, entries, count);
+}
+
+enum call_status net_policy_bind(handle_t policy, const struct net_interface_binding *entries, size_t count)
+{
+  return batch(policy, NET_POLICY_BIND, entries, count);
+}
+
+enum call_status net_policy_interface(handle_t policy, uint64_t interface_id, uint64_t rights, handle_t *facet)
+{
+  struct net_policy_interface_request request = {
+    .header = {PROTOCOL_NET_POLICY, NET_POLICY_INTERFACE}, .interface_id = interface_id, .rights = rights,
+  };
+  return returned_handle(policy, &request, sizeof(request), facet);
+}
+
+enum call_status net_policy_factory(handle_t policy, uint64_t protocol, uint64_t rights,
+    const uint64_t *interface_ids, size_t count, handle_t *factory)
+{
+  if (!interface_ids || !count) {
+    if (factory) {
+      *factory = HANDLE_INVALID;
     }
     return CALL_BAD_REQUEST;
   }
-  struct net_select_request request = {
-    .header = {PROTOCOL_NET_CONFIG, operation},
-    .selector = *selector,
+  struct net_policy_factory_request request = {
+    .header = {PROTOCOL_NET_POLICY, NET_POLICY_FACTORY}, .protocol = protocol, .rights = rights,
+    .interface_ids = (uintptr_t)interface_ids, .count = count,
   };
-  return snapshot_call(authority, &request, sizeof(request), reply);
+  return returned_handle(policy, &request, sizeof(request), factory);
 }
 
-enum call_status net_config_bind(handle_t authority, const struct net_selector *selector,
-    struct net_config_reply *reply)
+enum call_status net_policy_replace(handle_t policy, const struct net_policy_request *settings)
 {
-  return select_call(authority, NET_CONFIG_BIND, selector, reply);
-}
-
-enum call_status net_config_lookup(handle_t authority, const struct net_selector *selector,
-    struct net_config_reply *reply)
-{
-  return select_call(authority, NET_CONFIG_LOOKUP, selector, reply);
-}
-
-enum call_status net_config_replace(handle_t authority, uint32_t address,
-    uint32_t prefix, uint32_t gateway, uint32_t dns_server)
-{
-  struct net_config_request request = {
-    .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_REPLACE},
-    .address = address, .prefix = prefix, .gateway = gateway, .dns_server = dns_server,
-  };
-  struct syscall_result result = syscall_call(authority, &request, sizeof(request), NULL, 0);
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
+  if (!settings) {
+    return CALL_BAD_REQUEST;
   }
-  return result.reply_size ? CALL_BAD_REQUEST : result.status;
-}
-
-enum call_status net_config_set_dns(handle_t authority, uint32_t dns_server)
-{
-  struct net_dns_request request = {
-    .header = {PROTOCOL_NET_CONFIG, NET_CONFIG_SET_DNS}, .dns_server = dns_server,
-  };
-  struct syscall_result result = syscall_call(authority, &request, sizeof(request), NULL, 0);
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
-  }
-  return result.reply_size ? CALL_BAD_REQUEST : result.status;
-}
-
-enum call_status net_config_clear(handle_t authority)
-{
-  struct message_header request = {PROTOCOL_NET_CONFIG, NET_CONFIG_CLEAR};
-  struct syscall_result result = syscall_call(authority, &request, sizeof(request), NULL, 0);
-  if (result.status >= CALL_STATUS_COUNT) {
-    return CALL_UNAVAILABLE;
-  }
-  return result.reply_size ? CALL_BAD_REQUEST : result.status;
+  struct net_policy_request request = *settings;
+  request.header = (struct message_header){PROTOCOL_NET_POLICY, NET_POLICY_REPLACE};
+  return exchange(policy, &request, sizeof(request), NULL, 0);
 }

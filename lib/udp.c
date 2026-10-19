@@ -1,19 +1,23 @@
 #include <udp.h>
 #include <syscall.h>
 
-static enum call_status open_endpoint(handle_t service, uint64_t operation, uint32_t address, uint16_t port,
-    struct udp_open_reply *reply)
+static enum call_status open_endpoint(handle_t service, uint64_t operation, struct net_path path,
+    uint32_t destination, uint16_t port, struct udp_open_reply *reply)
 {
   if (!reply) {
     return CALL_BAD_REQUEST;
   }
   *reply = (struct udp_open_reply){.handle = HANDLE_INVALID};
-  struct udp_open_request request = {
-    .header = {PROTOCOL_UDP_SERVICE, operation}, .address = address, .port = port,
+  struct udp_open_request binding = {
+    .header = {PROTOCOL_UDP_SERVICE, operation}, .path = path, .port = port,
+  };
+  struct udp_open_route_request request = {
+    .header = {PROTOCOL_UDP_SERVICE, operation}, .path = path,
+    .address = destination, .port = port,
   };
   struct udp_open_reply response;
-  struct syscall_result result = syscall_call(service, &request, sizeof(request),
-      &response, sizeof(response));
+  struct syscall_result result = syscall_call(service, operation == UDP_OPEN_ROUTE ? (const void *)&request : &binding,
+      sizeof(request), &response, sizeof(response));
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
   }
@@ -26,22 +30,40 @@ static enum call_status open_endpoint(handle_t service, uint64_t operation, uint
   return result.status;
 }
 
+enum call_status udp_open_path(handle_t service, struct net_path path, uint16_t port,
+    struct udp_open_reply *reply)
+{
+  return open_endpoint(service, UDP_OPEN, path, 0, port, reply);
+}
+
+enum call_status udp_open_route_path(handle_t service, struct net_path path,
+    uint32_t destination, uint16_t port, struct udp_open_reply *reply)
+{
+  return open_endpoint(service, UDP_OPEN_ROUTE, path, destination, port, reply);
+}
+
+enum call_status udp_open_broadcast_path(handle_t service, struct net_path path, uint16_t port,
+    struct udp_open_reply *reply)
+{
+  return open_endpoint(service, UDP_OPEN_BROADCAST, path, 0, port, reply);
+}
+
 enum call_status udp_open(handle_t service, uint32_t address, uint16_t port,
     struct udp_open_reply *reply)
 {
-  return open_endpoint(service, UDP_OPEN, address, port, reply);
+  return udp_open_path(service, (struct net_path){.source = address}, port, reply);
 }
 
 enum call_status udp_open_route(handle_t service, uint32_t destination, uint16_t port,
     struct udp_open_reply *reply)
 {
-  return open_endpoint(service, UDP_OPEN_ROUTE, destination, port, reply);
+  return udp_open_route_path(service, (struct net_path){0}, destination, port, reply);
 }
 
 enum call_status udp_open_broadcast(handle_t service, uint16_t port,
     struct udp_open_reply *reply)
 {
-  return open_endpoint(service, UDP_OPEN_BROADCAST, 0, port, reply);
+  return udp_open_broadcast_path(service, (struct net_path){0}, port, reply);
 }
 
 enum call_status udp_inspect(handle_t endpoint, struct udp_endpoint_info *reply)
