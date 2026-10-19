@@ -18,4 +18,12 @@ enum call_status wifi_scan_cancel(handle_t operation);
 enum call_status wifi_install_policy(handle_t wifi, const char country[2],
     uint32_t channels);
 
+enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_target *target,
+    uint64_t deadline_ns, handle_t *operation);
+enum call_status wifi_connect_status(handle_t operation, struct wifi_connect_status_reply *status);
+enum call_status wifi_connect_take(handle_t operation, handle_t *link);
+enum call_status wifi_connect_cancel(handle_t operation);
+enum call_status wifi_link_status(handle_t link, struct wifi_link_status_reply *status);
+enum call_status wifi_link_disconnect(handle_t link);
+
 #endif

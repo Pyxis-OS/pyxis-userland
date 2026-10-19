@@ -112,3 +112,89 @@ enum call_status wifi_install_policy(handle_t wifi, const char country[2],
   };
   return invoke(wifi, &request, sizeof(request), NULL, 0);
 }
+
+static enum call_status returned_handle(handle_t target, const void *request, size_t bytes, handle_t *handle)
+{
+  if (!handle) {
+    return CALL_BAD_REQUEST;
+  }
+  *handle = HANDLE_INVALID;
+  handle_t returned = HANDLE_INVALID;
+  enum call_status status = invoke(target, request, bytes, &returned, sizeof(returned));
+  if (status == CALL_OK) {
+    if (!returned) {
+      return CALL_BAD_REQUEST;
+    }
+    *handle = returned;
+  }
+  return status;
+}
+
+enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_target *target,
+    uint64_t deadline_ns, handle_t *operation)
+{
+  if (!target) {
+    return CALL_BAD_REQUEST;
+  }
+  struct wifi_connect_request request = {
+    .header = {PROTOCOL_WIFI, WIFI_CONNECT_START}, .deadline_ns = deadline_ns, .target = *target,
+  };
+  return returned_handle(radio, &request, sizeof(request), operation);
+}
+
+enum call_status wifi_connect_status(handle_t operation, struct wifi_connect_status_reply *status)
+{
+  if (!status) {
+    return CALL_BAD_REQUEST;
+  }
+  *status = (struct wifi_connect_status_reply){0};
+  struct message_header request = {PROTOCOL_WIFI_CONNECT, WIFI_CONNECT_STATUS};
+  struct wifi_connect_status_reply reply = {0};
+  enum call_status result = invoke(operation, &request, sizeof(request), &reply, sizeof(reply));
+  if (result == CALL_OK) {
+    if (reply.status >= CALL_STATUS_COUNT || reply.reserved[0] || reply.reserved[1] ||
+        (reply.flags & ~(WIFI_SCAN_COMPLETE | WIFI_SCAN_TAKEN | WIFI_SCAN_CANCEL_REQUESTED))) {
+      return CALL_BAD_REQUEST;
+    }
+    *status = reply;
+  }
+  return result;
+}
+
+enum call_status wifi_connect_take(handle_t operation, handle_t *link)
+{
+  struct message_header request = {PROTOCOL_WIFI_CONNECT, WIFI_CONNECT_TAKE};
+  return returned_handle(operation, &request, sizeof(request), link);
+}
+
+enum call_status wifi_connect_cancel(handle_t operation)
+{
+  struct message_header request = {PROTOCOL_WIFI_CONNECT, WIFI_CONNECT_CANCEL};
+  return invoke(operation, &request, sizeof(request), NULL, 0);
+}
+
+enum call_status wifi_link_status(handle_t link, struct wifi_link_status_reply *status)
+{
+  if (!status) {
+    return CALL_BAD_REQUEST;
+  }
+  *status = (struct wifi_link_status_reply){0};
+  struct message_header request = {PROTOCOL_WIFI_LINK, WIFI_LINK_STATUS};
+  struct wifi_link_status_reply reply = {0};
+  enum call_status result = invoke(link, &request, sizeof(request), &reply, sizeof(reply));
+  if (result == CALL_OK) {
+    if (!reply.generation || reply.reserved || reply.status >= CALL_STATUS_COUNT ||
+        (reply.flags & ~(WIFI_LINK_ATTEMPTING | WIFI_LINK_ASSOCIATED | WIFI_LINK_OPEN |
+            WIFI_LINK_DATA_READY | WIFI_LINK_TERMINAL | WIFI_LINK_CLOSE_REQUESTED))) {
+      return CALL_BAD_REQUEST;
+    }
+    *status = reply;
+  }
+  return result;
+}
+
+enum call_status wifi_link_disconnect(handle_t link)
+{
+  struct message_header request = {PROTOCOL_WIFI_LINK, WIFI_LINK_DISCONNECT};
+  return invoke(link, &request, sizeof(request), NULL, 0);
+}

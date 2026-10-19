@@ -17,6 +17,8 @@
 #include <abi/pipe.h>
 #include <abi/power.h>
 #include <abi/wifi.h>
+#include <wifi.h>
+#include <forwarder.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/acpi_tables.h>
@@ -709,6 +711,7 @@ struct space_launch {
   bool package_set_loaded;
   struct job_work *job_provisioner;
   handle_t commands;
+  struct forwarder_reply wifi_session;
   struct mounted_volume *commands_mount;
   handle_t http_staging;
   handle_t http_staging_parent; /* Borrowed until source handles close. */
@@ -910,8 +913,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
   for (size_t i = 0; space->network && i < authority->network.config.count; ++i) {
     network_entries += authority->network.config.interfaces[i].resolved_controller != 0;
   }
-  launch->resources = calloc(SERVICE_COUNT + 17 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 18 + BUNDLE_SOURCE_LIMIT + network_entries,
+  launch->resources = calloc(SERVICE_COUNT + 18 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 19 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   launch->package_trees = calloc(space->root_count ? space->root_count : 1,
@@ -1124,10 +1127,25 @@ static const char *build_launch(const struct authority *authority, struct mounts
     };
   }
   if (space->wifi_rights) {
+    handle_t radio = authority->wifi;
+    if (space->wifi_rights & WIFI_RIGHT_CONNECT) {
+      enum call_status status = forwarder_revocable(radio, space->wifi_rights, 0, 0,
+          &launch->wifi_session);
+      if (status != CALL_OK) {
+        snprintf(reason, size, "Wi-Fi session lifetime unavailable (status %u)", status);
+        return reason;
+      }
+      radio = launch->wifi_session.holder;
+      launch->resources[launch->resource_count++] =
+          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_session_control", launch->grant_count);
+      launch->grants[launch->grant_count++] = (struct launch_grant){
+        launch->wifi_session.controller, FORWARDER_RIGHT_CUT, 0,
+      };
+    }
     launch->resources[launch->resource_count++] =
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->wifi, space->wifi_rights, 0
+      radio, space->wifi_rights, 0
     };
   }
   if (space->screenshot) {
@@ -1329,6 +1347,8 @@ cleanup:
     }
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);
+  if (launch.wifi_session.holder) handle_close(launch.wifi_session.holder);
+  if (launch.wifi_session.controller) handle_close(launch.wifi_session.controller);
   if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
   for (size_t i = 0; i < launch.package_tree_count; ++i) handle_close(launch.package_trees[i]);
@@ -1481,6 +1501,13 @@ int main(int argc, char **argv)
   if (!set_input_policy(&authority, &defaults, applied_override, &mounts, installed)) {
     exit_status = EXIT_FAILURE;
     goto finish;
+  }
+  if (defaults.wifi_channels) {
+    enum call_status policy = wifi_install_policy(authority.wifi,
+        defaults.wifi_country, defaults.wifi_channels);
+    if (policy != CALL_OK) {
+      fprintf(stderr, "boot-init: Wi-Fi country policy refused (status %u); no Wi-Fi TX admitted\n", policy);
+    }
   }
   bind_bin(&authority, &plan, installed);
   if (suppress_boot_focus) {

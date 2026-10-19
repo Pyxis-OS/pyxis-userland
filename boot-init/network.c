@@ -251,6 +251,7 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
     uint32_t after = 0;
     bool complete = false;
     size_t matches = 0;
+    bool pending_wifi_identity = false;
     for (;;) {
       struct net_controller_reply controller;
       status = net_registry_next_controller(registry, after, &controller);
@@ -264,6 +265,12 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
         break;
       }
       after = controller.controller_id;
+      if (entry->interface_class == NET_INTERFACE_CLASS_WIFI &&
+          controller.interface_class == NET_INTERFACE_CLASS_WIFI &&
+          entry->selector.kind == NET_SELECT_MAC && controller.driver == NET_DRIVER_AX200 &&
+          !memcmp(controller.mac, (uint8_t[6]){0}, 6)) {
+        pending_wifi_identity = true;
+      }
       if (!controller_matches(entry, &controller)) {
         continue;
       }
@@ -298,7 +305,7 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
       return CALL_BUSY;
     }
     if (!selected.controller_id) {
-      if (complete && !entry->optional && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
+      if (complete && !pending_wifi_identity && !entry->optional && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
         fprintf(stderr, "network: required %s controller is absent\n", entry->name);
         free(bindings);
         free(controllers);

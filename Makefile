@@ -263,8 +263,8 @@ $(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $
 $(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
 $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)
@@ -305,6 +305,9 @@ $(BUILD)/net.pxb/manifest.json: $(BUILD)/net.pxe net/manifest.json net/README.md
 	install -m 644 $(BUILD)/net.pxe "$(@D)/app/bin/"
 	install -m 644 net/README.md "$(@D)/app/"
 	install -m 644 net/manifest.json "$@"
+
+$(BUILD)/wifi.pxe: $(BUILD)/wifi/main.o $(BUILD)/wifi/profile.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/wifi/main.o $(BUILD)/wifi/profile.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
 $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/README.md
 	@rm -rf "$(@D)"

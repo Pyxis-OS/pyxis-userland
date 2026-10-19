@@ -598,18 +598,19 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
   lua_pop(state, 1);
   config_field(state, -1, "wifi");
   if (!lua_isnil(state, -1)) {
-    static const char *const wifi_keys[] = {"read", "scan"};
+    static const char *const wifi_keys[] = {"read", "scan", "connect"};
+    static const uint64_t wifi_rights[] = {WIFI_RIGHT_READ, WIFI_RIGHT_SCAN, WIFI_RIGHT_CONNECT};
     if (!lua_istable(state, -1)) {
       luaL_error(state, "space %s: wifi must be a table", space->name);
     }
-    config_keys(state, -1, wifi_keys, 2);
-    for (size_t i = 0; i < 2; ++i) {
+    config_keys(state, -1, wifi_keys, 3);
+    for (size_t i = 0; i < 3; ++i) {
       config_field(state, -1, wifi_keys[i]);
       if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
         luaL_error(state, "space %s: wifi.%s must be boolean", space->name, wifi_keys[i]);
       }
       if (lua_toboolean(state, -1)) {
-        space->wifi_rights |= i ? WIFI_RIGHT_SCAN : WIFI_RIGHT_READ;
+        space->wifi_rights |= wifi_rights[i];
       }
       lua_pop(state, 1);
     }
@@ -730,7 +731,7 @@ static int decode_archive(lua_State *state)
 {
   struct boot_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  static const char *const keys[] = {"hostname", "input", "volumes", "spaces", "ram_npfs_bytes"};
+  static const char *const keys[] = {"hostname", "input", "volumes", "spaces", "ram_npfs_bytes", "wifi_policy"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
   config_field(state, 1, "hostname");
   const char *name = MACHINE_HOSTNAME_DEFAULT;
@@ -752,6 +753,30 @@ static int decode_archive(lua_State *state)
     if (config->ram_npfs_bytes % MOUNT_RAM_ALIGNMENT) {
       luaL_error(state, "ram_npfs_bytes must be aligned to 4096 bytes");
     }
+  }
+  lua_pop(state, 1);
+  config_field(state, 1, "wifi_policy");
+  if (!lua_isnil(state, -1)) {
+    static const char *const policy_keys[] = {"country", "channels"};
+    config_keys(state, -1, policy_keys, 2);
+    config_field(state, -1, "country");
+    size_t country_bytes = 0;
+    const char *country = lua_type(state, -1) == LUA_TSTRING ?
+        lua_tolstring(state, -1, &country_bytes) : NULL;
+    if (!country || country_bytes != 2 || country[0] < 'A' || country[0] > 'Z' ||
+        country[1] < 'A' || country[1] > 'Z' || (country[0] == 'Z' && country[1] == 'Z')) {
+      return luaL_error(state, "wifi_policy.country must be an explicit upper-case country excluding ZZ");
+    }
+    memcpy(config->wifi_country, country, 2);
+    lua_pop(state, 1);
+    config_field(state, -1, "channels");
+    lua_Number mask = luaL_checknumber(state, -1);
+    if (mask < 1 || mask > WIFI_SCAN_CHANNELS || mask != (uint32_t)mask) {
+      return luaL_error(state, "wifi_policy.channels must be a nonempty channels 1-11 mask");
+    }
+    config->wifi_channels = (uint32_t)mask;
+    lua_pop(state, 1);
+
   }
   lua_pop(state, 1);
   read_input(state, config, true);

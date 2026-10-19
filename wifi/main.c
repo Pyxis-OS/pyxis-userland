@@ -1,4 +1,8 @@
 #include "../common/bootstrap_environment.h"
+#include "profile.h"
+#include <environment.h>
+#include <output.h>
+#include <pyxis/stdio.h>
 #include <wifi.h>
 #include <startup.h>
 #include <clock.h>
@@ -131,24 +135,125 @@ static int scan(void)
   return result;
 }
 
+static int connect_profile(const char *path)
+{
+  /* Require an empty native typed collector before reading a profile or TX.
+   * A console or byte pipeline cannot silently orphan a successful lease. */
+  struct pyxis_stdio_binding binding;
+  struct output_status_reply output;
+  if (pyxis_stdio_stream(stdout, &binding) != 0 || binding.protocol != PROTOCOL_FILE || binding.append) {
+    return failure("typed capture output (use link=$(wifi connect --profile ...))", CALL_BAD_OPERATION);
+  }
+  enum call_status status = output_producer_status(binding.handle, &output);
+  if (status != CALL_OK || output.mode != OUTPUT_MODE_EMPTY || output.flags) {
+    return failure("empty typed capture", status == CALL_OK ? CALL_IO : status);
+  }
+  handle_t radio = bootstrap_capability("wifi_connect");
+  if (!radio) return failure("CONNECT authority", CALL_DENIED);
+  struct wifi_open_target target;
+  status = wifi_read_profile(path, &target);
+  if (status != CALL_OK) return failure("private profile", status);
+  handle_t clock = bootstrap_capability("clock"), operation = HANDLE_INVALID;
+  uint64_t now = 0;
+  status = clock_now(clock, &now);
+  if (status != CALL_OK || now > UINT64_MAX - WIFI_CONNECT_MAX_NS) {
+    return failure("clock", status == CALL_OK ? CALL_LIMIT : status);
+  }
+  uint64_t deadline = now + WIFI_CONNECT_MAX_NS;
+  status = wifi_connect_start(radio, &target, deadline, &operation);
+  memset(&target, 0, sizeof(target));
+  if (status != CALL_OK) return failure("connect start", status);
+  handle_t interrupt = HANDLE_INVALID, input = bootstrap_capability("stdin");
+  if (input) {
+    status = console_arm_interrupt(input, &interrupt);
+    if (status != CALL_OK && status != CALL_DENIED && status != CALL_WRONG_TYPE && status != CALL_BAD_OPERATION) {
+      handle_close(operation);
+      return failure("interrupt arm", status);
+    }
+  }
+  struct wait_interest interests[] = {{operation, WAIT_COMPLETE, 0}, {interrupt, WAIT_INTERRUPT, 0}};
+  uint64_t events[2] = {0};
+  status = wait_many(interests, interrupt ? 2 : 1, deadline, events);
+  if (interrupt) handle_close(interrupt);
+  if (status != CALL_OK || (events[1] & WAIT_INTERRUPT)) {
+    wifi_connect_cancel(operation);
+    handle_close(operation);
+    return failure("connect wait", status == CALL_OK ? CALL_ABANDONED : status);
+  }
+  handle_t link = HANDLE_INVALID;
+  status = wifi_connect_take(operation, &link);
+  if (handle_close(operation) && status == CALL_OK) status = CALL_BAD_HANDLE;
+  if (status != CALL_OK) {
+    if (link) handle_close(link);
+    return failure("connection result", status);
+  }
+  struct output_handoff_request owned = {.value = link};
+  status = pyxis_stdio_handoff_owned(stdout, &owned);
+  if (owned.value) handle_close(owned.value);
+  return status == CALL_OK ? EXIT_SUCCESS : failure("publish connection (link is being drained)", status);
+}
+
+static int link_command(const char *operation, const char *argument)
+{
+  const char *tail = strstr(argument, "://");
+  if (!tail || tail == argument || tail[3] || (size_t)(tail - argument) > ENVIRONMENT_NAME_MAX) {
+    return failure("held link (use $link)", CALL_BAD_REQUEST);
+  }
+  char name[ENVIRONMENT_NAME_MAX + 1];
+  memcpy(name, argument, tail - argument);
+  name[tail - argument] = 0;
+  handle_t link = HANDLE_INVALID;
+  enum call_status status = environment_capability(startup_environment_handle(), name, &link);
+  if (status != CALL_OK) return failure("held link", status);
+  struct handle_info info;
+  status = handle_query(link, &info);
+  if (status == CALL_OK && (info.protocol != PROTOCOL_WIFI_LINK || info.kind != HANDLE_KIND_NATIVE)) {
+    status = CALL_WRONG_TYPE;
+  }
+  if (status == CALL_OK && !strcmp(operation, "disconnect")) {
+    status = wifi_link_disconnect(link);
+    uint64_t now;
+    if (status == CALL_OK) status = clock_now(bootstrap_capability("clock"), &now);
+    if (status == CALL_OK && now > UINT64_MAX - WIFI_CONNECT_MAX_NS) status = CALL_LIMIT;
+    if (status == CALL_OK) {
+      struct wait_interest interest = {link, WAIT_CLOSED, 0};
+      uint64_t events;
+      status = wait_many(&interest, 1, now + WIFI_CONNECT_MAX_NS, &events);
+      if (status == CALL_OK && !(events & WAIT_CLOSED)) status = CALL_TIMED_OUT;
+    }
+  }
+  struct wifi_link_status_reply reply;
+  if (status == CALL_OK) status = wifi_link_status(link, &reply);
+  if (handle_close(link) && status == CALL_OK) status = CALL_BAD_HANDLE;
+  if (status != CALL_OK) return failure(operation, status);
+  printf("wifi: generation=%llu interface=%llu associated=%u open=%u data-ready=%u terminal=%u status=%u\n",
+      (unsigned long long)reply.generation, (unsigned long long)reply.interface_id,
+      !!(reply.flags & WIFI_LINK_ASSOCIATED), !!(reply.flags & WIFI_LINK_OPEN),
+      !!(reply.flags & WIFI_LINK_DATA_READY), !!(reply.flags & WIFI_LINK_TERMINAL), reply.status);
+  if (!strcmp(operation, "disconnect") && reply.status != CALL_OK && reply.status != CALL_ABANDONED) {
+    return failure("disconnect drain", reply.status);
+  }
+  return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
+  if (argc == 4 && !strcmp(argv[1], "connect") && !strcmp(argv[2], "--profile")) {
+    return connect_profile(argv[3]);
+  }
+  if (argc == 3 && (!strcmp(argv[1], "status") || !strcmp(argv[1], "disconnect"))) {
+    return link_command(argv[1], argv[2]);
+  }
   if (argc != 2 || (strcmp(argv[1], "status") && strcmp(argv[1], "scan"))) {
-    fputs("usage: wifi status | wifi scan\n", stderr);
+    fputs("usage: wifi status [LINK] | scan | connect --profile FILE | disconnect LINK\n", stderr);
     return EXIT_FAILURE;
   }
-  if (!strcmp(argv[1], "scan")) {
-    return scan();
-  }
+  if (!strcmp(argv[1], "scan")) return scan();
   handle_t radio = bootstrap_capability("wifi");
-  if (radio == HANDLE_INVALID) {
-    return failure("READ authority", CALL_DENIED);
-  }
+  if (!radio) return failure("READ authority", CALL_DENIED);
   struct wifi_status_reply reply;
   enum call_status status = wifi_status(radio, &reply);
-  if (status != CALL_OK) {
-    return failure("status", status);
-  }
+  if (status != CALL_OK) return failure("status", status);
   printf("wifi: present=%u enabled=%u prepared=%u ready=%u rfkill=%u failed=%u\n",
       !!(reply.flags & WIFI_PRESENT), !!(reply.flags & WIFI_ENABLED),
       !!(reply.flags & WIFI_PREPARED), !!(reply.flags & WIFI_READY),

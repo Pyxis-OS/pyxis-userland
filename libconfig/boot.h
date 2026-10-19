@@ -94,7 +94,7 @@ struct boot_space {
   bool screenshot; /* Whole-screen capture plus the initial private Print Screen saver. */
   bool acpi_tables; /* Receives the read-only ACPI table root as acpi://. */
   bool power; /* Receives power-off and restart authority. */
-  uint64_t wifi_rights; /* Explicit controller READ/SCAN; default neither. */
+  uint64_t wifi_rights; /* Explicit controller READ/SCAN/CONNECT; default none. */
   bool remote_power; /* Opts remote root shells into power authority. */
 };
 
@@ -102,6 +102,8 @@ struct boot_space {
 struct boot_config {
   /* Machine defaults and RAM pool capacity remain archive-only. */
   char hostname[MACHINE_HOSTNAME_MAX + 1];
+  char wifi_country[2]; /* Archive-only explicit policy; zero means no TX policy. */
+  uint32_t wifi_channels;
   bool mouse_scroll_natural, touchpad_scroll_natural;
   bool input_diagnostics;
   bool touchpad_speed_present;
