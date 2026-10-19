@@ -121,6 +121,9 @@ static enum call_status child_call(handle_t source, handle_t previous,
   if (operation == DIRECTORY_COMMAND_CAPTURE) {
     struct package_command_capture_request request = {.previous = previous};
     memcpy(&message.body, &request, sizeof(request));
+  } else if (operation == DIRECTORY_COMMAND_BIND) {
+    struct package_command_bind_request request = {.capture = previous};
+    memcpy(&message.body, &request, sizeof(request));
   }
   struct directory_child_reply reply = {0};
   status = result_status(syscall_call(source, &message, sizeof(message), &reply, sizeof(reply)),
@@ -169,6 +172,15 @@ enum call_status package_commands_info(handle_t view, struct package_command_inf
 enum call_status package_commands_capture(handle_t view, handle_t previous, handle_t *fixed)
 {
   return child_call(view, previous, DIRECTORY_COMMAND_CAPTURE, fixed);
+}
+
+enum call_status package_commands_bind(handle_t source, handle_t fixed, handle_t *root)
+{
+  if (!fixed) {
+    if (root) *root = HANDLE_INVALID;
+    return CALL_BAD_REQUEST;
+  }
+  return child_call(source, fixed, DIRECTORY_COMMAND_BIND, root);
 }
 
 enum call_status package_commands_lookup(handle_t fixed, const char *name,

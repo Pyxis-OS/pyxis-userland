@@ -35,6 +35,7 @@ struct bundle_launch {
   handle_t *trees;
   size_t tree_count;
   struct package_set *set;
+  handle_t package_root;
   enum call_status set_status;
   bool set_loaded;
 };
@@ -297,32 +298,23 @@ static enum call_status provider_source(const struct launch_request *source,
 }
 
 static enum call_status selected_package_set(const struct bundle_program *program,
-    handle_t source, struct package_set **set, const char **reason)
+    handle_t source, struct bundle_launch *prepared, const char **reason)
 {
   handle_t fixed = bundle_program_package_view(program);
   if (!fixed) {
-    return package_set_load(source, set, reason);
+    return package_set_load(source, &prepared->set, reason);
   }
   struct package_command_info selected;
   enum call_status status = package_commands_info(fixed, &selected);
-  handle_t view = HANDLE_INVALID, matched = HANDLE_INVALID;
   if (status == CALL_OK) {
-    status = package_commands_open(source, &view);
-  }
-  if (status == CALL_OK) {
-    status = package_commands_capture(view, fixed, &matched);
-  }
-  if (matched) {
-    handle_close(matched);
-  }
-  if (view) {
-    handle_close(view);
+    status = package_commands_bind(source, fixed, &prepared->package_root);
   }
   if (status != CALL_OK) {
     *reason = "package source does not match the selected command volume";
     return status;
   }
-  return package_set_load_number(source, selected.set, set, reason);
+  return package_set_load_number(prepared->package_root, selected.set,
+      &prepared->set, reason);
 }
 
 static enum call_status prepare_resources(struct bundle_launch *prepared,
@@ -372,11 +364,12 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       handle_t tree = HANDLE_INVALID;
       if (!prepared->set_loaded) {
         prepared->set_status = selected_package_set(program, source,
-            &prepared->set, &reason);
+            prepared, &reason);
         prepared->set_loaded = true;
       }
       if (prepared->set_status != CALL_OK ||
-          package_set_open(prepared->set, source, requests[i].package, requests[i].rights,
+          package_set_open(prepared->set, prepared->package_root ? prepared->package_root : source,
+            requests[i].package, requests[i].rights,
             &tree, &reason) != CALL_OK) {
         if (requests[i].required) {
           *missing = requests[i].package;
@@ -731,6 +724,7 @@ void bundle_launch_close(struct bundle_launch *prepared)
     }
     free(prepared->trees);
     package_set_free(prepared->set);
+    if (prepared->package_root) handle_close(prepared->package_root);
     free(prepared->directories);
     free(prepared->entries);
     free(prepared->grants);

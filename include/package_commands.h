@@ -13,6 +13,11 @@ enum call_status package_commands_info(handle_t view, struct package_command_inf
  * origin to reuse regardless of a later current switch. Both lineages apply.
  * A fixed source refuses a previous view of a different set. */
 enum call_status package_commands_capture(handle_t view, handle_t previous, handle_t *fixed);
+/* Freeze an independently held volume root for this fixed selection. The
+ * kernel checks actual volume identity and preserves both CUT lineages; the
+ * result has only the source root's held read-only rights. A command view alone
+ * cannot obtain the backing root. Retargeting SOURCE does not retarget ROOT. */
+enum call_status package_commands_bind(handle_t source, handle_t fixed, handle_t *root);
 /* Resolve one name from a fixed view. Only read-only FILE/DIRECTORY rights are
  * allowed. Success owns reply->handle and includes the immutable target record;
  * failure closes provisional grants and clears the reply. */
