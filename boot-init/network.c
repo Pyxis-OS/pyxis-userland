@@ -145,10 +145,18 @@ static bool expand_wired(struct network_config *config, handle_t registry)
     struct network_interface_config *entry = &config->interfaces[i];
     struct net_controller_reply *selected = NULL;
     size_t matching = 0;
+    bool linked = entry->selector.kind == NET_SELECT_LINKED_CONTROLLER;
+    bool permitted_prepared = false;
     bool reserve_link = config->wired_auto &&
-        entry->interface_class == NET_INTERFACE_CLASS_ETHERNET &&
-        entry->selector.kind == NET_SELECT_LINKED_CONTROLLER;
+        entry->interface_class == NET_INTERFACE_CLASS_ETHERNET && linked;
     for (size_t j = 0; j < count; ++j) {
+      if (linked) {
+        if (excluded(config, &controllers[j])) {
+          continue;
+        }
+        permitted_prepared |= controllers[j].interface_class == entry->interface_class &&
+            (controllers[j].flags & NET_CONTROLLER_PREPARED);
+      }
       /* Automatic members must not take a pending explicit role's controller.
        * Its actual linked binding still requires fresh known/up carrier. */
       bool matches = reserve_link ?
@@ -162,8 +170,8 @@ static bool expand_wired(struct network_config *config, handle_t registry)
         }
       }
     }
-    if ((matching > 1 && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) ||
-        (!selected && !entry->optional && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER)) {
+    if ((matching > 1 && !linked) ||
+        (!selected && !entry->optional && (!linked || !permitted_prepared))) {
       fprintf(stderr, "network: %s explicit controller is absent or ambiguous\n", entry->name);
       free(controllers);
       return false;
@@ -260,6 +268,9 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
         continue;
       }
       if (excluded(config, &controller)) {
+        if (entry->selector.kind == NET_SELECT_LINKED_CONTROLLER) {
+          continue;
+        }
         fprintf(stderr, "network: %s selects an excluded wired controller\n", entry->name);
         free(bindings);
         free(controllers);

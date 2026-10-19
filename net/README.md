@@ -28,7 +28,10 @@ boots, use explicit MAC entries for roles that need a stable name.
 
 `wired.exclude` is an array of nonzero unicast MAC strings. Excluded controllers
 receive no automatic interface, DHCP client or packet scope. Selecting one
-explicitly refuses setup; duplicate exclusion entries also fail validation.
+explicitly by MAC refuses setup; duplicate exclusion entries also fail validation.
+Linked roles filter exclusions before preference/ID ranking, including late
+binding. A required linked role with no permitted prepared candidate refuses
+initial setup; a permitted candidate waiting for carrier can remain pending.
 Exclusion does not disable the driver's mandatory receive draining. Omitting
 `wired`, or setting `auto = false`, retains explicit-only configuration.
 
