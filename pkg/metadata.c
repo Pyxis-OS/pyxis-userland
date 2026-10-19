@@ -114,6 +114,122 @@ static bool array(const struct literal_value *value)
   return true;
 }
 
+static bool utf8(const char *bytes)
+{
+  size_t remaining = strlen(bytes);
+  while (remaining) {
+    int count = mbtowc(NULL, bytes, remaining);
+    if (count <= 0) {
+      return false;
+    }
+    bytes += count;
+    remaining -= (size_t)count;
+  }
+  return true;
+}
+
+static bool command_name(const char *name)
+{
+  size_t size = strlen(name);
+  if (!size || size > 255 || !strcmp(name, ".") || !strcmp(name, "..") || !utf8(name)) {
+    return false;
+  }
+  for (size_t i = 0; i < size; ++i) {
+    unsigned char byte = name[i];
+    if (byte <= 0x20 || byte == 0x7f || byte == '/' || byte == ':' || byte == '\\') {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool command_ustar_path(const char *path, size_t size, bool directory)
+{
+  char full[PKG_PATH_MAX + 7] = "tree/";
+  memcpy(full + 5, path, size);
+  size += 5;
+  if (directory) {
+    full[size++] = '/';
+  }
+  full[size] = 0;
+  if (size <= 100) {
+    return true;
+  }
+  for (size_t i = 0; i < size && i <= 155; ++i) {
+    if (full[i] == '/' && size - i - 1 >= 1 && size - i - 1 <= 100 &&
+        strcmp(full + i + 1, "/")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool command_path(const char *path, bool bundle)
+{
+  size_t size = strlen(path);
+  if (size < 4 || size > PKG_PATH_MAX || strchr(path, '\\') || !utf8(path) ||
+      strcmp(path + size - 4, bundle ? ".pxb" : ".pxe")) {
+    return false;
+  }
+  size_t start = 0;
+  for (size_t i = 0; i <= size; ++i) {
+    if (i != size && path[i] != '/') {
+      continue;
+    }
+    size_t count = i - start;
+    if (!count || (count == 1 && path[start] == '.') ||
+        (count == 2 && path[start] == '.' && path[start + 1] == '.') ||
+        (i != size && count >= 4 && !memcmp(path + i - 4, ".pxb", 4)) ||
+        !command_ustar_path(path, i, i != size || bundle)) {
+      return false;
+    }
+    start = i + 1;
+  }
+  return true;
+}
+
+static bool commands_parse(const struct literal_value *value,
+    struct pkg_manifest *manifest, const char **reason)
+{
+  if (!value) {
+    return true;
+  }
+  if (value->kind != LITERAL_TABLE) {
+    return false;
+  }
+  manifest->command_count = value->as.table.count;
+  if (manifest->command_count) {
+    manifest->commands = calloc(manifest->command_count, sizeof(*manifest->commands));
+    if (!manifest->commands) {
+      *reason = "out of memory reading commands";
+      return false;
+    }
+  }
+  static const char *const plain_fields[] = { "path" };
+  static const char *const bundle_fields[] = { "path", "command" };
+  size_t index = 0;
+  for (const struct literal_entry *item = value->as.table.entries; item;
+      item = item->next, ++index) {
+    struct pkg_command *command = &manifest->commands[index];
+    if (item->key->kind != LITERAL_STRING ||
+        item->key->as.string.size >= sizeof(command->name) ||
+        memchr(item->key->as.string.bytes, 0, item->key->as.string.size)) {
+      return false;
+    }
+    memcpy(command->name, item->key->as.string.bytes, item->key->as.string.size);
+    bool bundle = literal_field(item->value, "command") != NULL;
+    if (!command_name(command->name) ||
+        !fields(item->value, bundle ? bundle_fields : plain_fields, bundle ? 2 : 1) ||
+        !text(item->value, "path", command->path, sizeof(command->path)) ||
+        !command_path(command->path, bundle) ||
+        (bundle && (!text(item->value, "command", command->command, sizeof(command->command)) ||
+            !command_name(command->command)))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
     size_t *count, const char **reason)
 {
@@ -170,6 +286,7 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
 void pkg_manifest_free(struct pkg_manifest *manifest)
 {
   free(manifest->dependencies);
+  free(manifest->commands);
   memset(manifest, 0, sizeof(*manifest));
 }
 
@@ -189,7 +306,13 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
   static const char *const dependency_fields[] = { "id", "version" };
   const struct literal_value *root = document->root;
   const struct literal_value *dependencies = literal_field(root, "depends");
-  bool ok = fields(root, manifest_fields, 8) && format(root) &&
+  const struct literal_value *commands = literal_field(root, "commands");
+  bool ok = root && root->kind == LITERAL_TABLE &&
+      root->as.table.count == (commands ? 9 : 8);
+  for (size_t i = 0; ok && i < 8; ++i) {
+    ok = literal_field(root, manifest_fields[i]) != NULL;
+  }
+  ok = ok && format(root) &&
       identity(root, &manifest->identity) && kind(root, manifest->kind) &&
       integer(root, "files", 1, PKG_MAX_FILES, &manifest->files) &&
       integer(root, "bytes", 0, INT64_MAX, &manifest->bytes) &&
@@ -212,6 +335,9 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
       ok = strcmp(manifest->dependencies[previous].id, dependency->id) ||
           strcmp(manifest->dependencies[previous].version, dependency->version);
     }
+  }
+  if (ok) {
+    ok = commands_parse(commands, manifest, reason);
   }
   literal_free(document);
   if (!ok) {

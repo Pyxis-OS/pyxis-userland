@@ -21,6 +21,11 @@ struct pkg_entry {
   char sha256[65];
 };
 
+struct pkg_command {
+  /* An empty command selects the plain file; otherwise it selects a bundle alias. */
+  char name[256], path[PKG_PATH_MAX + 1], command[256];
+};
+
 struct pkg_manifest {
   struct pkg_identity identity;
   char kind[10];
@@ -28,6 +33,8 @@ struct pkg_manifest {
   char inventory_sha256[65];
   struct pkg_identity *dependencies;
   size_t dependency_count;
+  struct pkg_command *commands;
+  size_t command_count;
 };
 
 bool pkg_version_valid(const char *version);
