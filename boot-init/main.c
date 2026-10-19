@@ -28,6 +28,7 @@
 #include <package.h>
 #include <package_maintenance.h>
 #include <clock.h>
+#include <command_search.h>
 #include <directory.h>
 #include <disk.h>
 #include <file.h>
@@ -38,6 +39,7 @@
 #include <machine_settings.h>
 #include <mount.h>
 #include <path.h>
+#include <package_commands.h>
 #include <remote/beacon.h>
 #include <space.h>
 #include <startup.h>
@@ -645,6 +647,8 @@ struct space_launch {
   const char *package_set_reason;
   bool package_set_loaded;
   struct job_work *job_provisioner;
+  handle_t commands;
+  struct mounted_volume *commands_mount;
   handle_t http_staging;
   handle_t http_staging_parent; /* Borrowed until source handles close. */
   struct mounted_volume *http_staging_mount;
@@ -772,6 +776,47 @@ static void select_start(const struct boot_space *space, struct space_launch *la
   snprintf(launch->working_path, sizeof(launch->working_path), "tmp://");
 }
 
+static enum call_status build_commands(const struct authority *authority,
+    struct mounts *mounts, struct space_launch *launch)
+{
+  struct command_list_create_entry entries[3] = {
+    {.label = "bin://", .handle = authority->bin, .rights = BOOT_ROOT_RIGHTS},
+  };
+  size_t count = 1;
+  if (authority->bin != authority->boot) {
+    entries[count++] = (struct command_list_create_entry){
+      .label = "boot://", .handle = authority->boot, .rights = BOOT_ROOT_RIGHTS,
+    };
+  }
+  handle_t packages = HANDLE_INVALID;
+  struct mounted_volume *mounted = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  enum call_status status = CALL_OK;
+  if (mounted && mounted->root != HANDLE_INVALID) {
+    status = package_commands_open(mounted->root, &packages);
+    if (status == CALL_OK) {
+      entries[count++] = (struct command_list_create_entry){
+        .label = "packages", .handle = packages, .rights = BOOT_ROOT_RIGHTS,
+      };
+      launch->commands_mount = mounted;
+    }
+  }
+  if (status == CALL_OK) {
+    status = command_list_create(startup_environment_handle(), entries, count,
+        &launch->commands);
+  }
+  if (packages != HANDLE_INVALID) {
+    handle_close(packages);
+  }
+  if (status != CALL_OK) {
+    return status;
+  }
+  launch->resources[launch->resource_count++] =
+      (struct launch_environment_entry)PROFILE_CAP("commands", launch->grant_count);
+  launch->grants[launch->grant_count++] =
+      (struct launch_grant){launch->commands, COMMAND_LIST_RIGHT_READ, 0};
+  return CALL_OK;
+}
+
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
@@ -811,6 +856,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
   launch->grant_count = GRANT_FIRST_VOLUME;
   launch->resource_count = SERVICE_COUNT;
   launch->root_count = 3;
+  enum call_status commands_status = build_commands(authority, mounts, launch);
+  if (commands_status != CALL_OK) {
+    snprintf(reason, size, "command search list unavailable (status %u)", commands_status);
+    return reason;
+  }
   for (size_t i = 0; i < space->root_count; ++i) {
     const struct boot_root *root = &space->roots[i];
     struct mounted_volume *mounted = find_mount(mounts, root->volume);
@@ -1153,6 +1203,10 @@ cleanup:
   bool uncertain = admission_attempted && (status == CALL_OUTCOME_UNKNOWN ||
       status == CALL_BAD_BUFFER);
   if (started || uncertain) {
+    /* The command list retains its private package-volume backing too. */
+    if (launch.commands_mount) {
+      launch.commands_mount->published = true;
+    }
     for (size_t i = 0; i < launch.source_handle_count; ++i) {
       if (launch.source_mounts[i]->control != HANDLE_INVALID) {
         launch.source_mounts[i]->published = true;
@@ -1188,6 +1242,7 @@ cleanup:
     }
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);
+  if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
   for (size_t i = 0; i < launch.package_tree_count; ++i) handle_close(launch.package_trees[i]);
   free(launch.package_trees);
