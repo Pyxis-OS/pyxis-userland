@@ -15,7 +15,8 @@ struct network_environment {
 };
 
 /* Owns the array, canonical DNS text and attenuated dns_udp factory. The
- * resolver is available only when its selected interface is permitted by udp.
+ * Numeric DNS without an interface retains udp's immutable initial scope; a
+ * selected DNS interface instead requires a permitted one-interface derivative.
  * Missing/denied scoped paths omit DNS_SERVER; text grants no packet authority.
  * Without a registry retain the inherited startup choice only with held udp. */
 enum call_status network_environment_read(struct network_environment *environment,

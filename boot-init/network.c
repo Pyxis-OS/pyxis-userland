@@ -419,10 +419,12 @@ bool boot_network_prepare(struct boot_network *network, handle_t registry, handl
     .log_interface_id = boot_network_id(network, network->config.log_interface),
     .debug_interface_id = boot_network_id(network, network->config.debug_interface),
     .dns_server = network->config.dns_address,
-    .dns_mode = !boot_network_id(network, network->config.dns_interface) ? NET_DNS_NONE :
-        network->config.dns_explicit ? NET_DNS_NUMERIC : NET_DNS_DHCP,
+    .dns_mode = network->config.dns_explicit ? NET_DNS_NUMERIC :
+        boot_network_id(network, network->config.dns_interface) ? NET_DNS_DHCP : NET_DNS_NONE,
+    .route_mode = network->config.routing_auto ? NET_ROUTE_AUTOMATIC : NET_ROUTE_PINNED,
   };
-  if (!settings.dns_interface_id) {
+  if (network->config.dns_interface[0] && !settings.dns_interface_id) {
+    settings.dns_mode = NET_DNS_NONE;
     settings.dns_server = 0;
   }
   if (net_policy_replace(policy, &settings) != CALL_OK ||

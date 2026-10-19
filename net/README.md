@@ -8,8 +8,8 @@ The packaged profile is:
 return {
   wired = { auto = true, exclude = {} },
   interfaces = {},
-  routing = { default = "eth0" },
-  dns = { interface = "eth0", server = "1.1.1.1" },
+  routing = { auto = true },
+  dns = { server = "1.1.1.1" },
   management = { remote = "eth0", log = "eth0", debug = "eth0" },
 }
 ```
@@ -35,13 +35,17 @@ initial setup; a permitted candidate waiting for carrier can remain pending.
 Exclusion does not disable the driver's mandatory receive draining. Omitting
 `wired`, or setting `auto = false`, retains explicit-only configuration.
 
-This first delivery does not rank routes or link speeds. The packaged route,
-DNS and management choices remain pinned to `eth0`, even if another interface
-has usable carrier or a lease. An absent automatic `ethN` policy pin means no
-selected path (`eth0` through `eth253`), so an offline or all-excluded machine can
-still boot locally;
-there is no fallback. Undefined references remain errors in explicit-only
-profiles. Automatic preference is a separate delivery.
+Automatic routing prefers usable wired paths over connected Wi-Fi, then higher
+negotiated speed using the lower TX/RX rate. Unknown speed ranks last within its
+class; equal ranks retain the current winner. Carrier, address, rate and DHCP
+failure changes affect new operations. An acquiring or failed DHCP client cannot
+displace a usable peer, and off-link traffic requires a gateway. There is no
+WAN-health probe. Existing endpoints remain on their captured interface and
+address epoch. Management remains pinned to `eth0`.
+
+An absent automatic `ethN` policy pin means no selected path (`eth0` through
+`eth253`), so an offline or all-excluded machine can still boot locally. Explicit
+pins never fall back. Undefined references remain errors in explicit-only profiles.
 
 `interfaces` is a consecutive array. Each entry has a unique canonical `ethN`
 Ethernet name or `wlanN` Wi-Fi name and the corresponding `class = "ethernet"`
@@ -80,9 +84,10 @@ and optional numeric `gateway` fields. For example:
 DHCP and static address fields exclude each other. Static host/subnet/gateway
 validation and duplicate static address/name checks run before network effects;
 the kernel also rejects duplicate local addresses, including DHCP conflicts.
-Connected prefixes may overlap. Configuration order breaks equal-prefix route
-ties. Each DHCP client owns its own pinned port-68 broadcast endpoint, MAC,
-transaction, retry state, lease and renewal/rebind/expiry timers. Active clients
+Connected prefixes may overlap. Longest prefix wins; automatic mode applies its
+class/speed preference to equal prefixes too. Each DHCP client owns its own
+pinned port-68 broadcast endpoint, MAC, transaction, retry state, lease and
+renewal/rebind/expiry timers. Active clients
 share a bounded initial acquisition budget of ten seconds; a working interface
 can hand off immediately. Maintenance continues independently after handoff. Healthy bound clients sleep
 until the earliest owned renewal/expiry deadline. Pending setup, link waits,
@@ -97,11 +102,17 @@ DHCP reports are timestamped userspace assertions, not kernel-verified lease
 health. Initial replies remain broadcast-only and there is no independent
 kernel lease-expiry backstop if the configuration owner stops running.
 
-`routing.default` selects a retained interface explicitly. `dns.interface`
-selects DNS independently: add `server` for a numeric resolver, or omit it to
-use that interface's first DHCP DNS contribution. No lease changes either system
-selection and no missing source selects another interface or resolver. Omitted
-policy selections mean none. The packaged numeric `1.1.1.1` choice is explicit.
+`routing.auto = true` selects automatic preference within the caller's held
+initial interface set. It excludes `routing.default`, which selects an explicit
+retained default interface. Omitted routing means no default.
+
+`dns = { server = "1.1.1.1" }` supplies a numeric resolver whose new queries use
+ordinary routing within the caller's held initial interface set. Add
+`interface = "eth0"` to pin that resolver to one interface. An interface without
+`server` selects its first DHCP DNS contribution instead. A DNS table requires
+a numeric server or an interface. Omitted DNS means none. No lease changes the
+chosen system DNS mode or explicit interface, and missing pinned DNS never
+selects another interface or resolver.
 
 `management.remote`, `management.log` and `management.debug` select interfaces
 independently of ordinary egress. Remote binds its listener using its retained
@@ -117,9 +128,11 @@ provided. Unsupported/missing selections report unavailable with no fallback.
 `net_registry` READ enumerates controllers/interfaces, reads policy, and looks
 up read-only interface facets. `net` never starts DMA, DHCP or scans. It prints
 one interface row with retained identity, class/driver/MAC, binding/readiness,
-carrier/authentication validity, IPv4/gateway and last reported DHCP phase.
-Optional clock READ adds report age; route/DNS/management IDs come from the
-read-only policy snapshot.
+carrier/authentication validity, truthful negotiated TX/RX bit rates when known,
+IPv4/gateway and last reported DHCP phase. Unknown rates print as unknown;
+wireless advertised maxima and USB bus rates are not negotiated speeds.
+Optional clock READ adds report age; route mode and route/DNS/management IDs
+come from the read-only policy snapshot.
 
 Only the explicit network-owner role receives private `config.NAME` interface
 facets, `dhcp.NAME` pinned broadcast factories and `net_policy` administration
@@ -147,14 +160,19 @@ forwarder lineage. Closing a copied handle does not revoke other holders.
 `*_path` operation helpers can additionally restrict an interface/source within
 the held set; existing convenience helpers emit the same native wire format.
 
-Trusted launches pair `DNS_SERVER` text with the declared `dns_udp` UDP OPEN
-factory derived for the selected DNS interface from their permitted UDP scope.
-The text grants no authority. A restricted scope that excludes that interface
-has no resolver path; no wider packet grant is added. Registry-less successors
-can retain their inherited resolver only through their held declared `dns_udp`.
+Trusted launches pair `DNS_SERVER` text with a declared `dns_udp` UDP OPEN
+factory. Numeric DNS without an interface preserves the launcher's held UDP
+scope; a pinned DNS interface receives a one-interface derivative of that scope.
+The text grants no authority. A restricted scope that excludes a selected DNS
+interface has no resolver path; no wider packet grant is added. Registry-less
+successors can retain their inherited resolver only through their held declared
+`dns_udp`.
 New launches read the selected policy once; existing processes/providers retain
-their startup choice. Numeric HTTP targets remain usable without DNS; hostname
-requests report unavailable. Bundle/Lua grant roles must declare `dns_udp`
+their startup resolver address and immutable packet scope. Each fresh numeric
+query opens an endpoint using current routing; existing query endpoints never
+migrate. Changed DHCP resolver addresses reach new launches only. Numeric HTTP
+targets remain usable without DNS; hostname requests report unavailable.
+Bundle/Lua grant roles must declare `dns_udp`
 explicitly. Shell selected operands cannot replace an existing packet role with
 a different grant: conflicting publication/source selections are refused.
 

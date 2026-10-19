@@ -61,8 +61,12 @@ enum call_status network_environment_read(struct network_environment *environmen
     if (status != CALL_OK) {
       return status;
     }
-    if ((snapshot.flags & NET_POLICY_DNS_VALID) && snapshot.dns_interface_id && snapshot.dns_server) {
-      status = udp_factory_derive(udp, snapshot.dns_interface_id, UDP_SERVICE_RIGHT_OPEN, &environment->dns_udp);
+    if ((snapshot.flags & NET_POLICY_DNS_VALID) && snapshot.dns_server) {
+      if (snapshot.dns_mode == NET_DNS_NUMERIC && !snapshot.dns_interface_id) {
+        status = handle_copy_restricted(udp, UDP_SERVICE_RIGHT_OPEN, 0, &environment->dns_udp);
+      } else {
+        status = udp_factory_derive(udp, snapshot.dns_interface_id, UDP_SERVICE_RIGHT_OPEN, &environment->dns_udp);
+      }
       if (status == CALL_OK) {
         chosen = snapshot.dns_server;
       } else if (status != CALL_DENIED && status != CALL_NOT_FOUND && status != CALL_UNAVAILABLE && status != CALL_NO_ROUTE) {

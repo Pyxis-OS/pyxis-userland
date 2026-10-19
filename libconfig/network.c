@@ -341,9 +341,13 @@ static int decode_network(lua_State *state)
   lua_pop(state, 1);
   config_field(state, 1, "routing");
   if (!lua_isnil(state, 2)) {
-    const char *fields[] = {"default"};
-    config_keys(state, 2, fields, 1);
+    const char *fields[] = {"auto", "default"};
+    config_keys(state, 2, fields, 2);
+    config->routing_auto = read_boolean(state, 2, "auto");
     read_policy_name(state, 2, "default", config, config->default_interface);
+    if (config->routing_auto && config->default_interface[0]) {
+      return luaL_error(state, "routing.auto excludes routing.default");
+    }
   }
   lua_pop(state, 1);
   config_field(state, 1, "dns");
@@ -351,9 +355,6 @@ static int decode_network(lua_State *state)
     const char *fields[] = {"interface", "server"};
     config_keys(state, 2, fields, 2);
     read_policy_name(state, 2, "interface", config, config->dns_interface);
-    if (!config->dns_interface[0]) {
-      return luaL_error(state, "dns requires an interface");
-    }
     config_field(state, 2, "server");
     if (!lua_isnil(state, 3)) {
       config->dns_address = read_address(state, "dns.server");
@@ -361,9 +362,11 @@ static int decode_network(lua_State *state)
         return luaL_error(state, "dns.server must be a unicast IPv4 address");
       }
       config->dns_explicit = true;
-
     }
     lua_pop(state, 1);
+    if (!config->dns_interface[0] && !config->dns_explicit) {
+      return luaL_error(state, "dns requires a numeric server or an interface");
+    }
   }
   lua_pop(state, 1);
   config_field(state, 1, "management");

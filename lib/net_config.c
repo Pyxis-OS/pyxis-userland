@@ -44,7 +44,25 @@ enum call_status net_registry_next_controller(handle_t registry, uint32_t after_
   struct net_controller_reply response;
   enum call_status status = exchange(registry, &request, sizeof(request), &response, sizeof(response));
   if (status == CALL_OK) {
-    if (response.controller_id && response.controller_id <= after_id) {
+    const uint32_t flags = NET_CONTROLLER_INVENTORY_COMPLETE | NET_CONTROLLER_PREPARED |
+        NET_CONTROLLER_CARRIER_KNOWN | NET_CONTROLLER_LINK_UP | NET_CONTROLLER_BOUND |
+        NET_CONTROLLER_SPEED_VALID;
+    if (response.flags & ~flags || response.reserved_mac[0] || response.reserved_mac[1]) {
+      return CALL_BAD_REQUEST;
+    }
+    if (!response.controller_id) {
+      const struct net_controller_reply end = {.flags = response.flags};
+      if ((response.flags & ~NET_CONTROLLER_INVENTORY_COMPLETE) || memcmp(&response, &end, sizeof(end))) {
+        return CALL_BAD_REQUEST;
+      }
+    } else if (response.controller_id <= after_id) {
+      return CALL_BAD_REQUEST;
+    }
+    if (response.flags & NET_CONTROLLER_SPEED_VALID) {
+      if (!response.tx_bits_per_second || !response.rx_bits_per_second) {
+        return CALL_BAD_REQUEST;
+      }
+    } else if (response.tx_bits_per_second || response.rx_bits_per_second) {
       return CALL_BAD_REQUEST;
     }
     *reply = response;
@@ -56,6 +74,13 @@ static bool interface_valid(const struct net_interface_reply *reply)
 {
   if (!reply->interface_id || reply->flags & ~NET_INTERFACE_FLAGS ||
       reply->reserved[0] || reply->reserved[1] || !(reply->flags & NET_INTERFACE_DEFINED)) {
+    return false;
+  }
+  if (reply->flags & NET_INTERFACE_SPEED_VALID) {
+    if (!reply->tx_bits_per_second || !reply->rx_bits_per_second) {
+      return false;
+    }
+  } else if (reply->tx_bits_per_second || reply->rx_bits_per_second) {
     return false;
   }
   const char *end = memchr(reply->name, 0, sizeof(reply->name));
@@ -114,7 +139,14 @@ enum call_status net_registry_policy(handle_t registry, struct net_policy_reply 
   struct net_policy_reply response;
   enum call_status status = exchange(registry, &request, sizeof(request), &response, sizeof(response));
   if (status == CALL_OK) {
-    if (response.reserved || response.flags & ~NET_POLICY_DNS_VALID || response.dns_mode > NET_DNS_DHCP) {
+    if (response.flags & ~NET_POLICY_DNS_VALID || response.dns_mode > NET_DNS_DHCP ||
+        response.route_mode > NET_ROUTE_AUTOMATIC ||
+        !!(response.flags & NET_POLICY_DNS_VALID) != !!response.dns_server) {
+      return CALL_BAD_REQUEST;
+    }
+    if ((response.dns_mode == NET_DNS_NONE && (response.dns_interface_id || response.dns_server)) ||
+        (response.dns_mode == NET_DNS_NUMERIC && !response.dns_server) ||
+        (response.dns_mode == NET_DNS_DHCP && !response.dns_interface_id)) {
       return CALL_BAD_REQUEST;
     }
     *reply = response;

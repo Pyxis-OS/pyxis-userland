@@ -259,19 +259,22 @@ Trusted boot-init reads the ordered `config/network.lua` profile, defines and
 binds its interfaces, selects route/DNS/management policy, and mints immutable
 packet scopes from the resolved initial IDs plus `lo`. The stock profile binds
 all boot-discovered wired controllers, with explicit entries and MAC exclusions
-available to private profiles; route, DNS and management remain pinned to
-`eth0` without automatic failover. The configured
-network-owner session receives separate interface configuration facets and
+available to private profiles. Ordinary routing prefers a usable wired path,
+then connected Wi-Fi, ranking truthful negotiated speeds within each class.
+Numeric DNS follows routing within each caller's existing scope; management
+remains pinned to `eth0`. Private profiles can pin routing and DNS separately.
+The configured network-owner session receives separate interface configuration facets and
 pinned DHCP factories; ordinary applications receive no configuration or policy
 authority. `session.pxe --configure-network` maintains independent DHCP clients
 and lease timers while handing off the local session. A working interface or
 an absent optional interface never waits for another client's acquisition.
 
-`net` uses read-only registry inventory and reports interface state, DHCP report
-age when clock READ is available, and the selected route/DNS/management IDs.
-Launchers pair each chosen `DNS_SERVER` with declared `dns_udp` authority derived
-within the permitted UDP scope. Existing programs retain their startup resolver
-snapshot; missing permitted DNS paths are unavailable. See the
+`net` uses read-only registry inventory and reports interface state, negotiated
+TX/RX rates when known, DHCP report age when clock READ is available, and the
+selected route mode and route/DNS/management IDs. Launchers pair each chosen
+`DNS_SERVER` with declared `dns_udp` authority within the permitted UDP scope.
+Existing programs retain their startup resolver address; each new numeric DNS
+query follows routing unless its DNS interface is explicitly pinned. See the
 [network profile and grant reference](net/README.md) for selectors, static/DHCP
 configuration, restricted delivery, Remote binding and private-profile migration.
 

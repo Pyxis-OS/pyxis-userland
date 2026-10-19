@@ -73,13 +73,19 @@ static bool print_controllers(handle_t authority)
       return false;
     }
     if (!count) {
-      printf("%-4s %-8s %-17s %-8s %-9s %s\n", "ID", "DRIVER", "MAC", "LINK", "PREPARED", "BOUND");
+      printf("%-4s %-8s %-17s %-8s %-9s %-5s %s\n", "ID", "DRIVER", "MAC", "LINK", "PREPARED", "BOUND", "TX/RX bit/s");
     }
     char mac[18];
     format_mac(controller.mac, mac);
-    printf("%-4u %-8s %-17s %-8s %-9s %s\n", controller.controller_id, driver_name(controller.driver), mac,
+    printf("%-4u %-8s %-17s %-8s %-9s %-5s ", controller.controller_id, driver_name(controller.driver), mac,
         link_name(controller.flags), controller.flags & NET_CONTROLLER_PREPARED ? "yes" : "no",
         controller.flags & NET_CONTROLLER_BOUND ? "yes" : "-");
+    if (controller.flags & NET_CONTROLLER_SPEED_VALID) {
+      printf("%llu/%llu\n", (unsigned long long)controller.tx_bits_per_second,
+          (unsigned long long)controller.rx_bits_per_second);
+    } else {
+      puts("unknown");
+    }
     after_id = controller.controller_id;
     ++count;
   }
@@ -116,6 +122,12 @@ static bool print_interfaces(handle_t authority)
     if (interface.flags & NET_INTERFACE_CARRIER_KNOWN) {
       printf(" link %s", interface.flags & NET_INTERFACE_LINK_UP ? "up" : "down");
     }
+    if (interface.flags & NET_INTERFACE_SPEED_VALID) {
+      printf(" speed tx %llu rx %llu bit/s", (unsigned long long)interface.tx_bits_per_second,
+          (unsigned long long)interface.rx_bits_per_second);
+    } else {
+      printf(" speed unknown");
+    }
     if (interface.flags & NET_INTERFACE_ADDRESS_VALID) {
       char text[16];
       format_ipv4(interface.address, text);
@@ -151,14 +163,16 @@ static bool print_policy(handle_t registry)
     fprintf(stderr, "net: cannot read policy (status %u)\n", status);
     return false;
   }
-  printf("Policy revision %llu: default %llu DNS interface %llu remote %llu log %llu debug %llu\n",
+  printf("Policy revision %llu: default %llu (%s) DNS interface %llu remote %llu log %llu debug %llu\n",
       (unsigned long long)policy.revision, (unsigned long long)policy.default_interface_id,
+      policy.route_mode == NET_ROUTE_AUTOMATIC ? "automatic" : "pinned",
       (unsigned long long)policy.dns_interface_id, (unsigned long long)policy.remote_interface_id,
       (unsigned long long)policy.log_interface_id, (unsigned long long)policy.debug_interface_id);
   if (policy.flags & NET_POLICY_DNS_VALID) {
     char text[16];
     format_ipv4(policy.dns_server, text);
-    printf("DNS: %s (%s)\n", text, policy.dns_mode == NET_DNS_NUMERIC ? "numeric" : "DHCP");
+    printf("DNS: %s (%s)\n", text, policy.dns_mode == NET_DNS_DHCP ? "pinned DHCP" :
+        policy.dns_interface_id ? "pinned numeric" : "routed numeric");
   } else {
     puts("DNS: unavailable");
   }
