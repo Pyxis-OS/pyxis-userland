@@ -141,7 +141,7 @@ static int connect_profile(const char *path)
    * A console or byte pipeline cannot silently orphan a successful lease. */
   struct pyxis_stdio_binding binding;
   struct output_status_reply output;
-  if (pyxis_stdio_stream(stdout, &binding) != 0 || binding.protocol != PROTOCOL_FILE || binding.append) {
+  if (pyxis_stdio_stream(stdout, &binding) != 0 || binding.protocol != PROTOCOL_FILE) {
     return failure("typed capture output (use link=$(wifi connect --profile ...))", CALL_BAD_OPERATION);
   }
   enum call_status status = output_producer_status(binding.handle, &output);
