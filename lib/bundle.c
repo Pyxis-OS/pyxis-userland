@@ -37,7 +37,6 @@
 
 /* Development lookup budgets, not disk-format or ABI limits. */
 #define BUNDLE_JSON_MAX_SIZE (64 * 1024)
-#define BUNDLE_COUNT_LIMIT 8
 #define BUNDLE_COMMAND_LIMIT 32
 #define BUNDLE_RESOURCE_LIMIT 8
 /* Separate resolver authority preserves existing UDP delivery with one more request. */
@@ -180,17 +179,7 @@ static bool bundle_suffix(const char *uri)
   return length > 4 && !memcmp(uri + length - 4, ".pxb", 4);
 }
 
-static bool explicit_uri(const char *uri)
-{
-  const char *end = uri;
-  while (*end && *end != ':' && *end != '/') {
-    if ((unsigned char)*end <= 0x20) {
-      return false;
-    }
-    ++end;
-  }
-  return end != uri && *end == ':' && end[1] == '/' && end[2] == '/';
-}
+
 
 static enum call_status resolve(const struct path_context *context, const char *path,
     uint64_t kind, uint64_t rights, handle_t *handle)
@@ -755,159 +744,6 @@ enum call_status bundle_open(const struct path_context *context,
   return open_bundle(context, bundle_uri, NULL, program);
 }
 
-static enum call_status plain_collision(handle_t bin, const char *command)
-{
-  if (bin == HANDLE_INVALID) {
-    return CALL_OK;
-  }
-  size_t size = strlen(command);
-  if (size > BUNDLE_COMPONENT_LIMIT - 4) {
-    return CALL_OK;
-  }
-  char name[BUNDLE_COMPONENT_LIMIT + 1];
-  memcpy(name, command, size);
-  memcpy(name + size, ".pxe", 5);
-  handle_t image = HANDLE_INVALID;
-  enum call_status status = directory_lookup(bin, name, DIRECTORY_KIND_FILE,
-      0, &image);
-  if (image != HANDLE_INVALID) {
-    handle_close(image);
-  }
-  if (status == CALL_OK) {
-    return CALL_BAD_REQUEST;
-  }
-  return status == CALL_NOT_FOUND ? CALL_OK : status;
-}
-
-static enum call_status validate_registration(struct bundle_program *const *view,
-    size_t count, handle_t bin)
-{
-  for (size_t i = 0; i < count; ++i) {
-    for (size_t previous = 0; previous < i; ++previous) {
-      if (!strcmp(view[i]->id, view[previous]->id)) {
-        return CALL_BAD_REQUEST;
-      }
-    }
-    for (size_t command = 0; command < view[i]->command_count; ++command) {
-      const char *name = view[i]->commands[command].name;
-      enum call_status status = plain_collision(bin, name);
-      if (status != CALL_OK) {
-        return status;
-      }
-      for (size_t previous = 0; previous < i; ++previous) {
-        for (size_t other = 0; other < view[previous]->command_count; ++other) {
-          if (!strcmp(name, view[previous]->commands[other].name)) {
-            return CALL_BAD_REQUEST;
-          }
-        }
-      }
-    }
-  }
-  return CALL_OK;
-}
-
-enum call_status bundle_command_open(const struct path_context *context,
-    const char *catalog_uri, const char *command, struct bundle_program **program)
-{
-  if (!program) {
-    return CALL_BAD_REQUEST;
-  }
-  *program = NULL;
-  if (!catalog_uri || !explicit_uri(catalog_uri) || !command || !valid_name(command)) {
-    return CALL_BAD_REQUEST;
-  }
-  handle_t catalog = HANDLE_INVALID, bin = HANDLE_INVALID;
-  struct bundle_json json = {0};
-  struct bundle_program *view[BUNDLE_COUNT_LIMIT] = {0};
-  size_t count = 0;
-  enum call_status status = resolve(context, catalog_uri, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &catalog);
-  if (status == CALL_OK) {
-    status = read_json(catalog, &json);
-  }
-  if (catalog != HANDLE_INVALID) {
-    handle_close(catalog);
-  }
-  const struct bundle_json_node *nodes = json.nodes;
-  const struct bundle_json_node *bundles = NULL;
-  bool format = false;
-  if (status == CALL_OK) {
-    if (nodes[1].type != BUNDLE_JSON_OBJECT) {
-      status = CALL_BAD_REQUEST;
-    } else {
-      for (size_t key = nodes[1].child; key; key = nodes[nodes[key].next].next) {
-        const struct bundle_json_node *value = &nodes[nodes[key].next];
-        if (!strcmp(nodes[key].string, "format")) {
-          format = value->type == BUNDLE_JSON_INTEGER && value->integer == 1;
-        } else if (!strcmp(nodes[key].string, "bundles")) {
-          bundles = value;
-        } else {
-          status = CALL_BAD_REQUEST;
-        }
-      }
-      if (!format || !bundles || bundles->type != BUNDLE_JSON_ARRAY) {
-        status = CALL_BAD_REQUEST;
-      }
-    }
-  }
-  if (status == CALL_OK) {
-    status = resolve(context, "bin://", DIRECTORY_KIND_DIRECTORY,
-        DIRECTORY_RIGHT_LOOKUP, &bin);
-    if (status == CALL_NOT_FOUND) {
-      status = CALL_OK;
-    } else if (status == CALL_OK) {
-      status = require_native(bin, PROTOCOL_DIRECTORY);
-    }
-  }
-  if (status == CALL_OK) {
-    for (size_t index = bundles->child; index; index = nodes[index].next) {
-      if (count == BUNDLE_COUNT_LIMIT) {
-        status = CALL_LIMIT;
-        break;
-      }
-      if (nodes[index].type != BUNDLE_JSON_STRING || !explicit_uri(nodes[index].string)) {
-        status = CALL_BAD_REQUEST;
-        break;
-      }
-      status = open_bundle(context, nodes[index].string, command, &view[count]);
-      if (status != CALL_OK) {
-        break;
-      }
-      ++count;
-    }
-  }
-  if (status == CALL_OK) {
-    status = validate_registration(view, count, bin);
-  }
-  /* NOT_FOUND identifies a missing registered command, not a broken source. */
-  if (status == CALL_NOT_FOUND) {
-    status = CALL_BAD_REQUEST;
-  }
-  if (status == CALL_OK) {
-    status = CALL_NOT_FOUND;
-    for (size_t i = 0; i < count; ++i) {
-      for (size_t j = 0; j < view[i]->command_count; ++j) {
-        if (!strcmp(command, view[i]->commands[j].name)) {
-          *program = view[i];
-          view[i] = NULL;
-          status = CALL_OK;
-          break;
-        }
-      }
-      if (status == CALL_OK) {
-        break;
-      }
-    }
-  }
-  for (size_t i = 0; i < count; ++i) {
-    bundle_program_close(view[i]);
-  }
-  if (bin != HANDLE_INVALID) {
-    handle_close(bin);
-  }
-  bundle_json_close(&json);
-  return status;
-}
 
 handle_t bundle_program_image(const struct bundle_program *program)
 {

@@ -10,6 +10,7 @@
  * PACKAGE_VIEW retains the fixed set, including bundle resource provenance.
  * Diagnostic labels/paths never confer authority. */
 struct command_selection {
+  char *explicit_path; /* Full diagnostic path, owned; NULL for a bare name. */
   handle_t image;
   struct bundle_program *bundle;
   handle_t package_view;
@@ -27,7 +28,7 @@ struct command_selection {
  * Subsequent entries reuse that set; selected errors never fall through.
  * Conventional directories admit NAME.pxe or NAME.pxb, refusing a collision.
  * No launch, arbitrary package authority or process replacement occurs here.
- * Existing launcher adapters use this only when migrated in task 3. */
+ * Launch adapters retain the same selection through preparation/admission. */
 enum call_status command_search_resolve(const struct path_context *context,
     const struct command_search_capture *search, const char *name,
     struct command_selection **selection);

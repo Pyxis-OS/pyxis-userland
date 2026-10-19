@@ -43,6 +43,7 @@ void command_selection_close(struct command_selection *selection)
   if (selection->package_view) {
     handle_close(selection->package_view);
   }
+  free(selection->explicit_path);
   free(selection);
 }
 

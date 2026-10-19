@@ -22,13 +22,6 @@ struct bundle_grant_request {
   bool required;
 };
 
-/* Explicit development catalog: {"format":1,"bundles":["root://name.pxb"]}.
- * Validate the entire registration before selecting a bare command name.
- * Duplicate IDs/commands and collisions with held bin://NAME.pxe reject it.
- * These functions only prepare native .pxb programs; policy supplies grants.
- * Failure clears *program and leaves the caller's context unchanged. */
-enum call_status bundle_command_open(const struct path_context *context,
-    const char *catalog_uri, const char *command, struct bundle_program **program);
 /* NOT_FOUND means the bundle directory itself is absent. A missing manifest,
  * app, resource directory or entry after selection is BAD_REQUEST. */
 enum call_status bundle_open(const struct path_context *context,

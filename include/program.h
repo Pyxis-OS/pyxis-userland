@@ -1,21 +1,36 @@
 #ifndef USERSPACE_PROGRAM_H
 #define USERSPACE_PROGRAM_H
 
-#include <bundle.h>
+#include <command_selection.h>
 
-/* The longest candidate prefix and suffix program_open adds to a bare name. */
-#define PROGRAM_LOOKUP_EXTRA sizeof("home://bin/.pxe")
+/* Scratch for explicit paths: COMMAND plus its NUL, and that many directory
+ * slots plus CONTEXT's depth. Bare names need no path workspace. */
+#define PROGRAM_LOOKUP_EXTRA 1
 
-/* Bare names: bin .pxe, same-name .pxb default, explicit development catalog,
- * boot .pxe, then the user's home://bin .pxe and .pxb. Only an absent
- * candidate permits fallback. The catalog comes from PYXIS_BUNDLE_CATALOG and
- * is not consulted on a direct hit. Explicit paths retain their meaning;
- * logical bin://NAME aliases omit the boot and home candidates.
- * WORKSPACE must accommodate COMMAND plus PROGRAM_LOOKUP_EXTRA bytes, and that
- * many directory slots plus CONTEXT's depth. Supply HTTP scratch for HTTP URIs.
- * On success a plain IMAGE is owned by the caller; a BUNDLE owns its borrowed
- * IMAGE and must be closed instead. Failure clears both outputs. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+bool program_is_explicit(const char *command);
+/* Bare names resolve only through the supplied immutable command-list capture.
+ * An absent/empty list means no search. Explicit paths use their held roots/cwd;
+ * .pxb paths retain the complete bundle. Neither bin nor cwd is an implicit
+ * bare-name fallback. Success owns *selection through preparation/admission. */
+enum call_status program_open_search(const struct path_context *context,
+    const struct command_search_capture *search, const char *command,
+    struct path_workspace *workspace, struct command_selection **selection);
+/* Capture the caller's current commands entry once for a bare name. No default
+ * entry is added; malformed/revoked lists fail. Explicit paths need no list. */
 enum call_status program_open(const struct path_context *context, const char *command,
-    struct path_workspace *workspace, handle_t *image, struct bundle_program **bundle);
+    struct path_workspace *workspace, struct command_selection **selection);
+/* For PATH-aware adapters only: absent PATH uses SEARCH. Otherwise only the
+ * exact colon-joined diagnostic labels are supported. Text never grants search
+ * authority; an empty projection is empty, never cwd. */
+enum call_status program_search_path_validate(const char *path,
+    const struct command_search_capture *search);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

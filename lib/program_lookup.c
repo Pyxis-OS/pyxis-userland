@@ -1,119 +1,80 @@
 #include <program.h>
 #include <file.h>
-#include <pyxis/environment.h>
+#include <startup.h>
 #include <stdlib.h>
 #include <string.h>
 
-static bool suffix(const char *path, size_t length, const char *ending)
+bool program_is_explicit(const char *command)
 {
-  return length >= 4 && !memcmp(path + length - 4, ending, 4);
+  return command && (strchr(command, '/') || strchr(command, ':'));
 }
 
-static enum call_status open_bundle(const struct path_context *context,
-    const char *path, handle_t *image, struct bundle_program **bundle)
+enum call_status program_search_path_validate(const char *path,
+    const struct command_search_capture *search)
 {
-  enum call_status status = bundle_open(context, path, bundle);
-  if (status == CALL_OK) {
-    *image = bundle_program_image(*bundle);
+  if (!path) return CALL_OK;
+  size_t count = search ? search->count : 0;
+  if (count && !search->entries) return CALL_BAD_REQUEST;
+  for (size_t i = 0; i < count; ++i) {
+    size_t length = strlen(search->entries[i].label);
+    if (strncmp(path, search->entries[i].label, length)) return CALL_BAD_OPERATION;
+    path += length;
+    if (i + 1 < count) {
+      if (*path != ':') return CALL_BAD_OPERATION;
+      ++path;
+    }
   }
-  return status;
+  return *path ? CALL_BAD_OPERATION : CALL_OK;
 }
 
-static enum call_status open_catalog(const struct path_context *context,
-    const char *command, handle_t *image, struct bundle_program **bundle)
+enum call_status program_open_search(const struct path_context *context,
+    const struct command_search_capture *search, const char *command,
+    struct path_workspace *workspace, struct command_selection **output)
 {
-  char *catalog;
-  enum call_status status = pyxis_environment_copy("PYXIS_BUNDLE_CATALOG", &catalog);
-  if (status != CALL_OK || !catalog) {
-    return status == CALL_OK ? CALL_NOT_FOUND : status;
+  if (!output) return CALL_BAD_REQUEST;
+  *output = NULL;
+  if (!command || !*command || !workspace) return CALL_BAD_REQUEST;
+  if (!program_is_explicit(command)) {
+    return search && search->list ? command_search_resolve(context, search, command, output) :
+        CALL_NOT_FOUND;
   }
-  status = bundle_command_open(context, catalog, command, bundle);
-  free(catalog);
-  if (status == CALL_OK) {
-    *image = bundle_program_image(*bundle);
-  }
-  return status;
-}
-
-static void candidate(char *path, const char *root, const char *name, size_t length,
-    const char *ending)
-{
-  size_t root_length = strlen(root);
-  memcpy(path, root, root_length);
-  memcpy(path + root_length, name, length);
-  memcpy(path + root_length + length, ending, 5);
-}
-
-/* User programs come last: on installed systems boot:// holds system programs
- * such as ls and cp, not only a rescue fallback, so home://bin must not shadow
- * them. A missing home root or bin directory is an absent candidate. */
-static enum call_status open_name(const struct path_context *context,
-    const char *name, bool bare, struct path_workspace *workspace, handle_t *image,
-    struct bundle_program **bundle)
-{
-  size_t length = strlen(name);
-  if (length > SIZE_MAX - PROGRAM_LOOKUP_EXTRA) {
-    return CALL_LIMIT;
-  }
-  char *path = malloc(length + PROGRAM_LOOKUP_EXTRA);
-  if (!path) {
+  struct command_selection *selection = calloc(1, sizeof(*selection));
+  if (!selection) return CALL_NO_MEMORY;
+  selection->explicit_path = strdup(command);
+  if (!selection->explicit_path) {
+    command_selection_close(selection);
     return CALL_NO_MEMORY;
   }
-  candidate(path, "bin://", name, length, ".pxe");
-  enum call_status status = path_resolve(context, path, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, workspace, image);
-  if (status == CALL_NOT_FOUND) {
-    candidate(path, "bin://", name, length, ".pxb");
-    status = open_bundle(context, path, image, bundle);
+  selection->ordinal = SIZE_MAX;
+  strcpy(selection->label, "explicit");
+  size_t end = strlen(command);
+  while (end && command[end - 1] == '/') --end;
+  enum call_status status;
+  if (end >= 4 && !memcmp(command + end - 4, ".pxb", 4)) {
+    status = bundle_open(context, command, &selection->bundle);
+    if (status == CALL_OK) selection->image = bundle_program_image(selection->bundle);
+  } else {
+    status = path_resolve(context, command, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+        workspace, &selection->image);
   }
-  if (status == CALL_NOT_FOUND) {
-    status = open_catalog(context, name, image, bundle);
-  }
-  if (status == CALL_NOT_FOUND && bare) {
-    candidate(path, "boot://", name, length, ".pxe");
-    status = path_resolve(context, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
-        workspace, image);
-  }
-  if (status == CALL_NOT_FOUND && bare) {
-    candidate(path, "home://bin/", name, length, ".pxe");
-    status = path_resolve(context, path, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
-        workspace, image);
-  }
-  if (status == CALL_NOT_FOUND && bare) {
-    candidate(path, "home://bin/", name, length, ".pxb");
-    status = open_bundle(context, path, image, bundle);
-  }
-  free(path);
+  if (status == CALL_OK) *output = selection;
+  else command_selection_close(selection);
   return status;
 }
 
 enum call_status program_open(const struct path_context *context, const char *command,
-    struct path_workspace *workspace, handle_t *image, struct bundle_program **bundle)
+    struct path_workspace *workspace, struct command_selection **selection)
 {
-  if (image) {
-    *image = HANDLE_INVALID;
+  if (!selection) return CALL_BAD_REQUEST;
+  *selection = NULL;
+  if (!command || !*command) return CALL_BAD_REQUEST;
+  struct command_search_capture search = {0};
+  enum call_status status = CALL_OK;
+  if (!program_is_explicit(command)) {
+    status = command_search_capture_init(startup_environment_handle(), &search);
+    if (status == CALL_NOT_FOUND) status = CALL_OK;
   }
-  if (bundle) {
-    *bundle = NULL;
-  }
-  if (!context || !command || !*command || !workspace || !image || !bundle) {
-    return CALL_BAD_REQUEST;
-  }
-  size_t length = strlen(command), end = length;
-  while (end && command[end - 1] == '/') {
-    --end;
-  }
-  if (suffix(command, end, ".pxb")) {
-    return open_bundle(context, command, image, bundle);
-  }
-  if (!strchr(command, '/')) {
-    return open_name(context, command, true, workspace, image, bundle);
-  }
-  enum call_status status = path_resolve(context, command, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, workspace, image);
-  if (status == CALL_NOT_FOUND && !strncmp(command, "bin://", 6) && command[6] &&
-      !strchr(command + 6, '/') && !suffix(command, length, ".pxe")) {
-    status = open_name(context, command + 6, false, workspace, image, bundle);
-  }
+  if (status == CALL_OK) status = program_open_search(context, &search, command, workspace, selection);
+  command_search_capture_close(&search);
   return status;
 }
