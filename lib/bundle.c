@@ -683,7 +683,11 @@ static enum call_status open_bundle(const struct path_context *context, const ch
   enum call_status status = resolve(context, uri, DIRECTORY_KIND_DIRECTORY,
       BUNDLE_DIRECTORY_RIGHTS, &revision);
   if (status == CALL_OK) {
-    status = open_revision(context, revision, command, output);
+    /* URI opening keeps its existing startup-namespace collision checks even
+     * when it uses the implicit path context. Only the new held-directory
+     * validation entry point accepts an absent publication namespace. */
+    const struct path_context implicit = {0};
+    status = open_revision(context ? context : &implicit, revision, command, output);
     handle_close(revision);
   }
   return status;
