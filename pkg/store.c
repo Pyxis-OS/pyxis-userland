@@ -112,7 +112,8 @@ bool pkg_selection_load(handle_t packages, bool current, uint64_t number,
   }
   selection->count = package_set_count(set);
   selection->number = package_set_number(set);
-  selection->entries = calloc(selection->count ? selection->count : 1,
+  selection->capacity = selection->count ? selection->count : 1;
+  selection->entries = calloc(selection->capacity,
       sizeof(*selection->entries));
   if (!selection->entries) {
     package_set_free(set);

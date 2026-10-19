@@ -2,17 +2,90 @@
   "format": 1,
   "id": "org.pyxis.pkg",
   "entry": "bin/pkg.pxe",
-  "commands": {"pkg": "bin/pkg.pxe"},
+  "commands": {
+    "pkg": "bin/pkg.pxe"
+  },
   "stack_bytes": 1048576,
   "resource_dirs": {},
   "grants": [
-    {"name":"memory","resource":"memory","rights":["manage"],"required":true},
-    {"name":"clock","resource":"clock","rights":["read"],"required":true},
-    {"name":"random","resource":"random","rights":["read"],"required":false},
-    {"name":"package_inspect","resource":"directory","source":"package_inspect","rights":["lookup","enumerate","read-files"],"required":false},
-    {"name":"package_management","resource":"directory","source":"package_management","rights":["lookup","enumerate","read-files","create","write-files","remove"],"required":false},
-    {"name":"package_config","resource":"directory","source":"package_config","rights":["lookup","read-files"],"required":false},
-    {"name":"http","resource":"provider","source":"http","rights":["open-read"],"required":false},
-    {"name":"https","resource":"provider","source":"https","rights":["open-read"],"required":false}
+    {
+      "name": "memory",
+      "resource": "memory",
+      "rights": [
+        "manage"
+      ],
+      "required": true
+    },
+    {
+      "name": "clock",
+      "resource": "clock",
+      "rights": [
+        "read"
+      ],
+      "required": true
+    },
+    {
+      "name": "random",
+      "resource": "random",
+      "rights": [
+        "read"
+      ],
+      "required": false
+    },
+    {
+      "name": "package_inspect",
+      "resource": "directory",
+      "source": "package_inspect",
+      "rights": [
+        "lookup",
+        "enumerate",
+        "read-files",
+        "filesystem-info"
+      ],
+      "required": false
+    },
+    {
+      "name": "package_management",
+      "resource": "directory",
+      "source": "package_management",
+      "rights": [
+        "lookup",
+        "enumerate",
+        "read-files",
+        "create",
+        "write-files",
+        "remove",
+        "filesystem-info"
+      ],
+      "required": false
+    },
+    {
+      "name": "package_config",
+      "resource": "directory",
+      "source": "package_config",
+      "rights": [
+        "lookup",
+        "read-files"
+      ],
+      "required": false
+    },
+    {
+      "name": "http",
+      "resource": "provider",
+      "source": "http",
+      "rights": [
+        "open-read"
+      ],
+      "required": false
+    },
+    {
+      "name": "https",
+      "resource": "provider",
+      "source": "https",
+      "rights": [
+        "open-read"
+      ],
+      "required": false
+    }
   ]
 }

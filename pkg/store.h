@@ -13,7 +13,7 @@
 struct pkg_selection {
   uint64_t number;
   struct pkg_identity *entries;
-  size_t count;
+  size_t count, capacity;
 };
 
 bool pkg_directory(handle_t parent, const char *name, bool create, uint64_t rights,

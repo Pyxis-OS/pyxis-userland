@@ -723,13 +723,13 @@ static void package_sources(struct mounts *mounts, const struct boot_space *spac
 {
   struct mounted_volume *packages = find_mount(mounts, BOOT_PACKAGES_VOLUME);
   if (packages && packages->root != HANDLE_INVALID) {
-    add_package_source(launch, count, PACKAGE_INSPECT_SOURCE, packages->root, PACKAGE_TREE_RIGHTS);
+    add_package_source(launch, count, PACKAGE_INSPECT_SOURCE, packages->root, PACKAGE_TREE_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO);
     if (space->package_management) {
       struct handle_info info;
       enum call_status status = handle_query(packages->root, &info);
-      if (status == CALL_OK && !(DIRECTORY_CONTENT_RIGHTS & ~info.rights)) {
+      if (status == CALL_OK && !(DIRECTORY_RIGHTS & ~info.rights)) {
         add_package_source(launch, count, PACKAGE_MANAGEMENT_SOURCE, packages->root,
-            DIRECTORY_CONTENT_RIGHTS);
+            DIRECTORY_RIGHTS);
       } else {
         printf("boot-init: space %s package management unavailable (status %u)\n",
             space->name, status == CALL_OK ? CALL_DENIED : status);

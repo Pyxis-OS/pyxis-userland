@@ -33,6 +33,9 @@ struct client {
   const char *reason;
 };
 
+/* The literal parser imposes the stricter eventual set-record bound. */
+#define PKG_SELECTION_MAX 8192
+
 static struct client client;
 
 /* While waiting inside the HTTP provider, preserve normal foreground Ctrl+C.
@@ -93,15 +96,19 @@ static bool select_version(struct pkg_selection *selection,
     selection->entries[index] = *identity;
     return true;
   }
-  if (selection->count >= 8192) {
+  if (selection->count >= PKG_SELECTION_MAX) {
     return fail("package selection exceeds metadata budget");
   }
-  struct pkg_identity *entries = realloc(selection->entries,
-      (selection->count + 1) * sizeof(*entries));
-  if (!entries) {
-    return fail("cannot grow package selection");
+  if (selection->count == selection->capacity) {
+    size_t capacity = selection->capacity ? selection->capacity * 2 : 8;
+    if (capacity > PKG_SELECTION_MAX) capacity = PKG_SELECTION_MAX;
+    struct pkg_identity *entries = realloc(selection->entries, capacity * sizeof(*entries));
+    if (!entries) {
+      return fail("cannot grow package selection");
+    }
+    selection->entries = entries;
+    selection->capacity = capacity;
   }
-  selection->entries = entries;
   selection->entries[selection->count++] = *identity;
   return true;
 }
@@ -300,8 +307,7 @@ static bool install_version(const struct offered_package *offered, struct pkg_ma
   ok = ok && pkg_directory(client.packages, "store", true, PKG_WRITE_RIGHTS,
       &store, &client.reason);
   ok = ok && pkg_directory(store, identity->id, true, PKG_WRITE_RIGHTS, &id, &client.reason);
-  if (ok && (directory_sync(destination) != CALL_OK ||
-      directory_rename(staging, name, id, identity->version,
+  if (ok && (directory_rename(staging, name, id, identity->version,
           DIRECTORY_RENAME_NO_REPLACE, DIRECTORY_KIND_DIRECTORY) != CALL_OK ||
       directory_sync(client.packages) != CALL_OK)) {
     ok = fail("cannot durably publish the verified immutable package tree");
@@ -505,12 +511,28 @@ static bool unlock(void)
   return true;
 }
 
-static bool mutate(const char *command, int argc, char **argv)
+static bool package_volume(handle_t root, bool writable)
 {
   struct handle_info info;
-  if (client.management == HANDLE_INVALID || handle_query(client.management, &info) != CALL_OK ||
-      info.protocol != PROTOCOL_DIRECTORY || (PKG_WRITE_RIGHTS & ~info.rights)) {
-    return fail("package management authority is unavailable");
+  struct directory_filesystem_info filesystem;
+  uint64_t rights = PKG_READ_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO;
+  if (writable) rights |= PKG_WRITE_RIGHTS;
+  if (root == HANDLE_INVALID || handle_query(root, &info) != CALL_OK ||
+      info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_DIRECTORY ||
+      info.transport || (rights & ~info.rights) ||
+      directory_filesystem_info(root, &filesystem) != CALL_OK ||
+      filesystem.type != FILESYSTEM_TYPE_NPFS ||
+      (writable && (filesystem.flags & FILESYSTEM_FLAG_READ_ONLY))) {
+    return fail(writable ? "writable npfs package management authority is unavailable" :
+        "npfs package inspection authority is unavailable");
+  }
+  return true;
+}
+
+static bool mutate(const char *command, int argc, char **argv)
+{
+  if (!package_volume(client.management, true)) {
+    return false;
   }
   client.packages = client.management;
   if (!strcmp(command, "unlock")) return unlock();
@@ -527,16 +549,12 @@ static bool mutate(const char *command, int argc, char **argv)
   if (!strcmp(command, "rollback")) {
     uint64_t target = 0;
     if (argc) {
-      if (pkg_timeout_parse(argv[0], &target) != CALL_OK) {
-        /* Set numbers use the full signed literal range, not timeout limits. */
-        target = 0;
-        for (const char *p = argv[0]; *p; ++p) {
-          if (*p < '0' || *p > '9' || target > ((uint64_t)INT64_MAX - (*p - '0')) / 10) {
-            target = 0;
-            break;
-          }
-          target = target * 10 + *p - '0';
+      for (const char *p = argv[0]; *p; ++p) {
+        if (*p < '0' || *p > '9' || target > ((uint64_t)INT64_MAX - (*p - '0')) / 10) {
+          target = 0;
+          break;
         }
+        target = target * 10 + *p - '0';
       }
       ok = target > 0;
       if (!ok) client.reason = "invalid explicit set number";
@@ -635,7 +653,8 @@ int main(int argc, char **argv)
     }
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
     struct pkg_selection selection = {0};
-    ok = pkg_selection_load(client.packages, true, 0, &selection, &client.reason);
+    ok = package_volume(client.packages, false) &&
+        pkg_selection_load(client.packages, true, 0, &selection, &client.reason);
     if (ok) {
       print_selection(&selection);
       if (!strcmp(command, "verify")) {

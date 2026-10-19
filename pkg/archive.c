@@ -416,9 +416,7 @@ static bool close_frame(struct tree_walk *walk, const char **reason)
   struct directory_frame *frame = &walk->stack[--walk->depth];
   bool ok = true;
   if (frame->handle != HANDLE_INVALID) {
-    if (walk->extract && directory_sync(frame->handle) != CALL_OK) {
-      ok = fail(reason, "cannot sync staged package directory");
-    } else if (walk->verify) {
+    if (walk->verify) {
       ok = directory_count(frame->handle, frame->children, reason);
     }
     handle_close(frame->handle);
@@ -562,9 +560,6 @@ static bool process_inventory(struct inventory_reader *inventory,
     bool ok;
     if (archive) {
       ok = hash_range(archive->file, member.offset, line.size, line.sha256, file, reason);
-      if (ok && file != HANDLE_INVALID && file_sync(file) != CALL_OK) {
-        ok = fail(reason, "cannot sync staged package file");
-      }
     } else {
       uint64_t size;
       ok = file_size(file, &size) == CALL_OK && size == line.size;
@@ -617,9 +612,6 @@ static bool copy_metadata(handle_t archive, const struct member *member,
     return fail(reason, "cannot create staged metadata");
   }
   bool ok = copy_range(archive, member->offset, member->size, file, reason);
-  if (ok && file_sync(file) != CALL_OK) {
-    ok = fail(reason, "cannot sync staged package metadata");
-  }
   handle_close(file);
   return ok;
 }
@@ -691,6 +683,8 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
     }
     ok = false;
   }
+  /* npfs directory sync writes every dirty file before committing namespace
+   * mutations, including files whose staging handles have already closed. */
   if (ok && destination != HANDLE_INVALID && directory_sync(destination) != CALL_OK) {
     ok = fail(reason, "cannot sync staged package namespace");
   }
