@@ -433,8 +433,9 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
   }
   char line[16];
   struct term_line_result result = term_read_line(&client.terminal,
-      "Type apply to switch, or cancel: ", line, sizeof(line));
-  if (result.status != TERM_LINE_OK || result.limit_reached || strcmp(line, "apply")) {
+      "Switch to this package set? [y/N] ", line, sizeof(line));
+  if (result.status != TERM_LINE_OK || result.limit_reached ||
+      (strcmp(line, "y") && strcmp(line, "Y"))) {
     return fail("change cancelled; any prepared package trees remain inactive");
   }
   return true;
