@@ -84,8 +84,8 @@ enum call_status net_registry_next_interface(handle_t registry, uint64_t after_i
   enum call_status status = exchange(registry, &request, sizeof(request), &response, sizeof(response));
   if (status == CALL_OK) {
     if (!response.interface_id) {
-      const struct net_interface_reply end = {.flags = NET_INTERFACE_INVENTORY_COMPLETE};
-      if (memcmp(&response, &end, sizeof(end))) {
+      const struct net_interface_reply end = {.flags = response.flags};
+      if ((response.flags & ~NET_INTERFACE_INVENTORY_COMPLETE) || memcmp(&response, &end, sizeof(end))) {
         return CALL_BAD_REQUEST;
       }
     } else if (response.interface_id <= after_id || !interface_valid(&response)) {
