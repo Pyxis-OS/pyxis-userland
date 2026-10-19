@@ -28,7 +28,7 @@ static enum call_status result_status(struct syscall_result result, size_t size)
 
 static bool info_valid(const struct package_command_info *info)
 {
-  if (info->limit != PACKAGE_COMMANDS_LIMIT || info->count > info->limit ||
+  if (!info->origin || info->limit != PACKAGE_COMMANDS_LIMIT || info->count > info->limit ||
       info->set > INT64_MAX || (info->flags & ~PACKAGE_COMMAND_VIEW_LIVE)) {
     return false;
   }

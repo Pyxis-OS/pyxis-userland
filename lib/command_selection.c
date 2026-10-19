@@ -127,8 +127,7 @@ static enum call_status conventional(const struct path_context *context,
 static bool same_volume(const struct package_command_info *left,
     const struct package_command_info *right)
 {
-  return !memcmp(left->pool_id, right->pool_id, 16) &&
-      !memcmp(left->volume_id, right->volume_id, 16);
+  return left->origin == right->origin;
 }
 
 static enum call_status package_target(const struct path_context *context,

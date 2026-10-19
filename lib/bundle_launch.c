@@ -303,21 +303,20 @@ static enum call_status selected_package_set(const struct bundle_program *progra
   if (!fixed) {
     return package_set_load(source, set, reason);
   }
-  struct package_command_info selected, origin;
+  struct package_command_info selected;
   enum call_status status = package_commands_info(fixed, &selected);
-  handle_t view = HANDLE_INVALID;
+  handle_t view = HANDLE_INVALID, matched = HANDLE_INVALID;
   if (status == CALL_OK) {
     status = package_commands_open(source, &view);
   }
   if (status == CALL_OK) {
-    status = package_commands_info(view, &origin);
+    status = package_commands_capture(view, fixed, &matched);
+  }
+  if (matched) {
+    handle_close(matched);
   }
   if (view) {
     handle_close(view);
-  }
-  if (status == CALL_OK && (memcmp(selected.pool_id, origin.pool_id, 16) ||
-      memcmp(selected.volume_id, origin.volume_id, 16))) {
-    status = CALL_DENIED;
   }
   if (status != CALL_OK) {
     *reason = "package source does not match the selected command volume";
