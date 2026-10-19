@@ -4,6 +4,7 @@
 #include <abi/pipe.h>
 #include <abi/disk.h>
 #include <abi/mount.h>
+#include <abi/provider.h>
 #include <job_work.h>
 #include <process.h>
 #include <wait.h>
@@ -172,7 +173,7 @@ static bool has_entry(const struct bundle_launch *prepared, const char *name)
 
 static enum call_status prepare_context(struct context_grants *context,
     const struct launch_request *source, const struct environment_value *bundle_entries,
-    size_t bundle_entry_count)
+    size_t bundle_entry_count, bool explicit_providers)
 {
   struct bundle_launch *prepared = context->prepared;
   const struct launch_environment_entry *entries = (const void *)(uintptr_t)source->entries;
@@ -195,6 +196,11 @@ static enum call_status prepare_context(struct context_grants *context,
       enum call_status status = handle_query(context->source[entry->value].source, &info);
       if (status != CALL_OK) {
         return status;
+      }
+      /* Filter by actual protocol, so another name for the same provider
+       * cannot retain the original, broader grant. */
+      if (explicit_providers && info.protocol == PROTOCOL_PROVIDER) {
+        continue;
       }
       bool stream = !strcmp(name, "stdin") ||
           !strcmp(name, "stdout") || !strcmp(name, "stderr");
@@ -222,6 +228,13 @@ static enum call_status prepare_context(struct context_grants *context,
   }
   const uint64_t *directories = (const void *)(uintptr_t)source->working_directories;
   for (size_t i = 0; i < source->working_directory_count; ++i) {
+    if (explicit_providers) {
+      if (directories[i] >= context->source_count) return CALL_BAD_REQUEST;
+      struct handle_info info;
+      enum call_status status = handle_query(context->source[directories[i]].source, &info);
+      if (status != CALL_OK) return status;
+      if (info.protocol == PROTOCOL_PROVIDER) return CALL_WRONG_TYPE;
+    }
     enum call_status status = retain_grant(context, directories[i], &prepared->directories[i]);
     if (status != CALL_OK) {
       return status;
@@ -230,9 +243,44 @@ static enum call_status prepare_context(struct context_grants *context,
   return CALL_OK;
 }
 
+static enum call_status provider_source(const struct launch_request *source,
+    const struct bundle_grant_request *request, handle_t *handle)
+{
+  *handle = HANDLE_INVALID;
+  const struct launch_environment_entry *entries = (const void *)(uintptr_t)source->entries;
+  const struct launch_grant *grants = (const void *)(uintptr_t)source->grants;
+  const struct launch_grant *selected = NULL;
+  for (size_t i = 0; i < source->entry_count; ++i) {
+    const struct launch_environment_entry *entry = &entries[i];
+    if (strcmp((const char *)(uintptr_t)entry->name, request->source)) continue;
+    if (selected) return CALL_BAD_REQUEST;
+    if (entry->kind != ENVIRONMENT_CAP || !(entry->flags & ENVIRONMENT_EXPORTED)) {
+      return CALL_NOT_FOUND;
+    }
+    if (entry->value >= source->grant_count) return CALL_BAD_REQUEST;
+    selected = &grants[entry->value];
+  }
+  if (!selected) return CALL_NOT_FOUND;
+  struct handle_info info;
+  enum call_status status = handle_query(selected->source, &info);
+  if (status != CALL_OK) return status;
+  if (info.kind != HANDLE_KIND_EXPORTED || info.protocol != PROTOCOL_PROVIDER) {
+    return CALL_WRONG_TYPE;
+  }
+  if ((request->rights & info.rights) != request->rights ||
+      (request->rights & selected->rights) != request->rights ||
+      !(info.transport & HANDLE_TRANSPORT_CALL) ||
+      !(selected->transport & HANDLE_TRANSPORT_CALL)) {
+    return CALL_DENIED;
+  }
+  *handle = selected->source;
+  return CALL_OK;
+}
+
 static enum call_status prepare_resources(struct bundle_launch *prepared,
     const struct bundle_grant_request *requests, size_t count,
-    const struct bundle_authority *authority, size_t authority_count, const char **missing)
+    const struct bundle_authority *authority, size_t authority_count,
+    const struct launch_request *launch_source, const char **missing)
 {
   for (size_t i = 0; i < count; ++i) {
     if (has_entry(prepared, requests[i].name) ||
@@ -245,16 +293,26 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     if (!strcmp(requests[i].resource, "job_work")) {
       continue;
     }
-    const char *selection = requests[i].source ? requests[i].source :
-        requests[i].package ? PACKAGE_SOURCE : requests[i].resource;
     handle_t source = HANDLE_INVALID;
-    for (size_t j = 0; j < authority_count; ++j) {
-      if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
-          authority[j].protocol == requests[i].protocol) {
-        if (source != HANDLE_INVALID && authority[j].source != HANDLE_INVALID) {
-          return CALL_BAD_REQUEST;
+    if (requests[i].protocol == PROTOCOL_PROVIDER) {
+      enum call_status status = provider_source(launch_source, &requests[i], &source);
+      if (status != CALL_OK) {
+        if (status == CALL_BAD_REQUEST) return status;
+        if (!requests[i].required) continue;
+        *missing = requests[i].name;
+        return status == CALL_NOT_FOUND ? CALL_DENIED : status;
+      }
+    } else {
+      const char *selection = requests[i].source ? requests[i].source :
+          requests[i].package ? PACKAGE_SOURCE : requests[i].resource;
+      for (size_t j = 0; j < authority_count; ++j) {
+        if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
+            authority[j].protocol == requests[i].protocol) {
+          if (source != HANDLE_INVALID && authority[j].source != HANDLE_INVALID) {
+            return CALL_BAD_REQUEST;
+          }
+          source = authority[j].source;
         }
-        source = authority[j].source;
       }
     }
     if (source != HANDLE_INVALID && requests[i].package) {
@@ -421,6 +479,10 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   size_t bundle_count, resource_count;
   const struct environment_value *bundle_entries = bundle_program_entries(program, &bundle_count);
   const struct bundle_grant_request *resources = bundle_program_grants(program, &resource_count);
+  bool explicit_providers = false;
+  for (size_t i = 0; i < resource_count; ++i) {
+    explicit_providers |= resources[i].protocol == PROTOCOL_PROVIDER;
+  }
   const size_t grant_limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
   const size_t entry_limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry);
   if (source->grant_count > grant_limit || bundle_count > grant_limit ||
@@ -467,10 +529,11 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
     .source = (const void *)(uintptr_t)source->grants,
     .source_count = source->grant_count, .mapped = mapped, .prepared = prepared,
   };
-  enum call_status status = prepare_context(&context, source, bundle_entries, bundle_count);
+  enum call_status status = prepare_context(&context, source, bundle_entries, bundle_count,
+      explicit_providers);
   if (status == CALL_OK) {
     status = prepare_resources(prepared, resources, resource_count, authority, authority_count,
-        missing);
+        source, missing);
   }
   if (status == CALL_OK) {
     status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs, missing);

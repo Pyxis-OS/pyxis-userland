@@ -11,7 +11,9 @@ struct bundle_grant_request {
   const char *resource;
   /* Selected external inventory key and optional directory URI-root alias.
    * A directory grant names either a source or a package ID; a package is
-   * resolved from the launcher's packages source and is always read-only. */
+   * resolved from the launcher's packages source and is always read-only.
+   * A provider source names a held exported provider root in the supplied
+   * launch environment, rather than the private source inventory. */
   const char *source;
   const char *package;
   const char *root;

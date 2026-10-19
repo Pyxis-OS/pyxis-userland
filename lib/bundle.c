@@ -17,6 +17,7 @@
 #include <abi/keyboard.h>
 #include <abi/pointer.h>
 #include <abi/profile.h>
+#include <abi/provider.h>
 #include <abi/random.h>
 #include <abi/retention.h>
 #include <abi/screen_capture.h>
@@ -91,6 +92,7 @@ static const struct grant_right grant_rights[] = {
   {"directory", "create", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_CREATE},
   {"directory", "remove", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_REMOVE},
   {"directory", "filesystem-info", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_FILESYSTEM_INFO},
+  {"provider", "open-read", PROTOCOL_PROVIDER, PROVIDER_RIGHT_OPEN_READ},
   {"mount", "open-root", PROTOCOL_MOUNT, MOUNT_RIGHT_OPEN_ROOT},
   {"mount", "observe", PROTOCOL_MOUNT, MOUNT_RIGHT_OBSERVE},
   {"mount", "write", PROTOCOL_MOUNT, MOUNT_RIGHT_WRITE},
@@ -435,7 +437,8 @@ static enum call_status parse_grants(struct bundle_program *program,
       return status;
     }
     bool external = !strcmp(request->resource, "directory") ||
-        !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks");
+        !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks") ||
+        !strcmp(request->resource, "provider");
     bool directory = !strcmp(request->resource, "directory");
     bool selected = request->source || request->package;
     if (external != selected || (request->source && request->package) ||
