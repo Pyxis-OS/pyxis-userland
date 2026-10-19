@@ -563,7 +563,7 @@ static bool mutate(const char *command, int argc, char **argv)
   if (ok) {
     ok = pkg_publish(client.packages, &after, previous, &uncertain, &client.reason);
   }
-  if (!ok && !current_valid) show_sets();
+  if (!ok && (!current_valid || !strcmp(command, "rollback"))) show_sets();
   pkg_selection_free(&after);
   pkg_selection_free(&before);
   handle_close(lock);
