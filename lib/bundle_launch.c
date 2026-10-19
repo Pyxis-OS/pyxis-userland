@@ -13,6 +13,10 @@
 #include <package.h>
 #include <package_commands.h>
 #include <handle.h>
+#include <net_config.h>
+#include <tcp.h>
+#include <udp.h>
+#include <echo.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,10 +34,11 @@ struct bundle_launch {
   struct launch_grant *grants;
   struct launch_environment_entry *entries;
   uint64_t *directories;
-  /* Package trees opened for this launch; closed with the preparation. The
-   * set is loaded once, at the first package grant, so they share one set. */
-  handle_t *trees;
-  size_t tree_count;
+  /* At most one temporary per manifest request: a package tree or a narrowed
+   * network factory. The launch borrows each until preparation closes. */
+  handle_t *owned_grants;
+  size_t owned_count;
+  /* Package trees share the set selected at the first package grant. */
   struct package_set *set;
   handle_t package_root;
   enum call_status set_status;
@@ -318,6 +323,65 @@ static enum call_status selected_package_set(const struct bundle_program *progra
       &prepared->set, reason);
 }
 
+static enum call_status scoped_network_grant(const struct bundle_grant_request *request,
+    handle_t factory, const struct bundle_authority *authority, size_t authority_count,
+    handle_t *derived)
+{
+  *derived = HANDLE_INVALID;
+  handle_t registry = HANDLE_INVALID;
+  for (size_t i = 0; i < authority_count; ++i) {
+    if (!authority[i].resource || strcmp(authority[i].resource, "net_registry") ||
+        authority[i].protocol != PROTOCOL_NET_REGISTRY || authority[i].source == HANDLE_INVALID) {
+      continue;
+    }
+    if (registry != HANDLE_INVALID) {
+      return CALL_BAD_REQUEST;
+    }
+    registry = authority[i].source;
+  }
+  if (registry == HANDLE_INVALID) {
+    return CALL_DENIED;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(registry, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_NET_REGISTRY || info.transport) {
+    return CALL_WRONG_TYPE;
+  }
+  if (!(info.rights & NET_REGISTRY_RIGHT_READ)) {
+    return CALL_DENIED;
+  }
+  uint64_t interface_id = 0, after = 0;
+  for (;;) {
+    struct net_interface_reply interface;
+    status = net_registry_next_interface(registry, after, &interface);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (!interface.interface_id) {
+      return CALL_DENIED;
+    }
+    if (!strcmp(interface.name, request->interface)) {
+      interface_id = interface.interface_id;
+      break;
+    }
+    after = interface.interface_id;
+  }
+  /* The registry supplies identity, never packet authority. Native derivation
+   * checks the held scope/rights and preserves the factory's revocation lineage. */
+  switch (request->protocol) {
+  case PROTOCOL_TCP_SERVICE:
+    return tcp_factory_derive(factory, interface_id, request->rights, derived);
+  case PROTOCOL_UDP_SERVICE:
+    return udp_factory_derive(factory, interface_id, request->rights, derived);
+  case PROTOCOL_ECHO:
+    return echo_factory_derive(factory, interface_id, request->rights, derived);
+  default: return CALL_BAD_REQUEST;
+  }
+}
+
 static enum call_status prepare_resources(struct bundle_launch *prepared,
     const struct bundle_program *program,
     const struct bundle_grant_request *requests, size_t count,
@@ -379,7 +443,7 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
         }
         continue;
       }
-      prepared->trees[prepared->tree_count++] = tree;
+      prepared->owned_grants[prepared->owned_count++] = tree;
       source = tree;
     }
     if (source == HANDLE_INVALID) {
@@ -398,7 +462,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       continue;
     }
     if (info.protocol != requests[i].protocol ||
-        (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+        (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED) ||
+        (requests[i].interface && (info.kind != HANDLE_KIND_NATIVE || info.transport))) {
       if (requests[i].required) {
         return CALL_WRONG_TYPE;
       }
@@ -413,6 +478,23 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
         return CALL_DENIED;
       }
       continue;
+    }
+    if (requests[i].interface) {
+      handle_t derived;
+      status = scoped_network_grant(&requests[i], source, authority, authority_count, &derived);
+      if (status != CALL_OK) {
+        if (status == CALL_BAD_REQUEST) {
+          return status;
+        }
+        if (requests[i].required) {
+          *missing = requests[i].name;
+          return status;
+        }
+        continue;
+      }
+      prepared->owned_grants[prepared->owned_count++] = derived;
+      source = derived;
+      transport = 0;
     }
     size_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
@@ -556,10 +638,10 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   prepared->entries = entry_capacity ? calloc(entry_capacity, sizeof(*prepared->entries)) : NULL;
   prepared->directories = source->working_directory_count ?
       malloc(source->working_directory_count * sizeof(*prepared->directories)) : NULL;
-  prepared->trees = resource_count ? malloc(resource_count * sizeof(*prepared->trees)) : NULL;
+  prepared->owned_grants = resource_count ? malloc(resource_count * sizeof(*prepared->owned_grants)) : NULL;
   if ((grant_capacity && !prepared->grants) || (entry_capacity && !prepared->entries) ||
       (source->working_directory_count && !prepared->directories) ||
-      (resource_count && !prepared->trees)) {
+      (resource_count && !prepared->owned_grants)) {
     free(mapped);
     bundle_launch_close(prepared);
     return CALL_NO_MEMORY;
@@ -754,10 +836,10 @@ void bundle_launch_close(struct bundle_launch *prepared)
         free(context);
       }
     }
-    for (size_t i = 0; i < prepared->tree_count; ++i) {
-      handle_close(prepared->trees[i]);
+    for (size_t i = 0; i < prepared->owned_count; ++i) {
+      handle_close(prepared->owned_grants[i]);
     }
-    free(prepared->trees);
+    free(prepared->owned_grants);
     package_set_free(prepared->set);
     if (prepared->package_root) handle_close(prepared->package_root);
     free(prepared->directories);

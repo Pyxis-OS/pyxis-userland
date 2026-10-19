@@ -17,6 +17,10 @@ struct bundle_grant_request {
   const char *source;
   const char *package;
   const char *root;
+  /* Optional canonical lo/ethN/wlanN role for TCP/UDP/echo. Preparation resolves
+   * it using supplied registry READ, then attenuates the held native factory.
+   * The child receives no registry unless it separately declares that grant. */
+  const char *interface;
   uint64_t protocol;
   uint64_t rights;
   bool required;

@@ -153,6 +153,34 @@ static bool valid_name(const char *name)
   return true;
 }
 
+static bool valid_interface_name(const char *name)
+{
+  size_t size = strlen(name);
+  if (!size || size >= sizeof(((struct net_interface_reply *)0)->name)) {
+    return false;
+  }
+  if (!strcmp(name, "lo")) {
+    return true;
+  }
+  const char *number;
+  if (!strncmp(name, "eth", 3)) {
+    number = name + 3;
+  } else if (!strncmp(name, "wlan", 4)) {
+    number = name + 4;
+  } else {
+    return false;
+  }
+  if (!*number || (number[0] == '0' && number[1])) {
+    return false;
+  }
+  for (; *number; ++number) {
+    if (*number < '0' || *number > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool valid_path(const char *path)
 {
   size_t size = strlen(path);
@@ -415,6 +443,11 @@ static enum call_status parse_grants(struct bundle_program *program,
           return CALL_BAD_REQUEST;
         }
         request->root = value->string;
+      } else if (!strcmp(nodes[key].string, "interface")) {
+        if (value->type != BUNDLE_JSON_STRING || !valid_interface_name(value->string)) {
+          return CALL_BAD_REQUEST;
+        }
+        request->interface = value->string;
       } else if (!strcmp(nodes[key].string, "rights")) {
         rights = value;
       } else if (!strcmp(nodes[key].string, "required")) {
@@ -441,12 +474,15 @@ static enum call_status parse_grants(struct bundle_program *program,
     if (status != CALL_OK) {
       return status;
     }
+    bool network = request->protocol == PROTOCOL_TCP_SERVICE ||
+        request->protocol == PROTOCOL_UDP_SERVICE || request->protocol == PROTOCOL_ECHO;
     bool external = !strcmp(request->resource, "directory") ||
         !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks") ||
         !strcmp(request->resource, "provider");
     bool directory = !strcmp(request->resource, "directory");
     bool selected = request->source || request->package;
-    if (external != selected || (request->source && request->package) ||
+    if ((request->interface && !network) || external != selected ||
+        (request->source && request->package) ||
         (request->package && (!directory || (request->rights & ~PACKAGE_TREE_RIGHTS))) ||
         (request->root && (!directory ||
          !(request->rights & DIRECTORY_RIGHT_LOOKUP)))) {
