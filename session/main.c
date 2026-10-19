@@ -129,6 +129,7 @@ static int launch_session(const struct session_config *config, const struct netw
   size_t grant_capacity = fixed_grants + depth + captured.count;
   struct launch_grant *grants = malloc(grant_capacity * sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
+  struct launch_environment_entry *resources = NULL;
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   size_t environment_count = 0;
   struct pyxis_environment_snapshot inherited = {0};
@@ -171,10 +172,14 @@ static int launch_session(const struct session_config *config, const struct netw
     }
     grants[LAUNCHER].rights = rights & LAUNCHER_RIGHT_LAUNCH;
   }
-  struct launch_environment_entry resources[FIRST_OPTIONAL + OPTIONAL_RESOURCE_COUNT + BUNDLE_SOURCE_LIMIT] = {
-    PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
-    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"launcher", LAUNCHER),
-  };
+  resources = calloc(grant_capacity, sizeof(*resources));
+  if (!resources) {
+    goto done;
+  }
+  resources[0] = (struct launch_environment_entry)PROFILE_CAP("input", INPUT);
+  resources[1] = (struct launch_environment_entry)PROFILE_CAP("output", OUTPUT);
+  resources[2] = (struct launch_environment_entry)PROFILE_CAP("memory", MEMORY);
+  resources[3] = (struct launch_environment_entry)PROFILE_CAP("launcher", LAUNCHER);
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
   grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
@@ -247,6 +252,18 @@ static int launch_session(const struct session_config *config, const struct netw
     if (udp_beacons != HANDLE_INVALID) {
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", grant_count);
       grants[grant_count++] = (struct launch_grant){udp_beacons, UDP_SERVICE_RIGHT_BROADCAST, 0};
+    }
+  }
+  if (start_remote_services) {
+    static const struct { const char *name; uint64_t rights; } remote[] = {
+      {"remote_interface", NET_INTERFACE_RIGHT_READ}, {"remote_tcp", TCP_SERVICE_RIGHTS},
+    };
+    for (size_t i = 0; i < sizeof(remote) / sizeof(*remote); ++i) {
+      handle_t source = bootstrap_capability(remote[i].name);
+      if (source != HANDLE_INVALID) {
+        resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(remote[i].name, grant_count);
+        grants[grant_count++] = (struct launch_grant){source, remote[i].rights, 0};
+      }
     }
   }
   handle_t tcp = bootstrap_capability("tcp");
@@ -396,7 +413,7 @@ static int launch_session(const struct session_config *config, const struct netw
     }
   } else {
     status = bundle_sources_forward_capture(&captured, grants, grant_capacity, &grant_count,
-        resources, sizeof(resources) / sizeof(*resources), &resource_count);
+        resources, grant_capacity, &resource_count);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot retain selected sources (status %u)\n", status);
       goto done;
@@ -530,6 +547,7 @@ static int launch_session(const struct session_config *config, const struct netw
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  free(resources);
   free(entries);
   environment_capture_close(&captured);
   network_environment_free(&refreshed_environment);

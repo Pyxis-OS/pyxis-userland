@@ -125,7 +125,7 @@ enum call_status network_environment_from_capture(struct network_environment *en
 
 void network_environment_free(struct network_environment *environment)
 {
-  if (environment->variables && environment->dns_udp != HANDLE_INVALID) {
+  if (environment->dns_udp != HANDLE_INVALID) {
     handle_close(environment->dns_udp);
   }
   free(environment->variables);

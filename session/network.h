@@ -18,7 +18,7 @@ struct network_runtime {
   size_t count;
   handle_t registry, policy, clock, random;
   uint64_t *ids;
-  bool waiting_link, background;
+  bool waiting_link, background, binding_failed;
 };
 
 bool network_config_apply(const struct network_config *config, struct network_runtime *runtime);

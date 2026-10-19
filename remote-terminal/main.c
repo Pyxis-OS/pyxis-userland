@@ -572,6 +572,22 @@ static uint64_t terminal_interests(const struct client *client)
   return interests;
 }
 
+static bool discovery_transient(enum call_status status)
+{
+  return status == CALL_UNAVAILABLE || status == CALL_NO_ROUTE || status == CALL_QUEUE_FULL ||
+      status == CALL_NO_MEMORY || status == CALL_TIMED_OUT;
+}
+
+static handle_t discovery_delay(handle_t clock)
+{
+  enum call_status status = clock_sleep_for(clock, RECONNECT_NS);
+  if (status != CALL_OK) {
+    report("reconnect delay", status);
+    failed = true;
+  }
+  return HANDLE_INVALID;
+}
+
 /* The endpoint exists only while discovering. Shutdown before connecting drops
  * every queued beacon, so a later session requires a fresh advertisement. */
 static handle_t discover_remote(handle_t service, handle_t tcp, handle_t clock,
@@ -581,10 +597,15 @@ static handle_t discover_remote(handle_t service, handle_t tcp, handle_t clock,
   enum call_status status = udp_open_broadcast(service, REMOTE_BEACON_PORT, &opened);
   if (status != CALL_OK) {
     report("open beacon endpoint", status);
+    if (discovery_transient(status)) {
+      return discovery_delay(clock);
+    }
     failed = true;
     return HANDLE_INVALID;
   }
   handle_t endpoint = opened.handle;
+  uint64_t ingress_interface = opened.local.interface_id;
+  bool retry = false;
   uint32_t address = 0;
   uint16_t port = 0;
   while (!failed) {
@@ -603,7 +624,8 @@ static handle_t discover_remote(handle_t service, handle_t tcp, handle_t clock,
     }
     if (status != CALL_OK) {
       report("receive beacon", status);
-      failed = true;
+      retry = discovery_transient(status);
+      failed = !retry;
       break;
     }
     if (remote_beacon_decode(packet, received.length, name, &port) && received.address &&
@@ -621,6 +643,14 @@ static handle_t discover_remote(handle_t service, handle_t tcp, handle_t clock,
   if (failed) {
     return HANDLE_INVALID;
   }
+  if (retry) {
+    return discovery_delay(clock);
+  }
+  if (!ingress_interface) {
+    report("beacon interface", CALL_BAD_REQUEST);
+    failed = true;
+    return HANDLE_INVALID;
+  }
   uint64_t now;
   status = clock_now(clock, &now);
   if (status != CALL_OK || now > UINT64_MAX - HELLO_NS) {
@@ -629,19 +659,21 @@ static handle_t discover_remote(handle_t service, handle_t tcp, handle_t clock,
     return HANDLE_INVALID;
   }
   struct tcp_connect_reply connected;
-  status = tcp_connect(tcp, address, port, now + HELLO_NS, &connected);
+  /* Preserve the ingress endpoint's retained interface after shutting it down.
+   * The separate held management factory cannot route this connect elsewhere. */
+  status = tcp_connect_path(tcp, (struct net_path){.interface_id = ingress_interface},
+      address, port, now + HELLO_NS, &connected);
   if (status == CALL_OK) {
     printf("remote-terminal: connected to %u.%u.%u.%u:%u\n", address >> 24,
         (address >> 16) & 255, (address >> 8) & 255, address & 255, port);
     return connected.handle;
   }
   report("reverse connect", status);
-  status = clock_sleep_for(clock, RECONNECT_NS);
-  if (status != CALL_OK) {
-    report("reconnect delay", status);
+  if (!discovery_transient(status)) {
     failed = true;
+    return HANDLE_INVALID;
   }
-  return HANDLE_INVALID;
+  return discovery_delay(clock);
 }
 
 int main(int argc, char **argv)
@@ -663,7 +695,7 @@ int main(int argc, char **argv)
   }
   handle_t listener = bootstrap_take_capability("tcp_listener");
   handle_t clock = bootstrap_capability("clock");
-  handle_t udp_beacons = bootstrap_capability("udp_beacons"), tcp = bootstrap_capability("tcp");
+  handle_t udp_beacons = bootstrap_capability("udp_beacons"), tcp = bootstrap_capability("remote_tcp");
   if ((beacon ? udp_beacons == HANDLE_INVALID || tcp == HANDLE_INVALID :
       listener == HANDLE_INVALID) || clock == HANDLE_INVALID ||
       bootstrap_capability("terminal") == HANDLE_INVALID || bootstrap_capability("launcher") == HANDLE_INVALID ||

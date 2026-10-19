@@ -101,11 +101,6 @@ static bool service_interface(const struct network_interface_config *config,
   if (clock_now(clock, &now) != CALL_OK) {
     return false;
   }
-  if (runtime->lease.address && now >= runtime->lease.expires_ns) {
-    if (!clear_lease(runtime) || !report(runtime, NET_DHCP_EXPIRED)) {
-      return false;
-    }
-  }
   if (!usable) {
     return report(runtime, NET_DHCP_WAIT_LINK);
   }
@@ -150,9 +145,30 @@ static bool service_interface(const struct network_interface_config *config,
   return true;
 }
 
+static bool expire_leases(struct network_runtime *runtime)
+{
+  uint64_t now;
+  if (clock_now(runtime->clock, &now) != CALL_OK) {
+    return false;
+  }
+  for (size_t i = 0; i < runtime->count; ++i) {
+    struct interface_runtime *entry = &runtime->interfaces[i];
+    if (entry->lease.address && now >= entry->lease.expires_ns) {
+      if (!clear_lease(entry)) {
+        return false;
+      }
+      report(entry, NET_DHCP_EXPIRED);
+    }
+  }
+  return true;
+}
+
 static bool service(const struct network_config *config, struct network_runtime *runtime,
     bool *working)
 {
+  if (!expire_leases(runtime)) {
+    return false;
+  }
   bool unbound = false;
   for (size_t i = 0; i < runtime->count; ++i) {
     struct net_interface_reply snapshot;
@@ -160,17 +176,29 @@ static bool service(const struct network_config *config, struct network_runtime 
       unbound |= !(snapshot.flags & NET_INTERFACE_BOUND);
     }
   }
-  if (unbound && runtime->policy != HANDLE_INVALID &&
-      !boot_network_bind(config, runtime->ids, runtime->registry, runtime->policy)) {
-    return false;
+  if (unbound && !runtime->binding_failed && runtime->policy != HANDLE_INVALID) {
+    enum call_status status = boot_network_bind(config, runtime->ids, runtime->registry, runtime->policy);
+    if (status != CALL_OK && status != CALL_UNAVAILABLE && status != CALL_QUEUE_FULL && status != CALL_NO_MEMORY) {
+      fprintf(stderr, "session: late interface binding failed (status %u)\n", status);
+      runtime->binding_failed = true;
+    }
   }
   runtime->waiting_link = false;
   *working = false;
   for (size_t i = 0; i < runtime->count; ++i) {
+    if (!expire_leases(runtime)) {
+      return false;
+    }
     if (!service_interface(&config->interfaces[i], &runtime->interfaces[i], runtime->clock,
         runtime->random, working)) {
       fprintf(stderr, "session: %s network maintainer failed\n", config->interfaces[i].name);
-      runtime->interfaces[i].failed = true;
+      struct interface_runtime *entry = &runtime->interfaces[i];
+      if (entry->owns_dhcp_settings && !clear_lease(entry)) {
+        return false;
+      }
+      dhcp_close(&entry->dhcp);
+      report(entry, NET_DHCP_FAILED);
+      entry->failed = true;
     }
     runtime->waiting_link |= !runtime->interfaces[i].failed &&
         (config->interfaces[i].dhcp || !runtime->interfaces[i].configured);
@@ -206,8 +234,43 @@ bool network_config_apply(const struct network_config *config, struct network_ru
     }
     runtime->ids[i + 1] = entry->id = snapshot.interface_id;
   }
-  bool working;
-  return service(config, runtime, &working);
+  uint64_t now;
+  if (clock_now(runtime->clock, &now) != CALL_OK || now > UINT64_MAX - INITIAL_ACQUIRE_NS) {
+    return false;
+  }
+  uint64_t deadline = now + INITIAL_ACQUIRE_NS;
+  for (;;) {
+    bool working;
+    if (!service(config, runtime, &working)) {
+      return false;
+    }
+    bool acquiring = false;
+    for (size_t i = 0; i < runtime->count; ++i) {
+      const struct interface_runtime *entry = &runtime->interfaces[i];
+      if (!entry->failed && !entry->configured) {
+        struct net_interface_reply snapshot;
+        if (net_interface_query(entry->authority, &snapshot) == CALL_OK) {
+          /* An absent optional interface never delays a working/local session.
+           * An active client shares this one aggregate foreground budget. */
+          acquiring |= entry->dhcp.endpoint != HANDLE_INVALID ||
+              (!config->interfaces[i].optional && (snapshot.flags & NET_INTERFACE_BOUND));
+        }
+      }
+    }
+    if (working || !acquiring) {
+      return true;
+    }
+    if (clock_now(runtime->clock, &now) != CALL_OK) {
+      return false;
+    }
+    if (now >= deadline) {
+      return true;
+    }
+    uint64_t wake = deadline - now < NETWORK_POLL_NS ? deadline : now + NETWORK_POLL_NS;
+    if (clock_sleep_until(runtime->clock, wake) != CALL_OK) {
+      return false;
+    }
+  }
 }
 
 bool network_config_wait_address(const struct network_config *config, struct network_runtime *runtime)
@@ -251,6 +314,11 @@ bool network_config_stop(const struct network_config *config, struct network_run
     success &= dhcp_close(&entry->dhcp);
   }
   runtime->waiting_link = false;
+  free(runtime->interfaces);
+  free(runtime->ids);
+  runtime->interfaces = NULL;
+  runtime->ids = NULL;
+  runtime->count = 0;
   return success;
 }
 

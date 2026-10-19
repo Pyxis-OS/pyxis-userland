@@ -272,7 +272,7 @@ static int decode_network(lua_State *state)
       lua_pop(state, 1);
       int integer;
       lua_Integer prefix = lua_tointegerx(state, 5, &integer);
-      if (!integer || prefix < 1 || prefix > 32) {
+      if (lua_type(state, 5) != LUA_TNUMBER || !integer || prefix < 1 || prefix > 32) {
         return luaL_error(state, "interface.prefix must be an integer from 1 to 32");
       }
       entry->prefix = (uint32_t)prefix;

@@ -20,7 +20,7 @@ bool boot_network_prepare(struct boot_network *network, handle_t registry, handl
 uint64_t boot_network_id(const struct boot_network *network, const char *name);
 /* Resolve selectors for the entire plan before committing a binding batch.
  * Missing optional/controllers without usable carrier remain defined/unbound. */
-bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
+enum call_status boot_network_bind(const struct network_config *config, const uint64_t *ids,
     handle_t registry, handle_t policy);
 
 #endif

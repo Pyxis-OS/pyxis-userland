@@ -731,8 +731,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
     return "acpi_tables requested but the ACPI table root is unavailable";
   }
   size_t network_entries = space->network ? authority->network.config.count * 2 + 1 : 0;
-  launch->resources = calloc(SERVICE_COUNT + 12 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 13 + BUNDLE_SOURCE_LIMIT + network_entries,
+  launch->resources = calloc(SERVICE_COUNT + 16 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 17 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   launch->package_trees = calloc(space->root_count ? space->root_count : 1,

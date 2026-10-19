@@ -71,7 +71,7 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[38 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[42 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
@@ -1247,6 +1247,45 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   memcpy(prepared->entries, resources, resource_count * sizeof(*prepared->entries));
   memcpy(prepared->entries + entry_count, roots, root_count * sizeof(*prepared->entries));
   entry_count += root_count;
+  if (session) {
+    /* Initial trusted interpreters carry only declared network ownership and
+     * management grants across SESSION. Ordinary programs never inherit these. */
+    for (size_t i = 0; i < prepared->captured.count; ++i) {
+      const struct environment_value *entry = &prepared->captured.values[i];
+      if (entry->kind != ENVIRONMENT_CAP || entry->flags) {
+        continue;
+      }
+      uint64_t protocol, rights;
+      if (!strcmp(entry->name, "net_policy")) {
+        protocol = PROTOCOL_NET_POLICY;
+        rights = NET_POLICY_RIGHT_MANAGE;
+      } else if (!strncmp(entry->name, "config.", 7) && entry->name[7]) {
+        protocol = PROTOCOL_NET_INTERFACE;
+        rights = NET_INTERFACE_RIGHTS;
+      } else if (!strncmp(entry->name, "dhcp.", 5) && entry->name[5]) {
+        protocol = PROTOCOL_UDP_SERVICE;
+        rights = UDP_SERVICE_RIGHT_BROADCAST;
+      } else if (!strcmp(entry->name, "remote_interface")) {
+        protocol = PROTOCOL_NET_INTERFACE;
+        rights = NET_INTERFACE_RIGHT_READ;
+      } else if (!strcmp(entry->name, "remote_tcp")) {
+        protocol = PROTOCOL_TCP_SERVICE;
+        rights = TCP_SERVICE_RIGHTS;
+      } else {
+        continue;
+      }
+      struct handle_info info;
+      enum call_status status = handle_query(entry->handle, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (info.protocol != protocol || (info.rights & rights) != rights) {
+        return CALL_DENIED;
+      }
+      prepared->entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(entry->name, grant_count);
+      grants[grant_count++] = (struct launch_grant){entry->handle, rights, 0};
+    }
+  }
   for (size_t i = 0; i < environment->count; ++i) {
     const struct launch_environment_entry *entry = &environment->variables[i];
     bool stream_policy = false;

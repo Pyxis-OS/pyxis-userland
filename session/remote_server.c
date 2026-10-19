@@ -38,7 +38,7 @@
     DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO)
 
 static bool wait_for_address(handle_t authority, handle_t clock,
-    const struct network_config *network, uint32_t *address)
+    const struct network_config *network, struct net_interface_reply *selected)
 {
   (void)network;
   for (;;) {
@@ -49,7 +49,7 @@ static bool wait_for_address(handle_t authority, handle_t clock,
       return false;
     }
     if (snapshot.flags & NET_INTERFACE_ADDRESS_VALID) {
-      *address = snapshot.address;
+      *selected = snapshot;
       return true;
     }
     if (clock_sleep_for(clock, NETWORK_ASSIGNMENT_SLEEP_NS) != CALL_OK) {
@@ -93,8 +93,8 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
 
-  uint32_t address;
-  if (!wait_for_address(authority, clock, network, &address)) {
+  struct net_interface_reply selected;
+  if (!wait_for_address(authority, clock, network, &selected)) {
     return EXIT_FAILURE;
   }
 
@@ -111,10 +111,11 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 20, RESOURCE_CAPACITY = 24 };
+  enum { OPTIONAL_COUNT = 24 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
+  struct launch_environment_entry *resources = NULL;
   if (!grants) {
     environment_capture_close(&captured);
     return EXIT_FAILURE;
@@ -125,11 +126,18 @@ int launch_remote_server(const struct session_config *config,
   grants[TERMINAL] = (struct launch_grant){terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0};
   grants[STDOUT] = (struct launch_grant){output, CONSOLE_RIGHT_WRITE, 0};
   grants[STDERR] = (struct launch_grant){output, CONSOLE_RIGHT_WRITE, 0};
-  struct launch_environment_entry resources[RESOURCE_CAPACITY] = {
-    PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),
-    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER), PROFILE_CAP((uintptr_t)"terminal", TERMINAL),
-    PROFILE_CAP((uintptr_t)(beacon ? "udp_beacons" : "tcp_listener"), NETWORK_ENDPOINT),
-  };
+  resources = calloc(grant_capacity, sizeof(*resources));
+  if (!resources) {
+    free(grants);
+    environment_capture_close(&captured);
+    return EXIT_FAILURE;
+  }
+  resources[0] = (struct launch_environment_entry)PROFILE_CAP("memory", MEMORY);
+  resources[1] = (struct launch_environment_entry)PROFILE_CAP("clock", CLOCK);
+  resources[2] = (struct launch_environment_entry)PROFILE_CAP("launcher", LAUNCHER);
+  resources[3] = (struct launch_environment_entry)PROFILE_CAP("terminal", TERMINAL);
+  resources[4] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(
+      beacon ? "udp_beacons" : "tcp_listener", NETWORK_ENDPOINT);
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
   grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
@@ -221,7 +229,11 @@ int launch_remote_server(const struct session_config *config,
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", grant_count);
   grants[grant_count++] = (struct launch_grant){bootstrap_capability("net_registry"), NET_REGISTRY_RIGHT_READ, 0};
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", grant_count);
-  grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
+  grants[grant_count++] = (struct launch_grant){bootstrap_capability("tcp"), TCP_SERVICE_RIGHT_CONNECT, 0};
+  if (beacon) {
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_tcp", grant_count);
+    grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
+  }
   handle_t random = bootstrap_capability("random");
   if (random != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"random", grant_count);
@@ -269,7 +281,7 @@ int launch_remote_server(const struct session_config *config,
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
   const char *arguments[] = {"bin://remote-terminal.pxe", tab_width, "--beacon", beacon};
-  size_t entry_capacity = resource_count + root_count + environment_count + captured.count + 3;
+  size_t entry_capacity = resource_count + root_count + environment_count + captured.count + 4;
   entries = calloc(entry_capacity, sizeof(*entries));
   if (!entries) {
     goto done;
@@ -320,7 +332,8 @@ int launch_remote_server(const struct session_config *config,
     grants[NETWORK_ENDPOINT] = (struct launch_grant){udp_beacons, UDP_SERVICE_RIGHT_BROADCAST, 0};
   } else {
     struct tcp_listen_reply reply;
-    status = tcp_listen(tcp, address, port, &reply);
+    status = tcp_listen_path(tcp, (struct net_path){.interface_id = selected.interface_id,
+      .source = selected.address}, port, &reply);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot start remote listener (status %u)\n", status);
       goto done;
@@ -338,15 +351,13 @@ int launch_remote_server(const struct session_config *config,
   if (beacon) {
     printf("remote: waiting for beacon %s\n", beacon);
   } else {
-    printf("remote: listening on %u.%u.%u.%u:%u\n", address >> 24,
-        (address >> 16) & 255, (address >> 8) & 255, address & 255, port);
+    printf("remote: listening on %u.%u.%u.%u:%u\n", selected.address >> 24,
+        (selected.address >> 16) & 255, (selected.address >> 8) & 255, selected.address & 255, port);
   }
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
-  if (!bootstrap_release_except(NULL, 0)) {
-    result = EXIT_FAILURE;
-  }
+  free(resources);
   free(entries);
   free(grants);
   environment_capture_close(&captured);

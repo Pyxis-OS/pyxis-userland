@@ -19,12 +19,12 @@ static size_t rank(const struct network_interface_config *config,
   return config->preference_count;
 }
 
-bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
+enum call_status boot_network_bind(const struct network_config *config, const uint64_t *ids,
     handle_t registry, handle_t policy)
 {
   struct net_interface_binding *bindings = calloc(config->count, sizeof(*bindings));
   if (config->count && !bindings) {
-    return false;
+    return CALL_NO_MEMORY;
   }
   size_t count = 0;
   for (size_t i = 0; i < config->count; ++i) {
@@ -38,7 +38,7 @@ bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
     }
     if (status != CALL_OK) {
       free(bindings);
-      return false;
+      return status;
     }
     if (interface.flags & NET_INTERFACE_BOUND) {
       continue;
@@ -52,15 +52,14 @@ bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
       status = net_registry_next_controller(registry, after, &controller);
       if (status != CALL_OK) {
         free(bindings);
-        return false;
+        return status;
       }
       complete = (controller.flags & NET_CONTROLLER_INVENTORY_COMPLETE) != 0;
       if (!controller.controller_id) {
         break;
       }
       after = controller.controller_id;
-      if (controller.interface_class != entry->interface_class ||
-          controller.flags & NET_CONTROLLER_BOUND) {
+      if (controller.interface_class != entry->interface_class) {
         continue;
       }
       bool matches_selector = entry->selector.kind == NET_SELECT_MAC ?
@@ -69,6 +68,14 @@ bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
           (controller.flags & (NET_CONTROLLER_PREPARED | NET_CONTROLLER_CARRIER_KNOWN | NET_CONTROLLER_LINK_UP)) ==
               (NET_CONTROLLER_PREPARED | NET_CONTROLLER_CARRIER_KNOWN | NET_CONTROLLER_LINK_UP);
       if (!matches_selector) {
+        continue;
+      }
+      if (controller.flags & NET_CONTROLLER_BOUND) {
+        if (entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
+          fprintf(stderr, "network: %s controller is already bound\n", entry->name);
+          free(bindings);
+          return CALL_BUSY;
+        }
         continue;
       }
       ++matches;
@@ -80,13 +87,13 @@ bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
     if (matches > 1 && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
       fprintf(stderr, "network: %s selector is ambiguous\n", entry->name);
       free(bindings);
-      return false;
+      return CALL_BUSY;
     }
     if (!selected.controller_id) {
       if (complete && !entry->optional && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
         fprintf(stderr, "network: required %s controller is absent\n", entry->name);
         free(bindings);
-        return false;
+        return CALL_NOT_FOUND;
       }
       continue;
     }
@@ -94,7 +101,7 @@ bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
       if (bindings[j].selector.controller_id == selected.controller_id) {
         fprintf(stderr, "network: controller selected by multiple interfaces\n");
         free(bindings);
-        return false;
+        return CALL_BAD_REQUEST;
       }
     }
     bindings[count++] = (struct net_interface_binding){
@@ -104,10 +111,7 @@ bool boot_network_bind(const struct network_config *config, const uint64_t *ids,
   }
   enum call_status status = count ? net_policy_bind(policy, bindings, count) : CALL_OK;
   free(bindings);
-  if (status != CALL_OK) {
-    fprintf(stderr, "network: binding batch failed (status %u)\n", status);
-  }
-  return status == CALL_OK;
+  return status;
 }
 
 uint64_t boot_network_id(const struct boot_network *network, const char *name)
@@ -180,7 +184,9 @@ bool boot_network_prepare(struct boot_network *network, handle_t registry, handl
       return false;
     }
   }
-  if (!boot_network_bind(&network->config, network->ids, registry, policy)) {
+  status = boot_network_bind(&network->config, network->ids, registry, policy);
+  if (status != CALL_OK && status != CALL_UNAVAILABLE && status != CALL_QUEUE_FULL && status != CALL_NO_MEMORY) {
+    fprintf(stderr, "boot-init: interface binding failed (status %u)\n", status);
     return false;
   }
   struct net_policy_request settings = {
