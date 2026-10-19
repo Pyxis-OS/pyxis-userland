@@ -74,6 +74,7 @@ CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o selection.o)
 CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
+PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
@@ -85,8 +86,8 @@ SCREENSHOT_SAVER_OBJECTS := $(BUILD)/screenshot/saver.o $(BUILD)/screenshot/png.
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
-.PHONY: fat32ctl net config
-all: $(INSTALL_PROGRAMS) fat32ctl net config $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+.PHONY: fat32ctl net config pkg
+all: $(INSTALL_PROGRAMS) fat32ctl net config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Lua scripts for hand-run native checks, installed as boot://share/checks/.
 CHECK_SCRIPTS := console-burst.lua console-flood.lua cpu-busy.lua exit-latency.lua
@@ -104,7 +105,7 @@ install: all
 	    if [ "$$program" = shell ]; then name=init-shell; fi; \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/$$name.pxe"; \
 	  done; \
-	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/shell.pxb" "$$staging/"; \
+	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$$staging/"; \
 	  install -m 644 init/development.pxs "$$staging/init"; \
 	  install -m 644 init/readonly.pxs "$$staging/init-readonly"; \
 	  install -m 644 init/services.pxs "$$staging/init-services"; \
@@ -407,3 +408,14 @@ $(BUILD)/httpfs.pxb: $(BUILD)/httpfs.pxe httpfs/manifest.json
 	@install -m 644 httpfs/manifest.json "$@.tmp/manifest.json"
 	@rm -rf "$@"
 	@mv "$@.tmp" "$@"
+
+pkg: $(BUILD)/pkg.pxb/manifest.json
+
+$(BUILD)/pkg.pxe: $(PKG_OBJECTS) $(BUILD)/xfer/hash.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(PKG_OBJECTS) $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+
+$(BUILD)/pkg.pxb/manifest.json: $(BUILD)/pkg.pxe pkg/manifest.json pkg/README.md
+	@mkdir -p $(BUILD)/pkg.pxb/app/bin
+	install -m 755 $(BUILD)/pkg.pxe $(BUILD)/pkg.pxb/app/bin/pkg.pxe
+	install -m 644 pkg/README.md $(BUILD)/pkg.pxb/app/README.md
+	install -m 644 pkg/manifest.json $@

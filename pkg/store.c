@@ -116,6 +116,7 @@ bool pkg_selection_load(handle_t packages, bool current, uint64_t number,
       sizeof(*selection->entries));
   if (!selection->entries) {
     package_set_free(set);
+    *selection = (struct pkg_selection){0};
     *reason = "cannot allocate package selection";
     return false;
   }

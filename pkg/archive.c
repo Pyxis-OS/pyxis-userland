@@ -11,7 +11,6 @@
 #define BLOCK_SIZE 512
 #define IO_SIZE 16384
 #define INVENTORY_SIZE_MAX ((uint64_t)PKG_MAX_FILES * PKG_INVENTORY_LINE_MAX)
-#define MEMBER_COUNT_MAX (3 + 2 * PKG_MAX_FILES)
 #define DIRECTORY_DEPTH_MAX (PKG_PATH_MAX / 2 + 1)
 #define READ_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 #define WRITE_DIRECTORY_RIGHTS (READ_DIRECTORY_RIGHTS | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE)
@@ -25,7 +24,6 @@ struct member {
 struct archive_reader {
   handle_t file;
   uint64_t size, position;
-  size_t members;
 };
 
 struct inventory_reader {
@@ -229,14 +227,12 @@ static bool next_member(struct archive_reader *reader, struct member *member,
     const char **reason)
 {
   unsigned char bytes[BLOCK_SIZE];
-  if (reader->members == MEMBER_COUNT_MAX || reader->position > reader->size ||
-      reader->size - reader->position < BLOCK_SIZE) {
-    return fail(reason, "missing or excessive archive members");
+  if (reader->position > reader->size || reader->size - reader->position < BLOCK_SIZE) {
+    return fail(reason, "missing archive member");
   }
   if (!read_exact(reader->file, reader->position, bytes, sizeof(bytes), reason)) {
     return false;
   }
-  ++reader->members;
   uint64_t stored = 0;
   if (!octal(bytes + 148, 7, &stored) || bytes[155] != ' ') {
     return fail(reason, "invalid USTAR checksum field");
