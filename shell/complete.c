@@ -1,5 +1,7 @@
 #include "shell.h"
 #include <directory.h>
+#include <command_search.h>
+#include <package_commands.h>
 #include <handle.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +12,7 @@
 static const char *const builtins[] = {
   "affinity", "cd", "describe", "exit", "export", "mount", "poweroff",
   "reboot", "release", "revoke", "revocable", "service", "session",
-  "sync", "title", "unset",
+  "sync", "title", "unset", "which",
 };
 
 struct names {
@@ -49,15 +51,11 @@ static bool add_name(struct names *names, const char *name, size_t length)
   return true;
 }
 
-/* Programs are NAME.pxe files. Failure to list a root, such as a withheld
- * ENUMERATE right, simply offers fewer names. */
-static bool add_programs(struct shell *shell, const char *root, const char *prefix,
+/* Completion offers hints only from held entries; selection still validates
+ * the actual target at launch. Withheld ENUMERATE offers no names. */
+static bool add_programs(handle_t directory, bool projected, const char *prefix,
     size_t prefix_length, struct names *names)
 {
-  handle_t directory;
-  if (shell_open_directory(shell, root, DIRECTORY_RIGHT_ENUMERATE, &directory) != CALL_OK) {
-    return true;
-  }
   bool ok = true;
   size_t capacity = 128;
   char *name = malloc(capacity);
@@ -79,21 +77,25 @@ static bool add_programs(struct shell *shell, const char *root, const char *pref
     }
     cursor = entry.cursor;
     size_t length = strlen(name);
-    if (entry.kind != DIRECTORY_KIND_FILE || length <= 4 || strcmp(name + length - 4, ".pxe") ||
-        length - 4 < prefix_length || memcmp(name, prefix, prefix_length)) {
-      continue;
+    if (!projected) {
+      if (length <= 4 ||
+          !((entry.kind == DIRECTORY_KIND_FILE && !strcmp(name + length - 4, ".pxe")) ||
+            (entry.kind == DIRECTORY_KIND_DIRECTORY && !strcmp(name + length - 4, ".pxb")))) {
+        continue;
+      }
+      length -= 4;
     }
+    if (length < prefix_length || memcmp(name, prefix, prefix_length)) continue;
     bool bare = true;
-    for (size_t i = 0; bare && i < length - 4; ++i) {
+    for (size_t i = 0; bare && i < length; ++i) {
       bare = bare_character((unsigned char)name[i]);
     }
-    if (bare && !add_name(names, name, length - 4)) {
+    if (bare && !add_name(names, name, length)) {
       ok = false;
       break;
     }
   }
   free(name);
-  handle_close(directory);
   return ok;
 }
 
@@ -126,9 +128,24 @@ static bool complete_command(struct shell *shell, const struct completion_word *
       ok = add_name(&names, builtins[i], length);
     }
   }
-  ok = ok && add_programs(shell, "bin://", prefix, prefix_length, &names) &&
-      add_programs(shell, "boot://", prefix, prefix_length, &names) &&
-      add_programs(shell, "home://bin", prefix, prefix_length, &names);
+  struct command_search_capture search = {0};
+  enum call_status status = command_search_capture_init(shell->environment, &search);
+  if (status != CALL_OK && status != CALL_NOT_FOUND) ok = false;
+  for (size_t i = 0; ok && i < search.count; ++i) {
+    handle_t fixed = HANDLE_INVALID;
+    struct package_command_info info;
+    status = package_commands_info(search.entries[i].handle, &info);
+    bool projected = status == CALL_OK;
+    if (projected) {
+      status = package_commands_capture(search.entries[i].handle, HANDLE_INVALID, &fixed);
+    }
+    if (status == CALL_OK || status == CALL_BAD_OPERATION) {
+      ok = add_programs(projected ? fixed : search.entries[i].handle,
+          projected, prefix, prefix_length, &names);
+    }
+    if (fixed) handle_close(fixed);
+  }
+  command_search_capture_close(&search);
 
   size_t unique = 0;
   if (ok) {

@@ -32,16 +32,14 @@ it excludes objects/debug ELFs and removes stale installed files. Application bu
 runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang, US key layout, terminal style and UTF-8 text sources. TLSF is vendored locally with its license and pin.
 
-Shell and Lua launch lookup share `program_open` from [program.h](include/program.h).
-A bare name selects `bin://NAME.pxe`, then the default entry of `bin://NAME.pxb`,
-then the explicitly configured `PYXIS_BUNDLE_CATALOG`, then
-`boot://NAME.pxe`, then the user's `home://bin/NAME.pxe` and
-`home://bin/NAME.pxb`, so user programs never shadow system ones. Only absence permits fallback; a broken or denied candidate
-fails. Direct hits do not read the catalog or enumerate bin. Explicit `.pxb`
-paths use the same manifest, read-only app/resource roots, bounded stack and
-actual-grant preparation; plain FILE paths keep ordinary launch behavior.
-Logical `bin://NAME` aliases retain literal FILE lookup before the same bin
-candidates and catalog, without the boot or home candidates. ZIP launch remains unavailable.
+Shell, Lua jobs and libuv share owned `program_open` selections from
+[program.h](include/program.h). Bare names search only the inherited `commands`
+capability list. Trusted startup supplies read-only system roots, then the live
+package-command view. No list means no bare lookup; bin, boot, catalog, home and
+cwd are never recovered implicitly. Explicit `bin://NAME.pxe`, `.pxb` paths and
+relative `./NAME.pxe` retain their own held authority. Bundle selections preserve
+manifest, stack, grants and versioned resources through admission. `which NAME`
+reports that same resolver's selected entry and package provenance without launch.
 
 [examples/pointer-min](examples/pointer-min/main.c) is a minimal commented pointer
 program for people writing their own. It is built as the `pointer-min` program, and

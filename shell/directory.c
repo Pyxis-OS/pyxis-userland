@@ -96,11 +96,10 @@ static enum call_status prepare_open_workspace(struct shell *shell, const char *
   return prepare_workspace(shell, strlen(path));
 }
 
-enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,
-    struct bundle_program **bundle)
+enum call_status shell_open_image(struct shell *shell, const char *command,
+    struct command_selection **selection)
 {
-  *image = HANDLE_INVALID;
-  *bundle = NULL;
+  *selection = NULL;
   size_t length = strlen(command);
   if (length > SIZE_MAX - PROGRAM_LOOKUP_EXTRA) {
     return CALL_LIMIT;
@@ -110,7 +109,7 @@ enum call_status shell_open_image(struct shell *shell, const char *command, hand
     status = prepare_open_workspace(shell, command);
   }
   return status == CALL_OK ? program_open(shell->directory, command, &shell->workspace,
-      image, bundle) : status;
+      selection) : status;
 }
 
 /* Open only: truncation waits until every redirect has a retained file grant. */

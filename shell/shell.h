@@ -160,7 +160,7 @@ enum command_result shell_release_fat32(struct shell *shell, char **arguments, s
 /* Close owned data/control grants without implicit retirement. */
 void shell_fat_close(struct shell *shell);
 /* Tab completion. The word under the cursor is a command name (the first word
- * of a pipeline stage: builtins and the programs in bin:// and boot://) or a
+ * of a pipeline stage: builtins and names from the held command list) or a
  * path (any argument or redirection target: see complete_path.c). */
 bool shell_complete(void *context, const char *line, size_t cursor,
     struct term_candidates *result);
@@ -177,9 +177,10 @@ struct completion_word {
 bool completion_scan(const char *line, size_t cursor, struct completion_word *word);
 bool shell_complete_path(struct shell *shell, const struct completion_word *word,
     struct term_candidates *result);
-/* IMAGE is owned for plain programs, borrowed from BUNDLE when it is present. */
-enum call_status shell_open_image(struct shell *shell, const char *command, handle_t *image,
-    struct bundle_program **bundle);
+/* Own the complete selected image/bundle/provenance until admission closes. */
+struct command_selection;
+enum call_status shell_open_image(struct shell *shell, const char *command,
+    struct command_selection **selection);
 enum call_status shell_open_redirect(struct shell *shell, const char *path,
     bool input, handle_t *file);
 /* Typed OPEN without truncation; the caller owns the complete result. */

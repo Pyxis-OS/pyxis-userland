@@ -39,6 +39,7 @@
 #include <abi/wait.h>
 #include <clock.h>
 #include <bundle_launch.h>
+#include <command_selection.h>
 #include <job_work.h>
 #include <console.h>
 #include <handle.h>
@@ -63,6 +64,7 @@
 enum { CHILD_MEMORY, CHILD_ROOT };
 
 struct prepared_stage {
+  struct command_selection *program;
   handle_t image;
   struct bundle_program *bundle;
   struct bundle_launch *bundle_launch;
@@ -269,7 +271,12 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
     }
     bundle_launch_close(stages[i].bundle_launch);
     stages[i].bundle_launch = NULL;
-    if (stages[i].bundle) {
+    if (stages[i].program) {
+      command_selection_close(stages[i].program);
+      stages[i].program = NULL;
+      stages[i].image = HANDLE_INVALID;
+      stages[i].bundle = NULL;
+    } else if (stages[i].bundle) {
       bundle_program_close(stages[i].bundle);
       stages[i].bundle = NULL;
       stages[i].image = HANDLE_INVALID;
@@ -1903,13 +1910,15 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   for (size_t i = 0; i < user_count; ++i) {
     failed_stage = i;
     path = stages[i].arguments[0];
-    status = shell_open_image(shell, path, &prepared[i].image, &prepared[i].bundle);
+    status = shell_open_image(shell, path, &prepared[i].program);
     if (status != CALL_OK) {
       if (report_scope) {
         report_scope->evaluated = true;
       }
       goto failed;
     }
+    prepared[i].image = prepared[i].program->image;
+    prepared[i].bundle = prepared[i].program->bundle;
   }
 
   bool inherited_stream[ENVIRONMENT_STREAM_COUNT] = {0};
@@ -2087,13 +2096,15 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     failed_stage = owner[i];
     operation = "shell: open output relay image";
     path = stages[i].arguments[0];
-    status = shell_open_image(shell, stages[i].arguments[0], &prepared[i].image, &prepared[i].bundle);
+    status = shell_open_image(shell, stages[i].arguments[0], &prepared[i].program);
     if (status != CALL_OK) {
       if (report_scope) {
         report_scope->evaluated = true;
       }
       goto failed;
     }
+    prepared[i].image = prepared[i].program->image;
+    prepared[i].bundle = prepared[i].program->bundle;
   }
 
   /* Install pipeline defaults first, preserving endpoints a later 2>&1 may

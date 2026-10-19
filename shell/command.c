@@ -4,6 +4,7 @@
 #include "values.h"
 #include "../common/directory.h"
 #include <mount.h>
+#include <command_selection.h>
 #include <environment.h>
 #include <power.h>
 #include <handle.h>
@@ -354,7 +355,7 @@ bool shell_builtin(char **arguments, size_t count)
   const char *name = arguments[0];
   return shell_value_builtin(name) || !strcmp(name, "exit") || !strcmp(name, "cd") ||
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
-      !strcmp(name, "session") ||
+      !strcmp(name, "session") || !strcmp(name, "which") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
       (!strcmp(name, "sync") && count > 1 &&
        (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
@@ -398,6 +399,26 @@ static enum command_result builtin_command(struct shell *shell,
     shell->exit_status = status;
     shell->exit_requested = true;
     return COMMAND_EXIT;
+  }
+  if (strcmp(arguments[0], "which") == 0) {
+    if (count != 2) return shell_error(shell, "usage: which NAME\n");
+    struct command_selection *selection = NULL;
+    enum call_status status = shell_open_image(shell, arguments[1], &selection);
+    if (status != CALL_OK) return shell_directory_error(shell, "shell: which", arguments[1], status);
+    int written;
+    if (selection->explicit_path) {
+      written = printf("%s: explicit %s\n", arguments[1], selection->explicit_path);
+    } else if (selection->package) {
+      written = printf("%s: entry %zu [%s] %s@%s set %llu %s\n", arguments[1],
+          selection->ordinal + 1, selection->label, selection->target.id,
+          selection->target.version, (unsigned long long)selection->origin.set,
+          selection->target.path);
+    } else {
+      written = printf("%s: entry %zu [%s] %s\n", arguments[1],
+          selection->ordinal + 1, selection->label, selection->path);
+    }
+    command_selection_close(selection);
+    return written < 0 ? COMMAND_FATAL : COMMAND_OK;
   }
   if (strcmp(arguments[0], "cd") == 0) {
     if (count != 2) {
