@@ -226,6 +226,10 @@ static bool commands_parse(const struct literal_value *value,
             !command_name(command->command)))) {
       return false;
     }
+    if (bundle && strcmp(command->name, command->command)) {
+      *reason = "bundle export name must match its declared command";
+      return false;
+    }
   }
   return true;
 }
