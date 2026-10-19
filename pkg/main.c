@@ -28,7 +28,6 @@ struct client {
   struct offered_package *offered;
   size_t offered_count;
   uint64_t timeout;
-  bool cancelled;
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
 };
@@ -38,35 +37,14 @@ struct client {
 
 static struct client client;
 
-/* While waiting inside the HTTP provider, preserve normal foreground Ctrl+C.
- * Local verification/extraction polls Ctrl+C as data at bounded I/O boundaries. */
-static void passthrough(bool enabled)
+/* Preparation keeps ordinary foreground interruption and never scans stdin.
+ * Only the confirmed visibility switch holds passthrough until it settles. */
+static void release_publish_guard(void)
 {
-  if (!enabled && client.passthrough != HANDLE_INVALID) {
+  if (client.passthrough != HANDLE_INVALID) {
     handle_close(client.passthrough);
     client.passthrough = HANDLE_INVALID;
   }
-  if (enabled && client.terminal.input != HANDLE_INVALID &&
-      client.passthrough == HANDLE_INVALID) {
-    console_passthrough(client.terminal.input, &client.passthrough);
-  }
-}
-
-bool pkg_cancelled(void)
-{
-  if (!client.cancelled && client.passthrough != HANDLE_INVALID) {
-    unsigned char bytes[32];
-    size_t count = 0;
-    enum call_status status = console_read_timeout(client.terminal.input, bytes,
-        sizeof(bytes), 0, &count);
-    if (status != CALL_OK && status != CALL_TIMED_OUT) {
-      client.cancelled = true;
-    }
-    for (size_t i = 0; i < count; ++i) {
-      client.cancelled |= bytes[i] == 3;
-    }
-  }
-  return client.cancelled;
 }
 
 static bool fail(const char *reason)
@@ -137,7 +115,7 @@ static bool read_snapshot(handle_t file, char **bytes, size_t *size)
   size_t offset = 0;
   while (offset < length) {
     size_t count;
-    if (pkg_cancelled() || file_read(file, offset, buffer + offset,
+    if (file_read(file, offset, buffer + offset,
           length - offset, &count) != CALL_OK || !count) {
       free(buffer);
       return fail("repository index read failed or cancelled");
@@ -152,10 +130,8 @@ static bool read_snapshot(handle_t file, char **bytes, size_t *size)
 static bool fetch(const char *base, const char *relative, bool index, uint64_t size,
     handle_t *file)
 {
-  passthrough(false);
   enum call_status status = pkg_fetch(&client.fetch, base, relative, index, size,
       client.timeout, file, client.detail);
-  passthrough(true);
   if (status != CALL_OK) {
     fprintf(stderr, "pkg: fetch failed (status %u): %s\n", status, client.detail);
     return fail("no complete download; active set unchanged");
@@ -578,8 +554,11 @@ static bool mutate(const char *command, int argc, char **argv)
     }
   }
   if (ok) {
-    ok = review(&before, &after) && !pkg_cancelled();
+    ok = review(&before, &after);
     if (!ok && !client.reason) client.reason = "change cancelled";
+  }
+  if (ok && console_passthrough(client.terminal.input, &client.passthrough) != CALL_OK) {
+    ok = fail("cannot guard the confirmed set switch");
   }
   if (ok) {
     ok = pkg_publish(client.packages, &after, previous, &uncertain, &client.reason);
@@ -640,7 +619,6 @@ int main(int argc, char **argv)
       return EXIT_FAILURE;
     }
   }
-  passthrough(true);
   bool ok = false;
   if (mutation) {
     ok = mutate(command, count, arguments);
@@ -666,12 +644,12 @@ int main(int argc, char **argv)
     }
     pkg_selection_free(&selection);
   } else {
-    passthrough(false);
+    release_publish_guard();
     if (hash_ready) hash_close();
     free(client.offered);
     return usage();
   }
-  passthrough(false);
+  release_publish_guard();
   if (hash_ready) hash_close();
   free(client.offered);
   if (!ok) fprintf(stderr, "pkg: %s\n", client.reason ? client.reason : "operation failed");

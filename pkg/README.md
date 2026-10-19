@@ -18,5 +18,8 @@ network. A damaged current requires an explicit verified set choice.
 
 Unlock is explicit recovery after a writer has stopped. It reports staging,
 clears only the abandoned lock and retains incomplete attempts. Never use it to
-cancel a live writer. Boot cleanup removes unused versions before consumers
-start, retaining the active and previous sets. No archive scripts execute.
+cancel a live writer. Ctrl+C during download or preparation uses ordinary
+foreground interruption and can leave this lock; cancel at Review releases it.
+The confirmed switch is guarded until its actual result is known. Boot cleanup
+removes unused versions before consumers start, retaining the active and previous
+sets. No archive scripts execute.

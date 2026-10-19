@@ -3,9 +3,6 @@
 
 #include "metadata.h"
 
-/* Poll pending cancellation at bounded read boundaries. */
-bool pkg_cancelled(void);
-
 /* snapshot is one completed immutable provider FILE retained through this call.
  * destination is a fresh exclusively created directory, or HANDLE_INVALID for
  * verification only. Passed handles remain borrowed. A successful output owns

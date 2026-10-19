@@ -62,9 +62,6 @@ static bool read_exact(handle_t file, uint64_t offset, void *bytes, size_t size,
 {
   unsigned char *output = bytes;
   while (size) {
-    if (pkg_cancelled()) {
-      return fail(reason, "cancelled");
-    }
     size_t count = 0;
     size_t wanted = size > IO_SIZE ? IO_SIZE : size;
     if (file_read(file, offset, output, wanted, &count) != CALL_OK ||
@@ -392,9 +389,6 @@ static bool directory_count(handle_t directory, size_t expected, const char **re
   struct directory_cursor cursor = {0};
   size_t count = 0;
   for (;;) {
-    if (pkg_cancelled()) {
-      return fail(reason, "cancelled");
-    }
     char name[256];
     struct directory_enumerate_reply reply;
     if (directory_enumerate(directory, &cursor, name, sizeof(name), &reply) != CALL_OK) {
@@ -541,9 +535,6 @@ static bool process_inventory(struct inventory_reader *inventory,
     }
     if (end) {
       break;
-    }
-    if (pkg_cancelled()) {
-      return fail(reason, "cancelled");
     }
     if (!parse_line(text, &line, reason)) {
       return false;
