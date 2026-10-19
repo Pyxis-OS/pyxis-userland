@@ -1,6 +1,7 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include "../libconfig/boot.h"
+#include "network.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
 #include <abi/echo.h>
@@ -75,7 +76,7 @@ enum service {
   SERVICE_UDP,
   SERVICE_TCP,
   SERVICE_RANDOM,
-  SERVICE_NET_CONFIG,
+  SERVICE_NET_REGISTRY,
   SERVICE_PROFILE,
   SERVICE_PIPE,
   SERVICE_ENDPOINT,
@@ -96,10 +97,10 @@ static const struct {
   [SERVICE_SYSTEM_INFO] = {"system_info", SYSTEM_INFO_RIGHT_READ, 0},
   [SERVICE_LOG] = {"log", LOG_RIGHT_READ, 0},
   [SERVICE_ECHO] = {"echo", ECHO_RIGHT_SEND, 0},
-  [SERVICE_UDP] = {"udp", UDP_SERVICE_RIGHT_OPEN, UDP_SERVICE_RIGHT_BROADCAST},
+  [SERVICE_UDP] = {"udp", UDP_SERVICE_RIGHT_OPEN, 0},
   [SERVICE_TCP] = {"tcp", TCP_SERVICE_RIGHTS, 0},
   [SERVICE_RANDOM] = {"random", RANDOM_RIGHT_READ, 0},
-  [SERVICE_NET_CONFIG] = {"net_config", NET_CONFIG_RIGHT_READ, NET_CONFIG_RIGHT_WRITE},
+  [SERVICE_NET_REGISTRY] = {"net_registry", NET_REGISTRY_RIGHT_READ, 0},
   [SERVICE_PROFILE] = {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST, 0},
   [SERVICE_PIPE] = {"pipe", PIPE_SERVICE_RIGHT_CREATE, 0},
   [SERVICE_ENDPOINT] = {"service", ENDPOINT_SERVICE_RIGHT_CREATE, 0},
@@ -116,6 +117,7 @@ enum {
 };
 
 struct authority {
+  struct boot_network network;
   handle_t factory;
   handle_t services[SERVICE_COUNT];
   handle_t boot, tmp;
@@ -166,12 +168,23 @@ static bool take_authority(struct authority *authority)
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID &&
       authority->input_policy != HANDLE_INVALID;
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
+    if (i == SERVICE_ECHO || i == SERVICE_UDP || i == SERVICE_TCP) {
+      continue;
+    }
     authority->services[i] = bootstrap_capability(services[i].name);
     if (authority->services[i] == HANDLE_INVALID) {
       fprintf(stderr, "boot-init: missing resource %s\n", services[i].name);
       complete = false;
     }
   }
+  if (complete && !boot_network_prepare(&authority->network,
+      authority->services[SERVICE_NET_REGISTRY], bootstrap_capability("net_policy"))) {
+    fputs("boot-init: network profile setup failed\n", stderr);
+    complete = false;
+  }
+  authority->services[SERVICE_ECHO] = authority->network.echo;
+  authority->services[SERVICE_UDP] = authority->network.udp;
+  authority->services[SERVICE_TCP] = authority->network.tcp;
   struct system_info_cpu cpu;
   enum call_status status = system_info_get_cpu(authority->services[SERVICE_SYSTEM_INFO], &cpu);
   if (status != CALL_OK || !cpu.online_count) {
@@ -613,7 +626,7 @@ static const char *space_cpus(const struct authority *authority,
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
   struct launch_grant *grants;
-  struct launch_environment_entry resources[SERVICE_COUNT + 9 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry *resources;
   char source_names[BUNDLE_SOURCE_LIMIT][sizeof(BUNDLE_SOURCE_PREFIX) + BOOT_NAME_MAX];
   handle_t source_handles[BUNDLE_SOURCE_LIMIT];
   struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
@@ -717,12 +730,14 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->acpi_tables && authority->acpi_tables == HANDLE_INVALID) {
     return "acpi_tables requested but the ACPI table root is unavailable";
   }
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 10 + BUNDLE_SOURCE_LIMIT,
+  size_t network_entries = space->network ? authority->network.config.count * 2 + 1 : 0;
+  launch->resources = calloc(SERVICE_COUNT + 12 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 13 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   launch->package_trees = calloc(space->root_count ? space->root_count : 1,
       sizeof(*launch->package_trees));
-  if (!launch->grants || !launch->roots || !launch->package_trees) {
+  if (!launch->resources || !launch->grants || !launch->roots || !launch->package_trees) {
     return "boot init is out of memory";
   }
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
@@ -944,8 +959,36 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->resources[launch->resource_count++] =
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->services[SERVICE_UDP], UDP_SERVICE_RIGHT_BROADCAST, 0
+      authority->network.remote_udp, UDP_SERVICE_RIGHT_BROADCAST, 0
     };
+  }
+  if (space->network) {
+    launch->resources[launch->resource_count++] =
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("net_policy", launch->grant_count);
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->network.policy, NET_POLICY_RIGHT_MANAGE, 0};
+    for (size_t i = 0; i < authority->network.config.count; ++i) {
+      launch->resources[launch->resource_count++] = (struct launch_environment_entry)
+          PROFILE_PRIVATE_CAP(authority->network.facet_names[i], launch->grant_count);
+      launch->grants[launch->grant_count++] = (struct launch_grant){
+        authority->network.facets[i], NET_INTERFACE_RIGHTS, 0};
+      if (authority->network.dhcp[i] != HANDLE_INVALID) {
+        launch->resources[launch->resource_count++] = (struct launch_environment_entry)
+            PROFILE_PRIVATE_CAP(authority->network.dhcp_names[i], launch->grant_count);
+        launch->grants[launch->grant_count++] = (struct launch_grant){
+          authority->network.dhcp[i], UDP_SERVICE_RIGHT_BROADCAST, 0};
+      }
+    }
+  }
+  if (!strcmp(space->name, "remote") && authority->network.remote_interface != HANDLE_INVALID) {
+    launch->resources[launch->resource_count++] =
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_interface", launch->grant_count);
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->network.remote_interface, NET_INTERFACE_RIGHT_READ, 0};
+    launch->resources[launch->resource_count++] =
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_tcp", launch->grant_count);
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->network.remote_tcp, TCP_SERVICE_RIGHTS, 0};
   }
   select_start(space, launch);
   return NULL;
@@ -1088,6 +1131,7 @@ cleanup:
   free(launch.package_trees);
   package_set_free(launch.package_set);
   free(launch.roots);
+  free(launch.resources);
   free(launch.grants);
   free(cpus);
   return started;

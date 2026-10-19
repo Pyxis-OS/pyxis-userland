@@ -971,7 +971,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       return status;
     }
     grants[net_config_index] = (struct launch_grant){shell->net_config,
-        rights & NET_CONFIG_RIGHTS, 0};
+        rights & NET_REGISTRY_RIGHT_READ, 0};
   }
   if (has_pipe) {
     grants[pipe_index] = (struct launch_grant){shell->pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
@@ -1082,7 +1082,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", interpreter_root_index);
   }
   if (has_net_config) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_config", net_config_index);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", net_config_index);
   }
   if (has_pipe) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", pipe_index);
@@ -1233,6 +1233,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
   }
 
+  if (environment->dns_udp != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", grant_count);
+    grants[grant_count++] = (struct launch_grant){environment->dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
+  }
   size_t entry_capacity = resource_count + root_count + environment->count +
       prepared->captured.count + 2 * ENVIRONMENT_STREAM_COUNT + 1;
   prepared->entries = calloc(entry_capacity, sizeof(*prepared->entries));
@@ -1368,8 +1372,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       /* Offered only to a bundle that declares it. The declared request is READ
        * alone, so the shell's own rights never reach the bundle. Plain programs
        * receive net_config only through a session handoff. */
-      {"net_config", shell->net_config, PROTOCOL_NET_CONFIG},
+      {"net_registry", shell->net_config, PROTOCOL_NET_REGISTRY},
       {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
+      {"dns_udp", environment->dns_udp, PROTOCOL_UDP_SERVICE},
       {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
       {"pipe", mode == SHELL_FOREGROUND ? shell->pipe : HANDLE_INVALID, PROTOCOL_PIPE_SERVICE},
       {"retention_account", shell->retention_account, PROTOCOL_RETENTION_ACCOUNT},
@@ -2088,7 +2093,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     goto failed;
   }
   status = network_environment_from_capture(&environment, shell->net_config,
-      &inherited, NULL);
+      shell->udp != HANDLE_INVALID ? shell->udp : bootstrap_capability("dns_udp"), &inherited);
   if (status != CALL_OK) {
     goto failed;
   }

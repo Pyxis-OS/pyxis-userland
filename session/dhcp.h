@@ -17,6 +17,9 @@ struct dhcp_client {
   uint32_t xid, retry_seconds;
   uint64_t started_ns, retry_ns, request_ns;
   struct dhcp_lease offer;
+  bool refresh_started, refresh_xid_ready, refresh_sent, rebinding;
+  uint32_t refresh_xid;
+  uint64_t refresh_request_ns, refresh_started_ns, refresh_retry_ns;
 };
 
 enum dhcp_result {
@@ -27,20 +30,20 @@ enum dhcp_result {
 };
 
 /* Owns one wildcard port-68 endpoint; borrows clock/random READ authority.
- * No function changes net0 settings. Addresses are host-order. Deadlines are
+ * No function changes interface settings. Addresses are host-order. Deadlines are
  * absolute monotonic nanoseconds; infinite leases have UINT64_MAX deadlines. */
 bool dhcp_open(struct dhcp_client *client, handle_t udp, handle_t clock,
     handle_t random, const uint8_t mac[6]);
 bool dhcp_close(struct dhcp_client *client);
 void dhcp_discover(struct dhcp_client *client);
-/* net0 must be unassigned. Timeout retains discovery/REQUEST state and backoff
+/* The held interface must be unassigned. Timeout retains discovery/REQUEST state and backoff
  * for a later call. Only ACKNOWLEDGED fills lease; all other results clear it. */
 enum dhcp_result dhcp_acquire(struct dhcp_client *client, uint64_t deadline_ns,
     struct dhcp_lease *lease);
-/* Runs renewal/rebind through the current lease's expiry. A matching NAK or
+/* Resumes renewal/rebind until deadline, preserving transaction/backoff. A matching NAK or
  * expiry returns control to the configuration owner to clear IPv4 and restart
  * discovery. ACK retains omitted mask/router/DNS and requires the same IP. */
 enum dhcp_result dhcp_refresh(struct dhcp_client *client,
-    const struct dhcp_lease *current, struct dhcp_lease *updated);
+    const struct dhcp_lease *current, uint64_t deadline_ns, struct dhcp_lease *updated);
 
 #endif

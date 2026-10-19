@@ -53,7 +53,7 @@ bool dns_read_record(const uint8_t *bytes, size_t length, size_t *offset, struct
 enum dns_address_result dns_select_address(const struct dns_reply *reply,
     const struct dns_name *question, uint32_t *address);
 const char *dns_response_status(unsigned rcode);
-/* NULL override selects DNS_SERVER, or 1.1.1.1 only when it is absent. */
+/* NULL override selects the declared startup DNS_SERVER; absent is unavailable. */
 bool dns_select_server(const char *override, uint32_t *server);
 
 struct dns_exchange {

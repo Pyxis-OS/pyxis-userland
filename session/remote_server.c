@@ -40,83 +40,19 @@
 static bool wait_for_address(handle_t authority, handle_t clock,
     const struct network_config *network, uint32_t *address)
 {
-  bool announced = false;
-  bool binding_observed = false;
+  (void)network;
   for (;;) {
-    struct net_config_reply snapshot;
-    enum call_status status;
-    bool link_selection = network->action == NETWORK_REPLACE &&
-        network->selector.kind == NET_SELECT_LINKED_CONTROLLER;
-    if (network->action == NETWORK_REPLACE && !link_selection) {
-      status = net_config_lookup(authority, &network->selector, &snapshot);
-      if (status == CALL_NOT_FOUND) {
-        fputs("session: selected remote network is absent\n", stderr);
-        return false;
-      }
-      if (status == CALL_BUSY) {
-        fputs("session: remote network selector is ambiguous\n", stderr);
-        return false;
-      }
-      if (status == CALL_UNAVAILABLE) {
-        fputs("session: remote network discovery or identity unavailable\n", stderr);
-        return false;
-      }
-      if (status != CALL_OK) {
-        fprintf(stderr, "session: cannot look up remote network (status %u)\n", status);
-        return false;
-      }
-      if (!(snapshot.flags & NET_CONFIG_BOUND)) {
-        if (binding_observed) {
-          fputs("session: remote network unavailable; a different controller is bound\n", stderr);
-          return false;
-        }
-        struct net_config_reply bound;
-        status = net_config_query(authority, &bound);
-        if (status != CALL_OK) {
-          fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
-          return false;
-        }
-        /* Binding is permanent. Repeat lookup after observing it because the
-         * selected controller may have bound between these two calls. */
-        binding_observed = (bound.flags & NET_CONFIG_BOUND) != 0;
-      }
-    } else {
-      status = net_config_query(authority, &snapshot);
-      if (status != CALL_OK) {
-        fprintf(stderr, "session: cannot query remote network (status %u)\n", status);
-        return false;
-      }
-      if (!(snapshot.flags & NET_CONFIG_BOUND) && !link_selection) {
-        fputs("session: remote network unavailable; net0 is unbound\n", stderr);
-        return false;
-      }
-    }
-    if (snapshot.flags & NET_CONFIG_BOUND) {
-      if (!(snapshot.flags & NET_CONFIG_PRESENT)) {
-        fputs("session: remote network unavailable\n", stderr);
-        return false;
-      }
-      if (!(snapshot.flags & NET_CONFIG_READY)) {
-        bool pending;
-        if (!network_config_binding_pending(authority, &pending)) {
-          return false;
-        }
-        if (!pending) {
-          fputs("session: remote network unavailable\n", stderr);
-          return false;
-        }
-      } else if (snapshot.flags & NET_CONFIG_ASSIGNED) {
-        *address = snapshot.address;
-        return true;
-      }
-    }
-    if (!announced) {
-      fputs("session: waiting for remote network configuration\n", stdout);
-      announced = true;
-    }
-    status = clock_sleep_for(clock, NETWORK_ASSIGNMENT_SLEEP_NS);
+    struct net_interface_reply snapshot;
+    enum call_status status = net_interface_query(authority, &snapshot);
     if (status != CALL_OK) {
-      fprintf(stderr, "session: cannot wait for remote network (status %u)\n", status);
+      fprintf(stderr, "session: selected remote interface unavailable (status %u)\n", status);
+      return false;
+    }
+    if (snapshot.flags & NET_INTERFACE_ADDRESS_VALID) {
+      *address = snapshot.address;
+      return true;
+    }
+    if (clock_sleep_for(clock, NETWORK_ASSIGNMENT_SLEEP_NS) != CALL_OK) {
       return false;
     }
   }
@@ -146,9 +82,9 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
   handle_t memory = bootstrap_capability("memory"), clock = bootstrap_capability("clock");
-  handle_t launcher = bootstrap_capability("launcher"), tcp = bootstrap_capability("tcp");
+  handle_t launcher = bootstrap_capability("launcher"), tcp = bootstrap_capability("remote_tcp");
   handle_t terminal = bootstrap_capability("terminal"), output = bootstrap_capability("output");
-  handle_t authority = bootstrap_capability("net_config");
+  handle_t authority = bootstrap_capability("remote_interface");
   handle_t bin = bootstrap_capability("bin"), tmp = bootstrap_capability("tmp");
   if (memory == HANDLE_INVALID || clock == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       tcp == HANDLE_INVALID || terminal == HANDLE_INVALID || output == HANDLE_INVALID ||
@@ -282,8 +218,8 @@ int launch_remote_server(const struct session_config *config,
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", grant_count);
     grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
   }
-  resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_config", grant_count);
-  grants[grant_count++] = (struct launch_grant){authority, NET_CONFIG_RIGHT_READ, 0};
+  resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", grant_count);
+  grants[grant_count++] = (struct launch_grant){bootstrap_capability("net_registry"), NET_REGISTRY_RIGHT_READ, 0};
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", grant_count);
   grants[grant_count++] = (struct launch_grant){tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
   handle_t random = bootstrap_capability("random");
@@ -359,8 +295,8 @@ int launch_remote_server(const struct session_config *config,
     goto done;
   }
   request.image = image;
-  status = network_environment_read(&refreshed_environment, authority,
-      environment, environment_count, network->dns_server);
+  status = network_environment_read(&refreshed_environment, bootstrap_capability("net_registry"),
+      bootstrap_capability("udp"), environment, environment_count);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot read remote network environment (status %u)\n", status);
     goto done;
@@ -368,6 +304,10 @@ int launch_remote_server(const struct session_config *config,
   memcpy(entries + request.entry_count, refreshed_environment.variables,
       refreshed_environment.count * sizeof(*entries));
   request.entry_count += refreshed_environment.count;
+  if (refreshed_environment.dns_udp != HANDLE_INVALID) {
+    entries[request.entry_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", request.grant_count);
+    grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
+  }
   size_t prepared_grants = request.grant_count, prepared_entries = request.entry_count;
   status = profile_inherit_services(&captured, false, grants, grant_capacity,
       &prepared_grants, entries, entry_capacity, &prepared_entries);

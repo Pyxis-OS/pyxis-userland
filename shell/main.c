@@ -203,7 +203,7 @@ int main(int argc, char **argv)
     .retention_account = bootstrap_capability("retention_account"),
     .environment = startup_environment_handle(),
     .random = bootstrap_capability("random"),
-    .net_config = bootstrap_capability("net_config"),
+    .net_config = bootstrap_capability("net_registry"),
     .keyboard = bootstrap_capability("keyboard"),
     .pointer = bootstrap_capability("pointer"),
     .space = bootstrap_capability("space"),

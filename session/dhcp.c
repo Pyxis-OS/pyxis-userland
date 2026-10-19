@@ -324,6 +324,7 @@ static bool transient_send_failure(enum call_status status)
 
 void dhcp_discover(struct dhcp_client *client)
 {
+  client->refresh_started = false;
   client->requesting = false;
   client->xid_ready = false;
   client->request_sent = false;
@@ -516,7 +517,7 @@ enum dhcp_result dhcp_acquire(struct dhcp_client *client, uint64_t deadline_ns,
 }
 
 enum dhcp_result dhcp_refresh(struct dhcp_client *client,
-    const struct dhcp_lease *current, struct dhcp_lease *updated)
+    const struct dhcp_lease *current, uint64_t deadline_ns, struct dhcp_lease *updated)
 {
   if (!updated) {
     return DHCP_FAILED;
@@ -529,25 +530,32 @@ enum dhcp_result dhcp_refresh(struct dhcp_client *client,
     return DHCP_TIMEOUT;
   }
   uint8_t packet[UDP_MAX_PAYLOAD];
-  bool xid_ready = false, request_sent = false, rebinding = false;
-  uint32_t xid = 0;
-  uint64_t request_ns = 0, started_ns = 0, retry_ns = current->renewal_ns;
+  if (!client->refresh_started) {
+    client->refresh_started = true;
+    client->refresh_xid_ready = client->refresh_sent = client->rebinding = false;
+    client->refresh_xid = 0;
+    client->refresh_request_ns = client->refresh_started_ns = 0;
+    client->refresh_retry_ns = current->renewal_ns;
+  }
   for (;;) {
     uint64_t now;
     if (clock_now(client->clock, &now) != CALL_OK) {
       return DHCP_FAILED;
     }
-    if (now >= current->expires_ns) {
+    if (now >= current->expires_ns || now >= deadline_ns) {
       return DHCP_TIMEOUT;
     }
-    if (!rebinding && now >= current->rebind_ns) {
-      rebinding = true;
-      retry_ns = now;
+    if (!client->rebinding && now >= current->rebind_ns) {
+      client->rebinding = true;
+      client->refresh_retry_ns = now;
     }
-    uint64_t end = rebinding ? current->expires_ns : current->rebind_ns;
-    if (now >= retry_ns) {
-      if (!xid_ready) {
-        enum call_status entropy = random_read(client->random, &xid, sizeof(xid),
+    uint64_t end = client->rebinding ? current->expires_ns : current->rebind_ns;
+    if (end > deadline_ns) {
+      end = deadline_ns;
+    }
+    if (now >= client->refresh_retry_ns) {
+      if (!client->refresh_xid_ready) {
+        enum call_status entropy = random_read(client->random, &client->refresh_xid, sizeof(client->refresh_xid),
             clipped_deadline(now, RANDOM_MAX_WAIT_NS, end));
         if (entropy != CALL_OK && entropy != CALL_TIMED_OUT) {
           return DHCP_FAILED;
@@ -561,26 +569,27 @@ enum dhcp_result dhcp_refresh(struct dhcp_client *client,
         if (now >= end) {
           continue;
         }
-        xid_ready = true;
-        started_ns = now;
+        client->refresh_xid_ready = true;
+        client->refresh_started_ns = now;
       }
-      make_packet(packet, REFRESHING, xid, now - started_ns, client->mac, current);
-      uint64_t delay = (end - now) / 2;
+      make_packet(packet, REFRESHING, client->refresh_xid, now - client->refresh_started_ns, client->mac, current);
+      uint64_t phase_end = client->rebinding ? current->expires_ns : current->rebind_ns;
+      uint64_t delay = (phase_end - now) / 2;
       if (delay < 60 * SECOND_NS) {
         delay = 60 * SECOND_NS;
       }
-      retry_ns = clipped_deadline(now, delay, end);
+      client->refresh_retry_ns = clipped_deadline(now, delay, phase_end);
       enum call_status sent = udp_send(client->endpoint,
-          rebinding ? UINT32_MAX : current->server, DHCP_SERVER_PORT,
+          client->rebinding ? UINT32_MAX : current->server, DHCP_SERVER_PORT,
           packet, DHCP_PACKET_LENGTH, clipped_deadline(now, UDP_SEND_MAX_WAIT_NS, end));
       if (sent != CALL_OK && !transient_send_failure(sent)) {
         return DHCP_FAILED;
       }
-      if (sent == CALL_OK && !request_sent) {
-        /* Same xid across retransmission/T2: an older ACK is indistinguishable.
+      if (sent == CALL_OK && !client->refresh_sent) {
+        /* Same client->refresh_xid across retransmission/T2: an older ACK is indistinguishable.
          * Retain the earliest successful REQUEST origin conservatively. */
-        request_sent = true;
-        request_ns = now;
+        client->refresh_sent = true;
+        client->refresh_request_ns = now;
       }
     }
     if (clock_now(client->clock, &now) != CALL_OK) {
@@ -589,7 +598,7 @@ enum dhcp_result dhcp_refresh(struct dhcp_client *client,
     if (now >= end) {
       continue;
     }
-    uint64_t until = retry_ns < end ? retry_ns : end;
+    uint64_t until = client->refresh_retry_ns < end ? client->refresh_retry_ns : end;
     struct udp_receive_reply received;
     enum call_status status = receive(client, packet, now, until, &received);
     if (status == CALL_TIMED_OUT) {
@@ -601,18 +610,18 @@ enum dhcp_result dhcp_refresh(struct dhcp_client *client,
     if (clock_now(client->clock, &now) != CALL_OK) {
       return DHCP_FAILED;
     }
-    if (now >= current->expires_ns) {
+    if (now >= current->expires_ns || now >= deadline_ns) {
       return DHCP_TIMEOUT;
     }
-    if (!rebinding && now >= current->rebind_ns) {
-      rebinding = true;
-      retry_ns = now;
+    if (!client->rebinding && now >= current->rebind_ns) {
+      client->rebinding = true;
+      client->refresh_retry_ns = now;
     }
     struct dhcp_reply reply;
-    if (!request_sent || received.port != DHCP_SERVER_PORT ||
+    if (!client->refresh_sent || received.port != DHCP_SERVER_PORT ||
         received.length > sizeof(packet) ||
-        !decode_reply(packet, received.length, xid, client->mac, &reply) ||
-        !is_unicast(reply.server.value) || (!rebinding && reply.server.value != current->server)) {
+        !decode_reply(packet, received.length, client->refresh_xid, client->mac, &reply) ||
+        !is_unicast(reply.server.value) || (!client->rebinding && reply.server.value != current->server)) {
       continue;
     }
     if (reply.type == DHCP_NAK) {
@@ -620,8 +629,9 @@ enum dhcp_result dhcp_refresh(struct dhcp_client *client,
     }
     if (reply.type == DHCP_ACK) {
       enum dhcp_result result = acknowledge(client, packet, &reply,
-          request_ns, current, updated, NULL);
+          client->refresh_request_ns, current, updated, NULL);
       if (result != DHCP_TIMEOUT) {
+        client->refresh_started = false;
         return result;
       }
     }

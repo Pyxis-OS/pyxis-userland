@@ -6,6 +6,6 @@
   "resource_dirs": {},
   "grants": [
     {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
-    {"name": "net_config", "resource": "net_config", "rights": ["read"], "required": false}
+    {"name": "net_registry", "resource": "net_registry", "rights": ["read"], "required": false}
   ]
 }

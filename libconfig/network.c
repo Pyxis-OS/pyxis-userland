@@ -98,109 +98,106 @@ static void read_mac(lua_State *state, int index, uint8_t mac[6], const char *fi
   }
 }
 
-static void read_preferences(lua_State *state, struct network_config *config)
+static void read_name(lua_State *state, int index, char name[16], const char *field)
 {
-  config_field(state, 2, "prefer");
-  if (lua_isnil(state, 3)) {
-    lua_pop(state, 1);
-    return;
+  size_t size = 0;
+  const char *text = lua_type(state, index) == LUA_TSTRING ? lua_tolstring(state, index, &size) : NULL;
+  if (!text || !size || size >= 16 || strlen(text) != size) {
+    luaL_error(state, "%s must be an interface name", field);
   }
-  if (config->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
-    luaL_error(state, "net0.prefer requires select = 'link'");
+  memcpy(name, text, size + 1);
+}
+
+static bool read_boolean(lua_State *state, int table, const char *name)
+{
+  config_field(state, table, name);
+  if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
+    luaL_error(state, "%s must be a boolean", name);
   }
-  luaL_checktype(state, 3, LUA_TTABLE);
-  size_t count = lua_rawlen(state, 3);
-  if (count > SIZE_MAX / sizeof(*config->preferred_macs) || count > LUA_MAXINTEGER) {
-    luaL_error(state, "net0.prefer is too large");
-  }
-  size_t entries = 0;
+  bool value = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  return value;
+}
+
+static size_t array_count(lua_State *state, int table, const char *field)
+{
+  luaL_checktype(state, table, LUA_TTABLE);
+  size_t count = lua_rawlen(state, table), entries = 0;
   lua_pushnil(state);
-  while (lua_next(state, 3)) {
+  while (lua_next(state, table)) {
     if (!lua_isinteger(state, -2) || lua_tointeger(state, -2) < 1 ||
         (lua_Unsigned)lua_tointeger(state, -2) > count) {
-      luaL_error(state, "net0.prefer must be a consecutive array of MAC strings");
+      luaL_error(state, "%s must be a consecutive array", field);
     }
     ++entries;
     lua_pop(state, 1);
   }
   if (entries != count) {
-    luaL_error(state, "net0.prefer must be a consecutive array of MAC strings");
+    luaL_error(state, "%s must be a consecutive array", field);
   }
-  if (count) {
-    config->preferred_macs = malloc(count * sizeof(*config->preferred_macs));
-    if (!config->preferred_macs) {
-      luaL_error(state, "cannot allocate net0.prefer");
+  return count;
+}
+
+static void read_selector(lua_State *state, struct network_interface_config *config)
+{
+  config_field(state, 3, "driver");
+  config_field(state, 3, "mac");
+  config_field(state, 3, "select");
+  bool driver = !lua_isnil(state, 4), mac = !lua_isnil(state, 5), select = !lua_isnil(state, 6);
+  if ((unsigned)driver + (unsigned)mac + (unsigned)select != 1) {
+    luaL_error(state, "interface requires exactly one of driver, mac or select");
+  }
+  if (driver) {
+    if (lua_type(state, 4) != LUA_TSTRING || strcmp(lua_tostring(state, 4), "virtio")) {
+      luaL_error(state, "interface.driver must be 'virtio'");
     }
+    config->selector.kind = NET_SELECT_VIRTIO;
+  } else if (mac) {
+    read_mac(state, 5, config->selector.mac, "interface.mac");
+    config->selector.kind = NET_SELECT_MAC;
+  } else {
+    if (lua_type(state, 6) != LUA_TSTRING || strcmp(lua_tostring(state, 6), "link")) {
+      luaL_error(state, "interface.select must be 'link'");
+    }
+    config->selector.kind = NET_SELECT_LINKED_CONTROLLER;
   }
-  config->preference_count = count;
-  for (size_t i = 0; i < count; ++i) {
-    lua_rawgeti(state, 3, (lua_Integer)i + 1);
-    read_mac(state, 4, config->preferred_macs[i], "net0.prefer entry");
-    lua_pop(state, 1);
+  lua_pop(state, 3);
+  config_field(state, 3, "prefer");
+  if (!lua_isnil(state, 4)) {
+    if (config->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
+      luaL_error(state, "interface.prefer requires select = 'link'");
+    }
+    size_t count = array_count(state, 4, "interface.prefer");
+    if (count > SIZE_MAX / sizeof(*config->preferred_macs)) {
+      luaL_error(state, "interface.prefer is too large");
+    }
+    config->preferred_macs = calloc(count, sizeof(*config->preferred_macs));
+    if (count && !config->preferred_macs) {
+      luaL_error(state, "cannot allocate interface.prefer");
+    }
+    config->preference_count = count;
+    for (size_t i = 0; i < count; ++i) {
+      lua_rawgeti(state, 4, (lua_Integer)i + 1);
+      read_mac(state, 5, config->preferred_macs[i], "interface.prefer entry");
+      lua_pop(state, 1);
+    }
   }
   lua_pop(state, 1);
 }
 
-static void read_selector(lua_State *state, struct network_config *config)
+static void read_policy_name(lua_State *state, int table, const char *field,
+    const struct network_config *config, char name[16])
 {
-  struct net_selector *selector = &config->selector;
-  config_field(state, 2, "driver");
-  config_field(state, 2, "mac");
-  config_field(state, 2, "select");
-  bool has_driver = !lua_isnil(state, 3), has_mac = !lua_isnil(state, 4);
-  bool has_select = !lua_isnil(state, 5);
-  if ((unsigned)has_driver + (unsigned)has_mac + (unsigned)has_select != 1) {
-    luaL_error(state, "net0 requires exactly one of driver, mac or select");
-  }
-  if (has_driver) {
-    if (lua_type(state, 3) != LUA_TSTRING) {
-      luaL_error(state, "net0.driver must be the string 'virtio'");
+  config_field(state, table, field);
+  if (!lua_isnil(state, -1)) {
+    read_name(state, -1, name, field);
+    bool found = !strcmp(name, "lo");
+    for (size_t i = 0; i < config->count; ++i) {
+      found |= !strcmp(config->interfaces[i].name, name);
     }
-    size_t length;
-    const char *driver = lua_tolstring(state, 3, &length);
-    if (length != sizeof("virtio") - 1 || memcmp(driver, "virtio", length)) {
-      luaL_error(state, "net0.driver must be the string 'virtio'");
+    if (!found) {
+      luaL_error(state, "%s names an undefined interface", field);
     }
-    selector->kind = NET_SELECT_VIRTIO;
-  } else if (has_mac) {
-    read_mac(state, 4, selector->mac, "net0.mac");
-    selector->kind = NET_SELECT_MAC;
-  } else {
-    if (lua_type(state, 5) != LUA_TSTRING) {
-      luaL_error(state, "net0.select must be the string 'link'");
-    }
-    size_t length;
-    const char *selection = lua_tolstring(state, 5, &length);
-    if (length != sizeof("link") - 1 || memcmp(selection, "link", length)) {
-      luaL_error(state, "net0.select must be the string 'link'");
-    }
-    selector->kind = NET_SELECT_LINKED_CONTROLLER;
-  }
-  lua_pop(state, 3);
-  read_preferences(state, config);
-}
-
-/* Leaves the root table alone; DNS is independent of net0 being absent/false. */
-static void decode_dns(lua_State *state, struct network_config *config)
-{
-  config_field(state, 1, "dns");
-  if (!lua_isnil(state, 2)) {
-    const char *keys[] = {"server"};
-    config_keys(state, 2, keys, 1);
-    config_field(state, 2, "server");
-    if (!lua_isnil(state, 3)) {
-      uint32_t address = read_address(state, "dns.server");
-      /* Exclude 0/8, multicast and reserved high addresses. Loopback is useful
-       * for a local resolver; subnet validity/reachability belongs to routing. */
-      if (!(address >> 24) || address >= IPV4_MULTICAST_BASE) {
-        luaL_error(state, "dns.server must be a unicast IPv4 address");
-      }
-      snprintf(config->dns_server, sizeof(config->dns_server), "%u.%u.%u.%u",
-          address >> 24, (address >> 16) & 255, (address >> 8) & 255, address & 255);
-      config->dns_address = address;
-      config->dns_explicit = true;
-    }
-    lua_pop(state, 1);
   }
   lua_pop(state, 1);
 }
@@ -209,84 +206,134 @@ static int decode_network(lua_State *state)
 {
   struct network_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"net0", "dns"};
-  config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
-  decode_dns(state, config);
-  config_field(state, 1, "net0");
-  if (lua_isnil(state, 2)) {
-    return 0;
+  const char *keys[] = {"interfaces", "routing", "dns", "management"};
+  config_keys(state, 1, keys, 4);
+  config_field(state, 1, "interfaces");
+  size_t count = array_count(state, 2, "interfaces");
+  if (count > SIZE_MAX / sizeof(*config->interfaces)) {
+    return luaL_error(state, "interfaces is too large");
   }
-  if (lua_type(state, 2) == LUA_TBOOLEAN && !lua_toboolean(state, 2)) {
-    config->action = NETWORK_CLEAR;
-    return 0;
+  config->interfaces = calloc(count, sizeof(*config->interfaces));
+  if (count && !config->interfaces) {
+    return luaL_error(state, "cannot allocate interfaces");
   }
-  const char *settings[] = {"driver", "mac", "select", "prefer", "optional", "dhcp",
-      "address", "prefix", "gateway"};
-  config_keys(state, 2, settings, sizeof(settings) / sizeof(settings[0]));
-  config->action = NETWORK_REPLACE;
-  read_selector(state, config);
-
-  config_field(state, 2, "optional");
-  if (!lua_isnil(state, 3)) {
-    if (lua_type(state, 3) != LUA_TBOOLEAN) {
-      return luaL_error(state, "net0.optional must be a boolean");
+  config->count = count;
+  for (size_t i = 0; i < count; ++i) {
+    struct network_interface_config *entry = &config->interfaces[i];
+    lua_rawgeti(state, 2, (lua_Integer)i + 1);
+    const char *fields[] = {"name", "class", "driver", "mac", "select", "prefer", "optional",
+        "dhcp", "address", "prefix", "gateway"};
+    config_keys(state, 3, fields, sizeof(fields) / sizeof(*fields));
+    config_field(state, 3, "name");
+    read_name(state, 4, entry->name, "interface.name");
+    lua_pop(state, 1);
+    config_field(state, 3, "class");
+    const char *class = lua_type(state, 4) == LUA_TSTRING ? lua_tostring(state, 4) : "";
+    const char *prefix;
+    if (!strcmp(class, "ethernet")) {
+      entry->interface_class = NET_INTERFACE_CLASS_ETHERNET;
+      prefix = "eth";
+    } else if (!strcmp(class, "wifi")) {
+      entry->interface_class = NET_INTERFACE_CLASS_WIFI;
+      prefix = "wlan";
+    } else {
+      return luaL_error(state, "interface.class must be 'ethernet' or 'wifi'");
     }
-    config->optional = lua_toboolean(state, 3);
-  }
-  lua_pop(state, 1);
-
-  config_field(state, 2, "dhcp");
-  if (!lua_isnil(state, 3)) {
-    if (lua_type(state, 3) != LUA_TBOOLEAN) {
-      return luaL_error(state, "net0.dhcp must be a boolean");
+    size_t length = strlen(prefix);
+    const char *number = entry->name + length;
+    if (strncmp(entry->name, prefix, length) || !*number ||
+        (number[0] == '0' && number[1])) {
+      return luaL_error(state, "interface.name must use its canonical class prefix and number");
     }
-    config->dhcp = lua_toboolean(state, 3);
-  }
-  lua_pop(state, 1);
-  if (config->dhcp) {
-    const char *static_fields[] = {"address", "prefix", "gateway"};
-    for (size_t i = 0; i < sizeof(static_fields) / sizeof(static_fields[0]); ++i) {
-      config_field(state, 2, static_fields[i]);
-      if (!lua_isnil(state, 3)) {
-        return luaL_error(state, "net0.dhcp excludes address, prefix and gateway");
+    for (; *number; ++number) {
+      if (*number < '0' || *number > '9') {
+        return luaL_error(state, "interface.name must end in decimal digits");
       }
-      lua_pop(state, 1);
     }
-    return 0;
+    for (size_t j = 0; j < i; ++j) {
+      if (!strcmp(entry->name, config->interfaces[j].name)) {
+        return luaL_error(state, "duplicate interface.name");
+      }
+    }
+    lua_pop(state, 1);
+    read_selector(state, entry);
+    entry->optional = read_boolean(state, 3, "optional");
+    entry->dhcp = read_boolean(state, 3, "dhcp");
+    config_field(state, 3, "address");
+    config_field(state, 3, "prefix");
+    config_field(state, 3, "gateway");
+    if (entry->dhcp) {
+      if (!lua_isnil(state, 4) || !lua_isnil(state, 5) || !lua_isnil(state, 6)) {
+        return luaL_error(state, "interface.dhcp excludes address, prefix and gateway");
+      }
+    } else {
+      lua_pushvalue(state, 4);
+      entry->address = read_address(state, "interface.address");
+      lua_pop(state, 1);
+      int integer;
+      lua_Integer prefix = lua_tointegerx(state, 5, &integer);
+      if (!integer || prefix < 1 || prefix > 32) {
+        return luaL_error(state, "interface.prefix must be an integer from 1 to 32");
+      }
+      entry->prefix = (uint32_t)prefix;
+      if (!lua_isnil(state, 6)) {
+        entry->gateway = read_address(state, "interface.gateway");
+      }
+      if (!network_static_valid(entry->address, entry->prefix, entry->gateway)) {
+        return luaL_error(state, "interface address, subnet or gateway violates IPv4 host constraints");
+      }
+      for (size_t j = 0; j < i; ++j) {
+        if (!config->interfaces[j].dhcp && config->interfaces[j].address == entry->address) {
+          return luaL_error(state, "duplicate local IPv4 address");
+        }
+      }
+    }
+    lua_settop(state, 2);
   }
-
-  config_field(state, 2, "address");
-  config->address = read_address(state, "net0.address");
   lua_pop(state, 1);
-  config_field(state, 2, "prefix");
-  int integer;
-  lua_Integer prefix = lua_tointegerx(state, 3, &integer);
-  if (lua_type(state, 3) != LUA_TNUMBER || !integer || prefix < 1 || prefix > 32) {
-    return luaL_error(state, "net0.prefix must be an integer from 1 to 32");
+  config_field(state, 1, "routing");
+  if (!lua_isnil(state, 2)) {
+    const char *fields[] = {"default"};
+    config_keys(state, 2, fields, 1);
+    read_policy_name(state, 2, "default", config, config->default_interface);
   }
-  config->prefix = (uint32_t)prefix;
   lua_pop(state, 1);
-  config_field(state, 2, "gateway");
-  if (!lua_isnil(state, 3)) {
-    config->gateway = read_address(state, "net0.gateway");
+  config_field(state, 1, "dns");
+  if (!lua_isnil(state, 2)) {
+    const char *fields[] = {"interface", "server"};
+    config_keys(state, 2, fields, 2);
+    read_policy_name(state, 2, "interface", config, config->dns_interface);
+    if (!config->dns_interface[0]) {
+      return luaL_error(state, "dns requires an interface");
+    }
+    config_field(state, 2, "server");
+    if (!lua_isnil(state, 3)) {
+      config->dns_address = read_address(state, "dns.server");
+      if (!(config->dns_address >> 24) || config->dns_address >= IPV4_MULTICAST_BASE) {
+        return luaL_error(state, "dns.server must be a unicast IPv4 address");
+      }
+      config->dns_explicit = true;
+      snprintf(config->dns_server, sizeof(config->dns_server), "%u.%u.%u.%u",
+          config->dns_address >> 24, config->dns_address >> 16 & 255,
+          config->dns_address >> 8 & 255, config->dns_address & 255);
+    }
+    lua_pop(state, 1);
   }
-  return 0;
-}
-
-static int decode_literal_network(lua_State *state)
-{
-  struct network_config *config = lua_touserdata(state, 2);
-  decode_network(state);
-  if (config->action == NETWORK_REPLACE && !config->dhcp &&
-      !network_static_valid(config->address, config->prefix, config->gateway)) {
-    return luaL_error(state, "net0 address, subnet or gateway violates IPv4 host constraints");
+  lua_pop(state, 1);
+  config_field(state, 1, "management");
+  if (!lua_isnil(state, 2)) {
+    const char *fields[] = {"remote", "log", "debug"};
+    config_keys(state, 2, fields, 3);
+    read_policy_name(state, 2, "remote", config, config->remote_interface);
+    read_policy_name(state, 2, "log", config, config->log_interface);
+    read_policy_name(state, 2, "debug", config, config->debug_interface);
   }
   return 0;
 }
 
 bool network_config_read(struct network_config *config)
 {
-  *config = (struct network_config){.dns_server = "1.1.1.1", .dns_address = UINT32_C(0x01010101)};
+  *config = (struct network_config){0};
   if (config_read(NETWORK_CONFIG_PATH, decode_network, config) == CONFIG_ERROR) {
     network_config_free(config);
     return false;
@@ -296,14 +343,17 @@ bool network_config_read(struct network_config *config)
 
 void network_config_free(struct network_config *config)
 {
-  free(config->preferred_macs);
+  for (size_t i = 0; i < config->count; ++i) {
+    free(config->interfaces[i].preferred_macs);
+  }
+  free(config->interfaces);
   *config = (struct network_config){0};
 }
 
 enum config_result network_config_read_bytes(const char *name, const char *bytes,
     size_t size, struct network_config *config)
 {
-  *config = (struct network_config){.dns_server = "1.1.1.1", .dns_address = UINT32_C(0x01010101)};
+  *config = (struct network_config){0};
   enum config_result result = config_read_bytes(name, bytes, size, decode_network, config);
   if (result == CONFIG_ERROR) {
     network_config_free(config);
@@ -314,8 +364,8 @@ enum config_result network_config_read_bytes(const char *name, const char *bytes
 enum config_result network_config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, struct network_config *config)
 {
-  *config = (struct network_config){.dns_server = "1.1.1.1", .dns_address = UINT32_C(0x01010101)};
-  enum config_result result = config_read_literal_bytes(name, bytes, size, decode_literal_network, config);
+  *config = (struct network_config){0};
+  enum config_result result = config_read_literal_bytes(name, bytes, size, decode_network, config);
   if (result == CONFIG_ERROR) {
     network_config_free(config);
   }

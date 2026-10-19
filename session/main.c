@@ -68,7 +68,7 @@ static int launch_session(const struct session_config *config, const struct netw
     return EXIT_FAILURE;
   }
   if (!configure_network && script) {
-    enum call_status status = network_environment_wait(bootstrap_capability("net_config"), bootstrap_capability("clock"));
+    enum call_status status = network_environment_wait(bootstrap_capability("net_registry"), bootstrap_capability("clock"));
     if (status != CALL_OK && status != CALL_TIMED_OUT) {
       fprintf(stderr, "session: cannot wait for network setup (status %u)\n", status);
       return EXIT_FAILURE;
@@ -263,7 +263,7 @@ static int launch_session(const struct session_config *config, const struct netw
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", grant_count);
     grants[grant_count++] = (struct launch_grant){tcp, rights, 0};
   }
-  handle_t net_config = bootstrap_capability("net_config");
+  handle_t net_config = bootstrap_capability("net_registry");
   if (net_config != HANDLE_INVALID) {
     uint64_t rights;
     status = handle_rights(net_config, &rights, NULL);
@@ -271,9 +271,9 @@ static int launch_session(const struct session_config *config, const struct netw
       fprintf(stderr, "session: cannot query network rights (status %u)\n", status);
       goto done;
     }
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_config", grant_count);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", grant_count);
     grants[grant_count++] = (struct launch_grant){net_config,
-        rights & NET_CONFIG_RIGHT_READ, 0};
+        rights & NET_REGISTRY_RIGHT_READ, 0};
   }
   if (start_remote_services) {
     handle_t terminal_service = bootstrap_capability("terminal");
@@ -491,8 +491,8 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
 
-  status = network_environment_read(&refreshed_environment, net_config,
-      environment, environment_count, network->dns_server);
+  status = network_environment_read(&refreshed_environment, net_config, bootstrap_capability("udp"),
+      environment, environment_count);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot read network environment (status %u)\n", status);
     goto done;
@@ -500,6 +500,10 @@ static int launch_session(const struct session_config *config, const struct netw
   memcpy(entries + request.entry_count, refreshed_environment.variables,
       refreshed_environment.count * sizeof(*entries));
   request.entry_count += refreshed_environment.count;
+  if (refreshed_environment.dns_udp != HANDLE_INVALID) {
+    entries[request.entry_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", request.grant_count);
+    grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
+  }
   size_t prepared_grants = request.grant_count;
   size_t prepared_entries = request.entry_count;
   status = profile_inherit_services(&captured, true, grants, grant_capacity,
@@ -553,35 +557,28 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
     environment_capture_close(&capture);
     return false;
   }
-  const char *retained_names[] = {"memory", "output", "clock", "random", "net_config",
-      "stdout", "stderr"};
   size_t count = 0;
   for (size_t i = 0; i < capture.count; ++i) {
     const struct environment_value *entry = &capture.values[i];
-    bool keep = entry->kind != ENVIRONMENT_CAP;
-    for (size_t j = 0; j < sizeof(retained_names) / sizeof(*retained_names); ++j) {
-      keep |= !strcmp(entry->name, retained_names[j]);
+    if (entry->kind != ENVIRONMENT_CAP) {
+      continue;
     }
+    bool keep = !strcmp(entry->name, "memory") || !strcmp(entry->name, "output") ||
+        !strcmp(entry->name, "stdout") || !strcmp(entry->name, "stderr") ||
+        !strcmp(entry->name, "clock") || !strcmp(entry->name, "random") ||
+        !strcmp(entry->name, "net_registry") || !strcmp(entry->name, "net_policy") ||
+        !strncmp(entry->name, "config.", 7) || !strncmp(entry->name, "dhcp.", 5);
     if (!keep) {
       environment_name(removed[count].name, entry->name);
       removed[count++].identity = entry->identity;
     }
   }
-  /* Cleanup does not require an all-table transaction. Keep the immutable
-   * selection alive while removing each exact publication within admission. */
   for (size_t i = 0; status == CALL_OK && i < count; ++i) {
     status = environment_unset_batch(startup_environment_handle(), &removed[i], 1);
   }
   free(removed);
   environment_capture_close(&capture);
-  const handle_t retained[] = {
-    runtime->dhcp.endpoint, runtime->dhcp.clock, runtime->dhcp.random,
-    runtime->authority, runtime->waiting_link ? runtime->udp : HANDLE_INVALID,
-    bootstrap_capability("memory"), bootstrap_capability("output"),
-    bootstrap_stdio(ENVIRONMENT_STDOUT).handle, bootstrap_stdio(ENVIRONMENT_STDERR).handle,
-  };
-  bool success = status == CALL_OK &&
-      bootstrap_release_except(retained, sizeof(retained) / sizeof(*retained));
+  bool success = status == CALL_OK && network_runtime_release(runtime);
   for (size_t i = 0; i < startup_working_directory_count(); ++i) {
     bool duplicate = false;
     for (size_t j = 0; j < i; ++j) {
@@ -594,9 +591,6 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
   if (bootstrap_stdio(ENVIRONMENT_STDIN).protocol != 0 && fclose(stdin) != 0) {
     success = false;
   }
-  if (!runtime->waiting_link) {
-    runtime->udp = HANDLE_INVALID;
-  }
   runtime->background = true;
   if (!success) {
     fputs("session: cannot release bootstrap grants\n", stderr);
@@ -608,7 +602,7 @@ static int finish_network(const struct network_config *config,
     struct network_runtime *runtime, int result)
 {
   if (result == EXIT_SUCCESS &&
-      (runtime->waiting_link || runtime->dhcp.endpoint != HANDLE_INVALID)) {
+      runtime->waiting_link) {
     if (release_bootstrap_grants(runtime)) {
       result = network_config_maintain(config, runtime);
     } else {

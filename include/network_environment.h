@@ -10,21 +10,21 @@
 struct network_environment {
   struct launch_environment_entry *variables;
   size_t count;
+  handle_t dns_udp;
   char dns_server[sizeof("255.255.255.255")];
 };
 
-/* Owns the array and chosen DNS text; other strings borrow source or fallback.
- * A nonzero chosen kernel DNS replaces DNS_SERVER. Otherwise preserve its
- * inherited value, or use fallback when absent. An absent authority is allowed.
- * Keep this structure in place until the launcher has copied its metadata. */
+/* Owns the array, canonical DNS text and attenuated dns_udp factory. The
+ * resolver is available only when its selected interface is permitted by udp.
+ * Missing/denied scoped paths omit DNS_SERVER; text grants no packet authority.
+ * Without a registry retain the inherited startup choice only with held udp. */
 enum call_status network_environment_read(struct network_environment *environment,
-    handle_t authority, const struct launch_environment_entry *source, size_t count,
-    const char *fallback);
+    handle_t registry, handle_t udp, const struct launch_environment_entry *source, size_t count);
 enum call_status network_environment_from_capture(struct network_environment *environment,
-    handle_t authority, const struct environment_capture *source, const char *fallback);
+    handle_t registry, handle_t udp, const struct environment_capture *source);
 void network_environment_free(struct network_environment *environment);
 /* Initial provider startup waits at most ten seconds for the setup owner's
- * first DNS choice; timeout permits the existing fallback environment. */
+ * first DNS choice; timeout leaves DNS unavailable. */
 enum call_status network_environment_wait(handle_t authority, handle_t clock);
 
 #endif

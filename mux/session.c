@@ -244,7 +244,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"tcp", TCP_SERVICE_RIGHTS}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
-    {"net_config", NET_CONFIG_RIGHT_READ},
+    {"dns_udp", UDP_SERVICE_RIGHT_OPEN},
+    {"net_registry", NET_REGISTRY_RIGHT_READ},
   };
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
     const struct environment_value *value = environment_capture_find(&capture, allowed[i].name);

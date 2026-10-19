@@ -16,9 +16,9 @@ bool dns_resolve_address(const char *program, const char *target,
     fprintf(stderr, "%s: DNS server must be a numeric unicast IPv4 address\n", program);
     return false;
   }
-  handle_t udp = bootstrap_capability("udp"), random = bootstrap_capability("random");
+  handle_t udp = bootstrap_capability("dns_udp"), random = bootstrap_capability("random");
   if (udp == HANDLE_INVALID || random == HANDLE_INVALID) {
-    fprintf(stderr, "%s: missing udp or random capability for DNS\n", program);
+    fprintf(stderr, "%s: missing dns_udp or random capability for DNS\n", program);
     return false;
   }
 

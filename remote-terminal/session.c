@@ -49,7 +49,7 @@ static const struct {
   {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
   {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
   {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
-  {"net_config", NET_CONFIG_RIGHT_READ},
+  {"net_registry", NET_REGISTRY_RIGHT_READ},
   /* Directory rights are copied as held; the entry is private (see below). */
   {"interpreter_root", UINT64_MAX},
 };
@@ -268,10 +268,18 @@ static enum call_status context_init(struct remote_context *context, bool multip
       ENVIRONMENT_SNAPSHOT_TEXT_ONLY, &context->inherited);
   if (status == CALL_OK) {
     status = network_environment_from_capture(&context->environment,
-        bootstrap_capability("net_config"), &context->inherited, NULL);
+        bootstrap_capability("net_registry"), bootstrap_capability("udp"), &context->inherited);
   }
   if (status != CALL_OK) {
     goto done;
+  }
+  if (context->environment.dns_udp != HANDLE_INVALID) {
+    size_t index;
+    status = context_add(context, "dns_udp", context->environment.dns_udp,
+        UDP_SERVICE_RIGHT_OPEN, 0, ENVIRONMENT_EXPORTED, &index);
+    if (status != CALL_OK) {
+      goto done;
+    }
   }
   size_t count = 0;
   for (size_t i = 0; i < context->environment.count; ++i) {

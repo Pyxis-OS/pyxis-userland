@@ -83,7 +83,7 @@ int main(int argc, char **argv)
     fputs("dig: server must be a numeric unicast IPv4 address\n", stderr);
     return EXIT_FAILURE;
   }
-  handle_t udp = bootstrap_capability("udp"), clock = bootstrap_capability("clock");
+  handle_t udp = bootstrap_capability("dns_udp"), clock = bootstrap_capability("clock");
   handle_t random = bootstrap_capability("random");
   if (udp == HANDLE_INVALID || clock == HANDLE_INVALID || random == HANDLE_INVALID) {
     fputs("dig: missing udp, clock or random capability\n", stderr);

@@ -109,7 +109,7 @@ int main(int argc, char **argv)
    * shared root/path or filename implicitly supplies staging privacy. */
   handle_t staging = bootstrap_capability("staging");
   struct http_client client = {.scheme = HTTP_SCHEME_HTTP,
-    .authority = {.tcp = bootstrap_capability("tcp"), .udp = bootstrap_capability("udp"),
+    .authority = {.tcp = bootstrap_capability("tcp"), .udp = bootstrap_capability("dns_udp"),
       .random = bootstrap_capability("random"), .clock = clock}};
   struct endpoint_create_reply endpoint = {0};
   handle_t published[HTTPFS_ROOT_COUNT] = {0};

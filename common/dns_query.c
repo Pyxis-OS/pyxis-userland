@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <pyxis/environment.h>
 
-#define DNS_DEFAULT_SERVER "1.1.1.1"
 #define IPV4_MULTICAST_BASE UINT32_C(0xe0000000)
 #define DNS_PORT 53
 #define DNS_ATTEMPTS 2
@@ -27,7 +26,7 @@ bool dns_select_server(const char *override, uint32_t *server)
     }
   }
   if (!text) {
-    text = DNS_DEFAULT_SERVER;
+    return false;
   }
   return udp_parse_address(text, server) && (*server >> 24) && *server < IPV4_MULTICAST_BASE;
 }
