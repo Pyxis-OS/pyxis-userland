@@ -253,7 +253,7 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
     const char *target = strstr(url, "://") + 3;
     set_detail(detail, "HTTP GET endpoint preparation failed");
     status = http_prepare_endpoint(root, HTTP_ENDPOINT_GET, 0, target, strlen(target),
-        NULL, 0, duration, now + FETCH_DEFAULT_SECONDS * NS_PER_SECOND, &configured, NULL);
+        NULL, 0, duration, now + duration, &configured, NULL);
     if (status == CALL_OK) {
       status = result_status(&configured, detail);
     }
