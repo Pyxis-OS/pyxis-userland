@@ -19,7 +19,8 @@ including carrier-down controllers. Explicit entries reserve their controllers
 and names first. In automatic mode an explicit Ethernet `select = "link"` role
 reserves its preferred prepared controller even while carrier is down/unknown;
 MAC preference then controller ID fixes that initial choice. Its actual binding
-still waits for known/up carrier. Explicit-only linked selection is unchanged. Remaining controllers receive unused `ethN` names in ascending
+still waits for known/up carrier. Explicit-only linked selection is unchanged.
+Remaining controllers receive unused `ethN` names in ascending
 boot-local controller-ID order, independent optional DHCP clients and the same
 declared packet scopes. Bindings and scopes stay fixed until reboot; a new
 post-boot adapter is not admitted by this mode. When inventory differs between
@@ -34,7 +35,8 @@ Exclusion does not disable the driver's mandatory receive draining. Omitting
 This first delivery does not rank routes or link speeds. The packaged route,
 DNS and management choices remain pinned to `eth0`, even if another interface
 has usable carrier or a lease. An absent automatic `ethN` policy pin means no
-selected path (`eth0` through `eth253`), so an offline or all-excluded machine can still boot locally;
+selected path (`eth0` through `eth253`), so an offline or all-excluded machine can
+still boot locally;
 there is no fallback. Undefined references remain errors in explicit-only
 profiles. Automatic preference is a separate delivery.
 
@@ -49,8 +51,9 @@ Exactly one selector is required: `driver = "virtio"`, `mac = "02:00:00:00:00:01
 or `select = "link"`. MACs must be nonzero unicast addresses. Selectors are
 filtered by interface class. Driver/MAC selectors require a unique controller;
 ambiguity or selecting the same controller twice refuses the whole binding
-batch before associations change. Link selection considers prepared controllers
-with reported carrier, chooses the lowest boot-local controller ID, and can use
+batch before associations change. Explicit-only link selection considers prepared
+controllers with reported up carrier, chooses the lowest boot-local controller ID,
+and can use
 an ordered `prefer = { "02:00:00:00:00:01", ... }` list to rank MACs first.
 Use distinct MAC selectors when multiple interfaces must select distinct NICs.
 Unselected controllers stay visible; automatic wired mode covers those not
