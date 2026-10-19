@@ -304,11 +304,37 @@ bool network_config_wait_address(const struct network_config *config, struct net
   }
 }
 
+static bool wait_maintenance(struct network_runtime *runtime)
+{
+  uint64_t now;
+  if (clock_now(runtime->clock, &now) != CALL_OK) {
+    return false;
+  }
+  uint64_t wake = UINT64_MAX;
+  uint64_t poll = UINT64_MAX - now < NETWORK_POLL_NS ? UINT64_MAX : now + NETWORK_POLL_NS;
+  for (size_t i = 0; i < runtime->count; ++i) {
+    const struct interface_runtime *entry = &runtime->interfaces[i];
+    if (entry->lease.address && !entry->needs_clear && entry->lease.expires_ns < wake) {
+      wake = entry->lease.expires_ns;
+    }
+    if (entry->needs_clear || (!entry->failed && (!entry->configured ||
+        entry->reported_phase == NET_DHCP_WAIT_LINK || entry->dhcp.refresh_started ||
+        (entry->lease.address && now >= entry->lease.renewal_ns)))) {
+      if (poll < wake) {
+        wake = poll;
+      }
+    } else if (!entry->failed && entry->lease.address && entry->lease.renewal_ns < wake) {
+      wake = entry->lease.renewal_ns;
+    }
+  }
+  return clock_sleep_until(runtime->clock, wake) == CALL_OK;
+}
+
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime)
 {
   for (;;) {
     bool working;
-    if (!service(config, runtime, UINT64_MAX, &working) || clock_sleep_for(runtime->clock, NETWORK_POLL_NS) != CALL_OK) {
+    if (!service(config, runtime, UINT64_MAX, &working) || !wait_maintenance(runtime)) {
       network_config_stop(config, runtime);
       return EXIT_FAILURE;
     }

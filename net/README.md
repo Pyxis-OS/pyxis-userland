@@ -53,7 +53,10 @@ Connected prefixes may overlap. Configuration order breaks equal-prefix route
 ties. Each DHCP client owns its own pinned port-68 broadcast endpoint, MAC,
 transaction, retry state, lease and renewal/rebind/expiry timers. Active clients
 share a bounded initial acquisition budget of ten seconds; a working interface
-can hand off immediately. Maintenance continues independently after handoff.
+can hand off immediately. Maintenance continues independently after handoff. Healthy bound clients sleep
+until the earliest owned renewal/expiry deadline. Pending setup, link waits,
+active DHCP exchanges and cleanup retry at 100 ms, with peer expiry deadlines
+still limiting the sleep.
 Link/address/transport failure does not move a client to another interface.
 Address-clear failures pause that client and retry its cleanup while peers keep
 progressing. DHCP waits for carrier when it is reported; an otherwise ready
