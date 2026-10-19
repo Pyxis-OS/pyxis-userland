@@ -108,7 +108,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 27 };
+  enum { OPTIONAL_RESOURCE_COUNT = 28 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
