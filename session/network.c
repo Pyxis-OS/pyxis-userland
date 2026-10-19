@@ -217,11 +217,99 @@ static bool service(const struct network_config *config, struct network_runtime 
   return true;
 }
 
-bool network_config_apply(const struct network_config *config, struct network_runtime *runtime)
+static bool captured_controller(const char *interface, bool required, uint32_t *controller)
 {
-  *runtime = (struct network_runtime){.count = config->count,
+  char name[32], text[16];
+  snprintf(name, sizeof(name), "network.%s", interface);
+  struct environment_entry_reply hint;
+  enum call_status status = environment_lookup(startup_environment_handle(), name, &hint, text, sizeof(text));
+  *controller = 0;
+  if (!required && status == CALL_NOT_FOUND) {
+    return true;
+  }
+  if (status == CALL_OK && hint.kind == ENVIRONMENT_CAP) {
+    handle_close(hint.handle);
+  }
+  bool valid = status == CALL_OK && hint.kind == ENVIRONMENT_TEXT && hint.text_length &&
+      hint.text_length < sizeof(text) && text[0] != '0';
+  for (size_t i = 0; valid && i < hint.text_length; ++i) {
+    unsigned digit = (unsigned char)text[i] - '0';
+    if (digit > 9 || *controller > (UINT32_MAX - digit) / 10) {
+      valid = false;
+    } else {
+      *controller = *controller * 10 + digit;
+    }
+  }
+  return valid && *controller;
+}
+
+/* Boot-init already chose the immutable initial set. Adopt only definitions
+ * backed by this owner's private configuration and DHCP grants, never a fresh
+ * controller scan or a name observed through registry READ alone. */
+static bool adopt_wired(struct network_config *config, handle_t registry)
+{
+  if (!config->wired_auto) {
+    return true;
+  }
+  for (uint64_t after = 0;;) {
+    struct net_interface_reply published;
+    if (net_registry_next_interface(registry, after, &published) != CALL_OK) {
+      return false;
+    }
+    if (!published.interface_id) {
+      return true;
+    }
+    after = published.interface_id;
+    bool explicit = false;
+    for (size_t i = 0; i < config->count; ++i) {
+      explicit |= !strcmp(config->interfaces[i].name, published.name);
+    }
+    if (explicit || published.interface_class != NET_INTERFACE_CLASS_ETHERNET) {
+      continue;
+    }
+    char name[32];
+    snprintf(name, sizeof(name), "config.%s", published.name);
+    handle_t authority = bootstrap_capability(name);
+    snprintf(name, sizeof(name), "dhcp.%s", published.name);
+    handle_t udp = bootstrap_capability(name);
+    if (authority == HANDLE_INVALID && udp == HANDLE_INVALID) {
+      continue;
+    }
+    uint32_t controller;
+    struct net_interface_reply owned;
+    if (!captured_controller(published.name, true, &controller) ||
+        authority == HANDLE_INVALID || udp == HANDLE_INVALID ||
+        net_interface_query(authority, &owned) != CALL_OK ||
+        owned.interface_id != published.interface_id || strcmp(owned.name, published.name) ||
+        owned.interface_class != NET_INTERFACE_CLASS_ETHERNET ||
+        (owned.controller_id && owned.controller_id != controller) ||
+        config->count == NETWORK_INTERFACE_LIMIT) {
+      fputs("session: invalid declared automatic interface facets\n", stderr);
+      return false;
+    }
+    struct network_interface_config *entries = realloc(config->interfaces,
+        (config->count + 1) * sizeof(*entries));
+    if (!entries) {
+      return false;
+    }
+    config->interfaces = entries;
+    struct network_interface_config *entry = &entries[config->count++];
+    *entry = (struct network_interface_config){.interface_class = NET_INTERFACE_CLASS_ETHERNET,
+      .optional = true, .dhcp = true, .automatic = true, .resolved_controller = controller,
+      .selector = {.kind = NET_SELECT_CONTROLLER, .controller_id = controller}};
+    memcpy(entry->name, owned.name, sizeof(entry->name));
+  }
+}
+
+bool network_config_apply(struct network_config *config, struct network_runtime *runtime)
+{
+  *runtime = (struct network_runtime){
     .registry = bootstrap_capability("net_registry"), .policy = bootstrap_capability("net_policy"),
     .clock = bootstrap_capability("clock"), .random = bootstrap_capability("random")};
+  if (runtime->registry == HANDLE_INVALID || !adopt_wired(config, runtime->registry)) {
+    return false;
+  }
+  runtime->count = config->count;
   runtime->interfaces = calloc(config->count, sizeof(*runtime->interfaces));
   runtime->ids = calloc(config->count + 1, sizeof(*runtime->ids));
   if ((config->count && !runtime->interfaces) || !runtime->ids ||
@@ -230,6 +318,13 @@ bool network_config_apply(const struct network_config *config, struct network_ru
   }
   for (size_t i = 0; i < config->count; ++i) {
     struct interface_runtime *entry = &runtime->interfaces[i];
+    struct network_interface_config *definition = &config->interfaces[i];
+    uint32_t captured;
+    if (!captured_controller(definition->name, definition->automatic, &captured)) {
+      fprintf(stderr, "session: invalid initial controller for %s\n", definition->name);
+      return false;
+    }
+    definition->resolved_controller = captured;
     char name[32];
     snprintf(name, sizeof(name), "config.%s", config->interfaces[i].name);
     entry->authority = bootstrap_capability(name);
@@ -239,9 +334,14 @@ bool network_config_apply(const struct network_config *config, struct network_ru
     struct net_interface_reply snapshot;
     if (entry->authority == HANDLE_INVALID || net_interface_query(entry->authority, &snapshot) != CALL_OK ||
         strcmp(snapshot.name, config->interfaces[i].name) ||
+        snapshot.interface_class != config->interfaces[i].interface_class ||
+        (captured && snapshot.controller_id && snapshot.controller_id != captured) ||
         (config->interfaces[i].dhcp && entry->udp == HANDLE_INVALID)) {
       fprintf(stderr, "session: missing declared network facets for %s\n", config->interfaces[i].name);
       return false;
+    }
+    if (snapshot.controller_id) {
+      config->interfaces[i].resolved_controller = snapshot.controller_id;
     }
     runtime->ids[i + 1] = entry->id = snapshot.interface_id;
   }

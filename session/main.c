@@ -50,7 +50,7 @@
 #include <string.h>
 #include <term.h>
 
-static int launch_session(const struct session_config *config, const struct network_config *network,
+static int launch_session(const struct session_config *config, struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
     bool start_services, bool start_remote_services, handle_t retention_account)
 {

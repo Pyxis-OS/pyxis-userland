@@ -257,7 +257,10 @@ For manual native sibling qualification, see [threadprobe](threadprobe/README.md
 
 Trusted boot-init reads the ordered `config/network.lua` profile, defines and
 binds its interfaces, selects route/DNS/management policy, and mints immutable
-packet scopes from the explicitly configured IDs plus `lo`. The configured
+packet scopes from the resolved initial IDs plus `lo`. The stock profile binds
+all boot-discovered wired controllers, with explicit entries and MAC exclusions
+available to private profiles; route, DNS and management remain pinned to
+`eth0` without automatic failover. The configured
 network-owner session receives separate interface configuration facets and
 pinned DHCP factories; ordinary applications receive no configuration or policy
 authority. `session.pxe --configure-network` maintains independent DHCP clients

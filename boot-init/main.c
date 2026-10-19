@@ -907,6 +907,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
     return "acpi_tables requested but the ACPI table root is unavailable";
   }
   size_t network_entries = space->network ? authority->network.config.count * 2 + 1 : 0;
+  for (size_t i = 0; space->network && i < authority->network.config.count; ++i) {
+    network_entries += authority->network.config.interfaces[i].resolved_controller != 0;
+  }
   launch->resources = calloc(SERVICE_COUNT + 17 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
   launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 18 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
@@ -1157,6 +1160,13 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->network.policy, NET_POLICY_RIGHT_MANAGE, 0};
     for (size_t i = 0; i < authority->network.config.count; ++i) {
+      if (authority->network.config.interfaces[i].resolved_controller) {
+        launch->resources[launch->resource_count++] = (struct launch_environment_entry){
+          .name = (uintptr_t)authority->network.controller_names[i], .kind = ENVIRONMENT_TEXT,
+          .value = (uintptr_t)authority->network.controller_values[i],
+          .length = strlen(authority->network.controller_values[i]),
+        };
+      }
       launch->resources[launch->resource_count++] = (struct launch_environment_entry)
           PROFILE_PRIVATE_CAP(authority->network.facet_names[i], launch->grant_count);
       launch->grants[launch->grant_count++] = (struct launch_grant){

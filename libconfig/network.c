@@ -205,7 +205,17 @@ static void read_policy_name(lua_State *state, int table, const char *field,
     for (size_t i = 0; i < config->count; ++i) {
       found |= !strcmp(config->interfaces[i].name, name);
     }
-    if (!found) {
+    bool automatic = config->wired_auto && !strncmp(name, "eth", 3) && name[3] &&
+        !(name[3] == '0' && name[4]);
+    unsigned number = 0;
+    for (size_t i = 3; automatic && name[i]; ++i) {
+      unsigned digit = (unsigned char)name[i] - '0';
+      automatic = digit <= 9 && number <= (NETWORK_INTERFACE_LIMIT - 1 - digit) / 10;
+      if (automatic) {
+        number = number * 10 + digit;
+      }
+    }
+    if (!found && !automatic) {
       luaL_error(state, "%s names an undefined interface", field);
     }
   }
@@ -216,12 +226,41 @@ static int decode_network(lua_State *state)
 {
   struct network_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"interfaces", "routing", "dns", "management"};
-  config_keys(state, 1, keys, 4);
+  const char *keys[] = {"interfaces", "wired", "routing", "dns", "management"};
+  config_keys(state, 1, keys, 5);
+  config_field(state, 1, "wired");
+  if (!lua_isnil(state, 2)) {
+    const char *fields[] = {"auto", "exclude"};
+    config_keys(state, 2, fields, 2);
+    config->wired_auto = read_boolean(state, 2, "auto");
+    config_field(state, 2, "exclude");
+    if (!lua_isnil(state, 3)) {
+      size_t count = array_count(state, 3, "wired.exclude");
+      if (count > SIZE_MAX / sizeof(*config->excluded_macs)) {
+        return luaL_error(state, "wired.exclude is too large");
+      }
+      config->excluded_macs = calloc(count, sizeof(*config->excluded_macs));
+      if (count && !config->excluded_macs) {
+        return luaL_error(state, "cannot allocate wired.exclude");
+      }
+      config->exclusion_count = count;
+      for (size_t i = 0; i < count; ++i) {
+        lua_rawgeti(state, 3, (lua_Integer)i + 1);
+        read_mac(state, 4, config->excluded_macs[i], "wired.exclude entry");
+        lua_pop(state, 1);
+        for (size_t j = 0; j < i; ++j) {
+          if (!memcmp(config->excluded_macs[i], config->excluded_macs[j], 6)) {
+            return luaL_error(state, "duplicate wired.exclude entry");
+          }
+        }
+      }
+    }
+  }
+  lua_settop(state, 1);
   config_field(state, 1, "interfaces");
   size_t count = array_count(state, 2, "interfaces");
-  if (count > SIZE_MAX / sizeof(*config->interfaces)) {
-    return luaL_error(state, "interfaces is too large");
+  if (count > NETWORK_INTERFACE_LIMIT) {
+    return luaL_error(state, "interfaces exceeds the 254-entry plan limit");
   }
   config->interfaces = calloc(count, sizeof(*config->interfaces));
   if (count && !config->interfaces) {
@@ -354,6 +393,7 @@ void network_config_free(struct network_config *config)
     free(config->interfaces[i].preferred_macs);
   }
   free(config->interfaces);
+  free(config->excluded_macs);
   *config = (struct network_config){0};
 }
 

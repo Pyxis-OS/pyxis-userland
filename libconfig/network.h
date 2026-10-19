@@ -8,11 +8,14 @@
 #include <stdint.h>
 
 #define NETWORK_CONFIG_PATH "boot://config/network.lua"
+#define NETWORK_INTERFACE_LIMIT 254
 
 struct network_interface_config {
   char name[16];
   uint32_t interface_class;
-  bool optional, dhcp;
+  /* Trusted boot resolution only; neither field is accepted from Lua. */
+  uint32_t resolved_controller;
+  bool optional, dhcp, automatic;
   struct net_selector selector;
   uint8_t (*preferred_macs)[6];
   size_t preference_count;
@@ -22,6 +25,9 @@ struct network_interface_config {
 struct network_config {
   struct network_interface_config *interfaces;
   size_t count;
+  bool wired_auto;
+  uint8_t (*excluded_macs)[6];
+  size_t exclusion_count;
   char default_interface[16], dns_interface[16];
   char remote_interface[16], log_interface[16], debug_interface[16];
   bool dns_explicit;

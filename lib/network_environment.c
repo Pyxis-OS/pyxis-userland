@@ -113,6 +113,7 @@ enum call_status network_environment_from_capture(struct network_environment *en
   for (size_t i = 0; i < source->count; ++i) {
     const struct environment_value *value = &source->values[i];
     if (value->kind == ENVIRONMENT_TEXT &&
+        (value->flags || strncmp(value->name, "network.", 8)) &&
         strcmp(value->name, "stdin.append") && strcmp(value->name, "stdout.append") &&
         strcmp(value->name, "stderr.append")) {
       entries[count++] = (struct launch_environment_entry)PROFILE_TEXT(value->name, value->text);

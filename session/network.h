@@ -21,7 +21,7 @@ struct network_runtime {
   bool waiting_link, background, binding_failed;
 };
 
-bool network_config_apply(const struct network_config *config, struct network_runtime *runtime);
+bool network_config_apply(struct network_config *config, struct network_runtime *runtime);
 bool network_config_wait_address(const struct network_config *config, struct network_runtime *runtime);
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime);
 bool network_config_stop(const struct network_config *config, struct network_runtime *runtime);

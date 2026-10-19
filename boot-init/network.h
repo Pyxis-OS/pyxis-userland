@@ -10,6 +10,7 @@ struct boot_network {
   uint64_t *ids;
   handle_t *facets, *dhcp;
   char (*facet_names)[32], (*dhcp_names)[32];
+  char (*controller_names)[32], (*controller_values)[16];
   handle_t echo, udp, tcp;
   handle_t remote_interface, remote_tcp, remote_udp;
 };

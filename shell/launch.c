@@ -1315,6 +1315,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
      * management grants across SESSION. Ordinary programs never inherit these. */
     for (size_t i = 0; i < prepared->captured.count; ++i) {
       const struct environment_value *entry = &prepared->captured.values[i];
+      if (entry->kind == ENVIRONMENT_TEXT && !entry->flags &&
+          !strncmp(entry->name, "network.", 8) && entry->name[8]) {
+        prepared->entries[entry_count++] = (struct launch_environment_entry){
+          .name = (uintptr_t)entry->name, .kind = ENVIRONMENT_TEXT,
+          .value = (uintptr_t)entry->text, .length = entry->length,
+        };
+        continue;
+      }
       if (entry->kind != ENVIRONMENT_CAP || entry->flags) {
         continue;
       }

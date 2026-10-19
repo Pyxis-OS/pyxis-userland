@@ -6,14 +6,34 @@ The packaged profile is:
 
 ```lua
 return {
-  interfaces = {
-    { name = "eth0", class = "ethernet", select = "link", optional = true, dhcp = true },
-  },
+  wired = { auto = true, exclude = {} },
+  interfaces = {},
   routing = { default = "eth0" },
   dns = { interface = "eth0", server = "1.1.1.1" },
   management = { remote = "eth0", log = "eth0", debug = "eth0" },
 }
 ```
+
+`wired.auto = true` covers every supported wired controller discovered at boot,
+including carrier-down controllers. Explicit entries reserve their controllers
+and names first. Remaining controllers receive unused `ethN` names in ascending
+boot-local controller-ID order, independent optional DHCP clients and the same
+declared packet scopes. Bindings and scopes stay fixed until reboot; a new
+post-boot adapter is not admitted by this mode. When inventory differs between
+boots, use explicit MAC entries for roles that need a stable name.
+
+`wired.exclude` is an array of nonzero unicast MAC strings. Excluded controllers
+receive no automatic interface, DHCP client or packet scope. Selecting one
+explicitly refuses setup; duplicate exclusion entries also fail validation.
+Exclusion does not disable the driver's mandatory receive draining. Omitting
+`wired`, or setting `auto = false`, retains explicit-only configuration.
+
+This first delivery does not rank routes or link speeds. The packaged route,
+DNS and management choices remain pinned to `eth0`, even if another interface
+has usable carrier or a lease. An absent automatic `ethN` policy pin means no
+selected path (`eth0` through `eth253`), so an offline or all-excluded machine can still boot locally;
+there is no fallback. Undefined references remain errors in explicit-only
+profiles. Automatic preference is a separate delivery.
 
 `interfaces` is a consecutive array. Each entry has a unique canonical `ethN`
 Ethernet name or `wlanN` Wi-Fi name and the corresponding `class = "ethernet"`
@@ -30,7 +50,9 @@ batch before associations change. Link selection considers prepared controllers
 with reported carrier, chooses the lowest boot-local controller ID, and can use
 an ordered `prefer = { "02:00:00:00:00:01", ... }` list to rank MACs first.
 Use distinct MAC selectors when multiple interfaces must select distinct NICs.
-Unselected controllers stay visible and inactive.
+Unselected controllers stay visible; automatic wired mode covers those not
+reserved by an explicit entry or excluded by MAC. Low-level driver draining is
+independent of IP binding.
 
 `optional = true` permits an absent explicit controller. Such interfaces remain
 defined and may bind later through the trusted network owner; absence does not
@@ -98,8 +120,18 @@ SESSION handoff; ordinary programs, providers and successor local shells do not
 receive them. Remote's `remote_interface` and `remote_tcp` are separate private
 management resources carried only through its trusted setup.
 
+Boot-init completes discovery within a ten-second setup deadline and resolves
+the entire automatic plan before interface definitions or packet publication.
+The kernel permits at most 254 non-loopback definitions; exceeding that bound
+refuses setup. The network owner adopts the published interfaces using its
+private configuration/DHCP grants and private `network.NAME` controller-ID hints
+across the trusted SESSION handoff. These hints preserve an initial choice if a
+binding is temporarily unavailable; text alone grants no configuration or packet
+authority. The owner does not resample a new automatic inventory after handoff.
+
 Stock `tcp`, `udp` and `echo` factories contain exactly `lo` plus the profile's
-configured IDs, including any optional interface not yet bound. Interfaces added
+resolved initial IDs, including generated wired entries and any optional
+interface not yet bound. Interfaces added
 later never enter those held grants. Native `*_factory_derive` helpers return
 one-interface factories with subset operation rights. Copies retain scope and
 forwarder lineage. Closing a copied handle does not revoke other holders.
