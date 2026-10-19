@@ -26,7 +26,11 @@ use actual `-- pyxis:begin ID` / `-- pyxis:end ID` line comments (Limine uses
 `#`). Unmarked adoption and owner-value replacement require explicit choices;
 outside bytes are preserved exactly. Missing history is unknown. The current
 source catalog declares optional volume/space and session/network defaults;
-it does not invent Limine paths or migrations.
+it does not invent Limine paths or migrations. Network defaults now use the
+ordered interface profile. Legacy `net0` entries fail shared static validation;
+convert the owned profile explicitly using the [network migration reference](../net/README.md#private-profile-migration)
+before planning/applying it. No implicit conversion or second network authority
+is introduced.
 
 Publication stages, synchronizes and read-verifies one complete Lua triple and
 catalog; an exclusive bounded interval rechecks all consumed/staged bytes. A

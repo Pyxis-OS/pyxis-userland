@@ -243,25 +243,22 @@ For manually invoked performance measurements, see [iobench](iobench/README.md)
 for files and pipes and [ipcbench](ipcbench/README.md) for CALL/SEND.
 For manual native sibling qualification, see [threadprobe](threadprobe/README.md).
 
-`session.pxe --configure-network` applies `config/network.lua`. A `net0` table
-requires exactly one selector: `driver = "virtio"` or a locally supplied `mac`
-string containing six colon-separated hex pairs for a nonzero unicast address.
-The packaged configuration selects VirtIO. A unique match binds until reboot;
-there is no fallback to another controller. Missing `net0` preserves settings;
-`net0 = false` clears IPv4 settings while retaining the binding. Remote startup
-looks up the configured candidate without binding it, then waits for the setup
-owner to bind and assign an address.
+Trusted boot-init reads the ordered `config/network.lua` profile, defines and
+binds its interfaces, selects route/DNS/management policy, and mints immutable
+packet scopes from the explicitly configured IDs plus `lo`. The configured
+network-owner session receives separate interface configuration facets and
+pinned DHCP factories; ordinary applications receive no configuration or policy
+authority. `session.pxe --configure-network` maintains independent DHCP clients
+and lease timers while handing off the local session. A working interface or
+an absent optional interface never waits for another client's acquisition.
 
-`net0 = { driver = "virtio", dhcp = true }` requests a lease instead of static
-address/prefix/gateway fields; the packaged profile uses this form. DHCP waits
-for ready transport and reported carrier before acquisition; static settings do
-not wait for carrier. Acquisition waits at most about ten seconds, then starts the
-local session offline on failure.
-Task 2 keeps a successful lease until reboot; reboot before lease expiry until
-maintenance is implemented. Explicit profile `dns.server` wins, then first lease
-DNS, then `1.1.1.1`. Launchers read the chosen DNS for each new program; existing
-programs retain their startup environment. Ordinary shells receive only
-NET_CONFIG READ and UDP OPEN, with no configuration/broadcast write authority.
+`net` uses read-only registry inventory and reports interface state, DHCP report
+age when clock READ is available, and the selected route/DNS/management IDs.
+Launchers pair each chosen `DNS_SERVER` with declared `dns_udp` authority derived
+within the permitted UDP scope. Existing programs retain their startup resolver
+snapshot; missing permitted DNS paths are unavailable. See the
+[network profile and grant reference](net/README.md) for selectors, static/DHCP
+configuration, restricted delivery, Remote binding and private-profile migration.
 
 `session.pxe --configure-network --tcp-server ADDRESS PORT [--tcp-count COUNT]`
 hands off to a TCP echo server instead of the local shell. It needs

@@ -697,7 +697,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_pointer = device_input && shell->pointer != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
-  bool has_net_config = session && shell->net_config != HANDLE_INVALID;
+  bool has_net_registry = session && shell->net_registry != HANDLE_INVALID;
   bool has_random = shell->random != HANDLE_INVALID;
   bool has_tcp = shell->tcp != HANDLE_INVALID;
   bool has_pipe = session && shell->pipe != HANDLE_INVALID;
@@ -798,8 +798,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t launcher_index = pointer_index + (has_pointer ? 1 : 0);
   size_t child_launcher_index = launcher_index + (has_launcher ? 1 : 0);
   size_t interpreter_root_index = child_launcher_index + (pass_child_launcher ? 1 : 0);
-  size_t net_config_index = interpreter_root_index + (has_interpreter_root ? 1 : 0);
-  size_t pipe_index = net_config_index + (has_net_config ? 1 : 0);
+  size_t net_registry_index = interpreter_root_index + (has_interpreter_root ? 1 : 0);
+  size_t pipe_index = net_registry_index + (has_net_registry ? 1 : 0);
   size_t service_index = pipe_index + (has_pipe ? 1 : 0);
   size_t space_index = service_index + (has_service ? 1 : 0);
   size_t profile_index = space_index + (has_space ? 1 : 0);
@@ -964,13 +964,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_audio) {
     grants[audio_index] = (struct launch_grant){shell->audio, AUDIO_RIGHT_PLAYBACK, 0};
   }
-  if (has_net_config) {
+  if (has_net_registry) {
     uint64_t rights;
-    enum call_status status = handle_rights(shell->net_config, &rights, NULL);
+    enum call_status status = handle_rights(shell->net_registry, &rights, NULL);
     if (status != CALL_OK) {
       return status;
     }
-    grants[net_config_index] = (struct launch_grant){shell->net_config,
+    grants[net_registry_index] = (struct launch_grant){shell->net_registry,
         rights & NET_REGISTRY_RIGHT_READ, 0};
   }
   if (has_pipe) {
@@ -1081,8 +1081,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] =
         (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", interpreter_root_index);
   }
-  if (has_net_config) {
-    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", net_config_index);
+  if (has_net_registry) {
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", net_registry_index);
   }
   if (has_pipe) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", pipe_index);
@@ -1410,8 +1410,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"echo", shell->echo, PROTOCOL_ECHO},
       /* Offered only to a bundle that declares it. The declared request is READ
        * alone, so the shell's own rights never reach the bundle. Plain programs
-       * receive net_config only through a session handoff. */
-      {"net_registry", shell->net_config, PROTOCOL_NET_REGISTRY},
+       * receive net_registry only through a session handoff. */
+      {"net_registry", shell->net_registry, PROTOCOL_NET_REGISTRY},
       {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
       {"dns_udp", environment->dns_udp, PROTOCOL_UDP_SERVICE},
       {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
@@ -2131,8 +2131,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (status != CALL_OK) {
     goto failed;
   }
-  status = network_environment_from_capture(&environment, shell->net_config,
-      shell->udp != HANDLE_INVALID ? shell->udp : bootstrap_capability("dns_udp"), &inherited);
+  status = network_environment_from_capture(&environment, shell->net_registry,
+      shell->net_registry != HANDLE_INVALID && shell->udp != HANDLE_INVALID ?
+          shell->udp : bootstrap_capability("dns_udp"), &inherited);
   if (status != CALL_OK) {
     goto failed;
   }

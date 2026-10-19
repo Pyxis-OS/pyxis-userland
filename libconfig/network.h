@@ -26,7 +26,6 @@ struct network_config {
   char remote_interface[16], log_interface[16], debug_interface[16];
   bool dns_explicit;
   uint32_t dns_address;
-  char dns_server[sizeof("255.255.255.255")];
 };
 
 /* Full ordered profile validation has no network effects. Output owns all arrays.

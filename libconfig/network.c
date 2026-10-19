@@ -138,6 +138,16 @@ static size_t array_count(lua_State *state, int table, const char *field)
   return count;
 }
 
+static bool string_is(lua_State *state, int index, const char *expected)
+{
+  if (lua_type(state, index) != LUA_TSTRING) {
+    return false;
+  }
+  size_t length;
+  const char *text = lua_tolstring(state, index, &length);
+  return length == strlen(expected) && !memcmp(text, expected, length);
+}
+
 static void read_selector(lua_State *state, struct network_interface_config *config)
 {
   config_field(state, 3, "driver");
@@ -148,7 +158,7 @@ static void read_selector(lua_State *state, struct network_interface_config *con
     luaL_error(state, "interface requires exactly one of driver, mac or select");
   }
   if (driver) {
-    if (lua_type(state, 4) != LUA_TSTRING || strcmp(lua_tostring(state, 4), "virtio")) {
+    if (!string_is(state, 4, "virtio")) {
       luaL_error(state, "interface.driver must be 'virtio'");
     }
     config->selector.kind = NET_SELECT_VIRTIO;
@@ -156,7 +166,7 @@ static void read_selector(lua_State *state, struct network_interface_config *con
     read_mac(state, 5, config->selector.mac, "interface.mac");
     config->selector.kind = NET_SELECT_MAC;
   } else {
-    if (lua_type(state, 6) != LUA_TSTRING || strcmp(lua_tostring(state, 6), "link")) {
+    if (!string_is(state, 6, "link")) {
       luaL_error(state, "interface.select must be 'link'");
     }
     config->selector.kind = NET_SELECT_LINKED_CONTROLLER;
@@ -228,12 +238,11 @@ static int decode_network(lua_State *state)
     read_name(state, 4, entry->name, "interface.name");
     lua_pop(state, 1);
     config_field(state, 3, "class");
-    const char *class = lua_type(state, 4) == LUA_TSTRING ? lua_tostring(state, 4) : "";
     const char *prefix;
-    if (!strcmp(class, "ethernet")) {
+    if (string_is(state, 4, "ethernet")) {
       entry->interface_class = NET_INTERFACE_CLASS_ETHERNET;
       prefix = "eth";
-    } else if (!strcmp(class, "wifi")) {
+    } else if (string_is(state, 4, "wifi")) {
       entry->interface_class = NET_INTERFACE_CLASS_WIFI;
       prefix = "wlan";
     } else {
@@ -313,9 +322,7 @@ static int decode_network(lua_State *state)
         return luaL_error(state, "dns.server must be a unicast IPv4 address");
       }
       config->dns_explicit = true;
-      snprintf(config->dns_server, sizeof(config->dns_server), "%u.%u.%u.%u",
-          config->dns_address >> 24, config->dns_address >> 16 & 255,
-          config->dns_address >> 8 & 255, config->dns_address & 255);
+
     }
     lua_pop(state, 1);
   }

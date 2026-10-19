@@ -159,8 +159,8 @@ int main(int argc, char **argv)
     goto done;
   }
   if (!dns_select_server(NULL, &client.authority.dns_server)) {
-    status = CALL_BAD_REQUEST;
-    goto done;
+    client.authority.dns_server = 0;
+    client.authority.udp = HANDLE_INVALID;
   }
   if (staging != HANDLE_INVALID) {
     status = httpfs_staging_validate(staging, &staging_type);

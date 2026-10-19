@@ -128,7 +128,7 @@ struct shell {
   handle_t interpreter_image;
   handle_t threads; /* Retained before commands can rebind the startup table. */
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
-      echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_config,
+      echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_registry,
       keyboard, pointer, terminal_service,
       boot, tmp, host_mount, native_mount, power, screen_capture, audio, retention_account;
   const struct path_context *directory;

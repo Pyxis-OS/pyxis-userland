@@ -23,7 +23,10 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
     handle_t registry, handle_t policy)
 {
   struct net_interface_binding *bindings = calloc(config->count, sizeof(*bindings));
-  if (config->count && !bindings) {
+  uint32_t *controllers = calloc(config->count, sizeof(*controllers));
+  if (config->count && (!bindings || !controllers)) {
+    free(bindings);
+    free(controllers);
     return CALL_NO_MEMORY;
   }
   size_t count = 0;
@@ -38,6 +41,7 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
     }
     if (status != CALL_OK) {
       free(bindings);
+      free(controllers);
       return status;
     }
     if (interface.flags & NET_INTERFACE_BOUND) {
@@ -52,6 +56,7 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
       status = net_registry_next_controller(registry, after, &controller);
       if (status != CALL_OK) {
         free(bindings);
+        free(controllers);
         return status;
       }
       complete = (controller.flags & NET_CONTROLLER_INVENTORY_COMPLETE) != 0;
@@ -74,6 +79,7 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
         if (entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
           fprintf(stderr, "network: %s controller is already bound\n", entry->name);
           free(bindings);
+          free(controllers);
           return CALL_BUSY;
         }
         continue;
@@ -87,30 +93,37 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
     if (matches > 1 && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
       fprintf(stderr, "network: %s selector is ambiguous\n", entry->name);
       free(bindings);
+      free(controllers);
       return CALL_BUSY;
     }
     if (!selected.controller_id) {
       if (complete && !entry->optional && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
         fprintf(stderr, "network: required %s controller is absent\n", entry->name);
         free(bindings);
+        free(controllers);
         return CALL_NOT_FOUND;
       }
       continue;
     }
     for (size_t j = 0; j < count; ++j) {
-      if (bindings[j].selector.controller_id == selected.controller_id) {
+      if (controllers[j] == selected.controller_id) {
         fprintf(stderr, "network: controller selected by multiple interfaces\n");
         free(bindings);
+        free(controllers);
         return CALL_BAD_REQUEST;
       }
     }
+    controllers[count] = selected.controller_id;
     bindings[count++] = (struct net_interface_binding){
       .interface_id = ids[i + 1],
-      .selector = {.kind = NET_SELECT_LINKED_CONTROLLER, .controller_id = selected.controller_id},
+      .selector = entry->selector.kind == NET_SELECT_LINKED_CONTROLLER ?
+          (struct net_selector){.kind = NET_SELECT_LINKED_CONTROLLER, .controller_id = selected.controller_id} :
+          entry->selector,
     };
   }
   enum call_status status = count ? net_policy_bind(policy, bindings, count) : CALL_OK;
   free(bindings);
+  free(controllers);
   return status;
 }
 

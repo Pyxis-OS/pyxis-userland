@@ -268,7 +268,9 @@ static enum call_status context_init(struct remote_context *context, bool multip
       ENVIRONMENT_SNAPSHOT_TEXT_ONLY, &context->inherited);
   if (status == CALL_OK) {
     status = network_environment_from_capture(&context->environment,
-        bootstrap_capability("net_registry"), bootstrap_capability("udp"), &context->inherited);
+        bootstrap_capability("net_registry"),
+        bootstrap_capability(bootstrap_capability("net_registry") != HANDLE_INVALID ? "udp" : "dns_udp"),
+        &context->inherited);
   }
   if (status != CALL_OK) {
     goto done;

@@ -175,7 +175,7 @@ int main(int argc, char **argv)
   }
   handle_t authority = bootstrap_capability("net_registry");
   if (authority == HANDLE_INVALID) {
-    fputs("net: no net_config grant (the launching shell did not supply one)\n", stderr);
+    fputs("net: no net_registry grant (the launching shell did not supply one)\n", stderr);
     return EXIT_FAILURE;
   }
   bool ok = print_controllers(authority) && print_interfaces(authority) && print_policy(authority);

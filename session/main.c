@@ -141,7 +141,7 @@ static int launch_session(const struct session_config *config, const struct netw
     fprintf(stderr, "session: cannot snapshot environment (status %u)\n", status);
     goto done;
   }
-  environment = session_environment(config, network->dns_server, &inherited,
+  environment = session_environment(config, &inherited,
       &environment_count);
   if (!environment) {
     goto done;
@@ -280,21 +280,21 @@ static int launch_session(const struct session_config *config, const struct netw
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", grant_count);
     grants[grant_count++] = (struct launch_grant){tcp, rights, 0};
   }
-  handle_t net_config = bootstrap_capability("net_registry");
-  if (net_config != HANDLE_INVALID) {
+  handle_t net_registry = bootstrap_capability("net_registry");
+  if (net_registry != HANDLE_INVALID) {
     uint64_t rights;
-    status = handle_rights(net_config, &rights, NULL);
+    status = handle_rights(net_registry, &rights, NULL);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot query network rights (status %u)\n", status);
       goto done;
     }
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", grant_count);
-    grants[grant_count++] = (struct launch_grant){net_config,
+    grants[grant_count++] = (struct launch_grant){net_registry,
         rights & NET_REGISTRY_RIGHT_READ, 0};
   }
   if (start_remote_services) {
     handle_t terminal_service = bootstrap_capability("terminal");
-    if (terminal_service == HANDLE_INVALID || net_config == HANDLE_INVALID) {
+    if (terminal_service == HANDLE_INVALID || net_registry == HANDLE_INVALID) {
       fputs("session: missing remote service bootstrap authority\n", stderr);
       goto done;
     }
@@ -508,7 +508,8 @@ static int launch_session(const struct session_config *config, const struct netw
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
 
-  status = network_environment_read(&refreshed_environment, net_config, bootstrap_capability("udp"),
+  status = network_environment_read(&refreshed_environment, net_registry,
+      bootstrap_capability(net_registry != HANDLE_INVALID ? "udp" : "dns_udp"),
       environment, environment_count);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot read network environment (status %u)\n", status);
@@ -597,6 +598,11 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
   free(removed);
   environment_capture_close(&capture);
   bool success = status == CALL_OK && network_runtime_release(runtime);
+  const handle_t retained[] = {
+    bootstrap_capability("memory"), bootstrap_capability("output"),
+    bootstrap_stdio(ENVIRONMENT_STDOUT).handle, bootstrap_stdio(ENVIRONMENT_STDERR).handle,
+  };
+  success &= bootstrap_release_except(retained, sizeof(retained) / sizeof(*retained));
   for (size_t i = 0; i < startup_working_directory_count(); ++i) {
     bool duplicate = false;
     for (size_t j = 0; j < i; ++j) {

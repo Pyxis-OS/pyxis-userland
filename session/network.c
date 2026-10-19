@@ -308,7 +308,7 @@ bool network_config_stop(const struct network_config *config, struct network_run
 {
   (void)config;
   bool success = true;
-  for (size_t i = 0; i < runtime->count; ++i) {
+  for (size_t i = 0; runtime->interfaces && i < runtime->count; ++i) {
     struct interface_runtime *entry = &runtime->interfaces[i];
     success &= !entry->owns_dhcp_settings || clear_lease(entry);
     success &= dhcp_close(&entry->dhcp);

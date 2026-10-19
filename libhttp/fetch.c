@@ -479,8 +479,8 @@ static bool resolve(struct http_stream *fetch, const char *host, uint32_t *addre
     return fail(fetch, HTTP_INVALID_URI);
   }
   const struct http_authority *authority = &fetch->authority;
-  if (authority->udp == HANDLE_INVALID || authority->random == HANDLE_INVALID) {
-    return network(fetch, CALL_DENIED);
+  if (authority->udp == HANDLE_INVALID || authority->random == HANDLE_INVALID || !authority->dns_server) {
+    return network(fetch, CALL_UNAVAILABLE);
   }
   struct dns_exchange exchange;
   dns_query(authority->udp, authority->clock, authority->random, authority->dns_server,
@@ -1264,8 +1264,9 @@ enum http_step_result http_stream_step(struct http_stream *stream, void *bytes,
         fail(stream, HTTP_INVALID_URI);
         break;
       }
-      if (stream->authority.udp == HANDLE_INVALID || stream->authority.random == HANDLE_INVALID) {
-        network(stream, CALL_DENIED);
+      if (stream->authority.udp == HANDLE_INVALID || stream->authority.random == HANDLE_INVALID ||
+          !stream->authority.dns_server) {
+        network(stream, CALL_UNAVAILABLE);
         break;
       }
       dns_query_begin(&stream->dns, stream->authority.udp, stream->authority.clock,

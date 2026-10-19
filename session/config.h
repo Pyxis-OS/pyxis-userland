@@ -12,11 +12,11 @@
 bool session_config_read(struct session_config *config);
 
 /* The successor's environment: inherited variables, then configured ones,
- * then TZ and DNS_SERVER, each replacing an inherited variable of that name.
- * The caller frees the array; its strings borrow the supplied snapshot, config and
- * dns_server. NULL reports a diagnostic. */
+ * then TZ. DNS remains an inherited startup snapshot until trusted network
+ * selection pairs it with an explicitly permitted resolver factory.
+ * The caller frees the array; strings borrow snapshot/config. */
 struct launch_environment_entry *session_environment(const struct session_config *config,
-    const char *dns_server, const struct pyxis_environment_snapshot *inherited,
+    const struct pyxis_environment_snapshot *inherited,
     size_t *count);
 
 #endif

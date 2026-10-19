@@ -63,7 +63,7 @@ static bool configured_variable(const struct session_config *config, const char 
 }
 
 struct launch_environment_entry *session_environment(const struct session_config *config,
-    const char *dns_server, const struct pyxis_environment_snapshot *snapshot,
+    const struct pyxis_environment_snapshot *snapshot,
     size_t *count)
 {
   size_t inherited = snapshot->capture.count;
@@ -88,7 +88,7 @@ struct launch_environment_entry *session_environment(const struct session_config
       continue;
     }
     /* The boot-carried discovery name cannot be shadowed by configuration. */
-    if (!strcmp(name, "PYXIS_REMOTE_BEACON") ||
+    if (!strcmp(name, "PYXIS_REMOTE_BEACON") || !strcmp(name, "DNS_SERVER") ||
         (!session_variable_reserved(name) && !configured_variable(config, name))) {
       environment[used++] = (struct launch_environment_entry)PROFILE_TEXT(name, source[i].text);
     }
@@ -97,7 +97,6 @@ struct launch_environment_entry *session_environment(const struct session_config
     environment[used++] = (struct launch_environment_entry)PROFILE_TEXT(config->environment[i].name, config->environment[i].value);
   }
   environment[used++] = (struct launch_environment_entry)PROFILE_TEXT("TZ", config->timezone);
-  environment[used++] = (struct launch_environment_entry)PROFILE_TEXT("DNS_SERVER", dns_server);
   *count = used;
   return environment;
 }

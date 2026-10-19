@@ -273,7 +273,7 @@ int launch_remote_server(const struct session_config *config,
     fprintf(stderr, "session: cannot snapshot remote environment (status %u)\n", status);
     goto done;
   }
-  environment = session_environment(config, network->dns_server, &inherited,
+  environment = session_environment(config, &inherited,
       &environment_count);
   if (!environment) {
     goto done;
