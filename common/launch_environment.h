@@ -4,6 +4,7 @@
 #include <abi/launcher.h>
 #include <environment.h>
 #include <bundle_launch.h>
+#include <command_search.h>
 #include <string.h>
 #include <handle.h>
 #include <abi/directory.h>
@@ -74,9 +75,9 @@ static inline bool profile_stdio_name(const char *name)
   return false;
 }
 
-/* Named FILE/controller values preserve explicit export. Other native roles
- * still require the caller's fixed selection and masks. Private controllers
- * remain explicit trusted successor copies. */
+/* Named FILE/controller values and commands preserve explicit export. Other
+ * native roles require the caller's fixed selection and masks. Private
+ * controllers remain explicit trusted successor copies. */
 static inline enum call_status profile_inherit_services(
     const struct environment_capture *capture, bool trusted,
     struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
@@ -84,6 +85,16 @@ static inline enum call_status profile_inherit_services(
 {
   for (size_t i = 0; i < capture->count; ++i) {
     const struct environment_value *value = &capture->values[i];
+    bool commands = !strcmp(value->name, "commands") && (value->flags & ENVIRONMENT_EXPORTED);
+    if (commands) {
+      if (value->kind != ENVIRONMENT_CAP) {
+        return CALL_WRONG_TYPE;
+      }
+      enum call_status status = command_list_validate(value->handle);
+      if (status != CALL_OK) {
+        return status;
+      }
+    }
     if (value->kind != ENVIRONMENT_CAP ||
         !strncmp(value->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
         !strcmp(value->name, "job_provisioner") || !strcmp(value->name, "job_work") ||
@@ -110,7 +121,7 @@ static inline enum call_status profile_inherit_services(
         !strcmp(value->name + length - (sizeof(".control") - 1), ".control") &&
         info.protocol == PROTOCOL_FORWARDER;
     bool named_value = info.kind == HANDLE_KIND_NATIVE &&
-        (info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER);
+        (info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || commands);
     if (!controller && (!(value->flags & ENVIRONMENT_EXPORTED) ||
         (info.kind != HANDLE_KIND_EXPORTED && !named_value))) {
       continue;

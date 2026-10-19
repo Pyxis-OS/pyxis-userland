@@ -9,6 +9,7 @@
 #include <process.h>
 #include <wait.h>
 #include <bundle_launch.h>
+#include <command_search.h>
 #include <package.h>
 #include <handle.h>
 #include <stdlib.h>
@@ -188,6 +189,10 @@ static enum call_status prepare_context(struct context_grants *context,
       continue;
     }
     struct launch_environment_entry binding = *entry;
+    bool commands = !strcmp(name, "commands");
+    if (commands && entry->kind != ENVIRONMENT_CAP) {
+      return CALL_WRONG_TYPE;
+    }
     if (entry->kind == ENVIRONMENT_CAP) {
       if (entry->value >= context->source_count) {
         return CALL_BAD_REQUEST;
@@ -196,6 +201,19 @@ static enum call_status prepare_context(struct context_grants *context,
       enum call_status status = handle_query(context->source[entry->value].source, &info);
       if (status != CALL_OK) {
         return status;
+      }
+      if (commands) {
+        status = command_list_validate(context->source[entry->value].source);
+        if (status != CALL_OK) {
+          return status;
+        }
+        if (!(context->source[entry->value].rights & COMMAND_LIST_RIGHT_READ) ||
+            context->source[entry->value].transport) {
+          return CALL_DENIED;
+        }
+        if (!(entry->flags & ENVIRONMENT_EXPORTED)) {
+          continue;
+        }
       }
       /* Filter by actual protocol, so another name for the same provider
        * cannot retain the original, broader grant. */
@@ -206,7 +224,7 @@ static enum call_status prepare_context(struct context_grants *context,
           !strcmp(name, "stdout") || !strcmp(name, "stderr");
       bool directory = info.protocol == PROTOCOL_DIRECTORY && (entry->flags & ENVIRONMENT_EXPORTED);
       bool provider = info.kind == HANDLE_KIND_EXPORTED && (entry->flags & ENVIRONMENT_EXPORTED);
-      if (!stream && !directory && !provider) {
+      if (!stream && !directory && !provider && !commands) {
         continue;
       }
       status = retain_grant(context, entry->value, &binding.value);

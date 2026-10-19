@@ -1300,6 +1300,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (!provider) {
     for (size_t i = 0; i < prepared->captured.count; ++i) {
       const struct environment_value *entry = &prepared->captured.values[i];
+      bool commands = !strcmp(entry->name, "commands") && (entry->flags & ENVIRONMENT_EXPORTED);
+      if (commands) {
+        if (entry->kind != ENVIRONMENT_CAP) {
+          return CALL_WRONG_TYPE;
+        }
+        enum call_status status = command_list_validate(entry->handle);
+        if (status != CALL_OK) {
+          return status;
+        }
+      }
       if (entry->kind != ENVIRONMENT_CAP ||
           !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
           !strcmp(entry->name, "script") ||
@@ -1331,7 +1341,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         return status;
       }
       controller = controller && info.protocol == PROTOCOL_FORWARDER;
-      bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER;
+      bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || commands;
       if (!controller && (!(entry->flags & ENVIRONMENT_EXPORTED) ||
           (info.kind != HANDLE_KIND_EXPORTED && !value))) {
         continue;
