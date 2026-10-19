@@ -16,7 +16,10 @@ return {
 
 `wired.auto = true` covers every supported wired controller discovered at boot,
 including carrier-down controllers. Explicit entries reserve their controllers
-and names first. Remaining controllers receive unused `ethN` names in ascending
+and names first. In automatic mode an explicit Ethernet `select = "link"` role
+reserves its preferred prepared controller even while carrier is down/unknown;
+MAC preference then controller ID fixes that initial choice. Its actual binding
+still waits for known/up carrier. Explicit-only linked selection is unchanged. Remaining controllers receive unused `ethN` names in ascending
 boot-local controller-ID order, independent optional DHCP clients and the same
 declared packet scopes. Bindings and scopes stay fixed until reboot; a new
 post-boot adapter is not admitted by this mode. When inventory differs between

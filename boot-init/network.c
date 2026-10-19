@@ -145,8 +145,17 @@ static bool expand_wired(struct network_config *config, handle_t registry)
     struct network_interface_config *entry = &config->interfaces[i];
     struct net_controller_reply *selected = NULL;
     size_t matching = 0;
+    bool reserve_link = config->wired_auto &&
+        entry->interface_class == NET_INTERFACE_CLASS_ETHERNET &&
+        entry->selector.kind == NET_SELECT_LINKED_CONTROLLER;
     for (size_t j = 0; j < count; ++j) {
-      if (controller_matches(entry, &controllers[j])) {
+      /* Automatic members must not take a pending explicit role's controller.
+       * Its actual linked binding still requires fresh known/up carrier. */
+      bool matches = reserve_link ?
+          controllers[j].interface_class == entry->interface_class &&
+              (controllers[j].flags & NET_CONTROLLER_PREPARED) :
+          controller_matches(entry, &controllers[j]);
+      if (matches) {
         ++matching;
         if (!selected || rank(entry, &controllers[j]) < rank(entry, selected)) {
           selected = &controllers[j];
