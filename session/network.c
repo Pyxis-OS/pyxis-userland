@@ -38,6 +38,7 @@ static bool clear_lease(struct interface_runtime *runtime)
   }
   runtime->lease = (struct dhcp_lease){0};
   runtime->configured = false;
+  runtime->needs_clear = false;
   runtime->reported_epoch = 0;
   dhcp_discover(&runtime->dhcp);
   return true;
@@ -65,9 +66,9 @@ static bool apply_lease(const struct network_interface_config *config,
 }
 
 static bool service_interface(const struct network_interface_config *config,
-    struct interface_runtime *runtime, handle_t clock, handle_t random, bool *working)
+    struct interface_runtime *runtime, handle_t clock, handle_t random, uint64_t deadline, bool *working)
 {
-  if (runtime->failed) {
+  if (runtime->failed || runtime->needs_clear) {
     return true;
   }
   struct net_interface_reply snapshot;
@@ -80,7 +81,8 @@ static bool service_interface(const struct network_interface_config *config,
   }
   bool ready = (snapshot.flags & (NET_INTERFACE_BOUND | NET_INTERFACE_READY)) ==
       (NET_INTERFACE_BOUND | NET_INTERFACE_READY);
-  bool usable = ready && (snapshot.flags & NET_INTERFACE_LINK_UP) &&
+  bool usable = ready &&
+      (!(snapshot.flags & NET_INTERFACE_CARRIER_KNOWN) || (snapshot.flags & NET_INTERFACE_LINK_UP)) &&
       (!(snapshot.flags & NET_INTERFACE_AUTHENTICATION_VALID) ||
        (snapshot.flags & NET_INTERFACE_AUTHENTICATED));
   if (!config->dhcp) {
@@ -118,15 +120,19 @@ static bool service_interface(const struct network_interface_config *config,
   if (runtime->lease.address && now < runtime->lease.renewal_ns) {
     return report(runtime, NET_DHCP_BOUND);
   }
+  if (now >= deadline) {
+    return true;
+  }
   uint32_t phase = !runtime->lease.address ? NET_DHCP_SELECTING :
       now < runtime->lease.rebind_ns ? NET_DHCP_RENEWING : NET_DHCP_REBINDING;
   if (!report(runtime, phase) || now > UINT64_MAX - CLIENT_SLICE_NS) {
     return false;
   }
+  uint64_t until = deadline - now < CLIENT_SLICE_NS ? deadline : now + CLIENT_SLICE_NS;
   struct dhcp_lease lease;
   enum dhcp_result result = runtime->lease.address ?
-      dhcp_refresh(&runtime->dhcp, &runtime->lease, now + CLIENT_SLICE_NS, &lease) :
-      dhcp_acquire(&runtime->dhcp, now + CLIENT_SLICE_NS, &lease);
+      dhcp_refresh(&runtime->dhcp, &runtime->lease, until, &lease) :
+      dhcp_acquire(&runtime->dhcp, until, &lease);
   if (result == DHCP_ACKNOWLEDGED) {
     if (apply_lease(config, runtime, &lease)) {
       *working = true;
@@ -153,18 +159,22 @@ static bool expire_leases(struct network_runtime *runtime)
   }
   for (size_t i = 0; i < runtime->count; ++i) {
     struct interface_runtime *entry = &runtime->interfaces[i];
-    if (entry->lease.address && now >= entry->lease.expires_ns) {
+    if (entry->needs_clear || (entry->lease.address && now >= entry->lease.expires_ns)) {
       if (!clear_lease(entry)) {
-        return false;
+        if (!entry->needs_clear) {
+          fprintf(stderr, "session: interface %llu clear unavailable; retrying\n", (unsigned long long)entry->id);
+        }
+        entry->needs_clear = true;
+        continue;
       }
-      report(entry, NET_DHCP_EXPIRED);
+      report(entry, entry->failed ? NET_DHCP_FAILED : NET_DHCP_EXPIRED);
     }
   }
   return true;
 }
 
 static bool service(const struct network_config *config, struct network_runtime *runtime,
-    bool *working)
+    uint64_t deadline, bool *working)
 {
   if (!expire_leases(runtime)) {
     return false;
@@ -190,18 +200,19 @@ static bool service(const struct network_config *config, struct network_runtime 
       return false;
     }
     if (!service_interface(&config->interfaces[i], &runtime->interfaces[i], runtime->clock,
-        runtime->random, working)) {
+        runtime->random, deadline, working)) {
       fprintf(stderr, "session: %s network maintainer failed\n", config->interfaces[i].name);
       struct interface_runtime *entry = &runtime->interfaces[i];
-      if (entry->owns_dhcp_settings && !clear_lease(entry)) {
-        return false;
+      entry->failed = true;
+      entry->needs_clear = entry->owns_dhcp_settings;
+      if (entry->needs_clear) {
+        clear_lease(entry);
       }
       dhcp_close(&entry->dhcp);
       report(entry, NET_DHCP_FAILED);
-      entry->failed = true;
     }
-    runtime->waiting_link |= !runtime->interfaces[i].failed &&
-        (config->interfaces[i].dhcp || !runtime->interfaces[i].configured);
+    runtime->waiting_link |= runtime->interfaces[i].needs_clear ||
+        (!runtime->interfaces[i].failed && (config->interfaces[i].dhcp || !runtime->interfaces[i].configured));
   }
   return true;
 }
@@ -241,7 +252,7 @@ bool network_config_apply(const struct network_config *config, struct network_ru
   uint64_t deadline = now + INITIAL_ACQUIRE_NS;
   for (;;) {
     bool working;
-    if (!service(config, runtime, &working)) {
+    if (!service(config, runtime, deadline, &working)) {
       return false;
     }
     bool acquiring = false;
@@ -287,7 +298,7 @@ bool network_config_wait_address(const struct network_config *config, struct net
       return true;
     }
     bool working;
-    if (!service(config, runtime, &working) || clock_sleep_for(runtime->clock, NETWORK_POLL_NS) != CALL_OK) {
+    if (!service(config, runtime, UINT64_MAX, &working) || clock_sleep_for(runtime->clock, NETWORK_POLL_NS) != CALL_OK) {
       return false;
     }
   }
@@ -297,7 +308,7 @@ int network_config_maintain(const struct network_config *config, struct network_
 {
   for (;;) {
     bool working;
-    if (!service(config, runtime, &working) || clock_sleep_for(runtime->clock, NETWORK_POLL_NS) != CALL_OK) {
+    if (!service(config, runtime, UINT64_MAX, &working) || clock_sleep_for(runtime->clock, NETWORK_POLL_NS) != CALL_OK) {
       network_config_stop(config, runtime);
       return EXIT_FAILURE;
     }

@@ -55,6 +55,9 @@ transaction, retry state, lease and renewal/rebind/expiry timers. Active clients
 share a bounded initial acquisition budget of ten seconds; a working interface
 can hand off immediately. Maintenance continues independently after handoff.
 Link/address/transport failure does not move a client to another interface.
+Address-clear failures pause that client and retry its cleanup while peers keep
+progressing. DHCP waits for carrier when it is reported; an otherwise ready
+explicit controller with unknown carrier retains the driver's assumed-up behavior.
 
 DHCP reports are timestamped userspace assertions, not kernel-verified lease
 health. Initial replies remain broadcast-only and there is no independent

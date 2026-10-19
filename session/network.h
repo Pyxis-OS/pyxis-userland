@@ -10,7 +10,7 @@ struct interface_runtime {
   handle_t authority, udp;
   uint64_t id, reported_epoch;
   uint32_t reported_phase;
-  bool configured, owns_dhcp_settings, failed;
+  bool configured, owns_dhcp_settings, failed, needs_clear;
 };
 
 struct network_runtime {
