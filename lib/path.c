@@ -467,7 +467,7 @@ enum call_status path_create_directory(const struct path_context *context, const
 
 /* Leave the leaf name in component and transfer the last chain handle out.
  * Ancestors are closed; no directory entry or child handle is looked up. */
-static enum call_status rename_parent(const struct path_context *context, const char *path,
+static enum call_status mutation_parent(const struct path_context *context, const char *path,
     uint64_t rights, struct path_workspace *workspace, handle_t *parent)
 {
   *parent = HANDLE_INVALID;
@@ -493,7 +493,7 @@ enum call_status path_rename(const struct path_context *context, const char *sou
     return CALL_BAD_REQUEST;
   }
   handle_t source_parent, destination_parent;
-  enum call_status status = rename_parent(context, source, DIRECTORY_RIGHT_REMOVE,
+  enum call_status status = mutation_parent(context, source, DIRECTORY_RIGHT_REMOVE,
       source_workspace, &source_parent);
   if (status != CALL_OK) {
     return status;
@@ -502,11 +502,11 @@ enum call_status path_rename(const struct path_context *context, const char *sou
   if (policy == DIRECTORY_RENAME_REPLACE) {
     rights |= DIRECTORY_RIGHT_REMOVE;
   }
-  status = rename_parent(context, destination, rights, destination_workspace, &destination_parent);
+  status = mutation_parent(context, destination, rights, destination_workspace, &destination_parent);
   if (status == CALL_DENIED && policy == DIRECTORY_RENAME_REPLACE) {
     /* CREATE alone suffices for an absent destination. Do not probe its name
      * in userspace: the kernel checks replacement authority at publication. */
-    status = rename_parent(context, destination, DIRECTORY_RIGHT_CREATE,
+    status = mutation_parent(context, destination, DIRECTORY_RIGHT_CREATE,
         destination_workspace, &destination_parent);
   }
   if (status == CALL_OK) {
@@ -515,6 +515,31 @@ enum call_status path_rename(const struct path_context *context, const char *sou
         DIRECTORY_KIND_DIRECTORY : DIRECTORY_KIND_ANY;
     status = directory_rename(source_parent, source_workspace->component,
         destination_parent, destination_workspace->component, policy, kind);
+    handle_close(destination_parent);
+  }
+  handle_close(source_parent);
+  return status;
+}
+
+enum call_status path_link(const struct path_context *context, const char *source,
+    const char *destination, struct path_workspace *source_workspace,
+    struct path_workspace *destination_workspace)
+{
+  handle_t source_parent, destination_parent;
+  enum call_status status = mutation_parent(context, source, DIRECTORY_LINK_SOURCE_RIGHTS,
+      source_workspace, &source_parent);
+  if (status != CALL_OK) {
+    return status;
+  }
+  status = mutation_parent(context, destination, DIRECTORY_RIGHT_CREATE,
+      destination_workspace, &destination_parent);
+  if (status == CALL_OK) {
+    if (source[strlen(source) - 1] == '/' || destination[strlen(destination) - 1] == '/') {
+      status = CALL_WRONG_TYPE;
+    } else {
+      status = directory_link(source_parent, source_workspace->component,
+          destination_parent, destination_workspace->component);
+    }
     handle_close(destination_parent);
   }
   handle_close(source_parent);

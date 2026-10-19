@@ -23,6 +23,7 @@ extern "C" {
 #define STAT_DEV_VALID (UINT64_C(1) << 0)
 #define STAT_INO_VALID (UINT64_C(1) << 1)
 #define STAT_MTIME_VALID (UINT64_C(1) << 2)
+#define STAT_NLINK_VALID (UINT64_C(1) << 3)
 
 /* st_valid covers optional metadata only; type and file size are always given.
  * Check each bit before using its field: zero is not an absence marker. st_dev
@@ -30,7 +31,9 @@ extern "C" {
  * Different valid domains prove distinctness without inode IDs; full identity
  * needs both bits. Retain references while comparing: tokens have no promise
  * after final release or reboot. mtime may repeat or move backwards; it is not
- * a change count. No permission bits, owners or link counts are invented. */
+ * a change count. st_nlink counts names only when STAT_NLINK_VALID is set;
+ * zero is a valid detached-file count. No permission bits, owners or unknown
+ * link counts are invented. */
 struct stat {
   mode_t st_mode;
   off_t st_size; /* Zero for anything but a file. */
@@ -38,6 +41,7 @@ struct stat {
   ino_t st_ino;
   struct timespec st_mtim;
   uint64_t st_valid;
+  nlink_t st_nlink;
 };
 
 /* Resolve path like fopen. A file is opened with READ, or WRITE if READ is

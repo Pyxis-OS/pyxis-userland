@@ -383,3 +383,49 @@ done:
   }
   return 0;
 }
+
+int link(const char *source, const char *destination)
+{
+  const char *paths[] = {source, destination};
+  struct path_workspace workspaces[2] = {0};
+  struct pyxis_working_snapshot cwd;
+  enum call_status status = pyxis_working_snapshot_init(&cwd, NULL);
+  if (status != CALL_OK) {
+    errno = libc_path_errno(status, source, destination);
+    return -1;
+  }
+  size_t depth = cwd.context.count;
+  for (size_t i = 0; i < 2; ++i) {
+    if (!paths[i] || !*paths[i]) {
+      status = CALL_BAD_REQUEST;
+      goto done;
+    }
+    size_t length = strlen(paths[i]);
+    if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
+        depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+      status = CALL_LIMIT;
+      goto done;
+    }
+    workspaces[i].directory_capacity = depth + length + 1;
+    workspaces[i].component_capacity = length + 1;
+    workspaces[i].directories = malloc(workspaces[i].directory_capacity * sizeof(handle_t));
+    workspaces[i].component = malloc(length + 1);
+    if (!workspaces[i].directories || !workspaces[i].component) {
+      status = CALL_NO_MEMORY;
+      goto done;
+    }
+  }
+
+  status = path_link(&cwd.context, source, destination, &workspaces[0], &workspaces[1]);
+done:
+  for (size_t i = 0; i < 2; ++i) {
+    free(workspaces[i].component);
+    free(workspaces[i].directories);
+  }
+  pyxis_working_snapshot_close(&cwd);
+  if (status != CALL_OK) {
+    errno = libc_path_errno(status, source, destination);
+    return -1;
+  }
+  return 0;
+}

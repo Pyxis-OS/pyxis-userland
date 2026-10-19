@@ -27,6 +27,10 @@ static enum call_status stat_result(const struct file_info_reply *info, mode_t m
     value.st_valid |= STAT_MTIME_VALID;
     value.st_mtim = (struct timespec){info->modified_seconds, (long)info->modified_nanoseconds};
   }
+  if (info->valid & FILE_INFO_LINK_COUNT_VALID) {
+    value.st_valid |= STAT_NLINK_VALID;
+    value.st_nlink = info->link_count;
+  }
   *result = value;
   return CALL_OK;
 }
@@ -63,8 +67,9 @@ static enum call_status file_metadata(const char *path, struct stat *result)
 int stat(const char *restrict path, struct stat *restrict result)
 {
   enum call_status status = file_metadata(path, result);
-  if (status == CALL_WRONG_TYPE) {
+  if (status == CALL_WRONG_TYPE || status == CALL_DENIED) {
     /* A directory needs no rights of its own to be identified. */
+    enum call_status file_status = status;
     handle_t directory;
     status = directory_open_path(path, 0, &directory);
     if (status == CALL_OK) {
@@ -74,6 +79,8 @@ int stat(const char *restrict path, struct stat *restrict result)
       if (status == CALL_OK) {
         status = stat_result(&info, S_IFDIR, result);
       }
+    } else if (file_status == CALL_DENIED) {
+      status = file_status;
     }
   }
   if (status != CALL_OK) {

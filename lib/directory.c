@@ -167,6 +167,31 @@ enum call_status directory_sync(handle_t directory)
   return mutation_status(syscall_call(directory, &message, sizeof(message), NULL, 0));
 }
 
+enum call_status directory_link(handle_t source, const char *source_name,
+    handle_t destination, const char *destination_name)
+{
+  if (!source_name || !destination_name) {
+    return CALL_BAD_REQUEST;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(source, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != PROTOCOL_DIRECTORY) {
+    return CALL_WRONG_TYPE;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.transport) {
+    return CALL_BAD_OPERATION;
+  }
+  struct directory_message message = {
+    .header = {PROTOCOL_DIRECTORY, DIRECTORY_LINK},
+    .body.link = {(uintptr_t)source_name, strlen(source_name), destination,
+                  (uintptr_t)destination_name, strlen(destination_name)},
+  };
+  return mutation_status(syscall_call(source, &message, sizeof(message), NULL, 0));
+}
+
 enum call_status directory_info(handle_t directory, struct file_info_reply *info)
 {
   if (!info) {

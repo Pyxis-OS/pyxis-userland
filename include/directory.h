@@ -45,6 +45,14 @@ enum call_status directory_remove(handle_t directory, const char *name, uint64_t
 enum call_status directory_rename(handle_t source, const char *source_name,
     handle_t destination, const char *destination_name, uint64_t policy, uint64_t kind);
 
+/* Add an exclusive name for one npfs regular file in the same volume. Source
+ * requires LOOKUP, READ_FILES and WRITE_FILES; destination requires CREATE.
+ * Names are single components. No returned handle, copy fallback or implicit
+ * sync; a submitted call with an untrustworthy reply is OUTCOME_UNKNOWN and
+ * must not be replayed. Directories and other backends are unsupported. */
+enum call_status directory_link(handle_t source, const char *source_name,
+    handle_t destination, const char *destination_name);
+
 /* Requires CREATE or REMOVE on this directory handle. Flushes its metadata
  * and namespace changes; RAM backing succeeds without work. A submitted call
  * with an untrustworthy reply reports CALL_OUTCOME_UNKNOWN, so do not retry it

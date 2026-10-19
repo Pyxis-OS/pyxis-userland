@@ -92,6 +92,14 @@ int fsync(int descriptor);
 /* Remove a file, resolving path like fopen. Requires REMOVE on the parent.
  * Directories fail with EINVAL; open handles to the file stay valid. */
 int unlink(const char *path);
+/* Exclusive hard link of one regular file within an npfs volume. Uses one
+ * owned cwd snapshot for both paths. Source parent needs LOOKUP, READ_FILES
+ * and WRITE_FILES; destination needs CREATE plus LOOKUP for traversal.
+ * Existing target is EEXIST; directories/trailing / fail with EINVAL, and
+ * unsupported backends/cross-volume links with ENOTSUP. No implicit sync,
+ * symbolic links or copy fallback. Uncertain submission is EIO; never retry
+ * it automatically. */
+int link(const char *source, const char *destination);
 /* 1 when the descriptor is a console stream, a startup binding to the space's
  * terminal. Files and pipes return 0 with ENOTTY; invalid descriptors return 0
  * with EBADF. */

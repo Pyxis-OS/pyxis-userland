@@ -117,6 +117,16 @@ enum call_status path_rename(const struct path_context *context, const char *sou
     const char *destination, uint64_t policy, struct path_workspace *source_workspace,
     struct path_workspace *destination_workspace);
 
+/* Resolve two parents and exclusively link a regular file to the exact target
+ * path. Source needs LOOKUP, READ_FILES and WRITE_FILES; destination needs CREATE
+ * plus LOOKUP for traversal. Same-volume npfs only, with no provider OPEN or
+ * copy fallback. Roots, final . or .. and trailing / are rejected. Workspaces
+ * must be disjoint; all temporary handles are closed and cwd is unchanged.
+ * No allocation, retry or implicit sync. OUTCOME_UNKNOWN must not be replayed. */
+enum call_status path_link(const struct path_context *context, const char *source,
+    const char *destination, struct path_workspace *source_workspace,
+    struct path_workspace *destination_workspace);
+
 /* Prepare a complete owned chain, then replace context. All failures preserve
  * the old working directory. The final directory must allow LOOKUP. Requires room for the whole chain in both context
  * and scratch storage. No process-global cwd, allocation or kernel path parser. */

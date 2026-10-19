@@ -14,5 +14,6 @@ typedef signed long off_t;
 /* Native identity components, copied losslessly without host device encoding. */
 typedef uint64_t dev_t;
 typedef uint64_t ino_t;
+typedef uint64_t nlink_t;
 
 #endif
