@@ -13,6 +13,7 @@
 #include <abi/retention.h>
 #include <abi/power.h>
 #include <abi/wifi.h>
+#include <abi/forwarder.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -114,7 +115,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 25 };
+  enum { OPTIONAL_COUNT = 26 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -180,7 +181,7 @@ int launch_remote_server(const struct session_config *config,
       fputs("session: invalid Wi-Fi source\n", stderr);
       goto done;
     }
-    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN;
+    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT;
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
     grants[grant_count++] = radio;
   }
@@ -206,6 +207,25 @@ int launch_remote_server(const struct session_config *config,
   if (child_launcher != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
+  }
+  const struct environment_value *wifi_control =
+      environment_capture_find(&captured, "wifi_session_control");
+  if (wifi_control) {
+    struct handle_info info;
+    status = wifi_control->kind == ENVIRONMENT_CAP ?
+        handle_query(wifi_control->handle, &info) : CALL_WRONG_TYPE;
+    if (status != CALL_OK) {
+      goto done;
+    }
+    if (wifi_control->flags || info.kind != HANDLE_KIND_NATIVE ||
+        info.protocol != PROTOCOL_FORWARDER || info.transport ||
+        !(info.rights & FORWARDER_RIGHT_CUT)) {
+      status = CALL_DENIED;
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("wifi_session_control", grant_count);
+    grants[grant_count++] = (struct launch_grant){wifi_control->handle, FORWARDER_RIGHT_CUT, 0};
   }
   handle_t interpreter_root = bootstrap_capability("interpreter_root");
   if (interpreter_root != HANDLE_INVALID) {

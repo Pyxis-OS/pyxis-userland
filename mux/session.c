@@ -21,6 +21,7 @@
 #include <abi/pointer.h>
 #include <abi/power.h>
 #include <abi/wifi.h>
+#include <abi/forwarder.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -108,7 +109,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 28 };
+  enum { OPTIONAL_RESOURCE_COUNT = 29 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -247,13 +248,32 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
     {"dns_udp", UDP_SERVICE_RIGHT_OPEN},
     {"net_registry", NET_REGISTRY_RIGHT_READ},
-    {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN},
+    {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT},
+    {"wifi_session_control", FORWARDER_RIGHT_CUT},
   };
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
     const struct environment_value *value = environment_capture_find(&capture, allowed[i].name);
+    bool wifi_control = !strcmp(allowed[i].name, "wifi_session_control");
+    if (value && wifi_control && value->kind != ENVIRONMENT_CAP) {
+      status = CALL_WRONG_TYPE;
+      goto done;
+    }
     handle_t source = value && value->kind == ENVIRONMENT_CAP ? value->handle : HANDLE_INVALID;
     if (source == HANDLE_INVALID) {
       continue;
+    }
+    if (wifi_control) {
+      struct handle_info info;
+      status = handle_query(source, &info);
+      if (status != CALL_OK) {
+        goto done;
+      }
+      if (value->flags || info.kind != HANDLE_KIND_NATIVE ||
+          info.protocol != PROTOCOL_FORWARDER || info.transport ||
+          !(info.rights & FORWARDER_RIGHT_CUT)) {
+        status = CALL_DENIED;
+        goto done;
+      }
     }
     status = copy_grant(source, &grants[grant_count]);
     if (status != CALL_OK) {
@@ -262,7 +282,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     grants[grant_count].rights &= allowed[i].rights;
     entries[entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
-      .flags = !strcmp(allowed[i].name, "service") || !strcmp(allowed[i].name, "retention_account") ?
+      .flags = wifi_control || !strcmp(allowed[i].name, "service") ||
+          !strcmp(allowed[i].name, "retention_account") ?
           0 : ENVIRONMENT_EXPORTED,
       .value = grant_count++,
     };

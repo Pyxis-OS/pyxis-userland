@@ -24,6 +24,7 @@
 #include <abi/stream.h>
 #include <abi/power.h>
 #include <abi/wifi.h>
+#include <abi/forwarder.h>
 #include <abi/keyboard.h>
 #include <abi/pointer.h>
 #include <abi/space.h>
@@ -95,7 +96,7 @@ static int launch_session(const struct session_config *config, struct network_co
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 33 };
+  enum { OPTIONAL_RESOURCE_COUNT = 34 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -200,6 +201,25 @@ static int launch_session(const struct session_config *config, struct network_co
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   }
+  const struct environment_value *wifi_control =
+      environment_capture_find(&captured, "wifi_session_control");
+  if (wifi_control) {
+    struct handle_info info;
+    status = wifi_control->kind == ENVIRONMENT_CAP ?
+        handle_query(wifi_control->handle, &info) : CALL_WRONG_TYPE;
+    if (status != CALL_OK) {
+      goto done;
+    }
+    if (wifi_control->flags || info.kind != HANDLE_KIND_NATIVE ||
+        info.protocol != PROTOCOL_FORWARDER || info.transport ||
+        !(info.rights & FORWARDER_RIGHT_CUT)) {
+      status = CALL_DENIED;
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("wifi_session_control", grant_count);
+    grants[grant_count++] = (struct launch_grant){wifi_control->handle, FORWARDER_RIGHT_CUT, 0};
+  }
   handle_t interpreter_root = bootstrap_capability("interpreter_root");
   if (interpreter_root != HANDLE_INVALID) {
     struct launch_grant root = {.source = interpreter_root};
@@ -225,7 +245,7 @@ static int launch_session(const struct session_config *config, struct network_co
       fputs("session: invalid Wi-Fi source\n", stderr);
       goto done;
     }
-    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN;
+    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT;
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
     grants[grant_count++] = radio;
   }

@@ -15,6 +15,7 @@
 #include <abi/pipe.h>
 #include <abi/power.h>
 #include <abi/wifi.h>
+#include <abi/forwarder.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -52,7 +53,8 @@ static const struct {
   {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
   {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
   {"net_registry", NET_REGISTRY_RIGHT_READ},
-  {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN},
+  {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT},
+  {"wifi_session_control", FORWARDER_RIGHT_CUT},
   /* Directory rights are copied as held; the entry is private (see below). */
   {"interpreter_root", UINT64_MAX},
 };
@@ -190,14 +192,32 @@ static enum call_status context_init(struct remote_context *context, bool multip
     if (status != CALL_OK) goto done;
   }
   for (size_t i = 0; i < sizeof(remote_allowed) / sizeof(remote_allowed[0]); ++i) {
-    const struct environment_value *value = context_capability(&selection, remote_allowed[i].name);
-    if (!value) {
+    const struct environment_value *value = environment_capture_find(&selection, remote_allowed[i].name);
+    bool wifi_control = !strcmp(remote_allowed[i].name, "wifi_session_control");
+    if (value && wifi_control && value->kind != ENVIRONMENT_CAP) {
+      status = CALL_WRONG_TYPE;
+      goto done;
+    }
+    if (!value || value->kind != ENVIRONMENT_CAP) {
       continue;
+    }
+    if (wifi_control) {
+      struct handle_info info;
+      status = handle_query(value->handle, &info);
+      if (status != CALL_OK) {
+        goto done;
+      }
+      if (value->flags || info.kind != HANDLE_KIND_NATIVE ||
+          info.protocol != PROTOCOL_FORWARDER || info.transport ||
+          !(info.rights & FORWARDER_RIGHT_CUT)) {
+        status = CALL_DENIED;
+        goto done;
+      }
     }
     size_t index;
     status = context_add(context, remote_allowed[i].name, value->handle,
         value->rights & remote_allowed[i].rights, 0,
-        !strcmp(remote_allowed[i].name, "service") ||
+        wifi_control || !strcmp(remote_allowed[i].name, "service") ||
             !strcmp(remote_allowed[i].name, "interpreter_root") ? 0 : ENVIRONMENT_EXPORTED, &index);
     if (status != CALL_OK) {
       goto done;

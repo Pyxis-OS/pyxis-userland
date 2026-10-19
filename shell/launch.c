@@ -74,7 +74,7 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[43 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[44 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
@@ -482,6 +482,7 @@ static enum call_status capture_selection(const struct shell *shell,
   for (size_t i = 0; i < exported->count; ++i) {
     const struct environment_value *value = &exported->values[i];
     if (value->kind == ENVIRONMENT_CAP && (value->flags & ENVIRONMENT_EXPORTED) &&
+        strcmp(value->name, "wifi_session_control") &&
         !(prepared->program && prepared->program->commands && !strcmp(value->name, "commands")) &&
         !shell_environment_initial(shell, value)) {
       prepared->selection[prepared->selection_count++] = value;
@@ -840,7 +841,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 39 -
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 40 -
       BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -883,7 +884,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_output = shell->terminal.output != HANDLE_INVALID;
   size_t output_index = retention_account_index + (has_retention_account ? 1 : 0);
   size_t grant_count = output_index + (has_output ? 1 : 0);
-  size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 2 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
+  size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 3 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -1200,9 +1201,30 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     if (status != CALL_OK || radio.transport) {
       return status == CALL_OK ? CALL_BAD_REQUEST : status;
     }
-    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN;
+    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT;
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
     grants[grant_count++] = radio;
+  }
+  /* Only a trusted successor keeps the configured session's revocation root. */
+  if (session) {
+    const struct environment_value *wifi_control =
+        environment_capture_find(&prepared->captured, "wifi_session_control");
+    if (wifi_control) {
+      struct handle_info info;
+      enum call_status status = wifi_control->kind == ENVIRONMENT_CAP ?
+          handle_query(wifi_control->handle, &info) : CALL_WRONG_TYPE;
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (wifi_control->flags || info.kind != HANDLE_KIND_NATIVE ||
+          info.protocol != PROTOCOL_FORWARDER || info.transport ||
+          !(info.rights & FORWARDER_RIGHT_CUT)) {
+        return CALL_DENIED;
+      }
+      resources[resource_count++] = (struct launch_environment_entry)
+          PROFILE_PRIVATE_CAP("wifi_session_control", grant_count);
+      grants[grant_count++] = (struct launch_grant){wifi_control->handle, FORWARDER_RIGHT_CUT, 0};
+    }
   }
   if (has_retention_factory) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_factory", retention_factory_index);
@@ -1402,6 +1424,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           !strcmp(entry->name, "script") ||
           !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
           !strcmp(entry->name, "staging") || !strcmp(entry->name, "screenshot_saver") ||
+          !strcmp(entry->name, "wifi_session_control") ||
           !strcmp(entry->name, "stdin") ||
           !strcmp(entry->name, "stdout") || !strcmp(entry->name, "stderr")) {
         continue;
