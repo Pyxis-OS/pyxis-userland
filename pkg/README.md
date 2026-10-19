@@ -1,6 +1,6 @@
 # pkg
 
-Manage immutable data/toolchain packages on the installed npfs packages volume.
+Manage immutable data, toolchain and command packages on the installed npfs packages volume.
 Repository URLs are literal data in system://config/packages.lua. Installation
 uses the space's declared package management grant and GET-only HTTP providers.
 
@@ -10,6 +10,7 @@ pkg [--timeout SECONDS] install ID[@VERSION]...
 pkg remove ID...
 pkg rollback [SET]
 pkg verify
+pkg reindex
 pkg unlock
 
 Changes review the proposed set before its one atomic current switch. Running
@@ -23,3 +24,24 @@ foreground interruption and can leave this lock; cancel at Review releases it.
 The confirmed switch is guarded until its actual result is known. Boot cleanup
 removes unused versions before consumers start, retaining the active and previous
 sets. No archive scripts execute.
+
+A package declares its command exports in package.lua. A plain export names a
+.pxe path within tree; a bundle export names a .pxb directory and one declared
+bundle command alias. Undeclared files are never discovered. Export names must
+be unique across the selected set, with at most 256 total. Paths cannot traverse
+another .pxb directory: its launch policy must remain attached to its commands.
+Packages without commands export nothing.
+
+Install, remove and rollback validate every declared target and publish the
+sorted immutable sets/N.commands index before switching current. Plain targets
+must be native P1F files. Bundle targets retain the complete manifest policy;
+the selected alias and all executable entries are checked. Actual launch still
+requires the bundle's external resource authority. pkg verify checks selected
+files, targets and the exact command index.
+
+For a pre-index installation, pkg reindex verifies the active package trees and
+creates only its missing command index under the writer lock. It leaves current
+and predecessor retention unchanged and requires no repository access. It refuses
+an existing index, including damaged or partial content; it never repairs one
+silently. An empty selection with no current needs no index. New command views
+refuse missing or damaged indexes for a nonzero active set.

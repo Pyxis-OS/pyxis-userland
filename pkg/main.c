@@ -1,4 +1,5 @@
 #include "archive.h"
+#include "commands.h"
 #include "fetch.h"
 #include "store.h"
 #include "../common/bootstrap_environment.h"
@@ -522,7 +523,8 @@ static bool mutate(const char *command, int argc, char **argv)
   struct pkg_selection before = {0}, after = {0};
   bool current_valid = pkg_selection_load(client.packages, true, 0, &before, &client.reason);
   bool metadata_valid = current_valid;
-  if (metadata_valid && before.number && strcmp(command, "rollback")) {
+  bool reindex = !strcmp(command, "reindex");
+  if (metadata_valid && before.number && strcmp(command, "rollback") && !reindex) {
     uint64_t predecessor = 0;
     metadata_valid = pkg_predecessor(client.packages, before.number,
         &predecessor, &client.reason);
@@ -535,7 +537,14 @@ static bool mutate(const char *command, int argc, char **argv)
   }
   bool ok = metadata_valid;
   uint64_t previous = before.number;
-  if (!strcmp(command, "rollback")) {
+  struct package_command_record *commands = NULL;
+  size_t command_count = 0;
+  if (reindex) {
+    ok = ok && verify_selection(&before) &&
+        pkg_commands_build(client.packages, &before, &commands, &command_count, &client.reason) &&
+        pkg_reindex(client.packages, before.number, commands, command_count, &client.reason);
+    if (ok) puts("pkg: active command index bootstrapped; selection unchanged");
+  } else if (!strcmp(command, "rollback")) {
     uint64_t target = 0;
     if (argc) {
       for (const char *p = argv[0]; *p; ++p) {
@@ -566,16 +575,21 @@ static bool mutate(const char *command, int argc, char **argv)
       ok = prepare_remove(&after, argc, argv);
     }
   }
-  if (ok) {
+  if (ok && !reindex) {
+    ok = pkg_commands_build(client.packages, &after, &commands, &command_count, &client.reason);
+  }
+  if (ok && !reindex) {
     ok = review(&before, &after);
     if (!ok && !client.reason) client.reason = "change cancelled";
   }
-  if (ok && console_passthrough(client.terminal.input, &client.passthrough) != CALL_OK) {
+  if (ok && !reindex && console_passthrough(client.terminal.input, &client.passthrough) != CALL_OK) {
     ok = fail("cannot guard the confirmed set switch");
   }
-  if (ok) {
-    ok = pkg_publish(client.packages, &after, previous, &uncertain, &client.reason);
+  if (ok && !reindex) {
+    ok = pkg_publish(client.packages, &after, previous, commands, command_count,
+        &uncertain, &client.reason);
   }
+  free(commands);
   if (!ok && (!metadata_valid || !strcmp(command, "rollback"))) show_sets();
   pkg_selection_free(&after);
   pkg_selection_free(&before);
@@ -591,7 +605,7 @@ static bool mutate(const char *command, int argc, char **argv)
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | unlock\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -617,7 +631,7 @@ int main(int argc, char **argv)
   int count = argc - arg;
   char **arguments = argv + arg;
   bool mutation = !strcmp(command, "install") || !strcmp(command, "remove") ||
-      !strcmp(command, "rollback") || !strcmp(command, "unlock");
+      !strcmp(command, "rollback") || !strcmp(command, "reindex") || !strcmp(command, "unlock");
   if ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
       !strcmp(command, "rollback") ? count > 1 :
       !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0) {
@@ -650,7 +664,14 @@ int main(int argc, char **argv)
       print_selection(&selection);
       if (!strcmp(command, "verify")) {
         ok = verify_selection(&selection);
-        if (ok) puts("pkg: all selected package files verified");
+        struct package_command_record *commands = NULL;
+        size_t command_count = 0;
+        ok = ok && pkg_commands_build(client.packages, &selection, &commands,
+            &command_count, &client.reason) &&
+            pkg_commands_verify(client.packages, selection.number, commands,
+                command_count, &client.reason);
+        free(commands);
+        if (ok) puts("pkg: selected package files and command index verified");
       }
     } else {
       show_sets();

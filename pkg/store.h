@@ -3,6 +3,7 @@
 
 #include "metadata.h"
 #include <directory.h>
+#include <abi/package_commands.h>
 
 #define PKG_READ_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
@@ -28,7 +29,13 @@ void pkg_selection_free(struct pkg_selection *selection);
 bool pkg_predecessor(handle_t packages, uint64_t number, uint64_t *previous,
     const char **reason);
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, bool *uncertain, const char **reason);
+    uint64_t previous, const struct package_command_record *commands,
+    size_t command_count, bool *uncertain, const char **reason);
+bool pkg_commands_verify(handle_t packages, uint64_t number,
+    const struct package_command_record *commands, size_t command_count, const char **reason);
+/* Bootstrap only a missing active index. No current or retention change. */
+bool pkg_reindex(handle_t packages, uint64_t number,
+    const struct package_command_record *commands, size_t command_count, const char **reason);
 bool pkg_tree_open(handle_t packages, const struct pkg_identity *identity,
     uint64_t rights, handle_t *tree, const char **reason);
 

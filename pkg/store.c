@@ -197,7 +197,7 @@ static bool next_number(handle_t sets, uint64_t *number, const char **reason)
       value = value * 10 + digit;
     }
     if (tail == name || name[0] == '0' ||
-        (strcmp(tail, ".lua") && strcmp(tail, ".previous"))) {
+        (strcmp(tail, ".lua") && strcmp(tail, ".previous") && strcmp(tail, ".commands"))) {
       *reason = "unexpected name in sets directory";
       return false;
     }
@@ -207,8 +207,113 @@ static bool next_number(handle_t sets, uint64_t *number, const char **reason)
   }
 }
 
+static void *command_bytes(uint64_t number, const struct package_command_record *commands,
+    size_t command_count, size_t *size, const char **reason)
+{
+  if (command_count > PACKAGE_COMMANDS_LIMIT) {
+    *reason = "command projection exceeds its record limit";
+    return NULL;
+  }
+  *size = sizeof(struct package_command_index_header) + command_count * sizeof(*commands);
+  struct package_command_index_header *header = calloc(1, *size);
+  if (!header) {
+    *reason = "cannot allocate immutable command index";
+    return NULL;
+  }
+  memcpy(header->magic, PACKAGE_COMMAND_INDEX_MAGIC, sizeof(header->magic));
+  header->set = number;
+  header->count = command_count;
+  header->record_size = sizeof(*commands);
+  if (command_count) {
+    memcpy(header + 1, commands, command_count * sizeof(*commands));
+  }
+  return header;
+}
+
+static bool compare_commands(handle_t sets, uint64_t number, const void *expected,
+    size_t expected_size, const char **reason)
+{
+  char name[48];
+  snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
+  char *actual = NULL;
+  size_t actual_size = 0;
+  bool ok = pkg_text(sets, name, sizeof(struct package_command_index_header) +
+      PACKAGE_COMMANDS_LIMIT * sizeof(struct package_command_record),
+      &actual, &actual_size, reason);
+  if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
+    *reason = "command index differs from verified selected exports";
+    ok = false;
+  }
+  free(actual);
+  return ok;
+}
+
+static bool write_commands(handle_t sets, uint64_t number,
+    const struct package_command_record *commands, size_t command_count, const char **reason)
+{
+  size_t size;
+  void *bytes = command_bytes(number, commands, command_count, &size, reason);
+  if (!bytes) {
+    return false;
+  }
+  char name[48];
+  snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
+  bool ok = pkg_write_text(sets, name, bytes, size, reason) &&
+      compare_commands(sets, number, bytes, size, reason);
+  free(bytes);
+  return ok;
+}
+
+bool pkg_commands_verify(handle_t packages, uint64_t number,
+    const struct package_command_record *commands, size_t command_count, const char **reason)
+{
+  if (!number) {
+    return command_count == 0;
+  }
+  handle_t sets;
+  if (!pkg_directory(packages, "sets", false, PKG_READ_RIGHTS, &sets, reason)) {
+    return false;
+  }
+  size_t size;
+  void *bytes = command_bytes(number, commands, command_count, &size, reason);
+  bool ok = bytes && compare_commands(sets, number, bytes, size, reason);
+  free(bytes);
+  handle_close(sets);
+  return ok;
+}
+
+bool pkg_reindex(handle_t packages, uint64_t number,
+    const struct package_command_record *commands, size_t command_count, const char **reason)
+{
+  if (!number) {
+    return command_count == 0;
+  }
+  handle_t sets;
+  if (!pkg_directory(packages, "sets", false, PKG_WRITE_RIGHTS, &sets, reason)) {
+    return false;
+  }
+  char name[48];
+  snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
+  handle_t existing = HANDLE_INVALID;
+  enum call_status status = directory_lookup(sets, name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ, &existing);
+  if (existing != HANDLE_INVALID) handle_close(existing);
+  bool ok = status == CALL_NOT_FOUND;
+  if (!ok) {
+    *reason = "reindex requires a missing active command index; existing damage is not repaired";
+  }
+  ok = ok && write_commands(sets, number, commands, command_count, reason);
+  if (ok && directory_sync(sets) != CALL_OK) {
+    *reason = "cannot synchronize bootstrapped command index";
+    ok = false;
+  }
+  handle_close(sets);
+  return ok;
+}
+
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, bool *uncertain, const char **reason)
+    uint64_t previous, const struct package_command_record *commands,
+    size_t command_count, bool *uncertain, const char **reason)
 {
   *uncertain = false;
   handle_t sets = HANDLE_INVALID;
@@ -249,6 +354,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
       "return { format = 1, previous = %llu }\n", (unsigned long long)previous);
   snprintf(name, sizeof(name), "%llu.previous", (unsigned long long)number);
   ok = ok && pkg_write_text(sets, name, predecessor, length, reason);
+  ok = ok && write_commands(sets, number, commands, command_count, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
     *reason = "cannot synchronize immutable set names";
     ok = false;
