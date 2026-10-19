@@ -95,7 +95,7 @@ int unlink(const char *path);
 /* Exclusive hard link of one regular file within an npfs volume. Uses one
  * owned cwd snapshot for both paths. Source parent needs LOOKUP, READ_FILES
  * and WRITE_FILES; destination needs CREATE plus LOOKUP for traversal.
- * Existing target is EEXIST; directories/trailing / fail with EINVAL, and
+ * Existing target is EEXIST; directory sources/trailing / fail with EINVAL, and
  * unsupported backends/cross-volume links with ENOTSUP. No implicit sync,
  * symbolic links or copy fallback. Uncertain submission is EIO; never retry
  * it automatically. */
