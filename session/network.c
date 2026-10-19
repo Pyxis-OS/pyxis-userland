@@ -15,15 +15,22 @@
 
 static bool report(struct interface_runtime *runtime, uint32_t phase)
 {
+  if (runtime->wifi && !runtime->connection_generation) {
+    return true;
+  }
   struct net_interface_reply snapshot;
   enum call_status status = net_interface_query(runtime->authority, &snapshot);
   if (status != CALL_OK) {
     return false;
   }
+  if (snapshot.connection_generation != runtime->connection_generation) {
+    return true;
+  }
   if (runtime->reported_phase == phase && runtime->reported_epoch == snapshot.address_epoch) {
     return true;
   }
-  status = net_interface_report_dhcp(runtime->authority, snapshot.address_epoch, phase);
+  status = net_interface_report_dhcp(runtime->authority, runtime->connection_generation,
+      snapshot.address_epoch, phase);
   if (status == CALL_OK) {
     runtime->reported_phase = phase;
     runtime->reported_epoch = snapshot.address_epoch;
@@ -33,8 +40,25 @@ static bool report(struct interface_runtime *runtime, uint32_t phase)
 
 static bool clear_lease(struct interface_runtime *runtime)
 {
-  if (net_interface_clear(runtime->authority) != CALL_OK) {
-    return false;
+  bool retired = false;
+  if (runtime->wifi) {
+    struct net_interface_reply snapshot;
+    if (net_interface_query(runtime->authority, &snapshot) != CALL_OK) {
+      return false;
+    }
+    retired = snapshot.connection_generation != runtime->connection_generation ||
+        !runtime->connection_generation;
+  }
+  if (!retired) {
+    enum call_status status = net_interface_clear(runtime->authority, runtime->connection_generation);
+    if (status != CALL_OK) {
+      struct net_interface_reply snapshot;
+      if (!runtime->wifi || status != CALL_UNAVAILABLE ||
+          net_interface_query(runtime->authority, &snapshot) != CALL_OK ||
+          snapshot.connection_generation == runtime->connection_generation) {
+        return false;
+      }
+    }
   }
   runtime->lease = (struct dhcp_lease){0};
   runtime->configured = false;
@@ -48,11 +72,12 @@ static bool apply_lease(const struct network_interface_config *config,
     struct interface_runtime *runtime, const struct dhcp_lease *lease)
 {
   uint64_t now;
-  if (clock_now(runtime->dhcp.clock, &now) != CALL_OK || now >= lease->expires_ns) {
+  if (lease->connection_generation != runtime->connection_generation ||
+      clock_now(runtime->dhcp.clock, &now) != CALL_OK || now >= lease->expires_ns) {
     return false;
   }
-  enum call_status status = net_interface_replace(runtime->authority, lease->address,
-      lease->prefix, lease->gateway, lease->dns);
+  enum call_status status = net_interface_replace(runtime->authority, lease->connection_generation,
+      lease->address, lease->prefix, lease->gateway, lease->dns);
   if (status != CALL_OK) {
     fprintf(stderr, "session: %s lease rejected (status %u)\n", config->name, status);
     return false;
@@ -68,9 +93,6 @@ static bool apply_lease(const struct network_interface_config *config,
 static bool service_interface(const struct network_interface_config *config,
     struct interface_runtime *runtime, handle_t clock, handle_t random, uint64_t deadline, bool *working)
 {
-  if (runtime->failed || runtime->needs_clear) {
-    return true;
-  }
   struct net_interface_reply snapshot;
   enum call_status status = net_interface_query(runtime->authority, &snapshot);
   if (status == CALL_UNAVAILABLE || status == CALL_QUEUE_FULL) {
@@ -79,16 +101,34 @@ static bool service_interface(const struct network_interface_config *config,
   if (status != CALL_OK || snapshot.interface_id != runtime->id) {
     return false;
   }
+  if (snapshot.connection_generation != runtime->connection_generation) {
+    if (!runtime->wifi || !dhcp_close(&runtime->dhcp)) {
+      return false;
+    }
+    /* Retirement already cleared the old IPv4 incarnation in the kernel.
+     * Close its endpoint and discard its work before adopting another link. */
+    runtime->lease = (struct dhcp_lease){0};
+    runtime->configured = runtime->owns_dhcp_settings = false;
+    runtime->failed = runtime->needs_clear = false;
+    runtime->reported_epoch = 0;
+    runtime->reported_phase = NET_DHCP_NONE;
+    runtime->connection_generation = snapshot.connection_generation;
+  }
+  if (runtime->failed || runtime->needs_clear) {
+    return true;
+  }
   bool ready = (snapshot.flags & (NET_INTERFACE_BOUND | NET_INTERFACE_READY)) ==
       (NET_INTERFACE_BOUND | NET_INTERFACE_READY);
   bool usable = ready &&
       (!(snapshot.flags & NET_INTERFACE_CARRIER_KNOWN) || (snapshot.flags & NET_INTERFACE_LINK_UP)) &&
       (!(snapshot.flags & NET_INTERFACE_AUTHENTICATION_VALID) ||
-       (snapshot.flags & NET_INTERFACE_AUTHENTICATED));
+       (snapshot.flags & (NET_INTERFACE_AUTHENTICATED | NET_INTERFACE_OPEN))) &&
+      (!runtime->wifi || (snapshot.connection_generation &&
+       (snapshot.flags & (NET_INTERFACE_AUTHENTICATED | NET_INTERFACE_OPEN))));
   if (!config->dhcp) {
-    if (!runtime->configured && ready) {
-      status = net_interface_replace(runtime->authority, config->address, config->prefix,
-          config->gateway, 0);
+    if (!runtime->configured && (runtime->wifi ? usable : ready)) {
+      status = net_interface_replace(runtime->authority, runtime->connection_generation,
+          config->address, config->prefix, config->gateway, 0);
       if (status == CALL_OK) {
         runtime->configured = true;
       } else if (status != CALL_UNAVAILABLE && status != CALL_QUEUE_FULL) {
@@ -107,7 +147,8 @@ static bool service_interface(const struct network_interface_config *config,
     return report(runtime, NET_DHCP_WAIT_LINK);
   }
   if (runtime->dhcp.endpoint == HANDLE_INVALID) {
-    if (!dhcp_open(&runtime->dhcp, runtime->udp, clock, random, snapshot.mac)) {
+    if (!dhcp_open(&runtime->dhcp, runtime->udp, clock, random, snapshot.mac,
+        runtime->connection_generation)) {
       return report(runtime, NET_DHCP_WAIT_LINK);
     }
     if (!clear_lease(runtime)) {
@@ -344,6 +385,8 @@ bool network_config_apply(struct network_config *config, struct network_runtime 
       config->interfaces[i].resolved_controller = snapshot.controller_id;
     }
     runtime->ids[i + 1] = entry->id = snapshot.interface_id;
+    entry->wifi = snapshot.interface_class == NET_INTERFACE_CLASS_WIFI;
+    entry->connection_generation = snapshot.connection_generation;
   }
   uint64_t now;
   if (clock_now(runtime->clock, &now) != CALL_OK || now > UINT64_MAX - INITIAL_ACQUIRE_NS) {
@@ -414,6 +457,9 @@ static bool wait_maintenance(struct network_runtime *runtime)
   uint64_t poll = UINT64_MAX - now < NETWORK_POLL_NS ? UINT64_MAX : now + NETWORK_POLL_NS;
   for (size_t i = 0; i < runtime->count; ++i) {
     const struct interface_runtime *entry = &runtime->interfaces[i];
+    if (entry->wifi && poll < wake) {
+      wake = poll;
+    }
     if (entry->lease.address && !entry->needs_clear && entry->lease.expires_ns < wake) {
       wake = entry->lease.expires_ns;
     }

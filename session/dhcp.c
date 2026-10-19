@@ -200,7 +200,8 @@ static bool is_unicast(uint32_t address)
 }
 
 static bool decode_lease(const uint8_t *packet, const struct dhcp_reply *reply,
-    uint64_t acquired_ns, const struct dhcp_lease *current, struct dhcp_lease *lease)
+    uint64_t acquired_ns, uint64_t connection_generation,
+    const struct dhcp_lease *current, struct dhcp_lease *lease)
 {
   uint32_t address = read_u32(packet + BOOTP_YIADDR);
   if (!is_unicast(address) || !is_unicast(reply->server.value) ||
@@ -237,6 +238,7 @@ static bool decode_lease(const uint8_t *packet, const struct dhcp_reply *reply,
   *lease = (struct dhcp_lease){
     .address = address, .prefix = prefix, .gateway = gateway, .dns = dns,
     .server = reply->server.value, .acquired_ns = acquired_ns,
+    .connection_generation = connection_generation,
     .renewal_ns = UINT64_MAX, .rebind_ns = UINT64_MAX, .expires_ns = UINT64_MAX,
   };
   if (reply->duration.value == UINT32_MAX) {
@@ -337,7 +339,7 @@ void dhcp_discover(struct dhcp_client *client)
 }
 
 bool dhcp_open(struct dhcp_client *client, handle_t udp, handle_t clock,
-    handle_t random, const uint8_t mac[6])
+    handle_t random, const uint8_t mac[6], uint64_t connection_generation)
 {
   if (!client) {
     return false;
@@ -353,6 +355,7 @@ bool dhcp_open(struct dhcp_client *client, handle_t udp, handle_t clock,
   client->endpoint = opened.handle;
   client->clock = clock;
   client->random = random;
+  client->connection_generation = connection_generation;
   memcpy(client->mac, mac, sizeof(client->mac));
   dhcp_discover(client);
   return true;
@@ -378,7 +381,7 @@ static enum dhcp_result acknowledge(struct dhcp_client *client, const uint8_t *p
   }
   struct dhcp_lease candidate;
   uint64_t now;
-  if (!decode_lease(packet, reply, request_ns, current, &candidate)) {
+  if (!decode_lease(packet, reply, request_ns, client->connection_generation, current, &candidate)) {
     return DHCP_TIMEOUT;
   }
   if (clock_now(client->clock, &now) != CALL_OK) {
@@ -489,7 +492,8 @@ enum dhcp_result dhcp_acquire(struct dhcp_client *client, uint64_t deadline_ns,
       continue;
     }
     if (!client->requesting) {
-      if (reply.type == DHCP_OFFER && decode_lease(packet, &reply, 0, NULL, &client->offer)) {
+      if (reply.type == DHCP_OFFER && decode_lease(packet, &reply, 0,
+          client->connection_generation, NULL, &client->offer)) {
         client->requesting = true;
         client->retry_ns = now;
         client->retry_seconds = 4;
@@ -523,7 +527,8 @@ enum dhcp_result dhcp_refresh(struct dhcp_client *client,
     return DHCP_FAILED;
   }
   *updated = (struct dhcp_lease){0};
-  if (!client || client->endpoint == HANDLE_INVALID || !current) {
+  if (!client || client->endpoint == HANDLE_INVALID || !current ||
+      current->connection_generation != client->connection_generation) {
     return DHCP_FAILED;
   }
   if (current->expires_ns == UINT64_MAX) {

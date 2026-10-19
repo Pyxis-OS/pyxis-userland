@@ -83,6 +83,12 @@ static bool interface_valid(const struct net_interface_reply *reply)
   } else if (reply->tx_bits_per_second || reply->rx_bits_per_second) {
     return false;
   }
+  if ((reply->interface_class != NET_INTERFACE_CLASS_WIFI && reply->connection_generation) ||
+      ((reply->flags & NET_INTERFACE_OPEN) &&
+       (reply->interface_class != NET_INTERFACE_CLASS_WIFI || !reply->connection_generation ||
+        (reply->flags & NET_INTERFACE_AUTHENTICATED)))) {
+    return false;
+  }
   const char *end = memchr(reply->name, 0, sizeof(reply->name));
   if (!end || end == reply->name) {
     return false;
@@ -172,26 +178,33 @@ enum call_status net_interface_query(handle_t facet, struct net_interface_reply 
   return status;
 }
 
-enum call_status net_interface_replace(handle_t facet, uint32_t address, uint32_t prefix,
+enum call_status net_interface_replace(handle_t facet, uint64_t connection_generation,
+    uint32_t address, uint32_t prefix,
     uint32_t gateway, uint32_t dns_server)
 {
   struct net_config_request request = {
     .header = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_REPLACE},
+    .connection_generation = connection_generation,
     .address = address, .prefix = prefix, .gateway = gateway, .dns_server = dns_server,
   };
   return exchange(facet, &request, sizeof(request), NULL, 0);
 }
 
-enum call_status net_interface_clear(handle_t facet)
+enum call_status net_interface_clear(handle_t facet, uint64_t connection_generation)
 {
-  struct message_header request = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_CLEAR};
+  struct net_clear_request request = {
+    .header = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_CLEAR},
+    .connection_generation = connection_generation,
+  };
   return exchange(facet, &request, sizeof(request), NULL, 0);
 }
 
-enum call_status net_interface_report_dhcp(handle_t facet, uint64_t address_epoch, uint32_t phase)
+enum call_status net_interface_report_dhcp(handle_t facet, uint64_t connection_generation,
+    uint64_t address_epoch, uint32_t phase)
 {
   struct net_dhcp_report_request request = {
     .header = {PROTOCOL_NET_INTERFACE, NET_INTERFACE_REPORT_DHCP},
+    .connection_generation = connection_generation,
     .address_epoch = address_epoch, .phase = phase,
   };
   return exchange(facet, &request, sizeof(request), NULL, 0);

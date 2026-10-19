@@ -89,14 +89,24 @@ class/speed preference to equal prefixes too. Each DHCP client owns its own
 pinned port-68 broadcast endpoint, MAC, transaction, retry state, lease and
 renewal/rebind/expiry timers. Active clients
 share a bounded initial acquisition budget of ten seconds; a working interface
-can hand off immediately. Maintenance continues independently after handoff. Healthy bound clients sleep
-until the earliest owned renewal/expiry deadline. Pending setup, link waits,
-active DHCP exchanges and cleanup retry at 100 ms, with peer expiry deadlines
+can hand off immediately. Maintenance continues independently after handoff.
+Healthy bound Ethernet clients sleep until the earliest owned renewal/expiry
+deadline. Wi-Fi clients also sample the connection incarnation at the current
+100 ms maintenance interval, including with an infinite lease. This interval
+is tuning, at a cost of up to ten additional polling wakeups per second per
+maintainer with Wi-Fi configured; native cost and retirement latency still need
+qualification. Pending setup, link waits, active DHCP exchanges and cleanup
+retry at 100 ms, with peer expiry deadlines
 still limiting the sleep.
 Link/address/transport failure does not move a client to another interface.
 Address-clear failures pause that client and retry its cleanup while peers keep
 progressing. DHCP waits for carrier when it is reported; an otherwise ready
 explicit controller with unknown carrier retains the driver's assumed-up behavior.
+Wi-Fi requires current station admission; an open connection is displayed as
+open security without claiming peer authentication. Each DHCP endpoint, offer
+and lease retains the sampled connection generation. A new incarnation closes
+the old endpoint and discards its work before beginning another acquisition;
+an old ACK, clear or report cannot configure that later connection.
 
 DHCP reports are timestamped userspace assertions, not kernel-verified lease
 health. Initial replies remain broadcast-only and there is no independent

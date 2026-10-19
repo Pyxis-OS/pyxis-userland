@@ -8,9 +8,9 @@ struct interface_runtime {
   struct dhcp_client dhcp;
   struct dhcp_lease lease;
   handle_t authority, udp;
-  uint64_t id, reported_epoch;
+  uint64_t id, reported_epoch, connection_generation;
   uint32_t reported_phase;
-  bool configured, owns_dhcp_settings, failed, needs_clear;
+  bool configured, owns_dhcp_settings, failed, needs_clear, wifi;
 };
 
 struct network_runtime {

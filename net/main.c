@@ -19,6 +19,7 @@ static const char *driver_name(uint32_t driver)
   case NET_DRIVER_VIRTIO: return "virtio";
   case NET_DRIVER_RTL8111: return "rtl8111";
   case NET_DRIVER_CDC_NCM: return "cdc-ncm";
+  case NET_DRIVER_AX200: return "ax200";
   default: return "unknown";
   }
 }
@@ -139,8 +140,15 @@ static bool print_interfaces(handle_t authority)
     }
     printf(" admin %s ready %s", interface.flags & NET_INTERFACE_BOUND ? "bound" : "unbound",
         interface.flags & NET_INTERFACE_READY ? "yes" : "no");
-    printf(" authentication %s", !(interface.flags & NET_INTERFACE_AUTHENTICATION_VALID) ? "unknown" :
-        interface.flags & NET_INTERFACE_AUTHENTICATED ? "admitted" : "not admitted");
+    if (interface.interface_class == NET_INTERFACE_CLASS_WIFI) {
+      printf(" connection %llu", (unsigned long long)interface.connection_generation);
+    }
+    if (interface.flags & NET_INTERFACE_OPEN) {
+      printf(" security open (no peer authentication)");
+    } else {
+      printf(" authentication %s", !(interface.flags & NET_INTERFACE_AUTHENTICATION_VALID) ? "unknown" :
+          interface.flags & NET_INTERFACE_AUTHENTICATED ? "authenticated" : "not authenticated");
+    }
     if (interface.flags & NET_INTERFACE_DHCP_REPORT_VALID) {
       static const char *const phases[] = {"none", "wait-link", "selecting", "bound", "renewing",
         "rebinding", "expired", "failed"};

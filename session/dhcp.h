@@ -7,6 +7,7 @@
 
 struct dhcp_lease {
   uint32_t address, prefix, gateway, dns, server;
+  uint64_t connection_generation;
   uint64_t acquired_ns, renewal_ns, rebind_ns, expires_ns;
 };
 
@@ -16,6 +17,8 @@ struct dhcp_client {
   bool requesting, xid_ready, request_sent;
   uint32_t xid, retry_seconds;
   uint64_t started_ns, retry_ns, request_ns;
+  /* Captured when this endpoint's work starts; never refreshed by an ACK. */
+  uint64_t connection_generation;
   struct dhcp_lease offer;
   bool refresh_started, refresh_xid_ready, refresh_sent, rebinding;
   uint32_t refresh_xid;
@@ -33,7 +36,7 @@ enum dhcp_result {
  * No function changes interface settings. Addresses are host-order. Deadlines are
  * absolute monotonic nanoseconds; infinite leases have UINT64_MAX deadlines. */
 bool dhcp_open(struct dhcp_client *client, handle_t udp, handle_t clock,
-    handle_t random, const uint8_t mac[6]);
+    handle_t random, const uint8_t mac[6], uint64_t connection_generation);
 bool dhcp_close(struct dhcp_client *client);
 void dhcp_discover(struct dhcp_client *client);
 /* The held interface must be unassigned. Timeout retains discovery/REQUEST state and backoff
