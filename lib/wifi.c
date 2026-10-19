@@ -47,6 +47,9 @@ enum call_status wifi_scan_start(handle_t wifi, uint32_t channels,
   struct wifi_scan_start_reply reply;
   enum call_status result = invoke(wifi, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
+    if (reply.operation == HANDLE_INVALID) {
+      return CALL_BAD_REQUEST;
+    }
     *operation = reply.operation;
   }
   return result;
@@ -63,7 +66,9 @@ enum call_status wifi_scan_status(handle_t operation,
   struct wifi_scan_status_reply reply;
   enum call_status result = invoke(operation, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
-    if (reply.status >= CALL_STATUS_COUNT || reply.record_count > WIFI_SCAN_RECORDS || reply.reserved) {
+    if (reply.status >= CALL_STATUS_COUNT || reply.record_count > WIFI_SCAN_RECORDS || reply.reserved ||
+        (reply.flags & ~(WIFI_SCAN_COMPLETE | WIFI_SCAN_TAKEN | WIFI_SCAN_CANCEL_REQUESTED)) ||
+        (!(reply.flags & WIFI_SCAN_COMPLETE) && reply.status != CALL_WOULD_BLOCK)) {
       return CALL_BAD_REQUEST;
     }
     *status = reply;
@@ -81,6 +86,9 @@ enum call_status wifi_scan_take(handle_t operation, handle_t *file)
   struct wifi_scan_take_reply reply;
   enum call_status result = invoke(operation, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
+    if (reply.file == HANDLE_INVALID) {
+      return CALL_BAD_REQUEST;
+    }
     *file = reply.file;
   }
   return result;
