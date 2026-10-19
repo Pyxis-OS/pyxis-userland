@@ -37,7 +37,8 @@
 #define BUNDLE_COUNT_LIMIT 8
 #define BUNDLE_COMMAND_LIMIT 32
 #define BUNDLE_RESOURCE_LIMIT 8
-#define BUNDLE_GRANT_LIMIT 19
+/* Separate resolver authority preserves existing UDP delivery with one more request. */
+#define BUNDLE_GRANT_LIMIT 20
 #define BUNDLE_COMPONENT_LIMIT 255
 #define BUNDLE_PATH_LIMIT 1024
 #define BUNDLE_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
