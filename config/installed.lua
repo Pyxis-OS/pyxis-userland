@@ -29,7 +29,6 @@ return {
                  packages = { volume = "packages", kind = "directory",
                               access = "read-only", optional = true } },
       roots = { system = "read-write",
-                home = { access = "read-write", optional = true },
-                toolchain = { package = "clang-hosted", optional = true } } },
+                home = { access = "read-write", optional = true } } },
   },
 }
