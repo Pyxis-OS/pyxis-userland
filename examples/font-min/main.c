@@ -9,11 +9,17 @@
  * inside Pyxis, where the image ships this file as boot://share/examples/.
  * libfont is not a default library, so name it:
  *
- *   tcc boot://share/examples/font-min.c -lfont -o font-min.pxe
- *   ./font-min.pxe
+ *   pkg install fonts
+ *   mkdir font-min.pxb
+ *   mkdir font-min.pxb/app
+ *   mkdir font-min.pxb/app/bin
+ *   cp boot://share/examples/font-min-manifest.json font-min.pxb/manifest.json
+ *   tcc boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.pxe
+ *   ./font-min.pxb
  *
  * Run it from a local shell that was given the display, keyboard and pointer
- * grants, with a mouse present and the fonts under boot://share/fonts/.
+ * grants and a packages source, with a mouse present. The bundle declares a
+ * read-only fonts package root; opening its inner executable skips that policy.
  */
 #include <display.h>
 #include <environment.h>
@@ -47,16 +53,16 @@ struct style {
  * Icons are ordinary code points, so they need no special call. */
 static const struct style styles[STYLE_COUNT] = {
   {"Caskaydia Cove Regular \xef\x80\x93",
-      "boot://share/fonts/caskaydia-cove/CaskaydiaCoveNerdFont-Regular.ttf"},
-  {"Caskaydia Cove Bold", "boot://share/fonts/caskaydia-cove/CaskaydiaCoveNerdFont-Bold.ttf"},
-  {"Caskaydia Cove Italic", "boot://share/fonts/caskaydia-cove/CaskaydiaCoveNerdFont-Italic.ttf"},
+      "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-Regular.ttf"},
+  {"Caskaydia Cove Bold", "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-Bold.ttf"},
+  {"Caskaydia Cove Italic", "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-Italic.ttf"},
   {"Caskaydia Cove Bold Italic",
-      "boot://share/fonts/caskaydia-cove/CaskaydiaCoveNerdFont-BoldItalic.ttf"},
-  {"IBM Plex Sans Regular", "boot://share/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf"},
-  {"IBM Plex Sans Bold", "boot://share/fonts/ibm-plex-sans/IBMPlexSans-Bold.ttf"},
-  {"IBM Plex Serif Regular", "boot://share/fonts/ibm-plex-serif/IBMPlexSerif-Regular.ttf"},
-  {"IBM Plex Serif Bold", "boot://share/fonts/ibm-plex-serif/IBMPlexSerif-Bold.ttf"},
-  {"IBM Plex Serif Italic", "boot://share/fonts/ibm-plex-serif/IBMPlexSerif-Italic.ttf"},
+      "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-BoldItalic.ttf"},
+  {"IBM Plex Sans Regular", "fonts://ibm-plex-sans/IBMPlexSans-Regular.ttf"},
+  {"IBM Plex Sans Bold", "fonts://ibm-plex-sans/IBMPlexSans-Bold.ttf"},
+  {"IBM Plex Serif Regular", "fonts://ibm-plex-serif/IBMPlexSerif-Regular.ttf"},
+  {"IBM Plex Serif Bold", "fonts://ibm-plex-serif/IBMPlexSerif-Bold.ttf"},
+  {"IBM Plex Serif Italic", "fonts://ibm-plex-serif/IBMPlexSerif-Italic.ttf"},
 };
 
 struct app {

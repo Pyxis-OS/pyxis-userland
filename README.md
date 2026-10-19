@@ -46,8 +46,22 @@ program for people writing their own. It is built as the `pointer-min` program, 
 the image ships its source as `boot://share/examples/pointer-min.c` for TCC.
 
 [examples/font-min](examples/font-min/main.c) is pointer-min plus text with libfont:
-one line per font style and the pointer position. It is built as `font-min`, and the
-image ships its source as `boot://share/examples/font-min.c`; TCC needs `-lfont`.
+one line per font style and the pointer position. The `font-min` bundle requires
+the `fonts` package and reads its declared `fonts://` root. Install that package
+from a configured repository with `pkg install fonts`. The image ships its source
+and manifest for TCC; preserve the bundle so its package grant is applied:
+
+```text
+mkdir font-min.pxb
+mkdir font-min.pxb/app
+mkdir font-min.pxb/app/bin
+cp boot://share/examples/font-min-manifest.json font-min.pxb/manifest.json
+tcc boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.pxe
+./font-min.pxb
+```
+
+Run from a local shell with display, keyboard, pointer and packages authority.
+Launching the inner `.pxe` directly does not apply the bundle's package grant.
 
 `tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
 Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping
