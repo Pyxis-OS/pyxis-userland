@@ -27,6 +27,7 @@ enum call_status command_list_publish(handle_t environment, handle_t list, bool 
 
 struct command_search_capture {
   handle_t list;
+  uint64_t identity; /* Environment publication identity, zero for explicit list capture. */
   bool exported; /* Captured publication flag; explicit list capture defaults true. */
   struct command_list_entry_reply *entries;
   size_t count;

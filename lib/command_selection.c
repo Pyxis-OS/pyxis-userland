@@ -232,6 +232,7 @@ enum call_status command_search_resolve(const struct path_context *context,
   if (status == CALL_OK) {
     status = handle_copy_restricted(search->list, COMMAND_LIST_RIGHT_READ, 0, &selection->commands);
     selection->commands_exported = search->exported;
+    selection->commands_identity = search->identity;
   }
   if (status == CALL_OK) {
     *output = selection;

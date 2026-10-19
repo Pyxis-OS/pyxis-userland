@@ -680,7 +680,8 @@ static enum call_status retain_selected_commands(struct prepared_stage *prepared
   }
   *entry = (struct environment_value){.kind = ENVIRONMENT_CAP,
     .flags = program->commands_exported ? ENVIRONMENT_EXPORTED : 0,
-    .handle = held, .rights = COMMAND_LIST_RIGHT_READ};
+    .handle = held, .rights = COMMAND_LIST_RIGHT_READ,
+    .identity = program->commands_identity};
   strcpy(entry->name, "commands");
   return CALL_OK;
 }
@@ -1355,7 +1356,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       stream_policy |= !strcmp((const char *)(uintptr_t)entry->name,
           environment_stdio_append_name(stream));
     }
-    if (!stream_policy) {
+    if (!stream_policy && !(prepared->program && prepared->program->commands &&
+        !strcmp((const char *)(uintptr_t)entry->name, "commands"))) {
       prepared->entries[entry_count++] = *entry;
     }
   }

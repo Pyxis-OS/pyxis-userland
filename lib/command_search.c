@@ -166,7 +166,10 @@ enum call_status command_search_capture_init(handle_t environment,
   }
   if (status == CALL_OK) {
     status = capture_owned_list(entry.handle, capture);
-    if (status == CALL_OK) capture->exported = (entry.flags & ENVIRONMENT_EXPORTED) != 0;
+    if (status == CALL_OK) {
+      capture->exported = (entry.flags & ENVIRONMENT_EXPORTED) != 0;
+      capture->identity = entry.identity;
+    }
   }
   return status;
 }
