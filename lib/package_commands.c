@@ -103,7 +103,7 @@ static bool record_valid(const struct package_command_record *record, const char
     return record->kind == DIRECTORY_KIND_FILE && !record->command[0];
   }
   return protocol == PROTOCOL_DIRECTORY && record->kind == DIRECTORY_KIND_DIRECTORY &&
-      name_valid(record->command);
+      name_valid(record->command) && !strcmp(record->name, record->command);
 }
 
 static enum call_status child_call(handle_t source, handle_t previous,
