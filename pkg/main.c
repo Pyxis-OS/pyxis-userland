@@ -31,6 +31,7 @@ struct client {
   uint64_t timeout;
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
+  enum call_status cleanup_status;
 };
 
 /* The literal parser imposes the stricter eventual set-record bound. */
@@ -51,6 +52,17 @@ static void release_publish_guard(void)
 static bool fail(const char *reason)
 {
   client.reason = reason;
+  return false;
+}
+
+static bool release_writer_lock(handle_t packages, bool ok)
+{
+  enum call_status status = directory_remove(packages, PKG_LOCK, DIRECTORY_KIND_DIRECTORY);
+  if (status == CALL_OK) status = directory_sync(packages);
+  if (status == CALL_OK) return ok;
+  client.cleanup_status = status;
+  if (ok) client.reason = NULL;
+  else if (!client.reason) client.reason = "operation failed";
   return false;
 }
 
@@ -594,12 +606,7 @@ static bool mutate(const char *command, int argc, char **argv)
   pkg_selection_free(&after);
   pkg_selection_free(&before);
   handle_close(lock);
-  if (!uncertain) {
-    enum call_status status = directory_remove(client.packages, PKG_LOCK, DIRECTORY_KIND_DIRECTORY);
-    if (status != CALL_OK || directory_sync(client.packages) != CALL_OK) {
-      ok = fail("writer lock cleanup unconfirmed; inspect with pkg unlock");
-    }
-  }
+  if (!uncertain) ok = release_writer_lock(client.packages, ok);
   return ok;
 }
 
@@ -680,12 +687,7 @@ static bool repository_command(const char *command, const char *url)
     }
   }
   handle_close(lock);
-  if (!uncertain) {
-    enum call_status status = directory_remove(client.management, PKG_LOCK, DIRECTORY_KIND_DIRECTORY);
-    if (status != CALL_OK || directory_sync(client.management) != CALL_OK) {
-      ok = fail("writer lock cleanup unconfirmed; inspect with pkg unlock");
-    }
-  }
+  if (!uncertain) ok = release_writer_lock(client.management, ok);
   return ok;
 }
 
@@ -781,6 +783,14 @@ int main(int argc, char **argv)
   release_publish_guard();
   if (hash_ready) hash_close();
   free(client.offered);
-  if (!ok) fprintf(stderr, "pkg: %s\n", client.reason ? client.reason : "operation failed");
+  if (!ok) {
+    if (client.reason || client.cleanup_status == CALL_OK) {
+      fprintf(stderr, "pkg: %s\n", client.reason ? client.reason : "operation failed");
+    }
+    if (client.cleanup_status != CALL_OK) {
+      fprintf(stderr, "pkg: writer lock cleanup unconfirmed (status %u); inspect with pkg unlock\n",
+          client.cleanup_status);
+    }
+  }
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
