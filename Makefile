@@ -61,7 +61,7 @@ NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
-BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/network.o
+BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/network.o $(BUILD)/pkg/maintenance.o $(BUILD)/pkg/store.o
 SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o $(BUILD)/session/network.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o $(BUILD)/boot-init/network.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o $(BUILD)/httpfs/provider.o
@@ -115,6 +115,7 @@ install: all
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 config/live.lua "$$staging/config/live.lua"; \
 	  install -m 644 config/installed.lua "$$staging/config/installed.lua"; \
+	  install -m 644 config/packages.lua "$$staging/config/packages.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  install -m 644 examples/pointer-min/main.c "$$staging/share/examples/pointer-min.c"; \
 	  install -m 644 examples/font-min/main.c "$$staging/share/examples/font-min.c"; \

@@ -25,6 +25,7 @@
 /* Appended for acpi_tables, so no configured root may take the name. */
 #define BOOT_ACPI_ROOT "acpi"
 #define BOOT_HTTP_STAGING_SOURCE "http_staging"
+#define BOOT_HTTP_WORK_VOLUME "http-work"
 
 enum boot_volume_kind {
   BOOT_VOLUME_NPFS,
@@ -84,6 +85,7 @@ struct boot_space {
   bool focus; /* One boot-only selection request after successful startup. */
   bool launch;
   bool jobs; /* Private contexts for clients that explicitly declare job_work. */
+  bool package_management; /* Selected package writer and repository configuration. */
   bool multiplexer; /* Local terminal startup may create pane sessions. */
   bool remote_multiplexer; /* Explicit remote pane-broker opt-in. */
   bool clipboard_local; /* Explicit space-local graphics/store delegation. */

@@ -41,6 +41,7 @@
 #include <launcher.h>
 #include <job_work.h>
 #include <network_environment.h>
+#include <package_maintenance.h>
 #include <limits.h>
 #include <startup.h>
 #include <stdio.h>
@@ -398,6 +399,18 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   if (start_remote_services) {
+    for (size_t i = 0; i < captured.count; ++i) {
+      const struct environment_value *value = &captured.values[i];
+      if (value->kind != ENVIRONMENT_CAP || !package_launch_source(value->name)) continue;
+      if (grant_count == grant_capacity ||
+          resource_count == sizeof(resources) / sizeof(*resources)) {
+        status = CALL_LIMIT;
+        goto done;
+      }
+      resources[resource_count++] = (struct launch_environment_entry)
+          PROFILE_PRIVATE_CAP((uintptr_t)value->name, grant_count);
+      grants[grant_count++] = (struct launch_grant){value->handle, value->rights, value->transport};
+    }
     /* The remote bootstrap needs its declared private source for provider setup;
      * the remote server and its clients never receive this ancestor. */
     handle_t staging = bootstrap_capability(BUNDLE_SOURCE_PREFIX "http_staging");

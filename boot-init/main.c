@@ -25,6 +25,7 @@
 #include <abi/udp.h>
 #include <bundle_launch.h>
 #include <package.h>
+#include <package_maintenance.h>
 #include <clock.h>
 #include <directory.h>
 #include <disk.h>
@@ -357,7 +358,10 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
   mounts->entries = entries;
   for (size_t i = 0; i < plan->volume_count; ++i) {
     const struct boot_volume *volume = plan->volumes[i];
-    bool used = false, read_write = false;
+    bool maintenance = volume->kind == BOOT_VOLUME_NPFS &&
+        (!strcmp(volume->name, BOOT_PACKAGES_VOLUME) ||
+         !strcmp(volume->name, BOOT_HTTP_WORK_VOLUME));
+    bool used = maintenance, read_write = maintenance;
     for (size_t j = 0; j < plan->space_count; ++j) {
       const struct boot_space *space = plan->spaces[j];
       for (size_t k = 0; k < space->root_count; ++k) {
@@ -704,6 +708,50 @@ static enum call_status create_http_staging(const struct authority *authority,
   return status;
 }
 
+static void add_package_source(struct space_launch *launch, size_t *count,
+    const char *name, handle_t handle, uint64_t rights)
+{
+  snprintf(launch->source_names[*count], sizeof(launch->source_names[*count]),
+      "%s%s", BUNDLE_SOURCE_PREFIX, name);
+  launch->resources[launch->resource_count++] = (struct launch_environment_entry)
+      PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[(*count)++], launch->grant_count);
+  launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
+}
+
+static void package_sources(struct mounts *mounts, const struct boot_space *space,
+    struct space_launch *launch, size_t *count)
+{
+  struct mounted_volume *packages = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  if (packages && packages->root != HANDLE_INVALID) {
+    add_package_source(launch, count, PACKAGE_INSPECT_SOURCE, packages->root, PACKAGE_TREE_RIGHTS);
+    if (space->package_management) {
+      struct handle_info info;
+      enum call_status status = handle_query(packages->root, &info);
+      if (status == CALL_OK && !(DIRECTORY_CONTENT_RIGHTS & ~info.rights)) {
+        add_package_source(launch, count, PACKAGE_MANAGEMENT_SOURCE, packages->root,
+            DIRECTORY_CONTENT_RIGHTS);
+      } else {
+        printf("boot-init: space %s package management unavailable (status %u)\n",
+            space->name, status == CALL_OK ? CALL_DENIED : status);
+      }
+    }
+  }
+  if (!space->package_management) return;
+  struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
+  handle_t config = HANDLE_INVALID;
+  enum call_status status = system && system->root != HANDLE_INVALID ?
+      directory_lookup(system->root, "config", DIRECTORY_KIND_DIRECTORY,
+          PACKAGE_TREE_RIGHTS, &config) : CALL_UNAVAILABLE;
+  if (status == CALL_OK) {
+    launch->source_handles[launch->source_handle_count] = config;
+    launch->source_mounts[launch->source_handle_count++] = system;
+    add_package_source(launch, count, PACKAGE_CONFIG_SOURCE, config, PACKAGE_TREE_RIGHTS);
+  } else {
+    printf("boot-init: space %s package configuration unavailable (status %u)\n",
+        space->name, status);
+  }
+}
+
 /* Starts SPACE in the root its start names, or home. When that root is absent,
  * as for an optional root or a space without home, it starts in tmp. */
 static void select_start(const struct boot_space *space, struct space_launch *launch)
@@ -885,6 +933,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->resources[launch->resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[source_count++], launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
   }
+  package_sources(mounts, space, launch, &source_count);
   if (space->fat32_mount) {
     uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
         (space->fat32_mount_write ? DISKS_RIGHT_MOUNT_READ_WRITE : 0);
@@ -1283,6 +1332,11 @@ int main(int argc, char **argv)
   }
   size_t started = 0;
   if (mount_plan(&authority, &plan, &mounts)) {
+    struct mounted_volume *packages = find_mount(&mounts, BOOT_PACKAGES_VOLUME);
+    struct mounted_volume *http_work = find_mount(&mounts, BOOT_HTTP_WORK_VOLUME);
+    package_boot_maintain(packages ? packages->root : HANDLE_INVALID,
+        http_work && http_work->volume->kind == BOOT_VOLUME_NPFS ? http_work->root : HANDLE_INVALID,
+        authority.services[SERVICE_CLOCK]);
     check_packages(&mounts);
     for (size_t i = 0; i < plan.space_count; ++i) {
       started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);

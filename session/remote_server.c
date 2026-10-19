@@ -26,6 +26,7 @@
 #include <job_work.h>
 #include <net_config.h>
 #include <network_environment.h>
+#include <package_maintenance.h>
 #include <remote/beacon.h>
 #include <startup.h>
 #include <stdio.h>
@@ -99,7 +100,8 @@ int launch_remote_server(const struct session_config *config,
   }
 
   struct environment_capture captured = {0};
-  enum call_status status = environment_capture_init(startup_environment_handle(), 0, &captured);
+  enum call_status status = environment_capture_init(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
   struct profile_directory selected_roots[PROFILE_DIRECTORY_LIMIT];
   size_t root_count = 0;
   if (status == CALL_OK) {
@@ -321,6 +323,17 @@ int launch_remote_server(const struct session_config *config,
     grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   size_t prepared_grants = request.grant_count, prepared_entries = request.entry_count;
+  for (size_t i = 0; i < captured.count; ++i) {
+    const struct environment_value *value = &captured.values[i];
+    if (value->kind != ENVIRONMENT_CAP || !package_launch_source(value->name)) continue;
+    if (prepared_grants == grant_capacity || prepared_entries == entry_capacity) {
+      status = CALL_LIMIT;
+      goto done;
+    }
+    entries[prepared_entries++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP((uintptr_t)value->name, prepared_grants);
+    grants[prepared_grants++] = (struct launch_grant){value->handle, value->rights, value->transport};
+  }
   status = profile_inherit_services(&captured, false, grants, grant_capacity,
       &prepared_grants, entries, entry_capacity, &prepared_entries);
   if (status != CALL_OK) {

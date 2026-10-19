@@ -9,6 +9,7 @@
 #define EXECUTION_CLEANUP_NS UINT64_C(30000000000)
 #define COEXIST_ESP_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES | \
     DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
+#define PACKAGE_CONFIG_MAX_BYTES (64u * 1024u)
 
 static bool close_handle(handle_t *handle)
 {
@@ -104,6 +105,70 @@ static bool system_verify(const struct install_plan *plan)
   }
   ok = close_handle(&marker) && ok;
   ok = close_handle(&root) && ok;
+  return ok;
+}
+
+/* Seed only a missing owner configuration. Update never replaces an existing
+ * file, even when the new package client would reject its contents. */
+static bool package_config_prepare(const struct install_plan *plan)
+{
+  handle_t system = HANDLE_INVALID, config = HANDLE_INVALID;
+  handle_t source_config = HANDLE_INVALID, source = HANDLE_INVALID, target = HANDLE_INVALID;
+  enum call_status status = disk_open_volume(plan->disk.handle, plan->target.pool.partition,
+      "system", DIRECTORY_CONTENT_RIGHTS, &system);
+  if (status == CALL_OK) {
+    status = directory_create(system, "config", DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_CONTENT_RIGHTS, &config);
+    if (status == CALL_ALREADY_EXISTS) {
+      status = directory_lookup(system, "config", DIRECTORY_KIND_DIRECTORY,
+          DIRECTORY_CONTENT_RIGHTS, &config);
+    }
+  }
+  if (status != CALL_OK) goto done;
+  if (status == CALL_OK) {
+    status = directory_lookup(config, "packages.lua", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &target);
+    if (status == CALL_OK) goto done;
+  }
+  if (status != CALL_NOT_FOUND) goto done;
+  status = directory_lookup(plan->boot, "config", DIRECTORY_KIND_DIRECTORY,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &source_config);
+  if (status == CALL_OK) {
+    status = directory_lookup(source_config, "packages.lua", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &source);
+  }
+  uint64_t size = 0;
+  if (status == CALL_OK) status = file_size(source, &size);
+  if (status == CALL_OK && size > PACKAGE_CONFIG_MAX_BYTES) status = CALL_LIMIT;
+  if (status == CALL_OK) {
+    status = directory_create(config, "packages.lua", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_WRITE, &target);
+  }
+  char buffer[512];
+  for (uint64_t offset = 0; status == CALL_OK && offset < size;) {
+    size_t wanted = size - offset < sizeof(buffer) ? size - offset : sizeof(buffer), read = 0;
+    status = file_read(source, offset, buffer, wanted, &read);
+    if (status == CALL_OK && (!read || read > wanted)) status = CALL_IO;
+    for (size_t written = 0; status == CALL_OK && written < read;) {
+      size_t count = 0;
+      status = file_write(target, offset + written, buffer + written, read - written, &count);
+      if (status == CALL_OK && (!count || count > read - written)) status = CALL_IO;
+      written += count;
+    }
+    offset += read;
+  }
+  if (status == CALL_OK) status = file_sync(target);
+  if (status == CALL_OK) status = directory_sync(config);
+  if (status == CALL_OK) status = directory_sync(system);
+done:
+  bool ok = status == CALL_OK;
+  ok = close_handle(&target) && ok;
+  ok = close_handle(&source) && ok;
+  ok = close_handle(&source_config) && ok;
+  ok = close_handle(&config) && ok;
+  ok = close_handle(&system) && ok;
+  if (!ok) {
+    fprintf(stderr, "installer: package configuration preparation failed (status %u)\n", status);
+  }
   return ok;
 }
 
@@ -292,6 +357,13 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     fprintf(stderr, "installer: packages volume preparation failed (status %u)\n", status);
     goto done;
   }
+  install_progress_begin("Preparing private HTTP backing", INSTALL_PROGRESS_NONE, NULL);
+  status = disk_create_volume(disk->handle, plan->target.pool.partition, INSTALL_HTTP_WORK_VOLUME);
+  if (status != CALL_OK && status != CALL_ALREADY_EXISTS) {
+    fprintf(stderr, "installer: HTTP backing volume preparation failed (status %u)\n", status);
+    goto done;
+  }
+  if (!package_config_prepare(plan)) goto done;
   if (!install_programs_write(disk, plan->target.pool.partition, plan->boot, &plan->programs,
         revision, &plan->manifest, plan->manifest_text, plan->manifest_bytes) ||
       !system_verify(plan)) {

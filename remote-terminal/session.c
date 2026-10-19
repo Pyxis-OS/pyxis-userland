@@ -26,6 +26,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <network_environment.h>
+#include <package_maintenance.h>
 #include <startup.h>
 #include <string.h>
 #include <stdio.h>
@@ -177,6 +178,14 @@ static enum call_status context_init(struct remote_context *context, bool multip
   if (context->directory == SIZE_MAX) {
     status = CALL_NOT_FOUND;
     goto done;
+  }
+  for (size_t i = 0; i < selection.count; ++i) {
+    const struct environment_value *value = &selection.values[i];
+    if (value->kind != ENVIRONMENT_CAP || !package_launch_source(value->name)) continue;
+    size_t index;
+    status = context_add(context, value->name, value->handle,
+        value->rights, value->transport, 0, &index);
+    if (status != CALL_OK) goto done;
   }
   for (size_t i = 0; i < sizeof(remote_allowed) / sizeof(remote_allowed[0]); ++i) {
     const struct environment_value *value = context_capability(&selection, remote_allowed[i].name);

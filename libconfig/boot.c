@@ -3,6 +3,7 @@
 #include <abi/input_policy.h>
 #include <bundle_launch.h>
 #include <package.h>
+#include <package_maintenance.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdarg.h>
@@ -357,7 +358,8 @@ static void read_roots(lua_State *state, struct boot_space *space)
 static bool valid_source_name(const char *name, size_t length)
 {
   if (!length || length > BOOT_NAME_MAX || strlen(name) != length ||
-      !strcmp(name, "fat_mounts")) {
+      !strcmp(name, "fat_mounts") || !strcmp(name, PACKAGE_MANAGEMENT_SOURCE) ||
+      !strcmp(name, PACKAGE_INSPECT_SOURCE) || !strcmp(name, PACKAGE_CONFIG_SOURCE)) {
     return false;
   }
   for (size_t i = 0; i < length; ++i) {
@@ -409,7 +411,7 @@ static void read_grants(lua_State *state, struct boot_space *space)
         lua_tolstring(state, -2, &length) : NULL;
     if (!name || !valid_source_name(name, length)) {
       luaL_error(state, "space %s: source names use a-z, 0-9, '-' and '_'; "
-          "fat_mounts is reserved", space->name);
+          "management and inspection source names are reserved", space->name);
     }
     static const char *const keys[] = {"volume", "kind", "access", "optional", "path"};
     config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
@@ -457,7 +459,7 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
     "network", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
-    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount"};
+    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount", "package_management"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -543,6 +545,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: jobs must be a boolean", space->name);
   }
   space->jobs = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "package_management");
+  if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
+    luaL_error(state, "space %s: package_management must be a boolean", space->name);
+  }
+  space->package_management = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "multiplexer");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
@@ -816,6 +824,11 @@ static bool same_backing(const struct boot_volume *first, const struct boot_volu
 static bool private_http_backing(const struct boot_plan *plan, const struct boot_volume *backing)
 {
   const struct boot_volume *system = boot_plan_volume(plan, BOOT_SYSTEM_VOLUME);
+  const struct boot_volume *packages = boot_plan_volume(plan, BOOT_PACKAGES_VOLUME);
+  if ((system && same_backing(backing, system)) ||
+      (packages && same_backing(backing, packages))) {
+    return false;
+  }
   if (backing->kind == BOOT_VOLUME_NPFS && system &&
       system->kind == BOOT_VOLUME_NPFS && backing->partition == system->partition &&
       !strcmp(backing->volume, "bin")) {
@@ -963,6 +976,13 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
 
   for (size_t i = 0; i < plan->volume_count; ++i) {
     const struct boot_volume *volume = plan->volumes[i];
+    if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) &&
+        (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS)) {
+      return plan_fail(plan, "volume %s requires private RAM or NPFS backing", volume->name);
+    }
+    if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) && !private_http_backing(plan, volume)) {
+      return plan_fail(plan, "volume %s must remain outside all client roots and sources", volume->name);
+    }
     if (volume->kind != BOOT_VOLUME_FAT32) {
       continue;
     }
@@ -980,6 +1000,14 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
   const char *owner = NULL;
   for (size_t i = 0; i < plan->space_count; ++i) {
     const struct boot_space *space = plan->spaces[i];
+    const struct boot_volume *packages = boot_plan_volume(plan, BOOT_PACKAGES_VOLUME);
+    if (space->package_management && (!packages || packages->kind != BOOT_VOLUME_NPFS)) {
+      return plan_fail(plan, "space %s: package_management needs an npfs packages volume", space->name);
+    }
+    size_t package_sources = (packages != NULL) + (space->package_management ? 2 : 0);
+    if (space->grant_count + space->fat32_mount + package_sources > BUNDLE_SOURCE_LIMIT) {
+      return plan_fail(plan, "space %s: too many selected sources including packages", space->name);
+    }
     for (size_t j = 0; j < space->root_count; ++j) {
       const struct boot_volume *volume = boot_plan_volume(plan, space->roots[j].volume);
       if (!volume) {
