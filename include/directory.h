@@ -27,6 +27,12 @@ enum call_status directory_lookup_typed(handle_t directory, const char *name,
 enum call_status directory_create(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle);
 
+/* Derive an owned native npfs directory confined to FILE packages.lua and
+ * packages.lua.new. Requires all DIRECTORY_REPOSITORY_VIEW_RIGHTS and grants
+ * exactly that subset. No enumeration, child directories or links; rename
+ * stays between views of the same retained parent. Failure clears *view. */
+enum call_status directory_repository_view(handle_t directory, handle_t *view);
+
 /* Remove a single name with REMOVE on its parent. kind is FILE, DIRECTORY or
  * ANY; nonempty directories fail with NOT_EMPTY. Existing handles survive.
  * Removed RAM directories reject subsequent creation with NOT_FOUND. Host

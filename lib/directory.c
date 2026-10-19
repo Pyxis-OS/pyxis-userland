@@ -74,6 +74,49 @@ enum call_status directory_create(handle_t directory, const char *name,
   return child_call(directory, DIRECTORY_CREATE, name, kind, rights, handle);
 }
 
+enum call_status directory_repository_view(handle_t directory, handle_t *view)
+{
+  if (!view) {
+    return CALL_BAD_REQUEST;
+  }
+  *view = HANDLE_INVALID;
+  struct handle_info info;
+  enum call_status status = handle_query(directory, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != PROTOCOL_DIRECTORY) {
+    return CALL_WRONG_TYPE;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.transport) {
+    return CALL_BAD_OPERATION;
+  }
+  struct directory_message message = {
+    .header = {PROTOCOL_DIRECTORY, DIRECTORY_REPOSITORY_VIEW},
+  };
+  struct directory_child_reply reply = {0};
+  status = call_status(syscall_call(directory, &message, sizeof(message),
+      &reply, sizeof(reply)), sizeof(reply));
+  if (status == CALL_OK) {
+    if (reply.handle == HANDLE_INVALID || reply.handle == directory) {
+      status = CALL_BAD_REQUEST;
+    } else {
+      status = handle_query(reply.handle, &info);
+      if (status == CALL_OK && (info.protocol != PROTOCOL_DIRECTORY ||
+          info.kind != HANDLE_KIND_NATIVE || info.transport ||
+          info.rights != DIRECTORY_REPOSITORY_VIEW_RIGHTS)) {
+        status = CALL_BAD_REQUEST;
+      }
+    }
+  }
+  if (status == CALL_OK) {
+    *view = reply.handle;
+  } else if (reply.handle != HANDLE_INVALID && reply.handle != directory) {
+    handle_close(reply.handle);
+  }
+  return status;
+}
+
 enum call_status directory_lookup_typed(handle_t directory, const char *name,
     uint64_t file_rights, uint64_t directory_rights,
     struct directory_typed_lookup_reply *reply)
