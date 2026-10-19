@@ -266,5 +266,10 @@ int main(int argc, char **argv)
   printf("wifi: interrupts=%llu packets=%llu passive-mask=%x policy-mask=%x\n",
       (unsigned long long)reply.interrupts, (unsigned long long)reply.received_packets,
       reply.allowed_channels, reply.policy_channels);
+  printf("wifi: data TX queued=%llu complete=%llu failed=%llu dropped=%llu pending=%u high-water=%u ring=%u RX queued=%llu dropped=%llu high-water=%u\n",
+      (unsigned long long)reply.tx_queued, (unsigned long long)reply.tx_completed,
+      (unsigned long long)reply.tx_failed, (unsigned long long)reply.tx_dropped,
+      reply.data_tx_pending, reply.data_tx_high_water, reply.data_ring_entries,
+      (unsigned long long)reply.rx_queued, (unsigned long long)reply.rx_dropped, reply.data_rx_high_water);
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }

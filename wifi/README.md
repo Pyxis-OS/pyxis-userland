@@ -1,10 +1,31 @@
-# wifi
+# Wi-Fi controller
 
-`wifi status` observes the delegated controller without scanning. `wifi scan`
-explicitly requests one passive channels 1–11 scan and prints escaped results.
-READ and SCAN are separately declared grants; neither is supplied automatically
-to stock spaces. No country is required for the listen-only world-safe set;
-firmware/NVM, rfkill and any installed narrowing policy still apply.
+`wifi status` observes the declared controller READ grant. `wifi scan` uses the
+separate SCAN grant and prints one complete passive result. Neither can associate.
 
-The AX200 boot opt-in is `wifi.ax200=1`. A scan is bounded to 128 records / 15 s.
-No active probing, association or Wi-Fi IP interface is implemented.
+For an explicitly configured open test AP:
+
+```text
+link=$(wifi connect --profile home://wifi-test.lua)
+wifi status $link
+wifi disconnect $link
+unset link
+```
+
+The finite native profile (at most 4096 bytes) is literal Lua table data:
+
+```lua
+return {security="open", ssid="<test-ssid>", bssid="02:00:00:00:00:01", channel=1}
+```
+
+Use the actual private BSSID/channel. The tool does not execute profile code,
+select another AP or reconnect. CONNECT must be declared separately, and boot
+init must have installed the actual country/channel policy before transmission.
+An empty typed output capture is required before any association work. Closing
+its final owning lease disconnects; a READ-only observation cannot keep it alive.
+A configured session's private revocation root also bounds the lease lifetime.
+
+This first station profile is open, legacy 20 MHz on channels 1–11; it provides
+no cryptographic peer authentication or encryption. `data-ready` is L2 admission,
+not an IP address. The trusted per-interface maintainer obtains the independent
+`wlan0` address; Ethernet routing, DNS and management choices remain explicit.
