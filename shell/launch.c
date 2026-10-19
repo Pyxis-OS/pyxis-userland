@@ -22,6 +22,7 @@
 #include <abi/stream.h>
 #include <abi/retention.h>
 #include <abi/power.h>
+#include <abi/wifi.h>
 #include <abi/screen_capture.h>
 #include <abi/screenshot_saver.h>
 #include <abi/audio.h>
@@ -71,7 +72,7 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[42 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[43 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
@@ -823,7 +824,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_output = shell->terminal.output != HANDLE_INVALID;
   size_t output_index = retention_account_index + (has_retention_account ? 1 : 0);
   size_t grant_count = output_index + (has_output ? 1 : 0);
-  size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 1 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
+  size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 2 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -1133,6 +1134,17 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_clipboard_shared) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clipboard_shared", clipboard_shared_index);
   }
+  handle_t wifi = session ? bootstrap_capability("wifi") : HANDLE_INVALID;
+  if (wifi != HANDLE_INVALID) {
+    struct launch_grant radio = {.source = wifi};
+    enum call_status status = handle_rights(wifi, &radio.rights, &radio.transport);
+    if (status != CALL_OK || radio.transport) {
+      return status == CALL_OK ? CALL_BAD_REQUEST : status;
+    }
+    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN;
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
+    grants[grant_count++] = radio;
+  }
   if (has_retention_factory) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_factory", retention_factory_index);
   }
@@ -1414,6 +1426,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"display", shell->display, PROTOCOL_DISPLAY},
       {"audio", shell->audio, PROTOCOL_AUDIO},
       {"screen_capture", shell->screen_capture, PROTOCOL_SCREEN_CAPTURE},
+      {"wifi", bootstrap_capability("wifi"), PROTOCOL_WIFI},
       {"clipboard_local", clipboard_local, PROTOCOL_CLIPBOARD},
       {"clipboard_shared", clipboard_shared, PROTOCOL_CLIPBOARD},
       {"system_info", shell->system_info, PROTOCOL_SYSTEM_INFO},

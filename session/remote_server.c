@@ -12,6 +12,7 @@
 #include <abi/pipe.h>
 #include <abi/retention.h>
 #include <abi/power.h>
+#include <abi/wifi.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -113,7 +114,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 24 };
+  enum { OPTIONAL_COUNT = 25 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -172,6 +173,18 @@ int launch_remote_server(const struct session_config *config,
   struct pyxis_environment_snapshot inherited = {0};
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
+  handle_t wifi = bootstrap_capability("wifi");
+  if (wifi != HANDLE_INVALID) {
+    struct launch_grant radio = {.source = wifi};
+    if (handle_rights(wifi, &radio.rights, &radio.transport) != CALL_OK || radio.transport) {
+      fputs("session: invalid Wi-Fi source\n", stderr);
+      goto done;
+    }
+    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN;
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
+    grants[grant_count++] = radio;
+  }
+
   for (size_t i = 0; i < root_count; ++i) {
     const char *name = (const char *)selected_roots[i].name;
     roots[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)selected_roots[i].name, grant_count);

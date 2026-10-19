@@ -93,6 +93,7 @@ struct boot_space {
   bool screenshot; /* Whole-screen capture plus the initial private Print Screen saver. */
   bool acpi_tables; /* Receives the read-only ACPI table root as acpi://. */
   bool power; /* Receives power-off and restart authority. */
+  uint64_t wifi_rights; /* Explicit controller READ/SCAN; default neither. */
   bool remote_power; /* Opts remote root shells into power authority. */
 };
 

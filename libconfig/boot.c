@@ -1,6 +1,7 @@
 #include "boot.h"
 #include "config.h"
 #include <abi/input_policy.h>
+#include <abi/wifi.h>
 #include <bundle_launch.h>
 #include <package.h>
 #include <package_maintenance.h>
@@ -459,7 +460,7 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
     "network", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
-    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount", "package_management"};
+    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount", "package_management", "wifi"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -593,6 +594,25 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: power must be a boolean", space->name);
   }
   space->power = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "wifi");
+  if (!lua_isnil(state, -1)) {
+    static const char *const wifi_keys[] = {"read", "scan"};
+    if (!lua_istable(state, -1)) {
+      luaL_error(state, "space %s: wifi must be a table", space->name);
+    }
+    config_keys(state, -1, wifi_keys, 2);
+    for (size_t i = 0; i < 2; ++i) {
+      config_field(state, -1, wifi_keys[i]);
+      if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+        luaL_error(state, "space %s: wifi.%s must be boolean", space->name, wifi_keys[i]);
+      }
+      if (lua_toboolean(state, -1)) {
+        space->wifi_rights |= i ? WIFI_RIGHT_SCAN : WIFI_RIGHT_READ;
+      }
+      lua_pop(state, 1);
+    }
+  }
   lua_pop(state, 1);
   config_field(state, -1, "remote_power");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {

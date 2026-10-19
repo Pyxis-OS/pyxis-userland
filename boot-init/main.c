@@ -15,6 +15,7 @@
 #include <abi/net_config.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
+#include <abi/wifi.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/acpi_tables.h>
@@ -134,6 +135,7 @@ struct authority {
   handle_t acpi_tables;
   /* Granted only to spaces that set power or remote_power. */
   handle_t power;
+  handle_t wifi; /* Boot-only policy right is never forwarded. */
   uint64_t cpu_count;
   const char *remote_beacon;
 };
@@ -164,6 +166,7 @@ static bool take_authority(struct authority *authority)
   authority->screen_capture = bootstrap_capability("screen_capture");
   authority->acpi_tables = bootstrap_capability("acpi_tables");
   authority->power = bootstrap_capability("power");
+  authority->wifi = bootstrap_capability("wifi");
   authority->input_policy = bootstrap_capability("input_policy");
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID &&
@@ -772,6 +775,9 @@ static void select_start(const struct boot_space *space, struct space_launch *la
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
     const struct boot_space *space, struct space_launch *launch, char *reason, size_t size)
 {
+  if (space->wifi_rights && authority->wifi == HANDLE_INVALID) {
+    return "Wi-Fi delegation requested but radio capability is unavailable";
+  }
   if (space->screenshot && authority->screen_capture == HANDLE_INVALID) {
     return "screenshot requested but screen_capture is unavailable";
   }
@@ -779,8 +785,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
     return "acpi_tables requested but the ACPI table root is unavailable";
   }
   size_t network_entries = space->network ? authority->network.config.count * 2 + 1 : 0;
-  launch->resources = calloc(SERVICE_COUNT + 16 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 17 + BUNDLE_SOURCE_LIMIT + network_entries,
+  launch->resources = calloc(SERVICE_COUNT + 17 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 18 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   launch->package_trees = calloc(space->root_count ? space->root_count : 1,
@@ -985,6 +991,13 @@ static const char *build_launch(const struct authority *authority, struct mounts
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", launch->grant_count);
     launch->grants[launch->grant_count++] = (struct launch_grant){
       authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0
+    };
+  }
+  if (space->wifi_rights) {
+    launch->resources[launch->resource_count++] =
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", launch->grant_count);
+    launch->grants[launch->grant_count++] = (struct launch_grant){
+      authority->wifi, space->wifi_rights, 0
     };
   }
   if (space->screenshot) {

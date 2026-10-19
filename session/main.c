@@ -23,6 +23,7 @@
 #include <abi/pipe.h>
 #include <abi/stream.h>
 #include <abi/power.h>
+#include <abi/wifi.h>
 #include <abi/keyboard.h>
 #include <abi/pointer.h>
 #include <abi/space.h>
@@ -94,7 +95,7 @@ static int launch_session(const struct session_config *config, const struct netw
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 32 };
+  enum { OPTIONAL_RESOURCE_COUNT = 33 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -216,6 +217,17 @@ static int launch_session(const struct session_config *config, const struct netw
   if (audio != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"audio", grant_count);
     grants[grant_count++] = (struct launch_grant){audio, AUDIO_RIGHT_PLAYBACK, 0};
+  }
+  handle_t wifi = bootstrap_capability("wifi");
+  if (wifi != HANDLE_INVALID) {
+    struct launch_grant radio = {.source = wifi};
+    if (handle_rights(wifi, &radio.rights, &radio.transport) != CALL_OK || radio.transport) {
+      fputs("session: invalid Wi-Fi source\n", stderr);
+      goto done;
+    }
+    radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN;
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
+    grants[grant_count++] = radio;
   }
   handle_t screen_capture = bootstrap_capability("screen_capture");
   if (screen_capture != HANDLE_INVALID) {

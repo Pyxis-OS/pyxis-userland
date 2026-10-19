@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "org.pyxis.wifi",
+  "entry": "bin/wifi.pxe",
+  "commands": {"wifi": "bin/wifi.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read"], "required": true},
+    {"name": "wifi", "resource": "wifi", "rights": ["read"], "required": false},
+    {"name": "wifi_scan", "resource": "wifi", "rights": ["scan"], "required": false}
+  ]
+}

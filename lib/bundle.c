@@ -22,6 +22,7 @@
 #include <abi/random.h>
 #include <abi/retention.h>
 #include <abi/screen_capture.h>
+#include <abi/wifi.h>
 #include <abi/net_config.h>
 #include <abi/system_info.h>
 #include <abi/tcp.h>
@@ -109,6 +110,8 @@ static const struct grant_right grant_rights[] = {
   {"random", "read", PROTOCOL_RANDOM, RANDOM_RIGHT_READ},
   {"system_info", "read", PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_RIGHT_READ},
   {"net_registry", "read", PROTOCOL_NET_REGISTRY, NET_REGISTRY_RIGHT_READ},
+  {"wifi", "read", PROTOCOL_WIFI, WIFI_RIGHT_READ},
+  {"wifi", "scan", PROTOCOL_WIFI, WIFI_RIGHT_SCAN},
   {"echo", "send", PROTOCOL_ECHO, ECHO_RIGHT_SEND},
   {"tcp", "connect", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_CONNECT},
   {"tcp", "listen", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_LISTEN},

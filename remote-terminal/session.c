@@ -14,6 +14,7 @@
 #include <abi/endpoint.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
+#include <abi/wifi.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -51,6 +52,7 @@ static const struct {
   {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
   {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
   {"net_registry", NET_REGISTRY_RIGHT_READ},
+  {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN},
   /* Directory rights are copied as held; the entry is private (see below). */
   {"interpreter_root", UINT64_MAX},
 };

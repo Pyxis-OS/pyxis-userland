@@ -20,6 +20,7 @@
 #include <abi/retention.h>
 #include <abi/pointer.h>
 #include <abi/power.h>
+#include <abi/wifi.h>
 #include <abi/profile.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
@@ -246,6 +247,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
     {"dns_udp", UDP_SERVICE_RIGHT_OPEN},
     {"net_registry", NET_REGISTRY_RIGHT_READ},
+    {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN},
   };
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
     const struct environment_value *value = environment_capture_find(&capture, allowed[i].name);
