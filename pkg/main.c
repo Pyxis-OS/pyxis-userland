@@ -21,7 +21,7 @@ struct offered_package {
 };
 
 struct client {
-  handle_t packages, clock, config, management;
+  handle_t packages, clock, config, config_write, management;
   struct terminal terminal;
   handle_t passthrough;
   struct pkg_fetch_authority fetch;
@@ -146,7 +146,7 @@ static bool load_repositories(void)
     return false;
   }
   if (!client.repositories.count) {
-    return fail("no repositories configured in system://config/packages.lua");
+    return fail("no repositories configured; use pkg repository add URL (HTTP/HTTPS base ending in /)");
   }
   for (size_t r = 0; r < client.repositories.count; ++r) {
     handle_t file;
@@ -603,9 +603,95 @@ static bool mutate(const char *command, int argc, char **argv)
   return ok;
 }
 
+static bool repository_command(const char *command, const char *url)
+{
+  if (!strcmp(command, "list")) {
+    if (pkg_repositories_load(client.config, &client.repositories, &client.reason) != CALL_OK) {
+      return false;
+    }
+    for (size_t i = 0; i < client.repositories.count; ++i) {
+      puts(client.repositories.urls[i]);
+    }
+    if (!client.repositories.count) puts("No repositories; use pkg repository add URL.");
+    return true;
+  }
+  if (!pkg_repository_url_valid(url)) {
+    return fail("repository URL must be HTTP/HTTPS, at most 2048 bytes, end in / and have no credentials, query or fragment");
+  }
+  if (!package_volume(client.management, true)) return false;
+  if (client.config_write == HANDLE_INVALID) {
+    return fail("confined package_config_write authority is unavailable");
+  }
+  handle_t lock;
+  if (directory_create(client.management, PKG_LOCK, DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_ENUMERATE, &lock) != CALL_OK) {
+    return fail("writer lock unavailable; use pkg unlock only after the prior client has stopped");
+  }
+  bool uncertain = false;
+  bool ok = pkg_repositories_load(client.config_write, &client.repositories,
+      &client.reason) == CALL_OK;
+  size_t index = 0;
+  while (ok && index < client.repositories.count &&
+      strcmp(client.repositories.urls[index], url)) ++index;
+  bool changed = false;
+  if (ok && !strcmp(command, "add")) {
+    if (index < client.repositories.count) {
+      puts("pkg: repository already configured");
+    } else if (client.repositories.count == PKG_REPOSITORIES_MAX) {
+      ok = fail("at most eight repositories may be configured");
+    } else {
+      strcpy(client.repositories.urls[client.repositories.count++], url);
+      changed = true;
+    }
+  } else if (ok) {
+    if (index == client.repositories.count) {
+      ok = fail("repository not found");
+    } else {
+      memmove(client.repositories.urls + index, client.repositories.urls + index + 1,
+          (client.repositories.count - index - 1) * sizeof(client.repositories.urls[0]));
+      --client.repositories.count;
+      changed = true;
+    }
+  }
+  if (ok && changed) {
+    enum call_status status = pkg_repositories_stage(client.config_write,
+        &client.repositories, &client.reason);
+    uncertain = status == CALL_OUTCOME_UNKNOWN;
+    ok = status == CALL_OK;
+    if (uncertain) {
+      fail("repository preparation uncertain; writer lock retained for explicit recovery");
+    }
+  }
+  /* Keep ordinary interruption during preparation; protect only publication.
+   * Non-console callers need no foreground keyboard guard. */
+  if (ok && changed && client.terminal.input != HANDLE_INVALID &&
+      console_passthrough(client.terminal.input, &client.passthrough) != CALL_OK) {
+    ok = fail("cannot guard the repository configuration switch");
+  }
+  if (ok && changed) {
+    uncertain = true;
+    enum call_status status = directory_rename(client.config_write, "packages.lua.new",
+        client.config_write, "packages.lua", DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE);
+    if (status != CALL_OK || directory_sync(client.config_write) != CALL_OK) {
+      ok = fail("repository configuration uncertain; inspect packages.lua before explicit pkg unlock; no retry was made");
+    } else {
+      uncertain = false;
+      puts("pkg: repository configuration updated");
+    }
+  }
+  handle_close(lock);
+  if (!uncertain) {
+    enum call_status status = directory_remove(client.management, PKG_LOCK, DIRECTORY_KIND_DIRECTORY);
+    if (status != CALL_OK || directory_sync(client.management) != CALL_OK) {
+      ok = fail("writer lock cleanup unconfirmed; inspect with pkg unlock");
+    }
+  }
+  return ok;
+}
+
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add URL | repository remove URL\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -615,6 +701,7 @@ int main(int argc, char **argv)
   client.management = bootstrap_capability(PACKAGE_MANAGEMENT_SOURCE);
   client.packages = bootstrap_capability(PACKAGE_INSPECT_SOURCE);
   client.config = bootstrap_capability(PACKAGE_CONFIG_SOURCE);
+  client.config_write = bootstrap_capability(PACKAGE_CONFIG_WRITE_SOURCE);
   client.fetch = (struct pkg_fetch_authority){bootstrap_capability("http"),
     bootstrap_capability("https"), client.clock};
   struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
@@ -630,11 +717,17 @@ int main(int argc, char **argv)
   const char *command = argv[arg++];
   int count = argc - arg;
   char **arguments = argv + arg;
+  bool repository = !strcmp(command, "repository");
+  if (repository && (count < 1 ||
+      (!strcmp(arguments[0], "list") ? count != 1 :
+      (!strcmp(arguments[0], "add") || !strcmp(arguments[0], "remove")) ? count != 2 : true))) {
+    return usage();
+  }
   bool mutation = !strcmp(command, "install") || !strcmp(command, "remove") ||
       !strcmp(command, "rollback") || !strcmp(command, "reindex") || !strcmp(command, "unlock");
-  if ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
+  if (!repository && ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
       !strcmp(command, "rollback") ? count > 1 :
-      !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0) {
+      !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {
     return usage();
   }
   bool needs_hash = (mutation && strcmp(command, "unlock")) || !strcmp(command, "verify");
@@ -647,7 +740,9 @@ int main(int argc, char **argv)
     }
   }
   bool ok = false;
-  if (mutation) {
+  if (repository) {
+    ok = repository_command(arguments[0], count > 1 ? arguments[1] : NULL);
+  } else if (mutation) {
     ok = mutate(command, count, arguments);
   } else if (!strcmp(command, "list") && count) {
     ok = load_repositories();

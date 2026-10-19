@@ -20,10 +20,18 @@ struct pkg_fetch_authority {
   handle_t http, https, clock;
 };
 
-/* Borrows the explicitly granted system/config DIRECTORY. On failure the
+bool pkg_repository_url_valid(const char *base);
+
+/* Borrows the explicitly granted system/config DIRECTORY. Missing file means
+ * an empty list. On failure the
  * repository list is empty and reason is static text. Never executes Lua. */
 enum call_status pkg_repositories_load(handle_t package_config,
     struct pkg_repositories *repositories, const char **reason);
+/* Under the shared package writer lock, replace only the fixed temporary
+ * sibling, reread/validate it and synchronize its FILE before publication.
+ * Never retries an uncertain mutation. The caller owns rename/parent sync. */
+enum call_status pkg_repositories_stage(handle_t config,
+    const struct pkg_repositories *repositories, const char **reason);
 enum call_status pkg_timeout_parse(const char *text, uint64_t *seconds);
 
 /* Borrows captured provider roots/clock. timeout_seconds == 0 selects the

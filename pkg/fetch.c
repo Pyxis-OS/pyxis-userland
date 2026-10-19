@@ -7,6 +7,7 @@
 #include <http_url.h>
 #include <literal.h>
 #include <resource.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,8 +23,9 @@ static void set_detail(char detail[RESOURCE_DETAIL_MAX_BYTES + 1], const char *t
   detail[length] = 0;
 }
 
-static bool base_valid(const char *base)
+bool pkg_repository_url_valid(const char *base)
 {
+  if (!base) return false;
   size_t length = strnlen(base, PKG_BASE_URL_MAX + 1);
   if (!length || length > PKG_BASE_URL_MAX || base[length - 1] != '/' ||
       strchr(base, '@') || strchr(base, '?') || strchr(base, '#')) {
@@ -33,12 +35,13 @@ static bool base_valid(const char *base)
   return http_url_parse(base, &uri) == CALL_OK;
 }
 
-static enum call_status config_read(handle_t directory, char **bytes, size_t *size)
+static enum call_status config_read(handle_t directory, const char *name,
+    char **bytes, size_t *size)
 {
   *bytes = NULL;
   *size = 0;
   handle_t file = HANDLE_INVALID;
-  enum call_status status = directory_lookup(directory, "packages.lua", DIRECTORY_KIND_FILE,
+  enum call_status status = directory_lookup(directory, name, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &file);
   if (status != CALL_OK) {
     return status;
@@ -83,22 +86,14 @@ static enum call_status config_read(handle_t directory, char **bytes, size_t *si
   return CALL_OK;
 }
 
-enum call_status pkg_repositories_load(handle_t package_config,
+static enum call_status repositories_parse(const char *bytes, size_t size,
     struct pkg_repositories *repositories, const char **reason)
 {
   *repositories = (struct pkg_repositories){0};
   *reason = NULL;
-  char *bytes = NULL;
-  size_t size = 0;
-  enum call_status status = config_read(package_config, &bytes, &size);
-  if (status != CALL_OK) {
-    *reason = "cannot read package_config/packages.lua";
-    return status;
-  }
   struct literal *document = NULL;
   struct literal_diagnostic diagnostic;
   bool parsed = literal_parse(bytes, size, &document, &diagnostic);
-  free(bytes);
   if (!parsed) {
     *reason = "packages.lua is not strict literal data";
     return CALL_BAD_REQUEST;
@@ -115,7 +110,7 @@ enum call_status pkg_repositories_load(handle_t package_config,
         entry->key->as.integer == (int64_t)count + 1 && value->kind == LITERAL_STRING &&
         value->as.string.size <= PKG_BASE_URL_MAX &&
         strlen(value->as.string.bytes) == value->as.string.size &&
-        base_valid(value->as.string.bytes);
+        pkg_repository_url_valid(value->as.string.bytes);
     for (size_t i = 0; valid && i < count; ++i) {
       valid = strcmp(repositories->urls[i], value->as.string.bytes) != 0;
     }
@@ -131,6 +126,97 @@ enum call_status pkg_repositories_load(handle_t package_config,
   }
   repositories->count = count;
   return CALL_OK;
+}
+
+enum call_status pkg_repositories_load(handle_t package_config,
+    struct pkg_repositories *repositories, const char **reason)
+{
+  *repositories = (struct pkg_repositories){0};
+  *reason = NULL;
+  char *bytes = NULL;
+  size_t size = 0;
+  enum call_status status = config_read(package_config, "packages.lua", &bytes, &size);
+  if (status == CALL_NOT_FOUND) {
+    return CALL_OK;
+  }
+  if (status != CALL_OK) {
+    *reason = "cannot read package_config/packages.lua";
+    return status;
+  }
+  status = repositories_parse(bytes, size, repositories, reason);
+  free(bytes);
+  return status;
+}
+
+enum call_status pkg_repositories_stage(handle_t config,
+    const struct pkg_repositories *repositories, const char **reason)
+{
+  *reason = "cannot prepare packages.lua.new; repository configuration was not replaced";
+  if (repositories->count > PKG_REPOSITORIES_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  /* Quote as literal bytes; never interpret repository URLs as Lua. */
+  size_t capacity = 64 + repositories->count * (4 * PKG_BASE_URL_MAX + 8);
+  char *bytes = malloc(capacity);
+  if (!bytes) {
+    return CALL_NO_MEMORY;
+  }
+  size_t used = snprintf(bytes, capacity, "return { repositories = {\n");
+  for (size_t i = 0; i < repositories->count; ++i) {
+    if (!pkg_repository_url_valid(repositories->urls[i])) {
+      free(bytes);
+      return CALL_BAD_REQUEST;
+    }
+    used += snprintf(bytes + used, capacity - used, "  \"");
+    for (const unsigned char *byte = (const unsigned char *)repositories->urls[i];
+        *byte; ++byte) {
+      if (*byte == '"' || *byte == '\\') {
+        bytes[used++] = '\\';
+        bytes[used++] = *byte;
+      } else if (*byte < 32 || *byte >= 127) {
+        used += snprintf(bytes + used, capacity - used, "\\%03u", *byte);
+      } else {
+        bytes[used++] = *byte;
+      }
+    }
+    used += snprintf(bytes + used, capacity - used, "\",\n");
+  }
+  used += snprintf(bytes + used, capacity - used, "} }\n");
+  enum call_status status = directory_remove(config, "packages.lua.new", DIRECTORY_KIND_FILE);
+  if (status == CALL_NOT_FOUND) status = CALL_OK;
+  handle_t file = HANDLE_INVALID;
+  if (status == CALL_OK) {
+    status = directory_create(config, "packages.lua.new", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_WRITE, &file);
+  }
+  for (size_t offset = 0; status == CALL_OK && offset < used;) {
+    size_t count = 0;
+    status = file_write(file, offset, bytes + offset, used - offset, &count);
+    if (status == CALL_OK && !count) status = CALL_IO;
+    offset += count;
+  }
+  free(bytes);
+  char *stored = NULL;
+  size_t size = 0;
+  struct pkg_repositories checked;
+  if (status == CALL_OK) {
+    status = config_read(config, "packages.lua.new", &stored, &size);
+  }
+  if (status == CALL_OK) {
+    status = repositories_parse(stored, size, &checked, reason);
+  }
+  free(stored);
+  if (status == CALL_OK && checked.count != repositories->count) status = CALL_IO;
+  for (size_t i = 0; status == CALL_OK && i < checked.count; ++i) {
+    if (strcmp(checked.urls[i], repositories->urls[i])) status = CALL_IO;
+  }
+  if (status == CALL_OK) status = file_sync(file);
+  if (file != HANDLE_INVALID) handle_close(file);
+  if (status != CALL_OK && !*reason) {
+    *reason = "cannot verify or synchronize packages.lua.new; repository configuration was not replaced";
+  }
+  if (status == CALL_OK) *reason = NULL;
+  return status;
 }
 
 enum call_status pkg_timeout_parse(const char *text, uint64_t *seconds)
@@ -209,7 +295,7 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
 {
   *file = HANDLE_INVALID;
   set_detail(detail, "invalid package fetch request");
-  if (!authority || !base || !relative || !base_valid(base) || !*relative ||
+  if (!authority || !base || !relative || !pkg_repository_url_valid(base) || !*relative ||
       *relative == '/' || strchr(relative, ':') || strchr(relative, '@') ||
       strchr(relative, '?') || strchr(relative, '#')) {
     return CALL_BAD_REQUEST;

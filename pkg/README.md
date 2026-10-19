@@ -12,6 +12,9 @@ pkg rollback [SET]
 pkg verify
 pkg reindex
 pkg unlock
+pkg repository list
+pkg repository add URL
+pkg repository remove URL
 
 Changes review the proposed set before its one atomic current switch. Running
 programs retain their views; new launches see the new set. Rollback needs no
@@ -45,3 +48,15 @@ and predecessor retention unchanged and requires no repository access. It refuse
 an existing index, including damaged or partial content; it never repairs one
 silently. An empty selection with no current needs no index. New command views
 refuse missing or damaged indexes for a nonzero active set.
+
+Repository edits need package management and the separately declared confined
+config writer. List needs only config read authority. URLs are exact distinct
+HTTP/HTTPS bases ending in /, without credentials, query or fragment; at most
+eight bases of 2048 bytes each. Adding an existing URL changes nothing; removing
+an absent URL reports not found. Missing configuration is empty; malformed
+configuration refuses editing. No network request is made while editing.
+Edits share the package writer lock and atomically replace the strict literal
+file. An uncertain publication retains the lock: inspect packages.lua before
+explicit recovery with pkg unlock. A stopped repository writer can leave
+packages.lua.new; unlock retains it, and the next successful edit replaces it. A live boot keeps edits only until reboot;
+installed system edits persist after successful synchronization.

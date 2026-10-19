@@ -70,6 +70,19 @@
       "required": false
     },
     {
+      "name": "package_config_write",
+      "resource": "directory",
+      "source": "package_config_write",
+      "rights": [
+        "lookup",
+        "read-files",
+        "create",
+        "write-files",
+        "remove"
+      ],
+      "required": false
+    },
+    {
       "name": "http",
       "resource": "provider",
       "source": "http",

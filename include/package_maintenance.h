@@ -10,6 +10,7 @@
 #define PACKAGE_MANAGEMENT_SOURCE "package_management"
 #define PACKAGE_INSPECT_SOURCE "package_inspect"
 #define PACKAGE_CONFIG_SOURCE "package_config"
+#define PACKAGE_CONFIG_WRITE_SOURCE "package_config_write"
 
 /* Trusted session successors carry these selected sources privately. Ordinary
  * children receive only sources explicitly requested by their bundle. */
@@ -18,7 +19,8 @@ static inline bool package_launch_source(const char *name)
   return !strcmp(name, BUNDLE_SOURCE_PREFIX PACKAGE_SOURCE) ||
       !strcmp(name, BUNDLE_SOURCE_PREFIX PACKAGE_MANAGEMENT_SOURCE) ||
       !strcmp(name, BUNDLE_SOURCE_PREFIX PACKAGE_INSPECT_SOURCE) ||
-      !strcmp(name, BUNDLE_SOURCE_PREFIX PACKAGE_CONFIG_SOURCE);
+      !strcmp(name, BUNDLE_SOURCE_PREFIX PACKAGE_CONFIG_SOURCE) ||
+      !strcmp(name, BUNDLE_SOURCE_PREFIX PACKAGE_CONFIG_WRITE_SOURCE);
 }
 
 /* Trusted boot only, before any provider or package consumer starts. Missing
