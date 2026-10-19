@@ -332,6 +332,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
   if (!load_repositories()) {
     return false;
   }
+  size_t initial_count = selection->count;
   /* A bounded list identifies explicit requests, which are verified against the
    * repository even if an immutable copy already exists locally. */
   struct pkg_identity *requested = calloc(argc, sizeof(*requested));
@@ -369,7 +370,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
         &existing, &client.reason);
     if (present) handle_close(existing);
     client.reason = NULL;
-    if (explicit_request || !present) {
+    if (explicit_request || i >= initial_count || !present) {
       const struct offered_package *entry = offering(selection->entries[i].id,
           selection->entries[i].version);
       ok = entry ? install_version(entry, &manifest) :
@@ -520,7 +521,19 @@ static bool mutate(const char *command, int argc, char **argv)
   bool uncertain = false;
   struct pkg_selection before = {0}, after = {0};
   bool current_valid = pkg_selection_load(client.packages, true, 0, &before, &client.reason);
-  bool ok = current_valid;
+  bool metadata_valid = current_valid;
+  if (metadata_valid && before.number && strcmp(command, "rollback")) {
+    uint64_t predecessor = 0;
+    metadata_valid = pkg_predecessor(client.packages, before.number,
+        &predecessor, &client.reason);
+    if (metadata_valid && predecessor) {
+      struct pkg_selection retained = {0};
+      metadata_valid = pkg_selection_load(client.packages, false, predecessor,
+          &retained, &client.reason);
+      pkg_selection_free(&retained);
+    }
+  }
+  bool ok = metadata_valid;
   uint64_t previous = before.number;
   if (!strcmp(command, "rollback")) {
     uint64_t target = 0;
@@ -563,7 +576,7 @@ static bool mutate(const char *command, int argc, char **argv)
   if (ok) {
     ok = pkg_publish(client.packages, &after, previous, &uncertain, &client.reason);
   }
-  if (!ok && (!current_valid || !strcmp(command, "rollback"))) show_sets();
+  if (!ok && (!metadata_valid || !strcmp(command, "rollback"))) show_sets();
   pkg_selection_free(&after);
   pkg_selection_free(&before);
   handle_close(lock);
