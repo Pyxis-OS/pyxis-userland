@@ -1,6 +1,7 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include "../libconfig/boot.h"
+#include "../pkg/store.h"
 #include "network.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
@@ -35,6 +36,7 @@
 #include <handle.h>
 #include <input_policy.h>
 #include <launcher.h>
+#include <literal.h>
 #include <job_work.h>
 #include <machine_settings.h>
 #include <mount.h>
@@ -130,6 +132,8 @@ struct authority {
   /* A private RAM directory; each ram volume is one of its subdirectories. */
   handle_t ram;
   handle_t native_mount, host_mount, esp_mount, fat_mounts;
+  handle_t ram_npfs; /* Boot-only pool creation, never forwarded to a space init. */
+  uint64_t ram_npfs_bytes; /* Captured from the archive, never from an override. */
   handle_t input_policy; /* Boot-only, never forwarded through services. */
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
@@ -161,6 +165,7 @@ static bool take_authority(struct authority *authority)
   authority->boot = bootstrap_capability("boot");
   authority->tmp = bootstrap_capability("tmp");
   authority->ram = bootstrap_capability("ram");
+  authority->ram_npfs = bootstrap_capability("ram_npfs");
   authority->native_mount = bootstrap_capability("native_mount");
   authority->host_mount = bootstrap_capability("host_mount");
   authority->esp_mount = bootstrap_capability("esp_mount");
@@ -303,6 +308,15 @@ static enum call_status mount_volume(const struct authority *authority,
     }
     return status;
   }
+  if (volume->kind == BOOT_VOLUME_RAM_NPFS) {
+    if (authority->ram_npfs == HANDLE_INVALID || !authority->ram_npfs_bytes) {
+      return CALL_UNAVAILABLE;
+    }
+    uint64_t rights = (read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) |
+        observe_rights(authority->ram_npfs);
+    return mount_open_ram_volume(authority->ram_npfs, authority->ram_npfs_bytes,
+        volume->volume, rights, root);
+  }
   if (volume->kind == BOOT_VOLUME_RAM) {
     return open_ram_volume(authority->ram, volume->name, root);
   }
@@ -363,9 +377,11 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
   mounts->entries = entries;
   for (size_t i = 0; i < plan->volume_count; ++i) {
     const struct boot_volume *volume = plan->volumes[i];
-    bool maintenance = volume->kind == BOOT_VOLUME_NPFS &&
+    bool maintenance = (volume->kind == BOOT_VOLUME_NPFS ||
+        volume->kind == BOOT_VOLUME_RAM_NPFS) &&
         (!strcmp(volume->name, BOOT_PACKAGES_VOLUME) ||
-         !strcmp(volume->name, BOOT_HTTP_WORK_VOLUME));
+         !strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) ||
+         (volume->kind == BOOT_VOLUME_RAM_NPFS && !strcmp(volume->name, BOOT_SYSTEM_VOLUME)));
     bool used = maintenance, read_write = maintenance;
     for (size_t j = 0; j < plan->space_count; ++j) {
       const struct boot_space *space = plan->spaces[j];
@@ -394,6 +410,51 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
     }
   }
   return true;
+}
+
+/* Seed only the volatile system before any consumer starts. Existing files,
+ * including malformed ones, are retained for explicit owner recovery. */
+static void seed_live_repositories(const struct authority *authority, struct mounts *mounts)
+{
+  struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
+  if (!system || system->root == HANDLE_INVALID ||
+      system->volume->kind != BOOT_VOLUME_RAM_NPFS) return;
+  handle_t config = HANDLE_INVALID, archive_config = HANDLE_INVALID;
+  handle_t existing = HANDLE_INVALID;
+  const char *reason = NULL;
+  char *bytes = NULL;
+  size_t size = 0;
+  bool ok = pkg_directory(system->root, "config", true, DIRECTORY_CONTENT_RIGHTS,
+      &config, &reason);
+  if (ok) {
+    enum call_status status = directory_lookup(config, "packages.lua", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &existing);
+    if (status == CALL_OK) {
+      handle_close(existing);
+      handle_close(config);
+      return;
+    }
+    if (status != CALL_NOT_FOUND) {
+      reason = "cannot inspect existing packages.lua";
+      ok = false;
+    }
+  }
+  ok = ok && pkg_directory(authority->boot, "config", false, BOOT_ROOT_RIGHTS,
+      &archive_config, &reason);
+  ok = ok && pkg_text(archive_config, "packages.lua", LITERAL_SOURCE_LIMIT,
+      &bytes, &size, &reason);
+  ok = ok && pkg_write_text(config, "packages.lua", bytes, size, &reason);
+  if (ok && (directory_sync(config) != CALL_OK || directory_sync(system->root) != CALL_OK)) {
+    reason = "live repository configuration synchronization unconfirmed";
+    ok = false;
+  }
+  free(bytes);
+  if (archive_config != HANDLE_INVALID) handle_close(archive_config);
+  if (config != HANDLE_INVALID) handle_close(config);
+  if (!ok) {
+    printf("boot-init: live repository configuration unavailable: %s\n",
+        reason ? reason : "unknown error");
+  }
 }
 
 /* Reads the override from the mounted system root. MISSING when absent. */
@@ -743,7 +804,6 @@ static void package_sources(struct mounts *mounts, const struct boot_space *spac
       }
     }
   }
-  if (!space->package_management) return;
   struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
   handle_t config = HANDLE_INVALID;
   enum call_status status = system && system->root != HANDLE_INVALID ?
@@ -755,6 +815,23 @@ static void package_sources(struct mounts *mounts, const struct boot_space *spac
     add_package_source(launch, count, PACKAGE_CONFIG_SOURCE, config, PACKAGE_TREE_RIGHTS);
   } else {
     printf("boot-init: space %s package configuration unavailable (status %u)\n",
+        space->name, status);
+  }
+  if (!space->package_management || !system || system->root == HANDLE_INVALID) return;
+  handle_t writable = HANDLE_INVALID, view = HANDLE_INVALID;
+  status = directory_lookup(system->root, "config", DIRECTORY_KIND_DIRECTORY,
+      DIRECTORY_REPOSITORY_VIEW_RIGHTS, &writable);
+  if (status == CALL_OK) {
+    status = directory_repository_view(writable, &view);
+    handle_close(writable);
+  }
+  if (status == CALL_OK) {
+    launch->source_handles[launch->source_handle_count] = view;
+    launch->source_mounts[launch->source_handle_count++] = system;
+    add_package_source(launch, count, PACKAGE_CONFIG_WRITE_SOURCE, view,
+        DIRECTORY_REPOSITORY_VIEW_RIGHTS);
+  } else {
+    printf("boot-init: space %s repository writer unavailable (status %u)\n",
         space->name, status);
   }
 }
@@ -1348,6 +1425,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "boot-init: %s is invalid\n", path);
   }
 
+  authority.ram_npfs_bytes = defaults.ram_npfs_bytes;
   const struct boot_volume *system = boot_plan_volume(&plan, BOOT_SYSTEM_VOLUME);
   if (installed && system) {
     /* The override is read before the plan is final, so system is mounted
@@ -1400,10 +1478,12 @@ int main(int argc, char **argv)
   }
   size_t started = 0;
   if (mount_plan(&authority, &plan, &mounts)) {
+    seed_live_repositories(&authority, &mounts);
     struct mounted_volume *packages = find_mount(&mounts, BOOT_PACKAGES_VOLUME);
     struct mounted_volume *http_work = find_mount(&mounts, BOOT_HTTP_WORK_VOLUME);
     package_boot_maintain(packages ? packages->root : HANDLE_INVALID,
-        http_work && http_work->volume->kind == BOOT_VOLUME_NPFS ? http_work->root : HANDLE_INVALID,
+        http_work && (http_work->volume->kind == BOOT_VOLUME_NPFS ||
+            http_work->volume->kind == BOOT_VOLUME_RAM_NPFS) ? http_work->root : HANDLE_INVALID,
         authority.services[SERVICE_CLOCK]);
     check_packages(&mounts);
     for (size_t i = 0; i < plan.space_count; ++i) {

@@ -29,6 +29,7 @@
 
 enum boot_volume_kind {
   BOOT_VOLUME_NPFS,
+  BOOT_VOLUME_RAM_NPFS,
   BOOT_VOLUME_VIRTIO_FS,
   BOOT_VOLUME_RAM,
   BOOT_VOLUME_BOOT_ESP,
@@ -39,7 +40,7 @@ struct boot_volume {
   char *name;
   enum boot_volume_kind kind;
   uint64_t partition; /* npfs/FAT32 only, one-based. */
-  char *volume; /* npfs only. */
+  char *volume; /* npfs and ram-npfs only. */
   uint8_t disk_guid[16]; /* FAT32 only, exact persistent GPT disk selection. */
   bool read_write; /* FAT32 admission mode, independent of delegated views. */
 };
@@ -99,7 +100,7 @@ struct boot_space {
 
 /* One parsed file. Owns every string and array. */
 struct boot_config {
-  /* Hostname, directions and diagnostics remain archive-only machine defaults. */
+  /* Machine defaults and RAM pool capacity remain archive-only. */
   char hostname[MACHINE_HOSTNAME_MAX + 1];
   bool mouse_scroll_natural, touchpad_scroll_natural;
   bool input_diagnostics;
@@ -107,6 +108,7 @@ struct boot_config {
   int32_t touchpad_speed; /* Normalized permille; absent means zero in defaults. */
   bool num_lock_present;
   bool num_lock; /* Initial Num Lock state; absent means off in defaults. */
+  uint64_t ram_npfs_bytes; /* Archive-only logical capacity; zero disables creation. */
   struct boot_volume *volumes;
   size_t volume_count;
   struct boot_space *spaces;

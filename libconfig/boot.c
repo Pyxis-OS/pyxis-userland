@@ -167,16 +167,16 @@ static void read_volume(lua_State *state, struct boot_volume *volume)
   config_field(state, -1, "kind");
   char *kind = take_string(state, -1, 1, 16, "volume kind");
   bool npfs = !strcmp(kind, "npfs"), virtio_fs = !strcmp(kind, "virtio-fs"),
-      ram = !strcmp(kind, "ram"), boot_esp = !strcmp(kind, "boot-esp"),
-      fat32 = !strcmp(kind, "fat32");
+      ram = !strcmp(kind, "ram"), ram_npfs = !strcmp(kind, "ram-npfs"),
+      boot_esp = !strcmp(kind, "boot-esp"), fat32 = !strcmp(kind, "fat32");
   free(kind);
   lua_pop(state, 1);
-  if (!npfs && !virtio_fs && !ram && !boot_esp && !fat32) {
-    luaL_error(state, "volume %s: kind must be npfs, virtio-fs, ram, boot-esp or fat32",
+  if (!npfs && !virtio_fs && !ram && !ram_npfs && !boot_esp && !fat32) {
+    luaL_error(state, "volume %s: kind must be npfs, ram-npfs, virtio-fs, ram, boot-esp or fat32",
         volume->name);
   }
-  volume->kind = npfs ? BOOT_VOLUME_NPFS : virtio_fs ? BOOT_VOLUME_VIRTIO_FS :
-      ram ? BOOT_VOLUME_RAM : boot_esp ? BOOT_VOLUME_BOOT_ESP : BOOT_VOLUME_FAT32;
+  volume->kind = npfs ? BOOT_VOLUME_NPFS : ram_npfs ? BOOT_VOLUME_RAM_NPFS :
+      virtio_fs ? BOOT_VOLUME_VIRTIO_FS : ram ? BOOT_VOLUME_RAM : boot_esp ? BOOT_VOLUME_BOOT_ESP : BOOT_VOLUME_FAT32;
   config_field(state, -1, "partition");
   if (npfs || fat32) {
     volume->partition = take_integer(state, -1, 1, UINT32_MAX, "volume partition");
@@ -185,10 +185,10 @@ static void read_volume(lua_State *state, struct boot_volume *volume)
   }
   lua_pop(state, 1);
   config_field(state, -1, "volume");
-  if (npfs) {
+  if (npfs || ram_npfs) {
     volume->volume = take_string(state, -1, 1, MOUNT_VOLUME_NAME_MAX, "volume name");
   } else if (!lua_isnil(state, -1)) {
-    luaL_error(state, "volume %s: only npfs has a volume name", volume->name);
+    luaL_error(state, "volume %s: only npfs and ram-npfs have a volume name", volume->name);
   }
   lua_pop(state, 1);
   config_field(state, -1, "disk_guid");
@@ -360,7 +360,8 @@ static bool valid_source_name(const char *name, size_t length)
 {
   if (!length || length > BOOT_NAME_MAX || strlen(name) != length ||
       !strcmp(name, "fat_mounts") || !strcmp(name, PACKAGE_MANAGEMENT_SOURCE) ||
-      !strcmp(name, PACKAGE_INSPECT_SOURCE) || !strcmp(name, PACKAGE_CONFIG_SOURCE)) {
+      !strcmp(name, PACKAGE_INSPECT_SOURCE) || !strcmp(name, PACKAGE_CONFIG_SOURCE) ||
+      !strcmp(name, PACKAGE_CONFIG_WRITE_SOURCE)) {
     return false;
   }
   for (size_t i = 0; i < length; ++i) {
@@ -729,7 +730,7 @@ static int decode_archive(lua_State *state)
 {
   struct boot_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  static const char *const keys[] = {"hostname", "input", "volumes", "spaces"};
+  static const char *const keys[] = {"hostname", "input", "volumes", "spaces", "ram_npfs_bytes"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
   config_field(state, 1, "hostname");
   const char *name = MACHINE_HOSTNAME_DEFAULT;
@@ -743,6 +744,15 @@ static int decode_archive(lua_State *state)
   }
   memcpy(config->hostname, name, length);
   config->hostname[length] = '\0';
+  lua_pop(state, 1);
+  config_field(state, 1, "ram_npfs_bytes");
+  if (!lua_isnil(state, -1)) {
+    config->ram_npfs_bytes = take_integer(state, -1,
+        MOUNT_RAM_MIN_BYTES, MOUNT_RAM_MAX_BYTES, "ram_npfs_bytes");
+    if (config->ram_npfs_bytes % MOUNT_RAM_ALIGNMENT) {
+      luaL_error(state, "ram_npfs_bytes must be aligned to 4096 bytes");
+    }
+  }
   lua_pop(state, 1);
   read_input(state, config, true);
   read_volumes(state, config);
@@ -836,9 +846,9 @@ const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const c
 
 static bool same_backing(const struct boot_volume *first, const struct boot_volume *second)
 {
-  return first == second || (first->kind == BOOT_VOLUME_NPFS &&
-      second->kind == BOOT_VOLUME_NPFS && first->partition == second->partition &&
-      !strcmp(first->volume, second->volume));
+  return first == second || (first->kind == second->kind &&
+      (first->kind == BOOT_VOLUME_NPFS || first->kind == BOOT_VOLUME_RAM_NPFS) &&
+      first->partition == second->partition && !strcmp(first->volume, second->volume));
 }
 
 static bool private_http_backing(const struct boot_plan *plan, const struct boot_volume *backing)
@@ -996,8 +1006,12 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
 
   for (size_t i = 0; i < plan->volume_count; ++i) {
     const struct boot_volume *volume = plan->volumes[i];
+    if (volume->kind == BOOT_VOLUME_RAM_NPFS && !defaults->ram_npfs_bytes) {
+      return plan_fail(plan, "volume %s requires archive ram_npfs_bytes", volume->name);
+    }
     if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) &&
-        (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS)) {
+        (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS &&
+         volume->kind != BOOT_VOLUME_RAM_NPFS)) {
       return plan_fail(plan, "volume %s requires private RAM or NPFS backing", volume->name);
     }
     if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) && !private_http_backing(plan, volume)) {
@@ -1021,10 +1035,12 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
   for (size_t i = 0; i < plan->space_count; ++i) {
     const struct boot_space *space = plan->spaces[i];
     const struct boot_volume *packages = boot_plan_volume(plan, BOOT_PACKAGES_VOLUME);
-    if (space->package_management && (!packages || packages->kind != BOOT_VOLUME_NPFS)) {
+    if (space->package_management && (!packages ||
+        (packages->kind != BOOT_VOLUME_NPFS && packages->kind != BOOT_VOLUME_RAM_NPFS))) {
       return plan_fail(plan, "space %s: package_management needs an npfs packages volume", space->name);
     }
-    size_t package_sources = (packages != NULL) + (space->package_management ? 2 : 0);
+    size_t package_sources = (packages != NULL) +
+        (boot_plan_volume(plan, BOOT_SYSTEM_VOLUME) != NULL) + (space->package_management ? 2 : 0);
     if (space->grant_count + space->fat32_mount + package_sources > BUNDLE_SOURCE_LIMIT) {
       return plan_fail(plan, "space %s: too many selected sources including packages", space->name);
     }
@@ -1035,7 +1051,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
             space->name, space->roots[j].name, space->roots[j].volume);
       }
       /* A tree opened from a mount that boot init retires on exit would vanish. */
-      if (space->roots[j].package && volume->kind != BOOT_VOLUME_NPFS) {
+      if (space->roots[j].package && volume->kind != BOOT_VOLUME_NPFS &&
+          volume->kind != BOOT_VOLUME_RAM_NPFS) {
         return plan_fail(plan, "space %s: package root %s needs an npfs %s volume",
             space->name, space->roots[j].name, BOOT_PACKAGES_VOLUME);
       }
@@ -1054,7 +1071,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       }
       if (!strcmp(grant->name, BOOT_HTTP_STAGING_SOURCE) &&
           (grant->kind != BOOT_GRANT_DIRECTORY || !grant->read_write ||
-           (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS) ||
+           (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS &&
+            volume->kind != BOOT_VOLUME_RAM_NPFS) ||
            !private_http_backing(plan, volume))) {
         return plan_fail(plan, "source %s requires a private read-write RAM or NPFS volume",
             grant->name);
