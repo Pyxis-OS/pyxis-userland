@@ -17,6 +17,9 @@ static enum call_status set_entry(struct environment_set_entry *entry,
   entry->kind = value->kind;
   entry->flags = exported ? ENVIRONMENT_EXPORTED : 0;
   if (value->kind == ENVIRONMENT_CAP) {
+    if (shell_environment_runtime_role(name) || shell_environment_runtime_role(value->name)) {
+      return CALL_DENIED;
+    }
     entry->handle = value->handle;
     entry->rights = value->rights;
     entry->transport = value->transport;
