@@ -1,16 +1,20 @@
 # Owned ESP publication
 
-Normal builds enable the integrated Install/Update publisher and installed
+Normal builds enable the integrated Classic Install/Update publisher and installed
 configuration loader. `INSTALLER_PUBLICATION_SCRATCH=1` is the default build
-setting; explicit `=0` retains the legacy development build. The historical
-setting name also gates the separate disposable-image scratch frontend.
+setting; explicit `=0` retains the legacy development build. Coexist keeps its
+immutable-payload/manual-entry path; complete Coexist Install/Update/completion
+QEMU qualification and a separate activation record gate its integrated publisher.
+The historical build-setting name also gates an explicit disposable-image frontend.
 
-The ordinary interactive flow remains profile-first. After selecting Classic or
-Coexist, press Enter at **Scratch publication (scratch), or ordinary installer**
-to reach ordinary Install/Update. `--plan`, `--dry-run` and replay use the same
-integrated planner. No prior `config` invocation is needed when revision defaults
-and safe pre-selected migrations suffice. This reference describes publication;
-[installation](../../docs/userland/installer.md) and
+The first action list offers Install, Update, Replay a printed plan and Cancel.
+Only Install asks Classic/Coexist; Update discovers and revalidates the selected
+layout and preserves that layout's authority/recovery limits. Discovery parses
+media under a restricted read-only grant, reports refusal reasons and returns to
+the action list on Back or failure. Ordinary media flow has no scratch prompt.
+`--plan`, `--dry-run` and replay share the planner. No prior `config` invocation
+is needed when revision defaults and safe pre-selected migrations suffice.
+[Installation](../../docs/userland/installer.md) and
 [Update](../../docs/userland/system-updates.md) describe target consent and programs.
 
 ## Review and consumed inputs
@@ -50,8 +54,9 @@ same-revision Update. Canonical-name, retained-object, full size/hash and immuta
 ownership checks apply; names and paths alone confer no ownership.
 
 Before activation, provision or fully reverify the small independent kernel/archive
-pair under `EFI/pyxis/recovery/` and its static `/boot/limine.conf`. The recovery archive is built from trusted rescue components, excluding
-personal/game/development payloads. Normal publication never replaces or cleans this pair or fallback.
+pair under `EFI/pyxis/recovery/` and its static `/boot/limine.conf`. The recovery
+archive is built from trusted rescue components, excluding personal/game/development
+payloads. Normal publication never replaces or cleans this pair or fallback.
 Foreign fallback bytes and higher-priority shadowing configurations refuse. The
 fallback covers an absent primary `/boot/limine/limine.conf`, not a
 corrupt-but-present primary. A fresh installation has this recovery path only
@@ -68,10 +73,14 @@ verified inherited kernel/archive/revision evidence rechecked within the interva
 Normal Update preserves the boot manager, unowned content and healthy filesystem;
 ESP rebuilding is a separate explicitly reviewed Classic recovery grant.
 
-Ambiguous ownership leaves the menu unchanged and prints the proposed entry:
+In the Classic publisher, ambiguous ownership leaves the menu unchanged and prints the proposed entry:
 **staged, boot activation pending**. A committed record alone is not successful
-Update. A fresh explicit `complete` Review can finish exact recognized pending
-states, preserving the attempt, record and current/previous slots. Edited or
+Update. Choose Update and the pending target to open a fresh completion Review,
+select completion, then type `complete`. Exact recognized pending states reuse
+the attempt, record and current/previous slots without a new retention generation.
+Existing committed pending Coexist records use the same reachable explicit
+completion and full proofs under their confined authority, without enabling new
+Coexist publication. Edited or
 ambiguous menus, mismatching payloads and unrecognized artifacts refuse.
 
 Retain current and one known previous boot attempt, plus pinned rescue. Older
@@ -102,12 +111,14 @@ resources. Catalog identity remains independent of kernel/program revision.
 
 ## Disposable scratch frontend and limits
 
-`--scratch-publication`, or typing `scratch` at the interactive prompt, selects a
-separate development frontend for disposable images. It installs no program
-revision and has its own Review: `plan` prints full details and numbered choices,
-`change NUMBER ...` edits them, `confirm` applies and `cancel` writes nothing.
-It can preview configuration handoff without launching installed startup. It is
-not the ordinary Update action and should not be used on native media.
+Only an explicit trusted `--scratch-publication` invocation selects the separate
+frontend for disposable images. It installs no program revision. Review actions,
+source selection, owner-file adoption and per-change choices use highlighted
+numbered lists: Up/Down or a number, then Enter. Show full plan exposes numbered
+changes and hashes. Selecting Confirm publication additionally requires the typed
+word `confirm`; completing a pending publication requires typed `complete` after
+its Review. Cancel writes nothing. It can preview handoff without launching
+installed startup and should not be used on native media.
 
 Configuration files remain bounded at 1 MiB, completion records at 8 KiB and each
 boot payload at 1 GiB. Native bounded FILE transfers and the existing 30-second
@@ -117,6 +128,8 @@ remains separate. No cross-file atomicity or power-loss durability is claimed.
 
 The [qualification record](../../docs/development/experiments/installer-publication/README.md)
 separates QEMU source/functional/cut evidence from the owner-reported 2026-10-20
-native gate on vela. The native gate covered clean Install, installed loading,
-same-revision Update and rescue. Foreign-file preservation was not checked on
+native gate on vela. The native gate covered Classic clean Install, installed loading,
+same-revision Update and rescue through the prior UI. New action/Replay/completion
+UI qualification is separate and pending; Coexist activation is not qualified.
+Foreign-file preservation was not checked on
 that freshly wiped medium, and no native power-cut qualification is claimed.
