@@ -18,7 +18,9 @@ decimal status and defaults to zero.
 Foreground external commands accept ordered `2>&1`: `cmd >file 2>&1`
 merges both outputs, while `cmd 2>&1 >file` keeps stderr on the original stdout.
 Pipes and consoles share their endpoint; merged files and captures use one byte
-relay/cursor, including through descendants. Explicit and inherited append are
+relay/cursor, including through descendants. A redirected FILE output is truncated
+once, unless appended to, and then passed with append policy, so a script's commands
+follow each other. Explicit and inherited append are
 preserved without atomic-append guarantees. Merged streams cannot seek or hand
 off capabilities. Relay workers share the eight-process batch bound; their
 failure fails the command with status 1 without replacing user fault/termination

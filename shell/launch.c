@@ -1574,6 +1574,16 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   return status == CALL_OK ? validate_scope(request, scope) : status;
 }
 
+/* A redirected output file is truncated once by the shell, if it is not
+ * appended to, and then every writer of that stream appends. Children never
+ * inherit a file cursor, so a program that launches commands of its own, such as
+ * a script, would otherwise have each of them start again at offset zero. */
+static bool redirect_appends(const struct shell_redirection *redirect)
+{
+  return redirect->stream != ENVIRONMENT_STDIN && !redirect->staging_output &&
+      !redirect->duplicate_stdout;
+}
+
 static const char *selected_stream_conflict(const struct prepared_stage *prepared,
     const struct shell_stage *stage,
     const struct pyxis_stdio_binding streams[ENVIRONMENT_STREAM_COUNT],
@@ -1590,7 +1600,7 @@ static const char *selected_stream_conflict(const struct prepared_stage *prepare
         const struct shell_redirection *redirect = &stage->redirections[j];
         if (redirect->stream == stream) {
           bound = true;
-          append = redirect->append;
+          append = redirect_appends(redirect);
         }
       }
       struct launch_environment_entry entry = profile_stdio_entry(stream, 0);
@@ -2415,7 +2425,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           opened.resource = HANDLE_INVALID;
           streams[i][redirect->stream] = (struct pyxis_stdio_binding){
             .protocol = opened.info.protocol,
-            .handle = prepared[i].redirected[redirect->stream], .append = redirect->append,
+            .handle = prepared[i].redirected[redirect->stream],
+            .append = opened.info.protocol == PROTOCOL_FILE && redirect_appends(redirect),
           };
         }
         if (status == CALL_OK && redirect->staging_output) {
