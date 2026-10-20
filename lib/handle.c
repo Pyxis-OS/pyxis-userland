@@ -25,7 +25,8 @@ enum call_status handle_query(handle_t handle, struct handle_info *info)
   }
   if (result.status == CALL_OK) {
     if (!reply.protocol || (reply.kind != HANDLE_KIND_NATIVE &&
-        reply.kind != HANDLE_KIND_EXPORTED)) {
+        reply.kind != HANDLE_KIND_EXPORTED) ||
+        (reply.restrictions & ~HANDLE_RESTRICTIONS)) {
       return CALL_BAD_REQUEST;
     }
     *info = reply;
@@ -54,8 +55,11 @@ static bool description_reply_valid(const struct describe_reply *reply, uint64_t
   if (!reply->protocol || (reply->kind != HANDLE_KIND_NATIVE &&
       reply->kind != HANDLE_KIND_EXPORTED) ||
       (reply->transport & ~HANDLE_TRANSPORT_CALL) ||
-      (reply->properties & ~DESCRIBE_IMMUTABLE_SNAPSHOT) ||
+      (reply->properties & ~(DESCRIBE_IMMUTABLE_SNAPSHOT | DESCRIBE_DETAIL_WITHHELD)) ||
       !resource_description_valid(&reply->description)) {
+    return false;
+  }
+  if ((reply->properties & DESCRIBE_DETAIL_WITHHELD) && reply->description.detail_size) {
     return false;
   }
   if (reply->properties & DESCRIBE_IMMUTABLE_SNAPSHOT) {
