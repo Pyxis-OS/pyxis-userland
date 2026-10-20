@@ -196,6 +196,9 @@ static bool inspect_disk(struct update_inventory *inventory, const struct instal
   if (!update.eligible) {
     fprintf(stderr, "init-install: disk %llu classic Update unavailable: %s\n",
         (unsigned long long)disk->info.id, update.reason ? update.reason : "native layout not eligible");
+    if (update.classic_layout) {
+      return true;
+    }
     return inspect_coexist(inventory, disk, disks, clock, clean);
   }
   /* A recognized classic layout retains classic recovery and its exact grant.

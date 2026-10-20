@@ -106,7 +106,53 @@ static bool system_verify(const struct install_plan *plan)
         FILE_RIGHT_READ, &marker) == CALL_OK && file_size(marker, &size) == CALL_OK && size == 0;
   }
   ok = close_handle(&marker) && ok;
+  if (ok && !plan->record.coexist) {
+    char bytes[sizeof(INSTALL_CLASSIC_MARKER_BYTES)];
+    uint64_t size;
+    size_t read = 0;
+    ok = directory_lookup(root, INSTALL_CLASSIC_MARKER_NAME, DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &marker) == CALL_OK && file_size(marker, &size) == CALL_OK &&
+        size == sizeof(INSTALL_CLASSIC_MARKER_BYTES) - 1 &&
+        file_read(marker, 0, bytes, sizeof(bytes), &read) == CALL_OK && read == size &&
+        !memcmp(bytes, INSTALL_CLASSIC_MARKER_BYTES, (size_t)size);
+    ok = close_handle(&marker) && ok;
+  }
   ok = close_handle(&root) && ok;
+  return ok;
+}
+
+static bool classic_origin_prepare(const struct install_plan *plan)
+{
+  if (plan->record.updating || plan->record.coexist) {
+    return true;
+  }
+  handle_t system = HANDLE_INVALID, marker = HANDLE_INVALID;
+  enum call_status status = disk_open_volume(plan->disk.handle, plan->target.pool.partition,
+      "system", DIRECTORY_CONTENT_RIGHTS, &system);
+  if (status == CALL_OK) {
+    status = directory_create(system, INSTALL_CLASSIC_MARKER_NAME, DIRECTORY_KIND_FILE,
+        FILE_RIGHT_WRITE, &marker);
+  }
+  size_t written = 0;
+  if (status == CALL_OK) {
+    status = file_write(marker, 0, INSTALL_CLASSIC_MARKER_BYTES,
+        sizeof(INSTALL_CLASSIC_MARKER_BYTES) - 1, &written);
+    if (status == CALL_OK && written != sizeof(INSTALL_CLASSIC_MARKER_BYTES) - 1) {
+      status = CALL_IO;
+    }
+  }
+  if (status == CALL_OK) {
+    status = file_sync(marker);
+  }
+  if (status == CALL_OK) {
+    status = directory_sync(system);
+  }
+  bool ok = status == CALL_OK;
+  ok = close_handle(&marker) && ok;
+  ok = close_handle(&system) && ok;
+  if (!ok) {
+    fprintf(stderr, "installer: Classic origin marker preparation failed (status %u)\n", status);
+  }
   return ok;
 }
 
@@ -412,7 +458,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     fprintf(stderr, "installer: HTTP backing volume preparation failed (status %u)\n", status);
     goto done;
   }
-  if (!package_config_prepare(plan)) goto done;
+  if (!package_config_prepare(plan) || !classic_origin_prepare(plan)) goto done;
   if (!install_programs_write(disk, plan->target.pool.partition, plan->boot, &plan->programs,
         revision, &plan->manifest, plan->manifest_text, plan->manifest_bytes) ||
       !system_verify(plan)) {

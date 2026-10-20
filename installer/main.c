@@ -606,7 +606,7 @@ int main(int argc, char **argv)
   if (selected_pending) {
 #if INSTALLER_PUBLICATION_SCRATCH
     return install_publication_complete(&terminal, verbose, selected_target,
-        selected_esp, selected_pool, selected_guid);
+        selected_esp, selected_pool, selected_guid, coexist);
 #else
     say("Pending publication completion is unavailable in this development build.");
     goto done;

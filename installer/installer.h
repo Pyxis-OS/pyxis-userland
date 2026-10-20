@@ -26,6 +26,8 @@
 #define INSTALL_PACKAGES_VOLUME "packages"
 #define INSTALL_HTTP_WORK_VOLUME "http-work"
 #define INSTALL_UNKNOWN_REVISION "unknown"
+#define INSTALL_CLASSIC_MARKER_NAME ".pyxis-classic"
+#define INSTALL_CLASSIC_MARKER_BYTES "PYXIS-CLASSIC 1\n"
 /* Bounds shared by the GPT reader and its complete partition projection. */
 #define INSTALL_GPT_MAX_PARTITIONS 256u
 #define INSTALL_GPT_TABLE_MAX_BYTES 65536u
@@ -82,6 +84,8 @@ enum install_esp_state {
 
 struct install_update {
   bool eligible, degraded;
+  /* Geometry matched Classic; a missing origin marker must not select Coexist. */
+  bool classic_layout;
   const char *reason;
   struct install_layout layout;
   char revision[64];

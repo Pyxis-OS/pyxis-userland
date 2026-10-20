@@ -281,7 +281,8 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
 
 
 static int publication_frontend(struct terminal *terminal, bool verbose,
-    uint64_t selected_id, uint64_t selected_esp, uint64_t selected_pool, const char *selected_guid)
+    uint64_t selected_id, uint64_t selected_esp, uint64_t selected_pool, const char *selected_guid,
+    bool coexist)
 {
   handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
   handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
@@ -354,8 +355,10 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     }
     install_coexist_layout(&esp, &native_pool, &layout);
     install_guid_text(layout.disk_guid, guid);
-    if (strcmp(guid, selected_guid) || !install_scan_pool_update(&disk, &layout, &update) ||
-        !update.eligible) {
+    bool inspected = coexist ? install_scan_pool_update(&disk, &layout, &update) :
+        install_scan_update(&disk, &update);
+    if (strcmp(guid, selected_guid) || !inspected || !update.eligible ||
+        update.layout.esp_partition != selected_esp || update.layout.pool_partition != selected_pool) {
       fputs("Selected pending installation changed or is unavailable; nothing written.\n", stderr);
       goto done;
     }
@@ -846,14 +849,14 @@ done:
 
 int install_publication_scratch(struct terminal *terminal, bool verbose)
 {
-  return publication_frontend(terminal, verbose, 0, 0, 0, NULL);
+  return publication_frontend(terminal, verbose, 0, 0, 0, NULL, false);
 }
 
 int install_publication_complete(struct terminal *terminal, bool verbose, uint64_t disk,
-    uint64_t esp, uint64_t pool, const char *guid)
+    uint64_t esp, uint64_t pool, const char *guid, bool coexist)
 {
   if (!disk || !esp || !pool || !guid) {
     return EXIT_FAILURE;
   }
-  return publication_frontend(terminal, verbose, disk, esp, pool, guid);
+  return publication_frontend(terminal, verbose, disk, esp, pool, guid, coexist);
 }

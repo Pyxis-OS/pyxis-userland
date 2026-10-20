@@ -1143,6 +1143,9 @@ static enum inspection update_system(struct pool_view *pool, const struct npfs_v
   return walked == cleanup_count ? INSPECT_OK : INSPECT_DAMAGED;
 }
 
+static enum inspection classic_marker(struct pool_view *pool,
+    const struct npfs_volume *system, bool *recognized);
+
 static bool scan_update_pool(const struct install_disk *disk, struct install_update *update)
 {
   struct pool_view *pool = calloc(1, sizeof(*pool));
@@ -1204,6 +1207,17 @@ static bool scan_update_pool(const struct install_disk *disk, struct install_upd
   status = update_system(pool, &system);
   if (status != INSPECT_OK) {
     goto inspection_failed;
+  }
+  if (update->classic_layout) {
+    bool recognized;
+    update->reason = "not a recognised Classic install: missing or invalid .pyxis-classic marker";
+    status = classic_marker(pool, &system, &recognized);
+    if (status != INSPECT_OK) {
+      goto inspection_failed;
+    }
+    if (!recognized) {
+      goto done;
+    }
   }
   update->eligible = true;
   update->reason = "selected native pool metadata validated; previous active revision unknown";
@@ -1330,6 +1344,7 @@ bool install_scan_update(const struct install_disk *disk, struct install_update 
     update->reason = "foreign GPT disk: layout is not an installer layout";
     goto done;
   }
+  update->classic_layout = true;
   success = scan_update_pool(disk, update);
   if (update->eligible) {
     update->reason = "installer layout and system pool recognized";
@@ -1457,6 +1472,35 @@ static enum inspection prior_file_block(struct pool_view *pool, const struct npf
     return INSPECT_OK;
   }
   return raw_pool_read(pool, leaf, bytes);
+}
+
+static enum inspection classic_marker(struct pool_view *pool,
+    const struct npfs_volume *system, bool *recognized)
+{
+  *recognized = false;
+  struct npfs_inode root, marker;
+  enum inspection status = read_inode(pool, system, system->root_inode, &root);
+  if (status != INSPECT_OK) {
+    return status;
+  }
+  if (root.kind != NPFS_INODE_DIRECTORY) {
+    return INSPECT_DAMAGED;
+  }
+  uint64_t number;
+  status = prior_lookup(pool, system, system->root_inode, &root,
+      INSTALL_CLASSIC_MARKER_NAME, &number, &marker);
+  if (status != INSPECT_OK || !number) {
+    return status;
+  }
+  if (marker.kind != NPFS_INODE_FILE || marker.size != sizeof(INSTALL_CLASSIC_MARKER_BYTES) - 1) {
+    return INSPECT_OK;
+  }
+  status = prior_file_block(pool, &marker, 0, pool->scratch[0]);
+  if (status == INSPECT_OK) {
+    *recognized = !memcmp(pool->scratch[0], INSTALL_CLASSIC_MARKER_BYTES,
+        sizeof(INSTALL_CLASSIC_MARKER_BYTES) - 1);
+  }
+  return status;
 }
 
 static enum inspection prior_hash_file(struct pool_view *pool, const struct npfs_inode *inode,

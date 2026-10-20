@@ -12,6 +12,11 @@ Only Install asks Classic/Coexist; Update discovers and revalidates the selected
 layout and preserves that layout's authority/recovery limits. Discovery parses
 media under a restricted read-only grant, reports refusal reasons and returns to
 the action list on Back or failure. Ordinary media flow has no scratch prompt.
+Classic recognition additionally requires the regular system-volume root file
+`.pyxis-classic` with exact ASCII `PYXIS-CLASSIC 1` plus LF (16 bytes). New Classic
+Install writes and syncs it; Coexist does not. Raw read-only discovery and child
+revalidation check it alongside GPT/pool identity. A Classic-shaped unmarked
+layout refuses without fallback to Coexist or a legacy-adoption option.
 `--plan`, `--dry-run` and replay share the planner. No prior `config` invocation
 is needed when revision defaults and safe pre-selected migrations suffice.
 [Installation](../../docs/userland/installer.md) and
