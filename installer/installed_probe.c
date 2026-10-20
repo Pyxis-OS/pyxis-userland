@@ -32,10 +32,16 @@ static enum fat32_status probe_file(const struct fat32_volume *volume,
     struct fat32_workspace *work, const char *path, size_t limit, struct config_blob *blob)
 {
   struct probe_read read = {.bytes = malloc(limit), .capacity = limit};
-  if (!read.bytes) return FAT32_NO_MEMORY;
+  if (!read.bytes) {
+    fprintf(stderr, "installer: readiness read %s failed (FAT32 status %u)\n", path, FAT32_NO_MEMORY);
+    return FAT32_NO_MEMORY;
+  }
   enum fat32_status status = fat32_read(volume, path, strlen(path), work, probe_sink, &read);
   if (status == FAT32_OK && !config_blob_set(blob, read.bytes, read.size)) status = FAT32_NO_MEMORY;
   free(read.bytes);
+  if (status != FAT32_OK && status != FAT32_NOT_FOUND) {
+    fprintf(stderr, "installer: readiness read %s failed (FAT32 status %u)\n", path, status);
+  }
   return status;
 }
 
@@ -63,7 +69,7 @@ static bool retained_cleanup(const struct fat32_volume *volume, struct fat32_wor
     if (!obsolete->digest.present) {
       continue;
     }
-    snprintf(path, sizeof(path), "%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
+    snprintf(path, sizeof(path), "/%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
         obsolete->name);
     ok = optional_file(volume, work, path, CONFIG_FILE_MAX_BYTES, &artifact);
     if (ok && artifact.digest.present) {
@@ -76,7 +82,7 @@ static bool retained_cleanup(const struct fat32_volume *volume, struct fat32_wor
   char staged[CONFIG_ARTIFACT_NAME_BYTES];
   ok = ok && config_record_artifact_name(record->transaction, CONFIG_LIMINE, "new", staged);
   if (ok) {
-    snprintf(path, sizeof(path), "boot/limine/%s", staged);
+    snprintf(path, sizeof(path), "/boot/limine/%s", staged);
     ok = optional_file(volume, work, path, CONFIG_FILE_MAX_BYTES, &artifact);
     if (ok && artifact.digest.present) {
       ok = config_blob_equal(&artifact, &pending->menu);
@@ -154,14 +160,14 @@ enum install_installed_probe install_installed_probe(const struct install_disk *
   *reason = "committed readiness inputs are unavailable; manual disposition required";
   char path[256];
   for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    snprintf(path, sizeof(path), "%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
+    snprintf(path, sizeof(path), "/%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
         config_storage_file_name(i));
     if (!optional_file(&volume, &work, path, CONFIG_FILE_MAX_BYTES, &current[i])) {
       goto done;
     }
   }
   if (parsed.previous[CONFIG_LIMINE].digest.present) {
-    snprintf(path, sizeof(path), "boot/limine/%s", parsed.previous[CONFIG_LIMINE].name);
+    snprintf(path, sizeof(path), "/boot/limine/%s", parsed.previous[CONFIG_LIMINE].name);
     if (!optional_file(&volume, &work, path, CONFIG_FILE_MAX_BYTES, &previous)) {
       goto done;
     }
