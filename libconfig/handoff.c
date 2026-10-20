@@ -56,14 +56,14 @@ void config_handoff_bytes_free(struct config_handoff_bytes *snapshot)
 static bool source_valid(const struct config_selection *selection, size_t index)
 {
   if (!selection->bytes[index] || !selection->sizes[index] ||
-      selection->sizes[index] > CONFIG_LITERAL_SOURCE_LIMIT) {
+      selection->sizes[index] > LITERAL_SOURCE_LIMIT) {
     return false;
   }
-  struct config_literal *document = NULL;
-  struct config_literal_diagnostic diagnostic;
-  bool ok = config_literal_parse(selection->bytes[index], selection->sizes[index],
+  struct literal *document = NULL;
+  struct literal_diagnostic diagnostic;
+  bool ok = literal_parse(selection->bytes[index], selection->sizes[index],
       &document, &diagnostic);
-  config_literal_free(document);
+  literal_free(document);
   return ok;
 }
 
@@ -149,7 +149,7 @@ static bool file_state(handle_t file, struct file_info_reply *info, enum call_st
   }
   uint64_t required = FILE_INFO_SIZE_VALID | FILE_INFO_DOMAIN_VALID | FILE_INFO_OBJECT_VALID;
   return ((info->valid & required) == required && info->size &&
-      info->size <= CONFIG_LITERAL_SOURCE_LIMIT) || failed(status, CALL_BAD_REQUEST);
+      info->size <= LITERAL_SOURCE_LIMIT) || failed(status, CALL_BAD_REQUEST);
 }
 
 bool config_handoff_read(handle_t file, struct config_handoff_bytes *snapshot,

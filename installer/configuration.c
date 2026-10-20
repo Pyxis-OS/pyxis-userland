@@ -59,9 +59,9 @@ static bool lua_view(const struct config_catalog *source, struct config_catalog 
   return true;
 }
 
-static bool key_is(const struct config_literal_value *key, const char *text)
+static bool key_is(const struct literal_value *key, const char *text)
 {
-  return key && key->kind == CONFIG_LITERAL_STRING &&
+  return key && key->kind == LITERAL_STRING &&
       key->as.string.size == strlen(text) &&
       !memcmp(key->as.string.bytes, text, key->as.string.size);
 }
@@ -70,23 +70,23 @@ static bool key_is(const struct config_literal_value *key, const char *text)
  * archive data. Render only editable volumes/spaces into the ESP override. */
 static bool boot_defaults(const struct config_blob *archive, struct config_blob *output)
 {
-  struct config_literal *document = NULL;
-  struct config_literal_diagnostic diagnostic;
-  if (!config_literal_parse((char *)archive->bytes, archive->size, &document, &diagnostic)) {
+  struct literal *document = NULL;
+  struct literal_diagnostic diagnostic;
+  if (!literal_parse((char *)archive->bytes, archive->size, &document, &diagnostic)) {
     return false;
   }
-  const struct config_literal_value *volumes = config_literal_field(document->root, "volumes");
-  const struct config_literal_value *spaces = config_literal_field(document->root, "spaces");
-  bool ok = volumes && spaces && volumes->kind == CONFIG_LITERAL_TABLE &&
-      spaces->kind == CONFIG_LITERAL_TABLE;
-  struct config_literal_entry *entries = NULL;
+  const struct literal_value *volumes = literal_field(document->root, "volumes");
+  const struct literal_value *spaces = literal_field(document->root, "spaces");
+  bool ok = volumes && spaces && volumes->kind == LITERAL_TABLE &&
+      spaces->kind == LITERAL_TABLE;
+  struct literal_entry *entries = NULL;
   if (ok) {
     entries = calloc(volumes->as.table.count ? volumes->as.table.count : 1, sizeof(*entries));
     ok = entries != NULL;
   }
-  struct config_literal_value selected_volumes = {.kind = CONFIG_LITERAL_TABLE};
+  struct literal_value selected_volumes = {.kind = LITERAL_TABLE};
   size_t count = 0;
-  for (const struct config_literal_entry *entry = ok ? volumes->as.table.entries : NULL;
+  for (const struct literal_entry *entry = ok ? volumes->as.table.entries : NULL;
       entry; entry = entry->next) {
     if (!key_is(entry->key, BOOT_SYSTEM_VOLUME)) {
       entries[count] = *entry;
@@ -99,15 +99,15 @@ static bool boot_defaults(const struct config_blob *archive, struct config_blob 
   }
   selected_volumes.as.table.entries = count ? entries : NULL;
   selected_volumes.as.table.count = count;
-  struct config_literal_value volume_key = {.kind = CONFIG_LITERAL_STRING,
+  struct literal_value volume_key = {.kind = LITERAL_STRING,
       .as.string = {"volumes", 7}};
-  struct config_literal_value space_key = {.kind = CONFIG_LITERAL_STRING,
+  struct literal_value space_key = {.kind = LITERAL_STRING,
       .as.string = {"spaces", 6}};
-  struct config_literal_entry space_entry = {.key = &space_key,
-      .value = (struct config_literal_value *)spaces};
-  struct config_literal_entry volume_entry = {.key = &volume_key,
+  struct literal_entry space_entry = {.key = &space_key,
+      .value = (struct literal_value *)spaces};
+  struct literal_entry volume_entry = {.key = &volume_key,
       .value = &selected_volumes, .next = &space_entry};
-  struct config_literal_value root = {.kind = CONFIG_LITERAL_TABLE,
+  struct literal_value root = {.kind = LITERAL_TABLE,
       .as.table = {&volume_entry, 2}};
   char *value = NULL;
   size_t size = 0;
@@ -128,7 +128,7 @@ static bool boot_defaults(const struct config_blob *archive, struct config_blob 
   }
   free(value);
   free(entries);
-  config_literal_free(document);
+  literal_free(document);
   return ok;
 }
 
@@ -410,15 +410,15 @@ bool install_configuration_pool(struct install_configuration *plan, bool migrate
   return build_delta(plan);
 }
 
-static const struct config_literal_value *named_entry(
-    const struct config_literal_value *table, const char *name, size_t size, bool space)
+static const struct literal_value *named_entry(
+    const struct literal_value *table, const char *name, size_t size, bool space)
 {
-  if (!table || table->kind != CONFIG_LITERAL_TABLE) {
+  if (!table || table->kind != LITERAL_TABLE) {
     return NULL;
   }
-  for (const struct config_literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
-    const struct config_literal_value *key = space ? config_literal_field(entry->value, "name") : entry->key;
-    if (key && key->kind == CONFIG_LITERAL_STRING && key->as.string.size == size &&
+  for (const struct literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
+    const struct literal_value *key = space ? literal_field(entry->value, "name") : entry->key;
+    if (key && key->kind == LITERAL_STRING && key->as.string.size == size &&
         !memcmp(key->as.string.bytes, name, size)) {
       return entry->value;
     }
@@ -427,7 +427,7 @@ static const struct config_literal_value *named_entry(
 }
 
 static void review_value(FILE *output, const char *label,
-    const struct config_literal_value *value)
+    const struct literal_value *value)
 {
   char *bytes = NULL;
   size_t size = 0;
@@ -444,31 +444,31 @@ static void review_pool(const struct install_configuration *plan, FILE *output)
   if (!plan->pool_valid) {
     return;
   }
-  struct config_literal *pool = NULL, *esp = NULL;
-  struct config_literal_diagnostic diagnostic;
-  if (!config_literal_parse((char *)plan->pool_override.bytes, plan->pool_override.size,
+  struct literal *pool = NULL, *esp = NULL;
+  struct literal_diagnostic diagnostic;
+  if (!literal_parse((char *)plan->pool_override.bytes, plan->pool_override.size,
       &pool, &diagnostic)) {
     return;
   }
   if (plan->current[CONFIG_BOOT].digest.present) {
-    config_literal_parse((char *)plan->current[CONFIG_BOOT].bytes,
+    literal_parse((char *)plan->current[CONFIG_BOOT].bytes,
         plan->current[CONFIG_BOOT].size, &esp, &diagnostic);
   }
   for (unsigned group = 0; group < 2; ++group) {
     const char *name = group ? "spaces" : "volumes";
-    const struct config_literal_value *table = config_literal_field(pool->root, name);
-    const struct config_literal_value *current = esp ? config_literal_field(esp->root, name) : NULL;
-    for (const struct config_literal_entry *entry = table && table->kind == CONFIG_LITERAL_TABLE ?
+    const struct literal_value *table = literal_field(pool->root, name);
+    const struct literal_value *current = esp ? literal_field(esp->root, name) : NULL;
+    for (const struct literal_entry *entry = table && table->kind == LITERAL_TABLE ?
         table->as.table.entries : NULL; entry; entry = entry->next) {
-      const struct config_literal_value *key = group ? config_literal_field(entry->value, "name") : entry->key;
-      if (!key || key->kind != CONFIG_LITERAL_STRING) {
+      const struct literal_value *key = group ? literal_field(entry->value, "name") : entry->key;
+      if (!key || key->kind != LITERAL_STRING) {
         continue;
       }
-      const struct config_literal_value *existing = named_entry(current,
+      const struct literal_value *existing = named_entry(current,
           key->as.string.bytes, key->as.string.size, group != 0);
       fprintf(output, "Pool %s %.*s: %s\n", group ? "space" : "volume",
           (int)key->as.string.size, key->as.string.bytes,
-          existing && !config_literal_equal(existing, entry->value) ? "conflicts with ESP; no merge" :
+          existing && !literal_equal(existing, entry->value) ? "conflicts with ESP; no merge" :
           existing ? "matches ESP" : "personal entry");
       review_value(output, "pool value", entry->value);
       if (existing) {
@@ -476,8 +476,8 @@ static void review_pool(const struct install_configuration *plan, FILE *output)
       }
     }
   }
-  config_literal_free(esp);
-  config_literal_free(pool);
+  literal_free(esp);
+  literal_free(pool);
 }
 
 void install_configuration_review(const struct install_configuration *plan, FILE *output)
