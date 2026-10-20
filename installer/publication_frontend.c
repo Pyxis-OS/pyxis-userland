@@ -35,10 +35,11 @@ static bool confirm_word(struct terminal *terminal, const char *word)
   char text[32], prompt[80];
   snprintf(prompt, sizeof(prompt), "Type %s to confirm this Review: ", word);
   for (;;) {
-    if (!line(terminal, prompt, text, sizeof(text))) {
+    struct term_line_result input = term_read_line(terminal, prompt, text, sizeof(text));
+    if (input.status != TERM_LINE_OK) {
       return false;
     }
-    if (!strcmp(text, word)) {
+    if (!input.limit_reached && !strcmp(text, word)) {
       return true;
     }
     fputs("Confirmation did not match; try again or Ctrl+C to cancel.\n", stderr);
