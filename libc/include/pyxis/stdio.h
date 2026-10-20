@@ -35,6 +35,13 @@ enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source);
 enum call_status pyxis_stdio_handoff_owned(FILE *destination,
     struct output_handoff_request *owned);
 
+/* Takes the next value from a value-capable input pipe instead of reading its
+ * bytes: returns 1 with an owned READ-only *value at a value boundary, 0 when
+ * bytes, end of input, pushback or a partly read value come next (and for any
+ * other kind of input), or -1 with errno. Blocks like a read while the pipe is
+ * empty. Byte reads after 0 continue the stream unchanged. */
+int pyxis_input_take(FILE *stream, handle_t *value);
+
 #ifdef __cplusplus
 }
 #endif

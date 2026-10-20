@@ -128,6 +128,9 @@ int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdi
  * Success also holds descriptor read exclusion until descriptor_file_end. */
 enum call_status descriptor_object_output_copy(struct descriptor_object *object,
     struct output_handoff_request *owned);
+/* Pipe input only: 1 moves the next unread value to the caller, 0 means bytes
+ * or end come next (including any non-pipe input), -1 sets errno. */
+int descriptor_object_take_value(struct descriptor_object *object, handle_t *value);
 int descriptor_object_read(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
 int descriptor_object_read_complete(struct descriptor_object *object, void *buffer, size_t size, size_t *read);
 int descriptor_object_read_buffered(struct descriptor_object *object, void *buffer, size_t size, size_t *read);

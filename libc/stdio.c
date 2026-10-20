@@ -3,6 +3,7 @@
 #include <abi/file.h>
 #include <errno.h>
 #include <handle.h>
+#include <pipe.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -498,7 +499,13 @@ int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding)
   return descriptor_object_stream(current->operation, binding);
 }
 
-static enum call_status handoff_destination(FILE *destination, handle_t *producer)
+/* A capture producer, or the writer of a pipe that may carry values. */
+struct handoff_target {
+  handle_t handle;
+  bool pipe;
+};
+
+static enum call_status handoff_destination(FILE *destination, struct handoff_target *target)
 {
   if (destination->closed || !destination->writable) {
     return CALL_BAD_HANDLE;
@@ -511,13 +518,33 @@ static enum call_status handoff_destination(FILE *destination, handle_t *produce
   if (descriptor_object_stream(destination->operation, &binding) < 0) {
     return CALL_BAD_HANDLE;
   }
+  if (binding.protocol == PROTOCOL_PIPE) {
+    *target = (struct handoff_target){binding.handle, true};
+    return CALL_OK;
+  }
   struct output_status_reply state;
   enum call_status status = output_producer_status(binding.handle, &state);
   if (status != CALL_OK) {
     return status;
   }
-  *producer = binding.handle;
+  *target = (struct handoff_target){binding.handle, false};
   return CALL_OK;
+}
+
+/* A pipe takes only the value; any observation stays with the caller. Every
+ * pipe refusal before the move leaves the value with the caller, so each one
+ * permits byte copying. */
+static enum call_status handoff_to(const struct handoff_target *target,
+    struct output_handoff_request *owned)
+{
+  if (!target->pipe) {
+    return output_handoff(target->handle, owned);
+  }
+  if (!owned->value) {
+    return CALL_BAD_REQUEST;
+  }
+  enum call_status status = pipe_handoff(target->handle, &owned->value);
+  return status == CALL_WRONG_TYPE || status == CALL_DENIED ? CALL_BAD_OPERATION : status;
 }
 
 enum call_status pyxis_stdio_handoff_owned(FILE *destination,
@@ -530,9 +557,9 @@ enum call_status pyxis_stdio_handoff_owned(FILE *destination,
     return CALL_BAD_HANDLE;
   }
   struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {destination};
-  handle_t producer;
-  enum call_status status = handoff_destination(destination, &producer);
-  return status == CALL_OK ? output_handoff(producer, owned) : status;
+  struct handoff_target target;
+  enum call_status status = handoff_destination(destination, &target);
+  return status == CALL_OK ? handoff_to(&target, owned) : status;
 }
 
 enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source)
@@ -543,8 +570,8 @@ enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source)
   if (!stream_acquire(destination)) {
     return CALL_BAD_HANDLE;
   }
-  handle_t producer;
-  enum call_status status = handoff_destination(destination, &producer);
+  struct handoff_target target;
+  enum call_status status = handoff_destination(destination, &target);
   stream_end(destination);
   if (status != CALL_OK) {
     return status;
@@ -574,6 +601,24 @@ enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source)
   }
   errno = saved;
   return status;
+}
+
+int pyxis_input_take(FILE *stream, handle_t *value)
+{
+  if (!value) {
+    errno = EINVAL;
+    return -1;
+  }
+  *value = HANDLE_INVALID;
+  if (!stream_acquire(stream)) {
+    return -1;
+  }
+  struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
+  if (stream->closed || !stream->readable || stream->eof || stream->has_pushback ||
+      stream->has_wide_pushback) {
+    return 0;
+  }
+  return descriptor_object_take_value(stream->operation, value);
 }
 
 static int flush_output(FILE *stream)

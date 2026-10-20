@@ -63,6 +63,9 @@ struct descriptor_object {
   bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
   unsigned char *ahead; /* Owned, BUFSIZ bytes, allocated on first fill. */
   size_t ahead_start, ahead_count;
+  /* Owned pipe value being read through as bytes, and the next offset. */
+  handle_t value;
+  uint64_t value_offset;
 };
 
 struct descriptor_entry {
@@ -593,7 +596,8 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
     .handle = object->handle,
     .access = (object->readable && (!object->transaction || object->transaction->committed) ? PYXIS_DESCRIPTOR_READ : 0) |
         (object->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
-    .buffered_read = object->ahead_count,
+    /* A value being read through is available without waiting on the pipe. */
+    .buffered_read = object->ahead_count + (object->value != HANDLE_INVALID),
     .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
   };
   unlock_object(&object->read_guard);
@@ -750,12 +754,12 @@ static int release_alias(struct descriptor_object *object, bool final, bool aban
     if (!abandon && !first_error && object->transaction) {
       first_error = __atomic_load_n(&object->transaction->failure, __ATOMIC_ACQUIRE);
     }
-    handle_t handles[5] = {object->handle};
+    handle_t handles[6] = {object->handle, object->value};
     if (object->transaction) {
-      handles[1] = object->transaction->control;
-      handles[2] = object->transaction->body;
-      handles[3] = object->transaction->response;
-      handles[4] = object->transaction->failed_result.error_body;
+      handles[2] = object->transaction->control;
+      handles[3] = object->transaction->body;
+      handles[4] = object->transaction->response;
+      handles[5] = object->transaction->failed_result.error_body;
     }
     for (size_t i = 0; i < sizeof(handles) / sizeof(handles[0]); ++i) {
       bool duplicate = false;
@@ -1008,6 +1012,48 @@ int descriptor_finish(void)
   return error ? fail(error) : 0;
 }
 
+/* A value-capable pipe stops at each value. Receive it and read it through to
+ * its end as ordinary file bytes, then continue with the pipe, so byte readers
+ * see one stream. A failed value keeps failing its reads with its outcome.
+ * The try form waits for nothing on the pipe; reading a value can still wait
+ * for its file's own I/O. */
+static enum call_status pipe_segment_read(struct descriptor_object *entry, void *buffer,
+    size_t size, size_t *read, bool try)
+{
+  for (;;) {
+    enum call_status status;
+    if (entry->value) {
+      status = file_read(entry->value, entry->value_offset, buffer, size, read);
+      if (status != CALL_OK || *read) {
+        entry->value_offset += *read;
+        return status;
+      }
+      handle_t finished = entry->value;
+      entry->value = HANDLE_INVALID;
+      entry->value_offset = 0;
+      if (descriptor_release_handle(finished) < 0) {
+        return CALL_IO;
+      }
+    }
+    status = try ? pipe_try_read(entry->handle, buffer, size, read) :
+        pipe_read(entry->handle, buffer, size, read);
+    if (status != CALL_PIPE_VALUE) {
+      return status;
+    }
+    uint64_t head;
+    handle_t value;
+    status = try ? pipe_try_receive(entry->handle, &head, &value) :
+        pipe_receive(entry->handle, &head, &value);
+    if (status != CALL_OK) {
+      return status;
+    }
+    /* BYTES or END means a copied reader took the value first; read again. */
+    if (head == PIPE_HEAD_VALUE) {
+      entry->value = value;
+    }
+  }
+}
+
 /* One backend transfer following any read-ahead; does not move the position. */
 static int backend_read(struct descriptor_object *entry, void *buffer, size_t size,
     size_t *read)
@@ -1047,7 +1093,7 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     }
     status = file_read(entry->handle, offset, buffer, size, read);
   } else if (entry->kind == DESCRIPTOR_PIPE) {
-    status = pipe_read(entry->handle, buffer, size, read);
+    status = pipe_segment_read(entry, buffer, size, read, false);
   } else {
     status = console_read(entry->handle, buffer, size, read);
   }
@@ -1110,7 +1156,7 @@ static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, si
   }
   size_t read;
   enum call_status status = entry->kind == DESCRIPTOR_PIPE ?
-      pipe_try_read(entry->handle, buffer, count, &read) :
+      pipe_segment_read(entry, buffer, count, &read, true) :
       console_read_timeout(entry->handle, buffer, count, 0, &read);
   if (status != CALL_OK) {
     return fail(status == CALL_TIMED_OUT ? EAGAIN : libc_call_errno(status));
@@ -1931,6 +1977,36 @@ bool descriptor_file_begin(struct descriptor_object *object)
     return false;
   }
   return object_enter(object, false) == 0;
+}
+
+int descriptor_object_take_value(struct descriptor_object *object, handle_t *value)
+{
+  *value = HANDLE_INVALID;
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result = 0;
+  if (object->kind == DESCRIPTOR_PIPE && !object->ahead_count) {
+    if (object->value) {
+      /* A value counts only before any of its bytes were read. */
+      if (!object->value_offset) {
+        *value = object->value;
+        object->value = HANDLE_INVALID;
+        result = 1;
+      }
+    } else {
+      uint64_t head;
+      enum call_status status = pipe_receive(object->handle, &head, value);
+      if (status != CALL_OK) {
+        result = fail(libc_call_errno(status));
+      } else if (head == PIPE_HEAD_VALUE) {
+        object->input_consumed = true;
+        result = 1;
+      }
+    }
+  }
+  unlock_object(object_guard(object, false));
+  return result;
 }
 
 void descriptor_file_end(struct descriptor_object *object)
