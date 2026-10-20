@@ -38,16 +38,17 @@ struct target {
 static bool read_line(struct terminal *terminal, const char *prompt, const char *initial,
     char *line, size_t capacity)
 {
-  struct term_line_result result = term_read_line_initial(terminal, prompt, initial, line, capacity);
-  if (result.status != TERM_LINE_OK) {
-    say("Cancelled. Nothing was written.");
-    return false;
-  }
-  if (result.limit_reached) {
+  for (;;) {
+    struct term_line_result result = term_read_line_default(terminal, prompt, initial, line, capacity);
+    if (result.status != TERM_LINE_OK) {
+      say("Cancelled. Nothing was written.");
+      return false;
+    }
+    if (!result.limit_reached) {
+      return true;
+    }
     say("Input was too long; enter the value again.");
-    return false;
   }
-  return true;
 }
 
 static bool decimal(const char *text, uint64_t *value)
@@ -74,10 +75,9 @@ static void offer_restart(struct terminal *terminal, handle_t power, bool updati
     return;
   }
   fprintf(stderr, "Remove the %s medium before the machine restarts.\n", updating ? "live" : "install");
-  char line[16];
-  struct term_line_result result = term_read_line(terminal,
-      "Press Enter to restart, or type stay to remain here: ", line, sizeof(line));
-  if (result.status != TERM_LINE_OK || result.length) {
+  const char *const choices[] = {"Restart", "Remain here"};
+  struct term_choice_result selected = term_read_choice(terminal, "Restart: ", choices, 2, 0);
+  if (selected.status != TERM_LINE_OK || selected.selected != 0) {
     say("Not restarting.");
     return;
   }
@@ -91,35 +91,25 @@ static void offer_restart(struct terminal *terminal, handle_t power, bool updati
 
 static bool choose_action(struct terminal *terminal, bool *updating, bool *replay)
 {
-  say("1. Install\n2. Update\n3. Replay a printed plan");
-  char line[16];
-  for (;;) {
-    if (!read_line(terminal, "Choice: ", "", line, sizeof(line))) {
-      return false;
-    }
-    if (!strcmp(line, "1") || !strcmp(line, "2") || !strcmp(line, "3")) {
-      *replay = line[0] == '3';
-      *updating = line[0] == '2';
-      return true;
-    }
-    say("Enter 1, 2 or 3.");
+  const char *const choices[] = {"Install", "Update", "Replay a printed plan", "Cancel"};
+  struct term_choice_result selected = term_read_choice(terminal, "Action: ", choices, 4, 0);
+  if (selected.status != TERM_LINE_OK || selected.selected == 3) {
+    return false;
   }
+  *replay = selected.selected == 2;
+  *updating = selected.selected == 1;
+  return true;
 }
 
 static bool choose_mode(struct terminal *terminal, bool *read_the_room)
 {
-  say("1. Proceed with installation\n2. Read the room");
-  char line[16];
-  for (;;) {
-    if (!read_line(terminal, "Choice: ", "", line, sizeof(line))) {
-      return false;
-    }
-    if (!strcmp(line, "1") || !strcmp(line, "2")) {
-      *read_the_room = line[0] == '2';
-      return true;
-    }
-    say("Enter 1 or 2.");
+  const char *const choices[] = {"Proceed with marked media", "Read the room", "Cancel"};
+  struct term_choice_result selected = term_read_choice(terminal, "Install consent: ", choices, 3, 0);
+  if (selected.status != TERM_LINE_OK || selected.selected == 2) {
+    return false;
   }
+  *read_the_room = selected.selected == 1;
+  return true;
 }
 
 static const char *unavailable_reason(const struct disk_info *info)
@@ -694,9 +684,10 @@ int main(int argc, char **argv)
       goto done;
     }
     say("The previous revision has no valid manifest. Read and hash its programs once?");
-    char choice[16];
-    if (!read_line(&terminal, "Type scan to build a read-only inventory, or cancel: ",
-          "", choice, sizeof(choice)) || strcmp(choice, "scan")) {
+    const char *const choices[] = {"Read and hash the previous programs", "Cancel"};
+    struct term_choice_result decision = term_read_choice(&terminal, "Previous inventory: ",
+        choices, 2, 1);
+    if (decision.status != TERM_LINE_OK || decision.selected != 0) {
       goto done;
     }
     plan.record.legacy = true;
@@ -715,20 +706,16 @@ int main(int argc, char **argv)
     goto done;
   }
   if (!print_only && !dry_run && !replay) {
-    char action[16];
-    if (!read_line(&terminal, "Review action: 1 apply, 2 print plan, 3 dry-run: ",
-          "1", action, sizeof(action))) {
+    const char *const choices[] = {"Apply", "Print plan", "Dry-run", "Cancel"};
+    struct term_choice_result decision = term_read_choice(&terminal, "Review action: ",
+        choices, 4, 0);
+    if (decision.status != TERM_LINE_OK || decision.selected == 3) {
+      say("Cancelled. Nothing was written.");
       goto done;
     }
-    if (!strcmp(action, "2")) {
-      print_only = true;
-      if (!verbose && !install_plan_report(&plan, stderr, true)) {
-        goto done;
-      }
-    } else if (!strcmp(action, "3")) {
-      dry_run = true;
-    } else if (strcmp(action, "1")) {
-      say("Cancelled. Nothing was written.");
+    print_only = decision.selected == 1;
+    dry_run = decision.selected == 2;
+    if (print_only && !verbose && !install_plan_report(&plan, stderr, true)) {
       goto done;
     }
   }
@@ -747,8 +734,14 @@ int main(int argc, char **argv)
   if (!explicit_consent) {
     char prompt[64];
     snprintf(prompt, sizeof(prompt), "Type %s to confirm this plan: ", required_consent);
-    if (!read_line(&terminal, prompt, "", confirmation, sizeof(confirmation))) {
-      goto done;
+    for (;;) {
+      if (!read_line(&terminal, prompt, "", confirmation, sizeof(confirmation))) {
+        goto done;
+      }
+      if (!strcmp(confirmation, required_consent)) {
+        break;
+      }
+      say("Confirmation did not match; enter the displayed word, or Ctrl+C to cancel.");
     }
     explicit_consent = confirmation;
   }

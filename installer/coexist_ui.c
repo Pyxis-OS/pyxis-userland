@@ -29,17 +29,22 @@ static bool read_line(struct terminal *terminal, const char *prompt, const char 
     choice->reason = "installer selection output failed";
     return false;
   }
-  struct term_line_result result = term_read_line_initial(terminal, prompt, initial, line, 32);
-  if (result.status != TERM_LINE_OK || result.limit_reached || !strcmp(line, "cancel")) {
-    choice->reason = "selection cancelled, interrupted or input exceeded its bound";
-    return false;
+  for (;;) {
+    struct term_line_result result = term_read_line_default(terminal, prompt, initial, line, 32);
+    if (result.status != TERM_LINE_OK) {
+      choice->reason = "selection cancelled or interrupted";
+      return false;
+    }
+    if (!result.limit_reached) {
+      return true;
+    }
+    fputs("Input was too long; enter the value again.\n", stderr);
   }
-  return true;
 }
 
 static bool list_disks(handle_t disks, struct install_coexist_choice *choice)
 {
-  fputs("Coexistence uses existing ESPs and unallocated space; type cancel at a prompt to stop.\n", stderr);
+  fputs("Coexistence uses existing ESPs and unallocated space; Ctrl+C cancels a value prompt.\n", stderr);
   for (uint64_t index = 0;; ++index) {
     struct disk_info info;
     enum call_status status = disks_enumerate(disks, index, &info);
