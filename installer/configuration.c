@@ -507,12 +507,14 @@ void install_configuration_review(const struct install_configuration *plan, FILE
     }
   }
   if (plan->pool_override.digest.present) {
-    fprintf(output, "system://config/boot.lua: %llu bytes SHA256 %s; %s; after publication retained unchanged as inactive recovery\n",
+    fprintf(output, "system://config/boot.lua: %llu bytes SHA256 %s; %s; ESP copy: %s\n",
         (unsigned long long)plan->pool_override.digest.size, plan->pool_override.digest.sha256,
+        plan->pool_valid ? "boot reads it for spaces" :
+        "invalid; boot starts the stock spaces until it is fixed",
         plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
-        "unsupported/invalid; printed proposals only");
+        "printed proposals only");
     if (plan->pool_conflict) {
-      fputs("Pool/ESP boot inputs differ; ESP owner bytes take precedence, no silent merge\n", output);
+      fputs("Pool/ESP boot inputs differ; boot uses the pool file for spaces, never the ESP copy\n", output);
     }
     review_pool(plan, output);
   }
@@ -599,12 +601,14 @@ void install_configuration_summary(const struct install_configuration *plan, FIL
     }
   }
   if (plan->pool_override.digest.present) {
-    fprintf(output, "Pool boot override: %s; original kept as inactive recovery after publication.\n",
+    fprintf(output, "Pool boot override: %s; ESP copy: %s.\n",
+        plan->pool_valid ? "boot reads it for spaces" :
+        "invalid; boot starts the stock spaces until it is fixed",
         plan->source == CONFIG_ACTIVE_ARCHIVE ? "migration inactive; archive selected" :
         plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
-        "unsupported/invalid; printed proposals only");
+        "printed proposals only");
     if (plan->pool_conflict) {
-      fputs("Pool/ESP boot inputs differ; no silent merge.\n", output);
+      fputs("Pool/ESP boot inputs differ; boot uses the pool file for spaces.\n", output);
     }
   }
   fputs("CPU/volume/timezone/network: not checked. Details and numbered choices: plan.\n", output);

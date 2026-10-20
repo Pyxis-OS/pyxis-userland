@@ -36,8 +36,10 @@ Without usable history, the planner prepares the revision's defaults. Required
 safe changes are pre-selected; valid owner values stay Keep. A valid literal
 `system://config/boot.lua` can supply reviewed volume/space migration when no
 complete ESP set exists and no nonempty ESP boot file would be overwritten.
-Its original bytes remain at the same pool path as inactive recovery. Existing
-ESP owner bytes take precedence; conflicts are shown without a silent merge.
+Its original bytes remain at the same pool path, and installed boot reads that
+pool file for spaces at every boot (0.0.7a); the published ESP `boot.lua` copy is
+kept for the record and recovery contracts but is never used for spaces. Pool/ESP
+differences are shown without a silent merge.
 Unsupported Lua is neither executed nor rewritten. Unrecorded nonempty files
 require explicit adoption. An ordinary plan with unresolved configuration choices
 refuses before writes and requires a fresh configuration Review.

@@ -84,7 +84,9 @@ installed shell binding or editor workflow.
 
 `boot://boot-init.pxe` is the boot init the kernel starts in Caelum's space. It
 reads `config/live.lua`, or `config/installed.lua` plus the pool override
-`system://config/boot.lua` on installed boots, mounts each configured volume
+`system://config/boot.lua` on installed boots (declarative literal data for
+now; an invalid file starts the stock spaces with one line naming the reason,
+and rescue never reads it), mounts each configured volume
 once and creates each space with its init through the `space_factory`
 resource, forwarding only the configured roots and, to the one network owner,
 network WRITE authority. Spaces start in `home://` unless their `start` names
