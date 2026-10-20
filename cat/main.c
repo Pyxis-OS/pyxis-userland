@@ -1,4 +1,6 @@
+#include <abi/message.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +13,21 @@ static unsigned char buffer[4096];
 static int report_error(const char *path, int error)
 {
   return fprintf(stderr, "cat: %s: %s\n", path, strerror(error));
+}
+
+/* A closed reader is a broken pipe; other final handoff failures are I/O. */
+static int handoff_error(enum call_status status)
+{
+  return status == CALL_ENDPOINT_CLOSED ? EPIPE : EIO;
+}
+
+/* A capture holds a failed value for its consumer to report. A pipe reader
+ * only sees the outcome, so the source is named here too, as it is when the
+ * failed value could not be delivered. */
+static bool stdout_is_pipe(void)
+{
+  struct pyxis_stdio_binding binding;
+  return pyxis_stdio_stream(stdout, &binding) == 0 && binding.protocol == PROTOCOL_PIPE;
 }
 
 int main(int argc, char **argv)
@@ -31,11 +48,14 @@ int main(int argc, char **argv)
         enum call_status status = pyxis_stdio_handoff_owned(stdout, &owned);
         opened.resource.resource = owned.value;
         pyxis_open_result_close(&opened);
-        if (status == CALL_OK) {
+        if (status == CALL_OK && !stdout_is_pipe()) {
           return EXIT_FAILURE;
         }
         if (status != CALL_BAD_OPERATION) {
-          report_error("stdout", EIO);
+          report_error(name, open_error);
+          if (status != CALL_OK) {
+            report_error("stdout", handoff_error(status));
+          }
           return EXIT_FAILURE;
         }
       } else {
@@ -56,7 +76,7 @@ int main(int argc, char **argv)
           return EXIT_FAILURE;
         }
         if (status != CALL_OK) {
-          report_error("stdout", EIO);
+          report_error("stdout", handoff_error(status));
           return EXIT_FAILURE;
         }
         return EXIT_SUCCESS;
