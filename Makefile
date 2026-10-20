@@ -99,7 +99,7 @@ install: all
 	  staging="$(DESTDIR).tmp"; \
 	  trap 'rm -rf -- "$$staging"' EXIT; \
 	  rm -rf -- "$$staging"; \
-	  mkdir -p "$$staging/share/checks" "$$staging/share/examples" "$$staging/config"; \
+	  mkdir -p "$$staging/share/checks" "$$staging/share/examples/nvim" "$$staging/config"; \
 	  for program in $(INSTALL_PROGRAMS); do \
 	    name=$$program; \
 	    if [ "$$program" = shell ]; then name=init-shell; fi; \
@@ -121,6 +121,7 @@ install: all
 	  install -m 644 examples/pointer-min/main.c "$$staging/share/examples/pointer-min.c"; \
 	  install -m 644 examples/font-min/main.c "$$staging/share/examples/font-min.c"; \
 	  install -m 644 examples/font-min/manifest.json "$$staging/share/examples/font-min-manifest.json"; \
+	  install -m 644 examples/nvim/init.lua "$$staging/share/examples/nvim/init.lua"; \
 	  install -m 644 "$(BUILD)/share/iobench.bin" "$$staging/share/iobench.bin"; \
 	  install -m 644 "$(BUILD)/share/iobench-small.bin" "$$staging/share/iobench-small.bin"; \
 	  for script in $(CHECK_SCRIPTS); do \
