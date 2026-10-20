@@ -32,7 +32,7 @@ typedef struct {
  * -1 with EILSEQ and leaves output unchanged. output may be NULL. */
 int mbtowc(wchar_t *__restrict output, const char *__restrict text, size_t size);
 
-/* Single-threaded allocator; allocations are aligned to at least 16 bytes.
+/* Thread-safe allocator, synchronized by a libc-internal lock; allocations are aligned to at least 16 bytes.
  * A zero size gives a unique minimal allocation, not NULL, and free accepts it.
  * calloc with a zero total, and aligned_alloc, do the same. realloc(p, 0)
  * returns a minimal allocation (p itself when p is not NULL) and does not free
@@ -48,9 +48,10 @@ void *realloc(void *pointer, size_t size);
  * result is released with free; realloc keeps only 16-byte alignment. */
 void *aligned_alloc(size_t alignment, size_t size);
 
-/* Single-threaded process environment, copied from immutable startup state.
- * Borrowed values must not be modified or freed; successful mutation may
- * invalidate them. Names are case-sensitive, nonempty and exclude '='.
+/* Process environment, copied from immutable startup state and synchronized by a
+ * libc-internal lock. A borrowed getenv value must not be modified or freed, and
+ * the caller must exclude conflicting mutation until its last use; successful
+ * mutation may invalidate it. Names are case-sensitive, nonempty and exclude '='.
  * Empty values differ from absence. Invalid input sets EINVAL; allocation
  * failure sets ENOMEM, with no fallback to the startup block. */
 char *getenv(const char *name);
@@ -130,8 +131,8 @@ void *bsearch(const void *key, const void *base, size_t count, size_t size,
 /* Register a handler for exit or a return from main. Handlers run once each,
  * in reverse order of registration, including handlers registered while exit
  * runs them. The first 32 registrations always succeed; later ones use the heap
- * and return nonzero if it is exhausted. Registrations remain single-threaded
- * until the thread-safe libc gate. */
+ * and return nonzero if it is exhausted. Registrations are synchronized by a
+ * libc-internal lock. */
 int atexit(void (*handler)(void));
 /* exit runs calling-thread TLS/key destructors, exit handlers, .fini_array,
  * then closes stdio streams. Workers must be joined before these finalizers.

@@ -64,7 +64,7 @@ enum call_status launcher_launch_batch(handle_t launcher, const struct launch_re
  * Caller-owned arrays/strings must be valid C storage. Uses heap scratch space.
  * Interpreters resolve through the caller's startup roots, or explicit
  * interpreter_context roots when supplied, never child bindings. The context
- * may also select the current namespace; NULL selects the startup snapshot.
+ * may instead supply held directory bindings; NULL selects the startup environment snapshot.
  * It is borrowed until return.
  * Script launches require argv[0] as a diagnostic script name and no existing
  * resource named "script". Append a READ grant for the original image and use

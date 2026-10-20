@@ -398,9 +398,9 @@ content grants with `--read-write`. Exactly one access mode is required. Writabl
 roots require WRITE on the supplied `native_mount` authority and a writable
 backend with understood filesystem features. `--optional` continues only when
 `native_mount` is absent; failures from supplied authority stop the script.
-Names are explicit directory bindings, separate from service namespace entries. Duplicate or conflicting names fail without replacement.
-The shell reserves binding storage before opening and rechecks the service
-namespace before publication; it closes an unpublished root on conflict.
+Names are explicit directory bindings, separate from service entries in the process environment. Duplicate or conflicting names fail without replacement.
+The shell reserves binding storage before opening and rechecks the process
+environment before publication; it closes an unpublished root on conflict.
 The profile supports sixteen selected roots including boot, tmp and HOST.
 Default scripts require no native disk; HOST keeps its existing command syntax.
 Native mounts request filesystem observation when the supplied mount authority
