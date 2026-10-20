@@ -2183,7 +2183,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     failed_stage = i;
     operation = "shell: pipe";
     path = stages[i].arguments[0];
-    status = pipe_create(shell->pipe, &pipes[i]);
+    /* Only pipes between user stages carry values; relay pipes stay bytes. */
+    status = pipe_create_values(shell->pipe, &pipes[i]);
     if (status != CALL_OK) {
       goto failed;
     }
