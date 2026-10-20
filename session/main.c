@@ -413,9 +413,10 @@ static int launch_session(const struct session_config *config, struct network_co
   if (start_remote_services) {
     for (size_t i = 0; i < captured.count; ++i) {
       const struct environment_value *value = &captured.values[i];
-      if (value->kind != ENVIRONMENT_CAP || !package_launch_source(value->name)) continue;
-      if (grant_count == grant_capacity ||
-          resource_count == sizeof(resources) / sizeof(*resources)) {
+      if (value->kind != ENVIRONMENT_CAP || !package_launch_source(value->name)) {
+        continue;
+      }
+      if (grant_count == grant_capacity || resource_count == grant_capacity) {
         status = CALL_LIMIT;
         goto done;
       }
