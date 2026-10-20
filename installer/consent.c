@@ -915,6 +915,7 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
   }
   bool primary = maps[0].state == GPT_VALID, backup = maps[1].state == GPT_VALID;
   bool blank = empty_mbr && maps[0].state == GPT_ABSENT && maps[1].state == GPT_ABSENT;
+  consent->blank = blank;
   bool ambiguous = primary && backup && !gpt_agree(&maps[0], &maps[1]);
   bool valid_gpt = mbr && (primary || backup) && !ambiguous;
   consent->degraded = valid_gpt && primary != backup;

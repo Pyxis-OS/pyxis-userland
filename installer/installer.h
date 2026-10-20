@@ -90,6 +90,8 @@ struct install_update {
 
 struct install_consent {
   bool eligible, final_pool, degraded;
+  /* Zero MBR with both GPT headers absent, not a whole-media zero scan. */
+  bool blank;
   uint32_t pools, volumes;
   uint8_t existing_guid[16];
   const char *reason;
