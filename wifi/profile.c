@@ -61,8 +61,8 @@ static int decode(lua_State *state)
   lua_pop(state, 1);
   config_field(state, 1, "channel");
   lua_Number channel = luaL_checknumber(state, -1);
-  if (!(channel >= 1 && channel <= 11) || channel != (uint32_t)channel) {
-    return luaL_error(state, "channel must be an integer from 1 to 11");
+  if (!(channel >= 1 && channel <= WIFI_CHANNEL_24_COUNT) || channel != (uint32_t)channel) {
+    return luaL_error(state, "channel must be a supported 2.4 GHz channel integer");
   }
   target->channel = (uint8_t)channel;
   return 0;

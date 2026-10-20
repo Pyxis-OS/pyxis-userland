@@ -60,7 +60,7 @@ static int print_result(handle_t file)
   /* Validate the complete bounded snapshot before printing any records. */
   for (size_t i = 0; i < header.count; ++i) {
     if (records[i].ssid_bytes > sizeof(records[i].ssid) || !records[i].channel ||
-        records[i].channel > 11 || !(header.channels & (1u << (records[i].channel - 1)))) {
+        records[i].channel > WIFI_CHANNEL_24_COUNT || !(header.channels & (1u << (records[i].channel - 1)))) {
       return failure("result record", CALL_BAD_REQUEST);
     }
   }

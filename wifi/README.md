@@ -25,7 +25,7 @@ An empty typed output capture is required before any association work. Closing
 its final owning lease disconnects; a READ-only observation cannot keep it alive.
 A configured session's private revocation root also bounds the lease lifetime.
 
-This first station profile is open, legacy 20 MHz on channels 1–11; it provides
+This first station profile is open, legacy 20 MHz on firmware-permitted 2.4 GHz channels; it provides
 no cryptographic peer authentication or encryption. `data-ready` is L2 admission,
 not an IP address. The trusted per-interface maintainer obtains the independent
 `wlan0` address; Ethernet routing, DNS and management choices remain explicit.

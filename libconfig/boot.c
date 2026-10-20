@@ -772,7 +772,7 @@ static int decode_archive(lua_State *state)
     config_field(state, -1, "channels");
     lua_Number mask = luaL_checknumber(state, -1);
     if (!(mask >= 1 && mask <= WIFI_SCAN_CHANNELS) || mask != (uint32_t)mask) {
-      return luaL_error(state, "wifi_policy.channels must be a nonempty channels 1-11 mask");
+      return luaL_error(state, "wifi_policy.channels must be a nonempty 2.4 GHz channel mask");
     }
     config->wifi_channels = (uint32_t)mask;
     lua_pop(state, 1);
