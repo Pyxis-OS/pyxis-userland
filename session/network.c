@@ -80,7 +80,7 @@ static bool apply_lease(const struct network_interface_config *config,
       lease->address, lease->prefix, lease->gateway, lease->dns);
   if (status != CALL_OK) {
     if (runtime->wifi && status == CALL_ALREADY_EXISTS) {
-      fprintf(stderr, "session: %s lease conflicts with another interface or protected network destination (status %u)\n",
+      fprintf(stderr, "session: %s lease address is already used by another interface, gateway or DNS server (status %u)\n",
           config->name, status);
     } else {
       fprintf(stderr, "session: %s lease rejected (status %u)\n", config->name, status);
