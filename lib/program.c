@@ -2,6 +2,7 @@
 #include <file.h>
 #include <handle.h>
 #include <launcher.h>
+#include <job_work.h>
 #include <path.h>
 #include <pxe/shebang.h>
 #include <space.h>
@@ -63,10 +64,12 @@ struct script_scratch {
   struct launch_environment_entry *entries;
   const char **arguments;
   handle_t image;
+  struct job_work *provisioner;
 };
 
-static void release_script(struct script_scratch *scratch)
+static void release_script(struct script_scratch *scratch, bool admitted)
 {
+  job_work_close(scratch->provisioner, !admitted);
   if (scratch->image != HANDLE_INVALID) {
     handle_close(scratch->image);
   }
@@ -107,7 +110,22 @@ static enum call_status prepare_script(const struct launch_request *source,
   /* Code selection and extras use the same string parsed once from the prefix.
    * A selected held image must refuse on failure, never use mutable bindings. */
   bool selected = selects_interpreter(extras, interpreter);
-  size_t extra = selected ? extras->count : 0;
+  size_t runtime_count = selected ? extras->count : 0;
+  if (runtime_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) -
+          source->grant_count - 1 ||
+      runtime_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) -
+          source->entry_count - 1) {
+    return CALL_LIMIT;
+  }
+  size_t extra = runtime_count;
+  if (selected && extras->job_provisioner != HANDLE_INVALID &&
+      extras->job_clock != HANDLE_INVALID) {
+    enum call_status status = job_work_create(extras->job_provisioner,
+        extras->job_clock, &scratch->provisioner);
+    if (status == CALL_OK) {
+      ++extra;
+    }
+  }
   if (extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) - source->grant_count - 1 ||
       extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) -
           source->entry_count - 1) {
@@ -115,7 +133,8 @@ static enum call_status prepare_script(const struct launch_request *source,
   }
   for (size_t i = 0; i < extra; ++i) {
     for (size_t j = 0; j < source->entry_count; ++j) {
-      if (!strcmp((const char *)(uintptr_t)original_entries[j].name, extras->grants[i].name)) {
+      const char *name = i < runtime_count ? extras->grants[i].name : "job_provisioner";
+      if (!strcmp((const char *)(uintptr_t)original_entries[j].name, name)) {
         /* Distinct from a malformed request, so a name clash is identifiable. */
         return CALL_ALREADY_EXISTS;
       }
@@ -176,7 +195,7 @@ static enum call_status prepare_script(const struct launch_request *source,
       (struct launch_environment_entry){
       .name = (uintptr_t)"script", .kind = ENVIRONMENT_CAP,
       .flags = ENVIRONMENT_EXPORTED, .value = source->grant_count};
-  for (size_t i = 0; i < extra; ++i) {
+  for (size_t i = 0; i < runtime_count; ++i) {
     const struct program_script_grant *grant = &extras->grants[i];
     scratch->grants[source->grant_count + 1 + i] =
         (struct launch_grant){grant->source, grant->rights, grant->transport};
@@ -184,6 +203,16 @@ static enum call_status prepare_script(const struct launch_request *source,
         (struct launch_environment_entry){
         .name = (uintptr_t)grant->name, .kind = ENVIRONMENT_CAP,
         .flags = grant->flags, .value = source->grant_count + 1 + i};
+  }
+  if (scratch->provisioner) {
+    scratch->grants[source->grant_count + 1 + runtime_count] = (struct launch_grant){
+      job_work_directory(scratch->provisioner), JOB_PROVISIONER_RIGHTS, 0,
+    };
+    scratch->entries[source->entry_count + 1 + runtime_count] =
+        (struct launch_environment_entry){
+      .name = (uintptr_t)"job_provisioner", .kind = ENVIRONMENT_CAP,
+      .value = source->grant_count + 1 + runtime_count,
+    };
   }
   scratch->arguments[0] = interpreter;
   memcpy(scratch->arguments + 1, (const void *)(uintptr_t)source->argv,
@@ -255,12 +284,14 @@ enum call_status program_launch_extras(handle_t launcher, const struct launch_re
 
   struct script_scratch scratch = {0};
   struct launch_request prepared;
+  bool admitted = false;
   enum call_status status = prepare_program(request, interpreter_context, extras,
       &prepared, &scratch);
   if (status == CALL_OK) {
     status = launcher_launch(launcher, &prepared, child);
+    admitted = status == CALL_OK || status == CALL_OUTCOME_UNKNOWN;
   }
-  release_script(&scratch);
+  release_script(&scratch, admitted);
   return status;
 }
 
@@ -283,7 +314,7 @@ enum call_status program_create_space(handle_t factory, const struct space_defin
   if (status == CALL_OK) {
     status = space_create_started(factory, space, cpus, cpu_count, &prepared, child);
   }
-  release_script(&scratch);
+  release_script(&scratch, false);
   return status;
 }
 
@@ -326,11 +357,13 @@ enum call_status program_launch_batch_extras(handle_t launcher,
       break;
     }
   }
+  bool admitted = false;
   if (status == CALL_OK) {
     status = launcher_launch_batch(launcher, prepared, count, children, failed_index);
+    admitted = status == CALL_OK || status == CALL_OUTCOME_UNKNOWN;
   }
   for (size_t i = 0; i < count; ++i) {
-    release_script(&scratch[i]);
+    release_script(&scratch[i], admitted);
   }
   free(prepared);
   return status;

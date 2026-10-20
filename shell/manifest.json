@@ -13,6 +13,7 @@
     {"name": "output", "resource": "output", "rights": ["write"], "required": false},
     {"name": "pipe", "resource": "pipe", "rights": ["create"], "required": true},
     {"name": "launcher", "resource": "launcher", "rights": ["launch"], "required": true},
+    {"name": "job_provisioner", "resource": "job_provisioner", "rights": ["create", "remove", "read-files", "write-files", "lookup", "enumerate"], "required": false},
     {"name": "retention_account", "resource": "retention_account", "rights": ["retain"], "required": false}
   ]
 }

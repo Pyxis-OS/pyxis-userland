@@ -106,6 +106,11 @@ struct program_script_extras {
   handle_t image;
   const struct program_script_grant *grants;
   size_t count;
+  /* Explicit delegation for this exact held interpreter only. Preparation
+   * creates a private child subtree, never forwards the ancestor. Optional
+   * when absent/unavailable; successful or unknown admission retains the
+   * subtree for enclosing-owner cleanup or reboot, not PROCESS retirement. */
+  handle_t job_provisioner, job_clock;
 };
 
 /* As program_launch, with optional extras (NULL for none). */

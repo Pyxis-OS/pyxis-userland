@@ -53,8 +53,11 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
     size_t authority_count, struct bundle_launch **prepared);
 
 /* A trusted launcher supplies a private provisioning tree separately from
- * ordinary resource inventory. Client job_work sources in that inventory are
- * never forwarded. JOBS owns contexts beyond transient preparation storage.
+ * ordinary resource inventory. Declared job_work and job_provisioner roles get
+ * distinct fresh trees; existing sources in ordinary context are never copied.
+ * JOBS owns client leaves beyond transient preparation. Admitted delegation
+ * trees remain linked for enclosing-owner cleanup or reboot, even after the
+ * interpreter PROCESS retires.
  * When a required grant cannot be supplied, absent or with too few rights, the
  * result is CALL_DENIED and MISSING (optional) borrows its manifest name from
  * PROGRAM; otherwise MISSING is NULL. */

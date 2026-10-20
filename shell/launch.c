@@ -2482,6 +2482,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       .image = shell->interpreter_image,
       .grants = prepared[i].extras,
       .count = prepared[i].extra_count,
+      .job_provisioner = mode == SHELL_FOREGROUND && !prepared[i].bundle ?
+          bootstrap_capability("job_provisioner") : HANDLE_INVALID,
+      .job_clock = shell->clock,
     };
   }
   if (stage_count == 1) {

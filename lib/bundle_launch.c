@@ -20,7 +20,7 @@ struct bundle_job_context {
   struct bundle_job_context *next;
   struct job_work *work;
   handle_t observer;
-  bool admitted;
+  bool admitted, delegated;
 };
 
 struct bundle_launch {
@@ -187,6 +187,7 @@ static enum call_status prepare_context(struct context_grants *context,
       return CALL_BAD_REQUEST;
     }
     if (!strcmp(name, "app") || !strcmp(name, "job_work") ||
+        !strcmp(name, "job_provisioner") ||
         !strncmp(name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       continue;
     }
@@ -331,7 +332,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     /* Private context authority is created separately, never copied from a
      * caller's client leaf, including the ordinary Lua/bundle path. */
-    if (!strcmp(requests[i].resource, "job_work")) {
+    if (!strcmp(requests[i].resource, "job_work") ||
+        !strcmp(requests[i].resource, "job_provisioner")) {
       continue;
     }
     handle_t source = HANDLE_INVALID;
@@ -451,12 +453,13 @@ static bool has_selected(const struct bundle_launch *prepared,
 
 static enum call_status prepare_job_work(struct bundle_launch *prepared,
     const struct bundle_grant_request *requests, size_t count,
-    handle_t provisioner, struct bundle_jobs *jobs, const char **missing)
+    handle_t provisioner, struct bundle_jobs *jobs, const char *resource,
+    const char **missing)
 {
   bool declared = false;
   const char *required = NULL;
   for (size_t i = 0; i < count; ++i) {
-    if (!strcmp(requests[i].resource, "job_work")) {
+    if (!strcmp(requests[i].resource, resource)) {
       declared = true;
       if (requests[i].required && !required) {
         required = requests[i].name;
@@ -484,10 +487,12 @@ static enum call_status prepare_job_work(struct bundle_launch *prepared,
     free(context);
     return required ? status : CALL_OK;
   }
+  context->delegated = !strcmp(resource, "job_provisioner");
+  context->next = prepared->context;
   prepared->context = context;
   prepared->jobs = jobs;
   for (size_t i = 0; i < count; ++i) {
-    if (!strcmp(requests[i].resource, "job_work")) {
+    if (!strcmp(requests[i].resource, resource)) {
       size_t index = prepared->request.grant_count++;
       prepared->grants[index] = (struct launch_grant){
         job_work_directory(context->work), requests[i].rights, 0,
@@ -580,7 +585,12 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
         source, missing);
   }
   if (status == CALL_OK) {
-    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs, missing);
+    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs,
+        "job_work", missing);
+  }
+  if (status == CALL_OK) {
+    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs,
+        "job_provisioner", missing);
   }
   for (size_t i = 0; status == CALL_OK && i < bundle_count; ++i) {
     if (has_entry(prepared, bundle_entries[i].name)) {
@@ -627,11 +637,13 @@ void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status sta
   if (!prepared || !prepared->context || (status != CALL_OK && status != CALL_OUTCOME_UNKNOWN)) {
     return;
   }
-  struct bundle_job_context *context = prepared->context;
-  context->admitted = true;
-  /* Failure to retain the observer leaves the private link quarantined. */
-  if (status == CALL_OK && process != HANDLE_INVALID) {
-    handle_copy_restricted(process, PROCESS_RIGHT_WAIT, 0, &context->observer);
+  for (struct bundle_job_context *context = prepared->context; context; context = context->next) {
+    context->admitted = true;
+    /* A provisioner can escape through successors/services. PROCESS retirement
+     * proves only an ordinary client leaf is no longer used. */
+    if (!context->delegated && status == CALL_OK && process != HANDLE_INVALID) {
+      handle_copy_restricted(process, PROCESS_RIGHT_WAIT, 0, &context->observer);
+    }
   }
 }
 
@@ -710,13 +722,15 @@ const struct launch_request *bundle_launch_request(const struct bundle_launch *p
 void bundle_launch_close(struct bundle_launch *prepared)
 {
   if (prepared) {
-    if (prepared->context) {
-      if (prepared->context->admitted) {
-        prepared->context->next = prepared->jobs->contexts;
-        prepared->jobs->contexts = prepared->context;
+    while (prepared->context) {
+      struct bundle_job_context *context = prepared->context;
+      prepared->context = context->next;
+      if (context->admitted && !context->delegated) {
+        context->next = prepared->jobs->contexts;
+        prepared->jobs->contexts = context;
       } else {
-        job_work_close(prepared->context->work, true);
-        free(prepared->context);
+        job_work_close(context->work, !context->admitted);
+        free(context);
       }
     }
     for (size_t i = 0; i < prepared->tree_count; ++i) {
