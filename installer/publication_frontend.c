@@ -280,6 +280,29 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
 }
 
 
+static bool completion_target(const struct install_disk *disk, uint64_t selected_esp,
+    uint64_t selected_pool, const char *selected_guid, bool coexist)
+{
+  struct disk_partition_selection esp, native_pool;
+  struct install_layout layout;
+  struct install_update update;
+  char guid[37];
+  if (!selected_esp || !selected_pool || !selected_guid ||
+      disk_partition_info(disk->handle, selected_esp, &esp) != CALL_OK ||
+      disk_partition_info(disk->handle, selected_pool, &native_pool) != CALL_OK) {
+    return false;
+  }
+  install_coexist_layout(&esp, &native_pool, &layout);
+  install_guid_text(layout.disk_guid, guid);
+  if (strcmp(guid, selected_guid)) {
+    return false;
+  }
+  bool inspected = coexist ? install_scan_pool_update(disk, &layout, &update) :
+      install_scan_update(disk, &update);
+  return inspected && update.eligible && update.layout.esp_partition == selected_esp &&
+      update.layout.pool_partition == selected_pool;
+}
+
 static int publication_frontend(struct terminal *terminal, bool verbose,
     uint64_t selected_id, uint64_t selected_esp, uint64_t selected_pool, const char *selected_guid,
     bool coexist)
@@ -343,25 +366,9 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   }
   disk.bytes = disk.info.block_count * disk.info.block_size;
   install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"), verbose);
-  if (completion_only) {
-    struct disk_partition_selection esp, native_pool;
-    struct install_layout layout;
-    struct install_update update;
-    char guid[37];
-    if (!selected_esp || !selected_pool || !selected_guid ||
-        disk_partition_info(disk.handle, selected_esp, &esp) != CALL_OK ||
-        disk_partition_info(disk.handle, selected_pool, &native_pool) != CALL_OK) {
-      goto done;
-    }
-    install_coexist_layout(&esp, &native_pool, &layout);
-    install_guid_text(layout.disk_guid, guid);
-    bool inspected = coexist ? install_scan_pool_update(&disk, &layout, &update) :
-        install_scan_update(&disk, &update);
-    if (strcmp(guid, selected_guid) || !inspected || !update.eligible ||
-        update.layout.esp_partition != selected_esp || update.layout.pool_partition != selected_pool) {
-      fputs("Selected pending installation changed or is unavailable; nothing written.\n", stderr);
-      goto done;
-    }
+  if (completion_only && !completion_target(&disk, selected_esp, selected_pool, selected_guid, coexist)) {
+    fputs("Selected pending installation changed or is unavailable; nothing written.\n", stderr);
+    goto done;
   }
   uint64_t pool_partition = completion_only ? selected_pool : INSTALL_POOL_PARTITION;
   if (!install_pool_boot_snapshot_at(&disk, pool_partition, &pool) ||
@@ -713,6 +720,11 @@ admit:
   install_progress_begin("Scoped exclusive revalidation (no owned writes yet)", INSTALL_PROGRESS_RAW_READ, NULL);
   enum call_status status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle);
   if (status == CALL_OK) status = disk_get_info(disk.handle, &disk.info);
+  if (status == CALL_OK && completion_only &&
+      !completion_target(&disk, selected_esp, selected_pool, selected_guid, coexist)) {
+    fputs("Selected pending installation changed after Review; nothing staged.\n", stderr);
+    goto done;
+  }
   if (status == CALL_OK) status = disks_open_owned_esp(disks, &target_selection,
       MOUNT_ACCESS_READ_WRITE, WRITE_RIGHTS, &mount);
   struct config_blob current_pool = {0};
