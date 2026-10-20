@@ -110,9 +110,19 @@ static bool zeroes(handle_t file, uint64_t offset, uint64_t size, const char **r
   return true;
 }
 
-/* Hash exactly one bounded range, optionally copying to a fresh file. */
+static void report(const struct pkg_archive_progress *progress,
+    enum pkg_archive_phase phase, uint64_t done, uint64_t total)
+{
+  if (progress) {
+    progress->update(progress->context, phase, done, total);
+  }
+}
+
+/* Hash exactly one bounded range, optionally copying to a fresh file. A
+ * progress observer reports the range as the VERIFY phase. */
 static bool hash_range(handle_t file, uint64_t offset, uint64_t size,
-    const char *expected, handle_t destination, const char **reason)
+    const char *expected, handle_t destination, const struct pkg_archive_progress *progress,
+    const char **reason)
 {
   unsigned char bytes[IO_SIZE];
   char actual[65];
@@ -121,6 +131,7 @@ static bool hash_range(handle_t file, uint64_t offset, uint64_t size,
   }
   bool ok = true;
   uint64_t copied = 0;
+  report(progress, PKG_ARCHIVE_VERIFY, 0, size);
   while (ok && copied < size) {
     size_t count = size - copied > sizeof(bytes) ? sizeof(bytes) : (size_t)(size - copied);
     ok = read_exact(file, offset + copied, bytes, count, reason);
@@ -131,6 +142,9 @@ static bool hash_range(handle_t file, uint64_t offset, uint64_t size,
       ok = write_exact(destination, copied, bytes, count, reason);
     }
     copied += count;
+    if (ok) {
+      report(progress, PKG_ARCHIVE_VERIFY, copied, size);
+    }
   }
   if (ok && (!digest_finish(actual) || strcmp(expected, actual))) {
     ok = fail(reason, "package SHA-256 mismatch");
@@ -523,9 +537,13 @@ static bool walk_path(struct tree_walk *walk, struct archive_reader *archive,
 
 static bool process_inventory(struct inventory_reader *inventory,
     struct archive_reader *archive, struct tree_walk *walk,
-    const struct pkg_manifest *manifest, const char **reason)
+    const struct pkg_manifest *manifest, const struct pkg_archive_progress *progress,
+    const char **reason)
 {
   uint64_t files = 0, bytes = 0;
+  if (walk->extract) {
+    report(progress, PKG_ARCHIVE_EXTRACT, 0, manifest->files);
+  }
   for (;;) {
     char text[PKG_INVENTORY_LINE_MAX + 1];
     bool end;
@@ -550,14 +568,14 @@ static bool process_inventory(struct inventory_reader *inventory,
     }
     bool ok;
     if (archive) {
-      ok = hash_range(archive->file, member.offset, line.size, line.sha256, file, reason);
+      ok = hash_range(archive->file, member.offset, line.size, line.sha256, file, NULL, reason);
     } else {
       uint64_t size;
       ok = file_size(file, &size) == CALL_OK && size == line.size;
       if (!ok) {
         fail(reason, "installed package file size differs from inventory");
       } else {
-        ok = hash_range(file, 0, line.size, line.sha256, HANDLE_INVALID, reason);
+        ok = hash_range(file, 0, line.size, line.sha256, HANDLE_INVALID, NULL, reason);
       }
     }
     if (file != HANDLE_INVALID) {
@@ -565,6 +583,9 @@ static bool process_inventory(struct inventory_reader *inventory,
     }
     if (!ok) {
       return false;
+    }
+    if (walk->extract && files <= manifest->files) {
+      report(progress, PKG_ARCHIVE_EXTRACT, files, manifest->files);
     }
   }
   if (files != manifest->files || bytes != manifest->bytes) {
@@ -608,7 +629,8 @@ static bool copy_metadata(handle_t archive, const struct member *member,
 }
 
 bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
-    handle_t destination, struct pkg_manifest *manifest, const char **reason)
+    handle_t destination, struct pkg_manifest *manifest,
+    const struct pkg_archive_progress *progress, const char **reason)
 {
   memset(manifest, 0, sizeof(*manifest));
   *reason = NULL;
@@ -616,7 +638,7 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
   if (file_size(snapshot, &reader.size) != CALL_OK || reader.size != entry->size) {
     return fail(reason, "archive size differs from repository index");
   }
-  if (!hash_range(snapshot, 0, reader.size, entry->sha256, HANDLE_INVALID, reason)) {
+  if (!hash_range(snapshot, 0, reader.size, entry->sha256, HANDLE_INVALID, progress, reason)) {
     return false;
   }
   if (reader.size % BLOCK_SIZE) {
@@ -643,7 +665,7 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
   }
   if (ok) {
     ok = hash_range(snapshot, metadata[1].offset, metadata[1].size,
-        manifest->inventory_sha256, HANDLE_INVALID, reason);
+        manifest->inventory_sha256, HANDLE_INVALID, NULL, reason);
   }
   if (ok && destination != HANDLE_INVALID) {
     ok = copy_metadata(snapshot, &metadata[0], destination, reason) &&
@@ -665,7 +687,7 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
       .file = snapshot, .position = metadata[1].offset,
       .end = metadata[1].offset + metadata[1].size,
     };
-    ok = process_inventory(&inventory, &reader, &walk, manifest, reason);
+    ok = process_inventory(&inventory, &reader, &walk, manifest, progress, reason);
   }
   if (ok && (reader.size - reader.position < 2 * BLOCK_SIZE ||
       !zeroes(snapshot, reader.position, reader.size - reader.position, reason))) {
@@ -737,7 +759,7 @@ bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
     }
   }
   if (ok) {
-    ok = hash_range(inventory, 0, inventory_size, manifest->inventory_sha256, HANDLE_INVALID, reason);
+    ok = hash_range(inventory, 0, inventory_size, manifest->inventory_sha256, HANDLE_INVALID, NULL, reason);
   }
   if (ok && directory_lookup(directory, "tree", DIRECTORY_KIND_DIRECTORY,
       READ_DIRECTORY_RIGHTS, &tree) != CALL_OK) {
@@ -748,7 +770,7 @@ bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
     walk.depth = 1;
     tree = HANDLE_INVALID;
     struct inventory_reader lines = { .file = inventory, .end = inventory_size };
-    ok = process_inventory(&lines, NULL, &walk, manifest, reason);
+    ok = process_inventory(&lines, NULL, &walk, manifest, NULL, reason);
   }
   if (ok) {
     ok = directory_count(directory, 3, reason);

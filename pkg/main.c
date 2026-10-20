@@ -1,6 +1,7 @@
 #include "archive.h"
 #include "commands.h"
 #include "fetch.h"
+#include "progress.h"
 #include "store.h"
 #include "../common/bootstrap_environment.h"
 #include "../xfer/hash.h"
@@ -140,12 +141,16 @@ static bool read_snapshot(handle_t file, char **bytes, size_t *size)
   return true;
 }
 
+/* progress, when given, has its open line closed before the failure is printed. */
 static bool fetch(const char *base, const char *relative, bool index, uint64_t size,
-    handle_t *file)
+    struct pkg_progress *progress, handle_t *file)
 {
   enum call_status status = pkg_fetch(&client.fetch, base, relative, index, size,
       client.timeout, file, client.detail);
   if (status != CALL_OK) {
+    if (progress) {
+      pkg_progress_abort(progress);
+    }
     fprintf(stderr, "pkg: %s%s: %s (fetch status %u)\n",
         base, relative, client.detail, status);
     return fail("no complete download; active set unchanged");
@@ -164,7 +169,7 @@ static bool load_repositories(void)
   for (size_t r = 0; r < client.repositories.count; ++r) {
     handle_t file;
     printf("pkg: reading repository %zu/%zu\n", r + 1, client.repositories.count);
-    if (!fetch(client.repositories.urls[r], "index.lua", true, 0, &file)) {
+    if (!fetch(client.repositories.urls[r], "index.lua", true, 0, NULL, &file)) {
       return false;
     }
     char *bytes = NULL;
@@ -256,21 +261,29 @@ static bool verify_version(const struct pkg_identity *identity, struct pkg_manif
 static bool install_version(const struct offered_package *offered, struct pkg_manifest *manifest)
 {
   const struct pkg_identity *identity = &offered->entry.identity;
-  printf("pkg: fetching %s@%s (%llu bytes)\n", identity->id, identity->version,
-      (unsigned long long)offered->entry.size);
+  /* Console output is redrawn in place; pipes, files and other captures get
+   * one plain line per phase. */
+  struct pkg_progress progress;
+  pkg_progress_init(&progress, client.clock, client.terminal.output != HANDLE_INVALID,
+      identity->id, identity->version);
+  struct pkg_archive_progress observer = { pkg_progress_archive, &progress };
+  pkg_progress_fetch_begin(&progress, offered->entry.size);
   handle_t snapshot;
   if (!fetch(client.repositories.urls[offered->repository], offered->entry.archive,
-        false, offered->entry.size, &snapshot)) {
+        false, offered->entry.size, &progress, &snapshot)) {
     return false;
   }
+  pkg_progress_fetch_end(&progress, offered->entry.size);
   handle_t existing = HANDLE_INVALID;
   bool exists = pkg_tree_open(client.packages, identity, PKG_READ_RIGHTS,
       &existing, &client.reason);
   client.reason = NULL;
   if (exists) {
     struct pkg_manifest desired = {0};
-    bool ok = pkg_archive(snapshot, &offered->entry, HANDLE_INVALID, &desired, &client.reason) &&
+    bool ok = pkg_archive(snapshot, &offered->entry, HANDLE_INVALID, &desired, &observer,
+        &client.reason) &&
         pkg_tree_verify(existing, &desired, manifest, &client.reason);
+    pkg_progress_abort(&progress);
     pkg_manifest_free(&desired);
     handle_close(existing);
     handle_close(snapshot);
@@ -292,7 +305,9 @@ static bool install_version(const struct offered_package *offered, struct pkg_ma
       ok = fail("cannot exclusively create a staging attempt");
     }
   }
-  ok = ok && pkg_archive(snapshot, &offered->entry, destination, manifest, &client.reason);
+  ok = ok && pkg_archive(snapshot, &offered->entry, destination, manifest, &observer,
+      &client.reason);
+  pkg_progress_abort(&progress);
   handle_close(snapshot);
   ok = ok && pkg_directory(client.packages, "store", true, PKG_WRITE_RIGHTS,
       &store, &client.reason);
@@ -615,7 +630,7 @@ static bool mutate(const char *command, int argc, char **argv)
 static bool repository_available(const char *url)
 {
   handle_t file;
-  if (!fetch(url, "index.lua", true, 0, &file)) {
+  if (!fetch(url, "index.lua", true, 0, NULL, &file)) {
     return fail("not a package repository; repository configuration unchanged");
   }
   char *bytes = NULL;

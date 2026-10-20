@@ -20,6 +20,15 @@ Changes review the proposed set before its one atomic current switch. Running
 programs retain their views; new launches see the new set. Rollback needs no
 network. A damaged current requires an explicit verified set choice.
 
+Install shows each package's phases: fetch, archive verification and extraction.
+On a console every phase is one line redrawn in place and kept when it ends: fetch
+shows the indexed size while the transfer runs and its measured size, time and rate
+once the body is complete (the HTTP provider reports nothing before that), verify
+shows bytes hashed of the archive, and extract shows files written of the manifest
+count. When standard output is not a console, each phase prints plain lines once,
+with no carriage returns. No remaining-time estimate is shown. A remote machine
+session presents a console to the guest, so it receives the redrawn form.
+
 Unlock is explicit recovery after a writer has stopped. It reports staging,
 clears only the abandoned lock and retains incomplete attempts. Never use it to
 cancel a live writer. Ctrl+C during download or preparation uses ordinary

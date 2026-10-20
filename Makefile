@@ -74,7 +74,7 @@ CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o selection.o)
 CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
-PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o)
+PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o progress.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
