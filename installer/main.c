@@ -283,18 +283,45 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
   if (eligible == 1) {
     return &targets[single];
   }
-  char line[32];
-  for (;;) {
-    uint64_t number;
-    if (!read_line(terminal, "Disk number: ", "", line, sizeof(line))) {
-      return NULL;
-    }
-    if (decimal(line, &number) && number > 0 && number <= count &&
-        (updating ? targets[number - 1].update.eligible : targets[number - 1].consent.eligible)) {
-      return &targets[number - 1];
-    }
-    say("Enter the number of an eligible disk.");
+  if (eligible == SIZE_MAX || eligible + 1 > SIZE_MAX / sizeof(char *) ||
+      eligible > SIZE_MAX / sizeof(size_t)) {
+    return NULL;
   }
+  char **labels = calloc(eligible + 1, sizeof(*labels));
+  size_t *indices = malloc(eligible * sizeof(*indices));
+  struct target *selected = NULL;
+  if (!labels || !indices) {
+    goto done;
+  }
+  size_t row = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (!(updating ? targets[i].update.eligible : targets[i].consent.eligible)) {
+      continue;
+    }
+    labels[row] = malloc(96);
+    if (!labels[row]) {
+      goto done;
+    }
+    snprintf(labels[row], 96, "Disk %llu (%llu MiB)",
+        (unsigned long long)targets[i].info.id,
+        (unsigned long long)(targets[i].info.block_count * targets[i].info.block_size / INSTALL_MIB));
+    indices[row++] = i;
+  }
+  labels[eligible] = "Cancel";
+  struct term_choice_result choice = term_read_choice(terminal, "Target disk: ",
+      (const char *const *)labels, eligible + 1, 0);
+  if (choice.status == TERM_LINE_OK && choice.selected < eligible) {
+    selected = &targets[indices[choice.selected]];
+  }
+done:
+  if (labels) {
+    for (size_t i = 0; i < eligible; ++i) {
+      free(labels[i]);
+    }
+  }
+  free(labels);
+  free(indices);
+  return selected;
 }
 
 static bool show_selected_target(const struct target *selected)
@@ -473,7 +500,8 @@ int main(int argc, char **argv)
 #if INSTALLER_PUBLICATION_SCRATCH
   bool scratch_publication = false;
 #endif
-  const char *explicit_consent = NULL;
+  const char *explicit_consent = NULL, *selected_action = NULL, *selected_guid = NULL;
+  uint64_t selected_target = 0, selected_esp = 0, selected_pool = 0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
       verbose = true;
@@ -481,6 +509,25 @@ int main(int argc, char **argv)
     } else if (!strcmp(argv[i], "--scratch-publication")) {
       scratch_publication = true;
 #endif
+    } else if (!strncmp(argv[i], "--selected-action=", 18) && !selected_action) {
+      selected_action = argv[i] + 18;
+    } else if (!strncmp(argv[i], "--selected-target=", 18)) {
+      if (selected_target || !decimal(argv[i] + 18, &selected_target) || !selected_target) {
+        say("Invalid or repeated trusted target selection.");
+        return EXIT_FAILURE;
+      }
+    } else if (!strncmp(argv[i], "--selected-esp=", 15)) {
+      if (selected_esp || !decimal(argv[i] + 15, &selected_esp) || !selected_esp) {
+        say("Invalid or repeated trusted esp selection.");
+        return EXIT_FAILURE;
+      }
+    } else if (!strncmp(argv[i], "--selected-pool=", 16)) {
+      if (selected_pool || !decimal(argv[i] + 16, &selected_pool) || !selected_pool) {
+        say("Invalid or repeated trusted pool selection.");
+        return EXIT_FAILURE;
+      }
+    } else if (!strncmp(argv[i], "--selected-disk-guid=", 21) && !selected_guid) {
+      selected_guid = argv[i] + 21;
     } else if (!strcmp(argv[i], "--plan")) {
       print_only = true;
     } else if (!strcmp(argv[i], "--dry-run")) {
@@ -495,6 +542,16 @@ int main(int argc, char **argv)
       fputs("usage: installer [--coexist] [-v | --verbose] [--plan | --apply] [--dry-run] [--confirm=wipe|append|update]\n", stderr);
       return EXIT_FAILURE;
     }
+  }
+  bool selected_update = selected_action && !strcmp(selected_action, "update");
+  bool selected_install = selected_action && !strcmp(selected_action, "install");
+  bool any_target = selected_target || selected_esp || selected_pool || selected_guid;
+  if ((selected_action && !selected_update && !selected_install) ||
+      (selected_update && (!selected_target || !selected_esp || !selected_pool ||
+        !selected_guid || strlen(selected_guid) != 36)) ||
+      (any_target && !selected_update) || (selected_action && replay)) {
+    say("installer: invalid startup selection; nothing was written");
+    return EXIT_FAILURE;
   }
   if ((print_only && replay) || (explicit_consent &&
         (!replay || print_only || dry_run ||
@@ -528,7 +585,7 @@ int main(int argc, char **argv)
   struct target coexist_target = {0};
   struct target *targets = NULL;
   size_t count = 0;
-  bool updating = false, read_the_room = false, crypto = false;
+  bool updating = selected_update, read_the_room = false, crypto = false;
   int result = EXIT_FAILURE;
   if (disks == HANDLE_INVALID || boot == HANDLE_INVALID || clock == HANDLE_INVALID ||
       random == HANDLE_INVALID || kernel == HANDLE_INVALID || archive == HANDLE_INVALID ||
@@ -543,21 +600,7 @@ int main(int argc, char **argv)
   if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
   }
-#if INSTALLER_PUBLICATION_SCRATCH
-  if (!replay && !print_only && !dry_run) {
-    char scratch[32];
-    if (!read_line(&terminal, "Scratch publication (scratch), or ordinary installer (Enter): ", "", scratch, sizeof(scratch))) {
-      goto done;
-    }
-    if (!strcmp(scratch, "scratch")) {
-      return install_publication_scratch(&terminal, verbose);
-    }
-    if (*scratch) {
-      goto done;
-    }
-  }
-#endif
-  if (!replay && !choose_action(&terminal, &updating, &replay)) {
+  if (!replay && !selected_action && !choose_action(&terminal, &updating, &replay)) {
     goto done;
   }
   if (replay) {
@@ -598,6 +641,15 @@ int main(int argc, char **argv)
       if (!coexist_replay_target(disks, &expected, &coexist_target.info)) {
         goto done;
       }
+    } else if (selected_update) {
+      if (!install_coexist_ui_selected(disks, selected_target, selected_esp, selected_pool,
+          selected_guid, &coexist_choice)) {
+        fprintf(stderr, "installer: selected installation changed or is unavailable: %s\n",
+            coexist_choice.reason ? coexist_choice.reason : "selection refused");
+        goto done;
+      }
+      coexist_target.info = coexist_choice.info;
+      coexist_target.update = coexist_choice.update;
     } else {
       struct install_layout fresh_ids = {0};
       if (!updating && !new_ids(clock, random, &fresh_ids,
@@ -619,8 +671,31 @@ int main(int argc, char **argv)
       say("installer: target inventory unavailable; nothing was written");
       goto done;
     }
-    selected = replay ? replay_target(targets, count, &expected) :
-        choose_target(&terminal, targets, count, updating);
+    if (selected_update) {
+      selected = NULL;
+      for (size_t i = 0; i < count; ++i) {
+        struct target *candidate = &targets[i];
+        char guid[37];
+        install_guid_text(candidate->info.gpt_guid, guid);
+        if (candidate->info.id == selected_target && !strcmp(guid, selected_guid) &&
+            candidate->update.eligible &&
+            candidate->update.layout.esp_partition == selected_esp &&
+            candidate->update.layout.pool_partition == selected_pool) {
+          if (selected) {
+            say("installer: selected installation is ambiguous; nothing was written");
+            goto done;
+          }
+          selected = candidate;
+        }
+      }
+      if (!selected) {
+        say("installer: selected installation changed or is unavailable; nothing was written");
+        goto done;
+      }
+    } else {
+      selected = replay ? replay_target(targets, count, &expected) :
+          choose_target(&terminal, targets, count, updating);
+    }
   }
   if (!selected) {
     goto done;
