@@ -1240,17 +1240,48 @@ static const char *build_launch(const struct authority *authority, struct mounts
   return NULL;
 }
 
-static bool start_space(const struct authority *authority, struct mounts *mounts,
-    const struct boot_space *space, bool suppress_boot_focus)
+static struct space_definition space_definition_of(const struct boot_space *space)
 {
-  struct space_definition definition = {
+  return (struct space_definition){
     .name = space->name, .title = space->title,
     .flags = (space->multiplexer ? SPACE_CREATE_TERMINAL_CONTROL : 0) |
         (space->clipboard_local ? SPACE_CREATE_CLIPBOARD_LOCAL : 0) |
         (space->clipboard_shared ? SPACE_CREATE_CLIPBOARD_SHARED : 0) |
         (space->screenshot ? SPACE_CREATE_SCREENSHOT_SAVER : 0),
   };
+}
+
+static bool plan_has_space(const struct boot_plan *plan, const char *name)
+{
+  for (size_t i = 0; i < plan->space_count; ++i) {
+    if (!strcmp(plan->spaces[i]->name, name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* An unstarted space shows REASON on its tab and keeps its name taken. */
+static void create_unstarted(const struct authority *authority, const struct boot_space *space,
+    const char *reason)
+{
+  struct space_definition definition = space_definition_of(space);
+  enum call_status status = space_create_unstarted(authority->factory, &definition, reason);
+  if (status != CALL_OK) {
+    fprintf(stderr, "boot-init: cannot create space %s (status %u)\n", space->name, status);
+  }
+}
+
+/* With DEFERRED, a space that cannot start is not created: its reason is copied
+ * there (SPACE_REASON_MAX + 1 bytes, empty otherwise) for the caller to place. */
+static bool start_space(const struct authority *authority, struct mounts *mounts,
+    const struct boot_space *space, bool suppress_boot_focus, char *deferred)
+{
+  struct space_definition definition = space_definition_of(space);
   char text[SPACE_REASON_MAX + 1];
+  if (deferred) {
+    deferred[0] = '\0';
+  }
   uint64_t *cpus = calloc(cpu_words(authority->cpu_count), sizeof(*cpus));
   struct space_launch launch = {0};
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
@@ -1277,11 +1308,12 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
 
   bool started = false, admission_attempted = false;
   enum call_status status;
-  if (reason) {
-    status = space_create_unstarted(authority->factory, &definition, reason);
-    if (status != CALL_OK) {
-      fprintf(stderr, "boot-init: cannot create space %s (status %u)\n", space->name, status);
-    }
+  if (reason && deferred) {
+    snprintf(deferred, SPACE_REASON_MAX + 1, "%s", reason);
+    status = CALL_OK;
+  } else if (reason) {
+    create_unstarted(authority, space, reason);
+    status = CALL_OK;
   } else {
     if (space->focus && !suppress_boot_focus) {
       definition.flags |= SPACE_CREATE_BOOT_FOCUS;
@@ -1433,7 +1465,7 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
     .clipboard_local = true, .clipboard_shared = true,
   };
   puts("boot-init: no configured space started; starting the rescue space");
-  start_space(authority, mounts, &rescue, true);
+  start_space(authority, mounts, &rescue, true, NULL);
 }
 
 #if INSTALLER_PUBLICATION_SCRATCH
@@ -1456,7 +1488,7 @@ static bool start_archive_rescue(const struct authority *authority, struct mount
     .power = true, .clipboard_local = true, .clipboard_shared = true,
   };
   puts("boot-init: archive rescue: boot/tmp only; no installed programs or pool override");
-  return start_space(authority, mounts, &readonly, true);
+  return start_space(authority, mounts, &readonly, true, NULL);
 }
 
 static bool close_boot_payloads(struct authority *authority)
@@ -1513,6 +1545,7 @@ int main(int argc, char **argv)
   int exit_status = EXIT_SUCCESS;
   const char *path = installed ? INSTALLED_CONFIG : LIVE_CONFIG;
   bool frozen_configuration = false, archive_recovery = false;
+  char *deferred = NULL;
   enum boot_config_result result;
 #if INSTALLER_PUBLICATION_SCRATCH
   if (installed || default_config) {
@@ -1653,26 +1686,42 @@ int main(int argc, char **argv)
             http_work->volume->kind == BOOT_VOLUME_RAM_NPFS) ? http_work->root : HANDLE_INVALID,
         authority.services[SERVICE_CLOCK]);
     check_packages(&mounts);
+    /* Pool-file spaces that cannot start are placed after the stock retry, so
+     * their unstarted tabs never take a stock space's name. */
+    deferred = applied_override ? calloc(plan.space_count ? plan.space_count : 1,
+        SPACE_REASON_MAX + 1) : NULL;
     for (size_t i = 0; i < plan.space_count; ++i) {
-      started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
+      started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus,
+          deferred ? deferred + i * (SPACE_REASON_MAX + 1) : NULL);
     }
   }
   /* A pool file can validate and still start nothing. The stock spaces come
    * before the read-only archive rescue because they keep system:// writable,
    * so the file can be fixed. */
-  if (!started && applied_override) {
+  struct boot_plan stock = {0};
+  if (!started && applied_override && boot_plan_build(&defaults, NULL, &stock, NULL, NULL)) {
     puts("boot-init: no space started from " OVERRIDE_NAME "; retrying the stock spaces");
-    struct boot_plan stock;
-    if (boot_plan_build(&defaults, NULL, &stock, NULL, NULL)) {
-      boot_plan_free(&plan);
-      plan = stock;
-      if (mount_plan(&authority, &plan, &mounts)) {
-        for (size_t i = 0; i < plan.space_count; ++i) {
-          started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
-        }
+    if (mount_plan(&authority, &stock, &mounts)) {
+      for (size_t i = 0; i < stock.space_count; ++i) {
+        started += start_space(&authority, &mounts, stock.spaces[i], suppress_boot_focus, NULL);
       }
     }
   }
+  for (size_t i = 0; deferred && i < plan.space_count; ++i) {
+    const char *reason = deferred + i * (SPACE_REASON_MAX + 1);
+    if (!reason[0]) {
+      continue;
+    }
+    if (plan_has_space(&stock, plan.spaces[i]->name)) {
+      printf("boot-init: space %s from " OVERRIDE_NAME " not started: %s\n",
+          plan.spaces[i]->name, reason);
+    } else {
+      create_unstarted(&authority, plan.spaces[i], reason);
+    }
+  }
+  free(deferred);
+  deferred = NULL;
+  boot_plan_free(&stock);
   if (!started) {
 #if INSTALLER_PUBLICATION_SCRATCH
     if (frozen_configuration && !archive_recovery) {
