@@ -62,13 +62,14 @@ static inline struct syscall_result syscall_copy(handle_t source, uint64_t right
   return (struct syscall_result){status, reply_size};
 }
 
+/* HANDLE_INFO uses RDX for the reply capacity on entry and reply size on exit. */
 static inline struct syscall_result syscall_handle_info(handle_t handle,
-    struct handle_info *info)
+    struct handle_info *info, size_t capacity)
 {
   uint64_t status = SYSCALL_HANDLE_INFO;
-  uint64_t reply_size;
+  uint64_t reply_size = capacity;
   __asm__ volatile("syscall"
-                   : "+a"(status), "=d"(reply_size)
+                   : "+a"(status), "+d"(reply_size)
                    : "D"(handle), "S"(info)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};

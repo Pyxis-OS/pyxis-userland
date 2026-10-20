@@ -16,7 +16,7 @@ enum call_status handle_query(handle_t handle, struct handle_info *info)
   }
   *info = (struct handle_info){0};
   struct handle_info reply;
-  struct syscall_result result = syscall_handle_info(handle, &reply);
+  struct syscall_result result = syscall_handle_info(handle, &reply, sizeof(reply));
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
   }
