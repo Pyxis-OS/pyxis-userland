@@ -80,8 +80,11 @@ select completion, then type `complete`. Exact recognized pending states reuse
 the attempt, record and current/previous slots without a new retention generation.
 Existing committed pending Coexist records use the same reachable explicit
 completion and full proofs under their confined authority, without enabling new
-Coexist publication. Edited or
-ambiguous menus, mismatching payloads and unrecognized artifacts refuse.
+Coexist publication. Edited or ambiguous menus, mismatching payloads and
+unrecognized artifacts refuse. A power cut can leave FAT marked dirty; writable
+admission then refuses even a recognized pending record. Completion requires a
+clean ESP, after separately authorized external repair where necessary. The
+publisher never clears the dirty bit or repairs the filesystem.
 
 Retain current and one known previous boot attempt, plus pinned rescue. Older
 attempts require confirmed activation and exact owned-manifest/hash evidence
@@ -129,7 +132,8 @@ remains separate. No cross-file atomicity or power-loss durability is claimed.
 The [qualification record](../../docs/development/experiments/installer-publication/README.md)
 separates QEMU source/functional/cut evidence from the owner-reported 2026-10-20
 native gate on vela. The native gate covered Classic clean Install, installed loading,
-same-revision Update and rescue through the prior UI. New action/Replay/completion
-UI qualification is separate and pending; Coexist activation is not qualified.
+same-revision Update and rescue through the prior UI. New action/completion UI
+checks are recorded separately, including the dirty-FAT refusal and completion
+after external repair on disposable QEMU copies. Coexist activation is not qualified.
 Foreign-file preservation was not checked on
 that freshly wiped medium, and no native power-cut qualification is claimed.
