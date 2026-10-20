@@ -11,7 +11,10 @@
 /* The settings file is strict literal data that never reaches the evaluator,
  * so a writer of it gains no shell authority: only TEXT values can change. */
 #define SETTINGS_FILE_MAX (64 * 1024)
-#define SETTINGS_MAX 64
+/* One SET batch applies the whole file, so this stays within the kernel's
+ * current batch admission (ENVIRONMENT_MUTATIONS_LIMIT, a tunable policy rather
+ * than ABI); a smaller kernel bound refuses the batch and applies nothing. */
+#define SETTINGS_MAX 16
 #define SETTINGS_TEXT_MAX 4096
 
 struct setting {
@@ -81,7 +84,7 @@ static const char *collect(const struct literal_value *table, bool exported,
       return "each setting needs a name key";
     }
     if (*count == SETTINGS_MAX) {
-      return "more than 64 settings";
+      return "more than 16 settings";
     }
     struct setting *setting = &settings[*count];
     if (strlen(key->as.string.bytes) != key->as.string.size ||
@@ -115,9 +118,11 @@ static const char *validate(const struct literal *document, struct setting *sett
     return "the file must return a table";
   }
   for (const struct literal_entry *entry = root->as.table.entries; entry; entry = entry->next) {
-    if (entry->implicit || entry->key->kind != LITERAL_STRING ||
-        (strcmp(entry->key->as.string.bytes, "variables") &&
-         strcmp(entry->key->as.string.bytes, "exported"))) {
+    const struct literal_value *key = entry->key;
+    if (entry->implicit || key->kind != LITERAL_STRING ||
+        strlen(key->as.string.bytes) != key->as.string.size ||
+        (strcmp(key->as.string.bytes, "variables") &&
+         strcmp(key->as.string.bytes, "exported"))) {
       return "only variables and exported tables are allowed";
     }
   }

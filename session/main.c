@@ -576,9 +576,18 @@ static int launch_session(const struct session_config *config, struct network_co
     fprintf(stderr, "session: cannot read network environment (status %u)\n", status);
     goto done;
   }
-  memcpy(entries + request.entry_count, refreshed_environment.variables,
-      refreshed_environment.count * sizeof(*entries));
-  request.entry_count += refreshed_environment.count;
+  /* Inherited text never replaces an entry the session already supplies. */
+  size_t supplied_count = request.entry_count;
+  for (size_t i = 0; i < refreshed_environment.count; ++i) {
+    const char *name = (const char *)(uintptr_t)refreshed_environment.variables[i].name;
+    bool supplied = false;
+    for (size_t j = 0; j < supplied_count; ++j) {
+      supplied |= !strcmp(name, (const char *)(uintptr_t)entries[j].name);
+    }
+    if (!supplied) {
+      entries[request.entry_count++] = refreshed_environment.variables[i];
+    }
+  }
   if (refreshed_environment.dns_udp != HANDLE_INVALID) {
     entries[request.entry_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", request.grant_count);
     grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};

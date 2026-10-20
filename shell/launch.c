@@ -1396,7 +1396,14 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       stream_policy |= !strcmp((const char *)(uintptr_t)entry->name,
           environment_stdio_append_name(stream));
     }
-    if (!stream_policy && !(prepared->program && prepared->program->commands &&
+    /* Text never replaces an entry this launch already supplies; the later
+     * entry would otherwise win in the child's table. */
+    bool supplied = false;
+    for (size_t j = 0; j < entry_count; ++j) {
+      supplied |= !strcmp((const char *)(uintptr_t)entry->name,
+          (const char *)(uintptr_t)prepared->entries[j].name);
+    }
+    if (!stream_policy && !supplied && !(prepared->program && prepared->program->commands &&
         !strcmp((const char *)(uintptr_t)entry->name, "commands"))) {
       prepared->entries[entry_count++] = *entry;
     }
