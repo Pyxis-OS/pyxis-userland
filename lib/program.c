@@ -9,6 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct program_image {
+  handle_t image;
+  char *prefix;
+  const char *interpreter;
+};
+
 static enum call_status read_prefix(handle_t file, char *bytes, size_t *size)
 {
   *size = 0;
@@ -36,6 +42,75 @@ static enum call_status read_prefix(handle_t file, char *bytes, size_t *size)
   return CALL_OK;
 }
 
+void program_image_close(struct program_image *prepared)
+{
+  if (prepared) {
+    if (prepared->image != HANDLE_INVALID) {
+      handle_close(prepared->image);
+    }
+    free(prepared->prefix);
+    free(prepared);
+  }
+}
+
+enum call_status program_image_prepare(handle_t image, struct program_image **result)
+{
+  if (!result) {
+    return CALL_BAD_REQUEST;
+  }
+  *result = NULL;
+  struct handle_info info;
+  enum call_status status = handle_query(image, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != PROTOCOL_FILE ||
+      (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+    return CALL_WRONG_TYPE;
+  }
+  struct program_image *prepared = calloc(1, sizeof(*prepared));
+  if (!prepared) {
+    return CALL_NO_MEMORY;
+  }
+  uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
+  status = handle_copy_restricted(image, FILE_RIGHT_READ, transport, &prepared->image);
+  if (status == CALL_OK) {
+    prepared->prefix = malloc(SHEBANG_PREFIX_SIZE);
+    if (!prepared->prefix) {
+      status = CALL_NO_MEMORY;
+    }
+  }
+  size_t size;
+  if (status == CALL_OK) {
+    status = read_prefix(prepared->image, prepared->prefix, &size);
+  }
+  if (status == CALL_OK) {
+    struct shebang script;
+    enum shebang_result format = shebang_parse(prepared->prefix, size, &script);
+    if (format == SHEBANG_NONE) {
+      free(prepared->prefix);
+      prepared->prefix = NULL;
+    } else if (format == SHEBANG_OK) {
+      /* The parser leaves one byte beyond even a maximum-length URI. */
+      prepared->prefix[script.interpreter - prepared->prefix + script.length] = '\0';
+      prepared->interpreter = script.interpreter;
+    } else {
+      status = format == SHEBANG_TOO_LONG ? CALL_LIMIT : CALL_BAD_REQUEST;
+    }
+  }
+  if (status != CALL_OK) {
+    program_image_close(prepared);
+    return status;
+  }
+  *result = prepared;
+  return CALL_OK;
+}
+
+const char *program_image_interpreter(const struct program_image *prepared)
+{
+  return prepared ? prepared->interpreter : NULL;
+}
+
 static enum call_status open_interpreter(const struct path_context *context,
     const char *uri, handle_t *image)
 {
@@ -59,7 +134,7 @@ static enum call_status open_interpreter(const struct path_context *context,
 }
 
 struct script_scratch {
-  char *prefix;
+  struct program_image *input;
   struct launch_grant *grants;
   struct launch_environment_entry *entries;
   const char **arguments;
@@ -87,12 +162,12 @@ static void release_script(struct script_scratch *scratch, bool admitted)
   free(scratch->arguments);
   free(scratch->entries);
   free(scratch->grants);
-  free(scratch->prefix);
+  program_image_close(scratch->input);
 }
 
 static bool selects_interpreter(const struct program_script_extras *extras, const char *interpreter)
 {
-  return extras && !strcmp(extras->interpreter, interpreter) &&
+  return extras && extras->interpreter && !strcmp(extras->interpreter, interpreter) &&
       (extras->selection == PROGRAM_INTERPRETER_IMAGE ||
        (extras->count && extras->root != HANDLE_INVALID));
 }
@@ -246,31 +321,19 @@ static enum call_status prepare_program(const struct launch_request *source,
     const struct program_script_extras *extras, struct launch_request *request,
     struct script_scratch *scratch)
 {
-  *request = *source;
-  /* Keep the bounded file prefix out of the caller's stack budget. */
-  scratch->prefix = malloc(SHEBANG_PREFIX_SIZE);
-  if (!scratch->prefix) {
-    return CALL_NO_MEMORY;
-  }
-  size_t size;
-  enum call_status status = read_prefix(source->image, scratch->prefix, &size);
-  if (status == CALL_OK) {
-    struct shebang script;
-    enum shebang_result format = shebang_parse(scratch->prefix, size, &script);
-    if (format == SHEBANG_NONE) {
-      free(scratch->prefix);
-      scratch->prefix = NULL;
-    } else if (format == SHEBANG_OK) {
-      /* The limit leaves one byte beyond the URI for this terminator, even
-       * when EOF rather than LF ends a maximum-length shebang. */
-      scratch->prefix[script.interpreter - scratch->prefix + script.length] = '\0';
-      status = prepare_script(source, script.interpreter, interpreter_context,
-          extras, request, scratch);
-    } else {
-      status = format == SHEBANG_TOO_LONG ? CALL_LIMIT : CALL_BAD_REQUEST;
+  const struct program_image *input = extras ? extras->prepared_image : NULL;
+  if (!input) {
+    enum call_status status = program_image_prepare(source->image, &scratch->input);
+    if (status != CALL_OK) {
+      return status;
     }
+    input = scratch->input;
   }
-  return status;
+  struct launch_request selected = *source;
+  selected.image = input->image;
+  *request = selected;
+  return input->interpreter ? prepare_script(&selected, input->interpreter,
+      interpreter_context, extras, request, scratch) : CALL_OK;
 }
 
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,

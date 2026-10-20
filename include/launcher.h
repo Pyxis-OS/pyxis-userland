@@ -7,6 +7,7 @@
 #include <abi/syscall.h>
 
 struct job_work;
+struct program_image;
 struct path_context;
 struct space_definition;
 
@@ -61,6 +62,14 @@ enum call_status launcher_launch(handle_t launcher, const struct launch_request 
 enum call_status launcher_launch_batch(handle_t launcher, const struct launch_request *requests,
     size_t count, handle_t *children, uint64_t *failed_index);
 
+/* Retain a READ FILE and parse its bounded prefix once. Success owns *prepared;
+ * failure clears it. The interpreter accessor borrows the parsed URI until close,
+ * or returns NULL for a native image. Holding the FILE pins the object, not its
+ * bytes: neither preparation nor later launch snapshots mutable contents. */
+enum call_status program_image_prepare(handle_t image, struct program_image **prepared);
+const char *program_image_interpreter(const struct program_image *prepared);
+void program_image_close(struct program_image *prepared);
+
 /* Launch native PXE or a single-level shebang script from request->image.
  * Caller-owned arrays/strings must be valid C storage. Uses heap scratch space.
  * Interpreters resolve through the caller's startup roots, or explicit
@@ -100,6 +109,10 @@ enum program_interpreter_selection {
 };
 
 struct program_script_extras {
+  /* Optional borrowed preparation, kept live through admission. Its held FILE
+   * replaces request->image for native admission and the original script grant;
+   * adaptation uses its parsed interpreter without reading the prefix again. */
+  const struct program_image *prepared_image;
   enum program_interpreter_selection selection;
   const char *interpreter;
   handle_t root;
