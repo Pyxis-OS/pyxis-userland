@@ -1016,36 +1016,48 @@ int descriptor_finish(void)
  * its end as ordinary file bytes, then continue with the pipe, so byte readers
  * see one stream. A failed value keeps failing its reads with its outcome.
  * The try form waits for nothing on the pipe; reading a value can still wait
- * for its file's own I/O. */
-static enum call_status pipe_segment_read(struct descriptor_object *entry, void *buffer,
+ * for its file's own I/O. Returns zero or an errno. */
+static int pipe_segment_read(struct descriptor_object *entry, void *buffer,
     size_t size, size_t *read, bool try)
 {
   for (;;) {
     enum call_status status;
     if (entry->value) {
       status = file_read(entry->value, entry->value_offset, buffer, size, read);
-      if (status != CALL_OK || *read) {
+      if (status == CALL_ENDPOINT_CLOSED || status == CALL_TIMED_OUT) {
+        /* A provider that exited or stalled is an I/O error, never EPIPE or
+         * a retryable EAGAIN. */
+        return EIO;
+      }
+      if (status != CALL_OK) {
+        return libc_call_errno(status);
+      }
+      if (*read) {
         entry->value_offset += *read;
-        return status;
+        return 0;
       }
       handle_t finished = entry->value;
       entry->value = HANDLE_INVALID;
       entry->value_offset = 0;
       if (descriptor_release_handle(finished) < 0) {
-        return CALL_IO;
+        return EIO;
       }
     }
     status = try ? pipe_try_read(entry->handle, buffer, size, read) :
         pipe_read(entry->handle, buffer, size, read);
     if (status != CALL_PIPE_VALUE) {
-      return status;
+      return status == CALL_OK ? 0 : libc_call_errno(status);
     }
     uint64_t head;
     handle_t value;
     status = try ? pipe_try_receive(entry->handle, &head, &value) :
         pipe_receive(entry->handle, &head, &value);
+    if (status == CALL_LIMIT) {
+      /* No free handle slot for the value. */
+      return EMFILE;
+    }
     if (status != CALL_OK) {
-      return status;
+      return libc_call_errno(status);
     }
     /* BYTES or END means a copied reader took the value first; read again. */
     if (head == PIPE_HEAD_VALUE) {
@@ -1093,7 +1105,12 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     }
     status = file_read(entry->handle, offset, buffer, size, read);
   } else if (entry->kind == DESCRIPTOR_PIPE) {
-    status = pipe_segment_read(entry, buffer, size, read, false);
+    int error = pipe_segment_read(entry, buffer, size, read, false);
+    if (error) {
+      *read = 0;
+      return fail(error);
+    }
+    status = CALL_OK;
   } else {
     status = console_read(entry->handle, buffer, size, read);
   }
@@ -1155,11 +1172,16 @@ static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, si
     return (ssize_t)take_ahead(entry, buffer, count);
   }
   size_t read;
-  enum call_status status = entry->kind == DESCRIPTOR_PIPE ?
-      pipe_segment_read(entry, buffer, count, &read, true) :
-      console_read_timeout(entry->handle, buffer, count, 0, &read);
-  if (status != CALL_OK) {
-    return fail(status == CALL_TIMED_OUT ? EAGAIN : libc_call_errno(status));
+  if (entry->kind == DESCRIPTOR_PIPE) {
+    int error = pipe_segment_read(entry, buffer, count, &read, true);
+    if (error) {
+      return fail(error);
+    }
+  } else {
+    enum call_status status = console_read_timeout(entry->handle, buffer, count, 0, &read);
+    if (status != CALL_OK) {
+      return fail(status == CALL_TIMED_OUT ? EAGAIN : libc_call_errno(status));
+    }
   }
   if (read > count) {
     return fail(EIO);
@@ -1998,7 +2020,7 @@ int descriptor_object_take_value(struct descriptor_object *object, handle_t *val
       uint64_t head;
       enum call_status status = pipe_receive(object->handle, &head, value);
       if (status != CALL_OK) {
-        result = fail(libc_call_errno(status));
+        result = fail(status == CALL_LIMIT ? EMFILE : libc_call_errno(status));
       } else if (head == PIPE_HEAD_VALUE) {
         object->input_consumed = true;
         result = 1;

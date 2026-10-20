@@ -20,18 +20,23 @@ extern "C" {
  * retain it past fclose/close/dup2 replacement. Delegation does not transfer the process's private
  * file cursor, read-ahead or pushback. Preserve append with the environment
  * companion when staging children. File-backed children start at offset zero;
- * pipe children cannot receive bytes already fetched into this process. */
+ * pipe children cannot receive bytes already fetched into this process,
+ * including the rest of a pipe value it has started reading. */
 int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding);
 
 /* Attempt a complete unread READ-only, rereadable source (or held failure)
- * using owned restricted copies. One-pass successful streams keep byte copying.
+ * using owned restricted copies. The destination is a capture producer or a
+ * pipe; a byte-only pipe returns BAD_OPERATION. One-pass successful streams keep byte copying.
  * Pending output, pushback, read-ahead and consumed input are ineligible.
  * The descriptor's borrowed handles are never consumed. BAD_OPERATION permits
  * ordinary byte copying; every other failure is final, including uncertainty.
  * The source stays open. This helper does not change stdio error indicators. */
 enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source);
-/* Same dispatch for an explicitly owned typed result, including a failed OPEN.
- * Sources follow output_handoff ownership rules; no borrowed handles allowed. */
+/* Same dispatch for an explicitly owned typed result, including a failed OPEN;
+ * no borrowed handles allowed. A capture destination follows output_handoff
+ * ownership rules. A pipe destination moves only the value: success and
+ * OUTCOME_UNKNOWN clear owned->value, a definite refusal keeps it, and the
+ * observation always stays with the caller. */
 enum call_status pyxis_stdio_handoff_owned(FILE *destination,
     struct output_handoff_request *owned);
 

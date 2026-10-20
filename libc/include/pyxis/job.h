@@ -22,8 +22,9 @@ struct pyxis_job_options {
   size_t entry_count;
   const struct pyxis_working_snapshot *working;
   /* Live descriptors, stdin/stdout/stderr order. -1 deliberately omits a
-   * stream. FILE append policy is preserved; cursors and private input
-   * read-ahead are not transferred. */
+   * stream. FILE append policy is preserved; cursors, private input
+   * read-ahead and the rest of a partly read pipe value are not transferred:
+   * a child inheriting stdin continues with the pipe after them. */
   int streams[ENVIRONMENT_STREAM_COUNT];
   uint64_t initial_stack_bytes;
 };

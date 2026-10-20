@@ -129,7 +129,7 @@ static enum call_status pipe_handoff_call(handle_t writer, uint64_t operation, h
   }
   struct pipe_handoff_request request = {{PROTOCOL_PIPE, operation}, *value};
   enum call_status status = mutation_status(syscall_call(writer, &request, sizeof(request), NULL, 0), 0);
-  if (status == CALL_OK) {
+  if (status == CALL_OK || status == CALL_OUTCOME_UNKNOWN) {
     *value = HANDLE_INVALID;
   }
   return status;
@@ -155,7 +155,7 @@ static enum call_status pipe_receive_call(handle_t reader, uint64_t operation,
   *value = HANDLE_INVALID;
   struct message_header request = {PROTOCOL_PIPE, operation};
   struct pipe_receive_reply response;
-  enum call_status status = response_status(syscall_call(reader, &request, sizeof(request),
+  enum call_status status = mutation_status(syscall_call(reader, &request, sizeof(request),
       &response, sizeof(response)), sizeof(response));
   if (status == CALL_BAD_BUFFER) {
     return CALL_OUTCOME_UNKNOWN;
@@ -166,6 +166,9 @@ static enum call_status pipe_receive_call(handle_t reader, uint64_t operation,
   bool valued = response.head == PIPE_HEAD_VALUE;
   if ((valued != (response.value != HANDLE_INVALID)) ||
       (!valued && response.head != PIPE_HEAD_BYTES && response.head != PIPE_HEAD_END)) {
+    if (response.value != HANDLE_INVALID) {
+      syscall_close(response.value);
+    }
     return CALL_OUTCOME_UNKNOWN;
   }
   *head = response.head;

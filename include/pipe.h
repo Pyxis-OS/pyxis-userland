@@ -30,15 +30,19 @@ enum call_status pipe_try_write(handle_t writer, const void *bytes, size_t lengt
 /* Reads on a value-capable pipe stop at each value with CALL_PIPE_VALUE. */
 
 /* Moves the owned value into the pipe; on success *value is HANDLE_INVALID.
- * Any refusal leaves *value with the caller; BAD_OPERATION means byte-only.
- * The try form returns CALL_WOULD_BLOCK instead of waiting for a value slot. */
+ * A definite refusal leaves *value with the caller; BAD_OPERATION means
+ * byte-only. CALL_OUTCOME_UNKNOWN also clears *value: ownership is uncertain,
+ * so never retry or fall back to copying. The try form returns
+ * CALL_WOULD_BLOCK instead of waiting for a value slot. */
 enum call_status pipe_handoff(handle_t writer, handle_t *value);
 enum call_status pipe_try_handoff(handle_t writer, handle_t *value);
 
 /* Reports the next segment as PIPE_HEAD_VALUE (with an owned *value),
  * PIPE_HEAD_BYTES or PIPE_HEAD_END. The blocking form waits while the pipe is
- * empty and writers remain; the try form returns CALL_WOULD_BLOCK. A bad reply
- * is CALL_OUTCOME_UNKNOWN: a moved value may have been lost. Outputs are
+ * empty and writers remain; the try form returns CALL_WOULD_BLOCK. A rejected
+ * reply buffer (whether refused before or after dequeuing) and a malformed or
+ * inconsistent reply return CALL_OUTCOME_UNKNOWN: a value may have been
+ * dequeued and closed, and any handle the reply named is closed. Outputs are
  * cleared on failure. */
 enum call_status pipe_receive(handle_t reader, uint64_t *head, handle_t *value);
 enum call_status pipe_try_receive(handle_t reader, uint64_t *head, handle_t *value);
