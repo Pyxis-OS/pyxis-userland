@@ -652,7 +652,9 @@ static bool repository_command(const char *command, const char *url)
     return fail("repository URL must fit 2048 bytes including its final /");
   }
   memcpy(normalized, url, length);
-  if (normalized[length - 1] != '/') normalized[length++] = '/';
+  if (normalized[length - 1] != '/') {
+    normalized[length++] = '/';
+  }
   normalized[length] = 0;
   url = normalized;
   if (!pkg_repository_url_valid(url)) {
