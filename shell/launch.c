@@ -89,6 +89,7 @@ struct prepared_stage {
   const char *missing;
   struct launch_request request;
   struct program_image *input;
+  bool shell_execution;
   /* Offered to the shell interpreter only; see program_script_extras. */
   struct program_script_grant extras[4];
   size_t extra_count;
@@ -1307,8 +1308,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", grant_count);
     grants[grant_count++] = (struct launch_grant){environment->dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
+  bool wait_session = mode == SHELL_FOREGROUND && scope && scope->owned &&
+      prepared->shell_execution;
   size_t entry_capacity = resource_count + root_count + environment->count +
-      prepared->captured.count + 2 * ENVIRONMENT_STREAM_COUNT + 1;
+      prepared->captured.count + 2 * ENVIRONMENT_STREAM_COUNT + 1 + wait_session;
   prepared->entries = calloc(entry_capacity, sizeof(*prepared->entries));
   if (!prepared->entries) {
     return CALL_NO_MEMORY;
@@ -1375,6 +1378,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         !strcmp((const char *)(uintptr_t)entry->name, "commands"))) {
       prepared->entries[entry_count++] = *entry;
     }
+  }
+  if (wait_session) {
+    /* Keep session chains alive until their owner can seal and retire the scope. */
+    prepared->entries[entry_count++] =
+        (struct launch_environment_entry)PROFILE_TEXT(SESSION_WAIT_ENV, "1");
   }
   if (!provider) {
     for (size_t i = 0; i < prepared->captured.count; ++i) {
@@ -1611,6 +1619,7 @@ static enum call_status preflight_operands(struct shell *shell,
   prepared->image = image->image;
   prepared->bundle = image->bundle;
   prepared->program = image->program;
+  prepared->shell_execution = image->shell_execution;
   enum call_status status = prepare_stage(shell, prepared, stage, mode, named_input,
       streams, publication, read_only, environment, exported, true, scope);
   *conflict = prepared->conflict;
@@ -2009,9 +2018,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     bool held_interpreter = !prepared[i].bundle && interpreter &&
         !strcmp(interpreter, SHELL_INTERPRETER) &&
         (shell->interpreter_root != HANDLE_INVALID || shell->interpreter_image != HANDLE_INVALID);
-    shell_execution |= held_interpreter ||
+    prepared[i].shell_execution = held_interpreter ||
         same_native_image(prepared[i].image, shell->command_shell_image) ||
         same_native_image(prepared[i].image, shell->interpreter_image);
+    shell_execution |= prepared[i].shell_execution;
   }
 
   bool inherited_stream[ENVIRONMENT_STREAM_COUNT] = {0};
