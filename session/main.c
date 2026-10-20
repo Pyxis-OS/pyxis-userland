@@ -44,6 +44,7 @@
 #include <job_work.h>
 #include <network_environment.h>
 #include <package_maintenance.h>
+#include <shell_settings.h>
 #include <limits.h>
 #include <startup.h>
 #include <stdio.h>
@@ -139,6 +140,7 @@ static int launch_session(const struct session_config *config, struct network_co
   struct launch_environment_entry *environment = NULL;
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
+  handle_t settings = HANDLE_INVALID;
   status = pyxis_environment_snapshot_init(&inherited);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot snapshot environment (status %u)\n", status);
@@ -324,6 +326,19 @@ static int launch_session(const struct session_config *config, struct network_co
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", grant_count);
     grants[grant_count++] = (struct launch_grant){net_registry,
         rights & NET_REGISTRY_RIGHT_READ, 0};
+  }
+  /* Only a direct interactive shell; mux opens the file for each pane. */
+  if (!script && !multiplex) {
+    const struct environment_value *home = environment_capture_find(&captured, "home");
+    enum call_status opened = shell_settings_open(home && home->kind == ENVIRONMENT_CAP ?
+        home->handle : HANDLE_INVALID, &settings);
+    if (opened == CALL_OK) {
+      resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(SHELL_SETTINGS_RESOURCE, grant_count);
+      grants[grant_count++] = (struct launch_grant){settings, FILE_RIGHT_READ, 0};
+    } else if (opened != CALL_NOT_FOUND) {
+      fprintf(stderr, "session: cannot open %s (status %u); shell settings skipped\n",
+          SHELL_SETTINGS_PATH, opened);
+    }
   }
   if (start_remote_services) {
     handle_t terminal_service = bootstrap_capability("terminal");
@@ -594,6 +609,9 @@ static int launch_session(const struct session_config *config, struct network_co
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 
 done:
+  if (settings != HANDLE_INVALID) {
+    handle_close(settings);
+  }
   free(resources);
   free(entries);
   environment_capture_close(&captured);

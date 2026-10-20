@@ -29,6 +29,7 @@
 #include <launcher.h>
 #include <network_environment.h>
 #include <package_maintenance.h>
+#include <shell_settings.h>
 #include <startup.h>
 #include <string.h>
 #include <stdio.h>
@@ -352,14 +353,14 @@ static enum call_status broker_launch(struct remote_context *context,
   *shell = (struct remote_shell){0};
   size_t depth = cwd ? cwd->context.count : 1;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  size_t fixed_grants = FIRST_OPTIONAL + context->grant_count + 4;
+  size_t fixed_grants = FIRST_OPTIONAL + context->grant_count + 5;
   if (depth > SIZE_MAX / sizeof(struct launch_grant) - fixed_grants ||
       depth > SIZE_MAX / sizeof(uint64_t)) {
     return CALL_LIMIT;
   }
   struct launch_grant *grants = calloc(fixed_grants + depth, sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
-  size_t entry_capacity = context->entry_count + context->environment.count + 10;
+  size_t entry_capacity = context->entry_count + context->environment.count + 11;
   struct launch_environment_entry *entries = calloc(entry_capacity, sizeof(*entries));
   if (!grants || (depth && !directories) || !entries) {
     free(entries);
@@ -368,7 +369,7 @@ static enum call_status broker_launch(struct remote_context *context,
     return CALL_NO_MEMORY;
   }
   struct terminal_create_reply terminal = {0};
-  handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
+  handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID, settings = HANDLE_INVALID;
   enum call_status status = terminal_create(bootstrap_capability(
       context->multiplexer ? "remote_mux_terminal" : "terminal"),
       columns, rows, &terminal);
@@ -444,6 +445,25 @@ static enum call_status broker_launch(struct remote_context *context,
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP("child_launcher", grant_count);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
   }
+  /* A remote mux opens the file for each of its panes; --no-echo machine
+   * sessions never apply it. */
+  if (!mux && !no_echo) {
+    handle_t home = HANDLE_INVALID;
+    for (size_t i = 0; i < context->entry_count; ++i) {
+      if (context->entries[i].kind == ENVIRONMENT_CAP &&
+          !strcmp((const char *)(uintptr_t)context->entries[i].name, "home")) {
+        home = context->grants[context->entries[i].value].source;
+      }
+    }
+    enum call_status opened = shell_settings_open(home, &settings);
+    if (opened == CALL_OK) {
+      entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(SHELL_SETTINGS_RESOURCE, grant_count);
+      grants[grant_count++] = (struct launch_grant){settings, FILE_RIGHT_READ, 0};
+    } else if (opened != CALL_NOT_FOUND) {
+      fprintf(stderr, "remote: cannot open %s (status %u); shell settings skipped\n",
+          SHELL_SETTINGS_PATH, opened);
+    }
+  }
   if (mux || bootstrap != HANDLE_INVALID) {
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(mux ? "pane_broker" : "pane_cwd", grant_count);
     grants[grant_count++] = (struct launch_grant){mux ? broker_caller : bootstrap, 0, HANDLE_TRANSPORT_SEND};
@@ -511,6 +531,7 @@ done:
     job_work_close(shell->job_provisioner, true);
     shell->job_provisioner = NULL;
   }
+  owned_close(&settings);
   owned_close(&image);
   owned_close(&bound);
   owned_close(&terminal.input);

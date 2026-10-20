@@ -197,6 +197,9 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
  * saved entries; save merges one recorded line into home://.history unless it
  * starts with a space. Neither reports a missing or read-only home. */
 void shell_history_load(struct shell *shell);
+/* Validates and applies the trusted launcher's private settings FILE, then
+ * closes it. A refused file reports its reason and applies nothing. */
+void shell_settings_load(struct shell *shell, handle_t file);
 void shell_history_save(struct shell *shell, const char *line);
 enum command_result shell_command(struct shell *shell, char *line,
     struct shell_outcome *outcome);

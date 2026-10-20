@@ -39,6 +39,11 @@ The image stays private and
 carries no interpreter trust; unavailable images refuse re-entry. Mutable
 scheme bindings cannot replace it.
 
+Interactive shells started by session, mux and Remote apply
+`home://.config/shell/startup.lua` from a private `shell_settings` READ FILE
+(`settings.c`): strict literal TEXT settings only, validated in full before
+one SET batch. See the shell reference's startup settings section.
+
 Trusted startup uses the separately packaged `boot://init-shell.pxe` with a
 pre-granted script input. This bundle neither grants root launch authority nor
 creates retention accounts.

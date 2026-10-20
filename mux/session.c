@@ -35,6 +35,7 @@
 #include <endpoint.h>
 #include <handle.h>
 #include <launcher.h>
+#include <shell_settings.h>
 #include <startup.h>
 #include <wait.h>
 #include <stdlib.h>
@@ -136,7 +137,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     return CALL_NO_MEMORY;
   }
   struct terminal_create_reply terminal = {0};
-  handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID;
+  handle_t bound = HANDLE_INVALID, image = HANDLE_INVALID, settings = HANDLE_INVALID;
   bool admission_attempted = false;
   struct endpoint_create_reply bootstrap = {0};
   status = terminal_create(bootstrap_capability("terminal"), columns, rows,
@@ -226,6 +227,16 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("interpreter_root", grant_count);
       grants[grant_count++] = root;
     }
+  }
+  const struct environment_value *home = environment_capture_find(&capture, "home");
+  enum call_status opened = shell_settings_open(home && home->kind == ENVIRONMENT_CAP ?
+      home->handle : HANDLE_INVALID, &settings);
+  if (opened == CALL_OK) {
+    entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(SHELL_SETTINGS_RESOURCE, grant_count);
+    grants[grant_count++] = (struct launch_grant){settings, FILE_RIGHT_READ, 0};
+  } else if (opened != CALL_NOT_FOUND) {
+    fprintf(stderr, "mux: cannot open %s (status %u); shell settings skipped\n",
+        SHELL_SETTINGS_PATH, opened);
   }
   static const struct {
     const char *name;
@@ -360,6 +371,9 @@ done:
     handle_close(bootstrap.caller);
   }
   environment_capture_close(&capture);
+  if (settings != HANDLE_INVALID) {
+    handle_close(settings);
+  }
   if (image != HANDLE_INVALID) {
     handle_close(image);
   }

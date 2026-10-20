@@ -12,6 +12,7 @@
 #include "../common/directory.h"
 #include "../common/session_wait.h"
 #include "../common/pane_cwd.h"
+#include <shell_settings.h>
 #include <startup.h>
 #include <handle.h>
 #include <terminal.h>
@@ -176,6 +177,9 @@ int main(int argc, char **argv)
   /* A -c line runs as a one-line script: no prompt, script launch rules, and
    * its arguments follow the line. */
   bool interactive = script == HANDLE_INVALID && !positional && !command_line;
+  /* Taken in every mode so the private grant never reaches a successor;
+   * only an initial interactive prompt applies it. */
+  handle_t settings = bootstrap_take_capability(SHELL_SETTINGS_RESOURCE);
   /* Script shells never claim their launcher's interactive completion channel. */
   handle_t events = interactive ? bootstrap_capability("terminal_events") : HANDLE_INVALID;
   struct shell shell = {
@@ -339,6 +343,10 @@ int main(int argc, char **argv)
     }
     goto done;
   }
+  if (!quiet_input && settings != HANDLE_INVALID) {
+    shell_settings_load(&shell, settings);
+    settings = HANDLE_INVALID;
+  }
   if (!quiet_input) {
     shell_history_load(&shell);
   }
@@ -411,6 +419,9 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (settings != HANDLE_INVALID) {
+    handle_close(settings);
+  }
   if (shell.command_shell_image != HANDLE_INVALID && handle_close(shell.command_shell_image) != 0) {
     shell_directory_error(&shell, "shell: cleanup", "shell command image", CALL_BAD_HANDLE);
     result = EXIT_FAILURE;
