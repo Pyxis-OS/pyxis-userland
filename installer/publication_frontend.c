@@ -29,12 +29,6 @@
 #define READ_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 #define WRITE_RIGHTS (READ_RIGHTS | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_WRITE_FILES)
 
-static bool line(struct terminal *terminal, const char *prompt, char *text, size_t size)
-{
-  struct term_line_result result = term_read_line(terminal, prompt, text, size);
-  return result.status == TERM_LINE_OK && !result.limit_reached;
-}
-
 static bool number(const char *text, uint64_t *value)
 {
   if (!*text) {
@@ -49,6 +43,40 @@ static bool number(const char *text, uint64_t *value)
   }
   *value = result;
   return true;
+}
+
+static bool read_number(struct terminal *terminal, const char *prompt, uint64_t *value)
+{
+  char text[128];
+  for (;;) {
+    struct term_line_result input = term_read_line(terminal, prompt, text, sizeof(text));
+    if (input.status != TERM_LINE_OK) {
+      return false;
+    }
+    if (!input.limit_reached && number(text, value)) {
+      return true;
+    }
+    fputs("Enter a whole decimal number.\n", stderr);
+  }
+}
+
+static bool choose(struct terminal *terminal, const char *prompt, const char *const labels[],
+    size_t count, size_t initial, size_t *selected, int *result)
+{
+  struct term_choice_result input = term_read_choice(terminal, prompt, labels, count, initial);
+  if (input.status == TERM_LINE_OK) {
+    *selected = input.selected;
+    return true;
+  }
+  if (input.status == TERM_LINE_CANCELLED || input.status == TERM_LINE_EOF) {
+    fputs("Cancelled; nothing written.\n", stderr);
+    *result = EXIT_SUCCESS;
+  } else {
+    fprintf(stderr, "Review input unavailable (status %u, error %u); nothing written.\n",
+        input.status, input.error);
+    *result = EXIT_FAILURE;
+  }
+  return false;
 }
 
 static bool parent_open(handle_t root, const char *path, bool create, handle_t *output)
@@ -262,7 +290,7 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   struct config_blob previous_limine = {0};
   struct install_pending_plan completion = {0};
   struct install_recovery recovery = {.sources = {{.handle = HANDLE_INVALID}, {.handle = HANDLE_INVALID}}};
-  char text[128], revision[65], attempt[33], revision_text[66];
+  char revision[65], attempt[33], revision_text[66];
   if (!crypto || !install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
   }
@@ -282,8 +310,8 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
         (unsigned long long)info.gpt_status);
   }
   uint64_t id, partition;
-  if (!line(terminal, "Disposable disk ID: ", text, sizeof(text)) || !number(text, &id) ||
-      !line(terminal, "ESP partition number: ", text, sizeof(text)) || !number(text, &partition) ||
+  if (!read_number(terminal, "Disposable disk ID: ", &id) ||
+      !read_number(terminal, "ESP partition number: ", &partition) ||
       disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle) != CALL_OK ||
       disk_get_info(disk.handle, &disk.info) != CALL_OK ||
       disk.info.block_count > UINT64_MAX / disk.info.block_size) {
@@ -390,16 +418,20 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   if (completing) {
     uint64_t required = install_recovery_space(&recovery, cluster_bytes);
     fprintf(stderr, "Pending activation: %s. Reuse attempt %s; readiness and retention stay unchanged.\n"
-        "Immutable rescue: %s; %llu bytes free, %llu bytes required.\n"
-        "Review actions: complete, cancel.\n", completion.menu_changed ? "publish recorded menu" :
+        "Immutable rescue: %s; %llu bytes free, %llu bytes required.\n", completion.menu_changed ? "publish recorded menu" :
         "finish recorded cleanup", completion.record.boot.attempt, recovery.present ? "verify existing" :
         "provision small rescue first", (unsigned long long)available_bytes, (unsigned long long)required);
-    if (!line(terminal, "Review: ", text, sizeof(text)) || !strcmp(text, "cancel")) {
+    const char *const actions[] = {"Complete pending publication", "Cancel"};
+    size_t action;
+    if (!choose(terminal, "Review: ", actions, 2, 0, &action, &result)) {
+      goto done;
+    }
+    if (action == 1) {
       fputs("Cancelled; nothing written.\n", stderr);
       result = EXIT_SUCCESS;
       goto done;
     }
-    if (strcmp(text, "complete") || required > available_bytes) {
+    if (required > available_bytes) {
       fputs("Pending completion not confirmed or insufficient capacity; nothing written.\n", stderr);
       goto done;
     }
@@ -501,22 +533,30 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     if (verbose) {
       install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
     }
-    fputs("Review actions: confirm, cancel, plan, source archive, source esp, adopt boot|session|network,\n"
-        "or change NUMBER keep|apply|adopt|remove.\n", stderr);
     if (ferror(stderr)) {
       goto done;
     }
-    if (!line(terminal, "Review: ", text, sizeof(text)) || !strcmp(text, "cancel")) {
+    enum { REVIEW_CONFIRM, REVIEW_CANCEL, REVIEW_PLAN, REVIEW_SOURCE, REVIEW_ADOPT, REVIEW_CHANGE };
+    const char *const actions[] = {
+      "Confirm publication", "Cancel", "Show full plan", "Choose configuration source",
+      "Adopt configuration file", "Change configuration choice",
+    };
+    size_t action;
+    if (!choose(terminal, "Review: ", actions, sizeof(actions) / sizeof(actions[0]),
+        REVIEW_CONFIRM, &action, &result)) {
+      goto done;
+    }
+    if (action == REVIEW_CANCEL) {
       fputs("Cancelled; nothing written.\n", stderr);
       result = EXIT_SUCCESS;
       goto done;
     }
-    if (!strcmp(text, "plan")) {
+    if (action == REVIEW_PLAN) {
       install_configuration_review(&plan, stderr);
       install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
       continue;
     }
-    if (!strcmp(text, "confirm")) {
+    if (action == REVIEW_CONFIRM) {
       if (!plan.applicable || required > available_bytes) {
         fputs("Plan is not applicable or lacks staging capacity; nothing written.\n", stderr);
         continue;
@@ -524,29 +564,57 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
       break;
     }
     bool ok = false;
-    if (!strcmp(text, "source archive") || !strcmp(text, "source esp")) {
+    if (action == REVIEW_SOURCE) {
+      const char *const sources[] = {"Archive defaults", "ESP configuration", "Back"};
+      size_t source;
+      if (!choose(terminal, "Configuration source: ", sources, 3,
+          plan.source == CONFIG_ACTIVE_ESP ? 1 : 0, &source, &result)) {
+        goto done;
+      }
+      if (source == 2) {
+        continue;
+      }
       ok = install_configuration_source(&plan,
-          !strcmp(text, "source archive") ? CONFIG_ACTIVE_ARCHIVE : CONFIG_ACTIVE_ESP, true);
-    } else if (!strncmp(text, "adopt ", 6)) {
-      for (unsigned i = 0; i < CONFIG_LUA_COUNT; ++i) {
-        const char *file_names[] = {"boot", "session", "network"};
-        if (!strcmp(text + 6, file_names[i])) {
-          ok = install_configuration_adopt(&plan, i, true);
-        }
+          source == 0 ? CONFIG_ACTIVE_ARCHIVE : CONFIG_ACTIVE_ESP, true);
+    } else if (action == REVIEW_ADOPT) {
+      const char *const files[] = {"Boot configuration", "Session configuration", "Network configuration", "Back"};
+      size_t file;
+      if (!choose(terminal, "Adopt owner file: ", files, CONFIG_LUA_COUNT + 1, 0, &file, &result)) {
+        goto done;
       }
-    } else if (!strncmp(text, "change ", 7)) {
-      char *separator = strchr(text + 7, ' ');
-      uint64_t index;
-      if (separator) {
-        *separator++ = 0;
-        if (number(text + 7, &index) && index && index <= plan.delta.count) {
-          for (unsigned choice = 0; choice <= CONFIG_CHOICE_REMOVE; ++choice) {
-            if (!strcmp(separator, config_plan_choice_name(choice))) {
-              ok = install_configuration_choose(&plan, index - 1, choice);
-            }
-          }
-        }
+      if (file == CONFIG_LUA_COUNT) {
+        continue;
       }
+      ok = install_configuration_adopt(&plan, file, true);
+    } else if (action == REVIEW_CHANGE) {
+      if (!plan.delta.count) {
+        fputs("No configuration changes to select.\n", stderr);
+        continue;
+      }
+      const char *changes[CONFIG_PLAN_CHANGE_LIMIT + 1];
+      for (size_t i = 0; i < plan.delta.count; ++i) {
+        changes[i] = plan.delta.changes[i].entry->id;
+      }
+      changes[plan.delta.count] = "Back";
+      size_t change;
+      if (!choose(terminal, "Configuration change: ", changes, plan.delta.count + 1,
+          0, &change, &result)) {
+        goto done;
+      }
+      if (change == plan.delta.count) {
+        continue;
+      }
+      config_delta_plan_review(&plan.delta, change, stderr);
+      const char *const choices[] = {"Keep", "Apply", "Adopt", "Remove", "Back"};
+      size_t choice;
+      if (!choose(terminal, "Change action: ", choices, CONFIG_CHOICE_REMOVE + 2,
+          plan.delta.changes[change].choice, &choice, &result)) {
+        goto done;
+      }
+      if (choice == CONFIG_CHOICE_REMOVE + 1) {
+        continue;
+      }
+      ok = install_configuration_choose(&plan, change, choice);
     }
     if (!ok) {
       fputs("Choice refused; plan retained.\n", stderr);
