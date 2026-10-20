@@ -6,6 +6,11 @@ Run `config validate`, `config plan`, `config edit`, or
 that frame from stdin and requires final confirmation. No current-plan slot is
 retained. A plan grants no authority, and changed target or source bytes refuse.
 
+Installed boot reads spaces, volumes and input settings from the pool
+`system://config/boot.lua`, not the ESP `boot.lua` copy (0.0.7a). `config validate`
+checks that pool file the way boot reads it and lists each space's source;
+`config edit` skips `boot.lua` entries and says to edit the pool file directly.
+
 This delivery is for scratch ESPs. Installed Install/Update and boot selection
 remain unchanged until installer task 5. Normal Install/Update never requires a
 prior config invocation. The complete archive defaults remain available.

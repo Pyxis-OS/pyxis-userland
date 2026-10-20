@@ -61,7 +61,8 @@
 #define INSTALLED_CONFIG "boot://config/installed.lua"
 #define OVERRIDE_PATH "config/boot.lua"
 #define OVERRIDE_NAME "system://" OVERRIDE_PATH
-#define OVERRIDE_MAX_BYTES (64 * 1024)
+/* The literal parser's own bound, which the installer's pool snapshot also uses. */
+#define OVERRIDE_MAX_BYTES LITERAL_SOURCE_LIMIT
 #define HOSTNAME_NAME "system://" MACHINE_HOSTNAME_PATH
 #define RESCUE_INIT "boot://init-shell.pxe"
 /* The bin volume shares the system volume's pool; see the installer. */
@@ -490,7 +491,7 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
     return BOOT_CONFIG_MISSING;
   }
   if (status != CALL_OK) {
-    snprintf(failure->text, sizeof(failure->text), "cannot open (status %u)", status);
+    config_failure_format(failure, "cannot open (status %u)", status);
     return BOOT_CONFIG_INVALID;
   }
   uint64_t size;
@@ -518,9 +519,9 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
     result = boot_config_read_literal_bytes_reason(OVERRIDE_NAME, bytes, size, override,
         failure);
   } else if (too_large) {
-    snprintf(failure->text, sizeof(failure->text), "exceeds %d bytes", OVERRIDE_MAX_BYTES);
+    config_failure_format(failure, "exceeds %d bytes", OVERRIDE_MAX_BYTES);
   } else {
-    snprintf(failure->text, sizeof(failure->text), "cannot read (status %u)", status);
+    config_failure_format(failure, "cannot read (status %u)", status);
   }
   free(bytes);
   return result;
@@ -1532,9 +1533,11 @@ int main(int argc, char **argv)
     }
     /* This read-only binding happens after selection, before machine effects.
      * An absent program revision takes archive rescue rather than starting an
-     * ordinary installed session against an incomplete program set. */
-    bind_bin(&authority, &plan, installed && !default_config);
-    archive_recovery = default_config || authority.bin == authority.boot;
+     * ordinary installed session against an incomplete program set. The rescue
+     * entry starts the stock spaces with installed programs, as in 0.0.6, so a
+     * bad pool file can be fixed from them. */
+    bind_bin(&authority, &plan, installed);
+    archive_recovery = authority.bin == authority.boot;
     if (archive_recovery && !default_config) {
       boot_plan_free(&plan);
       config_selection_free(&selection);
@@ -1586,7 +1589,7 @@ int main(int argc, char **argv)
         printf("boot-init: volume %s unavailable (status %u)\n", system->name,
             mounted->status);
       } else if (plan.space_count && default_config) {
-        puts("boot-init: rescue entry: ignoring " OVERRIDE_NAME);
+        puts("boot-init: rescue entry: stock spaces; ignoring " OVERRIDE_NAME);
       } else if (plan.space_count) {
         struct config_failure failure = {0};
         result = read_override(mounted->root, &override, &failure);
@@ -1652,6 +1655,22 @@ int main(int argc, char **argv)
     check_packages(&mounts);
     for (size_t i = 0; i < plan.space_count; ++i) {
       started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
+    }
+  }
+  /* A pool file can validate and still start nothing. The stock spaces come
+   * before the read-only archive rescue because they keep system:// writable,
+   * so the file can be fixed. */
+  if (!started && applied_override) {
+    puts("boot-init: no space started from " OVERRIDE_NAME "; retrying the stock spaces");
+    struct boot_plan stock;
+    if (boot_plan_build(&defaults, NULL, &stock, NULL, NULL)) {
+      boot_plan_free(&plan);
+      plan = stock;
+      if (mount_plan(&authority, &plan, &mounts)) {
+        for (size_t i = 0; i < plan.space_count; ++i) {
+          started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
+        }
+      }
     }
   }
   if (!started) {

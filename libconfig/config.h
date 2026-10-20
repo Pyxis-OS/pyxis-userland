@@ -13,6 +13,12 @@ struct config_failure {
   char text[CONFIG_FAILURE_MAX];
 };
 
+/* Formats one reason into FAILURE. Control and non-ASCII bytes, which may come
+ * from file contents such as a key name, become \xNN so the reason stays one
+ * printable line; overlong reasons are truncated. */
+void config_failure_format(struct config_failure *failure, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+
 /* Read trusted text configuration in a fresh restricted Lua environment. The
  * chunk must return exactly one table. decode runs inside the protected call
  * with that table at index 1 and output as lightuserdata at index 2; it returns

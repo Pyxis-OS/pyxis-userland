@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <lauxlib.h>
 #include <lualib.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -184,6 +185,29 @@ static int decode_literal(lua_State *state)
   return 0;
 }
 
+void config_failure_format(struct config_failure *failure, const char *format, ...)
+{
+  char raw[CONFIG_FAILURE_MAX];
+  va_list arguments;
+  va_start(arguments, format);
+  vsnprintf(raw, sizeof(raw), format, arguments);
+  va_end(arguments);
+  size_t used = 0;
+  for (const unsigned char *byte = (const unsigned char *)raw; *byte; ++byte) {
+    bool printable = *byte >= 0x20 && *byte < 0x7f;
+    size_t needed = printable ? 1 : 4;
+    if (used + needed >= sizeof(failure->text)) {
+      break;
+    }
+    if (printable) {
+      failure->text[used++] = (char)*byte;
+    } else {
+      used += (size_t)snprintf(failure->text + used, sizeof(failure->text) - used, "\\x%02x", *byte);
+    }
+  }
+  failure->text[used] = '\0';
+}
+
 enum config_result config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, lua_CFunction decode, void *output)
 {
@@ -197,7 +221,7 @@ enum config_result config_read_literal_bytes_reason(const char *name, const char
   struct literal_diagnostic diagnostic;
   if (!literal_parse(bytes, size, &document, &diagnostic)) {
     if (failure) {
-      snprintf(failure->text, sizeof(failure->text), "line %zu column %zu: %s",
+      config_failure_format(failure, "line %zu column %zu: %s",
           diagnostic.line, diagnostic.column, diagnostic.reason);
     } else {
       fprintf(stderr, "config: %s:%zu:%zu: %s\n", name,
@@ -208,7 +232,7 @@ enum config_result config_read_literal_bytes_reason(const char *name, const char
   lua_State *state = luaL_newstate();
   if (!state) {
     if (failure) {
-      snprintf(failure->text, sizeof(failure->text), "cannot allocate decoder");
+      config_failure_format(failure, "cannot allocate decoder");
     } else {
       fprintf(stderr, "config: %s: cannot allocate decoder\n", name);
     }
@@ -223,7 +247,7 @@ enum config_result config_read_literal_bytes_reason(const char *name, const char
     const char *error = lua_type(state, -1) == LUA_TSTRING ?
         lua_tostring(state, -1) : "non-string configuration error";
     if (failure) {
-      snprintf(failure->text, sizeof(failure->text), "%s", error);
+      config_failure_format(failure, "%s", error);
     } else {
       fprintf(stderr, "config: %s: %s\n", name, error);
     }

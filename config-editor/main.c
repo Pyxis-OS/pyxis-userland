@@ -67,7 +67,20 @@ static bool edit(struct config_editor_context *context)
     fputs("config: edit refused: declared writer and stable ESP facts are required\n", stderr);
     return false;
   }
+  bool boot_refused = false;
   for (size_t i = 0; i < context->plan.count; ++i) {
+    const struct config_plan_change *change = &context->plan.changes[i];
+    const struct config_catalog_entry *entry = change->entry ? change->entry : change->old_entry;
+    /* Installed boot reads spaces from the pool file, never the ESP copy, so
+     * offering boot.lua choices here would edit a file nothing reads. */
+    if (entry && entry->file == CONFIG_FILE_BOOT) {
+      if (!boot_refused) {
+        fputs("config: boot.lua: edit system://config/boot.lua directly; it applies at next boot\n",
+            stderr);
+        boot_refused = true;
+      }
+      continue;
+    }
     config_delta_plan_review(&context->plan, i, stderr);
     char answer[64];
     for (;;) {

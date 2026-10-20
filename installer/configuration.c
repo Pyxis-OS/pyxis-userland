@@ -181,7 +181,7 @@ static bool refresh(struct install_configuration *plan)
         &plan->selection, &reason);
     plan->applicable = valid && plan->source_reviewed;
     plan->reason = !valid ? "trusted archive triple fails validation" :
-        !plan->source_reviewed ? "archive activation and inactive recovery require explicit Review" :
+        !plan->source_reviewed ? "archive activation requires explicit Review" :
         "whole archive selected; all ESP Lua/catalog bytes retained unchanged";
     return true;
   }
@@ -507,12 +507,12 @@ void install_configuration_review(const struct install_configuration *plan, FILE
     }
   }
   if (plan->pool_override.digest.present) {
-    fprintf(output, "system://config/boot.lua: %llu bytes SHA256 %s; %s; ESP copy: %s\n",
+    fprintf(output, "system://config/boot.lua: %llu bytes SHA256 %s; %s; %s\n",
         (unsigned long long)plan->pool_override.digest.size, plan->pool_override.digest.sha256,
         plan->pool_valid ? "boot reads it for spaces" :
         "invalid; boot starts the stock spaces until it is fixed",
-        plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
-        "printed proposals only");
+        plan->migrate_pool ? "copied into the ESP set, which boot does not use for spaces" :
+        plan->pool_valid ? "ESP set unchanged" : "printed proposals only");
     if (plan->pool_conflict) {
       fputs("Pool/ESP boot inputs differ; boot uses the pool file for spaces, never the ESP copy\n", output);
     }
@@ -601,12 +601,12 @@ void install_configuration_summary(const struct install_configuration *plan, FIL
     }
   }
   if (plan->pool_override.digest.present) {
-    fprintf(output, "Pool boot override: %s; ESP copy: %s.\n",
+    fprintf(output, "Pool boot override: %s; %s.\n",
         plan->pool_valid ? "boot reads it for spaces" :
         "invalid; boot starts the stock spaces until it is fixed",
-        plan->source == CONFIG_ACTIVE_ARCHIVE ? "migration inactive; archive selected" :
-        plan->migrate_pool ? "migration selected" : plan->pool_valid ? "migration not selected" :
-        "printed proposals only");
+        plan->source == CONFIG_ACTIVE_ARCHIVE ? "archive selected, no ESP copy" :
+        plan->migrate_pool ? "copied into the ESP set, which boot does not use for spaces" :
+        plan->pool_valid ? "ESP set unchanged" : "printed proposals only");
     if (plan->pool_conflict) {
       fputs("Pool/ESP boot inputs differ; boot uses the pool file for spaces.\n", output);
     }

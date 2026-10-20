@@ -957,7 +957,9 @@ static bool plan_fail(struct boot_plan *plan, struct config_failure *failure,
   va_list arguments;
   va_start(arguments, format);
   if (failure) {
-    vsnprintf(failure->text, sizeof(failure->text), format, arguments);
+    char reason[CONFIG_FAILURE_MAX];
+    vsnprintf(reason, sizeof(reason), format, arguments);
+    config_failure_format(failure, "%s", reason);
   } else {
     fprintf(stderr, "boot-init: ");
     vfprintf(stderr, format, arguments);
@@ -1038,7 +1040,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
   }
   for (size_t i = 0; override && i < override->volume_count; ++i) {
     if (!strcmp(override->volumes[i].name, BOOT_SYSTEM_VOLUME)) {
-      return plan_fail(plan, failure, "the override cannot redefine the %s volume", BOOT_SYSTEM_VOLUME);
+      return plan_fail(plan, failure, "the override cannot redefine the %s volume",
+          BOOT_SYSTEM_VOLUME);
     }
   }
 
@@ -1050,10 +1053,12 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) &&
         (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS &&
          volume->kind != BOOT_VOLUME_RAM_NPFS)) {
-      return plan_fail(plan, failure, "volume %s requires private RAM or NPFS backing", volume->name);
+      return plan_fail(plan, failure, "volume %s requires private RAM or NPFS backing",
+          volume->name);
     }
     if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) && !private_http_backing(plan, volume)) {
-      return plan_fail(plan, failure, "volume %s must remain outside all client roots and sources", volume->name);
+      return plan_fail(plan, failure, "volume %s must remain outside all client roots and sources",
+          volume->name);
     }
     if (volume->kind != BOOT_VOLUME_FAT32) {
       continue;
@@ -1063,7 +1068,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       if (alias->kind == BOOT_VOLUME_FAT32 && alias->partition == volume->partition &&
           !memcmp(alias->disk_guid, volume->disk_guid, sizeof(volume->disk_guid)) &&
           alias->read_write != volume->read_write) {
-        return plan_fail(plan, failure, "FAT32 volume %s conflicts with another alias's admission mode",
+        return plan_fail(plan, failure,
+            "FAT32 volume %s conflicts with another alias's admission mode",
             volume->name);
       }
     }
@@ -1075,12 +1081,14 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     const struct boot_volume *packages = boot_plan_volume(plan, BOOT_PACKAGES_VOLUME);
     if (space->package_management && (!packages ||
         (packages->kind != BOOT_VOLUME_NPFS && packages->kind != BOOT_VOLUME_RAM_NPFS))) {
-      return plan_fail(plan, failure, "space %s: package_management needs an npfs packages volume", space->name);
+      return plan_fail(plan, failure, "space %s: package_management needs an npfs packages volume",
+          space->name);
     }
     size_t package_sources = (packages != NULL) +
         (boot_plan_volume(plan, BOOT_SYSTEM_VOLUME) != NULL) + (space->package_management ? 2 : 0);
     if (space->grant_count + space->fat32_mount + package_sources > BUNDLE_SOURCE_LIMIT) {
-      return plan_fail(plan, failure, "space %s: too many selected sources including packages", space->name);
+      return plan_fail(plan, failure, "space %s: too many selected sources including packages",
+          space->name);
     }
     for (size_t j = 0; j < space->root_count; ++j) {
       const struct boot_volume *volume = boot_plan_volume(plan, space->roots[j].volume);
@@ -1112,7 +1120,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
            (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS &&
             volume->kind != BOOT_VOLUME_RAM_NPFS) ||
            !private_http_backing(plan, volume))) {
-        return plan_fail(plan, failure, "source %s requires a private read-write RAM or NPFS volume",
+        return plan_fail(plan, failure,
+            "source %s requires a private read-write RAM or NPFS volume",
             grant->name);
       }
       bool fat32 = volume->kind == BOOT_VOLUME_FAT32 || volume->kind == BOOT_VOLUME_BOOT_ESP;
@@ -1121,7 +1130,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
             space->name, grant->name);
       }
       if (grant->read_write && fat32 && !volume->read_write) {
-        return plan_fail(plan, failure, "space %s: writable source %s requires read-write FAT32 admission",
+        return plan_fail(plan, failure,
+            "space %s: writable source %s requires read-write FAT32 admission",
             space->name, grant->name);
       }
     }

@@ -9,6 +9,8 @@
 #include <random.h>
 #include <startup.h>
 #include <system_info.h>
+#include <literal.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -211,6 +213,50 @@ static void archive_bytes(const struct config_editor_context *context,
   }
 }
 
+#define POOL_BOOT_PATH "system://config/boot.lua"
+
+/* Installed boot reads spaces from the pool file, not the ESP copy, so check
+ * that file the way boot does: declarative literal data over the archive
+ * defaults. False only for a present file that boot would ignore. */
+static bool validate_pool(const struct boot_config *defaults, struct boot_config *override,
+    struct boot_plan *plan)
+{
+  FILE *file = fopen(POOL_BOOT_PATH, "rb");
+  if (!file) {
+    if (errno == ENOENT) {
+      fputs("config: no " POOL_BOOT_PATH "; boot starts the stock spaces\n", stderr);
+    } else {
+      fputs("config: " POOL_BOOT_PATH ": not checked (no readable system:// root)\n", stderr);
+    }
+    return boot_plan_build(defaults, NULL, plan, NULL, NULL);
+  }
+  char *bytes = malloc(LITERAL_SOURCE_LIMIT + 1);
+  size_t size = bytes ? fread(bytes, 1, LITERAL_SOURCE_LIMIT + 1, file) : 0;
+  bool read = bytes && !ferror(file);
+  fclose(file);
+  struct config_failure failure = {0};
+  bool ok = false;
+  if (!read) {
+    config_failure_format(&failure, "cannot read");
+  } else if (size > LITERAL_SOURCE_LIMIT) {
+    config_failure_format(&failure, "exceeds %d bytes", LITERAL_SOURCE_LIMIT);
+  } else {
+    ok = boot_config_read_literal_bytes_reason(POOL_BOOT_PATH, bytes, size, override,
+        &failure) == BOOT_CONFIG_OK &&
+        boot_plan_build(defaults, override, plan, NULL, &failure);
+  }
+  free(bytes);
+  if (ok) {
+    fputs("config: " POOL_BOOT_PATH " is valid; boot reads it for spaces\n", stderr);
+    return true;
+  }
+  fprintf(stderr, "config: " POOL_BOOT_PATH " is invalid: %s; boot ignores it and starts "
+      "the stock spaces\n", failure.text[0] ? failure.text : "invalid");
+  boot_config_free(override);
+  boot_plan_build(defaults, NULL, plan, NULL, NULL);
+  return false;
+}
+
 bool config_editor_validate(struct config_editor_context *context, bool planned)
 {
   struct config_bytes archive[CONFIG_LUA_COUNT], esp[CONFIG_LUA_COUNT];
@@ -229,11 +275,16 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
   bool ok;
   if (planned || any) {
     ok = all && config_selection_validate(archive, esp, &selection);
-    if (!ok) {
+    if (ok) {
+      fputs("config: ESP triple is statically valid\n", stderr);
+    } else {
+      /* Boot then uses the archive triple; the pool file still applies. */
       fputs("config: ESP triple is missing, unsupported or statically invalid\n", stderr);
-      goto preview;
+      const char *reason;
+      if (!config_selection_choose(archive, archive, false, false, &selection, &reason)) {
+        goto preview;
+      }
     }
-    fputs("config: ESP triple is statically valid\n", stderr);
   } else {
     const char *reason;
     ok = config_selection_choose(archive, esp, false, false, &selection, &reason);
@@ -242,19 +293,22 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
     }
     fprintf(stderr, "config: %s\n", reason);
   }
-  for (size_t i = 0; i < selection.boot.space_count; ++i) {
-    fprintf(stderr, "config: space %s from %s, init %s\n", selection.boot.spaces[i]->name,
-        selection.boot.space_sources[i] == BOOT_ENTRY_OVERRIDE ? "ESP override" : "archive default",
-        selection.boot.spaces[i]->init);
+  struct boot_config pool = {0};
+  struct boot_plan spaces = {0};
+  ok = validate_pool(&selection.defaults, &pool, &spaces) && ok;
+  for (size_t i = 0; i < spaces.space_count; ++i) {
+    fprintf(stderr, "config: space %s from %s, init %s\n", spaces.spaces[i]->name,
+        spaces.space_sources[i] == BOOT_ENTRY_OVERRIDE ? "pool override" : "archive default",
+        spaces.spaces[i]->init);
   }
-  for (size_t i = 0; i < selection.boot.volume_count; ++i) {
-    fprintf(stderr, "config: volume %s from %s\n", selection.boot.volumes[i]->name,
-        selection.boot.volume_sources[i] == BOOT_ENTRY_OVERRIDE ? "ESP override" : "archive default");
+  for (size_t i = 0; i < spaces.volume_count; ++i) {
+    fprintf(stderr, "config: volume %s from %s\n", spaces.volumes[i]->name,
+        spaces.volume_sources[i] == BOOT_ENTRY_OVERRIDE ? "pool override" : "archive default");
   }
   struct system_info_cpu cpu;
   if (system_info_get_cpu(bootstrap_capability("system_info"), &cpu) == CALL_OK && cpu.online_count) {
-    for (size_t i = 0; i < selection.boot.space_count; ++i) {
-      const struct boot_space *space = selection.boot.spaces[i];
+    for (size_t i = 0; i < spaces.space_count; ++i) {
+      const struct boot_space *space = spaces.spaces[i];
       for (size_t j = 0; j < space->cpu_count; ++j) {
         if (space->cpus[j] >= cpu.online_count) {
           fprintf(stderr, "config: space %s names absent CPU %llu\n", space->name,
@@ -267,6 +321,8 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
     fputs("config: CPU presence: not checked (read authority/inventory unavailable)\n", stderr);
   }
   fputs("config: mounted volumes, packaged timezone data and live network availability: not checked\n", stderr);
+  boot_plan_free(&spaces);
+  boot_config_free(&pool);
   config_selection_free(&selection);
 
 preview:
