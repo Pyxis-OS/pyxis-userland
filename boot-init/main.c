@@ -1,6 +1,7 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include "../libconfig/boot.h"
+#include "../libconfig/config.h"
 #include "../pkg/store.h"
 #include "network.h"
 #include "../libconfig/handoff.h"
@@ -469,8 +470,10 @@ static void seed_live_repositories(const struct authority *authority, struct mou
   }
 }
 
-/* Reads the override from the mounted system root. MISSING when absent. */
-static enum boot_config_result read_override(handle_t system, struct boot_config *override)
+/* Reads the pool override from the mounted system root, declarative only for
+ * now: literal data, never executed. MISSING when absent; INVALID fills FAILURE. */
+static enum boot_config_result read_override(handle_t system, struct boot_config *override,
+    struct config_failure *failure)
 {
   *override = (struct boot_config){0};
   struct path_context context = {.directories = &system, .count = 1};
@@ -487,14 +490,14 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
     return BOOT_CONFIG_MISSING;
   }
   if (status != CALL_OK) {
-    fprintf(stderr, "boot-init: cannot open " OVERRIDE_NAME " (status %u)\n", status);
+    snprintf(failure->text, sizeof(failure->text), "cannot open (status %u)", status);
     return BOOT_CONFIG_INVALID;
   }
   uint64_t size;
   char *bytes = NULL;
   status = file_size(file, &size);
-  if (status == CALL_OK && size > OVERRIDE_MAX_BYTES) {
-    fprintf(stderr, "boot-init: " OVERRIDE_NAME " exceeds %d bytes\n", OVERRIDE_MAX_BYTES);
+  bool too_large = status == CALL_OK && size > OVERRIDE_MAX_BYTES;
+  if (too_large) {
     status = CALL_LIMIT;
   }
   if (status == CALL_OK) {
@@ -512,9 +515,12 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
   handle_close(file);
   enum boot_config_result result = BOOT_CONFIG_INVALID;
   if (status == CALL_OK) {
-    result = boot_config_read_bytes(OVERRIDE_NAME, bytes, size, override);
+    result = boot_config_read_literal_bytes_reason(OVERRIDE_NAME, bytes, size, override,
+        failure);
+  } else if (too_large) {
+    snprintf(failure->text, sizeof(failure->text), "exceeds %d bytes", OVERRIDE_MAX_BYTES);
   } else {
-    fprintf(stderr, "boot-init: cannot read " OVERRIDE_NAME " (status %u)\n", status);
+    snprintf(failure->text, sizeof(failure->text), "cannot read (status %u)", status);
   }
   free(bytes);
   return result;
@@ -1515,26 +1521,33 @@ int main(int argc, char **argv)
       exit_status = EXIT_FAILURE;
       goto finish;
     }
+    /* Spaces never come from the published ESP boot.lua: the plan starts from
+     * the archive defaults and the pool override below applies on top. The
+     * selection keeps provenance, bin:// and the session/network snapshots. */
+    boot_plan_free(&selection.boot);
+    boot_config_free(&selection.override);
+    if (!boot_plan_build(&selection.defaults, NULL, &plan, &plan_error, NULL)) {
+      exit_status = EXIT_FAILURE;
+      goto finish;
+    }
     /* This read-only binding happens after selection, before machine effects.
      * An absent program revision takes archive rescue rather than starting an
      * ordinary installed session against an incomplete program set. */
-    bind_bin(&authority, &selection.boot, installed && !default_config);
+    bind_bin(&authority, &plan, installed && !default_config);
     archive_recovery = default_config || authority.bin == authority.boot;
     if (archive_recovery && !default_config) {
+      boot_plan_free(&plan);
       config_selection_free(&selection);
       if (!config_handoff_close(&authority.configuration) ||
-          !freeze_configuration(&authority, true, &selection)) {
+          !freeze_configuration(&authority, true, &selection) ||
+          !boot_plan_build(&selection.defaults, NULL, &plan, &plan_error, NULL)) {
         exit_status = EXIT_FAILURE;
         goto finish;
       }
     }
+    /* The plan points into these defaults; they move to the local owner. */
     defaults = selection.defaults;
-    override = selection.override;
-    plan = selection.boot;
-    applied_override = selection.from_esp ? &override : NULL;
     selection.defaults = (struct boot_config){0};
-    selection.override = (struct boot_config){0};
-    selection.boot = (struct boot_plan){0};
     frozen_configuration = true;
     result = BOOT_CONFIG_OK;
   } else
@@ -1552,7 +1565,8 @@ int main(int argc, char **argv)
   if (result != BOOT_CONFIG_OK) {
     fprintf(stderr, "boot-init: %s %s\n", path,
         result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");
-  } else if (!frozen_configuration && !boot_plan_build(&defaults, NULL, &plan, &plan_error)) {
+  } else if (!frozen_configuration && !boot_plan_build(&defaults, NULL, &plan, &plan_error,
+      NULL)) {
     suppress_boot_focus = plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
     fprintf(stderr, "boot-init: %s is invalid\n", path);
   }
@@ -1560,8 +1574,8 @@ int main(int argc, char **argv)
   authority.ram_npfs_bytes = defaults.ram_npfs_bytes;
   const struct boot_volume *system = boot_plan_volume(&plan, BOOT_SYSTEM_VOLUME);
   if (installed && system && !archive_recovery) {
-    /* Machine settings retain the system mount. Legacy startup also reads its
-     * boot override here; frozen task-5 startup never reopens that override. */
+    /* Machine settings retain the system mount. The pool boot override is read
+     * here at every boot, with READ access only; rescue never reads it. */
     mounts.entries = calloc(1, sizeof(*mounts.entries));
     if (mounts.entries) {
       struct mounted_volume *mounted = &mounts.entries[mounts.count++];
@@ -1571,26 +1585,29 @@ int main(int argc, char **argv)
       if (mounted->status != CALL_OK) {
         printf("boot-init: volume %s unavailable (status %u)\n", system->name,
             mounted->status);
-      } else if (plan.space_count && !frozen_configuration && default_config) {
+      } else if (plan.space_count && default_config) {
         puts("boot-init: rescue entry: ignoring " OVERRIDE_NAME);
-      } else if (plan.space_count && !frozen_configuration) {
-        result = read_override(mounted->root, &override);
+      } else if (plan.space_count) {
+        struct config_failure failure = {0};
+        result = read_override(mounted->root, &override, &failure);
         if (result == BOOT_CONFIG_MISSING) {
           puts("boot-init: no " OVERRIDE_NAME "; using the default");
         } else if (result == BOOT_CONFIG_OK) {
           struct boot_plan merged;
-          if (boot_plan_build(&defaults, &override, &merged, &plan_error)) {
+          if (boot_plan_build(&defaults, &override, &merged, &plan_error, &failure)) {
             boot_plan_free(&plan);
             plan = merged;
             applied_override = &override;
             puts("boot-init: applied " OVERRIDE_NAME);
           } else {
             suppress_boot_focus |= plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
+            boot_config_free(&override);
             result = BOOT_CONFIG_INVALID;
           }
         }
         if (result == BOOT_CONFIG_INVALID) {
-          puts("boot-init: ignoring invalid " OVERRIDE_NAME "; using the default");
+          printf("boot-init: ignoring " OVERRIDE_NAME ": %s; starting the stock spaces\n",
+              failure.text[0] ? failure.text : "invalid");
         }
       }
     }

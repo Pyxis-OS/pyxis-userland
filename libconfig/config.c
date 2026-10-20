@@ -187,16 +187,31 @@ static int decode_literal(lua_State *state)
 enum config_result config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, lua_CFunction decode, void *output)
 {
+  return config_read_literal_bytes_reason(name, bytes, size, decode, output, NULL);
+}
+
+enum config_result config_read_literal_bytes_reason(const char *name, const char *bytes,
+    size_t size, lua_CFunction decode, void *output, struct config_failure *failure)
+{
   struct literal *document;
   struct literal_diagnostic diagnostic;
   if (!literal_parse(bytes, size, &document, &diagnostic)) {
-    fprintf(stderr, "config: %s:%zu:%zu: %s\n", name,
-        diagnostic.line, diagnostic.column, diagnostic.reason);
+    if (failure) {
+      snprintf(failure->text, sizeof(failure->text), "line %zu column %zu: %s",
+          diagnostic.line, diagnostic.column, diagnostic.reason);
+    } else {
+      fprintf(stderr, "config: %s:%zu:%zu: %s\n", name,
+          diagnostic.line, diagnostic.column, diagnostic.reason);
+    }
     return CONFIG_ERROR;
   }
   lua_State *state = luaL_newstate();
   if (!state) {
-    fprintf(stderr, "config: %s: cannot allocate decoder\n", name);
+    if (failure) {
+      snprintf(failure->text, sizeof(failure->text), "cannot allocate decoder");
+    } else {
+      fprintf(stderr, "config: %s: cannot allocate decoder\n", name);
+    }
     literal_free(document);
     return CONFIG_ERROR;
   }
@@ -207,7 +222,11 @@ enum config_result config_read_literal_bytes(const char *name, const char *bytes
   if (status != LUA_OK) {
     const char *error = lua_type(state, -1) == LUA_TSTRING ?
         lua_tostring(state, -1) : "non-string configuration error";
-    fprintf(stderr, "config: %s: %s\n", name, error);
+    if (failure) {
+      snprintf(failure->text, sizeof(failure->text), "%s", error);
+    } else {
+      fprintf(stderr, "config: %s: %s\n", name, error);
+    }
   }
   lua_close(state);
   literal_free(document);

@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct config_failure;
+
 /* Names of volumes and spaces: 1..SPACE_NAME_MAX bytes of a-z, 0-9 and '-'. */
 #define BOOT_NAME_MAX SPACE_NAME_MAX
 /* Inits are boot archive entries named by URI. */
@@ -156,6 +158,10 @@ enum boot_config_result boot_config_read_archive_bytes(const char *name, const c
     size_t size, struct boot_config *config);
 enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
+/* The pool boot override, declarative only for now: as the literal reader, but a
+ * non-NULL FAILURE receives the reason instead of stderr. */
+enum boot_config_result boot_config_read_literal_bytes_reason(const char *name,
+    const char *bytes, size_t size, struct boot_config *config, struct config_failure *failure);
 /* Archive schema, including machine defaults, without executing input Lua. */
 enum boot_config_result boot_config_read_archive_literal_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
@@ -166,10 +172,11 @@ void boot_config_free(struct boot_config *config);
  * Then checks what spans entries: the override cannot redefine the system
  * volume, roots must name defined volumes, start must name one of its space's
  * roots and at most one space may own the network or request boot focus.
- * False reports the reason on stderr and leaves PLAN empty. Optional ERROR
- * distinguishes duplicate focus so boot can suppress it even after fallback. */
+ * False reports the reason on stderr, or in a non-NULL FAILURE, and leaves PLAN
+ * empty. Optional ERROR distinguishes duplicate focus so boot can suppress it
+ * even after fallback. */
 bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan, enum boot_plan_error *error);
+    struct boot_plan *plan, enum boot_plan_error *error, struct config_failure *failure);
 void boot_plan_free(struct boot_plan *plan);
 const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const char *name);
 /* True for the boot, tmp and bin roots and the space's configured roots. */
