@@ -56,6 +56,7 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
 /* A trusted launcher supplies a private provisioning tree separately from
  * ordinary resource inventory. Declared job_work and job_provisioner roles get
  * distinct fresh trees; existing sources in ordinary context are never copied.
+ * ALLOW_PROVISIONER gates delegation alone; client leaves remain available.
  * JOBS owns client leaves beyond transient preparation. Admitted delegation
  * trees remain linked for enclosing-owner cleanup or reboot, even after the
  * interpreter PROCESS retires.
@@ -64,7 +65,8 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
  * PROGRAM; otherwise MISSING is NULL. */
 enum call_status bundle_launch_prepare_jobs(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
-    size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
+    size_t authority_count, handle_t provisioner, bool allow_provisioner,
+    struct bundle_jobs *jobs,
     struct bundle_launch **prepared, const char **missing);
 /* Call once after the admission attempt, before releasing preparation. Unknown
  * admission pins the context; never invent retirement or replay admission. */

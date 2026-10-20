@@ -88,6 +88,7 @@ struct prepared_stage {
   /* Borrowed from bundle: the required grant this shell could not supply. */
   const char *missing;
   struct launch_request request;
+  struct program_image *input;
   /* Offered to the shell interpreter only; see program_script_extras. */
   struct program_script_grant extras[4];
   size_t extra_count;
@@ -272,6 +273,8 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
     }
     bundle_launch_close(stages[i].bundle_launch);
     stages[i].bundle_launch = NULL;
+    program_image_close(stages[i].input);
+    stages[i].input = NULL;
     if (stages[i].program) {
       command_selection_close(stages[i].program);
       stages[i].program = NULL;
@@ -717,7 +720,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   /* Only the explicit trusted init/session successor receives this ancestor;
    * ordinary clients receive a newly declared leaf through bundle preparation. */
-  handle_t job_provisioner = session ? bootstrap_capability("job_provisioner") : HANDLE_INVALID;
+  handle_t job_provisioner = session ? shell->job_provisioner : HANDLE_INVALID;
   bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
   handle_t threads = session ? shell->threads : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
@@ -1502,7 +1505,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
       {"dns_udp", environment->dns_udp, PROTOCOL_UDP_SERVICE},
       {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
-      {"pipe", mode == SHELL_FOREGROUND ? shell->pipe : HANDLE_INVALID, PROTOCOL_PIPE_SERVICE},
+      {"pipe", mode == SHELL_FOREGROUND || session ? shell->pipe : HANDLE_INVALID,
+        PROTOCOL_PIPE_SERVICE},
       {"retention_account", shell->retention_account, PROTOCOL_RETENTION_ACCOUNT},
       {"random", shell->random, PROTOCOL_RANDOM},
       {"profile", shell->profile, PROTOCOL_PROFILE},
@@ -1551,8 +1555,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       }
     }
     status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
-        ordinary_count + source_count, mode == SHELL_FOREGROUND ?
-            bootstrap_capability("job_provisioner") : HANDLE_INVALID,
+        ordinary_count + source_count, shell->job_provisioner, mode == SHELL_FOREGROUND,
         &shell->jobs, &prepared->bundle_launch, &prepared->missing);
     if (status != CALL_OK) {
       return status;
@@ -1892,6 +1895,24 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
   return CALL_OK;
 }
 
+static bool same_native_image(handle_t candidate, handle_t held)
+{
+  if (candidate == HANDLE_INVALID || held == HANDLE_INVALID) {
+    return false;
+  }
+  struct handle_info first, second;
+  if (handle_query(candidate, &first) != CALL_OK || first.kind != HANDLE_KIND_NATIVE ||
+      first.protocol != PROTOCOL_FILE || handle_query(held, &second) != CALL_OK ||
+      second.kind != HANDLE_KIND_NATIVE || second.protocol != PROTOCOL_FILE) {
+    return false;
+  }
+  struct file_info_reply a, b;
+  uint64_t identity = FILE_INFO_DOMAIN_VALID | FILE_INFO_OBJECT_VALID;
+  return file_info(candidate, &a) == CALL_OK && file_info(held, &b) == CALL_OK &&
+      (a.valid & identity) == identity && (b.valid & identity) == identity &&
+      a.domain == b.domain && a.object == b.object;
+}
+
 static enum command_result launch_stages(struct shell *shell, const struct shell_stage *user_stages,
     size_t user_count, enum shell_launch_mode mode, const char *service_name,
     handle_t replacement_control,
@@ -1965,7 +1986,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     goto failed;
   }
 
-  /* Open user images before taking any command-specific redirect action. */
+  bool shell_execution = false;
+  /* Open and classify held user images once, before redirects or group policy. */
   operation = "shell: open image";
   for (size_t i = 0; i < user_count; ++i) {
     failed_stage = i;
@@ -1979,6 +2001,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     prepared[i].image = prepared[i].program->image;
     prepared[i].bundle = prepared[i].program->bundle;
+    status = program_image_prepare(prepared[i].image, &prepared[i].input);
+    if (status != CALL_OK) {
+      goto failed;
+    }
+    const char *interpreter = program_image_interpreter(prepared[i].input);
+    bool held_interpreter = !prepared[i].bundle && interpreter &&
+        !strcmp(interpreter, SHELL_INTERPRETER) &&
+        (shell->interpreter_root != HANDLE_INVALID || shell->interpreter_image != HANDLE_INVALID);
+    shell_execution |= held_interpreter ||
+        same_native_image(prepared[i].image, shell->command_shell_image) ||
+        same_native_image(prepared[i].image, shell->interpreter_image);
   }
 
   bool inherited_stream[ENVIRONMENT_STREAM_COUNT] = {0};
@@ -2108,7 +2141,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
   if (mode == SHELL_FOREGROUND && scope) {
-    if (scope->producer != HANDLE_INVALID || stage_count != user_count) {
+    if (scope->producer != HANDLE_INVALID || stage_count != user_count || shell_execution) {
       handle_t launcher = shell->script_group.launcher != HANDLE_INVALID ?
           shell->script_group.launcher : shell->child_launcher != HANDLE_INVALID ?
           shell->child_launcher : shell->launcher;
@@ -2488,8 +2521,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       .grants = prepared[i].extras,
       .count = prepared[i].extra_count,
       .job_provisioner = mode == SHELL_FOREGROUND && !prepared[i].bundle ?
-          bootstrap_capability("job_provisioner") : HANDLE_INVALID,
+          shell->job_provisioner : HANDLE_INVALID,
       .job_clock = shell->clock,
+      .prepared_image = prepared[i].input,
       .job_delegation = scope && scope->owned ? &scope->delegations[i] : NULL,
     };
   }
@@ -3150,7 +3184,7 @@ static enum command_result launch_output(struct shell *shell,
       staged |= stages[i].redirections[j].staging_output;
     }
   }
-  if (stdout_producer == HANDLE_INVALID && !merged && !staged) {
+  if (command->background && stdout_producer == HANDLE_INVALID && !merged && !staged) {
     enum command_result result = launch_stages(shell, stages, stage_count,
         command->background ? SHELL_BACKGROUND : SHELL_FOREGROUND, NULL,
         HANDLE_INVALID, false, false, outcome, NULL);

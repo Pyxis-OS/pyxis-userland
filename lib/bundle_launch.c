@@ -507,7 +507,8 @@ static enum call_status prepare_job_work(struct bundle_launch *prepared,
 
 static enum call_status prepare_bundle(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
-    size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
+    size_t authority_count, handle_t provisioner, bool allow_provisioner,
+    struct bundle_jobs *jobs,
     struct bundle_launch **result, const char **missing)
 {
   const char *unused;
@@ -589,8 +590,8 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
         "job_work", missing);
   }
   if (status == CALL_OK) {
-    status = prepare_job_work(prepared, resources, resource_count, provisioner, jobs,
-        "job_provisioner", missing);
+    status = prepare_job_work(prepared, resources, resource_count,
+        allow_provisioner ? provisioner : HANDLE_INVALID, jobs, "job_provisioner", missing);
   }
   for (size_t i = 0; status == CALL_OK && i < bundle_count; ++i) {
     if (has_entry(prepared, bundle_entries[i].name)) {
@@ -619,16 +620,17 @@ enum call_status bundle_launch_prepare(const struct bundle_program *program,
     size_t authority_count, struct bundle_launch **result)
 {
   return prepare_bundle(program, source, authority, authority_count,
-      HANDLE_INVALID, NULL, result, NULL);
+      HANDLE_INVALID, false, NULL, result, NULL);
 }
 
 enum call_status bundle_launch_prepare_jobs(const struct bundle_program *program,
     const struct launch_request *source, const struct bundle_authority *authority,
-    size_t authority_count, handle_t provisioner, struct bundle_jobs *jobs,
+    size_t authority_count, handle_t provisioner, bool allow_provisioner,
+    struct bundle_jobs *jobs,
     struct bundle_launch **result, const char **missing)
 {
-  return prepare_bundle(program, source, authority, authority_count, provisioner, jobs, result,
-      missing);
+  return prepare_bundle(program, source, authority, authority_count, provisioner,
+      allow_provisioner, jobs, result, missing);
 }
 
 void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status status,

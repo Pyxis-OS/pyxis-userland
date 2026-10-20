@@ -8,6 +8,7 @@
 #include <abi/pipe.h>
 #include <abi/file.h>
 #include <directory.h>
+#include <command_selection.h>
 #include "../common/directory.h"
 #include "../common/session_wait.h"
 #include "../common/pane_cwd.h"
@@ -129,6 +130,8 @@ static int run_command_line(struct shell *shell, const char *source, char *line)
 static void retain_interpreter_image(struct shell *shell)
 {
   if (shell->interpreter_root != HANDLE_INVALID) {
+    directory_lookup(shell->interpreter_root, "init-shell.pxe", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, &shell->interpreter_image);
     return;
   }
   handle_t inherited = bootstrap_capability("interpreter_image");
@@ -201,6 +204,7 @@ int main(int argc, char **argv)
     .pipe = bootstrap_capability("pipe"),
     .service = bootstrap_capability("service"),
     .retention_account = bootstrap_capability("retention_account"),
+    .job_provisioner = bootstrap_capability("job_provisioner"),
     .environment = startup_environment_handle(),
     .random = bootstrap_capability("random"),
     .net_registry = bootstrap_capability("net_registry"),
@@ -278,6 +282,17 @@ int main(int argc, char **argv)
   if (status != CALL_OK) {
     shell_directory_error(&shell, "shell", "working directory", status);
     goto done;
+  }
+
+  /* Pin the startup command selection for containment only. A later shadowing
+   * name or a manifest ID is not proof of the same held executable. */
+  struct command_selection *command_shell = NULL;
+  if (shell_open_image(&shell, "shell", &command_shell) == CALL_OK) {
+    if (command_shell->bundle) {
+      handle_copy_restricted(command_shell->image, FILE_RIGHT_READ, 0,
+          &shell.command_shell_image);
+    }
+    command_selection_close(command_shell);
   }
 
   if (positional) {
@@ -396,6 +411,10 @@ int main(int argc, char **argv)
   }
 
 done:
+  if (shell.command_shell_image != HANDLE_INVALID && handle_close(shell.command_shell_image) != 0) {
+    shell_directory_error(&shell, "shell: cleanup", "shell command image", CALL_BAD_HANDLE);
+    result = EXIT_FAILURE;
+  }
   if (shell.interpreter_image != HANDLE_INVALID && handle_close(shell.interpreter_image) != 0) {
     shell_directory_error(&shell, "shell: cleanup", "interpreter image", CALL_BAD_HANDLE);
     result = EXIT_FAILURE;

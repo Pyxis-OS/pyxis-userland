@@ -60,6 +60,9 @@ enum call_status shell_capture_destination(struct shell *shell, const char *name
   if (!environment_name(checked, name)) {
     return CALL_BAD_REQUEST;
   }
+  if (shell_environment_runtime_role(name)) {
+    return CALL_DENIED;
+  }
   if (!shell->retention_account) {
     return CALL_DENIED;
   }

@@ -126,6 +126,9 @@ struct shell {
   /* Owned READ-only code selection for rootless script re-entry. Never a root
    * or proof of trust; nested scripts receive a private source-lineage copy. */
   handle_t interpreter_image;
+  /* Startup-selected shell bundle code, retained only for containment matching. */
+  handle_t command_shell_image;
+  handle_t job_provisioner;
   handle_t threads; /* Retained before commands can rebind the startup table. */
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_registry,

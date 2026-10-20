@@ -132,17 +132,9 @@ static enum command_result export_values(struct shell *shell,
         status = capture_value(snapshot, name, &owned[i]);
       }
       value = &owned[i];
-      if (status == CALL_OK && value->kind == ENVIRONMENT_CAP &&
-          shell_environment_runtime_role(name)) {
-        status = CALL_DENIED;
-      }
       if (status == CALL_OK && (value->flags & ENVIRONMENT_EXPORTED)) {
         continue;
       }
-    }
-    if (status == CALL_OK && value->kind == ENVIRONMENT_CAP &&
-        shell_environment_runtime_role(name)) {
-      status = CALL_DENIED;
     }
     if (status == CALL_OK) {
       struct shell_expanded_word selected = *word;
