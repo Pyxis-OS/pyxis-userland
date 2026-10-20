@@ -29,9 +29,13 @@ bool install_installed_admit(struct install_plan *plan);
 bool install_installed_publish(struct install_plan *plan);
 void install_installed_destroy(struct install_installed_publication *publication);
 
-/* Discovery through the shared FAT reader. ABSENT means no readiness record;
- * malformed/prepared/pending evidence refuses normal Update. */
-enum install_installed_probe { INSTALL_INSTALLED_ABSENT, INSTALL_INSTALLED_READY, INSTALL_INSTALLED_REFUSED };
+/* Discovery through the shared FAT reader. PENDING routes an inherited committed
+ * record to a fresh completion Review; it proves no writable completion is safe.
+ * Prepared/malformed records and failed inspection refuse normal Update. */
+enum install_installed_probe {
+  INSTALL_INSTALLED_ABSENT, INSTALL_INSTALLED_READY,
+  INSTALL_INSTALLED_PENDING, INSTALL_INSTALLED_REFUSED,
+};
 enum install_installed_probe install_installed_probe(const struct install_disk *disk,
     const struct install_layout *layout, char revision[64], const char **reason);
 

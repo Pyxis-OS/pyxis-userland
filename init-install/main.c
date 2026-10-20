@@ -1,6 +1,7 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
 #include "update.h"
+#include "../installer/plan_record.h"
 #include <abi/clock.h>
 #include <abi/console.h>
 #include <abi/disk.h>
@@ -14,6 +15,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
+#include <pyxis/descriptor.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +23,7 @@
 #include <space.h>
 #include <system_info.h>
 #include <term.h>
+#include <unistd.h>
 
 #if INSTALLER_PUBLICATION_SCRATCH
 #define INSTALL_ESP_DISK_RIGHTS DISKS_RIGHT_OPEN_OWNED_ESP
@@ -52,14 +55,77 @@ static bool close_sources(const handle_t *sources, size_t count)
   return success;
 }
 
+static bool prepare_replay(handle_t parent, handle_t *record_file, bool *coexist, bool *clean)
+{
+  struct install_plan_record record;
+  puts("Supply one framed printed plan on standard input (ending with end).");
+  if (fflush(stdout) != 0 || !install_plan_record_parse(stdin, &record)) {
+    fputs("init-install: invalid, incomplete or unsupported plan; returning to installer actions\n", stderr);
+    clearerr(stdin);
+    return false;
+  }
+  handle_t file = HANDLE_INVALID;
+  enum call_status status = directory_create(parent, "installer-replay", DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ | FILE_RIGHT_WRITE, &file);
+  if (status != CALL_OK) {
+    fprintf(stderr, "init-install: private Replay file unavailable (status %u)\n", status);
+    return false;
+  }
+  status = directory_remove(parent, "installer-replay", DIRECTORY_KIND_FILE);
+  if (status != CALL_OK) {
+    fprintf(stderr, "init-install: private Replay file unlink failed (status %u)\n", status);
+    *clean = false;
+    if (handle_close(file) != CALL_OK) {
+      *clean = false;
+    }
+    return false;
+  }
+  int descriptor = pyxis_descriptor_adopt(&file, PYXIS_DESCRIPTOR_READ | PYXIS_DESCRIPTOR_WRITE);
+  if (descriptor < 0) {
+    if (handle_close(file) != CALL_OK) {
+      *clean = false;
+    }
+    fputs("init-install: cannot prepare Replay stream\n", stderr);
+    return false;
+  }
+  FILE *output = fdopen(descriptor, "w");
+  if (!output) {
+    if (close(descriptor) != 0) {
+      *clean = false;
+    }
+    fputs("init-install: cannot prepare Replay output\n", stderr);
+    return false;
+  }
+  struct pyxis_descriptor_binding binding;
+  bool success = install_plan_record_format(output, &record) &&
+      pyxis_descriptor_borrow(descriptor, &binding) == 0 &&
+      handle_copy_restricted(binding.handle, FILE_RIGHT_READ, 0, record_file) == CALL_OK;
+  if (fclose(output) != 0) {
+    *clean = false;
+    success = false;
+  }
+  if (!success) {
+    if (*record_file != HANDLE_INVALID) {
+      if (handle_close(*record_file) != CALL_OK) {
+        *clean = false;
+      }
+      *record_file = HANDLE_INVALID;
+    }
+    fputs("init-install: Replay capture failed; installer not launched\n", stderr);
+    return false;
+  }
+  *coexist = record.coexist;
+  return true;
+}
+
 static int run_install(int argc, char **argv, bool selector)
 {
   enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, DIAGNOSTICS,
     SNAPSHOT_PARENT, POWER,
-    LAUNCHER, INPUT, OUTPUT, ERROR, FACTORY, SOURCE_COUNT, GRANT_COUNT = FACTORY };
+    LAUNCHER, INPUT, OUTPUT, ERROR, REPLAY, FACTORY, SOURCE_COUNT, GRANT_COUNT = FACTORY };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
     "clock", "random", "system_info", "log", "boot", "installer_diagnostics", "config_snapshot_parent", "power",
-    "launcher", "input", "output", "stderr", "space_factory"};
+    "launcher", "input", "output", "stderr", "replay", "space_factory"};
   handle_t sources[SOURCE_COUNT] = {
     bootstrap_capability("disks"), bootstrap_capability("boot_kernel"), bootstrap_capability("boot_archive"),
     bootstrap_capability("memory"), bootstrap_capability("clock"), bootstrap_capability("random"),
@@ -69,7 +135,7 @@ static int run_install(int argc, char **argv, bool selector)
     bootstrap_capability("power"), bootstrap_capability("launcher"),
     selector ? bootstrap_capability("input") : HANDLE_INVALID,
     selector ? bootstrap_capability("output") : HANDLE_INVALID,
-    HANDLE_INVALID, selector ? HANDLE_INVALID : bootstrap_take_capability("space_factory"),
+    HANDLE_INVALID, HANDLE_INVALID, selector ? HANDLE_INVALID : bootstrap_take_capability("space_factory"),
   };
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
   uint64_t *cpus = NULL;
@@ -77,6 +143,7 @@ static int run_install(int argc, char **argv, bool selector)
   int result = EXIT_FAILURE;
   bool coexist = false;
   bool updating = false;
+  bool replay = false, inspection_clean = true;
   struct installer_update_choice update_choice = {0};
   char selected_target[64], selected_esp[64], selected_pool[64], selected_guid[64];
   bool snapshot_created = false, child_retired = false;
@@ -108,7 +175,7 @@ static int run_install(int argc, char **argv, bool selector)
   }
   for (unsigned i = 0; i < SOURCE_COUNT; i++) {
     /* Without power the installer simply offers no restart. */
-    bool required = i != POWER && (selector ? i != FACTORY :
+    bool required = i != POWER && i != REPLAY && (selector ? i != FACTORY :
         i != INPUT && i != OUTPUT && i != ERROR);
     if (sources[i] == HANDLE_INVALID && required) {
       fprintf(stderr, "init-install: missing resource %s; use the Install Pyxis boot entry\n", names[i]);
@@ -125,14 +192,14 @@ static int run_install(int argc, char **argv, bool selector)
   if (selector) {
     struct terminal terminal = {.input = sources[INPUT], .output = sources[OUTPUT]};
     for (;;) {
-      const char *actions[] = {"Install", "Update", "Cancel"};
+      const char *actions[] = {"Install", "Update", "Replay", "Cancel"};
       if (fflush(stdout) != 0) {
         goto done;
       }
       struct term_choice_result action = term_read_choice(&terminal,
           "Choose installer action", actions, sizeof(actions) / sizeof(actions[0]), 0);
       if (action.status == TERM_LINE_CANCELLED ||
-          (action.status == TERM_LINE_OK && action.selected == 2)) {
+          (action.status == TERM_LINE_OK && action.selected == 3)) {
         puts("Installation cancelled; installer not launched.");
         result = EXIT_SUCCESS;
         goto done;
@@ -141,12 +208,33 @@ static int run_install(int argc, char **argv, bool selector)
         fputs("init-install: action selection interrupted; installer not launched\n", stderr);
         goto done;
       }
+      if (!inspection_clean) {
+        fputs("init-install: inspection cleanup remains uncertain; cancel and restart the installer before launching\n", stderr);
+        continue;
+      }
       updating = action.selected == 1;
+      replay = action.selected == 2;
       if (updating) {
-        bool back;
-        if (!installer_update_choose(&terminal, sources[DISKS], sources[CLOCK], sources[RANDOM],
-            &update_choice, &back)) {
-          goto done;
+        bool back, clean;
+        handle_t discovery = HANDLE_INVALID;
+        uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY |
+            DISKS_RIGHT_OPEN_OWNED_ESP;
+        enum call_status status = handle_copy_restricted(sources[DISKS], rights, 0, &discovery);
+        if (status != CALL_OK) {
+          fprintf(stderr, "init-install: read-only discovery grant unavailable (status %u)\n", status);
+          continue;
+        }
+        bool selected = installer_update_choose(&terminal, discovery, sources[CLOCK], sources[RANDOM],
+            &update_choice, &back, &clean);
+        bool closed = handle_close(discovery) == CALL_OK;
+        inspection_clean &= clean && closed;
+        if (!inspection_clean) {
+          fputs("init-install: Update discovery cleanup remains uncertain; returning to installer actions\n", stderr);
+          continue;
+        }
+        if (!selected) {
+          fputs("init-install: Update discovery unavailable; returning to installer actions\n", stderr);
+          continue;
         }
         if (back) {
           continue;
@@ -161,6 +249,10 @@ static int run_install(int argc, char **argv, bool selector)
         snprintf(selected_pool, sizeof(selected_pool), "--selected-pool=%llu",
             (unsigned long long)update_choice.layout.pool_partition);
         snprintf(selected_guid, sizeof(selected_guid), "--selected-disk-guid=%s", guid);
+      } else if (replay) {
+        if (!prepare_replay(sources[SNAPSHOT_PARENT], &sources[REPLAY], &coexist, &inspection_clean)) {
+          continue;
+        }
       } else {
         puts("Coexist preserves other partitions; classic permits whole-disk erase.");
         if (fflush(stdout) != 0) {
@@ -229,6 +321,7 @@ static int run_install(int argc, char **argv, bool selector)
     [INPUT] = {sources[INPUT], CONSOLE_RIGHT_READ, 0},
     [OUTPUT] = {sources[OUTPUT], CONSOLE_RIGHT_WRITE, 0},
     [ERROR] = {sources[ERROR], CONSOLE_RIGHT_WRITE, 0},
+    [REPLAY] = {sources[REPLAY], FILE_RIGHT_READ, 0},
   };
   struct launch_environment_entry resources[] = {
     PROFILE_CAP((uintptr_t)"disks", DISKS), PROFILE_CAP((uintptr_t)"boot_kernel", KERNEL),
@@ -243,7 +336,7 @@ static int run_install(int argc, char **argv, bool selector)
   struct launch_environment_entry roots[] = {PROFILE_CAP((uintptr_t)"boot", BOOT_ROOT)};
   size_t argument_count = 1 + (!selector || coexist);
   if (selector) {
-    argument_count += 1 + (updating ? 4 : 0);
+    argument_count += 1 + (updating ? 4 + update_choice.pending : 0);
   }
   if (argc > 1) {
     argument_count += (size_t)argc - 1;
@@ -259,12 +352,16 @@ static int run_install(int argc, char **argv, bool selector)
     arguments[argument_index++] = selector ? "--coexist" : "--select-profile";
   }
   if (selector) {
-    arguments[argument_index++] = updating ? "--selected-action=update" : "--selected-action=install";
+    arguments[argument_index++] = replay ? "--apply" :
+        updating ? "--selected-action=update" : "--selected-action=install";
     if (updating) {
       arguments[argument_index++] = selected_target;
       arguments[argument_index++] = selected_esp;
       arguments[argument_index++] = selected_pool;
       arguments[argument_index++] = selected_guid;
+      if (update_choice.pending) {
+        arguments[argument_index++] = "--selected-pending";
+      }
     }
   }
   for (int i = 1; i < argc; i++) {
@@ -279,7 +376,7 @@ static int run_install(int argc, char **argv, bool selector)
   if (selector) {
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"input", INPUT);
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", OUTPUT);
-    entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDIN, INPUT);
+    entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDIN, replay ? REPLAY : INPUT);
     entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDOUT, OUTPUT);
     entries[entry_count++] = profile_stdio_entry(ENVIRONMENT_STDERR, ERROR);
   } else {

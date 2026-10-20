@@ -83,6 +83,7 @@ INSTALLER_CONFIG_OBJECTS += $(BUILD)/installer/installed_probe.o
 INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c \
     installer/consent.c installer/esp_read.c installer/review.c installer/coexist.c \
     installer/progress.c installer/digest.c installer/installed_probe.c installer/boot_entry.c \
+    installer/pending.c installer/plan_record.c \
     config-editor/record.c config-editor/storage.c config-editor/ownership.c \
     config-editor/catalog.c xfer/hash.c
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/init-install/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
