@@ -67,6 +67,17 @@ struct script_scratch {
   struct job_work *provisioner;
 };
 
+static void take_delegation(struct script_scratch *scratch, bool admitted,
+    const struct program_script_extras *extras)
+{
+  if (extras && extras->job_delegation) {
+    *extras->job_delegation = admitted ? scratch->provisioner : NULL;
+    if (admitted) {
+      scratch->provisioner = NULL;
+    }
+  }
+}
+
 static void release_script(struct script_scratch *scratch, bool admitted)
 {
   job_work_close(scratch->provisioner, !admitted);
@@ -117,15 +128,9 @@ static enum call_status prepare_script(const struct launch_request *source,
           source->entry_count - 1) {
     return CALL_LIMIT;
   }
-  size_t extra = runtime_count;
-  if (selected && extras->job_provisioner != HANDLE_INVALID &&
-      extras->job_clock != HANDLE_INVALID) {
-    enum call_status status = job_work_create(extras->job_provisioner,
-        extras->job_clock, &scratch->provisioner);
-    if (status == CALL_OK) {
-      ++extra;
-    }
-  }
+  bool wants_provisioner = selected && extras->job_provisioner != HANDLE_INVALID &&
+      extras->job_clock != HANDLE_INVALID;
+  size_t extra = runtime_count + wants_provisioner;
   if (extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) - source->grant_count - 1 ||
       extra >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) -
           source->entry_count - 1) {
@@ -161,7 +166,7 @@ static enum call_status prepare_script(const struct launch_request *source,
       return CALL_WRONG_TYPE;
     }
     status = handle_copy_restricted(extras->image, FILE_RIGHT_READ, 0, &scratch->image);
-  } else if (extra) {
+  } else if (runtime_count) {
     handle_t held = extras->root;
     struct path_context root = {.directories = &held, .count = 1, .capacity = 1};
     status = open_interpreter(&root, extras->path, &scratch->image);
@@ -172,10 +177,6 @@ static enum call_status prepare_script(const struct launch_request *source,
     return status;
   }
 
-  if (source->grant_count) {
-    memcpy(scratch->grants, (const void *)(uintptr_t)source->grants,
-        source->grant_count * sizeof(*scratch->grants));
-  }
   struct handle_info info;
   enum call_status query = handle_query(source->image, &info);
   if (query != CALL_OK) {
@@ -183,6 +184,14 @@ static enum call_status prepare_script(const struct launch_request *source,
   }
   if (info.protocol != PROTOCOL_FILE) {
     return CALL_WRONG_TYPE;
+  }
+  if (wants_provisioner) {
+    job_work_create(extras->job_provisioner, extras->job_clock, &scratch->provisioner);
+  }
+  extra = runtime_count + (scratch->provisioner != NULL);
+  if (source->grant_count) {
+    memcpy(scratch->grants, (const void *)(uintptr_t)source->grants,
+        source->grant_count * sizeof(*scratch->grants));
   }
   uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
   scratch->grants[source->grant_count] =
@@ -282,6 +291,9 @@ enum call_status program_launch_extras(handle_t launcher, const struct launch_re
     return CALL_BAD_REQUEST;
   }
 
+  if (extras && extras->job_delegation) {
+    *extras->job_delegation = NULL;
+  }
   struct script_scratch scratch = {0};
   struct launch_request prepared;
   bool admitted = false;
@@ -291,6 +303,7 @@ enum call_status program_launch_extras(handle_t launcher, const struct launch_re
     status = launcher_launch(launcher, &prepared, child);
     admitted = status == CALL_OK || status == CALL_OUTCOME_UNKNOWN;
   }
+  take_delegation(&scratch, admitted, extras);
   release_script(&scratch, admitted);
   return status;
 }
@@ -343,6 +356,11 @@ enum call_status program_launch_batch_extras(handle_t launcher,
     return CALL_BAD_REQUEST;
   }
 
+  for (size_t i = 0; extras && i < count; ++i) {
+    if (extras[i].job_delegation) {
+      *extras[i].job_delegation = NULL;
+    }
+  }
   struct launch_request *prepared = malloc(count * sizeof(*prepared));
   if (!prepared) {
     return CALL_NO_MEMORY;
@@ -363,6 +381,7 @@ enum call_status program_launch_batch_extras(handle_t launcher,
     admitted = status == CALL_OK || status == CALL_OUTCOME_UNKNOWN;
   }
   for (size_t i = 0; i < count; ++i) {
+    take_delegation(&scratch[i], admitted, extras ? &extras[i] : NULL);
     release_script(&scratch[i], admitted);
   }
   free(prepared);

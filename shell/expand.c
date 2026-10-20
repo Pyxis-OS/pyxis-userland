@@ -190,6 +190,11 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
         }
       }
       if (selected.kind == ENVIRONMENT_CAP) {
+        if (shell_environment_runtime_role(selected.name)) {
+          *status = handle_close(selected.handle) ? CALL_OUTCOME_UNKNOWN : CALL_DENIED;
+          error = "A runtime capability is private to the shell";
+          break;
+        }
         if (capability || length || word->count != 1) {
           if (handle_close(selected.handle)) {
             *status = CALL_OUTCOME_UNKNOWN;

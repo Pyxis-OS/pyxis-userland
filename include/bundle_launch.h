@@ -4,6 +4,7 @@
 #include <bundle.h>
 #include <launcher.h>
 
+struct job_work;
 struct bundle_launch;
 struct bundle_job_context;
 
@@ -69,6 +70,9 @@ enum call_status bundle_launch_prepare_jobs(const struct bundle_program *program
  * admission pins the context; never invent retirement or replay admission. */
 void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status status,
     handle_t process);
+/* Take an admitted delegation for an enclosing owned scope. The caller closes
+ * it with job_work_close, removing it only after confirmed scope retirement. */
+struct job_work *bundle_launch_take_delegation(struct bundle_launch *prepared);
 /* Poll confirmed client retirement; clean only with a valid owned observer. */
 enum call_status bundle_jobs_reap(struct bundle_jobs *jobs);
 enum call_status bundle_jobs_close(struct bundle_jobs *jobs);

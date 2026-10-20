@@ -106,6 +106,7 @@ struct launch_scope {
   size_t root_count;
   char root_roles[PROVIDER_SETUP_ROOT_MAX * (PROVIDER_SETUP_ROLE_MAX + 1)];
   bool published;
+  struct job_work *delegations[LAUNCH_BATCH_MAX];
 };
 
 static enum call_status publish_service_roots(struct shell *shell,
@@ -518,6 +519,9 @@ static enum call_status select_operands(struct prepared_stage *prepared, bool re
     const struct environment_value *value = prepared->selection[i];
     if (value->kind != ENVIRONMENT_CAP) {
       return CALL_BAD_REQUEST;
+    }
+    if (shell_environment_runtime_role(value->name)) {
+      return CALL_DENIED;
     }
     bool repeated = false;
     for (size_t j = 0; j < i; ++j) {
@@ -1547,7 +1551,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       }
     }
     status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
-        ordinary_count + source_count, bootstrap_capability("job_provisioner"),
+        ordinary_count + source_count, mode == SHELL_FOREGROUND ?
+            bootstrap_capability("job_provisioner") : HANDLE_INVALID,
         &shell->jobs, &prepared->bundle_launch, &prepared->missing);
     if (status != CALL_OK) {
       return status;
@@ -2485,6 +2490,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       .job_provisioner = mode == SHELL_FOREGROUND && !prepared[i].bundle ?
           bootstrap_capability("job_provisioner") : HANDLE_INVALID,
       .job_clock = shell->clock,
+      .job_delegation = scope && scope->owned ? &scope->delegations[i] : NULL,
     };
   }
   if (stage_count == 1) {
@@ -2496,6 +2502,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
   for (size_t i = 0; i < stage_count; ++i) {
     bundle_launch_admitted(prepared[i].bundle_launch, status, children[i]);
+    if (scope && scope->owned && prepared[i].bundle_launch) {
+      scope->delegations[i] = bundle_launch_take_delegation(prepared[i].bundle_launch);
+    }
   }
   if (status != CALL_OK) {
     if (report_scope && status == CALL_OUTCOME_UNKNOWN) {
@@ -3229,6 +3238,14 @@ static enum command_result launch_output(struct shell *shell,
     scope.error = CALL_BAD_HANDLE;
     result = COMMAND_FATAL;
     shell_directory_error(shell, "shell: close transaction", "", CALL_BAD_HANDLE);
+  }
+  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
+    status = job_work_close(scope.delegations[i], scope.retired);
+    if (status != CALL_OK) {
+      scope.error = status;
+      result = COMMAND_FATAL;
+      shell_directory_error(shell, "shell: delegated job cleanup", "", status);
+    }
   }
   bool closed = close_handle(&scope.group.launcher);
   closed = close_handle(&scope.group.supervision) && closed;

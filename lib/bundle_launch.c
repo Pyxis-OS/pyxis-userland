@@ -647,6 +647,25 @@ void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status sta
   }
 }
 
+struct job_work *bundle_launch_take_delegation(struct bundle_launch *prepared)
+{
+  if (!prepared) {
+    return NULL;
+  }
+  struct bundle_job_context **link = &prepared->context;
+  while (*link) {
+    struct bundle_job_context *context = *link;
+    if (context->admitted && context->delegated) {
+      *link = context->next;
+      struct job_work *work = context->work;
+      free(context);
+      return work;
+    }
+    link = &context->next;
+  }
+  return NULL;
+}
+
 enum call_status bundle_jobs_reap(struct bundle_jobs *jobs)
 {
   if (!jobs) {

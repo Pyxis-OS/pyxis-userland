@@ -3,6 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool shell_environment_runtime_role(const char *name)
+{
+  return !strcmp(name, "job_provisioner") || !strcmp(name, "interpreter_root") ||
+      !strcmp(name, "interpreter_image");
+}
+
 enum call_status shell_environment_init(struct shell *shell)
 {
   struct environment_capture captured = {0};

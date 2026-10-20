@@ -5,7 +5,7 @@ declared grants, and `shell -c "LINE" [argument...]` runs one command line the
 same way; Neovim's `'shell'` uses it. Console input/output, threads, random and
 the retention account and a private job provisioner are optional grants:
 without a retention account `$(...)` captures are refused. Where the caller
-can provision jobs, this bundle receives its own private provisioning subtree;
+can provision jobs, a foreground launch receives its own private provisioning subtree;
 `FILE`, `-c` and nested exact-shell scripts can launch declared job clients.
 Typed captures retain capabilities: `api=$(http prepare POST URI)`, then
 `reply=$(printf '{}' > $api)` and `cat $reply`. Ctrl+C stops the script subtree.
@@ -31,7 +31,7 @@ conflict with response handoff.
 Nested scripts with the exact `#!boot://init-shell.pxe` interpreter use the
 bundle's held `app/bin/shell.pxe` image and forward only held pipe creation,
 subgroup-bound child launch and optional threads. When explicitly available,
-launch preparation also creates a fresh private job provisioning subtree for
+foreground launch preparation also creates a fresh private job provisioning subtree for
 the selected interpreter. Ordinary programs receive no implicit job context.
 The image stays private and
 carries no interpreter trust; unavailable images refuse re-entry. Mutable

@@ -141,6 +141,7 @@ struct shell {
   struct shell_fat_mount fat_mounts[SHELL_FAT_MOUNT_LIMIT];
 };
 
+bool shell_environment_runtime_role(const char *name);
 enum call_status shell_environment_init(struct shell *shell);
 void shell_environment_close(struct shell *shell);
 bool shell_environment_initial(const struct shell *shell, const struct environment_value *value);

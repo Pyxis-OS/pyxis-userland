@@ -6,6 +6,7 @@
 #include <abi/launcher.h>
 #include <abi/syscall.h>
 
+struct job_work;
 struct path_context;
 struct space_definition;
 
@@ -111,6 +112,10 @@ struct program_script_extras {
    * when absent/unavailable; successful or unknown admission retains the
    * subtree for enclosing-owner cleanup or reboot, not PROCESS retirement. */
   handle_t job_provisioner, job_clock;
+  /* Optional owned result, initialized to NULL. Successful/unknown admission
+   * transfers the delegation to the caller, which may remove it only after
+   * confirmed retirement of the enclosing scope, not merely the interpreter. */
+  struct job_work **job_delegation;
 };
 
 /* As program_launch, with optional extras (NULL for none). */
