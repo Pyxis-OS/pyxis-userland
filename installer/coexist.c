@@ -4,6 +4,21 @@
 
 #define DEFAULT_POOL_BYTES (UINT64_C(64) * 1024 * 1024 * 1024)
 
+void install_coexist_layout(const struct disk_partition_selection *esp,
+    const struct disk_partition_selection *pool, struct install_layout *layout)
+{
+  *layout = (struct install_layout){.esp_partition = esp->partition,
+      .pool_partition = pool->partition,
+      .esp_start = esp->first_block * esp->device_block_size,
+      .esp_bytes = esp->block_count * esp->device_block_size,
+      .pool_start = pool->first_block * pool->device_block_size,
+      .pool_bytes = pool->block_count * pool->device_block_size,
+      .esp_attributes = esp->attributes, .pool_attributes = pool->attributes};
+  memcpy(layout->disk_guid, pool->disk_guid, 16);
+  memcpy(layout->esp_guid, esp->partition_guid, 16);
+  memcpy(layout->pool_guid, pool->partition_guid, 16);
+}
+
 static const uint8_t esp_type[16] = {
   0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
   0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,

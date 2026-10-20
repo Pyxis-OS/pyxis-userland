@@ -1,5 +1,6 @@
 #include "../common/launch_environment.h"
 #include "../common/bootstrap_environment.h"
+#include "update.h"
 #include <abi/clock.h>
 #include <abi/console.h>
 #include <abi/disk.h>
@@ -75,6 +76,9 @@ static int run_install(int argc, char **argv, bool selector)
   const char **arguments = NULL;
   int result = EXIT_FAILURE;
   bool coexist = false;
+  bool updating = false;
+  struct installer_update_choice update_choice = {0};
+  char selected_target[64], selected_esp[64], selected_pool[64], selected_guid[64];
   bool snapshot_created = false, child_retired = false;
   handle_t ram = selector ? HANDLE_INVALID : bootstrap_capability("ram");
   struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
@@ -112,35 +116,72 @@ static int run_install(int argc, char **argv, bool selector)
     }
   }
   for (int i = 1; i < argc; ++i) {
-    if (!strcmp(argv[i], "--coexist") || !strcmp(argv[i], "--select-profile")) {
-      fputs("init-install: installer profile is selected by the trusted prompt\n", stderr);
+    if (!strcmp(argv[i], "--coexist") || !strcmp(argv[i], "--select-profile") ||
+        !strncmp(argv[i], "--selected-", 11)) {
+      fputs("init-install: installer action and profile are selected by the trusted prompt\n", stderr);
       goto done;
     }
   }
   if (selector) {
     struct terminal terminal = {.input = sources[INPUT], .output = sources[OUTPUT]};
-    puts("Choose installer authority: coexist preserves other partitions; classic permits whole-disk erase.");
     for (;;) {
-      char line[32];
+      const char *actions[] = {"Install", "Update", "Cancel"};
       if (fflush(stdout) != 0) {
         goto done;
       }
-      struct term_line_result selected = term_read_line(&terminal,
-          "Profile (coexist/classic/cancel): ", line, sizeof(line));
-      if (selected.status != TERM_LINE_OK || selected.limit_reached) {
-        fputs("init-install: profile selection interrupted; installer not launched\n", stderr);
-        goto done;
-      }
-      if (!strcmp(line, "cancel")) {
+      struct term_choice_result action = term_read_choice(&terminal,
+          "Choose installer action", actions, sizeof(actions) / sizeof(actions[0]), 0);
+      if (action.status == TERM_LINE_CANCELLED ||
+          (action.status == TERM_LINE_OK && action.selected == 2)) {
         puts("Installation cancelled; installer not launched.");
         result = EXIT_SUCCESS;
         goto done;
       }
-      if (!strcmp(line, "coexist") || !strcmp(line, "classic")) {
-        coexist = !strcmp(line, "coexist");
-        break;
+      if (action.status != TERM_LINE_OK) {
+        fputs("init-install: action selection interrupted; installer not launched\n", stderr);
+        goto done;
       }
-      puts("Enter coexist, classic or cancel.");
+      updating = action.selected == 1;
+      if (updating) {
+        bool back;
+        if (!installer_update_choose(&terminal, sources[DISKS], sources[CLOCK], sources[RANDOM],
+            &update_choice, &back)) {
+          goto done;
+        }
+        if (back) {
+          continue;
+        }
+        coexist = update_choice.coexist;
+        char guid[37];
+        install_guid_text(update_choice.layout.disk_guid, guid);
+        snprintf(selected_target, sizeof(selected_target), "--selected-target=%llu",
+            (unsigned long long)update_choice.disk);
+        snprintf(selected_esp, sizeof(selected_esp), "--selected-esp=%llu",
+            (unsigned long long)update_choice.layout.esp_partition);
+        snprintf(selected_pool, sizeof(selected_pool), "--selected-pool=%llu",
+            (unsigned long long)update_choice.layout.pool_partition);
+        snprintf(selected_guid, sizeof(selected_guid), "--selected-disk-guid=%s", guid);
+      } else {
+        puts("Coexist preserves other partitions; classic permits whole-disk erase.");
+        if (fflush(stdout) != 0) {
+          goto done;
+        }
+        const char *profiles[] = {"Coexist", "Classic", "Cancel"};
+        struct term_choice_result profile = term_read_choice(&terminal,
+            "Choose installation layout", profiles, sizeof(profiles) / sizeof(profiles[0]), 0);
+        if (profile.status == TERM_LINE_CANCELLED ||
+            (profile.status == TERM_LINE_OK && profile.selected == 2)) {
+          puts("Installation cancelled; installer not launched.");
+          result = EXIT_SUCCESS;
+          goto done;
+        }
+        if (profile.status != TERM_LINE_OK) {
+          fputs("init-install: layout selection interrupted; installer not launched\n", stderr);
+          goto done;
+        }
+        coexist = profile.selected == 0;
+      }
+      break;
     }
   }
   const char *image_name = selector ? "installer.pxe" : "init-install.pxe";
@@ -201,6 +242,9 @@ static int run_install(int argc, char **argv, bool selector)
   bool has_power = sources[POWER] != HANDLE_INVALID;
   struct launch_environment_entry roots[] = {PROFILE_CAP((uintptr_t)"boot", BOOT_ROOT)};
   size_t argument_count = 1 + (!selector || coexist);
+  if (selector) {
+    argument_count += 1 + (updating ? 4 : 0);
+  }
   if (argc > 1) {
     argument_count += (size_t)argc - 1;
   }
@@ -213,6 +257,15 @@ static int run_install(int argc, char **argv, bool selector)
   size_t argument_index = 1;
   if (!selector || coexist) {
     arguments[argument_index++] = selector ? "--coexist" : "--select-profile";
+  }
+  if (selector) {
+    arguments[argument_index++] = updating ? "--selected-action=update" : "--selected-action=install";
+    if (updating) {
+      arguments[argument_index++] = selected_target;
+      arguments[argument_index++] = selected_esp;
+      arguments[argument_index++] = selected_pool;
+      arguments[argument_index++] = selected_guid;
+    }
   }
   for (int i = 1; i < argc; i++) {
     arguments[argument_index++] = argv[i];

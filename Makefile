@@ -77,6 +77,15 @@ CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o netwo
 CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o $(BUILD)/installer/pending_archive.o $(BUILD)/installer/io.o $(BUILD)/config-editor/readiness.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
 INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o) $(addprefix $(BUILD)/installer/,configuration.o publication.o publication_snapshot.o publication_frontend.o pending.o pending_archive.o recovery.o installed_publication.o)
+INSTALLER_CONFIG_OBJECTS += $(BUILD)/installer/installed_probe.o
+# Discovery borrows the installer validators. Separate sectioned objects let
+# the selector retain only read-only inspection from the mixed private modules.
+INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c \
+    installer/consent.c installer/esp_read.c installer/review.c installer/coexist.c \
+    installer/progress.c installer/digest.c installer/installed_probe.c installer/boot_entry.c \
+    config-editor/record.c config-editor/storage.c config-editor/ownership.c \
+    config-editor/catalog.c xfer/hash.c
+INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/init-install/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
 ifeq ($(INSTALLER_PUBLICATION_SCRATCH),1)
 BOOT_INIT_OBJECTS += $(BUILD)/boot-init/selection.o $(addprefix $(BUILD)/config-editor/,readiness.o record.o catalog.o ownership.o) $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
@@ -348,7 +357,18 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/boot-init/main.o $(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/boot-init/main.o $(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+
+$(INSTALL_SELECTOR_OBJECTS): private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH) -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(INSTALL_SELECTOR_OBJECTS): private CFLAGS += -ffunction-sections -fdata-sections
+$(INSTALL_SELECTOR_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+
+$(BUILD)/init-install/inspect/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/init-install.pxe: $(BUILD)/init-install/main.o $(INSTALL_SELECTOR_OBJECTS) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -Wl,--gc-sections -o $@ $(PYXIS_START) $(BUILD)/init-install/main.o $(INSTALL_SELECTOR_OBJECTS) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
@@ -423,6 +443,7 @@ clean:
 -include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
 -include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d) $(SCREENSHOT_OBJECTS:.o=.d) $(SCREENSHOT_SAVER_OBJECTS:.o=.d)
 -include $(CONFIG_EDITOR_OBJECTS:.o=.d)
+-include $(INSTALL_SELECTOR_OBJECTS:.o=.d) $(BUILD)/installer/installed_probe.d
 
 -include $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d
 

@@ -23,6 +23,11 @@ struct install_coexist {
 bool install_coexist_inspect(const struct install_disk *disk,
     struct install_coexist *facts, const char **reason);
 
+/* Pure projection of ESP/pool selections from the same successful observation.
+ * No identity, ownership, admission or extent validation is performed here. */
+void install_coexist_layout(const struct disk_partition_selection *esp,
+    const struct disk_partition_selection *pool, struct install_layout *layout);
+
 /* Pure proposal from a successful inspection above; keep facts unchanged.
  * size_bytes zero selects min(64 GiB, largest aligned gap).
  * Explicit size is nonzero whole MiB, bounded by that gap. The caller supplies
