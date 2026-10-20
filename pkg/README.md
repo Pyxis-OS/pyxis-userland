@@ -51,10 +51,16 @@ refuse missing or damaged indexes for a nonzero active set.
 
 Repository edits need package management and the separately declared confined
 config writer. List needs only config read authority. URLs are exact distinct
-HTTP/HTTPS bases ending in /, without credentials, query or fragment; at most
-eight bases of 2048 bytes each. Adding an existing URL changes nothing; removing
-an absent URL reports not found. Missing configuration is empty; malformed
-configuration refuses editing. No network request is made while editing.
+HTTP/HTTPS bases without credentials, query or fragment; add/remove accept URLs
+with or without a final / and append it before storing or comparing. Duplicate
+adds refuse without changing configuration; remove matches either spelling. At most
+eight bases of 2048 bytes each including the stored final /. Removing an absent
+URL reports not found. Missing configuration is empty; malformed
+configuration refuses editing. Add fetches index.lua and requires the existing strict index validation before
+saving. An unreachable host, HTTP failure or invalid index refuses without
+changing configuration; add it once reachable. Remove needs no network request.
+Fetch failures name the full request
+URL and retain the provider detail, including the HTTP status when available.
 Edits share the package writer lock and atomically replace the strict literal
 file. An uncertain publication retains the lock: inspect packages.lua before
 explicit recovery with pkg unlock. A stopped repository writer can leave

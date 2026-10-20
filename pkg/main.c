@@ -146,7 +146,8 @@ static bool fetch(const char *base, const char *relative, bool index, uint64_t s
   enum call_status status = pkg_fetch(&client.fetch, base, relative, index, size,
       client.timeout, file, client.detail);
   if (status != CALL_OK) {
-    fprintf(stderr, "pkg: fetch failed (status %u): %s\n", status, client.detail);
+    fprintf(stderr, "pkg: %s%s: %s (fetch status %u)\n",
+        base, relative, client.detail, status);
     return fail("no complete download; active set unchanged");
   }
   return true;
@@ -158,7 +159,7 @@ static bool load_repositories(void)
     return false;
   }
   if (!client.repositories.count) {
-    return fail("no repositories configured; use pkg repository add URL (HTTP/HTTPS base ending in /)");
+    return fail("no repositories configured; use pkg repository add URL (HTTP/HTTPS base; final / optional)");
   }
   for (size_t r = 0; r < client.repositories.count; ++r) {
     handle_t file;
@@ -611,6 +612,27 @@ static bool mutate(const char *command, int argc, char **argv)
   return ok;
 }
 
+static bool repository_available(const char *url)
+{
+  handle_t file;
+  if (!fetch(url, "index.lua", true, 0, &file)) {
+    return fail("not a package repository; repository configuration unchanged");
+  }
+  char *bytes = NULL;
+  size_t size = 0, count = 0;
+  struct pkg_entry *entries = NULL;
+  bool ok = read_snapshot(file, &bytes, &size) &&
+      pkg_index_parse(bytes, size, &entries, &count, &client.reason);
+  free(bytes);
+  free(entries);
+  handle_close(file);
+  if (!ok) {
+    fprintf(stderr, "pkg: not a package repository: %sindex.lua: %s\n",
+        url, client.reason ? client.reason : "index validation failed");
+  }
+  return ok;
+}
+
 static bool repository_command(const char *command, const char *url)
 {
   if (!strcmp(command, "list")) {
@@ -623,8 +645,18 @@ static bool repository_command(const char *command, const char *url)
     if (!client.repositories.count) puts("No repositories; use pkg repository add URL.");
     return true;
   }
+  char normalized[PKG_BASE_URL_MAX + 1];
+  size_t length = strnlen(url, sizeof(normalized));
+  if (!length || length > PKG_BASE_URL_MAX ||
+      (url[length - 1] != '/' && length == PKG_BASE_URL_MAX)) {
+    return fail("repository URL must fit 2048 bytes including its final /");
+  }
+  memcpy(normalized, url, length);
+  if (normalized[length - 1] != '/') normalized[length++] = '/';
+  normalized[length] = 0;
+  url = normalized;
   if (!pkg_repository_url_valid(url)) {
-    return fail("repository URL must be HTTP/HTTPS, at most 2048 bytes, end in / and have no credentials, query or fragment");
+    return fail("repository URL must be HTTP/HTTPS without credentials, query or fragment; final / is optional");
   }
   if (!package_volume(client.management, true)) return false;
   if (client.config_write == HANDLE_INVALID) {
@@ -644,12 +676,14 @@ static bool repository_command(const char *command, const char *url)
   bool changed = false;
   if (ok && !strcmp(command, "add")) {
     if (index < client.repositories.count) {
-      puts("pkg: repository already configured");
+      ok = fail("repository already configured");
     } else if (client.repositories.count == PKG_REPOSITORIES_MAX) {
       ok = fail("at most eight repositories may be configured");
-    } else {
+    } else if (repository_available(url)) {
       strcpy(client.repositories.urls[client.repositories.count++], url);
       changed = true;
+    } else {
+      ok = false;
     }
   } else if (ok) {
     if (index == client.repositories.count) {
@@ -694,7 +728,7 @@ static bool repository_command(const char *command, const char *url)
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add URL | repository remove URL\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add URL | repository remove URL\nRepository URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
