@@ -1,5 +1,6 @@
 #include "publication_frontend.h"
 #include "battery.h"
+#include "coexist.h"
 #include "pending.h"
 #include "recovery.h"
 #include "publication_snapshot.h"
@@ -28,6 +29,21 @@
 
 #define READ_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 #define WRITE_RIGHTS (READ_RIGHTS | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_WRITE_FILES)
+
+static bool confirm_word(struct terminal *terminal, const char *word)
+{
+  char text[32], prompt[80];
+  snprintf(prompt, sizeof(prompt), "Type %s to confirm this Review: ", word);
+  for (;;) {
+    if (!line(terminal, prompt, text, sizeof(text))) {
+      return false;
+    }
+    if (!strcmp(text, word)) {
+      return true;
+    }
+    fputs("Confirmation did not match; try again or Ctrl+C to cancel.\n", stderr);
+  }
+}
 
 static bool number(const char *text, uint64_t *value)
 {
@@ -193,7 +209,7 @@ static const char *publication_phase(enum config_publish_phase phase)
 static void publication_result(const struct install_publication_request *request,
     const struct config_storage_report *report, const struct config_boot_binding *obsolete, bool ok)
 {
-  fprintf(stderr, "Scratch publication: status %u, phase %s, readiness %s, boot %s.\n",
+  fprintf(stderr, "Publication: status %u, phase %s, readiness %s, boot %s.\n",
       report->status, publication_phase(report->phase), report->committed ? "committed" : "not confirmed",
       report->boot_activated ? "entry confirmed" : report->committed ?
       "staged, boot activation pending" : "entry unchanged; staging/readiness incomplete");
@@ -263,7 +279,8 @@ static bool ready_preview(struct install_configuration *plan, const struct confi
 }
 
 
-int install_publication_scratch(struct terminal *terminal, bool verbose)
+static int publication_frontend(struct terminal *terminal, bool verbose,
+    uint64_t selected_id, uint64_t selected_esp, uint64_t selected_pool, const char *selected_guid)
 {
   handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
   handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
@@ -294,32 +311,56 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
   if (!crypto || !install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
   }
-  fputs("SCRATCH configuration publication. Disposable GPT/FAT32 images only.\n"
-      "No installed activation, program installation, formatting or firmware changes.\n", stderr);
-  for (uint64_t index = 0;; ++index) {
-    struct disk_info info;
-    enum call_status status = disks_enumerate(disks, index, &info);
-    if (status == CALL_NOT_FOUND) {
-      break;
+  bool completion_only = selected_id != 0;
+  uint64_t id = selected_id, partition = selected_esp;
+  if (!completion_only) {
+    fputs("SCRATCH configuration publication. Disposable GPT/FAT32 images only.\n"
+        "No program installation, formatting or firmware changes.\n", stderr);
+    for (uint64_t index = 0;; ++index) {
+      struct disk_info info;
+      enum call_status status = disks_enumerate(disks, index, &info);
+      if (status == CALL_NOT_FOUND) {
+        break;
+      }
+      if (status != CALL_OK) {
+        goto done;
+      }
+      fprintf(stderr, "Disk %llu: %llu blocks of %llu; GPT %llu\n", (unsigned long long)info.id,
+          (unsigned long long)info.block_count, (unsigned long long)info.block_size,
+          (unsigned long long)info.gpt_status);
     }
-    if (status != CALL_OK) {
+    if (!read_number(terminal, "Disposable disk ID: ", &id) ||
+        !read_number(terminal, "ESP partition number: ", &partition)) {
       goto done;
     }
-    fprintf(stderr, "Disk %llu: %llu blocks of %llu; GPT %llu\n", (unsigned long long)info.id,
-        (unsigned long long)info.block_count, (unsigned long long)info.block_size,
-        (unsigned long long)info.gpt_status);
   }
-  uint64_t id, partition;
-  if (!read_number(terminal, "Disposable disk ID: ", &id) ||
-      !read_number(terminal, "ESP partition number: ", &partition) ||
-      disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle) != CALL_OK ||
-      disk_get_info(disk.handle, &disk.info) != CALL_OK ||
-      disk.info.block_count > UINT64_MAX / disk.info.block_size) {
+  if (disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle) != CALL_OK ||
+      disk_get_info(disk.handle, &disk.info) != CALL_OK || disk.info.id != id ||
+      !disk.info.block_size || disk.info.block_count > UINT64_MAX / disk.info.block_size) {
     goto done;
   }
   disk.bytes = disk.info.block_count * disk.info.block_size;
   install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"), verbose);
-  if (!install_pool_boot_snapshot(&disk, &pool) ||
+  if (completion_only) {
+    struct disk_partition_selection esp, native_pool;
+    struct install_layout layout;
+    struct install_update update;
+    char guid[37];
+    if (!selected_esp || !selected_pool || !selected_guid ||
+        disk_partition_info(disk.handle, selected_esp, &esp) != CALL_OK ||
+        disk_partition_info(disk.handle, selected_pool, &native_pool) != CALL_OK) {
+      goto done;
+    }
+    install_coexist_layout(&esp, &native_pool, &layout);
+    install_guid_text(layout.disk_guid, guid);
+    if (strcmp(guid, selected_guid) || !install_scan_pool_update(&disk, &layout, &update) ||
+        !update.eligible) {
+      fputs("Selected pending installation changed or is unavailable; nothing written.\n", stderr);
+      goto done;
+    }
+  }
+  uint64_t pool_partition = completion_only ? selected_pool : INSTALL_POOL_PARTITION;
+  if (!install_pool_boot_snapshot_at(&disk, pool_partition, &pool) ||
       disk_partition_info(disk.handle, partition, &target_selection) != CALL_OK ||
       disks_open_owned_esp(disks, &target_selection, MOUNT_ACCESS_READ_ONLY, READ_RIGHTS, &mount) != CALL_OK ||
       !install_snapshot_facts(mount.control, &planned_facts)) {
@@ -411,6 +452,10 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     fputs("Pending cleanup and changed selection need explicit manual disposition; nothing written.\n", stderr);
     goto done;
   }
+  if (completion_only && !completing) {
+    fputs("No provable pending activation/cleanup remains; prepare a fresh Update instead.\n", stderr);
+    goto done;
+  }
   if (!retire(&mount) || handle_close(disk.handle) != CALL_OK) {
     goto done;
   }
@@ -433,6 +478,10 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
     }
     if (required > available_bytes) {
       fputs("Pending completion not confirmed or insufficient capacity; nothing written.\n", stderr);
+      goto done;
+    }
+    if (!confirm_word(terminal, "complete")) {
+      fputs("Completion not confirmed; nothing written.\n", stderr);
       goto done;
     }
     goto admit;
@@ -561,6 +610,10 @@ int install_publication_scratch(struct terminal *terminal, bool verbose)
         fputs("Plan is not applicable or lacks staging capacity; nothing written.\n", stderr);
         continue;
       }
+      if (!confirm_word(terminal, "confirm")) {
+        fputs("Publication not confirmed; nothing written.\n", stderr);
+        goto done;
+      }
       break;
     }
     bool ok = false;
@@ -660,7 +713,7 @@ admit:
       MOUNT_ACCESS_READ_WRITE, WRITE_RIGHTS, &mount);
   struct config_blob current_pool = {0};
   if (status != CALL_OK ||
-      !install_pool_boot_snapshot(&disk, &current_pool) || !config_blob_equal(&pool, &current_pool)) {
+      !install_pool_boot_snapshot_at(&disk, pool_partition, &current_pool) || !config_blob_equal(&pool, &current_pool)) {
     config_blob_destroy(&current_pool);
     fprintf(stderr, "Scoped admission/stale input refused (status %u); nothing staged.\n", status);
     goto done;
@@ -760,7 +813,7 @@ done:
     }
   }
   if (!retire(&mount)) {
-    fputs("Scratch publication cleanup unconfirmed; view was not revoked or retried.\n", stderr);
+    fputs("Publication cleanup unconfirmed; view was not revoked or retried.\n", stderr);
     result = EXIT_FAILURE;
   }
   if (disk.handle != HANDLE_INVALID) {
@@ -788,4 +841,18 @@ done:
     hash_close();
   }
   return result;
+}
+
+int install_publication_scratch(struct terminal *terminal, bool verbose)
+{
+  return publication_frontend(terminal, verbose, 0, 0, 0, NULL);
+}
+
+int install_publication_complete(struct terminal *terminal, bool verbose, uint64_t disk,
+    uint64_t esp, uint64_t pool, const char *guid)
+{
+  if (!disk || !esp || !pool || !guid) {
+    return EXIT_FAILURE;
+  }
+  return publication_frontend(terminal, verbose, disk, esp, pool, guid);
 }

@@ -502,6 +502,7 @@ int main(int argc, char **argv)
 #endif
   const char *explicit_consent = NULL, *selected_action = NULL, *selected_guid = NULL;
   uint64_t selected_target = 0, selected_esp = 0, selected_pool = 0;
+  bool selected_pending = false;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
       verbose = true;
@@ -509,6 +510,8 @@ int main(int argc, char **argv)
     } else if (!strcmp(argv[i], "--scratch-publication")) {
       scratch_publication = true;
 #endif
+    } else if (!strcmp(argv[i], "--selected-pending") && !selected_pending) {
+      selected_pending = true;
     } else if (!strncmp(argv[i], "--selected-action=", 18) && !selected_action) {
       selected_action = argv[i] + 18;
     } else if (!strncmp(argv[i], "--selected-target=", 18)) {
@@ -549,7 +552,7 @@ int main(int argc, char **argv)
   if ((selected_action && !selected_update && !selected_install) ||
       (selected_update && (!selected_target || !selected_esp || !selected_pool ||
         !selected_guid || strlen(selected_guid) != 36)) ||
-      (any_target && !selected_update) || (selected_action && replay)) {
+      (any_target && !selected_update) || (selected_pending && !selected_update) || (selected_action && replay)) {
     say("installer: invalid startup selection; nothing was written");
     return EXIT_FAILURE;
   }
@@ -599,6 +602,15 @@ int main(int argc, char **argv)
   }
   if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
+  }
+  if (selected_pending) {
+#if INSTALLER_PUBLICATION_SCRATCH
+    return install_publication_complete(&terminal, verbose, selected_target,
+        selected_esp, selected_pool, selected_guid);
+#else
+    say("Pending publication completion is unavailable in this development build.");
+    goto done;
+#endif
   }
   if (!replay && !selected_action && !choose_action(&terminal, &updating, &replay)) {
     goto done;

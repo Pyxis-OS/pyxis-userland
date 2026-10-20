@@ -215,7 +215,9 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
 #if INSTALLER_PUBLICATION_SCRATCH
     char active[64];
     const char *reason = NULL;
-    if (install_installed_probe(&target->disk, &record->layout, active, &reason) == INSTALL_INSTALLED_REFUSED) {
+    enum install_installed_probe installed = install_installed_probe(&target->disk,
+        &record->layout, active, &reason);
+    if (installed == INSTALL_INSTALLED_REFUSED || installed == INSTALL_INSTALLED_PENDING) {
       target->reason = reason;
       return false;
     }
