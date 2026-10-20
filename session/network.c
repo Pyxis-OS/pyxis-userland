@@ -79,7 +79,12 @@ static bool apply_lease(const struct network_interface_config *config,
   enum call_status status = net_interface_replace(runtime->authority, lease->connection_generation,
       lease->address, lease->prefix, lease->gateway, lease->dns);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: %s lease rejected (status %u)\n", config->name, status);
+    if (runtime->wifi && status == CALL_ALREADY_EXISTS) {
+      fprintf(stderr, "session: %s lease conflicts with another interface or protected network destination (status %u)\n",
+          config->name, status);
+    } else {
+      fprintf(stderr, "session: %s lease rejected (status %u)\n", config->name, status);
+    }
     return false;
   }
   runtime->lease = *lease;

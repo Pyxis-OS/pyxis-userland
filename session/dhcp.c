@@ -232,7 +232,7 @@ static bool decode_lease(const uint8_t *packet, const struct dhcp_reply *reply,
     return false;
   }
   uint32_t dns = reply->dns.present ? reply->dns.value : current ? current->dns : 0;
-  if ((dns || reply->dns.present) && (!(dns >> 24) || dns >= IPV4_MULTICAST_BASE)) {
+  if ((dns || reply->dns.present) && !is_unicast(dns)) {
     return false;
   }
   *lease = (struct dhcp_lease){
