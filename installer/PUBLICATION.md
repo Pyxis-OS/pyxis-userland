@@ -1,78 +1,122 @@
-# Scratch configuration publication
+# Owned ESP publication
 
-Build Pyxis with `make -j8 image INSTALLER_PUBLICATION_SCRATCH=1`. In the Install
-boot entry, type `scratch` at the first prompt. This is a disposable-image
-qualification path, not installed Update. Normal builds omit that entry and
-retain the existing Install/Update and boot-loader behaviour. Never use this
-path on native media.
+Normal builds enable the integrated Install/Update publisher and installed
+configuration loader. `INSTALLER_PUBLICATION_SCRATCH=1` is the default build
+setting; explicit `=0` retains the legacy development build. The historical
+setting name also gates the separate disposable-image scratch frontend.
 
-Select the exact disposable disk ID and GPT ESP partition. Preparation opens a
-native read-only FAT view, freezes the config/catalog/record/menu bytes and
-issuer facts, inspects the personal pool override without mounting or replay,
-checks full FAT free capacity through the shared reader, then drains and
-explicitly retires the view. Review normally shows a compact configuration
-summary: selected source, applicability/reason, required/selected delta counts,
-owner-file adoption and pool-migration/refusal state, plus capacity, payload and
-boot-entry status. `plan` prints the full review with numbered choices, source
-hashes and the actual proposed boot entries; `change NUMBER ...` uses those
-numbers. Existing `-v`/`--verbose` prints full details and progress records,
-including with `--scratch-publication` in a scratch build. Review-output failure
-refuses apply.
+The ordinary interactive flow remains profile-first. After selecting Classic or
+Coexist, press Enter at **Scratch publication (scratch), or ordinary installer**
+to reach ordinary Install/Update. `--plan`, `--dry-run` and replay use the same
+integrated planner. No prior `config` invocation is needed when revision defaults
+and safe pre-selected migrations suffice. This reference describes publication;
+[installation](../../docs/userland/installer.md) and
+[Update](../../docs/userland/system-updates.md) describe target consent and programs.
 
-The scratch flow uses the same literal/schema/delta planner as `config`;
-unsupported Lua is data, not executed code. `confirm` applies only that owned
-in-memory plan; `cancel` writes nothing. It installs no program revision. After
-a committed result whose boot entry still needs manual adoption, the actual
-proposed entry is printed again and remains explicitly pending.
+## Review and consumed inputs
 
-The executor reacquires the existing whole-disk claim and rechecks the frozen
-bytes with the shared FAT reader before staging. It releases that claim before
-native FAT32 write admission, repeats the snapshots, and streams fresh kernel,
-filtered rescue archive and revision files through the shared
-[ESP payload helper](ESP-PAYLOADS.md) into `EFI/pyxis/REVISION/ATTEMPT/`. Bounded
-FILE-to-FILE transfers of at most 1 MiB grow each fresh file; memory-backed
-archive bytes first enter a private unlinked RAM FILE through ordinary writes.
-Full verification transfers FAT bytes into RAM before hashing through small
-READ calls, both after staging and at the final publication boundary.
-No full-file resize is needed. The
-immutable ownership record certifies their
-exact names, sizes and hashes. Files are synchronized and reread before the
-exclusive configuration interval runs one full-volume CHECK immediately after
-BEGIN, rechecks identity/content and publishes a
-prepared, then committed, boot-bound readiness record. Only then may the exact
-owned normal/rescue Limine entries move. Foreign bytes stay unchanged. Exact
-legacy Pyxis menu adoption additionally requires a disk-bound recipe, validated
-kernel/archive/revision structure and retained payload hashes rechecked under
-the final interval. Ambiguous menus are printed for manual adoption and remain
-unchanged: the result is `staged, boot activation pending`.
+Preparation is read-only. It freezes issuer-bound ESP identity, configuration,
+catalog, record and menu bytes, archive declarations, personal pool override and
+recovery evidence. Temporary native views are drained and explicitly retired.
+Review shows the active source, required/selected deltas, owner-file adoption,
+pool migration, proposed boot attempt, retained recovery and capacity. Verbose
+output and the printed plan expose detailed bytes/hashes and entries. Review
+output failure refuses apply. A printed plan conveys no writer authority.
 
-One previous boot pair is retained; older pairs are removed only after entry
-confirmation and matching immutable ownership/hash evidence. Unknown ownership
-skips cleanup. Failure or unknown completion stops at the reported phase with
-artifacts retained; there is no retry, rollback, automatic repair or reboot
-offer. Close is not sync or retirement. A cleanup failure does not report full
-success.
+Without usable history, the planner prepares the revision's defaults. Required
+safe changes are pre-selected; valid owner values stay Keep. A valid literal
+`system://config/boot.lua` can supply reviewed volume/space migration when no
+complete ESP set exists and no nonempty ESP boot file would be overwritten.
+Its original bytes remain at the same pool path as inactive recovery. Existing
+ESP owner bytes take precedence; conflicts are shown without a silent merge.
+Unsupported Lua is neither executed nor rewritten. Unrecorded nonempty files
+require explicit adoption. An ordinary plan with unresolved configuration choices
+refuses before writes and requires a fresh configuration Review.
 
-The readiness reader accepts frozen bytes and actual kernel/program identities;
-it has no issuer or writer authority. It chooses a complete compatible ESP
-triple or the entire archive triple. Archive selection certifies no ESP files,
-and rescue always selects archive. The current scratch frontend previews this
-handoff without launching installed startup. The scratch-only trusted startup creates a private RAM parent. After ESP
-retirement and Review, the constructor creates and immediately unlinks three
-files, writes the frozen literal bytes, syncs them, returns exact native READ
-grants and closes every writer. The frontend rereads and compares all three
-held files before staging. Optional session_config and network_config startup
-FILE resources use these bytes without path resolution; present invalid files
-fail, while absent resources keep today's archive behavior. Installed startup
-does not supply those resources yet. No live ESP reference reaches a
-configuration consumer. Catalog identity is independent of kernel/program
-revision; the same generated catalog is packaged with trusted archive defaults
-and the editor bundle.
+ESP selection publishes the complete `boot.lua`, `session.lua`, `network.lua`
+and catalog at stable `EFI/pyxis/config/` paths. Reviewed whole-archive selection
+leaves those files untouched and records archive activation, certifying no ESP
+set or default provenance. Active source and retained inactive bytes are distinct
+reviewed facts. Prepared/malformed records require explicit disposition.
 
-Limits: configuration files remain 1 MiB, completion records 8 KiB, and each
-boot payload 1 GiB. Streaming uses bounded native FILE calls. Publication uses
-the existing non-extending 30-second interval. Small-volume success does not
-clear the full-size FAT32 lease-cost gate; internal coexistence additionally
-waits for partition-first NVMe authority. Installed activation and replacement
-of destructive Update remain blocked, and external adversarial review precedes
-release.
+## Ordering, activation and retention
+
+An initial exclusive checked interval revalidates consumed inputs before program
+writes. Programs and their revision manifest are copied, synchronized and verified
+before the boot switch. Every publication stages fresh `kernel.elf`, `boot.arc`
+and `revision.txt` under `EFI/pyxis/REVISION/ATTEMPT/` through the
+[shared payload helper](ESP-PAYLOADS.md). Collisions refuse, including on
+same-revision Update. Canonical-name, retained-object, full size/hash and immutable
+ownership checks apply; names and paths alone confer no ownership.
+
+Before activation, provision or fully reverify the small independent kernel/archive
+pair under `EFI/pyxis/recovery/` and its static `/boot/limine.conf`. The recovery archive is built from trusted rescue components, excluding
+personal/game/development payloads. Normal publication never replaces or cleans this pair or fallback.
+Foreign fallback bytes and higher-priority shadowing configurations refuse. The
+fallback covers an absent primary `/boot/limine/limine.conf`, not a
+corrupt-but-present primary. A fresh installation has this recovery path only
+after the first complete provisioning is confirmed.
+
+Staging, retained current/previous payloads, pinned rescue, configuration recovery
+and allocation overhead enter capacity admission without credit for later cleanup.
+The final non-extending 30-second publication interval runs CHECK immediately
+after BEGIN, then rechecks frozen inputs and fresh payload identity/content.
+It publishes prepared then committed boot-bound readiness before switching only
+confirmed Pyxis-owned normal/rescue Limine spans last, with synchronization and
+readback. Exact legacy adoption additionally requires a disk-bound recipe and
+verified inherited kernel/archive/revision evidence rechecked within the interval.
+Normal Update preserves the boot manager, unowned content and healthy filesystem;
+ESP rebuilding is a separate explicitly reviewed Classic recovery grant.
+
+Ambiguous ownership leaves the menu unchanged and prints the proposed entry:
+**staged, boot activation pending**. A committed record alone is not successful
+Update. A fresh explicit `complete` Review can finish exact recognized pending
+states, preserving the attempt, record and current/previous slots. Edited or
+ambiguous menus, mismatching payloads and unrecognized artifacts refuse.
+
+Retain current and one known previous boot attempt, plus pinned rescue. Older
+attempts require confirmed activation and exact owned-manifest/hash evidence
+before removal; unknown ownership skips cleanup. Program-tree retention remains
+separate: same-revision `bin/REVISION` replacement is not atomic. Failure, deadline
+or unknown completion stops at the reported phase with artifacts retained.
+There is no automatic repair, retry or rollback, and no firmware-variable write.
+Close is not sync or view retirement. Incomplete activation/verification does not
+report `updated` or authorize ordinary program cleanup.
+
+## Installed configuration selection
+
+The trusted early reader supplies evidence for the kernel/archive actually loaded.
+Readiness must match their sizes/SHA-256, revisions and trusted archive catalog,
+as well as the complete selected configuration/catalog. A pathname, revision string
+or newly staged hash cannot substitute for loaded-byte identity. Archive mode
+explicitly selects the whole archive set. Missing, prepared, malformed,
+incompatible or mismatching evidence also selects the complete archive triple;
+rescue always uses archive defaults, never previous configuration or the pool
+override.
+
+Freeze the whole selection before effects. Copy selected literal bytes into
+private unlinked RAM FILEs, sync and close writers, then retire the ESP view.
+Declared READ-only session/network snapshots pass through trusted startup;
+ordinary children receive no live ESP references or administrative writer
+resources. Catalog identity remains independent of kernel/program revision.
+
+## Disposable scratch frontend and limits
+
+`--scratch-publication`, or typing `scratch` at the interactive prompt, selects a
+separate development frontend for disposable images. It installs no program
+revision and has its own Review: `plan` prints full details and numbered choices,
+`change NUMBER ...` edits them, `confirm` applies and `cancel` writes nothing.
+It can preview configuration handoff without launching installed startup. It is
+not the ordinary Update action and should not be used on native media.
+
+Configuration files remain bounded at 1 MiB, completion records at 8 KiB and each
+boot payload at 1 GiB. Native bounded FILE transfers and the existing 30-second
+interval remain unchanged. Battery below 40% or unreadable reported battery state
+refuses; AC or no battery permits operation. Native internal-NVMe qualification
+remains separate. No cross-file atomicity or power-loss durability is claimed.
+
+The [qualification record](../../docs/development/experiments/installer-publication/README.md)
+separates QEMU source/functional/cut evidence from the owner-reported 2026-10-20
+native gate on vela. The native gate covered clean Install, installed loading,
+same-revision Update and rescue. Foreign-file preservation was not checked on
+that freshly wiped medium, and no native power-cut qualification is claimed.

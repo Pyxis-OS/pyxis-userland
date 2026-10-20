@@ -33,10 +33,6 @@
     DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES | \
     DIRECTORY_RIGHT_FILESYSTEM_INFO)
 
-#ifndef INSTALLER_PUBLICATION_SCRATCH
-#define INSTALLER_PUBLICATION_SCRATCH 0
-#endif
-
 static bool close_sources(const handle_t *sources, size_t count)
 {
   bool success = true;
