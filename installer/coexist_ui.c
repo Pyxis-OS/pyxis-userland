@@ -42,29 +42,83 @@ static bool read_line(struct terminal *terminal, const char *prompt, const char 
   }
 }
 
-static bool list_disks(handle_t disks, struct install_coexist_choice *choice)
+struct disk_choice {
+  uint64_t id;
+  char label[192];
+};
+
+static bool choose_disk(struct terminal *terminal, handle_t disks,
+    struct install_coexist_choice *choice, uint64_t *id)
 {
-  fputs("Coexistence uses existing ESPs and unallocated space; Ctrl+C cancels a value prompt.\n", stderr);
+  struct disk_choice *options = NULL;
+  const char **labels = NULL;
+  size_t count = 0, capacity = 0;
+  bool success = false;
+  fputs("Coexistence uses existing ESPs and unallocated space; Ctrl+C cancels a prompt.\n", stderr);
   for (uint64_t index = 0;; ++index) {
     struct disk_info info;
     enum call_status status = disks_enumerate(disks, index, &info);
     if (status == CALL_NOT_FOUND) {
-      if (ferror(stderr)) {
-        choice->reason = "installer inventory output failed";
-        return false;
-      }
-      return !ferror(stderr);
+      break;
     }
     if (status != CALL_OK) {
       fprintf(stderr, "installer: disk inventory failed (status %u)\n", status);
       choice->reason = "disk inventory is incomplete or unavailable";
-      return false;
+      goto done;
     }
-    fprintf(stderr, "Disk ID %llu: %llu blocks of %llu bytes, preparation=%llu GPT=%llu flags=%llx\n",
+    if (count == capacity) {
+      size_t maximum = SIZE_MAX / sizeof(*options);
+      size_t next = capacity ? capacity : 8;
+      next = next > maximum / 2 ? maximum : next * 2;
+      if (next <= count) {
+        choice->reason = "disk inventory exceeds allocation capacity";
+        goto done;
+      }
+      struct disk_choice *grown = realloc(options, next * sizeof(*grown));
+      if (!grown) {
+        choice->reason = "out of memory listing target disks";
+        goto done;
+      }
+      options = grown;
+      capacity = next;
+    }
+    struct disk_choice *option = &options[count++];
+    option->id = info.id;
+    snprintf(option->label, sizeof(option->label),
+        "Disk %llu: %llu blocks of %llu bytes, preparation=%llu GPT=%llu flags=%llx",
         (unsigned long long)info.id, (unsigned long long)info.block_count,
         (unsigned long long)info.block_size, (unsigned long long)info.preparation,
         (unsigned long long)info.gpt_status, (unsigned long long)info.flags);
   }
+  if (!count) {
+    choice->reason = "no target disks are available";
+    goto done;
+  }
+  if (count > SIZE_MAX / sizeof(*labels) - 1 ||
+      !(labels = calloc(count + 1, sizeof(*labels)))) {
+    choice->reason = "out of memory preparing disk choices";
+    goto done;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    labels[i] = options[i].label;
+  }
+  labels[count] = "Cancel";
+  if (fflush(stderr) != 0) {
+    choice->reason = "installer inventory output failed";
+    goto done;
+  }
+  struct term_choice_result result = term_read_choice(terminal, "Choose target disk",
+      labels, count + 1, 0);
+  if (result.status != TERM_LINE_OK || result.selected >= count) {
+    choice->reason = "disk selection cancelled or interrupted";
+    goto done;
+  }
+  *id = options[result.selected].id;
+  success = true;
+done:
+  free(labels);
+  free(options);
+  return success;
 }
 
 static bool show_gpt(const struct install_gpt *gpt)
@@ -104,47 +158,77 @@ static const struct disk_partition_selection *choose_partition(struct terminal *
     choice->reason = esp ? "healthy GPT has no ESP" : "healthy GPT has no native pool for Update";
     return NULL;
   }
+  if (count > INSTALL_GPT_MAX_PARTITIONS) {
+    choice->reason = "partition choice count exceeds GPT inspection capacity";
+    return NULL;
+  }
+  char (*storage)[128] = calloc(count, sizeof(*storage));
+  const char **labels = calloc((size_t)count + 1, sizeof(*labels));
+  const struct disk_partition_selection *selected = NULL;
+  if (!storage || !labels) {
+    choice->reason = "out of memory listing partition choices";
+    goto done;
+  }
   for (uint32_t i = 0; i < count; ++i) {
-    fprintf(stderr, "%s GPT entry %llu: first=%llu count=%llu\n", esp ? "ESP" : "Native pool",
-        (unsigned long long)partitions[i].partition, (unsigned long long)partitions[i].first_block,
+    snprintf(storage[i], sizeof(storage[i]), "%s GPT entry %llu: first=%llu count=%llu",
+        esp ? "ESP" : "Native pool", (unsigned long long)partitions[i].partition,
+        (unsigned long long)partitions[i].first_block,
         (unsigned long long)partitions[i].block_count);
+    labels[i] = storage[i];
   }
-  if (esp && count == 1) {
-    return &partitions[0];
-  }
+  labels[count] = "Cancel";
   if (!esp) {
-    fputs("A native pool type is not ownership evidence; explicitly select the pool to inspect for Update.\n", stderr);
+    fputs("A native pool type is not ownership evidence; select the pool to inspect for Update.\n", stderr);
   }
-  char line[32];
-  for (;;) {
-    if (!read_line(terminal, esp ? "ESP GPT entry: " : "Native pool GPT entry: ", "", line, choice)) {
-      return NULL;
-    }
-    uint64_t entry;
-    if (decimal(line, &entry)) {
-      for (uint32_t i = 0; i < count; ++i) {
-        if (partitions[i].partition == entry) {
-          return &partitions[i];
-        }
-      }
-    }
-    fputs("Enter one of the listed GPT entry numbers.\n", stderr);
+  if (fflush(stderr) != 0) {
+    choice->reason = "installer partition listing output failed";
+    goto done;
   }
+  struct term_choice_result result = term_read_choice(terminal,
+      esp ? "Choose EFI System Partition" : "Choose native pool", labels, (size_t)count + 1, 0);
+  if (result.status != TERM_LINE_OK || result.selected >= count) {
+    choice->reason = "partition selection cancelled or interrupted";
+    goto done;
+  }
+  selected = &partitions[result.selected];
+done:
+  free(labels);
+  free(storage);
+  return selected;
 }
 
-static void selected_layout(const struct disk_partition_selection *esp,
-    const struct disk_partition_selection *pool, struct install_layout *layout)
+static bool open_disk(handle_t disks, uint64_t id, struct install_disk *disk,
+    struct install_coexist_choice *choice)
 {
-  *layout = (struct install_layout){.esp_partition = esp->partition,
-      .pool_partition = pool->partition,
-      .esp_start = esp->first_block * esp->device_block_size,
-      .esp_bytes = esp->block_count * esp->device_block_size,
-      .pool_start = pool->first_block * pool->device_block_size,
-      .pool_bytes = pool->block_count * pool->device_block_size,
-      .esp_attributes = esp->attributes, .pool_attributes = pool->attributes};
-  memcpy(layout->disk_guid, pool->disk_guid, 16);
-  memcpy(layout->esp_guid, esp->partition_guid, 16);
-  memcpy(layout->pool_guid, pool->partition_guid, 16);
+  enum call_status status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk->handle);
+  if (status != CALL_OK) {
+    fprintf(stderr, "installer: target RO open failed (status %u)\n", status);
+    choice->reason = "target read-only inspection could not be opened";
+    return false;
+  }
+  status = disk_get_info(disk->handle, &disk->info);
+  if (status != CALL_OK || disk->info.id != id) {
+    fprintf(stderr, "installer: target INFO unavailable or mismatched (status %u)\n", status);
+    choice->reason = "target identity could not be established";
+    return false;
+  }
+  choice->info = disk->info;
+  if (!disk->info.block_size || disk->info.block_count > UINT64_MAX / disk->info.block_size) {
+    choice->reason = "target disk geometry overflows its byte extent";
+    return false;
+  }
+  disk->bytes = disk->info.block_count * disk->info.block_size;
+  return true;
+}
+
+static bool close_disk(struct install_disk *disk, struct install_coexist_choice *choice)
+{
+  if (disk->handle != HANDLE_INVALID && handle_close(disk->handle) != 0) {
+    choice->pending_inspection = disk->handle;
+    choice->reason = "read-only inspection handle close failed; caller retains cleanup ownership";
+    return false;
+  }
+  return true;
 }
 
 bool install_coexist_ui_choose(struct terminal *terminal, handle_t disks, bool updating,
@@ -164,38 +248,11 @@ bool install_coexist_ui_choose(struct terminal *terminal, handle_t disks, bool u
   }
   bool success = false;
   struct install_disk disk = {.handle = HANDLE_INVALID};
-  if (!list_disks(disks, choice)) {
-    goto done;
-  }
   uint64_t id;
   char line[32];
-  for (;;) {
-    if (!read_line(terminal, "Explicit target disk ID: ", "", line, choice)) {
-      goto done;
-    }
-    if (decimal(line, &id) && id) {
-      break;
-    }
-    fputs("Enter an explicit nonzero disk ID.\n", stderr);
-  }
-  enum call_status status = disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle);
-  if (status != CALL_OK) {
-    fprintf(stderr, "installer: target RO open failed (status %u)\n", status);
-    choice->reason = "target read-only inspection could not be opened";
+  if (!choose_disk(terminal, disks, choice, &id) || !open_disk(disks, id, &disk, choice)) {
     goto done;
   }
-  status = disk_get_info(disk.handle, &disk.info);
-  if (status != CALL_OK || disk.info.id != id) {
-    fprintf(stderr, "installer: target INFO unavailable or mismatched (status %u)\n", status);
-    choice->reason = "target identity could not be established";
-    goto done;
-  }
-  choice->info = disk.info;
-  if (!disk.info.block_size || disk.info.block_count > UINT64_MAX / disk.info.block_size) {
-    choice->reason = "target disk geometry overflows its byte extent";
-    goto done;
-  }
-  disk.bytes = disk.info.block_count * disk.info.block_size;
   if (!install_coexist_inspect(&disk, facts, &choice->reason)) {
     goto done;
   }
@@ -240,7 +297,7 @@ bool install_coexist_ui_choose(struct terminal *terminal, handle_t disks, bool u
     }
     pool = &proposed;
   }
-  selected_layout(esp, pool, &choice->layout);
+  install_coexist_layout(esp, pool, &choice->layout);
   if (updating && (!install_scan_pool_update(&disk, &choice->layout, &choice->update) ||
       !choice->update.eligible)) {
     choice->reason = choice->update.reason;
@@ -251,10 +308,65 @@ bool install_coexist_ui_choose(struct terminal *terminal, handle_t disks, bool u
   choice->reason = success ? NULL : "installer selection output failed";
 done:
   free(facts);
-  if (disk.handle != HANDLE_INVALID && handle_close(disk.handle) != 0) {
-    choice->pending_inspection = disk.handle;
-    choice->reason = "read-only inspection handle close failed; caller retains cleanup ownership";
-    success = false;
+  return close_disk(&disk, choice) && success;
+}
+
+static const struct disk_partition_selection *find_partition(
+    const struct disk_partition_selection *partitions, uint32_t count, uint64_t entry)
+{
+  for (uint32_t i = 0; i < count; ++i) {
+    if (partitions[i].partition == entry) {
+      return &partitions[i];
+    }
   }
-  return success;
+  return NULL;
+}
+
+bool install_coexist_ui_selected(handle_t disks, uint64_t target, uint64_t esp_entry,
+    uint64_t pool_entry, const char *guid, struct install_coexist_choice *choice)
+{
+  if (!choice) {
+    return false;
+  }
+  *choice = (struct install_coexist_choice){.updating = true,
+      .reason = "missing selected target, partition entries or disk GUID"};
+  if (!target || !esp_entry || !pool_entry || !guid) {
+    return false;
+  }
+  struct install_disk disk = {.handle = HANDLE_INVALID};
+  struct install_coexist *facts = calloc(1, sizeof(*facts));
+  bool success = false;
+  if (!facts) {
+    choice->reason = "out of memory revalidating selected installation";
+    goto done;
+  }
+  if (!open_disk(disks, target, &disk, choice) ||
+      !install_coexist_inspect(&disk, facts, &choice->reason)) {
+    goto done;
+  }
+  char current_guid[37];
+  install_guid_text(facts->gpt.disk_guid, current_guid);
+  if (strcmp(current_guid, guid)) {
+    choice->reason = "selected disk GUID differs from the current healthy GPT";
+    goto done;
+  }
+  const struct disk_partition_selection *esp = find_partition(facts->esps,
+      facts->esp_count, esp_entry);
+  const struct disk_partition_selection *pool = find_partition(facts->pools,
+      facts->pool_count, pool_entry);
+  if (!esp || !pool) {
+    choice->reason = "selected ESP or native pool entry is absent from the current healthy GPT";
+    goto done;
+  }
+  install_coexist_layout(esp, pool, &choice->layout);
+  if (!install_scan_pool_update(&disk, &choice->layout, &choice->update) ||
+      !choice->update.eligible) {
+    choice->reason = choice->update.reason;
+    goto done;
+  }
+  choice->reason = NULL;
+  success = true;
+done:
+  free(facts);
+  return close_disk(&disk, choice) && success;
 }

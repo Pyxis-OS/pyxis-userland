@@ -25,4 +25,12 @@ struct install_coexist_choice {
 bool install_coexist_ui_choose(struct terminal *terminal, handle_t disks, bool updating,
     const uint8_t new_pool_guid[16], struct install_coexist_choice *choice);
 
+/* Revalidate the trusted selector's exact Update choice without input or
+ * fallback. GUID is the canonical disk text emitted by install_guid_text;
+ * target and both GPT entries must still identify eligible native metadata.
+ * ESP admission and final Review remain caller work. Output and failed-close
+ * ownership follow choose above; no pool mount, replay or write occurs. */
+bool install_coexist_ui_selected(handle_t disks, uint64_t target, uint64_t esp_entry,
+    uint64_t pool_entry, const char *guid, struct install_coexist_choice *choice);
+
 #endif
