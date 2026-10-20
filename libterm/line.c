@@ -14,7 +14,7 @@ struct line_editor {
   size_t columns, cells, prompt_length;
   size_t length, cursor, displayed_length, displayed_cursor;
   size_t match_start, match_length;
-  bool quiet, search_failed;
+  bool quiet, search_failed, default_selected;
 };
 
 struct history_search {
@@ -50,11 +50,13 @@ static enum call_status write_spaces(struct terminal *term, size_t count)
 static enum call_status draw_input(struct line_editor *editor, size_t start, size_t count)
 {
   size_t end = start + count;
-  size_t match_end = editor->match_start + editor->match_length;
-  if (!editor->match_length || start >= match_end || end <= editor->match_start) {
+  size_t match_start = editor->default_selected ? 0 : editor->match_start;
+  size_t match_length = editor->default_selected ? editor->length : editor->match_length;
+  size_t match_end = match_start + match_length;
+  if (!match_length || start >= match_end || end <= match_start) {
     return term_write_all(editor->term, editor->buffer + start, count);
   }
-  size_t first = start > editor->match_start ? start : editor->match_start;
+  size_t first = start > match_start ? start : match_start;
   size_t last = end < match_end ? end : match_end;
   enum call_status status = term_write_all(editor->term, editor->buffer + start, first - start);
   if (status == CALL_OK) {
@@ -421,7 +423,8 @@ static enum call_status complete_word(struct line_editor *editor,
 
 static struct term_line_result read_line(struct terminal *term, const char *prompt,
     const char *initial, struct term_history *history, const struct term_completion *completion,
-    char *buffer, size_t capacity, bool quiet, bool marked, struct term_line_service *service)
+    char *buffer, size_t capacity, bool quiet, bool marked, struct term_line_service *service,
+    bool selected_default)
 {
   struct term_line_result result = {.status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST};
   if (!buffer || !capacity) {
@@ -471,6 +474,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     .term = term, .prompt = prompt, .buffer = buffer,
     .columns = columns, .cells = cells, .prompt_length = prompt_length, .quiet = quiet,
     .length = initial_length, .cursor = initial_length,
+    .default_selected = selected_default && initial_length,
   };
   struct term_event_reader reader = {.term = term, .clock = HANDLE_INVALID};
   handle_t clock = bootstrap_capability("clock");
@@ -592,6 +596,11 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
           }
         }
         if (result.error == CALL_OK) {
+          if (editor.default_selected && event.length) {
+            editor.default_selected = false;
+            editor.length = editor.cursor = 0;
+            buffer[0] = '\0';
+          }
           size_t inserted = event.length;
           if (inserted > limit - editor.length) {
             inserted = limit - editor.length;
@@ -702,6 +711,21 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
       break;
     }
 
+    if (editor.default_selected) {
+      if ((key >= ' ' && key <= '~') || key == '\b' || key == 0x7f ||
+          key == TERM_KEY_DELETE) {
+        editor.default_selected = false;
+        editor.length = editor.cursor = 0;
+        buffer[0] = '\0';
+        if (key == '\b' || key == 0x7f || key == TERM_KEY_DELETE) {
+          result.error = draw_line(&editor, true, false);
+          continue;
+        }
+      } else if (key == TERM_KEY_LEFT || key == TERM_KEY_RIGHT || key == TERM_KEY_HOME ||
+          key == TERM_KEY_END || key == 1 || key == 5) {
+        editor.default_selected = false;
+      }
+    }
     bool full = false;
     switch (key) {
     case 18:
@@ -814,6 +838,7 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
     end_search(&search, &editor, prompt, &position, limit, false);
   }
   if (result.status != TERM_LINE_ERROR && !quiet) {
+    editor.default_selected = false;
     enum call_status status = draw_line(&editor, false, false);
     if (status == CALL_OK) {
       status = term_print(term, result.status == TERM_LINE_CANCELLED ? "^C\n" : "\n");
@@ -848,17 +873,17 @@ static struct term_line_result read_line(struct terminal *term, const char *prom
 static struct term_line_result read_line_passthrough(struct terminal *term,
     const char *prompt, const char *initial, struct term_history *history,
     const struct term_completion *completion, char *buffer, size_t capacity, bool quiet,
-    bool marked, struct term_line_service *service)
+    bool marked, struct term_line_service *service, bool selected_default)
 {
   /* Invalid arguments keep read_line's handled BAD_REQUEST result. */
   if (!term || !prompt || !buffer || !capacity) {
     return read_line(term, prompt, initial, history, completion, buffer, capacity, quiet, marked,
-        service);
+        service, selected_default);
   }
   handle_t passthrough;
   bool held = term_passthrough(term, &passthrough) == CALL_OK;
   struct term_line_result result = read_line(term, prompt, initial, history, completion, buffer,
-      capacity, quiet, marked, service);
+      capacity, quiet, marked, service, selected_default);
   if (held && handle_close(passthrough) != 0) {
     /* A retained grant would keep Ctrl+C from interrupting this program. */
     result = (struct term_line_result){.status = TERM_LINE_ERROR, .error = CALL_BAD_HANDLE};
@@ -872,32 +897,43 @@ static struct term_line_result read_line_passthrough(struct terminal *term,
 struct term_line_result term_read_line(struct terminal *term, const char *prompt,
                                       char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, false, false, NULL);
+  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, false, false,
+      NULL, false);
 }
 
 struct term_line_result term_read_line_history(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, false, NULL);
+  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, false,
+      NULL, false);
 }
 
 struct term_line_result term_read_line_quiet(struct terminal *term, const char *prompt,
                                             char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, true, false, NULL);
+  return read_line_passthrough(term, prompt, "", NULL, NULL, buffer, capacity, true, false,
+      NULL, false);
 }
 
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity)
 {
   return read_line_passthrough(term, prompt, initial, NULL, NULL, buffer, capacity, false, false,
-      NULL);
+      NULL, false);
+}
+
+struct term_line_result term_read_line_default(struct terminal *term, const char *prompt,
+    const char *initial, char *buffer, size_t capacity)
+{
+  return read_line_passthrough(term, prompt, initial, NULL, NULL, buffer, capacity, false, false,
+      NULL, true);
 }
 
 struct term_line_result term_read_line_marked(struct terminal *term, const char *prompt,
     struct term_history *history, char *buffer, size_t capacity)
 {
-  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, true, NULL);
+  return read_line_passthrough(term, prompt, "", history, NULL, buffer, capacity, false, true,
+      NULL, false);
 }
 
 struct term_line_result term_read_line_completing(struct terminal *term, const char *prompt,
@@ -905,7 +941,7 @@ struct term_line_result term_read_line_completing(struct terminal *term, const c
     char *buffer, size_t capacity)
 {
   return read_line_passthrough(term, prompt, "", history, completion, buffer, capacity, false,
-      marked, NULL);
+      marked, NULL, false);
 }
 
 struct term_line_result term_read_line_servicing(struct terminal *term, const char *prompt,
@@ -913,5 +949,275 @@ struct term_line_result term_read_line_servicing(struct terminal *term, const ch
     bool quiet, struct term_line_service *service, char *buffer, size_t capacity)
 {
   return read_line_passthrough(term, prompt, "", history, completion, buffer, capacity, quiet,
-      marked, service);
+      marked, service, false);
+}
+
+struct choice_editor {
+  struct terminal *term;
+  const char *prompt;
+  const char *const *labels;
+  size_t count, selected, columns, rows, displayed_rows;
+  char number[3 * sizeof(size_t) + 1];
+  size_t length;
+  bool overflow, invalid;
+};
+
+static bool printable(const char *text)
+{
+  if (!text) {
+    return false;
+  }
+  for (; *text; ++text) {
+    if ((unsigned char)*text < ' ' || (unsigned char)*text > '~') {
+      return false;
+    }
+  }
+  return true;
+}
+
+static enum call_status choice_text(struct terminal *term, const char *text, size_t *remaining)
+{
+  size_t length = strlen(text);
+  if (length > *remaining) {
+    length = *remaining;
+  }
+  *remaining -= length;
+  return term_write_all(term, text, length);
+}
+
+static enum call_status draw_choice(struct choice_editor *editor)
+{
+  struct terminal *term = editor->term;
+  enum call_status status = term_cursor_visible(term, false);
+  if (status == CALL_OK) {
+    status = term_print(term, "\r");
+  }
+  if (status == CALL_OK) {
+    status = term_move(term, -(int)editor->displayed_rows, 0);
+  }
+  if (status == CALL_OK) {
+    status = term_print(term, "\x1b[0m\x1b[J");
+  }
+  size_t visible = editor->count < editor->rows - 1 ? editor->count : editor->rows - 1;
+  size_t first = editor->selected >= visible ? editor->selected - visible + 1 : 0;
+  for (size_t row = 0; status == CALL_OK && row < visible; ++row) {
+    size_t index = first + row;
+    if (index == editor->selected) {
+      status = term_reverse(term, true);
+    }
+    char prefix[3 * sizeof(size_t) + 4];
+    snprintf(prefix, sizeof(prefix), "%zu. ", index + 1);
+    size_t remaining = editor->columns;
+    if (status == CALL_OK) {
+      status = choice_text(term, prefix, &remaining);
+    }
+    if (status == CALL_OK) {
+      status = choice_text(term, editor->labels[index], &remaining);
+    }
+    if (status == CALL_OK) {
+      status = term_reset_style(term);
+    }
+    if (status == CALL_OK) {
+      /* CR cancels a delayed wrap when the label filled the last column. */
+      status = term_print(term, "\r\n");
+    }
+  }
+  size_t remaining = editor->columns - 1;
+  size_t number_visible = editor->length < remaining ? editor->length : remaining;
+  size_t text_remaining = remaining - number_visible;
+  if (status == CALL_OK && editor->invalid) {
+    status = choice_text(term, "Invalid choice. ", &text_remaining);
+  }
+  if (status == CALL_OK && editor->rows == 1) {
+    size_t suffix = text_remaining < 2 ? text_remaining : 2;
+    size_t label_remaining = text_remaining - suffix;
+    char prefix[3 * sizeof(size_t) + 4];
+    snprintf(prefix, sizeof(prefix), "%zu. ", editor->selected + 1);
+    status = term_reverse(term, true);
+    if (status == CALL_OK) {
+      status = choice_text(term, prefix, &label_remaining);
+    }
+    if (status == CALL_OK) {
+      status = choice_text(term, editor->labels[editor->selected], &label_remaining);
+    }
+    if (status == CALL_OK) {
+      status = term_reset_style(term);
+    }
+    if (status == CALL_OK) {
+      status = choice_text(term, "> ", &suffix);
+    }
+  } else if (status == CALL_OK) {
+    status = choice_text(term, editor->prompt, &text_remaining);
+  }
+  if (status == CALL_OK) {
+    status = term_write_all(term, editor->number + editor->length - number_visible, number_visible);
+  }
+  if (status == CALL_OK) {
+    status = term_cursor_visible(term, true);
+  }
+  if (status == CALL_OK) {
+    editor->displayed_rows = visible;
+  }
+  return status;
+}
+
+static bool choice_number(const struct choice_editor *editor, size_t *selected)
+{
+  if (editor->overflow || !editor->length) {
+    return false;
+  }
+  size_t number = 0;
+  for (size_t i = 0; i < editor->length; ++i) {
+    unsigned char digit = editor->number[i];
+    if (digit < '0' || digit > '9' || number > (SIZE_MAX - (digit - '0')) / 10) {
+      return false;
+    }
+    number = number * 10 + digit - '0';
+  }
+  if (!number || number > editor->count) {
+    return false;
+  }
+  *selected = number - 1;
+  return true;
+}
+
+struct term_choice_result term_read_choice(struct terminal *term, const char *prompt,
+    const char *const labels[], size_t count, size_t default_index)
+{
+  struct term_choice_result result = {
+    .status = TERM_LINE_ERROR, .error = CALL_BAD_REQUEST, .selected = SIZE_MAX,
+  };
+  if (!term || !printable(prompt) || !labels || !count || default_index >= count) {
+    return result;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (!printable(labels[i]) || !*labels[i]) {
+      return result;
+    }
+  }
+  struct choice_editor editor = {
+    .term = term, .prompt = prompt, .labels = labels, .count = count, .selected = default_index,
+  };
+  result.error = term_size(term, &editor.columns, &editor.rows);
+  if (result.error != CALL_OK) {
+    return result;
+  }
+  if (!editor.columns || !editor.rows || editor.columns > UINT16_MAX ||
+      editor.rows > UINT16_MAX) {
+    result.error = CALL_LIMIT;
+    return result;
+  }
+  struct term_event_reader reader = {.term = term, .clock = HANDLE_INVALID};
+  handle_t clock = bootstrap_capability("clock");
+  if (clock != HANDLE_INVALID) {
+    result.error = term_event_reader_init(&reader, term, clock);
+    if (result.error == CALL_OK) {
+      editor.columns = reader.size.columns;
+      editor.rows = reader.size.rows;
+    } else if (result.error == CALL_DENIED || result.error == CALL_BAD_HANDLE) {
+      reader.clock = HANDLE_INVALID;
+    } else {
+      return result;
+    }
+  }
+  handle_t passthrough = HANDLE_INVALID;
+  bool held = term_passthrough(term, &passthrough) == CALL_OK;
+  result.error = term_fresh_line(term);
+  while (result.error == CALL_OK) {
+    if (!editor.columns || !editor.rows || editor.columns > UINT16_MAX ||
+        editor.rows > UINT16_MAX) {
+      result.error = CALL_LIMIT;
+      break;
+    }
+    result.error = draw_choice(&editor);
+    if (result.error != CALL_OK) {
+      break;
+    }
+    struct term_event event;
+    result.error = term_read_editor_event(&reader, &event);
+    if (result.error != CALL_OK) {
+      if (result.error == CALL_INPUT_LOST) {
+        result.status = TERM_LINE_INPUT_LOST;
+      }
+      break;
+    }
+    if (event.kind == TERM_EVENT_RESIZED) {
+      editor.columns = event.size.columns;
+      editor.rows = event.size.rows;
+      continue;
+    }
+    if (event.kind != TERM_EVENT_KEY) {
+      result.error = CALL_BAD_REQUEST;
+      break;
+    }
+    unsigned key = event.key;
+    if (key == 3) {
+      result.status = TERM_LINE_CANCELLED;
+      break;
+    }
+    if (key == TERM_KEY_EOF || (key == 4 && !editor.length && !editor.overflow)) {
+      result.status = TERM_LINE_EOF;
+      break;
+    }
+    if (key == '\r' || key == '\n') {
+      size_t selected = editor.selected;
+      if ((!editor.length && !editor.overflow) || choice_number(&editor, &selected)) {
+        result.status = TERM_LINE_OK;
+        result.selected = selected;
+        break;
+      }
+      editor.invalid = true;
+      editor.length = 0;
+      editor.number[0] = '\0';
+      editor.overflow = false;
+      continue;
+    }
+    if (key == TERM_KEY_UP || key == TERM_KEY_DOWN) {
+      if (key == TERM_KEY_UP && editor.selected) {
+        --editor.selected;
+      } else if (key == TERM_KEY_DOWN && editor.selected < count - 1) {
+        ++editor.selected;
+      }
+      editor.length = 0;
+      editor.number[0] = '\0';
+      editor.overflow = editor.invalid = false;
+    } else if (key == '\b' || key == 0x7f) {
+      if (editor.length) {
+        editor.number[--editor.length] = '\0';
+      }
+    } else if (key >= ' ' && key <= '~') {
+      editor.invalid = false;
+      if (editor.length == sizeof(editor.number) - 1) {
+        editor.overflow = true;
+      } else {
+        editor.number[editor.length++] = key;
+        editor.number[editor.length] = '\0';
+      }
+    }
+    size_t selected;
+    if (choice_number(&editor, &selected)) {
+      editor.selected = selected;
+    }
+  }
+  enum call_status cleanup = term_reset_style(term);
+  enum call_status cursor = term_cursor_visible(term, true);
+  if (cleanup == CALL_OK) {
+    cleanup = cursor;
+  }
+  if (cleanup == CALL_OK && result.error == CALL_OK) {
+    cleanup = term_print(term, result.status == TERM_LINE_CANCELLED ? "^C\r\n" : "\r\n");
+  }
+  if (held && handle_close(passthrough) != 0) {
+    cleanup = CALL_BAD_HANDLE;
+  }
+  if (cleanup != CALL_OK) {
+    result.error = cleanup;
+    result.status = TERM_LINE_ERROR;
+  } else if (result.error != CALL_OK && result.status != TERM_LINE_INPUT_LOST) {
+    result.status = TERM_LINE_ERROR;
+  }
+  if (result.status != TERM_LINE_OK) {
+    result.selected = SIZE_MAX;
+  }
+  return result;
 }

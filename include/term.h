@@ -174,6 +174,34 @@ struct term_line_result term_read_line(struct terminal *term, const char *prompt
  * same buffer limit; cancellation and errors discard it. */
 struct term_line_result term_read_line_initial(struct terminal *term, const char *prompt,
     const char *initial, char *buffer, size_t capacity);
+/* Selected printable ASCII default. Enter accepts it; the first printable key
+ * or nonempty paste replaces it. Left/Right/Home/End begin ordinary editing;
+ * Backspace/Delete clear the selected default. Other line-reader guarantees
+ * and initial-text validation are the same as term_read_line_initial. */
+struct term_line_result term_read_line_default(struct terminal *term, const char *prompt,
+    const char *initial, char *buffer, size_t capacity);
+
+struct term_choice_result {
+  enum term_line_status status;
+  enum call_status error; /* Native failure for ERROR/INPUT_LOST, otherwise OK. */
+  size_t selected; /* Zero-based index on OK, SIZE_MAX otherwise. */
+};
+
+/* Borrow printable ASCII prompt and nonempty labels for this call. Count must
+ * be nonzero and default_index less than count. Shows numbered choices with a
+ * highlighted active row. Up/Down move within the list; Enter accepts that row,
+ * or a typed 1-based number. Backspace edits the number. Invalid/overlong input
+ * gives a short message and re-prompts. Ctrl+C cancels; Ctrl+D on an empty number
+ * and actual input EOF return EOF. Native errors and input loss return directly.
+ * A viewport follows the active row; labels are truncated to terminal width.
+ * A one-row terminal shows the active item and number input inline.
+ * Uses the startup clock for resize when available. Owns terminal input/output
+ * for the call and holds passthrough when available. Restores default style and
+ * a visible cursor; passthrough withdrawal failure returns ERROR.
+ * Does not register a native clipboard receiver. No input is read ahead. */
+struct term_choice_result term_read_choice(struct terminal *term, const char *prompt,
+    const char *const labels[], size_t count, size_t default_index);
+
 /* Same editing, cancellation, EOF and buffer limit as term_read_line, but
  * writes nothing: no prompt, fresh line, redraw, cursor or
  * style control, overflow color, submission newline or ^C. The prompt is
