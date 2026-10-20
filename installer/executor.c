@@ -197,7 +197,6 @@ static bool open_pool(struct install_plan *plan)
   return release_raw(&plan->disk, &plan->disk_claimed);
 }
 
-#if !INSTALLER_PUBLICATION_SCRATCH
 static const struct mount_state_reply *reviewed_esp(const struct install_plan *plan)
 {
   if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
@@ -213,13 +212,14 @@ static const struct mount_state_reply *reviewed_esp(const struct install_plan *p
   }
   return NULL;
 }
-#endif
 
 static bool stage_esp(struct install_plan *plan)
 {
 #if INSTALLER_PUBLICATION_SCRATCH
-  return install_installed_publish(plan);
-#else
+  if (install_plan_publication(plan)) {
+    return install_installed_publish(plan);
+  }
+#endif
   enum call_status status = install_esp_view_open(&plan->view, plan->disks,
       &plan->target.esp, reviewed_esp(plan),
       plan->record.coexist ? COEXIST_ESP_RIGHTS : INSTALL_ESP_VIEW_RIGHTS);
@@ -272,7 +272,6 @@ static bool stage_esp(struct install_plan *plan)
     fprintf(stderr, "installer: EFI interval end failed (status %u)\n", status);
   }
   return status == CALL_OK;
-#endif
 }
 
 static void cleanup_programs(struct install_plan *plan)
@@ -280,15 +279,17 @@ static void cleanup_programs(struct install_plan *plan)
   bool updating = plan->record.updating;
   const char *previous = updating ? plan->record.previous : NULL;
 #if INSTALLER_PUBLICATION_SCRATCH
-  const struct config_boot_binding *retained = &plan->publication_report.record.previous_boot;
-  bool unknown_previous = updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION);
-  bool retained_conflict = retained->present && previous && !unknown_previous &&
-      strcmp(previous, retained->program_revision);
-  if (retained_conflict) {
-    fputs("Older program directories kept: recorded previous programs and retained boot programs differ.\n", stderr);
-    return;
+  if (install_plan_publication(plan)) {
+    const struct config_boot_binding *retained = &plan->publication_report.record.previous_boot;
+    bool unknown_previous = updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION);
+    bool retained_conflict = retained->present && previous && !unknown_previous &&
+        strcmp(previous, retained->program_revision);
+    if (retained_conflict) {
+      fputs("Older program directories kept: recorded previous programs and retained boot programs differ.\n", stderr);
+      return;
+    }
+    if (retained->present && !unknown_previous) previous = retained->program_revision;
   }
-  if (retained->present && !unknown_previous) previous = retained->program_revision;
 #endif
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
     fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
@@ -390,7 +391,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
       goto done;
     }
   }
-  if (!install_installed_admit(plan)) goto done;
+  if (install_plan_publication(plan) && !install_installed_admit(plan)) goto done;
 #endif
   install_progress_begin("Preparing the selected home volume", INSTALL_PROGRESS_NONE, NULL);
   status = disk_create_volume(disk->handle, plan->target.pool.partition, INSTALL_HOME_VOLUME);
@@ -454,21 +455,24 @@ done:
     return false;
   }
 #if INSTALLER_PUBLICATION_SCRATCH
-  fputs(updating ? "updated\n" : "installed\n", stderr);
-  fputs("Boot-bound configuration and owned menu activation verified.\n", stderr);
-#else
-  if (coexist) {
-    fputs("Coexistence payload staged, synchronized and verified. Existing boot menu unchanged.\n"
-        "Review and add these entries to that menu before booting the new payload:\n", stderr);
-    if (fwrite(plan->entry.bytes, 1, plan->entry.size, stderr) != plan->entry.size ||
-        fflush(stderr) != 0) {
-      return false;
-    }
-  } else {
+  if (install_plan_publication(plan)) {
     fputs(updating ? "updated\n" : "installed\n", stderr);
-    fputs("Boot from this disk after removing the live medium.\n", stderr);
-  }
+    fputs("Boot-bound configuration and owned menu activation verified.\n", stderr);
+  } else
 #endif
+  {
+    if (coexist) {
+      fputs("Coexistence payload staged, synchronized and verified. Existing boot menu unchanged.\n"
+          "Review and add these entries to that menu before booting the new payload:\n", stderr);
+      if (fwrite(plan->entry.bytes, 1, plan->entry.size, stderr) != plan->entry.size ||
+          fflush(stderr) != 0) {
+        return false;
+      }
+    } else {
+      fputs(updating ? "updated\n" : "installed\n", stderr);
+      fputs("Boot from this disk after removing the live medium.\n", stderr);
+    }
+  }
   if (!updating) {
     fputs("Deleting system://SAFE_TO_WIPE marks this installation as final.\n", stderr);
   }

@@ -48,6 +48,18 @@ struct install_plan {
   bool ready, disk_claimed, raw_claimed;
 };
 
+/* Default publication is qualified for Classic only. Coexist keeps the
+ * immutable-payload/manual-entry path until separately qualified. */
+static inline bool install_plan_publication(const struct install_plan *plan)
+{
+#if INSTALLER_PUBLICATION_SCRATCH
+  return !plan->record.coexist;
+#else
+  (void)plan;
+  return false;
+#endif
+}
+
 bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t boot, handle_t kernel,
     handle_t archive, handle_t clock, handle_t system_info);
 /* Rebuilds inspection, hashes and derived assets for the recorded choices;

@@ -148,7 +148,7 @@ static bool source_fingerprint(const struct install_plan *plan, char output[65])
       hash_source(&digest, &(struct install_source){.memory = plan->entry.bytes,
         .bytes = plan->entry.size}) &&
 #if INSTALLER_PUBLICATION_SCRATCH
-      install_installed_hash(plan, &digest) &&
+      (!install_plan_publication(plan) || install_installed_hash(plan, &digest)) &&
 #endif
       install_digest_finish(&digest, output);
   install_digest_abort(&digest);
@@ -213,7 +213,9 @@ static bool payload_plan(struct install_plan *plan)
 {
 #if INSTALLER_PUBLICATION_SCRATCH
   plan->payload_request.workspace = plan->workspace;
-  return true;
+  if (install_plan_publication(plan)) {
+    return true;
+  }
 #endif
   if (!plan->record.coexist) {
     plan->classic_request = (struct install_esp_activation_request){
@@ -262,7 +264,9 @@ static bool payload_plan(struct install_plan *plan)
 static bool esp_space_budget(struct install_plan *plan)
 {
 #if INSTALLER_PUBLICATION_SCRATCH
-  return plan->installed.prepared;
+  if (install_plan_publication(plan)) {
+    return plan->installed.prepared;
+  }
 #endif
   plan->esp_cluster_bytes = plan->esp_required_clusters = plan->esp_free_clusters = 0;
   if (!plan->record.coexist) {
@@ -371,7 +375,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
         plan->revision_record, revision_bytes, npfs_get_u32(plan->record.layout.esp_guid));
     if (!plan->esp) return false;
   }
-  if (!install_installed_prepare(plan)) {
+  if (install_plan_publication(plan) && !install_installed_prepare(plan)) {
     return false;
   }
 #endif
@@ -500,44 +504,47 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
   fprintf(output, "Staging reserve: %llu blocks; available %llu.\n",
       (unsigned long long)plan->required_blocks, (unsigned long long)plan->available_blocks);
 #if INSTALLER_PUBLICATION_SCRATCH
-  install_installed_report(plan, output, verbose);
-  if (!plan->record.updating && !plan->record.coexist) {
-    fputs("ERASE: the entire disk will be rebuilt; every existing partition and volume\n"
-        "will be destroyed, including any Fedora or Windows installation.\n", output);
-    if (plan->consent.volume_labels) fprintf(output, "Existing volumes:\n%s\n", plan->consent.volume_labels);
-  } else if (plan->record.esp_rebuild) {
-    fputs("RECOVERY: the explicitly reviewed damaged ESP will be initialized; other partitions stay.\n", output);
-  } else if (!plan->record.updating) {
-    fputs("Append only the reviewed pool GPT entry and required CRCs; format only that new pool.\n", output);
-  }
-  fputs("The reviewed source commits before the owned menu changes; unknown menu ownership\n"
-      "retains the menu and reports boot activation pending. No Update formats a healthy ESP.\n", output);
-#else
-  if (plan->record.coexist) {
-    fprintf(output, "ESP staging reserve: %llu bytes; checked free space %llu bytes.\n",
-        (unsigned long long)(plan->esp_required_clusters * plan->esp_cluster_bytes),
-        (unsigned long long)(plan->esp_free_clusters * plan->esp_cluster_bytes));
-    fputs(plan->record.updating ?
-        "The selected pool is updated; GPT and all other partitions stay.\n" :
-        "Only the reviewed unused GPT slot and required CRCs are appended, then\n"
-        "only the new pool is formatted. A failed append can leave partial GPT effects.\n", output);
-    fprintf(output, "ESP payloads use EFI/pyxis/%s/%s/.\n",
-        plan->record.revision, plan->record.attempt);
-    fputs("No firmware, Fedora, Windows or Limine configuration is changed.\n"
-        "The verified entry is saved and printed for manual addition.\n", output);
-  } else if (plan->record.updating) {
-    fputs(plan->record.esp_rebuild ?
-        "RECOVERY: the explicitly reviewed ESP will be initialized; other partitions stay.\n" :
-        "GPT and volumes stay; fixed boot files are replaced through native FAT files.\n"
-        "The healthy ESP is not formatted.\n", output);
-  } else {
-    fputs("ERASE: the entire disk will be rebuilt; every existing partition and volume\n"
-        "will be destroyed, including any Fedora or Windows installation.\n", output);
-    if (plan->consent.volume_labels) {
-      fprintf(output, "Existing volumes:\n%s\n", plan->consent.volume_labels);
+  if (install_plan_publication(plan)) {
+    install_installed_report(plan, output, verbose);
+    if (!plan->record.updating && !plan->record.coexist) {
+      fputs("ERASE: the entire disk will be rebuilt; every existing partition and volume\n"
+          "will be destroyed, including any Fedora or Windows installation.\n", output);
+      if (plan->consent.volume_labels) fprintf(output, "Existing volumes:\n%s\n", plan->consent.volume_labels);
+    } else if (plan->record.esp_rebuild) {
+      fputs("RECOVERY: the explicitly reviewed damaged ESP will be initialized; other partitions stay.\n", output);
+    } else if (!plan->record.updating) {
+      fputs("Append only the reviewed pool GPT entry and required CRCs; format only that new pool.\n", output);
+    }
+    fputs("The reviewed source commits before the owned menu changes; unknown menu ownership\n"
+        "retains the menu and reports boot activation pending. No Update formats a healthy ESP.\n", output);
+  } else
+#endif
+  {
+    if (plan->record.coexist) {
+      fprintf(output, "ESP staging reserve: %llu bytes; checked free space %llu bytes.\n",
+          (unsigned long long)(plan->esp_required_clusters * plan->esp_cluster_bytes),
+          (unsigned long long)(plan->esp_free_clusters * plan->esp_cluster_bytes));
+      fputs(plan->record.updating ?
+          "The selected pool is updated; GPT and all other partitions stay.\n" :
+          "Only the reviewed unused GPT slot and required CRCs are appended, then\n"
+          "only the new pool is formatted. A failed append can leave partial GPT effects.\n", output);
+      fprintf(output, "ESP payloads use EFI/pyxis/%s/%s/.\n",
+          plan->record.revision, plan->record.attempt);
+      fputs("No firmware, Fedora, Windows or Limine configuration is changed.\n"
+          "The verified entry is saved and printed for manual addition.\n", output);
+    } else if (plan->record.updating) {
+      fputs(plan->record.esp_rebuild ?
+          "RECOVERY: the explicitly reviewed ESP will be initialized; other partitions stay.\n" :
+          "GPT and volumes stay; fixed boot files are replaced through native FAT files.\n"
+          "The healthy ESP is not formatted.\n", output);
+    } else {
+      fputs("ERASE: the entire disk will be rebuilt; every existing partition and volume\n"
+          "will be destroyed, including any Fedora or Windows installation.\n", output);
+      if (plan->consent.volume_labels) {
+        fprintf(output, "Existing volumes:\n%s\n", plan->consent.volume_labels);
+      }
     }
   }
-#endif
   if (plan->record.updating) {
     if (!strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
       fputs("Previous program revision unknown; old revision cleanup is skipped.\n", output);
