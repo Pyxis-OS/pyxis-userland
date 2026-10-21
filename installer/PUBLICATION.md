@@ -86,8 +86,14 @@ and allocation overhead enter capacity admission without credit for later cleanu
 The final non-extending 30-second publication interval runs CHECK immediately
 after BEGIN, then rechecks frozen inputs and fresh payload identity/content.
 It publishes prepared then committed boot-bound readiness before switching only
-confirmed Pyxis-owned normal/rescue Limine spans last, with synchronization and
-readback. Exact legacy adoption additionally requires a disk-bound recipe and
+confirmed Pyxis-owned Limine spans last, with synchronization and readback:
+normal and rescue boot the new attempt, and `Pyxis OS (previous)` boots the
+outgoing one, recorded as `previous_boot`. The readiness record format does not
+change. Pending completion and recovery own the replaced menu's previous entry,
+whatever attempt it names, because that whole menu equals the digest-recorded
+previous `limine.conf` (chronium, 2026-10-21). A committed menu without a
+previous entry, as written before it existed, is still current; the next Update
+adds it. Exact legacy adoption additionally requires a disk-bound recipe and
 verified inherited kernel/archive/revision evidence rechecked within the interval.
 Normal Update preserves the boot manager, unowned content and healthy filesystem;
 ESP rebuilding is a separate explicitly reviewed Classic recovery grant.

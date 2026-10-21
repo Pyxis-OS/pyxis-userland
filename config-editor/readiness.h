@@ -11,7 +11,9 @@
  * No FILE handles, writer authority, effects or boot-init activation occur.
  * Unknown/prepared/unbound/mismatching readiness and rescue select the entire
  * archive set. Missing loaded-payload evidence also refuses ESP selection.
- * A bound archive record never certifies or decodes ESP inputs.
+ * A bound archive record never certifies or decodes ESP inputs. Payloads that
+ * match previous_boot (the previous menu entry) select the committed ESP set
+ * only when the loaded archive's trusted catalog is the selected catalog.
  * Selection owns its resulting byte snapshots and decoded values. */
 bool config_readiness_choose(const struct config_bytes archive[CONFIG_LUA_COUNT],
     const struct config_bytes *archive_catalog, const char *kernel_revision,

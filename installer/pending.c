@@ -54,12 +54,18 @@ bool install_pending_inspect(const struct config_blob *record,
   }
   const struct install_boot_entry_paths active = {
     history->boot.kernel.path, history->boot.archive.path};
-  bool adoption = false, pending = true;
-  if (!install_boot_entry_plan(&current[CONFIG_LIMINE], &active, disk_guid, &active,
-      false, &plan->menu, &adoption, &pending)) {
+  const struct install_boot_entry_paths inherited = {
+    history->previous_boot.kernel.path, history->previous_boot.archive.path};
+  const struct install_boot_menu committed = {&active,
+    history->previous_boot.present ? &inherited : NULL, false};
+  bool adoption = false, pending = true, is_current = false;
+  if (!install_boot_entry_current(&current[CONFIG_LIMINE], &committed, disk_guid, &is_current)) {
     return false;
   }
-  if (!pending && config_blob_equal(&plan->menu, &current[CONFIG_LIMINE])) {
+  if (is_current) {
+    if (!config_blob_set(&plan->menu, current[CONFIG_LIMINE].bytes, current[CONFIG_LIMINE].size)) {
+      return false;
+    }
     plan->state = INSTALL_PENDING_MENU_CURRENT;
     /* A completed menu permits an ordinary new Review of owner edits. Those
      * edits are not the committed set and cannot authorize pending cleanup. */
@@ -72,8 +78,6 @@ bool install_pending_inspect(const struct config_blob *record,
       !digest_equal(&old->digest, &previous_limine->digest)) {
     return true;
   }
-  const struct install_boot_entry_paths inherited = {
-    history->previous_boot.kernel.path, history->previous_boot.archive.path};
   bool legacy_valid = !history->previous_boot.present && legacy;
   for (unsigned i = 0; legacy_valid && i < INSTALL_BOOT_PAYLOADS; ++i) {
     legacy_valid = config_payload_digest_valid(&legacy[i]) && legacy[i].present && legacy[i].size;
@@ -81,8 +85,10 @@ bool install_pending_inspect(const struct config_blob *record,
   if (!history->previous_boot.present && !legacy_valid) {
     return true;
   }
+  /* The digest proof above owns its previous entry, whatever attempt it names. */
+  const struct install_boot_menu replaced = {&inherited, NULL, true};
   if (!install_boot_entry_plan(&current[CONFIG_LIMINE],
-      history->previous_boot.present ? &inherited : NULL, disk_guid, &active,
+      history->previous_boot.present ? &replaced : NULL, disk_guid, &committed,
       legacy_valid, &plan->menu, &adoption, &pending)) {
     return false;
   }

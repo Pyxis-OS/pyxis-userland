@@ -12,22 +12,42 @@ struct install_boot_entry_paths {
   const char *kernel, *archive;
 };
 
+/* A menu's owned Pyxis entries: NORMAL boots the normal and rescue entries,
+ * PREVIOUS, when not NULL, the "Pyxis OS (previous)" entry. For an inherited
+ * menu, PREVIOUS_PROVEN instead owns a marked previous entry whatever it names:
+ * the caller proved the whole menu equal to a digest-recorded menu this
+ * publisher wrote (chronium, 2026-10-21). */
+struct install_boot_menu {
+  const struct install_boot_entry_paths *normal, *previous;
+  bool previous_proven;
+};
+
 /* Pure planning over borrowed frozen bytes. Paths must be validated relative
- * kernel/archive paths, such as install_esp_payload_path output. PREVIOUS is
+ * kernel/archive paths, such as install_esp_payload_path output. INHERITED is
  * NULL for legacy admission; otherwise the caller has certified its boot
- * binding and payload evidence against this disk. The GUID names that same
+ * bindings and payload evidence against this disk. The GUID names that same
  * reviewed target. These inputs confer no I/O authority or boot readiness.
  *
- * Only exact inherited Pyxis entries are replaceable. Markers alone do not
- * establish ownership. An ambiguous menu is retained byte-for-byte, with
- * PENDING true; LEGACY_PAIR_VERIFIED comes from the read-only certifier below.
- * Inputs remain frozen and distinct from caller-owned SELECTED, initialized as
- * a config_blob. Keep the shared hash context ready. Missing current input
- * clears SELECTED and remains pending. No target files are opened or changed. */
+ * Only exact inherited Pyxis entries are replaceable: normal and rescue must
+ * match INHERITED's normal pair, and a present previous entry its previous pair
+ * unless PREVIOUS_PROVEN. A missing previous entry, as in menus written before
+ * it existed, is added after the normal entry when NEXT has one; NEXT without
+ * one removes it. Markers alone do not establish ownership. An ambiguous menu is retained
+ * byte-for-byte, with PENDING true; LEGACY_PAIR_VERIFIED comes from the
+ * read-only certifier below. Inputs remain frozen and distinct from
+ * caller-owned SELECTED, initialized as a config_blob. Keep the shared hash
+ * context ready. Missing current input clears SELECTED and remains pending.
+ * No target files are opened or changed. */
 bool install_boot_entry_plan(const struct config_blob *current,
-    const struct install_boot_entry_paths *previous, const uint8_t disk_guid[16],
-    const struct install_boot_entry_paths *next, bool legacy_pair_verified,
+    const struct install_boot_menu *inherited, const uint8_t disk_guid[16],
+    const struct install_boot_menu *next, bool legacy_pair_verified,
     struct config_blob *selected, bool *adoption, bool *pending);
+
+/* Whether CURRENT is exactly the menu COMMITTED publishes, or that menu
+ * without its previous entry, as written before the previous entry existed.
+ * Same inputs and hash context as install_boot_entry_plan. */
+bool install_boot_entry_current(const struct config_blob *current,
+    const struct install_boot_menu *committed, const uint8_t disk_guid[16], bool *is_current);
 
 /* Pure manual proposal: unmarked normal/rescue entries, no global directives.
  * Borrow validated relative PATHS and GUIDs, distinct from initialized owned

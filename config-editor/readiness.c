@@ -27,18 +27,28 @@ static bool payload_matches(const struct config_file_digest *loaded,
       loaded->size == expected->size && !strcmp(loaded->sha256, expected->sha256);
 }
 
+/* The running kernel, programs and loaded payloads are those BINDING names. */
+static bool loaded_binding(const struct config_boot_binding *binding,
+    const struct config_bytes *archive_catalog, const char *kernel_revision,
+    const char *program_revision, const struct config_file_digest *loaded_kernel,
+    const struct config_file_digest *loaded_archive)
+{
+  return binding->present &&
+      config_revision_valid(kernel_revision) && config_revision_valid(program_revision) &&
+      !strcmp(kernel_revision, binding->kernel_revision) &&
+      !strcmp(program_revision, binding->program_revision) &&
+      bytes_match(archive_catalog, &binding->archive_catalog) &&
+      payload_matches(loaded_kernel, &binding->kernel.digest) &&
+      payload_matches(loaded_archive, &binding->archive.digest);
+}
+
 static bool compatible(const struct config_record *record,
     const struct config_bytes *archive_catalog, const char *kernel_revision,
     const char *program_revision, const struct config_file_digest *loaded_kernel,
     const struct config_file_digest *loaded_archive)
 {
-  if (!record->committed || !record->boot.present ||
-      !config_revision_valid(kernel_revision) || !config_revision_valid(program_revision) ||
-      strcmp(kernel_revision, record->boot.kernel_revision) ||
-      strcmp(program_revision, record->boot.program_revision) ||
-      !bytes_match(archive_catalog, &record->boot.archive_catalog) ||
-      !payload_matches(loaded_kernel, &record->boot.kernel.digest) ||
-      !payload_matches(loaded_archive, &record->boot.archive.digest)) {
+  if (!record->committed || !loaded_binding(&record->boot, archive_catalog, kernel_revision,
+      program_revision, loaded_kernel, loaded_archive)) {
     return false;
   }
   struct config_catalog *catalog = NULL;
@@ -46,6 +56,17 @@ static bool compatible(const struct config_record *record,
       archive_catalog->size, &catalog) && !strcmp(catalog->revision, record->revision);
   config_catalog_free(catalog);
   return ok;
+}
+
+static bool esp_set_matches(const struct config_record *record,
+    const struct config_bytes esp[CONFIG_LUA_COUNT], const struct config_bytes *esp_catalog)
+{
+  bool complete = record->boot.source == CONFIG_ACTIVE_ESP && esp &&
+      bytes_match(esp_catalog, &record->selected[CONFIG_CATALOG]);
+  for (size_t i = 0; complete && i < CONFIG_LUA_COUNT; ++i) {
+    complete = bytes_match(&esp[i], &record->selected[i]);
+  }
+  return complete;
 }
 
 bool config_readiness_choose(const struct config_bytes archive[CONFIG_LUA_COUNT],
@@ -60,22 +81,34 @@ bool config_readiness_choose(const struct config_bytes archive[CONFIG_LUA_COUNT]
     return false;
   }
   struct config_record record = {0};
-  bool ready = !rescue && provenance_valid && completion &&
-      config_record_parse(completion->bytes, completion->size, &record) &&
-      compatible(&record, archive_catalog, kernel_revision, program_revision,
-          loaded_kernel, loaded_archive);
+  bool parsed = !rescue && provenance_valid && completion &&
+      config_record_parse(completion->bytes, completion->size, &record);
+  bool ready = parsed && compatible(&record, archive_catalog, kernel_revision, program_revision,
+      loaded_kernel, loaded_archive);
+  /* Normally the previous entry; also the normal entry while an interrupted
+   * Update has committed the record but not yet switched the menu. Either way
+   * the committed set applies only when its catalog is the loaded archive's. */
+  if (!ready && parsed && record.committed &&
+      loaded_binding(&record.previous_boot, archive_catalog, kernel_revision, program_revision,
+          loaded_kernel, loaded_archive)) {
+    bool complete = bytes_match(archive_catalog, &record.selected[CONFIG_CATALOG]) &&
+        esp_set_matches(&record, esp, esp_catalog);
+    bool ok = config_selection_choose(archive, esp, complete, false, selection, reason);
+    *reason = complete ? "loaded payloads match previous_boot; committed ESP selection" :
+        record.boot.source == CONFIG_ACTIVE_ARCHIVE ?
+        "loaded payloads match previous_boot; committed archive selection" :
+        "loaded payloads match previous_boot, whose archive catalog is not the selected one; "
+        "using archive defaults";
+    return ok;
+  }
   if (ready && record.boot.source == CONFIG_ACTIVE_ARCHIVE) {
     bool ok = config_selection_choose(archive, NULL, false, false, selection, reason);
     *reason = "committed boot-bound archive selection";
     return ok;
   }
-  bool complete = ready && record.boot.source == CONFIG_ACTIVE_ESP && esp &&
-      bytes_match(esp_catalog, &record.selected[CONFIG_CATALOG]) &&
+  bool complete = ready && esp_set_matches(&record, esp, esp_catalog) &&
       record.selected[CONFIG_CATALOG].size == record.boot.archive_catalog.size &&
       !strcmp(record.selected[CONFIG_CATALOG].sha256, record.boot.archive_catalog.sha256);
-  for (size_t i = 0; complete && i < CONFIG_LUA_COUNT; ++i) {
-    complete = bytes_match(&esp[i], &record.selected[i]);
-  }
   bool ok = config_selection_choose(archive, esp, complete, rescue, selection, reason);
   if (!rescue && !complete) {
     *reason = "no compatible committed boot-bound ESP set; using archive defaults";

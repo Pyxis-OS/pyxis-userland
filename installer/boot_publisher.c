@@ -135,9 +135,15 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
       bool recorded = record->digest.present && config_record_parse(record->bytes, record->size, &previous) &&
           previous.committed && previous.boot.present;
       const struct install_boot_entry_paths old = {previous.boot.kernel.path, previous.boot.archive.path};
+      const struct install_boot_entry_paths old_previous = {previous.previous_boot.kernel.path,
+        previous.previous_boot.archive.path};
+      const struct install_boot_menu inherited = {&old,
+        previous.previous_boot.present ? &old_previous : NULL, false};
+      /* The outgoing attempt becomes the previous entry, as it becomes previous_boot. */
+      const struct install_boot_menu target = {&next, recorded ? &old : NULL, false};
       bool adoption = false;
-      ok = install_boot_entry_plan(&current[CONFIG_LIMINE], recorded ? &old : NULL,
-          input->disk_guid, &next, legacy,
+      ok = install_boot_entry_plan(&current[CONFIG_LIMINE], recorded ? &inherited : NULL,
+          input->disk_guid, &target, legacy,
           &publication->configuration.after[CONFIG_LIMINE], &adoption, &publication->activation_pending);
       publication->legacy_active = adoption;
       if (ok && recorded && publication->activation_pending) {
@@ -252,7 +258,7 @@ void boot_publication_report(const struct boot_publication *publication,
   struct config_record history = {0};
   const struct config_blob *record = &publication->configuration.record;
   if (record->digest.present && config_record_parse(record->bytes, record->size, &history) && history.boot.present) {
-    fprintf(output, "Retain previous boot kernel %s (%s) and archive %s (%s).\n",
+    fprintf(output, "Retain previous boot kernel %s (%s) and archive %s (%s) as the previous menu entry.\n",
         history.boot.kernel.path, history.boot.kernel.digest.sha256,
         history.boot.archive.path, history.boot.archive.digest.sha256);
   }

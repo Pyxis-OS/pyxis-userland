@@ -563,13 +563,18 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   bool previous_valid = record.digest.present && config_record_parse(record.bytes, record.size, &previous) && previous.committed;
   const struct install_boot_entry_paths previous_paths = {
     .kernel = previous.boot.kernel.path, .archive = previous.boot.archive.path};
-  const struct install_boot_entry_paths *previous_pair = previous_valid && previous.boot.present ?
-    &previous_paths : NULL;
+  const struct install_boot_entry_paths previous_previous_paths = {
+    .kernel = previous.previous_boot.kernel.path, .archive = previous.previous_boot.archive.path};
+  const struct install_boot_menu inherited = {&previous_paths,
+    previous.previous_boot.present ? &previous_previous_paths : NULL, false};
+  const struct install_boot_menu *previous_pair = previous_valid && previous.boot.present ?
+    &inherited : NULL;
   const struct install_boot_entry_paths next_paths = {
     .kernel = binding->kernel.path, .archive = binding->archive.path};
+  const struct install_boot_menu target = {&next_paths, previous_pair ? &previous_paths : NULL, false};
   bool adoption, pending;
   if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_pair,
-        planned_facts.disk_guid, &next_paths, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
+        planned_facts.disk_guid, &target, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
     goto done;
   }
   for (;;) {
@@ -685,7 +690,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     }
     /* Rebuilding config choices copies the original Limine snapshot. */
     if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_pair,
-          planned_facts.disk_guid, &next_paths, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
+          planned_facts.disk_guid, &target, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
       goto done;
     }
   }
