@@ -33,6 +33,14 @@
       "required": false
     },
     {
+      "name": "system_info",
+      "resource": "system_info",
+      "rights": [
+        "read"
+      ],
+      "required": false
+    },
+    {
       "name": "package_inspect",
       "resource": "directory",
       "source": "package_inspect",

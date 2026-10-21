@@ -657,7 +657,8 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
   struct tree_walk walk = { .extract = destination != HANDLE_INVALID };
   bool ok = read_manifest(snapshot, metadata[0].offset, metadata[0].size, manifest, reason);
   if (ok && (strcmp(manifest->identity.id, entry->identity.id) ||
-      strcmp(manifest->identity.version, entry->identity.version) || strcmp(manifest->kind, entry->kind))) {
+      strcmp(manifest->identity.version, entry->identity.version) || strcmp(manifest->kind, entry->kind) ||
+      strcmp(manifest->abi, entry->abi))) {
     ok = fail(reason, "package manifest differs from repository index");
   }
   if (ok && metadata[1].size > INVENTORY_SIZE_MAX) {
@@ -711,7 +712,7 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
 static bool manifests_equal(const struct pkg_manifest *a, const struct pkg_manifest *b)
 {
   if (strcmp(a->identity.id, b->identity.id) || strcmp(a->identity.version, b->identity.version) ||
-      strcmp(a->kind, b->kind) || a->files != b->files || a->bytes != b->bytes ||
+      strcmp(a->kind, b->kind) || strcmp(a->abi, b->abi) || a->files != b->files || a->bytes != b->bytes ||
       strcmp(a->inventory_sha256, b->inventory_sha256) || a->dependency_count != b->dependency_count) {
     return false;
   }
@@ -731,14 +732,12 @@ static bool manifests_equal(const struct pkg_manifest *a, const struct pkg_manif
   return true;
 }
 
-bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
-    struct pkg_manifest *manifest, const char **reason)
+bool pkg_tree_manifest(handle_t directory, struct pkg_manifest *manifest, const char **reason)
 {
   memset(manifest, 0, sizeof(*manifest));
   *reason = NULL;
-  handle_t metadata = HANDLE_INVALID, inventory = HANDLE_INVALID, tree = HANDLE_INVALID;
-  struct tree_walk walk = { .verify = true };
-  uint64_t size = 0, inventory_size = 0;
+  handle_t metadata = HANDLE_INVALID;
+  uint64_t size = 0;
   bool ok = directory_lookup(directory, "package.lua", DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &metadata) == CALL_OK && file_size(metadata, &size) == CALL_OK;
   if (!ok) {
@@ -747,6 +746,19 @@ bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
   if (ok) {
     ok = read_manifest(metadata, 0, size, manifest, reason);
   }
+  if (metadata != HANDLE_INVALID) {
+    handle_close(metadata);
+  }
+  return ok;
+}
+
+bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
+    struct pkg_manifest *manifest, const char **reason)
+{
+  handle_t inventory = HANDLE_INVALID, tree = HANDLE_INVALID;
+  struct tree_walk walk = { .verify = true };
+  uint64_t inventory_size = 0;
+  bool ok = pkg_tree_manifest(directory, manifest, reason);
   if (ok && expected && !manifests_equal(manifest, expected)) {
     ok = fail(reason, "installed immutable package conflicts with requested metadata");
   }
@@ -781,9 +793,6 @@ bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
   }
   if (inventory != HANDLE_INVALID) {
     handle_close(inventory);
-  }
-  if (metadata != HANDLE_INVALID) {
-    handle_close(metadata);
   }
   if (!ok) {
     pkg_manifest_free(manifest);

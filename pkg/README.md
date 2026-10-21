@@ -16,6 +16,14 @@ pkg repository list
 pkg repository add URL
 pkg repository remove URL
 
+Indexes are format 2. Program and toolchain packages record the ABI they were
+built for; `pkg` reads what the running system provides through its read-only
+`system_info` grant (for now the kernel's build revision) and offers, installs
+and keeps only packages whose ABI it provides. Builds for other systems are
+hidden and counted, and a stored stale build refuses install, remove, rollback
+and verify, naming both ABIs and the `pkg install`/`pkg remove` remedy, before
+any tree is hashed. Stored format 1 manifests stay readable.
+
 Changes review the proposed set before its one atomic current switch. Running
 programs retain their views; new launches see the new set. Rollback needs no
 network. A damaged current requires an explicit verified set choice.

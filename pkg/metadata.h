@@ -14,9 +14,11 @@ struct pkg_identity {
   char id[PACKAGE_ID_MAX + 1], version[PACKAGE_VERSION_MAX + 1];
 };
 
+/* abi is empty for a data package and for a format 1 toolchain manifest
+ * stored by an older client; pkg_abi_check refuses the latter. */
 struct pkg_entry {
   struct pkg_identity identity;
-  char kind[10], archive[PKG_ARCHIVE_PATH_MAX + 1];
+  char kind[10], abi[PACKAGE_ABI_MAX + 1], archive[PKG_ARCHIVE_PATH_MAX + 1];
   uint64_t size;
   char sha256[65];
 };
@@ -28,7 +30,7 @@ struct pkg_command {
 
 struct pkg_manifest {
   struct pkg_identity identity;
-  char kind[10];
+  char kind[10], abi[PACKAGE_ABI_MAX + 1];
   uint64_t files, bytes;
   char inventory_sha256[65];
   struct pkg_identity *dependencies;
@@ -38,6 +40,8 @@ struct pkg_manifest {
 };
 
 bool pkg_version_valid(const char *version);
+/* Program and toolchain packages hold native programs and must record an ABI. */
+bool pkg_kind_bound(const char *kind);
 /* Successful outputs own their arrays, independent of the literal document.
  * Free index entries with free(), manifests with pkg_manifest_free(). */
 bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,

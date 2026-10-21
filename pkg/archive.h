@@ -25,6 +25,10 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
     handle_t destination, struct pkg_manifest *manifest,
     const struct pkg_archive_progress *progress, const char **reason);
 
+/* Read only an installed package's manifest, unverified, for checks that can
+ * refuse before the full verification. output owns its dependencies. */
+bool pkg_tree_manifest(handle_t directory, struct pkg_manifest *manifest, const char **reason);
+
 /* Verify an installed package, including surplus namespace entries. expected
  * optionally requires the same manifest/inventory before immutable-tree reuse.
  * directory and expected are borrowed; output owns its dependencies. */

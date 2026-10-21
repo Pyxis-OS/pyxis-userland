@@ -15,9 +15,31 @@
 #define PACKAGE_TREE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
                              DIRECTORY_RIGHT_READ_FILES)
 
+/* The ABI a program or toolchain package requires. For now it is the kernel's
+ * 12-hex build revision; with dynamic linking it becomes a system library's ABI
+ * name, so readers check only this grammar and compare names exactly. */
+#define PACKAGE_ABI_MAX 64
+/* For now the running system provides exactly one ABI. */
+#define PACKAGE_PROVIDED_ABI_MAX 1
+
 struct package_set;
 
+struct package_provided_abi {
+  size_t count;
+  char names[PACKAGE_PROVIDED_ABI_MAX][PACKAGE_ABI_MAX + 1];
+};
+
 bool package_id_valid(const char *id);
+bool package_abi_valid(const char *abi);
+/* Read the ABIs the running system provides through SYSTEM_INFO with READ: for
+ * now its build revision alone. A kernel without a revision provides none, so
+ * every package that records an ABI is refused. */
+enum call_status package_provided_abi(handle_t system_info,
+    struct package_provided_abi *provided);
+bool package_abi_provided(const struct package_provided_abi *provided, const char *abi);
+/* "NAME, NAME" for refusals, or "no ABI" when the list is empty. */
+void package_provided_abi_text(const struct package_provided_abi *provided,
+    char *text, size_t capacity);
 
 /* Read current and its set record through PACKAGES, a directory with LOOKUP
  * and READ_FILES on the volume root. A missing current is the empty set.

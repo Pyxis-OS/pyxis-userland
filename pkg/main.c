@@ -22,7 +22,12 @@ struct offered_package {
 };
 
 struct client {
-  handle_t packages, clock, config, config_write, management;
+  handle_t packages, clock, config, config_write, management, system_info;
+  /* What the running system provides, read once on first use. */
+  struct package_provided_abi provided;
+  bool provided_loaded, provided_readable;
+  size_t hidden; /* Offered builds for an ABI this system does not provide. */
+  char message[512];
   struct terminal terminal;
   handle_t passthrough;
   struct pkg_fetch_authority fetch;
@@ -54,6 +59,48 @@ static bool fail(const char *reason)
 {
   client.reason = reason;
   return false;
+}
+
+static const struct package_provided_abi *provided_abi(void)
+{
+  if (!client.provided_loaded) {
+    client.provided_loaded = true;
+    client.provided_readable = client.system_info != HANDLE_INVALID &&
+        package_provided_abi(client.system_info, &client.provided) == CALL_OK;
+  }
+  return &client.provided;
+}
+
+/* A program or toolchain package is usable only on a system that provides its
+ * ABI. Refusals name both sides; INSTALLED adds the way out for a stored one. */
+static bool abi_check(const char *id, const char *version, const char *kind,
+    const char *abi, bool installed)
+{
+  if (!pkg_kind_bound(kind)) {
+    return true;
+  }
+  const struct package_provided_abi *provided = provided_abi();
+  char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
+  package_provided_abi_text(provided, names, sizeof(names));
+  char remedy[2 * PACKAGE_ID_MAX + 80] = "";
+  if (installed) {
+    snprintf(remedy, sizeof(remedy),
+        "; pkg install %s takes a build for this system, pkg remove %s drops it", id, id);
+  }
+  if (!client.provided_readable) {
+    snprintf(client.message, sizeof(client.message),
+        "%s %s needs an ABI check, but the running system's ABI is unreadable (no system_info)",
+        id, version);
+  } else if (!abi[0]) {
+    snprintf(client.message, sizeof(client.message),
+        "%s %s records no ABI; this system provides %s%s", id, version, names, remedy);
+  } else if (!package_abi_provided(provided, abi)) {
+    snprintf(client.message, sizeof(client.message),
+        "%s %s needs ABI %s; this system provides %s%s", id, version, abi, names, remedy);
+  } else {
+    return true;
+  }
+  return fail(client.message);
 }
 
 static bool release_writer_lock(handle_t packages, bool ok)
@@ -183,6 +230,18 @@ static bool load_repositories(void)
     if (!ok) {
       return false;
     }
+    /* Builds for another ABI are not offered; only their number is reported. */
+    const struct package_provided_abi *provided = provided_abi();
+    size_t usable = 0;
+    for (size_t i = 0; i < count; ++i) {
+      if (pkg_kind_bound(entries[i].kind) && (!client.provided_readable ||
+          !package_abi_provided(provided, entries[i].abi))) {
+        ++client.hidden;
+        continue;
+      }
+      entries[usable++] = entries[i];
+    }
+    count = usable;
     for (size_t i = 0; i < count; ++i) {
       for (size_t j = 0; j < client.offered_count; ++j) {
         if (client.offered[j].repository != r &&
@@ -247,8 +306,16 @@ static bool verify_version(const struct pkg_identity *identity, struct pkg_manif
   if (!pkg_tree_open(client.packages, identity, PKG_READ_RIGHTS, &tree, &client.reason)) {
     return false;
   }
-  printf("pkg: verifying %s@%s\n", identity->id, identity->version);
-  bool ok = pkg_tree_verify(tree, NULL, manifest, &client.reason);
+  /* The ABI refusal needs only the manifest, so it comes before hashing a
+   * possibly large tree. */
+  struct pkg_manifest stored;
+  bool ok = pkg_tree_manifest(tree, &stored, &client.reason) &&
+      abi_check(identity->id, identity->version, stored.kind, stored.abi, true);
+  pkg_manifest_free(&stored);
+  if (ok) {
+    printf("pkg: verifying %s@%s\n", identity->id, identity->version);
+    ok = pkg_tree_verify(tree, NULL, manifest, &client.reason);
+  }
   handle_close(tree);
   if (ok && (strcmp(manifest->identity.id, identity->id) ||
       strcmp(manifest->identity.version, identity->version))) {
@@ -376,7 +443,15 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
     const struct offered_package *entry = ok ?
         offering(identity.id, explicit_version ? identity.version : NULL) : NULL;
     if (ok && !entry) {
-      ok = fail("requested package version is not available");
+      if (client.hidden) {
+        snprintf(client.message, sizeof(client.message),
+            "%s%s%s is not available for this system (%zu builds for other systems hidden)",
+            identity.id, explicit_version ? "@" : "", explicit_version ? identity.version : "",
+            client.hidden);
+        ok = fail(client.message);
+      } else {
+        ok = fail("requested package version is not available");
+      }
     }
     if (ok) {
       requested[i] = entry->entry.identity;
@@ -756,6 +831,7 @@ int main(int argc, char **argv)
   client.packages = bootstrap_capability(PACKAGE_INSPECT_SOURCE);
   client.config = bootstrap_capability(PACKAGE_CONFIG_SOURCE);
   client.config_write = bootstrap_capability(PACKAGE_CONFIG_WRITE_SOURCE);
+  client.system_info = bootstrap_capability("system_info");
   client.fetch = (struct pkg_fetch_authority){bootstrap_capability("http"),
     bootstrap_capability("https"), client.clock};
   struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
@@ -801,9 +877,13 @@ int main(int argc, char **argv)
   } else if (!strcmp(command, "list") && count) {
     ok = load_repositories();
     for (size_t i = 0; ok && i < client.offered_count; ++i) {
-      printf("%s@%s %s %llu bytes\n", client.offered[i].entry.identity.id,
-          client.offered[i].entry.identity.version, client.offered[i].entry.kind,
-          (unsigned long long)client.offered[i].entry.size);
+      const struct pkg_entry *entry = &client.offered[i].entry;
+      printf("%s@%s %s%s%s %llu bytes\n", entry->identity.id, entry->identity.version,
+          entry->kind, entry->abi[0] ? " abi " : "", entry->abi,
+          (unsigned long long)entry->size);
+    }
+    if (ok && client.hidden) {
+      printf("%zu builds for other systems hidden\n", client.hidden);
     }
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
     struct pkg_selection selection = {0};

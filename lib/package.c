@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system_info.h>
 
 #define CURRENT_NAME "current"
 #define SETS_NAME "sets"
@@ -38,6 +39,61 @@ bool package_id_valid(const char *id)
     }
   }
   return true;
+}
+
+bool package_abi_valid(const char *abi)
+{
+  size_t length = strnlen(abi, PACKAGE_ABI_MAX + 1);
+  if (!length || length > PACKAGE_ABI_MAX) {
+    return false;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    bool lower = (abi[i] >= 'a' && abi[i] <= 'z') || (abi[i] >= '0' && abi[i] <= '9');
+    if (!lower && (!i || (abi[i] != '.' && abi[i] != '-'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+enum call_status package_provided_abi(handle_t system_info,
+    struct package_provided_abi *provided)
+{
+  *provided = (struct package_provided_abi){0};
+  struct system_info_identity identity;
+  enum call_status status = system_info_get_identity(system_info, &identity);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (identity.build_revision[0] && package_abi_valid(identity.build_revision)) {
+    strcpy(provided->names[provided->count++], identity.build_revision);
+  }
+  return CALL_OK;
+}
+
+bool package_abi_provided(const struct package_provided_abi *provided, const char *abi)
+{
+  for (size_t i = 0; i < provided->count; ++i) {
+    if (!strcmp(provided->names[i], abi)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void package_provided_abi_text(const struct package_provided_abi *provided,
+    char *text, size_t capacity)
+{
+  size_t used = 0;
+  text[0] = 0;
+  for (size_t i = 0; i < provided->count && used < capacity; ++i) {
+    int written = snprintf(text + used, capacity - used, "%s%s", i ? ", " : "",
+        provided->names[i]);
+    used += written > 0 ? (size_t)written : 0;
+  }
+  if (!provided->count) {
+    snprintf(text, capacity, "no ABI");
+  }
 }
 
 static bool version_valid(const char *version, size_t length)

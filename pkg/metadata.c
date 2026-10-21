@@ -65,10 +65,19 @@ static bool integer(const struct literal_value *table, const char *key,
   return true;
 }
 
-static bool format(const struct literal_value *table)
+/* Indexes are format 2. Stored manifests may still be format 1, written by an
+ * older client before program packages existed. */
+#define INDEX_FORMAT 2
+#define MANIFEST_FORMAT_MIN 1
+
+static bool format(const struct literal_value *table, uint64_t minimum, uint64_t *number)
 {
-  uint64_t number;
-  return integer(table, "format", 1, 1, &number);
+  return integer(table, "format", minimum, INDEX_FORMAT, number);
+}
+
+bool pkg_kind_bound(const char *kind)
+{
+  return !strcmp(kind, "program") || !strcmp(kind, "toolchain");
 }
 
 static bool identity(const struct literal_value *table, struct pkg_identity *output)
@@ -79,10 +88,25 @@ static bool identity(const struct literal_value *table, struct pkg_identity *out
       pkg_version_valid(output->version);
 }
 
-static bool kind(const struct literal_value *table, char output[10])
+static bool kind(const struct literal_value *table, uint64_t format, char output[10])
 {
   return text(table, "kind", output, 10) &&
-      (!strcmp(output, "data") || !strcmp(output, "toolchain"));
+      (!strcmp(output, "data") || !strcmp(output, "toolchain") ||
+       (format >= 2 && !strcmp(output, "program")));
+}
+
+/* Format 2 requires abi on program and toolchain and refuses it on data;
+ * format 1 has no abi. */
+static bool abi(const struct literal_value *table, uint64_t format, const char *kind,
+    char output[PACKAGE_ABI_MAX + 1])
+{
+  output[0] = 0;
+  bool present = literal_field(table, "abi") != NULL;
+  if (format < 2 || !pkg_kind_bound(kind)) {
+    return !present;
+  }
+  return present && text(table, "abi", output, PACKAGE_ABI_MAX + 1) &&
+      package_abi_valid(output);
 }
 
 static bool hash(const struct literal_value *table, const char *key, char output[65])
@@ -250,7 +274,12 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
     "id", "version", "kind", "archive", "size", "sha256",
   };
   const struct literal_value *packages = literal_field(document->root, "packages");
-  bool ok = fields(document->root, root_fields, 2) && format(document->root) && array(packages);
+  uint64_t number = 0;
+  bool ok = fields(document->root, root_fields, 2) && format(document->root, INDEX_FORMAT, &number) &&
+      array(packages);
+  if (!ok && literal_field(document->root, "format")) {
+    *reason = "repository index is not format 2; this client reads format 2 only";
+  }
   size_t length = ok ? packages->as.table.count : 0;
   struct pkg_entry *result = length ? calloc(length, sizeof(*result)) : NULL;
   if (length && !result) {
@@ -262,8 +291,14 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
       ok && item; item = item->next, ++index) {
     struct pkg_entry *entry = &result[index];
     const struct literal_value *value = item->value;
-    ok = fields(value, entry_fields, 6) && identity(value, &entry->identity) &&
-        kind(value, entry->kind) && text(value, "archive", entry->archive, sizeof(entry->archive)) &&
+    bool bound = value && value->kind == LITERAL_TABLE && literal_field(value, "abi");
+    ok = value && value->kind == LITERAL_TABLE && value->as.table.count == (bound ? 7 : 6);
+    for (size_t f = 0; ok && f < 6; ++f) {
+      ok = literal_field(value, entry_fields[f]) != NULL;
+    }
+    ok = ok && identity(value, &entry->identity) &&
+        kind(value, number, entry->kind) && abi(value, number, entry->kind, entry->abi) &&
+        text(value, "archive", entry->archive, sizeof(entry->archive)) &&
         integer(value, "size", 1, INT64_MAX, &entry->size) && hash(value, "sha256", entry->sha256);
     if (!ok) {
       break;
@@ -311,13 +346,16 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
   const struct literal_value *root = document->root;
   const struct literal_value *dependencies = literal_field(root, "depends");
   const struct literal_value *commands = literal_field(root, "commands");
+  bool bound = root && root->kind == LITERAL_TABLE && literal_field(root, "abi");
   bool ok = root && root->kind == LITERAL_TABLE &&
-      root->as.table.count == (commands ? 9 : 8);
+      root->as.table.count == 8 + (commands ? 1 : 0) + (bound ? 1 : 0);
   for (size_t i = 0; ok && i < 8; ++i) {
     ok = literal_field(root, manifest_fields[i]) != NULL;
   }
-  ok = ok && format(root) &&
-      identity(root, &manifest->identity) && kind(root, manifest->kind) &&
+  uint64_t number = 0;
+  ok = ok && format(root, MANIFEST_FORMAT_MIN, &number) &&
+      identity(root, &manifest->identity) && kind(root, number, manifest->kind) &&
+      abi(root, number, manifest->kind, manifest->abi) &&
       integer(root, "files", 1, PKG_MAX_FILES, &manifest->files) &&
       integer(root, "bytes", 0, INT64_MAX, &manifest->bytes) &&
       hash(root, "inventory_sha256", manifest->inventory_sha256) && array(dependencies);
