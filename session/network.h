@@ -3,6 +3,7 @@
 
 #include "../libconfig/network.h"
 #include "dhcp.h"
+#include "wifi_supplicant.h"
 
 struct interface_runtime {
   struct dhcp_client dhcp;
@@ -23,7 +24,8 @@ struct network_runtime {
 
 bool network_config_apply(struct network_config *config, struct network_runtime *runtime);
 bool network_config_wait_address(const struct network_config *config, struct network_runtime *runtime);
-int network_config_maintain(const struct network_config *config, struct network_runtime *runtime);
+int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
+    struct session_wifi_supplicant *supplicant);
 bool network_config_stop(const struct network_config *config, struct network_runtime *runtime);
 /* Remove unrelated bootstrap grants after successor handoff while retaining
  * each independent client's declared facets, timers and packet endpoint. */

@@ -3,6 +3,7 @@
 #include "../boot-init/network.h"
 #include "network.h"
 #include <clock.h>
+#include <abi/wait.h>
 #include <handle.h>
 #include <net_config.h>
 #include <startup.h>
@@ -453,10 +454,11 @@ bool network_config_wait_address(const struct network_config *config, struct net
   }
 }
 
-static bool wait_maintenance(struct network_runtime *runtime)
+static bool wait_maintenance(struct network_runtime *runtime, struct session_wifi_supplicant *supplicant)
 {
   uint64_t now;
-  if (clock_now(runtime->clock, &now) != CALL_OK) {
+  handle_t clock = runtime->clock ? runtime->clock : supplicant->clock;
+  if (clock_now(clock, &now) != CALL_OK) {
     return false;
   }
   uint64_t wake = UINT64_MAX;
@@ -479,18 +481,27 @@ static bool wait_maintenance(struct network_runtime *runtime)
       wake = entry->lease.renewal_ns;
     }
   }
+  if (session_wifi_active(supplicant)) {
+    if (wake > now && wake - now > WAIT_MAX_WAIT_NS) {
+      wake = now + WAIT_MAX_WAIT_NS;
+    }
+    return session_wifi_wait(supplicant, wake);
+  }
   return clock_sleep_until(runtime->clock, wake) == CALL_OK;
 }
 
-int network_config_maintain(const struct network_config *config, struct network_runtime *runtime)
+int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
+    struct session_wifi_supplicant *supplicant)
 {
-  for (;;) {
+  while (runtime->waiting_link || session_wifi_active(supplicant)) {
     bool working;
-    if (!service(config, runtime, UINT64_MAX, &working) || !wait_maintenance(runtime)) {
+    if ((runtime->waiting_link && !service(config, runtime, UINT64_MAX, &working)) ||
+        !wait_maintenance(runtime, supplicant)) {
       network_config_stop(config, runtime);
       return EXIT_FAILURE;
     }
   }
+  return EXIT_SUCCESS;
 }
 
 bool network_config_stop(const struct network_config *config, struct network_runtime *runtime)

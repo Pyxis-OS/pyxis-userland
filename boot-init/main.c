@@ -23,6 +23,7 @@
 #include <abi/power.h>
 #include <abi/wifi.h>
 #include <wifi.h>
+#include <wifi_auth.h>
 #include <forwarder.h>
 #include <abi/profile.h>
 #include <abi/random.h>
@@ -731,6 +732,7 @@ struct space_launch {
   handle_t commands;
   handle_t package_roots; /* Live data package roots, with the packages source. */
   struct forwarder_reply wifi_session;
+  struct wifi_auth_open_reply wifi_auth;
   struct mounted_volume *commands_mount;
   handle_t http_staging;
   handle_t http_staging_parent; /* Borrowed until source handles close. */
@@ -984,8 +986,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
   for (size_t i = 0; space->network && i < authority->network.config.count; ++i) {
     network_entries += authority->network.config.interfaces[i].resolved_controller != 0;
   }
-  launch->resources = calloc(SERVICE_COUNT + 20 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 21 + BUNDLE_SOURCE_LIMIT + network_entries,
+  launch->resources = calloc(SERVICE_COUNT + 22 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
+  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 23 + BUNDLE_SOURCE_LIMIT + network_entries,
       sizeof(*launch->grants));
   launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
   launch->package_trees = calloc(space->root_count ? space->root_count : 1,
@@ -1216,13 +1218,28 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->wifi_rights) {
     handle_t radio = authority->wifi;
     if (space->wifi_rights & WIFI_RIGHT_CONNECT) {
-      enum call_status status = forwarder_revocable(radio, space->wifi_rights, 0, 0,
+      enum call_status status = forwarder_revocable(radio, space->wifi_rights | WIFI_RIGHT_SUPPLICANT, 0, 0,
           &launch->wifi_session);
       if (status != CALL_OK) {
         snprintf(reason, size, "Wi-Fi session lifetime unavailable (status %u)", status);
         return reason;
       }
       radio = launch->wifi_session.holder;
+      status = wifi_auth_open(radio, &launch->wifi_auth);
+      if (status != CALL_OK) {
+        snprintf(reason, size, "Wi-Fi authentication role unavailable (status %u)", status);
+        return reason;
+      }
+      launch->resources[launch->resource_count++] =
+          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth", launch->grant_count);
+      launch->grants[launch->grant_count++] = (struct launch_grant){
+        launch->wifi_auth.auth, WIFI_AUTH_RIGHT_RUN, 0,
+      };
+      launch->resources[launch->resource_count++] =
+          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth_observation", launch->grant_count);
+      launch->grants[launch->grant_count++] = (struct launch_grant){
+        launch->wifi_auth.observation, WIFI_AUTH_RIGHT_OBSERVE, 0,
+      };
       launch->resources[launch->resource_count++] =
           (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_session_control", launch->grant_count);
       launch->grants[launch->grant_count++] = (struct launch_grant){
@@ -1466,6 +1483,8 @@ cleanup:
     }
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);
+  if (launch.wifi_auth.auth) handle_close(launch.wifi_auth.auth);
+  if (launch.wifi_auth.observation) handle_close(launch.wifi_auth.observation);
   if (launch.wifi_session.holder) handle_close(launch.wifi_session.holder);
   if (launch.wifi_session.controller) handle_close(launch.wifi_session.controller);
   if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);

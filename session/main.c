@@ -6,6 +6,7 @@
 #include "retention.h"
 #include "screenshot.h"
 #include "network.h"
+#include "wifi_supplicant.h"
 #include "remote_server.h"
 #include "tcp_server.h"
 #include "../common/udp.h"
@@ -54,7 +55,8 @@
 
 static int launch_session(const struct session_config *config, struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
-    bool start_services, bool start_remote_services, handle_t retention_account)
+    bool start_services, bool start_remote_services, handle_t retention_account,
+    struct session_wifi_supplicant *supplicant)
 {
   struct terminal terminal = {bootstrap_capability("input"), bootstrap_capability("output")};
   handle_t launcher = bootstrap_capability("launcher");
@@ -79,6 +81,9 @@ static int launch_session(const struct session_config *config, struct network_co
     }
   }
 
+  if (!session_wifi_start(supplicant)) {
+    return EXIT_FAILURE;
+  }
   handle_t mux_terminal = bootstrap_capability("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
@@ -637,6 +642,14 @@ static int launch_session(const struct session_config *config, struct network_co
   /* The child owns its copied grants and strings. Never read terminal input
    * or wait for the child after handing off; closing this observer leaves it alive. */
   result = handle_close(child) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  const struct environment_value *control = environment_capture_find(&captured, "wifi_session_control");
+  if (control) {
+    struct environment_unset_entry removed = {.identity = control->identity};
+    environment_name(removed.name, "wifi_session_control");
+    if (environment_unset_batch(startup_environment_handle(), &removed, 1) != CALL_OK) {
+      result = EXIT_FAILURE;
+    }
+  }
 
 done:
   if (settings != HANDLE_INVALID) {
@@ -717,15 +730,18 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
 }
 
 static int finish_network(const struct network_config *config,
-    struct network_runtime *runtime, int result)
+    struct network_runtime *runtime, struct session_wifi_supplicant *supplicant, int result)
 {
   if (result == EXIT_SUCCESS &&
-      runtime->waiting_link) {
+      (runtime->waiting_link || session_wifi_active(supplicant))) {
     if (release_bootstrap_grants(runtime)) {
-      result = network_config_maintain(config, runtime);
+      result = network_config_maintain(config, runtime, supplicant);
     } else {
       result = EXIT_FAILURE;
     }
+  }
+  if (!session_wifi_stop(supplicant)) {
+    result = EXIT_FAILURE;
   }
   if (result != EXIT_SUCCESS && !network_config_stop(config, runtime)) {
     result = EXIT_FAILURE;
@@ -784,6 +800,7 @@ int main(int argc, char **argv)
       return EXIT_FAILURE;
     }
   }
+  struct session_wifi_supplicant supplicant = {0};
   if (tcp_server) {
     struct network_config network;
     struct network_runtime runtime = {0};
@@ -794,7 +811,7 @@ int main(int argc, char **argv)
     if (!configure_network || network_config_apply(&network, &runtime)) {
       result = launch_tcp_server(address, (uint16_t)port, count);
     }
-    result = finish_network(&network, &runtime, result);
+    result = finish_network(&network, &runtime, &supplicant, result);
     network_config_free(&network);
     return result;
   }
@@ -824,13 +841,13 @@ int main(int argc, char **argv)
     }
   } else {
     result = launch_session(&config, &network, &runtime, configure_network,
-        start_services, start_remote_services, retention_account);
+        start_services, start_remote_services, retention_account, &supplicant);
   }
   if (handle_close(retention_account) != 0) {
     result = EXIT_FAILURE;
   }
   session_config_free(&config);
-  result = finish_network(&network, &runtime, result);
+  result = finish_network(&network, &runtime, &supplicant, result);
   network_config_free(&network);
   return result;
 
