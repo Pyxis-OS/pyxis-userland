@@ -265,10 +265,11 @@ static int link_command(const char *operation, const char *argument)
   if (status == CALL_OK) status = wifi_link_status(link, &reply);
   if (handle_close(link) && status == CALL_OK) status = CALL_BAD_HANDLE;
   if (status != CALL_OK) return failure(operation, status);
-  printf("wifi: generation=%llu interface=%llu associated=%u open=%u data-ready=%u terminal=%u status=%u\n",
+  printf("wifi: generation=%llu interface=%llu associated=%u open=%u data-ready=%u terminal=%u status=%u authenticated=%u\n",
       (unsigned long long)reply.generation, (unsigned long long)reply.interface_id,
       !!(reply.flags & WIFI_LINK_ASSOCIATED), !!(reply.flags & WIFI_LINK_OPEN),
-      !!(reply.flags & WIFI_LINK_DATA_READY), !!(reply.flags & WIFI_LINK_TERMINAL), reply.status);
+      !!(reply.flags & WIFI_LINK_DATA_READY), !!(reply.flags & WIFI_LINK_TERMINAL), reply.status,
+      !!(reply.flags & WIFI_LINK_AUTHENTICATED));
   if (!strcmp(operation, "disconnect") && reply.status != CALL_OK && reply.status != CALL_ABANDONED) {
     return failure("disconnect drain", reply.status);
   }

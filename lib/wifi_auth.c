@@ -69,7 +69,7 @@ enum call_status wifi_auth_read(handle_t auth, struct wifi_auth_event *event)
       valid = valid && reply.credential && !reply.flags &&
           reply.length == sizeof(struct wifi_auth_begin);
     } else if (reply.kind == WIFI_AUTH_EAPOL) {
-      valid = valid && !reply.credential && reply.length && reply.length <= WIFI_AUTH_DATA_BYTES;
+      valid = valid && !reply.credential && reply.length && reply.length <= WIFI_AUTH_EAPOL_BYTES;
     } else if (reply.kind == WIFI_AUTH_DISASSOC) {
       valid = valid && !reply.credential && !reply.length && !reply.flags;
     } else {
@@ -89,7 +89,7 @@ enum call_status wifi_auth_read(handle_t auth, struct wifi_auth_event *event)
 enum call_status wifi_auth_send(handle_t auth, uint64_t generation,
     const void *data, size_t bytes, uint32_t flags)
 {
-  if (!data || !bytes || bytes > WIFI_AUTH_DATA_BYTES) return CALL_BAD_REQUEST;
+  if (!data || !bytes || bytes > WIFI_AUTH_EAPOL_BYTES) return CALL_BAD_REQUEST;
   struct wifi_auth_send_request request = {
     .header = {PROTOCOL_WIFI_AUTH, WIFI_AUTH_SEND},
     .generation = generation, .length = bytes, .flags = flags,
