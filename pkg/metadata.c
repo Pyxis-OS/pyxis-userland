@@ -277,7 +277,8 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
   uint64_t number = 0;
   bool ok = fields(document->root, root_fields, 2) && format(document->root, INDEX_FORMAT, &number) &&
       array(packages);
-  if (!ok && literal_field(document->root, "format")) {
+  const struct literal_value *declared = literal_field(document->root, "format");
+  if (!ok && declared && declared->kind == LITERAL_INTEGER && declared->as.integer != INDEX_FORMAT) {
     *reason = "repository index is not format 2; this client reads format 2 only";
   }
   size_t length = ok ? packages->as.table.count : 0;

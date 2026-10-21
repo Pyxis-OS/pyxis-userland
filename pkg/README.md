@@ -20,9 +20,10 @@ Indexes are format 2. Program and toolchain packages record the ABI they were
 built for; `pkg` reads what the running system provides through its read-only
 `system_info` grant (for now the kernel's build revision) and offers, installs
 and keeps only packages whose ABI it provides. Builds for other systems are
-hidden and counted, and a stored stale build refuses install, remove, rollback
-and verify, naming both ABIs and the `pkg install`/`pkg remove` remedy, before
-any tree is hashed. Stored format 1 manifests stay readable.
+hidden and counted per ID. Stale stored builds refuse install, remove,
+rollback and verify once, before any tree is hashed: one message lists every
+stale package with its ABI and gives one `pkg install` and one `pkg remove`
+command that clear them all. Stored format 1 manifests stay readable.
 
 Changes review the proposed set before its one atomic current switch. Running
 programs retain their views; new launches see the new set. Rollback needs no

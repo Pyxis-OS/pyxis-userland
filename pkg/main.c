@@ -26,8 +26,11 @@ struct client {
   /* What the running system provides, read once on first use. */
   struct package_provided_abi provided;
   bool provided_loaded, provided_readable;
-  size_t hidden; /* Offered builds for an ABI this system does not provide. */
-  char message[512];
+  /* Builds for an ABI this system does not provide, or for any ABI when the
+   * running one is unreadable: not offered, only reported. */
+  struct pkg_identity *hidden;
+  size_t hidden_count;
+  char message[2048];
   struct terminal terminal;
   handle_t passthrough;
   struct pkg_fetch_authority fetch;
@@ -100,6 +103,77 @@ static bool abi_check(const char *id, const char *version, const char *kind,
   } else {
     return true;
   }
+  return fail(client.message);
+}
+
+static void append(char *text, size_t capacity, const char *separator, const char *word)
+{
+  size_t used = strlen(text);
+  if (used < capacity) {
+    snprintf(text + used, capacity - used, "%s%s", used ? separator : "", word);
+  }
+}
+
+/* Every stored package in SELECTION that this system cannot run, found from
+ * manifests alone, refused in one message whose commands clear them all at once;
+ * one refusal per package would send the user round in circles. SKIP lists IDs
+ * this operation fetches anew. COMMAND and ARGV, for install and remove, are
+ * repeated in the suggested command. */
+static bool stale_check(const struct pkg_selection *selection, const struct pkg_identity *skip,
+    size_t skip_count, const char *command, int argc, char **argv)
+{
+  const struct package_provided_abi *provided = provided_abi();
+  char stale[1024] = "", details[1024] = "";
+  size_t count = 0;
+  for (size_t i = 0; i < selection->count; ++i) {
+    const struct pkg_identity *identity = &selection->entries[i];
+    bool skipped = false;
+    for (size_t s = 0; s < skip_count; ++s) {
+      skipped |= !strcmp(skip[s].id, identity->id);
+    }
+    handle_t tree;
+    struct pkg_manifest manifest;
+    if (skipped || !pkg_tree_open(client.packages, identity, PKG_READ_RIGHTS, &tree, &client.reason)) {
+      client.reason = NULL;
+      continue;
+    }
+    bool read = pkg_tree_manifest(tree, &manifest, &client.reason);
+    handle_close(tree);
+    client.reason = NULL;
+    if (read && pkg_kind_bound(manifest.kind) && (!client.provided_readable || !manifest.abi[0] ||
+        !package_abi_provided(provided, manifest.abi))) {
+      char detail[PACKAGE_ID_MAX + PACKAGE_ABI_MAX + 32];
+      snprintf(detail, sizeof(detail), manifest.abi[0] ? "%s (needs ABI %s)" : "%s (records no ABI)",
+          identity->id, manifest.abi);
+      append(stale, sizeof(stale), " ", identity->id);
+      append(details, sizeof(details), ", ", detail);
+      ++count;
+    }
+    if (read) {
+      pkg_manifest_free(&manifest);
+    }
+  }
+  if (!count) {
+    return true;
+  }
+  if (!client.provided_readable) {
+    snprintf(client.message, sizeof(client.message),
+        "cannot check the ABI of %s: this system's ABI is unreadable (no system_info grant)", stale);
+    return fail(client.message);
+  }
+  char install[1100] = "", remove[1100] = "";
+  bool installing = !strcmp(command, "install"), removing = !strcmp(command, "remove");
+  for (int i = 0; (installing || removing) && i < argc; ++i) {
+    append(installing ? install : remove, sizeof(install), " ", argv[i]);
+  }
+  append(install, sizeof(install), " ", stale);
+  append(remove, sizeof(remove), " ", stale);
+  char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
+  package_provided_abi_text(provided, names, sizeof(names));
+  snprintf(client.message, sizeof(client.message),
+      "%zu installed package%s not built for this system, which provides %s: %s. "
+      "Replace with: pkg install %s. Or drop with: pkg remove %s",
+      count, count == 1 ? " is" : "s are", names, details, install, remove);
   return fail(client.message);
 }
 
@@ -230,13 +304,19 @@ static bool load_repositories(void)
     if (!ok) {
       return false;
     }
-    /* Builds for another ABI are not offered; only their number is reported. */
     const struct package_provided_abi *provided = provided_abi();
     size_t usable = 0;
     for (size_t i = 0; i < count; ++i) {
       if (pkg_kind_bound(entries[i].kind) && (!client.provided_readable ||
           !package_abi_provided(provided, entries[i].abi))) {
-        ++client.hidden;
+        struct pkg_identity *hidden = realloc(client.hidden,
+            (client.hidden_count + 1) * sizeof(*hidden));
+        if (!hidden) {
+          free(entries);
+          return fail("cannot allocate repository catalog");
+        }
+        client.hidden = hidden;
+        client.hidden[client.hidden_count++] = entries[i].identity;
         continue;
       }
       entries[usable++] = entries[i];
@@ -277,6 +357,15 @@ static const struct offered_package *offering(const char *id, const char *versio
     }
   }
   return found;
+}
+
+static size_t hidden_builds(const char *id, const char *version)
+{
+  size_t count = 0;
+  for (size_t i = 0; i < client.hidden_count; ++i) {
+    count += !strcmp(client.hidden[i].id, id) && (!version || !strcmp(client.hidden[i].version, version));
+  }
+  return count;
 }
 
 static bool request(const char *text, struct pkg_identity *identity, bool *explicit_version)
@@ -443,11 +532,16 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
     const struct offered_package *entry = ok ?
         offering(identity.id, explicit_version ? identity.version : NULL) : NULL;
     if (ok && !entry) {
-      if (client.hidden) {
+      size_t hidden = hidden_builds(identity.id, explicit_version ? identity.version : NULL);
+      if (hidden && !client.provided_readable) {
         snprintf(client.message, sizeof(client.message),
-            "%s%s%s is not available for this system (%zu builds for other systems hidden)",
-            identity.id, explicit_version ? "@" : "", explicit_version ? identity.version : "",
-            client.hidden);
+            "%s has %zu build%s, but this system's ABI is unreadable (no system_info grant)",
+            argv[i], hidden, hidden == 1 ? "" : "s");
+        ok = fail(client.message);
+      } else if (hidden) {
+        snprintf(client.message, sizeof(client.message),
+            "%s is not available for this system (%zu build%s for other systems)", argv[i], hidden,
+            hidden == 1 ? "" : "s");
         ok = fail(client.message);
       } else {
         ok = fail("requested package version is not available");
@@ -463,6 +557,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
       ok = ok && select_version(selection, &requested[i], true);
     }
   }
+  ok = ok && stale_check(selection, requested, (size_t)argc, "install", argc, argv);
   for (size_t i = 0; ok && i < selection->count; ++i) {
     bool explicit_request = false;
     for (int j = 0; j < argc; ++j) {
@@ -501,7 +596,7 @@ static bool prepare_remove(struct pkg_selection *selection, int argc, char **arg
         (selection->count - index - 1) * sizeof(*selection->entries));
     --selection->count;
   }
-  return verify_selection(selection);
+  return stale_check(selection, NULL, 0, "remove", argc, argv) && verify_selection(selection);
 }
 
 static bool review(const struct pkg_selection *before, const struct pkg_selection *after)
@@ -644,7 +739,7 @@ static bool mutate(const char *command, int argc, char **argv)
   struct package_command_record *commands = NULL;
   size_t command_count = 0;
   if (reindex) {
-    ok = ok && verify_selection(&before) &&
+    ok = ok && stale_check(&before, NULL, 0, "reindex", 0, NULL) && verify_selection(&before) &&
         pkg_commands_build(client.packages, &before, &commands, &command_count, &client.reason) &&
         pkg_reindex(client.packages, before.number, commands, command_count, &client.reason);
     if (ok) puts("pkg: active command index bootstrapped; selection unchanged");
@@ -666,7 +761,7 @@ static bool mutate(const char *command, int argc, char **argv)
       if (!ok) client.reason = "rollback needs explicit SET when the active predecessor is unavailable";
     }
     ok = ok && pkg_selection_load(client.packages, false, target, &after, &client.reason) &&
-        verify_selection(&after);
+        stale_check(&after, NULL, 0, "rollback", 0, NULL) && verify_selection(&after);
     if (ok && !current_valid) {
       previous = target;
       puts("pkg: prior selection is unreadable; recovery target is retained as predecessor");
@@ -882,8 +977,10 @@ int main(int argc, char **argv)
           entry->kind, entry->abi[0] ? " abi " : "", entry->abi,
           (unsigned long long)entry->size);
     }
-    if (ok && client.hidden) {
-      printf("%zu builds for other systems hidden\n", client.hidden);
+    if (ok && client.hidden_count) {
+      printf(client.provided_readable ? "%zu builds for other systems hidden\n" :
+          "%zu builds hidden: this system's ABI is unreadable (no system_info grant)\n",
+          client.hidden_count);
     }
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
     struct pkg_selection selection = {0};
@@ -892,7 +989,7 @@ int main(int argc, char **argv)
     if (ok) {
       print_selection(&selection);
       if (!strcmp(command, "verify")) {
-        ok = verify_selection(&selection);
+        ok = stale_check(&selection, NULL, 0, "verify", 0, NULL) && verify_selection(&selection);
         struct package_command_record *commands = NULL;
         size_t command_count = 0;
         ok = ok && pkg_commands_build(client.packages, &selection, &commands,
@@ -910,11 +1007,13 @@ int main(int argc, char **argv)
     release_publish_guard();
     if (hash_ready) hash_close();
     free(client.offered);
+    free(client.hidden);
     return usage();
   }
   release_publish_guard();
   if (hash_ready) hash_close();
   free(client.offered);
+  free(client.hidden);
   if (!ok) {
     if (client.reason || client.cleanup_status == CALL_OK) {
       fprintf(stderr, "pkg: %s\n", client.reason ? client.reason : "operation failed");
