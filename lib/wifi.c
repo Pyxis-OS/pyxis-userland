@@ -130,6 +130,26 @@ static enum call_status returned_handle(handle_t target, const void *request, si
   return status;
 }
 
+enum call_status wifi_credential_seal(handle_t wifi, uint32_t format,
+    const void *bytes, size_t length, handle_t *file)
+{
+  if (!file) {
+    return CALL_BAD_REQUEST;
+  }
+  *file = HANDLE_INVALID;
+  if (!bytes || length > WIFI_CREDENTIAL_BYTES) {
+    return CALL_BAD_REQUEST;
+  }
+  struct wifi_credential_request request = {
+    .header = {PROTOCOL_WIFI, WIFI_CREDENTIAL_SEAL},
+    .credential = {.format = format, .length = length},
+  };
+  memcpy(request.credential.bytes, bytes, length);
+  enum call_status status = returned_handle(wifi, &request, sizeof(request), file);
+  memset_explicit(&request, 0, sizeof(request));
+  return status;
+}
+
 enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_target *target,
     uint64_t deadline_ns, handle_t *operation)
 {

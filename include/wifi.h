@@ -3,6 +3,7 @@
 
 #include <abi/wifi.h>
 #include <abi/syscall.h>
+#include <stddef.h>
 
 /* READ observes only; SCAN starts an explicit operation. The operation is local
  * to its owning process; closing requests cancellation and asynchronous drain. */
@@ -17,6 +18,10 @@ enum call_status wifi_scan_cancel(handle_t operation);
 /* Trusted boot init only; never transferred to successors. */
 enum call_status wifi_install_policy(handle_t wifi, const char country[2],
     uint32_t channels);
+/* Copies caller-supplied bytes into an anonymous, sealed, erased-on-release FILE.
+ * No environment entry is created. The caller must erase its own input. */
+enum call_status wifi_credential_seal(handle_t wifi, uint32_t format,
+    const void *bytes, size_t length, handle_t *file);
 
 enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_target *target,
     uint64_t deadline_ns, handle_t *operation);

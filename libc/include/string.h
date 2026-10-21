@@ -10,6 +10,7 @@ extern "C" {
 void *memcpy(void *__restrict dest, const void *__restrict src, size_t count);
 void *memmove(void *dest, const void *src, size_t count);
 void *memset(void *dest, int value, size_t count);
+void *memset_explicit(void *dest, int value, size_t count);
 int memcmp(const void *left, const void *right, size_t count);
 void *memchr(const void *memory, int value, size_t count);
 /* Last occurrence within count bytes; NULL when absent. */

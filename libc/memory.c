@@ -10,6 +10,15 @@ void *memset(void *dest, int value, size_t count)
   return dest;
 }
 
+void *memset_explicit(void *dest, int value, size_t count)
+{
+  volatile unsigned char *bytes = dest;
+  for (size_t i = 0; i < count; ++i) {
+    bytes[i] = (unsigned char)value;
+  }
+  return dest;
+}
+
 void *memcpy(void *restrict dest, const void *restrict src, size_t count)
 {
   unsigned char *dest_bytes = dest;
