@@ -58,7 +58,7 @@ REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o io.o gpt.o pool.o consent.o esp.o esp_read.o esp_directory.o esp_payload.o esp_transfer.o boot_entry.o programs.o progress.o digest.o manifest.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o archive_config.o coexist_ui.o esp_view.o target.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o gpt.o pool.o consent.o esp.o esp_read.o programs.o manifest.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o coexist_ui.o target.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
@@ -76,8 +76,12 @@ CONFIG_LIBRARY := $(BUILD)/libconfig.a
 CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o selection.o handoff.o)
 CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o $(BUILD)/installer/pending_archive.o $(BUILD)/installer/io.o $(BUILD)/config-editor/readiness.o
 INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
-INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o) $(addprefix $(BUILD)/installer/,configuration.o publication.o publication_snapshot.o publication_frontend.o pending.o pending_archive.o recovery.o installed_publication.o)
-INSTALLER_CONFIG_OBJECTS += $(BUILD)/installer/installed_probe.o
+INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/installer/,publication_frontend.o installed_publication.o installed_probe.o)
+# The shared boot publisher (installer/boot_publisher.h). The installer links
+# this archive; front ends add their own target admission and consent.
+PUBLISHER_LIBRARY := $(BUILD)/libpublisher.a
+PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o configuration.o publication.o publication_snapshot.o pending.o pending_archive.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o boot_archive.o archive_config.o digest.o progress.o io.o) \
+    $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o)
 # Discovery borrows the installer validators. Separate sectioned objects let
 # the selector retain only read-only inspection from the mixed private modules.
 INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c \
@@ -287,6 +291,10 @@ $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)
 
+$(PUBLISHER_LIBRARY): $(PUBLISHER_OBJECTS) Makefile
+	rm -f $@
+	$(AR) rcs $@ $(PUBLISHER_OBJECTS)
+
 $(BUILD)/boot-init.pxe: $(BOOT_INIT_LIBRARIES) $(TLS_EXPORT_IDENTITY) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BOOT_INIT_LIBRARIES) $(LDLIBS)
 
@@ -334,8 +342,8 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 	install -m 644 wifi/README.md "$(@D)/app/"
 	install -m 644 wifi/manifest.json "$@"
 
-$(BUILD)/boot-init/selection.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
-$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+$(BUILD)/boot-init/selection.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
 $(BUILD)/config.pxe: $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
@@ -374,8 +382,8 @@ $(BUILD)/init-install.pxe: $(BUILD)/init-install/main.o $(INSTALL_SELECTOR_OBJEC
 $(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/installer.pxe: $(INSTALLER_CONFIG_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/installer.pxe: $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/fat32-inspect/main.o: $(SDK)/sysroot/usr/include/pyxis_fs/fat32.h
 $(BUILD)/fat32-inspect.pxe: $(BUILD)/fat32-inspect/main.o $(FAT32_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
@@ -471,4 +479,4 @@ $(BUILD)/pkg.pxb/manifest.json: $(BUILD)/pkg.pxe pkg/manifest.json pkg/README.md
 	install -m 755 $(BUILD)/pkg.pxe $(BUILD)/pkg.pxb/app/bin/pkg.pxe
 	install -m 644 pkg/README.md $(BUILD)/pkg.pxb/app/README.md
 	install -m 644 pkg/manifest.json $@
--include $(INSTALLER_CONFIG_OBJECTS:.o=.d)
+-include $(INSTALLER_CONFIG_OBJECTS:.o=.d) $(PUBLISHER_OBJECTS:.o=.d)

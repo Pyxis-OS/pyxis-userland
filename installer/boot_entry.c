@@ -13,6 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+void install_guid_text(const uint8_t guid[16], char text[37])
+{
+  snprintf(text, 37, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      npfs_get_u32(guid), (unsigned)npfs_get_u16(guid + 4),
+      (unsigned)npfs_get_u16(guid + 6), guid[8], guid[9],
+      guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]);
+}
+
 static char *entry(const char *name, bool rescue, const char *kernel, const char *archive,
     const uint8_t disk_guid[16], const uint8_t esp_guid[16], size_t *size)
 {

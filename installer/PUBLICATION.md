@@ -22,6 +22,18 @@ is needed when revision defaults and safe pre-selected migrations suffice.
 [Installation](../../docs/userland/installer.md) and
 [Update](../../docs/userland/system-updates.md) describe target consent and programs.
 
+## Shared publisher library
+
+`boot_publisher.h` is the publisher's front-end interface, built with the modules
+it uses into `libpublisher.a`. The installer links it, and `pkg upgrade` is to link
+the same archive. The caller selects and admits the ESP, retires its planning
+view, supplies the reviewed target facts, kernel and filtered archive sources,
+revision, attempt and private RAM parent, and owns consent. The library prepares
+the frozen review state, revalidates it inside the checked admission interval and
+publishes: recovery, staging, readiness, menu and retention as described below.
+It opens no disk or mount itself. `installed_publication.c` is the installer's
+adapter from its plan to these inputs.
+
 ## Review and consumed inputs
 
 Preparation is read-only. It freezes issuer-bound ESP identity, configuration,

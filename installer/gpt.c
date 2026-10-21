@@ -18,14 +18,6 @@ static const uint8_t pool_type[16] = {
   0x83, 0x0e, 0x4c, 0xb4, 0xed, 0x7a, 0xac, 0x00,
 };
 
-void install_guid_text(const uint8_t guid[16], char text[37])
-{
-  snprintf(text, 37, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-      npfs_get_u32(guid), (unsigned)npfs_get_u16(guid + 4),
-      (unsigned)npfs_get_u16(guid + 6), guid[8], guid[9],
-      guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]);
-}
-
 bool install_layout_plan(const struct install_disk *disk, struct install_layout *layout)
 {
   uint64_t block_size = disk->info.block_size;

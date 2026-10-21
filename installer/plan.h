@@ -40,7 +40,7 @@ struct install_plan {
   struct install_esp_payloads *payloads;
   struct install_esp_classic_files *classic_files;
 #if INSTALLER_PUBLICATION_SCRATCH
-  struct install_installed_publication installed;
+  struct boot_publication installed;
   struct config_storage_report publication_report;
 #endif
   uint64_t available_blocks, required_blocks, cleanup_deadline_ns;
