@@ -98,7 +98,7 @@ static bool record_valid(const struct package_command_record *record, const char
       !padded(record->path, sizeof(record->path)) || !record->path[0] ||
       !padded(record->command, sizeof(record->command)) ||
       !padded(record->abi, sizeof(record->abi)) ||
-      (record->abi[0] && !package_abi_valid(record->abi)) ||
+      !package_abi_valid(record->abi) ||
       record->reserved[0] || record->reserved[1]) {
     return false;
   }

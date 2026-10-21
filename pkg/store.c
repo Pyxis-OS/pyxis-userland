@@ -155,11 +155,9 @@ bool pkg_predecessor(handle_t packages, uint64_t number, uint64_t *previous,
   struct literal_diagnostic diagnostic;
   ok = literal_parse(bytes, size, &document, &diagnostic);
   free(bytes);
-  const struct literal_value *format = ok ? literal_field(document->root, "format") : NULL;
   const struct literal_value *value = ok ? literal_field(document->root, "previous") : NULL;
   ok = ok && document->root->kind == LITERAL_TABLE &&
-      document->root->as.table.count == 2 && format && value && format->kind == LITERAL_INTEGER &&
-      format->as.integer == 1 && value->kind == LITERAL_INTEGER &&
+      document->root->as.table.count == 1 && value && value->kind == LITERAL_INTEGER &&
       value->as.integer >= 0 && (uint64_t)value->as.integer < number;
   if (ok) {
     *previous = value->as.integer;
@@ -240,11 +238,7 @@ static bool compare_commands(handle_t sets, uint64_t number, const void *expecte
   bool ok = pkg_text(sets, name, sizeof(struct package_command_index_header) +
       PACKAGE_COMMANDS_LIMIT * sizeof(struct package_command_record),
       &actual, &actual_size, reason);
-  if (ok && actual_size >= sizeof(PACKAGE_COMMAND_INDEX_MAGIC_V1) &&
-      !memcmp(actual, PACKAGE_COMMAND_INDEX_MAGIC_V1, sizeof(PACKAGE_COMMAND_INDEX_MAGIC_V1))) {
-    *reason = "command index predates ABI records; the next pkg install or remove publishes a current one";
-    ok = false;
-  } else if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
+  if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
     *reason = "command index differs from verified selected exports";
     ok = false;
   }
@@ -335,7 +329,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
     handle_close(sets);
     return false;
   }
-  size_t used = snprintf(bytes, capacity, "return { format = 1, packages = {\n");
+  size_t used = snprintf(bytes, capacity, "return { packages = {\n");
   for (size_t i = 0; i < selection->count; ++i) {
     used += snprintf(bytes + used, capacity - used,
         "  { id = \"%s\", version = \"%s\" },\n", selection->entries[i].id,
@@ -355,7 +349,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
   free(bytes);
   char predecessor[96];
   int length = snprintf(predecessor, sizeof(predecessor),
-      "return { format = 1, previous = %llu }\n", (unsigned long long)previous);
+      "return { previous = %llu }\n", (unsigned long long)previous);
   snprintf(name, sizeof(name), "%llu.previous", (unsigned long long)number);
   ok = ok && pkg_write_text(sets, name, predecessor, length, reason);
   ok = ok && write_commands(sets, number, commands, command_count, reason);
@@ -373,7 +367,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
     return false;
   }
   char pointer[96];
-  length = snprintf(pointer, sizeof(pointer), "return { format = 1, set = %llu }\n",
+  length = snprintf(pointer, sizeof(pointer), "return { set = %llu }\n",
       (unsigned long long)number);
   if (!pkg_write_text(packages, "current.new", pointer, length, reason) ||
       directory_sync(packages) != CALL_OK) {

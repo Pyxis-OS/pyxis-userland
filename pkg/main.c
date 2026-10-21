@@ -94,9 +94,6 @@ static bool abi_check(const char *id, const char *version, const char *kind,
     snprintf(client.message, sizeof(client.message),
         "%s %s needs an ABI check, but the running system's ABI is unreadable (no system_info)",
         id, version);
-  } else if (!abi[0]) {
-    snprintf(client.message, sizeof(client.message),
-        "%s %s records no ABI; this system provides %s%s", id, version, names, remedy);
   } else if (!package_abi_provided(provided, abi)) {
     snprintf(client.message, sizeof(client.message),
         "%s %s needs ABI %s; this system provides %s%s", id, version, abi, names, remedy);
@@ -140,11 +137,10 @@ static bool stale_check(const struct pkg_selection *selection, const struct pkg_
     bool read = pkg_tree_manifest(tree, &manifest, &client.reason);
     handle_close(tree);
     client.reason = NULL;
-    if (read && pkg_kind_bound(manifest.kind) && (!client.provided_readable || !manifest.abi[0] ||
+    if (read && pkg_kind_bound(manifest.kind) && (!client.provided_readable ||
         !package_abi_provided(provided, manifest.abi))) {
       char detail[PACKAGE_ID_MAX + PACKAGE_ABI_MAX + 32];
-      snprintf(detail, sizeof(detail), manifest.abi[0] ? "%s (needs ABI %s)" : "%s (records no ABI)",
-          identity->id, manifest.abi);
+      snprintf(detail, sizeof(detail), "%s (needs ABI %s)", identity->id, manifest.abi);
       append(stale, sizeof(stale), " ", identity->id);
       append(details, sizeof(details), ", ", detail);
       ++count;
@@ -414,6 +410,29 @@ static bool verify_version(const struct pkg_identity *identity, struct pkg_manif
   return ok;
 }
 
+/* A member carried over unchanged into a new set was verified when it was
+ * installed, and published trees are immutable: only its stored manifest is
+ * read and checked, never its tree. pkg verify still hashes every member. */
+static bool trust_version(const struct pkg_identity *identity, struct pkg_manifest *manifest)
+{
+  handle_t tree;
+  if (!pkg_tree_open(client.packages, identity, PKG_READ_RIGHTS, &tree, &client.reason)) {
+    return false;
+  }
+  bool ok = pkg_tree_manifest(tree, manifest, &client.reason);
+  handle_close(tree);
+  if (ok && (strcmp(manifest->identity.id, identity->id) ||
+      strcmp(manifest->identity.version, identity->version))) {
+    pkg_manifest_free(manifest);
+    return fail("stored manifest does not match its package directory");
+  }
+  if (ok && !abi_check(identity->id, identity->version, manifest->kind, manifest->abi, true)) {
+    pkg_manifest_free(manifest);
+    return false;
+  }
+  return ok;
+}
+
 static bool install_version(const struct offered_package *offered, struct pkg_manifest *manifest)
 {
   const struct pkg_identity *identity = &offered->entry.identity;
@@ -496,11 +515,18 @@ static bool check_dependencies(const struct pkg_selection *selection,
   return true;
 }
 
-static bool verify_selection(const struct pkg_selection *selection)
+/* Members of SELECTION that CARRIED (may be NULL) holds at the same version are
+ * trusted; every other member is hashed. */
+static bool verify_selection(const struct pkg_selection *selection,
+    const struct pkg_selection *carried)
 {
   for (size_t i = 0; i < selection->count; ++i) {
+    const struct pkg_identity *identity = &selection->entries[i];
+    size_t index = carried ? find_package(carried, identity->id) : SIZE_MAX;
+    bool unchanged = index != SIZE_MAX &&
+        !strcmp(carried->entries[index].version, identity->version);
     struct pkg_manifest manifest = {0};
-    if (!verify_version(&selection->entries[i], &manifest)) {
+    if (!(unchanged ? trust_version(identity, &manifest) : verify_version(identity, &manifest))) {
       return false;
     }
     bool ok = check_dependencies(selection, &manifest);
@@ -575,7 +601,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
       ok = entry ? install_version(entry, &manifest) :
           fail("an exact dependency is unavailable in the configured repositories");
     } else {
-      ok = verify_version(&selection->entries[i], &manifest);
+      ok = trust_version(&selection->entries[i], &manifest);
     }
     for (size_t d = 0; ok && d < manifest.dependency_count; ++d) {
       ok = select_version(selection, &manifest.dependencies[d], false);
@@ -596,7 +622,9 @@ static bool prepare_remove(struct pkg_selection *selection, int argc, char **arg
         (selection->count - index - 1) * sizeof(*selection->entries));
     --selection->count;
   }
-  return stale_check(selection, NULL, 0, "remove", argc, argv) && verify_selection(selection);
+  /* Every remaining member is carried over from the current set. */
+  return stale_check(selection, NULL, 0, "remove", argc, argv) &&
+      verify_selection(selection, selection);
 }
 
 static bool review(const struct pkg_selection *before, const struct pkg_selection *after)
@@ -739,7 +767,7 @@ static bool mutate(const char *command, int argc, char **argv)
   struct package_command_record *commands = NULL;
   size_t command_count = 0;
   if (reindex) {
-    ok = ok && stale_check(&before, NULL, 0, "reindex", 0, NULL) && verify_selection(&before) &&
+    ok = ok && stale_check(&before, NULL, 0, "reindex", 0, NULL) && verify_selection(&before, NULL) &&
         pkg_commands_build(client.packages, &before, &commands, &command_count, &client.reason) &&
         pkg_reindex(client.packages, before.number, commands, command_count, &client.reason);
     if (ok) puts("pkg: active command index bootstrapped; selection unchanged");
@@ -761,7 +789,8 @@ static bool mutate(const char *command, int argc, char **argv)
       if (!ok) client.reason = "rollback needs explicit SET when the active predecessor is unavailable";
     }
     ok = ok && pkg_selection_load(client.packages, false, target, &after, &client.reason) &&
-        stale_check(&after, NULL, 0, "rollback", 0, NULL) && verify_selection(&after);
+        stale_check(&after, NULL, 0, "rollback", 0, NULL) &&
+        verify_selection(&after, current_valid ? &before : NULL);
     if (ok && !current_valid) {
       previous = target;
       puts("pkg: prior selection is unreadable; recovery target is retained as predecessor");
@@ -989,7 +1018,7 @@ int main(int argc, char **argv)
     if (ok) {
       print_selection(&selection);
       if (!strcmp(command, "verify")) {
-        ok = stale_check(&selection, NULL, 0, "verify", 0, NULL) && verify_selection(&selection);
+        ok = stale_check(&selection, NULL, 0, "verify", 0, NULL) && verify_selection(&selection, NULL);
         struct package_command_record *commands = NULL;
         size_t command_count = 0;
         ok = ok && pkg_commands_build(client.packages, &selection, &commands,

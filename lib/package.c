@@ -12,7 +12,6 @@
 #define SETS_NAME "sets"
 #define STORE_NAME "store"
 #define TREE_NAME "tree"
-#define FORMAT 1
 /* current is one small table; a set record lists at most a few thousand
  * packages, well inside the literal parser's own bounds. */
 #define CURRENT_LIMIT 256
@@ -181,12 +180,6 @@ static bool exact_fields(const struct literal_value *table, const char *const *k
   return true;
 }
 
-static bool format_valid(const struct literal_value *table)
-{
-  const struct literal_value *format = literal_field(table, "format");
-  return format->kind == LITERAL_INTEGER && format->as.integer == FORMAT;
-}
-
 static bool text(const struct literal_value *value)
 {
   return value && value->kind == LITERAL_STRING &&
@@ -220,9 +213,8 @@ static enum call_status load_record(handle_t packages, int64_t requested,
     struct literal *current = NULL;
     status = parse(bytes, size, &current);
     free(bytes);
-    static const char *const current_keys[] = {"format", "set"};
-    if (status != CALL_OK || !exact_fields(current->root, current_keys, 2) ||
-        !format_valid(current->root) ||
+    static const char *const current_keys[] = {"set"};
+    if (status != CALL_OK || !exact_fields(current->root, current_keys, 1) ||
         literal_field(current->root, "set")->kind != LITERAL_INTEGER ||
         literal_field(current->root, "set")->as.integer < 1) {
       literal_free(current);
@@ -258,11 +250,10 @@ static enum call_status load_record(handle_t packages, int64_t requested,
     return status;
   }
 
-  static const char *const set_keys[] = {"format", "packages"};
+  static const char *const set_keys[] = {"packages"};
   static const char *const package_keys[] = {"id", "version"};
   const struct literal_value *list = literal_field(record->root, "packages");
-  bool valid = exact_fields(record->root, set_keys, 2) && format_valid(record->root) &&
-      list->kind == LITERAL_TABLE;
+  bool valid = exact_fields(record->root, set_keys, 1) && list->kind == LITERAL_TABLE;
   int64_t index = 0;
   for (const struct literal_entry *entry = valid ? list->as.table.entries : NULL;
        valid && entry; entry = entry->next) {

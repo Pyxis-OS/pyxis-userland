@@ -14,8 +14,7 @@ struct pkg_identity {
   char id[PACKAGE_ID_MAX + 1], version[PACKAGE_VERSION_MAX + 1];
 };
 
-/* abi is empty for a data package and for a format 1 toolchain manifest
- * stored by an older client; pkg_abi_check refuses the latter. */
+/* abi is set for program and toolchain packages and empty for data. */
 struct pkg_entry {
   struct pkg_identity identity;
   char kind[10], abi[PACKAGE_ABI_MAX + 1], archive[PKG_ARCHIVE_PATH_MAX + 1];

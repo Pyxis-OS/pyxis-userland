@@ -137,9 +137,8 @@ static bool same_volume(const struct package_command_info *left,
 }
 
 /* A package command runs only where the running system provides its package's
- * ABI. The kernel carries the index record's abi and never compares it; only
- * program and toolchain packages export commands, so an empty abi is a build
- * from before ABI records. The running ABI comes from the launching process's
+ * ABI. The kernel carries the index record's abi and never compares it. The
+ * running ABI comes from the launching process's
  * own system_info grant; without one, nothing can be checked and the command is
  * refused. */
 static enum call_status admit_abi(const struct package_command_record *target,
@@ -152,7 +151,7 @@ static enum call_status admit_abi(const struct package_command_record *target,
   if (system_info != HANDLE_INVALID) {
     handle_close(system_info);
   }
-  if (readable && target->abi[0] && package_abi_provided(&provided, target->abi)) {
+  if (readable && package_abi_provided(&provided, target->abi)) {
     return CALL_OK;
   }
   if (refusal && !readable) {
@@ -161,15 +160,9 @@ static enum call_status admit_abi(const struct package_command_record *target,
   } else if (refusal) {
     char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
     package_provided_abi_text(&provided, names, sizeof(names));
-    if (target->abi[0]) {
-      snprintf(refusal, COMMAND_REFUSAL_MAX,
-          "%s %s needs ABI %s; this system provides %s; run pkg install %s",
-          target->id, target->version, target->abi, names, target->id);
-    } else {
-      snprintf(refusal, COMMAND_REFUSAL_MAX,
-          "%s %s records no ABI; this system provides %s; run pkg install %s",
-          target->id, target->version, names, target->id);
-    }
+    snprintf(refusal, COMMAND_REFUSAL_MAX,
+        "%s %s needs ABI %s; this system provides %s; run pkg install %s",
+        target->id, target->version, target->abi, names, target->id);
   }
   return CALL_DENIED;
 }
