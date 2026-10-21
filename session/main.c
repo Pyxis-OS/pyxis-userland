@@ -81,9 +81,7 @@ static int launch_session(const struct session_config *config, struct network_co
     }
   }
 
-  if (!session_wifi_start(supplicant)) {
-    return EXIT_FAILURE;
-  }
+  session_wifi_start(supplicant);
   handle_t mux_terminal = bootstrap_capability("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   const char *image_name = start_remote_services ? "init-remote-services" :
@@ -741,7 +739,7 @@ static int finish_network(const struct network_config *config,
     }
   }
   if (!session_wifi_stop(supplicant)) {
-    result = EXIT_FAILURE;
+    fputs("session: Wi-Fi authentication cleanup not confirmed\n", stderr);
   }
   if (result != EXIT_SUCCESS && !network_config_stop(config, runtime)) {
     result = EXIT_FAILURE;

@@ -23,7 +23,6 @@
 #include <abi/power.h>
 #include <abi/wifi.h>
 #include <wifi.h>
-#include <wifi_auth.h>
 #include <forwarder.h>
 #include <abi/profile.h>
 #include <abi/random.h>
@@ -732,7 +731,6 @@ struct space_launch {
   handle_t commands;
   handle_t package_roots; /* Live data package roots, with the packages source. */
   struct forwarder_reply wifi_session;
-  struct wifi_auth_open_reply wifi_auth;
   struct mounted_volume *commands_mount;
   handle_t http_staging;
   handle_t http_staging_parent; /* Borrowed until source handles close. */
@@ -1225,20 +1223,10 @@ static const char *build_launch(const struct authority *authority, struct mounts
         return reason;
       }
       radio = launch->wifi_session.holder;
-      status = wifi_auth_open(radio, &launch->wifi_auth);
-      if (status != CALL_OK) {
-        snprintf(reason, size, "Wi-Fi authentication role unavailable (status %u)", status);
-        return reason;
-      }
       launch->resources[launch->resource_count++] =
-          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth", launch->grant_count);
+          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth_setup", launch->grant_count);
       launch->grants[launch->grant_count++] = (struct launch_grant){
-        launch->wifi_auth.auth, WIFI_AUTH_RIGHT_RUN, 0,
-      };
-      launch->resources[launch->resource_count++] =
-          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth_observation", launch->grant_count);
-      launch->grants[launch->grant_count++] = (struct launch_grant){
-        launch->wifi_auth.observation, WIFI_AUTH_RIGHT_OBSERVE, 0,
+        radio, WIFI_RIGHT_SUPPLICANT, 0,
       };
       launch->resources[launch->resource_count++] =
           (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_session_control", launch->grant_count);
@@ -1483,8 +1471,6 @@ cleanup:
     }
   }
   job_work_close(launch.job_provisioner, !started && !uncertain);
-  if (launch.wifi_auth.auth) handle_close(launch.wifi_auth.auth);
-  if (launch.wifi_auth.observation) handle_close(launch.wifi_auth.observation);
   if (launch.wifi_session.holder) handle_close(launch.wifi_session.holder);
   if (launch.wifi_session.controller) handle_close(launch.wifi_session.controller);
   if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);

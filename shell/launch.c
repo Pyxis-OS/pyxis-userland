@@ -76,7 +76,7 @@ struct prepared_stage {
   uint64_t *directories;
   struct launch_environment_entry resources[48 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
-  uint64_t wifi_private_identity[3];
+  uint64_t wifi_private_identity[2];
   char *source_names[BUNDLE_SOURCE_LIMIT];
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   struct environment_capture captured;
@@ -488,7 +488,7 @@ static enum call_status capture_selection(const struct shell *shell,
     const struct environment_value *value = &exported->values[i];
     if (value->kind == ENVIRONMENT_CAP && (value->flags & ENVIRONMENT_EXPORTED) &&
         strcmp(value->name, "wifi_session_control") &&
-        strcmp(value->name, "wifi_auth") && strcmp(value->name, "wifi_auth_observation") &&
+        strcmp(value->name, "wifi_auth_setup") &&
         !(prepared->program && prepared->program->commands && !strcmp(value->name, "commands")) &&
         !shell_environment_initial(shell, value)) {
       prepared->selection[prepared->selection_count++] = value;
@@ -1246,28 +1246,26 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
   }
   if (session) {
-    static const char *const names[] = {"wifi_auth", "wifi_auth_observation"};
-    static const uint64_t rights[] = {WIFI_AUTH_RIGHT_RUN, WIFI_AUTH_RIGHT_OBSERVE};
-    for (size_t i = 0; i < 2; ++i) {
-      const struct environment_value *entry = environment_capture_find(&prepared->captured, names[i]);
-      if (!entry) continue;
+    const struct environment_value *setup =
+        environment_capture_find(&prepared->captured, "wifi_auth_setup");
+    if (setup) {
       struct handle_info info;
-      enum call_status status = entry->kind == ENVIRONMENT_CAP ?
-          handle_query(entry->handle, &info) : CALL_WRONG_TYPE;
-      if (status != CALL_OK) return status;
-      if (entry->flags || info.kind != HANDLE_KIND_NATIVE ||
-          info.protocol != PROTOCOL_WIFI_AUTH || info.transport || info.rights != rights[i]) {
+      enum call_status status = setup->kind == ENVIRONMENT_CAP ?
+          handle_query(setup->handle, &info) : CALL_WRONG_TYPE;
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (setup->flags || info.kind != HANDLE_KIND_NATIVE ||
+          info.protocol != PROTOCOL_WIFI || info.transport || info.rights != WIFI_RIGHT_SUPPLICANT) {
         return CALL_DENIED;
       }
       if (grant_count == grant_capacity || resource_count == sizeof(prepared->resources) / sizeof(*resources)) {
         return CALL_LIMIT;
       }
-      resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(names[i], grant_count);
-      grants[grant_count++] = (struct launch_grant){entry->handle, rights[i], 0};
-      prepared->wifi_private_identity[i + 1] = entry->identity;
-    }
-    if (!!prepared->wifi_private_identity[1] != !!prepared->wifi_private_identity[2]) {
-      return CALL_DENIED;
+      resources[resource_count++] = (struct launch_environment_entry)
+          PROFILE_PRIVATE_CAP("wifi_auth_setup", grant_count);
+      grants[grant_count++] = (struct launch_grant){setup->handle, WIFI_RIGHT_SUPPLICANT, 0};
+      prepared->wifi_private_identity[1] = setup->identity;
     }
   }
   if (has_retention_factory) {
@@ -1484,7 +1482,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
           !strcmp(entry->name, "staging") || !strcmp(entry->name, "screenshot_saver") ||
           !strcmp(entry->name, "wifi_session_control") ||
-          !strcmp(entry->name, "wifi_auth") || !strcmp(entry->name, "wifi_auth_observation") ||
+          !strcmp(entry->name, "wifi_auth_setup") ||
           !strcmp(entry->name, "stdin") ||
           !strcmp(entry->name, "stdout") || !strcmp(entry->name, "stderr")) {
         continue;
@@ -2673,10 +2671,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         closed_sources;
   }
   if (mode == SHELL_SESSION) {
-    static const char *const names[] = {"wifi_session_control", "wifi_auth", "wifi_auth_observation"};
-    struct environment_unset_entry removed[3];
+    static const char *const names[] = {"wifi_session_control", "wifi_auth_setup"};
+    struct environment_unset_entry removed[2];
     size_t count = 0;
-    for (size_t i = 0; i < 3; ++i) {
+    for (size_t i = 0; i < 2; ++i) {
       if (prepared[0].wifi_private_identity[i]) {
         removed[count].identity = prepared[0].wifi_private_identity[i];
         environment_name(removed[count++].name, names[i]);

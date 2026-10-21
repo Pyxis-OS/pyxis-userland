@@ -457,7 +457,7 @@ bool network_config_wait_address(const struct network_config *config, struct net
 static bool wait_maintenance(struct network_runtime *runtime, struct session_wifi_supplicant *supplicant)
 {
   uint64_t now;
-  handle_t clock = runtime->clock ? runtime->clock : supplicant->clock;
+  handle_t clock = runtime->clock ? runtime->clock : bootstrap_capability("clock");
   if (clock_now(clock, &now) != CALL_OK) {
     return false;
   }
@@ -485,9 +485,15 @@ static bool wait_maintenance(struct network_runtime *runtime, struct session_wif
     if (wake > now && wake - now > WAIT_MAX_WAIT_NS) {
       wake = now + WAIT_MAX_WAIT_NS;
     }
-    return session_wifi_wait(supplicant, wake);
+    if (session_wifi_wait(supplicant, wake)) {
+      return true;
+    }
+    /* Optional worker supervision cannot retire unrelated interface leases. */
+    if (poll < wake) {
+      wake = poll;
+    }
   }
-  return clock_sleep_until(runtime->clock, wake) == CALL_OK;
+  return clock_sleep_until(clock, wake) == CALL_OK;
 }
 
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,

@@ -100,7 +100,7 @@ static inline enum call_status profile_inherit_services(
         !strcmp(value->name, "job_provisioner") || !strcmp(value->name, "job_work") ||
         !strcmp(value->name, "staging") || !strcmp(value->name, "script") ||
         !strcmp(value->name, "screenshot_saver") ||
-        !strcmp(value->name, "wifi_auth") || !strcmp(value->name, "wifi_auth_observation") ||
+        !strcmp(value->name, "wifi_auth_setup") ||
         profile_stdio_name(value->name)) {
       continue;
     }
