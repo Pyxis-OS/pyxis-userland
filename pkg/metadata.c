@@ -379,7 +379,9 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
           strcmp(manifest->dependencies[previous].version, dependency->version);
     }
   }
-  if (ok && commands && !pkg_kind_bound(manifest->kind)) {
+  /* Missing or empty means no exports, which every kind may have. */
+  if (ok && commands && commands->kind == LITERAL_TABLE && commands->as.table.count &&
+      !pkg_kind_bound(manifest->kind)) {
     *reason = "only program and toolchain packages export commands";
     ok = false;
   }

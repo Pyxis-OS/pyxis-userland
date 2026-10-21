@@ -404,6 +404,9 @@ static enum command_result builtin_command(struct shell *shell,
     if (count != 2) return shell_error(shell, "usage: which NAME\n");
     struct command_selection *selection = NULL;
     enum call_status status = shell_open_image(shell, arguments[1], &selection);
+    if (status == CALL_DENIED && shell->refusal[0]) {
+      return shell_error(shell, "shell: which: %s: %s\n", arguments[1], shell->refusal);
+    }
     if (status != CALL_OK) return shell_directory_error(shell, "shell: which", arguments[1], status);
     int written;
     if (selection->explicit_path) {

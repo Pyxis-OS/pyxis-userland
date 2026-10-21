@@ -39,7 +39,8 @@ enum call_status command_search_resolve(const struct path_context *context,
 #define COMMAND_REFUSAL_MAX 512
 /* As command_search_resolve. A package command whose package's ABI the running
  * system does not provide, as read through the caller's own system_info grant,
- * is refused with CALL_DENIED before its target is opened; a non-NULL REFUSAL
+ * is refused with CALL_DENIED before anything runs (the read handle the kernel's
+ * lookup returned is closed, and no selection is made); a non-NULL REFUSAL
  * of COMMAND_REFUSAL_MAX bytes then receives one line naming the package, both
  * sides and the remedy, and is empty otherwise. */
 enum call_status command_search_resolve_reason(const struct path_context *context,

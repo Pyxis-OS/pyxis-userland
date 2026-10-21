@@ -5,7 +5,6 @@
 #include <program.h>
 #include <resource.h>
 #include <startup.h>
-#include <stdio.h>
 #include <handle.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,6 +100,7 @@ enum call_status shell_open_image(struct shell *shell, const char *command,
     struct command_selection **selection)
 {
   *selection = NULL;
+  shell->refusal[0] = 0;
   size_t length = strlen(command);
   if (length > SIZE_MAX - PROGRAM_LOOKUP_EXTRA) {
     return CALL_LIMIT;
@@ -112,13 +112,8 @@ enum call_status shell_open_image(struct shell *shell, const char *command,
   if (status != CALL_OK) {
     return status;
   }
-  char refusal[COMMAND_REFUSAL_MAX];
-  status = program_open_reason(shell->directory, command, &shell->workspace, selection, refusal);
-  /* A refused package command says why; the caller still reports the status. */
-  if (status == CALL_DENIED && refusal[0]) {
-    fprintf(stderr, "shell: %s: %s\n", command, refusal);
-  }
-  return status;
+  return program_open_reason(shell->directory, command, &shell->workspace, selection,
+      shell->refusal);
 }
 
 /* Open only: truncation waits until every redirect has a retained file grant. */

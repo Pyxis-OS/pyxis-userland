@@ -9,6 +9,7 @@
 #include <startup.h>
 #include "../common/launch_environment.h"
 #include <bundle_launch.h>
+#include <command_selection.h>
 #include <resource.h>
 #include "../common/provider_setup.h"
 
@@ -88,6 +89,9 @@ struct shell_initial_entry {
 
 struct shell {
   struct bundle_jobs jobs;
+  /* Why the last shell_open_image refused a package command; empty otherwise.
+   * Error reports print it in place of the bare status. */
+  char refusal[COMMAND_REFUSAL_MAX];
   /* Immutable startup provenance only; no capability or table ownership. */
   struct shell_initial_entry *initial_entries;
   size_t initial_entry_count;

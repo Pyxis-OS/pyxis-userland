@@ -336,6 +336,10 @@ static enum command_result launch_error(struct shell *shell, const struct shell_
     size_t stage_count, size_t stage, const char *operation, const char *path,
     const char *missing, enum call_status status)
 {
+  /* A refused package command names its package, both ABIs and the remedy. */
+  if (status == CALL_DENIED && shell->refusal[0] && stage < stage_count) {
+    return shell_error(shell, "shell: %s: %s\n", stages[stage].arguments[0], shell->refusal);
+  }
   if (*missing && stage_count > 1 && stage < stage_count) {
     return shell_error(shell, "shell: stage %zu (%s): Missing required resource %s\n",
         stage + 1, stages[stage].arguments[0], missing);
