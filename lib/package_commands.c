@@ -2,6 +2,7 @@
 #include <abi/directory.h>
 #include <abi/file.h>
 #include <handle.h>
+#include <package.h>
 #include <string.h>
 #include <syscall.h>
 
@@ -96,7 +97,9 @@ static bool record_valid(const struct package_command_record *record, const char
       !padded(record->version, sizeof(record->version)) || !record->version[0] ||
       !padded(record->path, sizeof(record->path)) || !record->path[0] ||
       !padded(record->command, sizeof(record->command)) ||
-      record->reserved[0] || record->reserved[1] || record->reserved[2]) {
+      !padded(record->abi, sizeof(record->abi)) ||
+      (record->abi[0] && !package_abi_valid(record->abi)) ||
+      record->reserved[0] || record->reserved[1]) {
     return false;
   }
   if (protocol == PROTOCOL_FILE) {

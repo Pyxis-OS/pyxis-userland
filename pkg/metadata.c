@@ -379,6 +379,10 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
           strcmp(manifest->dependencies[previous].version, dependency->version);
     }
   }
+  if (ok && commands && !pkg_kind_bound(manifest->kind)) {
+    *reason = "only program and toolchain packages export commands";
+    ok = false;
+  }
   if (ok) {
     ok = commands_parse(commands, manifest, reason);
   }

@@ -31,12 +31,20 @@ enum call_status program_open_search(const struct path_context *context,
     const struct command_search_capture *search, const char *command,
     struct path_workspace *workspace, struct command_selection **output)
 {
+  return program_open_search_reason(context, search, command, workspace, output, NULL);
+}
+
+enum call_status program_open_search_reason(const struct path_context *context,
+    const struct command_search_capture *search, const char *command,
+    struct path_workspace *workspace, struct command_selection **output, char *refusal)
+{
+  if (refusal) refusal[0] = 0;
   if (!output) return CALL_BAD_REQUEST;
   *output = NULL;
   if (!command || !*command) return CALL_BAD_REQUEST;
   if (!program_is_explicit(command)) {
-    return search && search->list ? command_search_resolve(context, search, command, output) :
-        CALL_NOT_FOUND;
+    return search && search->list ?
+        command_search_resolve_reason(context, search, command, output, refusal) : CALL_NOT_FOUND;
   }
   if (!workspace) return CALL_BAD_REQUEST;
   struct command_selection *selection = calloc(1, sizeof(*selection));
@@ -66,6 +74,13 @@ enum call_status program_open_search(const struct path_context *context,
 enum call_status program_open(const struct path_context *context, const char *command,
     struct path_workspace *workspace, struct command_selection **selection)
 {
+  return program_open_reason(context, command, workspace, selection, NULL);
+}
+
+enum call_status program_open_reason(const struct path_context *context, const char *command,
+    struct path_workspace *workspace, struct command_selection **selection, char *refusal)
+{
+  if (refusal) refusal[0] = 0;
   if (!selection) return CALL_BAD_REQUEST;
   *selection = NULL;
   if (!command || !*command) return CALL_BAD_REQUEST;
@@ -75,7 +90,9 @@ enum call_status program_open(const struct path_context *context, const char *co
     status = command_search_capture_init(startup_environment_handle(), &search);
     if (status == CALL_NOT_FOUND) status = CALL_OK;
   }
-  if (status == CALL_OK) status = program_open_search(context, &search, command, workspace, selection);
+  if (status == CALL_OK) {
+    status = program_open_search_reason(context, &search, command, workspace, selection, refusal);
+  }
   command_search_capture_close(&search);
   return status;
 }

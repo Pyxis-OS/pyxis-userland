@@ -240,7 +240,11 @@ static bool compare_commands(handle_t sets, uint64_t number, const void *expecte
   bool ok = pkg_text(sets, name, sizeof(struct package_command_index_header) +
       PACKAGE_COMMANDS_LIMIT * sizeof(struct package_command_record),
       &actual, &actual_size, reason);
-  if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
+  if (ok && actual_size >= sizeof(PACKAGE_COMMAND_INDEX_MAGIC_V1) &&
+      !memcmp(actual, PACKAGE_COMMAND_INDEX_MAGIC_V1, sizeof(PACKAGE_COMMAND_INDEX_MAGIC_V1))) {
+    *reason = "command index predates ABI records; the next pkg install or remove publishes a current one";
+    ok = false;
+  } else if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
     *reason = "command index differs from verified selected exports";
     ok = false;
   }

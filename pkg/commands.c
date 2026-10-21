@@ -145,6 +145,7 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
         strcpy(record->version, identity->version);
         strcpy(record->path, command->path);
         strcpy(record->command, command->command);
+        strcpy(record->abi, manifest.abi);
         ++used;
       }
     }

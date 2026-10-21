@@ -1,8 +1,12 @@
 #include <command_selection.h>
 #include <directory.h>
+#include <environment.h>
 #include <file.h>
 #include <handle.h>
+#include <package.h>
 #include <pxe/p1f.h>
+#include <startup.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -132,13 +136,56 @@ static bool same_volume(const struct package_command_info *left,
   return left->origin == right->origin;
 }
 
+/* A package command runs only where the running system provides its package's
+ * ABI. The kernel carries the index record's abi and never compares it; only
+ * program and toolchain packages export commands, so an empty abi is a build
+ * from before ABI records. The running ABI comes from the launching process's
+ * own system_info grant; without one, nothing can be checked and the command is
+ * refused. */
+static enum call_status admit_abi(const struct package_command_record *target,
+    char *refusal)
+{
+  handle_t system_info = HANDLE_INVALID;
+  struct package_provided_abi provided;
+  bool readable = environment_capability(startup_environment_handle(), "system_info",
+      &system_info) == CALL_OK && package_provided_abi(system_info, &provided) == CALL_OK;
+  if (system_info != HANDLE_INVALID) {
+    handle_close(system_info);
+  }
+  if (readable && target->abi[0] && package_abi_provided(&provided, target->abi)) {
+    return CALL_OK;
+  }
+  if (refusal && !readable) {
+    snprintf(refusal, COMMAND_REFUSAL_MAX,
+        "%s %s: cannot check its ABI without a system_info grant", target->id, target->version);
+  } else if (refusal) {
+    char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
+    package_provided_abi_text(&provided, names, sizeof(names));
+    if (target->abi[0]) {
+      snprintf(refusal, COMMAND_REFUSAL_MAX,
+          "%s %s needs ABI %s; this system provides %s; run pkg install %s",
+          target->id, target->version, target->abi, names, target->id);
+    } else {
+      snprintf(refusal, COMMAND_REFUSAL_MAX,
+          "%s %s records no ABI; this system provides %s; run pkg install %s",
+          target->id, target->version, names, target->id);
+    }
+  }
+  return CALL_DENIED;
+}
+
 static enum call_status package_target(const struct path_context *context,
-    handle_t view, const char *name, struct command_selection *selection)
+    handle_t view, const char *name, struct command_selection *selection, char *refusal)
 {
   struct package_command_lookup_reply reply;
   enum call_status status = package_commands_lookup(view, name, FILE_RIGHT_READ,
       SEARCH_DIRECTORY_RIGHTS, &reply);
   if (status != CALL_OK) {
+    return status;
+  }
+  status = admit_abi(&reply.target, refusal);
+  if (status != CALL_OK) {
+    handle_close(reply.handle);
     return status;
   }
   if (reply.protocol == PROTOCOL_DIRECTORY) {
@@ -172,6 +219,16 @@ enum call_status command_search_resolve(const struct path_context *context,
     const struct command_search_capture *search, const char *name,
     struct command_selection **output)
 {
+  return command_search_resolve_reason(context, search, name, output, NULL);
+}
+
+enum call_status command_search_resolve_reason(const struct path_context *context,
+    const struct command_search_capture *search, const char *name,
+    struct command_selection **output, char *refusal)
+{
+  if (refusal) {
+    refusal[0] = 0;
+  }
   if (!output) {
     return CALL_BAD_REQUEST;
   }
@@ -207,7 +264,7 @@ enum call_status command_search_resolve(const struct path_context *context,
       handle_t fixed = HANDLE_INVALID;
       status = package_commands_capture(search->entries[i].handle, previous, &fixed);
       if (status == CALL_OK) {
-        status = package_target(context, fixed, name, selection);
+        status = package_target(context, fixed, name, selection, refusal);
         if (!previous) {
           volumes[volume_count++] = (struct captured_volume){.info = info, .view = fixed};
         } else {
