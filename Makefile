@@ -64,7 +64,7 @@ FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
 BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/network.o $(BUILD)/pkg/maintenance.o $(BUILD)/pkg/store.o
-SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o $(BUILD)/session/network.o \
+SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o $(BUILD)/session/network.o $(BUILD)/common/system_log.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o $(BUILD)/boot-init/network.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o $(BUILD)/httpfs/provider.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a

@@ -1,4 +1,5 @@
 #include "../common/bootstrap_environment.h"
+#include "../common/system_log.h"
 #include "../boot-init/network.h"
 #include "network.h"
 #include <clock.h>
@@ -80,17 +81,17 @@ static bool apply_lease(const struct network_interface_config *config,
       lease->address, lease->prefix, lease->gateway, lease->dns);
   if (status != CALL_OK) {
     if (runtime->wifi && status == CALL_ALREADY_EXISTS) {
-      fprintf(stderr, "session: %s lease address is already used by another interface, gateway or DNS server (status %u)\n",
+      system_log("session: %s lease address is already used by another interface, gateway or DNS server (status %u)\n",
           config->name, status);
     } else {
-      fprintf(stderr, "session: %s lease rejected (status %u)\n", config->name, status);
+      system_log("session: %s lease rejected (status %u)\n", config->name, status);
     }
     return false;
   }
   runtime->lease = *lease;
   runtime->configured = true;
   runtime->dhcp.refresh_started = false;
-  printf("%s: DHCP %u.%u.%u.%u/%u\n", config->name, lease->address >> 24,
+  system_log("%s: DHCP %u.%u.%u.%u/%u\n", config->name, lease->address >> 24,
       lease->address >> 16 & 255, lease->address >> 8 & 255, lease->address & 255, lease->prefix);
   return report(runtime, NET_DHCP_BOUND);
 }
