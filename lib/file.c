@@ -174,28 +174,26 @@ enum call_status file_read(handle_t file, uint64_t offset, void *bytes, size_t c
   struct file_read_response reply;
   struct syscall_result result = file_call(file, &message, sizeof(message),
       &reply, sizeof(reply.body) + limit, false);
+  enum call_status status = CALL_OK;
+  *read = 0;
   if (result.status >= CALL_STATUS_COUNT) {
-    *read = 0;
-    return CALL_BAD_REQUEST;
-  }
-  if (result.status != CALL_OK) {
-    *read = 0;
-    return result.reply_size ? CALL_BAD_REQUEST : (enum call_status)result.status;
-  }
-  if (result.reply_size < sizeof(reply.body) ||
+    status = CALL_BAD_REQUEST;
+  } else if (result.status != CALL_OK) {
+    status = result.reply_size ? CALL_BAD_REQUEST : (enum call_status)result.status;
+  } else if (result.reply_size < sizeof(reply.body) ||
       result.reply_size > sizeof(reply.body) + limit ||
       reply.body.read != result.reply_size - sizeof(reply.body) ||
       reply.body.read > UINT64_MAX - offset) {
-    *read = 0;
-    return CALL_BAD_REQUEST;
+    status = CALL_BAD_REQUEST;
+  } else {
+    size_t count = (size_t)reply.body.read;
+    if (count) {
+      memcpy(bytes, reply.bytes, count);
+    }
+    *read = count;
   }
-
-  size_t count = (size_t)reply.body.read;
-  if (count) {
-    memcpy(bytes, reply.bytes, count);
-  }
-  *read = count;
-  return CALL_OK;
+  memset_explicit(&reply, 0, sizeof(reply));
+  return status;
 }
 
 enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,

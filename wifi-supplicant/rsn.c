@@ -58,27 +58,19 @@ static void set_state(void *opaque, enum wpa_states state)
   if (context->failure != CALL_OK) {
     return;
   }
-  if ((state == WPA_4WAY_HANDSHAKE || state == WPA_GROUP_HANDSHAKE) &&
-      context->state == WPA_COMPLETED) {
-    uint64_t now;
-    if (current_time(context, &now) != CALL_OK) {
-      return;
-    }
-    if (now > UINT64_MAX - RSN_REKEY_MAX_NS) {
-      rsn_fail(context, CALL_LIMIT);
-      return;
-    }
-    context->phase_deadline = now + RSN_REKEY_MAX_NS;
-    context->timeout_cancelled = false;
-    if (authorize(context, false)) {
-      return;
-    }
-  }
   context->state = state;
   if (state == WPA_COMPLETED) {
     if (!context->timeout_cancelled || !context->pairwise_installed ||
         !context->group_installed) {
       rsn_fail(context, CALL_DENIED);
+      return;
+    }
+    uint64_t now;
+    if (current_time(context, &now) != CALL_OK) {
+      return;
+    }
+    if (now >= context->phase_deadline) {
+      rsn_fail(context, CALL_TIMED_OUT);
       return;
     }
     if (authorize(context, true) == 0) {
@@ -214,8 +206,22 @@ static int set_key(void *opaque, int link_id, enum wpa_alg algorithm,
   for (size_t i = 0; i < sequence_size; ++i) {
     receive_pn |= (uint64_t)sequence[i] << (8 * i);
   }
-  if (context->authorized && authorize(context, false)) {
-    return -1;
+  if (context->authorized) {
+    /* Upstream reaches key installation only after authenticating the frame.
+     * An unauthenticated message 1 may change state but cannot pause data. */
+    uint64_t now;
+    if (current_time(context, &now) != CALL_OK) {
+      return -1;
+    }
+    if (now > UINT64_MAX - RSN_REKEY_MAX_NS) {
+      rsn_fail(context, CALL_LIMIT);
+      return -1;
+    }
+    context->phase_deadline = now + RSN_REKEY_MAX_NS;
+    context->timeout_cancelled = false;
+    if (authorize(context, false)) {
+      return -1;
+    }
   }
   uint32_t action = removing ? WIFI_AUTH_KEY_REMOVE : WIFI_AUTH_KEY_INSTALL;
   enum call_status status = wifi_auth_key(context->auth, context->generation, group,
@@ -246,7 +252,9 @@ static int set_protection(void *opaque, const u8 *address, int protection, int k
     rsn_fail(context, CALL_BAD_OPERATION);
     return -1;
   }
-  return authorize(context, context->state == WPA_COMPLETED);
+  /* Key replacement owns the data pause, including when upstream skips an
+   * already installed key while processing an authenticated retransmission. */
+  return authorize(context, context->authorized || context->state == WPA_COMPLETED);
 }
 
 static bool valid_address(const uint8_t address[6])
