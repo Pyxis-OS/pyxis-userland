@@ -442,8 +442,7 @@ enum call_status resource_open_path(const struct path_context *context, const ch
     memcpy(name, path, length);
     name[length] = 0;
     handle_t target = HANDLE_INVALID;
-    enum call_status status = environment_lookup_file(startup_environment_handle(),
-        name, &target);
+    enum call_status status = path_root(name, &target);
     if (status != CALL_OK) {
       return status;
     }

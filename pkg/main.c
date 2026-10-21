@@ -764,12 +764,11 @@ static bool mutate(const char *command, int argc, char **argv)
   }
   bool ok = metadata_valid;
   uint64_t previous = before.number;
-  struct package_command_record *commands = NULL;
-  size_t command_count = 0;
+  struct pkg_projection projection = {0};
   if (reindex) {
     ok = ok && stale_check(&before, NULL, 0, "reindex", 0, NULL) && verify_selection(&before, NULL) &&
-        pkg_commands_build(client.packages, &before, &commands, &command_count, &client.reason) &&
-        pkg_reindex(client.packages, before.number, commands, command_count, &client.reason);
+        pkg_commands_build(client.packages, &before, &projection, &client.reason) &&
+        pkg_reindex(client.packages, before.number, &projection, &client.reason);
     if (ok) puts("pkg: active command index bootstrapped; selection unchanged");
   } else if (!strcmp(command, "rollback")) {
     uint64_t target = 0;
@@ -804,7 +803,7 @@ static bool mutate(const char *command, int argc, char **argv)
     }
   }
   if (ok && !reindex) {
-    ok = pkg_commands_build(client.packages, &after, &commands, &command_count, &client.reason);
+    ok = pkg_commands_build(client.packages, &after, &projection, &client.reason);
   }
   if (ok && !reindex) {
     ok = review(&before, &after);
@@ -814,10 +813,19 @@ static bool mutate(const char *command, int argc, char **argv)
     ok = fail("cannot guard the confirmed set switch");
   }
   if (ok && !reindex) {
-    ok = pkg_publish(client.packages, &after, previous, commands, command_count,
-        &uncertain, &client.reason);
+    ok = pkg_publish(client.packages, &after, previous, &projection, &uncertain,
+        &client.reason);
   }
-  free(commands);
+  /* Root records are the set's data packages. A space without the packages
+   * source cannot see them, so say where they are readable. */
+  for (size_t i = 0; ok && !reindex && i < projection.roots; ++i) {
+    const struct package_command_record *root = &projection.records[projection.commands + i];
+    if (find_package(&before, root->id) == SIZE_MAX) {
+      printf("pkg: %s is read as %s:// in spaces that hold the packages source\n",
+          root->id, root->id);
+    }
+  }
+  free(projection.records);
   if (!ok && (!metadata_valid || !strcmp(command, "rollback"))) show_sets();
   pkg_selection_free(&after);
   pkg_selection_free(&before);
@@ -1019,13 +1027,11 @@ int main(int argc, char **argv)
       print_selection(&selection);
       if (!strcmp(command, "verify")) {
         ok = stale_check(&selection, NULL, 0, "verify", 0, NULL) && verify_selection(&selection, NULL);
-        struct package_command_record *commands = NULL;
-        size_t command_count = 0;
-        ok = ok && pkg_commands_build(client.packages, &selection, &commands,
-            &command_count, &client.reason) &&
-            pkg_commands_verify(client.packages, selection.number, commands,
-                command_count, &client.reason);
-        free(commands);
+        struct pkg_projection projection = {0};
+        ok = ok && pkg_commands_build(client.packages, &selection, &projection,
+            &client.reason) &&
+            pkg_commands_verify(client.packages, selection.number, &projection, &client.reason);
+        free(projection.records);
         if (ok) puts("pkg: selected package files and command index verified");
       }
     } else {

@@ -729,6 +729,7 @@ struct space_launch {
   bool package_set_loaded;
   struct job_work *job_provisioner;
   handle_t commands;
+  handle_t package_roots; /* Live data package roots, with the packages source. */
   struct forwarder_reply wifi_session;
   struct mounted_volume *commands_mount;
   handle_t http_staging;
@@ -830,6 +831,33 @@ static void upgrade_sources(const struct authority *authority, const struct boot
   add_package_source(launch, count, PACKAGE_UPGRADE_SOURCE, authority->esp_mount, rights);
   add_package_source(launch, count, PACKAGE_EVIDENCE_SOURCE, authority->boot_evidence,
       FILE_RIGHT_READ);
+}
+
+/* A space holding the packages source reads each installed data package as
+ * NAME://. The exported live view resolves names against the active set at
+ * each lookup and serves only data package trees, read-only. The shell and
+ * plain programs inherit it; bundle launches withhold it, so a bundle reads
+ * only the packages its manifest grants. */
+static void package_roots(struct mounts *mounts, const struct boot_space *space,
+    struct space_launch *launch)
+{
+  bool held = false;
+  for (size_t i = 0; i < space->grant_count && !held; ++i) {
+    const struct boot_grant *source = &space->grants[i];
+    held = !strcmp(source->name, PACKAGE_SOURCE) && source->kind == BOOT_GRANT_DIRECTORY &&
+        !source->path && !strcmp(source->volume, BOOT_PACKAGES_VOLUME);
+  }
+  struct mounted_volume *packages = held ? find_mount(mounts, BOOT_PACKAGES_VOLUME) : NULL;
+  if (!packages || packages->root == HANDLE_INVALID) return;
+  enum call_status status = package_roots_open(packages->root, &launch->package_roots);
+  if (status != CALL_OK) {
+    printf("boot-init: space %s package roots unavailable (status %u)\n", space->name, status);
+    return;
+  }
+  launch->resources[launch->resource_count++] =
+      (struct launch_environment_entry)PROFILE_CAP(PACKAGE_ROOTS_NAME, launch->grant_count);
+  launch->grants[launch->grant_count++] =
+      (struct launch_grant){launch->package_roots, PACKAGE_TREE_RIGHTS, 0};
 }
 
 static void package_sources(struct mounts *mounts, const struct boot_space *space,
@@ -1131,6 +1159,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->package_upgrade) {
     upgrade_sources(authority, space, launch, &source_count);
   }
+  package_roots(mounts, space, launch);
   if (space->fat32_mount) {
     uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
         (space->fat32_mount_write ? DISKS_RIGHT_MOUNT_READ_WRITE : 0);
@@ -1440,6 +1469,7 @@ cleanup:
   if (launch.wifi_session.holder) handle_close(launch.wifi_session.holder);
   if (launch.wifi_session.controller) handle_close(launch.wifi_session.controller);
   if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);
+  if (launch.package_roots != HANDLE_INVALID) handle_close(launch.package_roots);
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
   for (size_t i = 0; i < launch.package_tree_count; ++i) handle_close(launch.package_trees[i]);
   free(launch.package_trees);

@@ -16,6 +16,7 @@
 #include <limits.h>
 #include <pipe.h>
 #include <output.h>
+#include <path.h>
 #include <pyxis/descriptor.h>
 #include <startup.h>
 #include <stdint.h>
@@ -316,7 +317,7 @@ static enum call_status open_typed_path(const struct path_context *context,
   memcpy(name, path, size);
   name[size] = 0;
   handle_t target = HANDLE_INVALID;
-  enum call_status status = environment_lookup_file(startup_environment_handle(), name, &target);
+  enum call_status status = path_root(name, &target);
   struct handle_info info;
   if (status == CALL_OK) {
     status = handle_query(target, &info);

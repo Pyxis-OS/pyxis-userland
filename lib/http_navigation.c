@@ -4,6 +4,7 @@
 #include <clock.h>
 #include <environment.h>
 #include <handle.h>
+#include <path.h>
 #include <provider.h>
 #include <startup.h>
 #include <pyxis/descriptor.h>
@@ -266,7 +267,7 @@ FILE *http_navigation_fopen(const char *path, struct http_navigation *metadata)
   memcpy(name, path, length); name[length] = 0;
   handle_t root = HANDLE_INVALID, clock = HANDLE_INVALID;
   struct resource_result result = {0}, configured = {0};
-  enum call_status status = environment_lookup_file(startup_environment_handle(), name, &root);
+  enum call_status status = path_root(name, &root);
   struct handle_info info;
   if (status == CALL_OK) status = handle_query(root, &info);
   bool framed = false;

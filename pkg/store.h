@@ -28,14 +28,21 @@ bool pkg_selection_load(handle_t packages, bool current, uint64_t number,
 void pkg_selection_free(struct pkg_selection *selection);
 bool pkg_predecessor(handle_t packages, uint64_t number, uint64_t *previous,
     const char **reason);
+/* A set's command projection: commands command records followed by roots
+ * root records, one per data package. */
+struct pkg_projection {
+  struct package_command_record *records;
+  size_t commands, roots;
+};
+
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, const struct package_command_record *commands,
-    size_t command_count, bool *uncertain, const char **reason);
+    uint64_t previous, const struct pkg_projection *projection, bool *uncertain,
+    const char **reason);
 bool pkg_commands_verify(handle_t packages, uint64_t number,
-    const struct package_command_record *commands, size_t command_count, const char **reason);
+    const struct pkg_projection *projection, const char **reason);
 /* Bootstrap only a missing active index. No current or retention change. */
 bool pkg_reindex(handle_t packages, uint64_t number,
-    const struct package_command_record *commands, size_t command_count, const char **reason);
+    const struct pkg_projection *projection, const char **reason);
 bool pkg_tree_open(handle_t packages, const struct pkg_identity *identity,
     uint64_t rights, handle_t *tree, const char **reason);
 

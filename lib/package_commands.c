@@ -157,6 +157,11 @@ enum call_status package_commands_open(handle_t volume, handle_t *live)
   return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_COMMANDS, live);
 }
 
+enum call_status package_roots_open(handle_t volume, handle_t *live)
+{
+  return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_ROOTS, live);
+}
+
 enum call_status package_commands_info(handle_t view, struct package_command_info *info)
 {
   if (!info) return CALL_BAD_REQUEST;

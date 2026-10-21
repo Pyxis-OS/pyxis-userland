@@ -24,12 +24,22 @@ static bool alphanumeric(char byte)
       (byte >= 'A' && byte <= 'Z');
 }
 
+/* A data package is read as ID://, so an ID may not be a fixed root name. */
+static const char *const fixed_root_names[] = {
+  "boot", "tmp", "bin", "system", "home", "acpi", "packages",
+};
+
 bool package_id_valid(const char *id)
 {
   size_t length = strnlen(id, PACKAGE_ID_MAX + 1);
   if (!length || length > PACKAGE_ID_MAX || !alphanumeric(id[0]) ||
       (id[0] >= 'A' && id[0] <= 'Z')) {
     return false;
+  }
+  for (size_t i = 0; i < sizeof(fixed_root_names) / sizeof(*fixed_root_names); ++i) {
+    if (!strcmp(id, fixed_root_names[i])) {
+      return false;
+    }
   }
   for (size_t i = 0; i < length; ++i) {
     bool lower = (id[i] >= 'a' && id[i] <= 'z') || (id[i] >= '0' && id[i] <= '9');

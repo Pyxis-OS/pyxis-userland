@@ -105,16 +105,19 @@ static int compare_records(const void *left, const void *right)
 }
 
 bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection,
-    struct package_command_record **records, size_t *count, const char **reason)
+    struct pkg_projection *projection, const char **reason)
 {
-  *records = NULL;
-  *count = 0;
-  struct package_command_record *output = calloc(PACKAGE_COMMANDS_LIMIT, sizeof(*output));
+  *projection = (struct pkg_projection){0};
+  /* Commands fill the front; root records are gathered after the command limit
+   * and moved down behind the commands once both are sorted. */
+  struct package_command_record *output =
+      calloc(PACKAGE_COMMANDS_LIMIT + PACKAGE_ROOTS_LIMIT, sizeof(*output));
   if (!output) {
     return fail(reason, "cannot allocate command projection");
   }
+  struct package_command_record *roots = output + PACKAGE_COMMANDS_LIMIT;
   bool ok = true;
-  size_t used = 0;
+  size_t used = 0, root_count = 0;
   for (size_t i = 0; ok && i < selection->count; ++i) {
     handle_t revision = HANDLE_INVALID, tree = HANDLE_INVALID;
     char *bytes = NULL;
@@ -134,6 +137,17 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     }
     if (ok && manifest.command_count) {
       ok = pkg_directory(revision, "tree", false, PKG_READ_RIGHTS, &tree, reason);
+    }
+    if (ok && !strcmp(manifest.kind, "data")) {
+      if (root_count == PACKAGE_ROOTS_LIMIT) {
+        ok = fail(reason, "selected data packages exceed projection limit");
+      } else {
+        struct package_command_record *root = &roots[root_count++];
+        root->kind = DIRECTORY_KIND_DIRECTORY;
+        strcpy(root->name, identity->id);
+        strcpy(root->id, identity->id);
+        strcpy(root->version, identity->version);
+      }
     }
     for (size_t c = 0; ok && c < manifest.command_count; ++c) {
       const struct pkg_command *command = &manifest.commands[c];
@@ -166,7 +180,8 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     free(output);
     return false;
   }
-  *records = output;
-  *count = used;
+  qsort(roots, root_count, sizeof(*roots), compare_records);
+  memmove(output + used, roots, root_count * sizeof(*roots));
+  *projection = (struct pkg_projection){output, used, root_count};
   return true;
 }

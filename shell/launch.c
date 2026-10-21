@@ -3178,6 +3178,9 @@ static enum call_status prepare_output_pipeline(struct shell *shell,
         memcpy(name, redirect->path, length);
         name[length] = 0;
         enum call_status status = environment_lookup_file(shell->environment, name, &target);
+        if (status == CALL_NOT_FOUND) {
+          status = path_package_root(name, &target);
+        }
         if (status != CALL_OK) {
           return status;
         }

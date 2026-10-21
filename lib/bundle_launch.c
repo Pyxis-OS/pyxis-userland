@@ -195,8 +195,10 @@ static enum call_status prepare_context(struct context_grants *context,
     if (!name || !*name) {
       return CALL_BAD_REQUEST;
     }
+    /* A bundle reads packages only through its manifest's package grants, so
+     * the space's package_roots view is withheld like the packages source. */
     if (!strcmp(name, "app") || !strcmp(name, "job_work") ||
-        !strcmp(name, "job_provisioner") ||
+        !strcmp(name, "job_provisioner") || !strcmp(name, PACKAGE_ROOTS_NAME) ||
         !strncmp(name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       continue;
     }

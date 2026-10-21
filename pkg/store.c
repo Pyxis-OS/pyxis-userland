@@ -205,14 +205,15 @@ static bool next_number(handle_t sets, uint64_t *number, const char **reason)
   }
 }
 
-static void *command_bytes(uint64_t number, const struct package_command_record *commands,
-    size_t command_count, size_t *size, const char **reason)
+static void *command_bytes(uint64_t number, const struct pkg_projection *projection,
+    size_t *size, const char **reason)
 {
-  if (command_count > PACKAGE_COMMANDS_LIMIT) {
+  if (projection->commands > PACKAGE_COMMANDS_LIMIT || projection->roots > PACKAGE_ROOTS_LIMIT) {
     *reason = "command projection exceeds its record limit";
     return NULL;
   }
-  *size = sizeof(struct package_command_index_header) + command_count * sizeof(*commands);
+  size_t count = projection->commands + projection->roots;
+  *size = sizeof(struct package_command_index_header) + count * sizeof(*projection->records);
   struct package_command_index_header *header = calloc(1, *size);
   if (!header) {
     *reason = "cannot allocate immutable command index";
@@ -220,10 +221,11 @@ static void *command_bytes(uint64_t number, const struct package_command_record 
   }
   memcpy(header->magic, PACKAGE_COMMAND_INDEX_MAGIC, sizeof(header->magic));
   header->set = number;
-  header->count = command_count;
-  header->record_size = sizeof(*commands);
-  if (command_count) {
-    memcpy(header + 1, commands, command_count * sizeof(*commands));
+  header->count = projection->commands;
+  header->roots = projection->roots;
+  header->record_size = sizeof(*projection->records);
+  if (count) {
+    memcpy(header + 1, projection->records, count * sizeof(*projection->records));
   }
   return header;
 }
@@ -236,7 +238,7 @@ static bool compare_commands(handle_t sets, uint64_t number, const void *expecte
   char *actual = NULL;
   size_t actual_size = 0;
   bool ok = pkg_text(sets, name, sizeof(struct package_command_index_header) +
-      PACKAGE_COMMANDS_LIMIT * sizeof(struct package_command_record),
+      (PACKAGE_COMMANDS_LIMIT + PACKAGE_ROOTS_LIMIT) * sizeof(struct package_command_record),
       &actual, &actual_size, reason);
   if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
     *reason = "command index differs from verified selected exports";
@@ -247,10 +249,10 @@ static bool compare_commands(handle_t sets, uint64_t number, const void *expecte
 }
 
 static bool write_commands(handle_t sets, uint64_t number,
-    const struct package_command_record *commands, size_t command_count, const char **reason)
+    const struct pkg_projection *projection, const char **reason)
 {
   size_t size;
-  void *bytes = command_bytes(number, commands, command_count, &size, reason);
+  void *bytes = command_bytes(number, projection, &size, reason);
   if (!bytes) {
     return false;
   }
@@ -263,17 +265,17 @@ static bool write_commands(handle_t sets, uint64_t number,
 }
 
 bool pkg_commands_verify(handle_t packages, uint64_t number,
-    const struct package_command_record *commands, size_t command_count, const char **reason)
+    const struct pkg_projection *projection, const char **reason)
 {
   if (!number) {
-    return command_count == 0;
+    return !projection->commands && !projection->roots;
   }
   handle_t sets;
   if (!pkg_directory(packages, "sets", false, PKG_READ_RIGHTS, &sets, reason)) {
     return false;
   }
   size_t size;
-  void *bytes = command_bytes(number, commands, command_count, &size, reason);
+  void *bytes = command_bytes(number, projection, &size, reason);
   bool ok = bytes && compare_commands(sets, number, bytes, size, reason);
   free(bytes);
   handle_close(sets);
@@ -281,10 +283,10 @@ bool pkg_commands_verify(handle_t packages, uint64_t number,
 }
 
 bool pkg_reindex(handle_t packages, uint64_t number,
-    const struct package_command_record *commands, size_t command_count, const char **reason)
+    const struct pkg_projection *projection, const char **reason)
 {
   if (!number) {
-    return command_count == 0;
+    return !projection->commands && !projection->roots;
   }
   handle_t sets;
   if (!pkg_directory(packages, "sets", false, PKG_WRITE_RIGHTS, &sets, reason)) {
@@ -300,7 +302,7 @@ bool pkg_reindex(handle_t packages, uint64_t number,
   if (!ok) {
     *reason = "reindex requires a missing active command index; existing damage is not repaired";
   }
-  ok = ok && write_commands(sets, number, commands, command_count, reason);
+  ok = ok && write_commands(sets, number, projection, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
     *reason = "cannot synchronize bootstrapped command index";
     ok = false;
@@ -310,8 +312,8 @@ bool pkg_reindex(handle_t packages, uint64_t number,
 }
 
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, const struct package_command_record *commands,
-    size_t command_count, bool *uncertain, const char **reason)
+    uint64_t previous, const struct pkg_projection *projection, bool *uncertain,
+    const char **reason)
 {
   *uncertain = false;
   handle_t sets = HANDLE_INVALID;
@@ -352,7 +354,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
       "return { previous = %llu }\n", (unsigned long long)previous);
   snprintf(name, sizeof(name), "%llu.previous", (unsigned long long)number);
   ok = ok && pkg_write_text(sets, name, predecessor, length, reason);
-  ok = ok && write_commands(sets, number, commands, command_count, reason);
+  ok = ok && write_commands(sets, number, projection, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
     *reason = "cannot synchronize immutable set names";
     ok = false;

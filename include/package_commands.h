@@ -7,6 +7,9 @@
 /* All inputs are borrowed native DIRECTORY grants with zero transport.
  * Success returns a new owned read-only DIRECTORY; failure clears output. */
 enum call_status package_commands_open(handle_t volume, handle_t *live);
+/* A live read-only directory of the active set's data package trees: looking
+ * up a package ID returns its tree, read at that moment. */
+enum call_status package_roots_open(handle_t volume, handle_t *live);
 /* Live views report set/count zero. Fixed views report captured provenance. */
 enum call_status package_commands_info(handle_t view, struct package_command_info *info);
 /* previous is zero for a fresh capture, or a held fixed view from the same
