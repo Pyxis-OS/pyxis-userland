@@ -101,11 +101,13 @@ static const struct grant_right grant_rights[] = {
   {"directory", "remove", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_REMOVE},
   {"directory", "filesystem-info", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_FILESYSTEM_INFO},
   {"provider", "open-read", PROTOCOL_PROVIDER, PROVIDER_RIGHT_OPEN_READ},
+  {"file", "read", PROTOCOL_FILE, FILE_RIGHT_READ},
   {"mount", "open-root", PROTOCOL_MOUNT, MOUNT_RIGHT_OPEN_ROOT},
   {"mount", "observe", PROTOCOL_MOUNT, MOUNT_RIGHT_OBSERVE},
   {"mount", "write", PROTOCOL_MOUNT, MOUNT_RIGHT_WRITE},
   {"mount", "retire", PROTOCOL_MOUNT, MOUNT_RIGHT_RETIRE},
   {"mount", "interval", PROTOCOL_MOUNT, MOUNT_RIGHT_INTERVAL},
+  {"mount", "upgrade-boot-esp", PROTOCOL_MOUNT, MOUNT_RIGHT_UPGRADE_BOOT_ESP},
   {"disks", "enumerate", PROTOCOL_DISKS, DISKS_RIGHT_ENUMERATE},
   {"disks", "mount-read-only", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_ONLY},
   {"disks", "mount-read-write", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_WRITE},
@@ -478,7 +480,7 @@ static enum call_status parse_grants(struct bundle_program *program,
         request->protocol == PROTOCOL_UDP_SERVICE || request->protocol == PROTOCOL_ECHO;
     bool external = !strcmp(request->resource, "directory") ||
         !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks") ||
-        !strcmp(request->resource, "provider");
+        !strcmp(request->resource, "provider") || !strcmp(request->resource, "file");
     bool directory = !strcmp(request->resource, "directory");
     bool selected = request->source || request->package;
     if ((request->interface && !network) || external != selected ||

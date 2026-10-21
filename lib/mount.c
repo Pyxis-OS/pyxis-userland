@@ -1,5 +1,6 @@
 #include <abi/directory.h>
 #include <mount.h>
+#include <string.h>
 #include <syscall.h>
 
 #define FAT32_DEVICE_BLOCK_SIZE_MIN UINT64_C(512)
@@ -132,6 +133,60 @@ enum call_status mount_open_fat32(handle_t issuer, uint64_t rights,
     struct message_header header;
     struct mount_fat32_root_request body;
   } message = {{PROTOCOL_MOUNT, MOUNT_OPEN_FAT32}, {rights}};
+  struct mount_fat32_reply reply = {HANDLE_INVALID, HANDLE_INVALID};
+  struct syscall_result result = syscall_call(issuer, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status != CALL_OK) {
+    return result.status;
+  }
+  if (reply.root == HANDLE_INVALID || reply.control == HANDLE_INVALID ||
+      reply.root == reply.control) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *mount = reply;
+  return CALL_OK;
+}
+
+enum call_status mount_boot_observe(handle_t issuer, struct mount_boot_reply *facts)
+{
+  if (!facts) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header message = {PROTOCOL_MOUNT, MOUNT_BOOT_OBSERVE};
+  struct mount_boot_reply reply = {0};
+  struct syscall_result result = syscall_call(issuer, &message, sizeof(message),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0) ||
+      (reply.flags & ~MOUNT_BOOT_POOL_DISK)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status == CALL_OK) {
+    *facts = reply;
+  }
+  return result.status;
+}
+
+enum call_status mount_boot_admit(handle_t issuer, const uint8_t disk_guid[16],
+    const uint8_t partition_guid[16], uint64_t rights, struct mount_fat32_reply *mount)
+{
+  if (!mount) {
+    return CALL_BAD_REQUEST;
+  }
+  *mount = (struct mount_fat32_reply){HANDLE_INVALID, HANDLE_INVALID};
+  if (!disk_guid || !partition_guid || !rights) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct mount_boot_admit_request body;
+  } message = {{PROTOCOL_MOUNT, MOUNT_BOOT_ADMIT}, {.rights = rights}};
+  memcpy(message.body.disk_guid, disk_guid, 16);
+  memcpy(message.body.partition_guid, partition_guid, 16);
   struct mount_fat32_reply reply = {HANDLE_INVALID, HANDLE_INVALID};
   struct syscall_result result = syscall_call(issuer, &message, sizeof(message),
       &reply, sizeof(reply));

@@ -44,6 +44,18 @@ enum call_status mount_check(handle_t control);
 enum call_status mount_open_fat32(handle_t issuer, uint64_t rights,
     struct mount_fat32_reply *mount);
 
+/* Boot-origin facts through OBSERVE on the boot ESP issuer: the GPT disk and
+ * ESP partition the boot loader named and, with MOUNT_BOOT_POOL_DISK, the native
+ * pool's disk. Malformed replies are outcome unknown. */
+enum call_status mount_boot_observe(handle_t issuer, struct mount_boot_reply *facts);
+
+/* The booted ESP's upgrade writer, through UPGRADE_BOOT_ESP. DISK_GUID and
+ * PARTITION_GUID are the reviewed facts from mount_boot_observe; RIGHTS are exact
+ * root bits. Success owns a read-write root/control pair confined to the owned
+ * ESP paths, with the same lifetime rules as mount_open_fat32. */
+enum call_status mount_boot_admit(handle_t issuer, const uint8_t disk_guid[16],
+    const uint8_t partition_guid[16], uint64_t rights, struct mount_fat32_reply *mount);
+
 /* Reopen only the bound FAT32 instance under its original rights ceiling, with
  * exact DIRECTORY_CONTENT_RIGHTS bits. Mutation rights need control WRITE.
  * Success owns a root; failure clears it. Retired controls cannot reopen. */

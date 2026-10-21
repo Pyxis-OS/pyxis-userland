@@ -16,6 +16,8 @@
 #define HANDOFF_PARENT_RIGHTS (READER_ROOT_RIGHTS | DIRECTORY_RIGHT_CREATE | \
     DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_FILESYSTEM_INFO)
 #define HANDOFF_PARENT_NAME ".config-handoff"
+#define EVIDENCE_NAME "boot-evidence"
+#define EVIDENCE_BYTES 512u
 
 static bool loaded_digest(handle_t file, struct config_file_digest *result)
 {
@@ -125,7 +127,7 @@ static bool read_esp(const struct boot_selection_authority *authority,
 }
 
 static bool make_handoff(handle_t ram, const struct config_selection *selection,
-    struct config_handoff *handoff)
+    struct config_handoff *handoff, const char *evidence_text, handle_t *evidence)
 {
   handle_t parent = HANDLE_INVALID;
   enum call_status status = directory_create(ram, HANDOFF_PARENT_NAME,
@@ -134,6 +136,11 @@ static bool make_handoff(handle_t ram, const struct config_selection *selection,
     return false;
   }
   bool ok = config_handoff_create(parent, selection, handoff, &status);
+  /* Only an upgrade needs the evidence; boot continues without it. */
+  if (ok && evidence_text && !config_handoff_file(parent, EVIDENCE_NAME, evidence_text,
+      strlen(evidence_text), evidence, &status)) {
+    printf("boot-init: boot evidence unavailable (status %u)\n", status);
+  }
   enum call_status removed = directory_remove(ram, HANDOFF_PARENT_NAME, DIRECTORY_KIND_DIRECTORY);
   bool closed = handle_close(parent) == 0;
   if (!ok || removed != CALL_OK || !closed) {
@@ -144,7 +151,8 @@ static bool make_handoff(handle_t ram, const struct config_selection *selection,
 }
 
 bool boot_selection_prepare(const struct boot_selection_authority *authority,
-    bool rescue, struct config_selection *selection, struct config_handoff *handoff)
+    bool rescue, struct config_selection *selection, struct config_handoff *handoff,
+    handle_t *evidence)
 {
   static const char *const archive_paths[CONFIG_LUA_COUNT] = {
     "config/installed.lua", "config/session.lua", "config/network.lua"
@@ -160,7 +168,7 @@ bool boot_selection_prepare(const struct boot_selection_authority *authority,
   }
   bool provenance_valid = false;
   bool hashing_attempted = false;
-  struct config_file_digest loaded_kernel = {0}, loaded_archive = {0};
+  struct config_file_digest loaded_kernel = {0}, loaded_archive = {0}, loaded_record = {0};
   if (ok && !rescue) {
     read_snapshot(authority->boot, "config/catalog.lua", CONFIG_FILE_MAX_BYTES, &archive_catalog);
     ok = read_esp(authority, &completion, files, &provenance_valid);
@@ -169,8 +177,22 @@ bool boot_selection_prepare(const struct boot_selection_authority *authority,
       provenance_valid = hash_init(authority->clock, authority->random) &&
           loaded_digest(authority->loaded_kernel, &loaded_kernel) &&
           loaded_digest(authority->loaded_archive, &loaded_archive);
+      loaded_record = (struct config_file_digest){.present = true, .size = completion.size};
+      struct install_digest digest = {0};
+      provenance_valid = provenance_valid && install_digest_begin(&digest) &&
+          install_digest_update(&digest, completion.bytes, completion.size) &&
+          install_digest_finish(&digest, loaded_record.sha256);
+      install_digest_abort(&digest);
     }
   }
+  /* What this boot actually loaded and read, for a later upgrade's identity check.
+   * It attests nothing about the selection made from it. */
+  char evidence_text[EVIDENCE_BYTES];
+  bool evidence_valid = provenance_valid && snprintf(evidence_text, sizeof(evidence_text),
+      "PYXIS-BOOT-EVIDENCE 1\nkernel %llu %s\narchive %llu %s\nrecord %llu %s\n",
+      (unsigned long long)loaded_kernel.size, loaded_kernel.sha256,
+      (unsigned long long)loaded_archive.size, loaded_archive.sha256,
+      (unsigned long long)loaded_record.size, loaded_record.sha256) < (int)sizeof(evidence_text);
   struct system_info_identity identity = {0};
   if (system_info_get_identity(authority->system_info, &identity) != CALL_OK) {
     provenance_valid = false;
@@ -201,7 +223,8 @@ bool boot_selection_prepare(const struct boot_selection_authority *authority,
   config_handoff_bytes_free(&completion);
   if (ok) {
     printf("boot-init: %s\n", reason);
-    ok = make_handoff(authority->ram, selection, handoff);
+    ok = make_handoff(authority->ram, selection, handoff,
+        evidence_valid ? evidence_text : NULL, evidence);
   }
   if (!ok) {
     config_selection_free(selection);

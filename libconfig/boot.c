@@ -461,7 +461,7 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
     "network", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
-    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount", "package_management", "wifi"};
+    "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount", "package_management", "package_upgrade", "wifi"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
   }
@@ -553,6 +553,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: package_management must be a boolean", space->name);
   }
   space->package_management = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "package_upgrade");
+  if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
+    luaL_error(state, "space %s: package_upgrade must be a boolean", space->name);
+  }
+  space->package_upgrade = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "multiplexer");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
@@ -1085,7 +1091,8 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
           space->name);
     }
     size_t package_sources = (packages != NULL) +
-        (boot_plan_volume(plan, BOOT_SYSTEM_VOLUME) != NULL) + (space->package_management ? 2 : 0);
+        (boot_plan_volume(plan, BOOT_SYSTEM_VOLUME) != NULL) + (space->package_management ? 2 : 0) +
+        (space->package_upgrade ? 2 : 0);
     if (space->grant_count + space->fat32_mount + package_sources > BUNDLE_SOURCE_LIMIT) {
       return plan_fail(plan, failure, "space %s: too many selected sources including packages",
           space->name);

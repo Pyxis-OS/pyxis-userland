@@ -1,4 +1,5 @@
 #include <abi/directory.h>
+#include <abi/file.h>
 #include <abi/clock.h>
 #include <abi/launcher.h>
 #include <abi/pipe.h>
@@ -85,6 +86,9 @@ static enum call_status configured_source(const struct environment_value *bindin
     uint64_t allowed = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
         DISKS_RIGHT_MOUNT_READ_WRITE;
     return (info->rights & ~allowed) ? CALL_DENIED : CALL_OK;
+  }
+  if (info->protocol == PROTOCOL_FILE) {
+    return (info->rights & ~FILE_RIGHT_READ) || info->transport ? CALL_DENIED : CALL_OK;
   }
   return CALL_WRONG_TYPE;
 }

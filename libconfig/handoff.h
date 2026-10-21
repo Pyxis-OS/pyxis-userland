@@ -25,6 +25,10 @@ struct config_handoff_bytes {
 bool config_handoff_create(handle_t private_parent, const struct config_selection *selection,
     struct config_handoff *handoff, enum call_status *status);
 bool config_handoff_close(struct config_handoff *handoff);
+/* One such file: NAME is created in the private parent and unlinked before any
+ * byte is written; success returns only its native READ grant in FILE. */
+bool config_handoff_file(handle_t private_parent, const char *name, const char *bytes,
+    size_t size, handle_t *file, enum call_status *status);
 
 /* Borrow a trusted handoff FILE with exactly native READ authority. Read and
  * recompare its bytes and held identity/size without resolving a path. Stable

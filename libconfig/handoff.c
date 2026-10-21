@@ -67,6 +67,52 @@ static bool source_valid(const struct config_selection *selection, size_t index)
   return ok;
 }
 
+bool config_handoff_file(handle_t private_parent, const char *name, const char *bytes,
+    size_t size, handle_t *file, enum call_status *status)
+{
+  handle_t writer = HANDLE_INVALID, reader = HANDLE_INVALID;
+  *status = directory_create(private_parent, name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ | FILE_RIGHT_WRITE, &writer);
+  bool ok = *status == CALL_OK;
+  if (ok) {
+    *status = directory_remove(private_parent, name, DIRECTORY_KIND_FILE);
+    ok = *status == CALL_OK &&
+        native_grant(writer, PROTOCOL_FILE, FILE_RIGHT_READ | FILE_RIGHT_WRITE, true, status);
+  }
+  for (size_t offset = 0; ok && offset < size;) {
+    size_t written = 0;
+    size_t wanted = size - offset;
+    if (wanted > FILE_WRITE_MAX_BYTES) {
+      wanted = FILE_WRITE_MAX_BYTES;
+    }
+    *status = file_write(writer, offset, bytes + offset, wanted, &written);
+    ok = *status == CALL_OK;
+    if (ok && (!written || written > wanted)) {
+      ok = failed(status, CALL_OUTCOME_UNKNOWN);
+    }
+    if (ok) {
+      offset += written;
+    }
+  }
+  if (ok) {
+    *status = file_sync(writer);
+    ok = *status == CALL_OK;
+  }
+  if (ok) {
+    *status = handle_copy_restricted(writer, FILE_RIGHT_READ, 0, &reader);
+    ok = *status == CALL_OK && native_grant(reader, PROTOCOL_FILE, FILE_RIGHT_READ, true, status);
+  }
+  if (writer != HANDLE_INVALID && handle_close(writer) != 0) {
+    ok = failed(status, CALL_OUTCOME_UNKNOWN);
+  }
+  if (ok) {
+    *file = reader;
+  } else if (reader != HANDLE_INVALID && handle_close(reader) != 0) {
+    failed(status, CALL_OUTCOME_UNKNOWN);
+  }
+  return ok;
+}
+
 bool config_handoff_create(handle_t private_parent, const struct config_selection *selection,
     struct config_handoff *handoff, enum call_status *status)
 {
@@ -94,46 +140,8 @@ bool config_handoff_create(handle_t private_parent, const struct config_selectio
   }
   bool ok = true;
   for (size_t i = 0; ok && i < CONFIG_LUA_COUNT; ++i) {
-    handle_t writer = HANDLE_INVALID, reader = HANDLE_INVALID;
-    *status = directory_create(private_parent, file_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ | FILE_RIGHT_WRITE, &writer);
-    ok = *status == CALL_OK;
-    if (ok) {
-      *status = directory_remove(private_parent, file_names[i], DIRECTORY_KIND_FILE);
-      ok = *status == CALL_OK &&
-          native_grant(writer, PROTOCOL_FILE, FILE_RIGHT_READ | FILE_RIGHT_WRITE, true, status);
-    }
-    for (size_t offset = 0; ok && offset < selection->sizes[i];) {
-      size_t written = 0;
-      size_t wanted = selection->sizes[i] - offset;
-      if (wanted > FILE_WRITE_MAX_BYTES) {
-        wanted = FILE_WRITE_MAX_BYTES;
-      }
-      *status = file_write(writer, offset, selection->bytes[i] + offset, wanted, &written);
-      ok = *status == CALL_OK;
-      if (ok && (!written || written > wanted)) {
-        ok = failed(status, CALL_OUTCOME_UNKNOWN);
-      }
-      if (ok) {
-        offset += written;
-      }
-    }
-    if (ok) {
-      *status = file_sync(writer);
-      ok = *status == CALL_OK;
-    }
-    if (ok) {
-      *status = handle_copy_restricted(writer, FILE_RIGHT_READ, 0, &reader);
-      ok = *status == CALL_OK && native_grant(reader, PROTOCOL_FILE, FILE_RIGHT_READ, true, status);
-    }
-    if (writer != HANDLE_INVALID && handle_close(writer) != 0) {
-      ok = failed(status, CALL_OUTCOME_UNKNOWN);
-    }
-    if (ok) {
-      handoff->files[i] = reader;
-    } else if (reader != HANDLE_INVALID && handle_close(reader) != 0) {
-      failed(status, CALL_OUTCOME_UNKNOWN);
-    }
+    ok = config_handoff_file(private_parent, file_names[i], selection->bytes[i],
+        selection->sizes[i], &handoff->files[i], status);
   }
   if (!ok && !config_handoff_close(handoff)) {
     failed(status, CALL_OUTCOME_UNKNOWN);

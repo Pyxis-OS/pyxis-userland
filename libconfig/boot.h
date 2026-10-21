@@ -89,6 +89,7 @@ struct boot_space {
   bool launch;
   bool jobs; /* Private contexts for clients that explicitly declare job_work. */
   bool package_management; /* Selected package writer and repository configuration. */
+  bool package_upgrade; /* Booted-ESP upgrade writer and boot evidence. */
   bool multiplexer; /* Local terminal startup may create pane sessions. */
   bool remote_multiplexer; /* Explicit remote pane-broker opt-in. */
   bool clipboard_local; /* Explicit space-local graphics/store delegation. */

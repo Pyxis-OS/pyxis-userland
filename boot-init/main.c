@@ -145,6 +145,7 @@ struct authority {
   handle_t input_policy; /* Boot-only, never forwarded through services. */
   handle_t loaded_kernel, loaded_archive; /* Private kernel-issued immutable FILEs. */
   struct config_handoff configuration;
+  handle_t boot_evidence; /* READ-only; granted only to package_upgrade spaces. */
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
   /* The read-only ACPI table root, bound as acpi only for spaces that set acpi_tables. */
@@ -806,6 +807,29 @@ static void add_package_source(struct space_launch *launch, size_t *count,
   launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
 }
 
+/* The writer for the install that booted: the issuer's own facts and admission
+ * bind it, and the evidence lets the holder check what this boot loaded. */
+static void upgrade_sources(const struct authority *authority, const struct boot_space *space,
+    struct space_launch *launch, size_t *count)
+{
+  const uint64_t rights = MOUNT_RIGHT_OBSERVE | MOUNT_RIGHT_UPGRADE_BOOT_ESP;
+  struct handle_info info;
+  enum call_status status = authority->esp_mount == HANDLE_INVALID ? CALL_UNAVAILABLE :
+      handle_query(authority->esp_mount, &info);
+  if (status == CALL_OK && !(rights & ~info.rights)) {
+    add_package_source(launch, count, PACKAGE_UPGRADE_SOURCE, authority->esp_mount, rights);
+  } else {
+    printf("boot-init: space %s boot ESP upgrade unavailable (status %u)\n",
+        space->name, status == CALL_OK ? CALL_DENIED : status);
+  }
+  if (authority->boot_evidence != HANDLE_INVALID) {
+    add_package_source(launch, count, PACKAGE_EVIDENCE_SOURCE, authority->boot_evidence,
+        FILE_RIGHT_READ);
+  } else {
+    printf("boot-init: space %s boot evidence unavailable\n", space->name);
+  }
+}
+
 static void package_sources(struct mounts *mounts, const struct boot_space *space,
     struct space_launch *launch, size_t *count)
 {
@@ -1102,6 +1126,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
   }
   package_sources(mounts, space, launch, &source_count);
+  if (space->package_upgrade) {
+    upgrade_sources(authority, space, launch, &source_count);
+  }
   if (space->fat32_mount) {
     uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
         (space->fat32_mount_write ? DISKS_RIGHT_MOUNT_READ_WRITE : 0);
@@ -1468,6 +1495,16 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   start_space(authority, mounts, &rescue, true, NULL);
 }
 
+static bool close_frozen(struct authority *authority)
+{
+  bool ok = config_handoff_close(&authority->configuration);
+  if (authority->boot_evidence != HANDLE_INVALID && handle_close(authority->boot_evidence)) {
+    ok = false;
+  }
+  authority->boot_evidence = HANDLE_INVALID;
+  return ok;
+}
+
 #if INSTALLER_PUBLICATION_SCRATCH
 static bool freeze_configuration(struct authority *authority, bool rescue,
     struct config_selection *selection)
@@ -1478,7 +1515,8 @@ static bool freeze_configuration(struct authority *authority, bool rescue,
     .clock = authority->services[SERVICE_CLOCK], .random = authority->services[SERVICE_RANDOM],
     .loaded_kernel = authority->loaded_kernel, .loaded_archive = authority->loaded_archive,
   };
-  return boot_selection_prepare(&sources, rescue, selection, &authority->configuration);
+  return boot_selection_prepare(&sources, rescue, selection, &authority->configuration,
+      &authority->boot_evidence);
 }
 
 static bool start_archive_rescue(const struct authority *authority, struct mounts *mounts)
@@ -1574,7 +1612,7 @@ int main(int argc, char **argv)
     if (archive_recovery && !default_config) {
       boot_plan_free(&plan);
       config_selection_free(&selection);
-      if (!config_handoff_close(&authority.configuration) ||
+      if (!close_frozen(&authority) ||
           !freeze_configuration(&authority, true, &selection) ||
           !boot_plan_build(&selection.defaults, NULL, &plan, &plan_error, NULL)) {
         exit_status = EXIT_FAILURE;
@@ -1726,7 +1764,7 @@ int main(int argc, char **argv)
 #if INSTALLER_PUBLICATION_SCRATCH
     if (frozen_configuration && !archive_recovery) {
       config_selection_free(&selection);
-      if (!config_handoff_close(&authority.configuration) ||
+      if (!close_frozen(&authority) ||
           !freeze_configuration(&authority, true, &selection)) {
         exit_status = EXIT_FAILURE;
         goto finish;
@@ -1771,7 +1809,7 @@ finish:
   boot_config_free(&override);
   boot_config_free(&defaults);
   config_selection_free(&selection);
-  config_handoff_close(&authority.configuration);
+  close_frozen(&authority);
   free(mounts.entries);
   return exit_status;
 }
