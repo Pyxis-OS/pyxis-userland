@@ -117,7 +117,10 @@ bool install_installed_admit(struct install_plan *plan)
   } else {
     fputs("installer: stale consumed configuration/ownership input; no program files written\n", stderr);
   }
-  if (system != HANDLE_INVALID) ok = handle_close(system) == CALL_OK && ok;
+  if (system != HANDLE_INVALID && handle_close(system) != CALL_OK && ok) {
+    fputs("installer: stale consumed configuration/ownership input; no program files written\n", stderr);
+    ok = false;
+  }
   return ok;
 }
 
