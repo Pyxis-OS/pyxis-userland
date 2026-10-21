@@ -11,8 +11,8 @@
 #define PACKAGE_INSPECT_SOURCE "package_inspect"
 #define PACKAGE_CONFIG_SOURCE "package_config"
 #define PACKAGE_CONFIG_WRITE_SOURCE "package_config_write"
-/* Selected only for a package_upgrade space: the boot ESP issuer with
- * OBSERVE|UPGRADE_BOOT_ESP, and boot-init's READ-only boot evidence. */
+/* Selected only for a package_upgrade space, and only together: the boot ESP
+ * issuer with OBSERVE|UPGRADE_BOOT_ESP, and boot-init's READ-only boot evidence. */
 #define PACKAGE_UPGRADE_SOURCE "boot_esp_upgrade"
 #define PACKAGE_EVIDENCE_SOURCE "boot_esp_evidence"
 

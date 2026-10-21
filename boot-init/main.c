@@ -808,26 +808,28 @@ static void add_package_source(struct space_launch *launch, size_t *count,
 }
 
 /* The writer for the install that booted: the issuer's own facts and admission
- * bind it, and the evidence lets the holder check what this boot loaded. */
+ * bind it, and the evidence lets the holder check what this boot loaded. A boot
+ * without that evidence, such as one whose committed record is missing or
+ * damaged, delegates neither. */
 static void upgrade_sources(const struct authority *authority, const struct boot_space *space,
     struct space_launch *launch, size_t *count)
 {
   const uint64_t rights = MOUNT_RIGHT_OBSERVE | MOUNT_RIGHT_UPGRADE_BOOT_ESP;
+  if (authority->boot_evidence == HANDLE_INVALID) {
+    printf("boot-init: space %s boot ESP upgrade unavailable: no boot evidence\n", space->name);
+    return;
+  }
   struct handle_info info;
   enum call_status status = authority->esp_mount == HANDLE_INVALID ? CALL_UNAVAILABLE :
       handle_query(authority->esp_mount, &info);
-  if (status == CALL_OK && !(rights & ~info.rights)) {
-    add_package_source(launch, count, PACKAGE_UPGRADE_SOURCE, authority->esp_mount, rights);
-  } else {
+  if (status != CALL_OK || (rights & ~info.rights)) {
     printf("boot-init: space %s boot ESP upgrade unavailable (status %u)\n",
         space->name, status == CALL_OK ? CALL_DENIED : status);
+    return;
   }
-  if (authority->boot_evidence != HANDLE_INVALID) {
-    add_package_source(launch, count, PACKAGE_EVIDENCE_SOURCE, authority->boot_evidence,
-        FILE_RIGHT_READ);
-  } else {
-    printf("boot-init: space %s boot evidence unavailable\n", space->name);
-  }
+  add_package_source(launch, count, PACKAGE_UPGRADE_SOURCE, authority->esp_mount, rights);
+  add_package_source(launch, count, PACKAGE_EVIDENCE_SOURCE, authority->boot_evidence,
+      FILE_RIGHT_READ);
 }
 
 static void package_sources(struct mounts *mounts, const struct boot_space *space,
