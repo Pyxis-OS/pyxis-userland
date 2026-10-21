@@ -21,17 +21,20 @@ static int hex_digit(char ch)
 
 static int decode(lua_State *state)
 {
-  struct wifi_open_target *target = lua_touserdata(state, 2);
+  struct wifi_target *target = lua_touserdata(state, 2);
   lua_settop(state, 1);
   static const char *const keys[] = {"ssid", "bssid", "channel", "security"};
   config_keys(state, 1, keys, 4);
   config_field(state, 1, "security");
   size_t bytes = 0;
   const char *value = lua_type(state, -1) == LUA_TSTRING ? lua_tolstring(state, -1, &bytes) : NULL;
-  if (!value || bytes != 4 || memcmp(value, "open", 4)) {
-    return luaL_error(state, "security must be explicitly open");
+  if (value && bytes == 4 && !memcmp(value, "open", 4)) {
+    target->security = WIFI_SECURITY_OPEN;
+  } else if (value && bytes == 8 && !memcmp(value, "wpa2-psk", 8)) {
+    target->security = WIFI_SECURITY_WPA2_PSK;
+  } else {
+    return luaL_error(state, "security must be explicitly open or wpa2-psk");
   }
-  target->security = WIFI_SECURITY_OPEN;
   lua_pop(state, 1);
   config_field(state, 1, "ssid");
   value = lua_type(state, -1) == LUA_TSTRING ? lua_tolstring(state, -1, &bytes) : NULL;
@@ -74,9 +77,9 @@ static void erase(void *memory, size_t bytes)
   while (bytes--) *cursor++ = 0;
 }
 
-enum call_status wifi_read_profile(const char *path, struct wifi_open_target *target)
+enum call_status wifi_read_profile(const char *path, struct wifi_target *target)
 {
-  *target = (struct wifi_open_target){0};
+  *target = (struct wifi_target){0};
   size_t path_bytes = strlen(path);
   if (!path_bytes || path_bytes > PROFILE_PATH_BYTES) {
     return CALL_BAD_REQUEST;

@@ -23,7 +23,7 @@ enum call_status wifi_install_policy(handle_t wifi, const char country[2],
 enum call_status wifi_credential_seal(handle_t wifi, uint32_t format,
     const void *bytes, size_t length, handle_t *file);
 
-enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_target *target,
+enum call_status wifi_connect_start(handle_t radio, const struct wifi_target *target, handle_t credential,
     uint64_t deadline_ns, handle_t *operation);
 enum call_status wifi_connect_status(handle_t operation, struct wifi_connect_status_reply *status);
 enum call_status wifi_connect_take(handle_t operation, handle_t *link);

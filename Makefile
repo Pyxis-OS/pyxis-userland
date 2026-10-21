@@ -15,11 +15,13 @@ ZLIB_PREFIX ?= build/ports-dev/zlib
 ZLIB_PREFIX := $(abspath $(ZLIB_PREFIX))
 LIBPNG_PREFIX ?= build/ports-dev/libpng
 LIBPNG_PREFIX := $(abspath $(LIBPNG_PREFIX))
+WPA_RSN_PREFIX ?= build/ports-dev/wpa-supplicant
+WPA_RSN_PREFIX := $(abspath $(WPA_RSN_PREFIX))
 HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest pointer-min screenshot screenshot-saver pcm
+INSTALL_PROGRAMS := wifi-supplicant mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest pointer-min screenshot screenshot-saver pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -28,6 +30,7 @@ $(error Missing SDK at $(SDK); supply SDK=/path/to/sdk exported by Pyxis)
 endif
 include $(SDK)/share/pyxis.mk
 -include $(MBEDTLS_PREFIX)/share/mbedtls.mk
+-include $(WPA_RSN_PREFIX)/share/wpa-rsn.mk
 endif
 CPPFLAGS := $(PYXIS_CPPFLAGS)
 CFLAGS := $(PYXIS_CFLAGS)
@@ -64,7 +67,7 @@ FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
 BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/network.o $(BUILD)/pkg/maintenance.o $(BUILD)/pkg/store.o
-SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o $(BUILD)/session/network.o $(BUILD)/common/system_log.o \
+SESSION_OBJECTS := $(BUILD)/session/wifi_supplicant.o $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o $(BUILD)/session/network.o $(BUILD)/common/system_log.o \
                    $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o $(BUILD)/boot-init/network.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o $(BUILD)/httpfs/provider.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
@@ -133,6 +136,8 @@ install: all
 	  install -m 644 init/remote.pxs "$$staging/init-remote"; \
 	  install -m 644 init/remote-services.pxs "$$staging/init-remote-services"; \
 	  install -m 644 init/installed.pxs "$$staging/init-installed"; \
+	  mkdir -p "$$staging/share/licenses/wpa-rsn"; \
+	  cp -a "$(WPA_RSN_PREFIX)/share/licenses/wpa-rsn/." "$$staging/share/licenses/wpa-rsn/"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 config/live.lua "$$staging/config/live.lua"; \
@@ -331,6 +336,14 @@ $(BUILD)/net.pxb/manifest.json: $(BUILD)/net.pxe net/manifest.json net/README.md
 	install -m 644 $(BUILD)/net.pxe "$(@D)/app/bin/"
 	install -m 644 net/README.md "$(@D)/app/"
 	install -m 644 net/manifest.json "$@"
+
+WIFI_SUPPLICANT_OBJECTS := $(addprefix $(BUILD)/wifi-supplicant/,main.o rsn.o os.o)
+$(WIFI_SUPPLICANT_OBJECTS): private CPPFLAGS += $(WPA_RSN_CPPFLAGS)
+$(WIFI_SUPPLICANT_OBJECTS): private CFLAGS += -Wno-unused-parameter
+$(WIFI_SUPPLICANT_OBJECTS): $(WPA_RSN_PREFIX)/share/wpa-rsn.mk
+wifi-supplicant: $(BUILD)/wifi-supplicant.pxe
+$(BUILD)/wifi-supplicant.pxe: $(WIFI_SUPPLICANT_OBJECTS) $(WPA_RSN_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(WIFI_SUPPLICANT_OBJECTS) $(WPA_RSN_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/wifi.pxe: $(BUILD)/wifi/main.o $(BUILD)/wifi/profile.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BUILD)/wifi/main.o $(BUILD)/wifi/profile.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)

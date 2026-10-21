@@ -7,6 +7,7 @@
 #include <startup.h>
 #include <clock.h>
 #include <console.h>
+#include <term.h>
 #include <file.h>
 #include <handle.h>
 #include <wait.h>
@@ -135,6 +136,37 @@ static int scan(void)
   return result;
 }
 
+/* Prompt through stderr only: stdout is the empty typed lease producer. */
+static enum call_status prompt_credential(handle_t radio, handle_t *credential)
+{
+  *credential = HANDLE_INVALID;
+  struct pyxis_stdio_binding input, error;
+  if (pyxis_stdio_stream(stdin, &input) || pyxis_stdio_stream(stderr, &error) ||
+      input.protocol != PROTOCOL_CONSOLE || error.protocol != PROTOCOL_CONSOLE) {
+    return CALL_DENIED;
+  }
+  struct terminal terminal = {input.handle, error.handle};
+  enum call_status status = term_print(&terminal, "Wi-Fi passphrase (not echoed): ");
+  char bytes[WIFI_CREDENTIAL_BYTES + 1] = {0};
+  if (status == CALL_OK) {
+    struct term_line_result line = term_read_line_quiet(&terminal, "", bytes, sizeof(bytes));
+    enum call_status newline = term_print(&terminal, "\n");
+    if (line.status != TERM_LINE_OK) {
+      status = line.status == TERM_LINE_ERROR || line.status == TERM_LINE_INPUT_LOST ?
+          line.error : CALL_ABANDONED;
+    } else if (line.limit_reached || line.length < 8 || line.length > 63) {
+      status = CALL_BAD_REQUEST;
+    } else if (newline != CALL_OK) {
+      status = newline;
+    } else {
+      status = wifi_credential_seal(radio, WIFI_CREDENTIAL_PASSPHRASE,
+          bytes, line.length, credential);
+    }
+  }
+  memset_explicit(bytes, 0, sizeof(bytes));
+  return status;
+}
+
 static int connect_profile(const char *path)
 {
   /* Require an empty native typed collector before reading a profile or TX.
@@ -150,18 +182,25 @@ static int connect_profile(const char *path)
   }
   handle_t radio = bootstrap_capability("wifi_connect");
   if (!radio) return failure("CONNECT authority", CALL_DENIED);
-  struct wifi_open_target target;
+  struct wifi_target target;
   status = wifi_read_profile(path, &target);
   if (status != CALL_OK) return failure("private profile", status);
+  handle_t credential = HANDLE_INVALID;
+  if (target.security == WIFI_SECURITY_WPA2_PSK) {
+    status = prompt_credential(radio, &credential);
+    if (status != CALL_OK) return failure("credential input", status);
+  }
   handle_t clock = bootstrap_capability("clock"), operation = HANDLE_INVALID;
   uint64_t now = 0;
   status = clock_now(clock, &now);
   if (status != CALL_OK || now > UINT64_MAX - WIFI_CONNECT_MAX_NS) {
+    if (credential) handle_close(credential);
     return failure("clock", status == CALL_OK ? CALL_LIMIT : status);
   }
   uint64_t deadline = now + WIFI_CONNECT_MAX_NS;
-  status = wifi_connect_start(radio, &target, deadline, &operation);
-  memset(&target, 0, sizeof(target));
+  status = wifi_connect_start(radio, &target, credential, deadline, &operation);
+  memset_explicit(&target, 0, sizeof(target));
+  if (credential) handle_close(credential);
   if (status != CALL_OK) return failure("connect start", status);
   handle_t interrupt = HANDLE_INVALID, input = bootstrap_capability("stdin");
   if (input) {

@@ -150,7 +150,7 @@ enum call_status wifi_credential_seal(handle_t wifi, uint32_t format,
   return status;
 }
 
-enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_target *target,
+enum call_status wifi_connect_start(handle_t radio, const struct wifi_target *target, handle_t credential,
     uint64_t deadline_ns, handle_t *operation)
 {
   if (!target) {
@@ -158,6 +158,7 @@ enum call_status wifi_connect_start(handle_t radio, const struct wifi_open_targe
   }
   struct wifi_connect_request request = {
     .header = {PROTOCOL_WIFI, WIFI_CONNECT_START}, .deadline_ns = deadline_ns, .target = *target,
+    .credential = credential,
   };
   return returned_handle(radio, &request, sizeof(request), operation);
 }
@@ -205,7 +206,7 @@ enum call_status wifi_link_status(handle_t link, struct wifi_link_status_reply *
   if (result == CALL_OK) {
     if (!reply.generation || reply.reserved || reply.status >= CALL_STATUS_COUNT ||
         (reply.flags & ~(WIFI_LINK_ATTEMPTING | WIFI_LINK_ASSOCIATED | WIFI_LINK_OPEN |
-            WIFI_LINK_DATA_READY | WIFI_LINK_TERMINAL | WIFI_LINK_CLOSE_REQUESTED))) {
+            WIFI_LINK_DATA_READY | WIFI_LINK_TERMINAL | WIFI_LINK_CLOSE_REQUESTED | WIFI_LINK_AUTHENTICATED))) {
       return CALL_BAD_REQUEST;
     }
     *status = reply;
