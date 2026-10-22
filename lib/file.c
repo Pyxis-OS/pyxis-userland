@@ -192,7 +192,6 @@ enum call_status file_read(handle_t file, uint64_t offset, void *bytes, size_t c
     }
     *read = count;
   }
-  memset_explicit(&reply, 0, sizeof(reply));
   return status;
 }
 

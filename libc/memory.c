@@ -12,11 +12,9 @@ void *memset(void *dest, int value, size_t count)
 
 void *memset_explicit(void *dest, int value, size_t count)
 {
-  volatile unsigned char *bytes = dest;
-  for (size_t i = 0; i < count; ++i) {
-    bytes[i] = (unsigned char)value;
-  }
-  return dest;
+  void *result = memset(dest, value, count);
+  asm volatile("" : : "r"(result) : "memory");
+  return result;
 }
 
 void *memcpy(void *restrict dest, const void *restrict src, size_t count)
