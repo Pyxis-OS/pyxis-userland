@@ -34,9 +34,16 @@ void malloc_init(void)
   /* Keep allocator authority even if main closes its original startup grant.
    * Missing authority does not prevent a program without a heap from running. */
   handle_t source;
-  if (environment_capability(startup_environment_handle(), "memory", &source) == CALL_OK) {
-    handle_copy_restricted(source, MEMORY_RIGHT_MANAGE, 0, &memory);
-    handle_close(source);
+  enum call_status status = environment_capability(startup_environment_handle(), "memory", &source);
+  if (status == CALL_UNKNOWN_SYSTEM_CALL) {
+    libc_start_failed(PROCESS_START_RESOURCES, status);
+  }
+  if (status == CALL_OK) {
+    status = handle_copy_restricted(source, MEMORY_RIGHT_MANAGE, 0, &memory);
+    if (status == CALL_UNKNOWN_SYSTEM_CALL || status == CALL_OUTCOME_UNKNOWN) {
+      libc_start_failed(PROCESS_START_RESOURCES, status);
+    }
+    libc_startup_close(source, PROCESS_START_RESOURCES);
   }
 }
 

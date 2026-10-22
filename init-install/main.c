@@ -422,6 +422,10 @@ static int run_install(int argc, char **argv, bool selector)
   if (completion.kind == PROCESS_EXITED) {
     printf("init-install: installer exited with status %lld\n", (long long)completion.exit_status);
     result = completion.exit_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  } else if (completion.kind == PROCESS_START_FAILED) {
+    fprintf(stderr, "init-install: installer did not start: %s: %s\n",
+        process_start_step_name(completion.exit_status),
+        process_start_status_name(completion.exit_status));
   } else {
     printf("init-install: installer stopped (completion kind %llu)\n",
         (unsigned long long)completion.kind);

@@ -19,6 +19,7 @@
 #include <udp.h>
 #include <echo.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 struct bundle_job_context {
@@ -756,7 +757,7 @@ struct job_work *bundle_launch_take_delegation(struct bundle_launch *prepared)
   return NULL;
 }
 
-enum call_status bundle_jobs_reap(struct bundle_jobs *jobs)
+enum call_status bundle_jobs_reap(struct bundle_jobs *jobs, bool report_start_failures)
 {
   if (!jobs) {
     return CALL_BAD_REQUEST;
@@ -788,6 +789,11 @@ enum call_status bundle_jobs_reap(struct bundle_jobs *jobs)
       link = &context->next;
       continue;
     }
+    if (report_start_failures && completion.kind == PROCESS_START_FAILED) {
+      fprintf(stderr, "bundle: job client did not start: %s: %s\n",
+          process_start_step_name(completion.exit_status),
+          process_start_status_name(completion.exit_status));
+    }
     *link = context->next;
     status = job_work_close(context->work, true);
     if (handle_close(context->observer) && status == CALL_OK) {
@@ -803,7 +809,7 @@ enum call_status bundle_jobs_reap(struct bundle_jobs *jobs)
 
 enum call_status bundle_jobs_close(struct bundle_jobs *jobs)
 {
-  enum call_status result = bundle_jobs_reap(jobs);
+  enum call_status result = bundle_jobs_reap(jobs, true);
   if (!jobs) {
     return result;
   }

@@ -360,7 +360,7 @@ int main(int argc, char **argv)
   }
 
   for (;;) {
-    status = bundle_jobs_reap(&shell.jobs);
+    status = bundle_jobs_reap(&shell.jobs, true);
     if (status != CALL_OK) {
       report_directory_error("shell", "job context cleanup", status);
       break;

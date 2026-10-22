@@ -69,17 +69,24 @@ static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rig
     uint64_t optional_rights)
 {
   handle_t source;
-  if (environment_capability(startup_environment_handle(), name, &source) != CALL_OK) {
+  enum call_status status = environment_capability(startup_environment_handle(), name, &source);
+  if (status == CALL_UNKNOWN_SYSTEM_CALL) {
+    libc_start_failed(PROCESS_START_RESOURCES, status);
+  }
+  if (status != CALL_OK) {
     return HANDLE_INVALID;
   }
   struct handle_info info;
   handle_t retained = HANDLE_INVALID;
-  if (source != HANDLE_INVALID && handle_query(source, &info) == CALL_OK &&
-      info.kind == HANDLE_KIND_NATIVE && info.protocol == protocol &&
+  status = handle_query(source, &info);
+  if (status == CALL_UNKNOWN_SYSTEM_CALL) {
+    libc_start_failed(PROCESS_START_RESOURCES, status);
+  }
+  if (status == CALL_OK && info.kind == HANDLE_KIND_NATIVE && info.protocol == protocol &&
       (info.rights & rights) == rights) {
-    enum call_status status = handle_copy_restricted(source,
+    status = handle_copy_restricted(source,
         rights | (info.rights & optional_rights), 0, &retained);
-    if (status == CALL_OUTCOME_UNKNOWN) {
+    if (status == CALL_UNKNOWN_SYSTEM_CALL || status == CALL_OUTCOME_UNKNOWN) {
       libc_start_failed(PROCESS_START_RESOURCES, status);
     }
   }

@@ -718,7 +718,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     return prepare_byte_worker(shell, prepared, stage, streams, false);
   }
   named_input = named_input && shell->terminal.input != HANDLE_INVALID;
-  enum call_status retired = bundle_jobs_reap(&shell->jobs);
+  enum call_status retired = bundle_jobs_reap(&shell->jobs, true);
   if (retired != CALL_OK) {
     shell_directory_error(shell, "shell: job context cleanup", "", retired);
     return CALL_OUTCOME_UNKNOWN;
@@ -2871,7 +2871,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     scope->retired = true;
   }
-  status = bundle_jobs_reap(&shell->jobs);
+  status = bundle_jobs_reap(&shell->jobs, false);
   if (status != CALL_OK) {
     if (report_scope) {
       report_scope->error = status;

@@ -75,8 +75,10 @@ void bundle_launch_admitted(struct bundle_launch *prepared, enum call_status sta
 /* Take an admitted delegation for an enclosing owned scope. The caller closes
  * it with job_work_close, removing it only after confirmed scope retirement. */
 struct job_work *bundle_launch_take_delegation(struct bundle_launch *prepared);
-/* Poll confirmed client retirement; clean only with a valid owned observer. */
-enum call_status bundle_jobs_reap(struct bundle_jobs *jobs);
+/* Poll confirmed client retirement; clean only with a valid owned observer.
+ * Report otherwise-unobserved startup failures when requested. A caller that
+ * already reports its foreground process results passes false to avoid repeats. */
+enum call_status bundle_jobs_reap(struct bundle_jobs *jobs, bool report_start_failures);
 enum call_status bundle_jobs_close(struct bundle_jobs *jobs);
 
 const struct launch_request *bundle_launch_request(const struct bundle_launch *prepared);

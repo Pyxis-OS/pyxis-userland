@@ -49,6 +49,8 @@
 #include <mount.h>
 #include <path.h>
 #include <package_commands.h>
+#include <process.h>
+#include <wait.h>
 #include <remote/beacon.h>
 #include <space.h>
 #include <startup.h>
@@ -75,6 +77,7 @@
 #define FAT32_SELECTION_POLL_NS UINT64_C(1000000)
 /* Start failure reasons print in full; a tab keeps SPACE_REASON_MAX bytes. */
 #define START_REASON_MAX 511
+#define ROOT_OBSERVER_POLL_NS UINT64_C(100000000)
 
 #define BOOT_ROOT_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
@@ -162,6 +165,90 @@ struct authority {
   uint64_t cpu_count;
   const char *remote_beacon;
 };
+
+struct root_observer {
+  struct root_observer *next;
+  handle_t process;
+  char name[SPACE_NAME_MAX + 1];
+};
+
+static struct root_observer *root_observers;
+
+/* Monitoring keeps this process alive. Release the original boot authority
+ * publications as well as the separately retained bootstrap copies. Libc owns
+ * its allocator, thread and stdio references independently of this table. */
+static void release_boot_environment(void)
+{
+  struct environment_capture capture = {0};
+  handle_t environment = startup_environment_handle();
+  enum call_status status = environment_capture_init(environment,
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
+  if (status == CALL_OK) {
+    for (size_t i = 0; i < capture.count; ++i) {
+      struct environment_unset_entry entry = {.identity = capture.values[i].identity};
+      environment_name(entry.name, capture.values[i].name);
+      enum call_status removed = environment_unset_batch(environment, &entry, 1);
+      if (status == CALL_OK && removed != CALL_OK) status = removed;
+    }
+  }
+  environment_capture_close(&capture);
+  if (status != CALL_OK) {
+    fprintf(stderr, "boot-init: startup authority release unconfirmed (status %u)\n", status);
+  }
+}
+
+/* Launch every root before waiting. A healthy root must not hide a later
+ * root's failure, and configuration does not limit the number to one wait batch. */
+static void observe_roots(handle_t clock)
+{
+  while (root_observers) {
+    struct wait_interest pending[WAIT_MAX_INTERESTS];
+    size_t count = 0, total = 0;
+    struct root_observer **link = &root_observers;
+    while (*link) {
+      struct root_observer *root = *link;
+      struct wait_interest interest = {.handle = root->process, .events = WAIT_COMPLETE};
+      uint64_t events = 0;
+      enum call_status status = wait_many(&interest, 1, 0, &events);
+      if (status == CALL_OK && !(events & WAIT_COMPLETE)) {
+        if (count < WAIT_MAX_INTERESTS) pending[count++] = interest;
+        ++total;
+        link = &root->next;
+        continue;
+      }
+      struct process_result completion;
+      if (status == CALL_OK) status = process_wait(root->process, &completion);
+      if (status != CALL_OK) {
+        fprintf(stderr, "boot-init: cannot observe space %s init (status %u)\n", root->name, status);
+      } else if (completion.kind == PROCESS_START_FAILED) {
+        fprintf(stderr, "boot-init: space %s init did not start: %s: %s\n", root->name,
+            process_start_step_name(completion.exit_status),
+            process_start_status_name(completion.exit_status));
+      }
+      *link = root->next;
+      handle_close(root->process);
+      free(root);
+    }
+    if (!count) continue;
+    uint64_t now, events[WAIT_MAX_INTERESTS];
+    enum call_status status = clock_now(clock, &now);
+    if (status == CALL_OK) {
+      uint64_t delay = total > count ? ROOT_OBSERVER_POLL_NS : WAIT_MAX_WAIT_NS;
+      status = delay > UINT64_MAX - now ? CALL_BAD_REQUEST :
+          wait_many(pending, count, now + delay, events);
+    }
+    if (status != CALL_OK && status != CALL_TIMED_OUT) {
+      fprintf(stderr, "boot-init: space startup observation unavailable (status %u)\n", status);
+      break;
+    }
+  }
+  while (root_observers) {
+    struct root_observer *root = root_observers;
+    root_observers = root->next;
+    handle_close(root->process);
+    free(root);
+  }
+}
 
 /* One configured volume, mounted at most once. */
 struct mounted_volume {
@@ -1414,7 +1501,8 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
   uint64_t *cpus = calloc(cpu_words(authority->cpu_count), sizeof(*cpus));
   struct space_launch launch = {0};
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
-  const char *reason = cpus ? space_cpus(authority, space, cpus, text, sizeof(text)) :
+  struct root_observer *observer = calloc(1, sizeof(*observer));
+  const char *reason = cpus && observer ? space_cpus(authority, space, cpus, text, sizeof(text)) :
       "boot init is out of memory";
   if (!reason) {
     reason = build_launch(authority, mounts, space, &launch, text, sizeof(text));
@@ -1491,6 +1579,12 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     if (status == CALL_OK) {
       printf("boot-init: space %s started: %s%s\n", space->name, space->init,
           space->network ? " (network owner)" : "");
+      observer->process = child;
+      memcpy(observer->name, space->name, strlen(space->name) + 1);
+      observer->next = root_observers;
+      root_observers = observer;
+      observer = NULL;
+      child = HANDLE_INVALID;
       started = true;
     } else {
       fprintf(stderr, "boot-init: space %s not started: cannot start %s (status %u)\n",
@@ -1498,6 +1592,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     }
   }
 cleanup:
+  free(observer);
   if (child != HANDLE_INVALID) {
     handle_close(child);
   }
@@ -1948,6 +2043,14 @@ finish:
   config_handoff_bytes_free(&session);
   config_handoff_bytes_free(&network);
   close_frozen(&authority);
+  boot_network_release(&authority.network);
+  if (authority.bin != HANDLE_INVALID && authority.bin != authority.boot) {
+    handle_close(authority.bin);
+  }
   free(mounts.entries);
+  handle_t clock = authority.services[SERVICE_CLOCK];
+  release_boot_environment();
+  bootstrap_release_except(&clock, 1);
+  observe_roots(clock);
   return exit_status;
 }
