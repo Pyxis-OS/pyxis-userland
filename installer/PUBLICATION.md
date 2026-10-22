@@ -79,8 +79,7 @@ outgoing one, recorded as `previous_boot`. Pending completion and recovery own t
 whatever attempt it names, because that whole menu equals the digest-recorded
 previous `limine.conf` (chronium, 2026-10-21). A committed menu without a
 previous entry, as written before it existed, is still current; the next Update
-adds it. Exact legacy adoption additionally requires a disk-bound recipe and
-verified inherited kernel/archive/revision evidence rechecked within the interval.
+adds it. A menu no committed record describes is never adopted.
 Normal Update preserves the boot manager, unowned content and healthy filesystem;
 ESP rebuilding is a separate explicitly reviewed Classic recovery grant.
 
