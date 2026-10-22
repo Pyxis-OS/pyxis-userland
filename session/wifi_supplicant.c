@@ -148,7 +148,7 @@ static void start_attempt(struct session_wifi_supplicant *worker, uint64_t now)
   worker->group_launcher = group.launcher;
   struct launch_grant grants[] = {
     {worker->auth, WIFI_AUTH_RIGHT_RUN, 0}, {worker->memory, MEMORY_RIGHT_MANAGE, 0},
-    {worker->clock, CLOCK_RIGHT_READ, 0}, {worker->random, RANDOM_RIGHT_READ, 0},
+    {worker->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0}, {worker->random, RANDOM_RIGHT_READ, 0},
   };
   struct launch_environment_entry entries[] = {
     PROFILE_PRIVATE_CAP("wifi_auth", 0), PROFILE_CAP("memory", 1),
@@ -355,7 +355,7 @@ void session_wifi_start(struct session_wifi_supplicant *worker)
     status = retain_resource(&capture, "memory", MEMORY_RIGHT_MANAGE, &worker->memory);
   }
   if (status == CALL_OK) {
-    status = retain_resource(&capture, "clock", CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, &worker->clock);
+    status = retain_resource(&capture, "clock", CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE | CLOCK_RIGHT_SLEEP, &worker->clock);
   }
   if (status == CALL_OK) {
     status = retain_resource(&capture, "random", RANDOM_RIGHT_READ, &worker->random);
