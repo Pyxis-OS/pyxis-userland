@@ -1,4 +1,5 @@
 #include <locale.h>
+#include <langinfo.h>
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
@@ -33,4 +34,10 @@ char *setlocale(int category, const char *locale)
     return NULL;
   }
   return c_locale_name;
+}
+
+char *nl_langinfo(nl_item item)
+{
+  static char codeset[] = "UTF-8", empty[] = "";
+  return item == CODESET ? codeset : empty;
 }
