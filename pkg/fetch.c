@@ -86,6 +86,27 @@ static enum call_status config_read(handle_t directory, const char *name,
   return CALL_OK;
 }
 
+/* One entry: a table holding exactly a name and a base URL. */
+static bool repository_parse(const struct literal_value *value, struct pkg_repository *repository)
+{
+  if (value->kind != LITERAL_TABLE || value->as.table.count != 2) {
+    return false;
+  }
+  const struct literal_value *name = literal_field(value, "name");
+  const struct literal_value *url = literal_field(value, "url");
+  if (!name || name->kind != LITERAL_STRING || name->as.string.size > PACKAGE_ID_MAX ||
+      strlen(name->as.string.bytes) != name->as.string.size ||
+      !package_id_valid(name->as.string.bytes) ||
+      !url || url->kind != LITERAL_STRING || url->as.string.size > PKG_BASE_URL_MAX ||
+      strlen(url->as.string.bytes) != url->as.string.size ||
+      !pkg_repository_url_valid(url->as.string.bytes)) {
+    return false;
+  }
+  memcpy(repository->name, name->as.string.bytes, name->as.string.size + 1);
+  memcpy(repository->url, url->as.string.bytes, url->as.string.size + 1);
+  return true;
+}
+
 static enum call_status repositories_parse(const char *bytes, size_t size,
     struct pkg_repositories *repositories, const char **reason)
 {
@@ -95,7 +116,7 @@ static enum call_status repositories_parse(const char *bytes, size_t size,
   struct literal_diagnostic diagnostic;
   bool parsed = literal_parse(bytes, size, &document, &diagnostic);
   if (!parsed) {
-    *reason = "packages.lua is not strict literal data";
+    *reason = "system://config/packages.lua is not strict literal data";
     return CALL_BAD_REQUEST;
   }
   const struct literal_value *root = document->root;
@@ -105,23 +126,22 @@ static enum call_status repositories_parse(const char *bytes, size_t size,
   size_t count = 0;
   for (const struct literal_entry *entry = valid ? list->as.table.entries : NULL;
        valid && entry; entry = entry->next) {
-    const struct literal_value *value = entry->value;
+    struct pkg_repository *repository = &repositories->entries[count];
     valid = entry->key->kind == LITERAL_INTEGER &&
-        entry->key->as.integer == (int64_t)count + 1 && value->kind == LITERAL_STRING &&
-        value->as.string.size <= PKG_BASE_URL_MAX &&
-        strlen(value->as.string.bytes) == value->as.string.size &&
-        pkg_repository_url_valid(value->as.string.bytes);
+        entry->key->as.integer == (int64_t)count + 1 &&
+        repository_parse(entry->value, repository);
     for (size_t i = 0; valid && i < count; ++i) {
-      valid = strcmp(repositories->urls[i], value->as.string.bytes) != 0;
+      valid = strcmp(repositories->entries[i].name, repository->name) &&
+          strcmp(repositories->entries[i].url, repository->url);
     }
-    if (valid) {
-      memcpy(repositories->urls[count++], value->as.string.bytes, value->as.string.size + 1);
-    }
+    count += valid;
   }
   literal_free(document);
   if (!valid) {
     *repositories = (struct pkg_repositories){0};
-    *reason = "packages.lua must contain only repositories: at most eight distinct HTTP/HTTPS base URLs ending in / without credentials, query or fragment";
+    *reason = "system://config/packages.lua must hold only repositories: at most eight "
+        "{ name = NAME, url = URL } entries with distinct package-ID names and distinct "
+        "HTTP/HTTPS base URLs ending in /, without credentials, query or fragment";
     return CALL_BAD_REQUEST;
   }
   repositories->count = count;
@@ -140,7 +160,7 @@ enum call_status pkg_repositories_load(handle_t package_config,
     return CALL_OK;
   }
   if (status != CALL_OK) {
-    *reason = "cannot read package_config/packages.lua";
+    *reason = "cannot read system://config/packages.lua";
     return status;
   }
   status = repositories_parse(bytes, size, repositories, reason);
@@ -155,20 +175,23 @@ enum call_status pkg_repositories_stage(handle_t config,
   if (repositories->count > PKG_REPOSITORIES_MAX) {
     return CALL_BAD_REQUEST;
   }
-  /* Quote as literal bytes; never interpret repository URLs as Lua. */
-  size_t capacity = 64 + repositories->count * (4 * PKG_BASE_URL_MAX + 8);
+  /* Quote as literal bytes; never interpret repository URLs as Lua. Names
+   * follow the package ID rules and need no quoting. */
+  size_t capacity = 64 + repositories->count * (4 * PKG_BASE_URL_MAX + PACKAGE_ID_MAX + 32);
   char *bytes = malloc(capacity);
   if (!bytes) {
     return CALL_NO_MEMORY;
   }
   size_t used = snprintf(bytes, capacity, "return { repositories = {\n");
   for (size_t i = 0; i < repositories->count; ++i) {
-    if (!pkg_repository_url_valid(repositories->urls[i])) {
+    const struct pkg_repository *repository = &repositories->entries[i];
+    if (!package_id_valid(repository->name) || !pkg_repository_url_valid(repository->url)) {
       free(bytes);
       return CALL_BAD_REQUEST;
     }
-    used += snprintf(bytes + used, capacity - used, "  \"");
-    for (const unsigned char *byte = (const unsigned char *)repositories->urls[i];
+    used += snprintf(bytes + used, capacity - used, "  { name = \"%s\", url = \"",
+        repository->name);
+    for (const unsigned char *byte = (const unsigned char *)repository->url;
         *byte; ++byte) {
       if (*byte == '"' || *byte == '\\') {
         bytes[used++] = '\\';
@@ -179,7 +202,7 @@ enum call_status pkg_repositories_stage(handle_t config,
         bytes[used++] = *byte;
       }
     }
-    used += snprintf(bytes + used, capacity - used, "\",\n");
+    used += snprintf(bytes + used, capacity - used, "\" },\n");
   }
   used += snprintf(bytes + used, capacity - used, "} }\n");
   enum call_status status = directory_remove(config, "packages.lua.new", DIRECTORY_KIND_FILE);
@@ -208,7 +231,10 @@ enum call_status pkg_repositories_stage(handle_t config,
   free(stored);
   if (status == CALL_OK && checked.count != repositories->count) status = CALL_IO;
   for (size_t i = 0; status == CALL_OK && i < checked.count; ++i) {
-    if (strcmp(checked.urls[i], repositories->urls[i])) status = CALL_IO;
+    if (strcmp(checked.entries[i].name, repositories->entries[i].name) ||
+        strcmp(checked.entries[i].url, repositories->entries[i].url)) {
+      status = CALL_IO;
+    }
   }
   if (status == CALL_OK) status = file_sync(file);
   if (file != HANDLE_INVALID) handle_close(file);

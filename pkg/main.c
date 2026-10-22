@@ -21,6 +21,20 @@ struct offered_package {
   size_t repository;
 };
 
+struct hidden_build {
+  struct pkg_identity identity;
+  size_t repository;
+};
+
+/* One install argument: [REPO/]ID[@VERSION]. */
+struct package_request {
+  struct pkg_identity identity;
+  bool explicit_version;
+  size_t repository; /* ANY_REPOSITORY unless REPO/ names one. */
+};
+
+#define ANY_REPOSITORY SIZE_MAX
+
 struct client {
   handle_t packages, clock, config, config_write, management, system_info;
   /* What the running system provides, read once on first use. */
@@ -28,7 +42,7 @@ struct client {
   bool provided_loaded, provided_readable;
   /* Builds for an ABI this system does not provide, or for any ABI when the
    * running one is unreadable: not offered, only reported. */
-  struct pkg_identity *hidden;
+  struct hidden_build *hidden;
   size_t hidden_count;
   char message[2048];
   struct terminal terminal;
@@ -37,6 +51,9 @@ struct client {
   struct pkg_repositories repositories;
   struct offered_package *offered;
   size_t offered_count;
+  /* The offers this operation fetches, for the review's origins. */
+  const struct offered_package **fetched;
+  size_t fetched_count;
   uint64_t timeout;
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
@@ -281,12 +298,12 @@ static bool load_repositories(void)
     return false;
   }
   if (!client.repositories.count) {
-    return fail("no repositories configured; use pkg repository add URL (HTTP/HTTPS base; final / optional)");
+    return fail("no repositories configured; use pkg repository add NAME URL (HTTP/HTTPS base; final / optional)");
   }
   for (size_t r = 0; r < client.repositories.count; ++r) {
     handle_t file;
-    printf("pkg: reading repository %zu/%zu\n", r + 1, client.repositories.count);
-    if (!fetch(client.repositories.urls[r], "index.lua", true, 0, NULL, &file)) {
+    printf("pkg: reading repository %s\n", client.repositories.entries[r].name);
+    if (!fetch(client.repositories.entries[r].url, "index.lua", true, 0, NULL, &file)) {
       return false;
     }
     char *bytes = NULL;
@@ -305,28 +322,19 @@ static bool load_repositories(void)
     for (size_t i = 0; i < count; ++i) {
       if (pkg_kind_bound(entries[i].kind) && (!client.provided_readable ||
           !package_abi_provided(provided, entries[i].abi))) {
-        struct pkg_identity *hidden = realloc(client.hidden,
+        struct hidden_build *hidden = realloc(client.hidden,
             (client.hidden_count + 1) * sizeof(*hidden));
         if (!hidden) {
           free(entries);
           return fail("cannot allocate repository catalog");
         }
         client.hidden = hidden;
-        client.hidden[client.hidden_count++] = entries[i].identity;
+        client.hidden[client.hidden_count++] = (struct hidden_build){entries[i].identity, r};
         continue;
       }
       entries[usable++] = entries[i];
     }
     count = usable;
-    for (size_t i = 0; i < count; ++i) {
-      for (size_t j = 0; j < client.offered_count; ++j) {
-        if (client.offered[j].repository != r &&
-            !strcmp(client.offered[j].entry.identity.id, entries[i].identity.id)) {
-          free(entries);
-          return fail("a package ID is offered by more than one repository");
-        }
-      }
-    }
     size_t total = client.offered_count + count;
     struct offered_package *offered = realloc(client.offered,
         (total ? total : 1) * sizeof(*offered));
@@ -343,44 +351,126 @@ static bool load_repositories(void)
   return true;
 }
 
-static const struct offered_package *offering(const char *id, const char *version)
+/* The build of ID, at VERSION when given, that repository R offers for this
+ * system: the last one its index lists. */
+static const struct offered_package *offering(const char *id, const char *version, size_t r)
 {
   const struct offered_package *found = NULL;
   for (size_t i = 0; i < client.offered_count; ++i) {
     const struct pkg_identity *identity = &client.offered[i].entry.identity;
-    if (!strcmp(identity->id, id) && (!version || !strcmp(identity->version, version))) {
+    if (client.offered[i].repository == r && !strcmp(identity->id, id) &&
+        (!version || !strcmp(identity->version, version))) {
       found = &client.offered[i];
     }
   }
   return found;
 }
 
-static size_t hidden_builds(const char *id, const char *version)
+static size_t hidden_builds(const char *id, const char *version, size_t repository)
 {
   size_t count = 0;
   for (size_t i = 0; i < client.hidden_count; ++i) {
-    count += !strcmp(client.hidden[i].id, id) && (!version || !strcmp(client.hidden[i].version, version));
+    const struct pkg_identity *identity = &client.hidden[i].identity;
+    count += (repository == ANY_REPOSITORY || client.hidden[i].repository == repository) &&
+        !strcmp(identity->id, id) && (!version || !strcmp(identity->version, version));
   }
   return count;
 }
 
-static bool request(const char *text, struct pkg_identity *identity, bool *explicit_version)
+static bool record_fetch(const struct offered_package *offered)
 {
+  const struct offered_package **fetched = realloc(client.fetched,
+      (client.fetched_count + 1) * sizeof(*fetched));
+  if (!fetched) {
+    return fail("cannot allocate package origins");
+  }
+  client.fetched = fetched;
+  client.fetched[client.fetched_count++] = offered;
+  return true;
+}
+
+/* Picks the build of ID (at VERSION when given) from REPOSITORY, or from any
+ * repository that offers one for this system. Several repositories give a
+ * numbered choice on a console; elsewhere pkg refuses and lists the REPO/ID
+ * spellings. *CHOSEN is NULL when nothing is offered. */
+static bool resolve(const char *id, const char *version, size_t repository,
+    const struct offered_package **chosen)
+{
+  *chosen = NULL;
+  const struct offered_package *candidates[PKG_REPOSITORIES_MAX];
+  size_t count = 0;
+  for (size_t r = 0; r < client.repositories.count; ++r) {
+    const struct offered_package *found = repository == ANY_REPOSITORY || repository == r ?
+        offering(id, version, r) : NULL;
+    if (found) {
+      candidates[count++] = found;
+    }
+  }
+  if (count <= 1) {
+    *chosen = count ? candidates[0] : NULL;
+    return true;
+  }
+  printf("pkg: %s is offered by %zu repositories\n", id, count);
+  for (size_t i = 0; i < count; ++i) {
+    const struct pkg_identity *identity = &candidates[i]->entry.identity;
+    printf("  %zu  %s/%s@%s\n", i + 1,
+        client.repositories.entries[candidates[i]->repository].name,
+        identity->id, identity->version);
+  }
+  if (client.terminal.input == HANDLE_INVALID || client.terminal.output == HANDLE_INVALID) {
+    snprintf(client.message, sizeof(client.message),
+        "%s is offered by %zu repositories; name one as REPO/%s", id, count, id);
+    return fail(client.message);
+  }
+  char prompt[48], line[16];
+  snprintf(prompt, sizeof(prompt), "Choose 1-%zu, or press Enter to cancel: ", count);
+  struct term_line_result result = term_read_line(&client.terminal, prompt, line, sizeof(line));
+  char *end = line;
+  unsigned long choice = result.status == TERM_LINE_OK && !result.limit_reached ?
+      strtoul(line, &end, 10) : 0;
+  if (end != line && !*end && choice >= 1 && choice <= count) {
+    *chosen = candidates[choice - 1];
+  }
+  return *chosen ? true : fail("no repository chosen; nothing was fetched or changed");
+}
+
+static bool request(const char *text, struct package_request *request)
+{
+  *request = (struct package_request){.repository = ANY_REPOSITORY};
+  const char *slash = strchr(text, '/');
+  if (slash) {
+    size_t length = (size_t)(slash - text);
+    char name[PACKAGE_ID_MAX + 1];
+    if (!length || length > PACKAGE_ID_MAX) {
+      return fail("invalid repository name");
+    }
+    memcpy(name, text, length);
+    name[length] = 0;
+    for (size_t r = 0; r < client.repositories.count; ++r) {
+      if (!strcmp(client.repositories.entries[r].name, name)) {
+        request->repository = r;
+      }
+    }
+    if (request->repository == ANY_REPOSITORY) {
+      snprintf(client.message, sizeof(client.message),
+          "no repository named %s; pkg repository list shows them", name);
+      return fail(client.message);
+    }
+    text = slash + 1;
+  }
   const char *at = strchr(text, '@');
   size_t length = at ? (size_t)(at - text) : strlen(text);
   if (!length || length > PACKAGE_ID_MAX) {
     return fail("invalid package ID");
   }
-  memcpy(identity->id, text, length);
-  identity->id[length] = 0;
-  if (!package_id_valid(identity->id) || (at && !pkg_version_valid(at + 1))) {
+  memcpy(request->identity.id, text, length);
+  request->identity.id[length] = 0;
+  if (!package_id_valid(request->identity.id) || (at && !pkg_version_valid(at + 1))) {
     return fail("invalid package ID or version");
   }
-  *explicit_version = at != NULL;
+  request->explicit_version = at != NULL;
   if (at) {
-    strcpy(identity->version, at + 1);
-  } else {
-    identity->version[0] = 0;
+    strcpy(request->identity.version, at + 1);
   }
   return true;
 }
@@ -444,7 +534,8 @@ static bool install_version(const struct offered_package *offered, struct pkg_ma
   struct pkg_archive_progress observer = { pkg_progress_archive, &progress };
   pkg_progress_fetch_begin(&progress, offered->entry.size);
   handle_t snapshot;
-  if (!fetch(client.repositories.urls[offered->repository], offered->entry.archive,
+  if (!record_fetch(offered) ||
+      !fetch(client.repositories.entries[offered->repository].url, offered->entry.archive,
         false, offered->entry.size, &progress, &snapshot)) {
     return false;
   }
@@ -547,18 +638,21 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
   /* A bounded list identifies explicit requests, which are verified against the
    * repository even if an immutable copy already exists locally. */
   struct pkg_identity *requested = calloc(argc, sizeof(*requested));
-  if (!requested) {
+  const struct offered_package **chosen = calloc(argc, sizeof(*chosen));
+  if (!requested || !chosen) {
+    free(requested);
+    free(chosen);
     return fail("cannot allocate package requests");
   }
   bool ok = true;
   for (int i = 0; ok && i < argc; ++i) {
-    struct pkg_identity identity;
-    bool explicit_version;
-    ok = request(argv[i], &identity, &explicit_version);
-    const struct offered_package *entry = ok ?
-        offering(identity.id, explicit_version ? identity.version : NULL) : NULL;
+    struct package_request want;
+    ok = request(argv[i], &want);
+    const char *version = want.explicit_version ? want.identity.version : NULL;
+    const struct offered_package *entry = NULL;
+    ok = ok && resolve(want.identity.id, version, want.repository, &entry);
     if (ok && !entry) {
-      size_t hidden = hidden_builds(identity.id, explicit_version ? identity.version : NULL);
+      size_t hidden = hidden_builds(want.identity.id, version, want.repository);
       if (hidden && !client.provided_readable) {
         snprintf(client.message, sizeof(client.message),
             "%s has %zu build%s, but this system's ABI is unreadable (no system_info grant)",
@@ -570,11 +664,13 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
             hidden == 1 ? "" : "s");
         ok = fail(client.message);
       } else {
-        ok = fail("requested package version is not available");
+        snprintf(client.message, sizeof(client.message), "%s is not available", argv[i]);
+        ok = fail(client.message);
       }
     }
     if (ok) {
       requested[i] = entry->entry.identity;
+      chosen[i] = entry;
       for (int j = 0; j < i; ++j) {
         if (!strcmp(requested[i].id, requested[j].id)) {
           ok = fail("one package ID was requested more than once");
@@ -585,9 +681,11 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
   }
   ok = ok && stale_check(selection, requested, (size_t)argc, "install", argc, argv);
   for (size_t i = 0; ok && i < selection->count; ++i) {
-    bool explicit_request = false;
+    const struct offered_package *explicit_request = NULL;
     for (int j = 0; j < argc; ++j) {
-      explicit_request |= !strcmp(selection->entries[i].id, requested[j].id);
+      if (!strcmp(selection->entries[i].id, requested[j].id)) {
+        explicit_request = chosen[j];
+      }
     }
     struct pkg_manifest manifest = {0};
     handle_t existing;
@@ -595,11 +693,14 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
         &existing, &client.reason);
     if (present) handle_close(existing);
     client.reason = NULL;
-    if (explicit_request || i >= initial_count || !present) {
-      const struct offered_package *entry = offering(selection->entries[i].id,
-          selection->entries[i].version);
-      ok = entry ? install_version(entry, &manifest) :
-          fail("an exact dependency is unavailable in the configured repositories");
+    if (explicit_request) {
+      ok = install_version(explicit_request, &manifest);
+    } else if (i >= initial_count || !present) {
+      const struct offered_package *entry = NULL;
+      ok = resolve(selection->entries[i].id, selection->entries[i].version, ANY_REPOSITORY,
+          &entry);
+      ok = ok && (entry ? install_version(entry, &manifest) :
+          fail("an exact dependency is unavailable in the configured repositories"));
     } else {
       ok = trust_version(&selection->entries[i], &manifest);
     }
@@ -609,6 +710,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
     pkg_manifest_free(&manifest);
   }
   free(requested);
+  free(chosen);
   return ok;
 }
 
@@ -627,14 +729,28 @@ static bool prepare_remove(struct pkg_selection *selection, int argc, char **arg
       verify_selection(selection, selection);
 }
 
+/* The repository IDENTITY was fetched from in this operation, if any. */
+static const char *origin(const struct pkg_identity *identity)
+{
+  for (size_t i = 0; i < client.fetched_count; ++i) {
+    const struct pkg_identity *fetched = &client.fetched[i]->entry.identity;
+    if (!strcmp(fetched->id, identity->id) && !strcmp(fetched->version, identity->version)) {
+      return client.repositories.entries[client.fetched[i]->repository].name;
+    }
+  }
+  return NULL;
+}
+
 static bool review(const struct pkg_selection *before, const struct pkg_selection *after)
 {
   puts("Proposed package set (new launches only):");
   for (size_t i = 0; i < after->count; ++i) {
     size_t old = find_package(before, after->entries[i].id);
     if (old == SIZE_MAX || strcmp(before->entries[old].version, after->entries[i].version)) {
-      printf("  %s %s@%s\n", old == SIZE_MAX ? "add" : "select",
-          after->entries[i].id, after->entries[i].version);
+      const char *name = origin(&after->entries[i]);
+      printf("  %s %s@%s%s%s%s\n", old == SIZE_MAX ? "add" : "select",
+          after->entries[i].id, after->entries[i].version,
+          name ? " (" : "", name ? name : "", name ? ")" : "");
     }
   }
   for (size_t i = 0; i < before->count; ++i) {
@@ -855,32 +971,38 @@ static bool repository_available(const char *url)
   return ok;
 }
 
-static bool repository_command(const char *command, const char *url)
+static bool repository_command(const char *command, const char *name, const char *url)
 {
   if (!strcmp(command, "list")) {
     if (pkg_repositories_load(client.config, &client.repositories, &client.reason) != CALL_OK) {
       return false;
     }
     for (size_t i = 0; i < client.repositories.count; ++i) {
-      puts(client.repositories.urls[i]);
+      printf("%s %s\n", client.repositories.entries[i].name, client.repositories.entries[i].url);
     }
-    if (!client.repositories.count) puts("No repositories; use pkg repository add URL.");
+    if (!client.repositories.count) puts("No repositories; use pkg repository add NAME URL.");
     return true;
   }
+  if (!package_id_valid(name)) {
+    return fail("repository names follow the package ID rules");
+  }
+  /* Only add takes a URL; remove names the repository alone. */
   char normalized[PKG_BASE_URL_MAX + 1];
-  size_t length = strnlen(url, sizeof(normalized));
-  if (!length || length > PKG_BASE_URL_MAX ||
-      (url[length - 1] != '/' && length == PKG_BASE_URL_MAX)) {
-    return fail("repository URL must fit 2048 bytes including its final /");
-  }
-  memcpy(normalized, url, length);
-  if (normalized[length - 1] != '/') {
-    normalized[length++] = '/';
-  }
-  normalized[length] = 0;
-  url = normalized;
-  if (!pkg_repository_url_valid(url)) {
-    return fail("repository URL must be HTTP/HTTPS without credentials, query or fragment; final / is optional");
+  if (url) {
+    size_t length = strnlen(url, sizeof(normalized));
+    if (!length || length > PKG_BASE_URL_MAX ||
+        (url[length - 1] != '/' && length == PKG_BASE_URL_MAX)) {
+      return fail("repository URL must fit 2048 bytes including its final /");
+    }
+    memcpy(normalized, url, length);
+    if (normalized[length - 1] != '/') {
+      normalized[length++] = '/';
+    }
+    normalized[length] = 0;
+    url = normalized;
+    if (!pkg_repository_url_valid(url)) {
+      return fail("repository URL must be HTTP/HTTPS without credentials, query or fragment; final / is optional");
+    }
   }
   if (!package_volume(client.management, true)) return false;
   if (client.config_write == HANDLE_INVALID) {
@@ -894,28 +1016,44 @@ static bool repository_command(const char *command, const char *url)
   bool uncertain = false;
   bool ok = pkg_repositories_load(client.config_write, &client.repositories,
       &client.reason) == CALL_OK;
+  struct pkg_repositories *repositories = &client.repositories;
   size_t index = 0;
-  while (ok && index < client.repositories.count &&
-      strcmp(client.repositories.urls[index], url)) ++index;
+  while (ok && index < repositories->count && strcmp(repositories->entries[index].name, name)) {
+    ++index;
+  }
+  size_t same_url = 0;
+  while (ok && url && same_url < repositories->count &&
+      strcmp(repositories->entries[same_url].url, url)) {
+    ++same_url;
+  }
   bool changed = false;
   if (ok && !strcmp(command, "add")) {
-    if (index < client.repositories.count) {
-      ok = fail("repository already configured");
-    } else if (client.repositories.count == PKG_REPOSITORIES_MAX) {
+    if (index < repositories->count) {
+      snprintf(client.message, sizeof(client.message),
+          "repository %s is already configured", name);
+      ok = fail(client.message);
+    } else if (same_url < repositories->count) {
+      snprintf(client.message, sizeof(client.message),
+          "%s is already configured as %s", url, repositories->entries[same_url].name);
+      ok = fail(client.message);
+    } else if (repositories->count == PKG_REPOSITORIES_MAX) {
       ok = fail("at most eight repositories may be configured");
     } else if (repository_available(url)) {
-      strcpy(client.repositories.urls[client.repositories.count++], url);
+      struct pkg_repository *added = &repositories->entries[repositories->count++];
+      strcpy(added->name, name);
+      strcpy(added->url, url);
       changed = true;
     } else {
       ok = false;
     }
   } else if (ok) {
-    if (index == client.repositories.count) {
-      ok = fail("repository not found");
+    if (index == repositories->count) {
+      snprintf(client.message, sizeof(client.message), "no repository named %s", name);
+      ok = fail(client.message);
     } else {
-      memmove(client.repositories.urls + index, client.repositories.urls + index + 1,
-          (client.repositories.count - index - 1) * sizeof(client.repositories.urls[0]));
-      --client.repositories.count;
+      memmove(repositories->entries + index, repositories->entries + index + 1,
+          (repositories->count - index - 1) * sizeof(repositories->entries[0]));
+      --repositories->count;
       changed = true;
     }
   }
@@ -952,7 +1090,7 @@ static bool repository_command(const char *command, const char *url)
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add URL | repository remove URL\nRepository URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -982,7 +1120,8 @@ int main(int argc, char **argv)
   bool repository = !strcmp(command, "repository");
   if (repository && (count < 1 ||
       (!strcmp(arguments[0], "list") ? count != 1 :
-      (!strcmp(arguments[0], "add") || !strcmp(arguments[0], "remove")) ? count != 2 : true))) {
+      !strcmp(arguments[0], "add") ? count != 3 :
+      !strcmp(arguments[0], "remove") ? count != 2 : true))) {
     return usage();
   }
   bool mutation = !strcmp(command, "install") || !strcmp(command, "remove") ||
@@ -1003,14 +1142,17 @@ int main(int argc, char **argv)
   }
   bool ok = false;
   if (repository) {
-    ok = repository_command(arguments[0], count > 1 ? arguments[1] : NULL);
+    ok = repository_command(arguments[0], count > 1 ? arguments[1] : NULL,
+        count > 2 ? arguments[2] : NULL);
   } else if (mutation) {
     ok = mutate(command, count, arguments);
   } else if (!strcmp(command, "list") && count) {
     ok = load_repositories();
     for (size_t i = 0; ok && i < client.offered_count; ++i) {
       const struct pkg_entry *entry = &client.offered[i].entry;
-      printf("%s@%s %s%s%s %llu bytes\n", entry->identity.id, entry->identity.version,
+      printf("%s/%s@%s %s%s%s %llu bytes\n",
+          client.repositories.entries[client.offered[i].repository].name,
+          entry->identity.id, entry->identity.version,
           entry->kind, entry->abi[0] ? " abi " : "", entry->abi,
           (unsigned long long)entry->size);
     }
@@ -1043,12 +1185,14 @@ int main(int argc, char **argv)
     if (hash_ready) hash_close();
     free(client.offered);
     free(client.hidden);
+    free(client.fetched);
     return usage();
   }
   release_publish_guard();
   if (hash_ready) hash_close();
   free(client.offered);
   free(client.hidden);
+  free(client.fetched);
   if (!ok) {
     if (client.reason || client.cleanup_status == CALL_OK) {
       fprintf(stderr, "pkg: %s\n", client.reason ? client.reason : "operation failed");

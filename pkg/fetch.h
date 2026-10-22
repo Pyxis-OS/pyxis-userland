@@ -4,6 +4,7 @@
 #include <abi/describe.h>
 #include <abi/handle.h>
 #include <abi/syscall.h>
+#include <package.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -11,9 +12,17 @@
 #define PKG_REPOSITORIES_MAX 8
 #define PKG_BASE_URL_MAX 2048
 
+/* A configured repository. The name follows the package ID rules, so REPO/ID
+ * parses without ambiguity; it is chosen by the user, never derived from the
+ * URL, so a server's path layout does not become a contract. */
+struct pkg_repository {
+  char name[PACKAGE_ID_MAX + 1];
+  char url[PKG_BASE_URL_MAX + 1];
+};
+
 struct pkg_repositories {
   size_t count;
-  char urls[PKG_REPOSITORIES_MAX][PKG_BASE_URL_MAX + 1];
+  struct pkg_repository entries[PKG_REPOSITORIES_MAX];
 };
 
 struct pkg_fetch_authority {

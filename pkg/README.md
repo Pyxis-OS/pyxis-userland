@@ -1,20 +1,25 @@
 # pkg
 
 Manage immutable data, toolchain and command packages on the installed npfs packages volume.
-Repository URLs are literal data in system://config/packages.lua. Installation
+Named repositories are literal data in system://config/packages.lua. Installation
 uses the space's declared package management grant and GET-only HTTP providers.
 
 pkg status
 pkg list [--available]
-pkg [--timeout SECONDS] install ID[@VERSION]...
+pkg [--timeout SECONDS] install [REPO/]ID[@VERSION]...
 pkg remove ID...
 pkg rollback [SET]
 pkg verify
 pkg reindex
 pkg unlock
 pkg repository list
-pkg repository add URL
-pkg repository remove URL
+pkg repository add NAME URL
+pkg repository remove NAME
+
+Repository names follow the package ID rules. `REPO/ID` installs from one
+repository; a plain ID offered by several gives a numbered choice on a console
+and is refused elsewhere, listing the `REPO/ID` spellings. The review shows
+which repository each fetched package comes from.
 
 Program and toolchain packages record the ABI they were
 built for; `pkg` reads what the running system provides through its read-only
