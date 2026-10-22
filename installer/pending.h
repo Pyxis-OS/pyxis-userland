@@ -4,7 +4,7 @@
 #include "publication.h"
 
 /* Pure evidence for one explicitly reviewed completion of an existing committed
- * readiness record. No new payload attempt, record or retention generation. */
+ * boot record. No new payload attempt, record or retention generation. */
 enum install_pending_state {
   INSTALL_PENDING_NONE, INSTALL_PENDING_REFUSED,
   INSTALL_PENDING_ACTIVATION, INSTALL_PENDING_MENU_CURRENT
@@ -17,12 +17,10 @@ struct install_pending_plan {
   struct config_blob menu;
 };
 
-/* Initialize PLAN with {0}; destroy releases its owned rendered menu. A current
- * menu with edited configuration is MENU_CURRENT but not available for cleanup;
- * ordinary reconciliation remains possible when no obsolete artifacts remain. */
+/* Initialize PLAN with {0}; destroy releases its owned rendered menu. */
 
 bool install_pending_inspect(const struct config_blob *record,
-    const struct config_blob current[CONFIG_ALL_FILES],
+    const struct config_blob *current_menu,
     const struct config_blob *previous_limine, const uint8_t disk_guid[16],
     uint64_t pool_partition, const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
     struct install_pending_plan *plan);
@@ -38,7 +36,7 @@ struct install_pending_request {
   struct config_target_facts facts;
   uint64_t pool_partition; /* The entries' mount.pool=. */
   struct mount_state_reply expected_target;
-  const struct config_blob *record, *current, *previous_limine;
+  const struct config_blob *record, *current_menu, *previous_limine;
   struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS];
   bool fallback_ready;
 };

@@ -155,7 +155,7 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
       if (probe == INSTALL_INSTALLED_REFUSED) {
         fprintf(stderr, "init-install: disk %llu pool %llu ESP %llu Update refused: %s\n",
             (unsigned long long)disk->info.id, (unsigned long long)update.layout.pool_partition,
-            (unsigned long long)update.layout.esp_partition, reason ? reason : "readiness refused");
+            (unsigned long long)update.layout.esp_partition, reason ? reason : "boot record refused");
         continue;
       }
       pending = probe == INSTALL_INSTALLED_PENDING;
@@ -211,7 +211,7 @@ static bool inspect_disk(struct update_inventory *inventory, const struct instal
   }
   if (probe == INSTALL_INSTALLED_REFUSED) {
     fprintf(stderr, "init-install: disk %llu classic Update refused: %s\n",
-        (unsigned long long)disk->info.id, update.reason ? update.reason : "readiness refused");
+        (unsigned long long)disk->info.id, update.reason ? update.reason : "boot record refused");
     return true;
   }
 #endif

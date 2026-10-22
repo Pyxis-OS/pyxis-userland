@@ -76,15 +76,14 @@ TLS_LIBRARY := $(BUILD)/libtls.a
 TLS_OBJECT := $(BUILD)/libtls/tls.o
 TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
-CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o selection.o handoff.o)
-CONFIG_EDITOR_OBJECTS := $(addprefix $(BUILD)/config-editor/,main.o context.o catalog.o ownership.o render.o plan.o replay.o storage.o record.o) $(BUILD)/installer/esp_transfer.o $(BUILD)/installer/pending_archive.o $(BUILD)/installer/io.o $(BUILD)/config-editor/readiness.o
-INSTALLER_BOOT_OBJECTS := $(addprefix $(BUILD)/config-editor/,ownership.o catalog.o storage.o record.o render.o)
+CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o handoff.o)
+CONFIG_EDITOR_OBJECTS := $(BUILD)/config-editor/main.o
 INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/installer/,publication_frontend.o installed_publication.o installed_probe.o)
 # The shared boot publisher (installer/boot_publisher.h). The installer links
 # this archive; front ends add their own target admission and consent.
 PUBLISHER_LIBRARY := $(BUILD)/libpublisher.a
-PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o configuration.o publication.o publication_snapshot.o pending.o pending_archive.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o boot_archive.o archive_config.o digest.o progress.o io.o) \
-    $(addprefix $(BUILD)/config-editor/,catalog.o ownership.o render.o plan.o storage.o record.o readiness.o)
+PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o publication.o publication_snapshot.o pending.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o boot_archive.o digest.o progress.o io.o) \
+    $(addprefix $(BUILD)/config-editor/,ownership.o storage.o record.o)
 # Discovery borrows the installer validators. Separate sectioned objects let
 # the selector retain only read-only inspection from the mixed private modules.
 INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c \
@@ -92,12 +91,11 @@ INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c
     installer/progress.c installer/digest.c installer/installed_probe.c installer/boot_entry.c \
     installer/pending.c installer/plan_record.c \
     config-editor/record.c config-editor/storage.c config-editor/ownership.c \
-    config-editor/catalog.c xfer/hash.c
+    xfer/hash.c
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/init-install/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
 BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/config-editor/record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o progress.o)
-CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
@@ -143,9 +141,7 @@ install: all
 	  install -m 644 config/session.lua "$$staging/share/installer/system/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/share/installer/system/network.lua"; \
 	  install -m 644 init/installed.pxs "$$staging/share/installer/system/init-installed"; \
-	  install -m 644 config/installed.lua "$$staging/config/installed.lua"; \
 	  install -m 644 config/packages.lua "$$staging/config/packages.lua"; \
-	  install -m 644 "$(BUILD)/config-editor/catalog.lua" "$$staging/config/catalog.lua"; \
 	  install -m 644 hello/message.txt "$$staging/share/hello.txt"; \
 	  install -m 644 examples/pointer-min/main.c "$$staging/share/examples/pointer-min.c"; \
 	  install -m 644 examples/font-min/main.c "$$staging/share/examples/font-min.c"; \
@@ -360,20 +356,13 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 $(BUILD)/boot-init/handoff.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/config.pxe: $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/config.pxe: $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
-$(BUILD)/config-editor/catalog.lua: scripts/config-catalog.lua config-editor/catalog-source.lua config/installed.lua config/session.lua config/network.lua FORCE
-	@mkdir -p $(@D)
-	$(LUA) scripts/config-catalog.lua '$(CONFIG_REVISION)' > $@.tmp
-	@cmp -s $@.tmp $@ || mv $@.tmp $@
-	@rm -f $@.tmp
-
-$(BUILD)/config.pxb/manifest.json: $(BUILD)/config.pxe $(BUILD)/config-editor/catalog.lua config-editor/manifest.json config-editor/README.md config/installed.lua config/session.lua config/network.lua
+$(BUILD)/config.pxb/manifest.json: $(BUILD)/config.pxe config-editor/manifest.json config-editor/README.md
 	@rm -rf "$(@D)"
-	@mkdir -p "$(@D)/app/bin" "$(@D)/app/defaults"
+	@mkdir -p "$(@D)/app/bin"
 	install -m 644 $(BUILD)/config.pxe "$(@D)/app/bin/"
-	install -m 644 config/installed.lua config/session.lua config/network.lua $(BUILD)/config-editor/catalog.lua "$(@D)/app/defaults/"
 	install -m 644 config-editor/README.md "$(@D)/app/"
 	install -m 644 config-editor/manifest.json "$@"
 

@@ -3,7 +3,6 @@
 #include "../installer/progress.h"
 #include "../installer/publication.h"
 #include "../installer/pending.h"
-#include "../installer/pending_archive.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -138,11 +137,6 @@ static bool grant(handle_t handle, uint64_t protocol, uint64_t rights,
       (info.rights & rights) == rights) || failed(report, CALL_DENIED);
 }
 
-static handle_t parent_for(const struct config_storage_view *view, enum config_storage_file file)
-{
-  return file == CONFIG_LIMINE ? view->limine_parent : view->config_parent;
-}
-
 static bool read_name(handle_t parent, const char *name, size_t limit,
     struct config_blob *blob, struct config_storage_report *report)
 {
@@ -206,22 +200,6 @@ static bool read_name(handle_t parent, const char *name, size_t limit,
   return ok || failed(report, status);
 }
 
-bool config_storage_read(const struct config_storage_view *view, enum config_storage_file file,
-    struct config_blob *blob, struct config_storage_report *report)
-{
-  if (!view || !config_storage_file_name(file)) {
-    return failed(report, CALL_BAD_REQUEST);
-  }
-  if (report) {
-    report->file = file;
-  }
-  install_progress_begin("Reading configuration file", INSTALL_PROGRESS_WORK, NULL);
-  bool ok = read_name(parent_for(view, file), config_storage_file_name(file), CONFIG_FILE_MAX_BYTES,
-      blob, report);
-  install_progress_finish();
-  return ok;
-}
-
 bool config_storage_read_record(const struct config_storage_view *view,
     struct config_blob *blob, struct config_storage_report *report)
 {
@@ -229,51 +207,6 @@ bool config_storage_read_record(const struct config_storage_view *view,
   bool ok = view ? read_name(view->config_parent, CONFIG_RECORD_NAME, CONFIG_RECORD_MAX_BYTES,
       blob, report) : failed(report, CALL_BAD_REQUEST);
   install_progress_finish();
-  return ok;
-}
-
-bool config_storage_load(const struct config_storage_view *view,
-    struct config_blob selected[CONFIG_SET_FILES], struct config_record *record,
-    struct config_storage_report *report)
-{
-  if (!view || !selected || !record) {
-    return failed(report, CALL_BAD_REQUEST);
-  }
-  struct config_blob completion = {0};
-  struct config_record parsed = {0};
-  bool ok = config_storage_read_record(view, &completion, report) &&
-      completion.digest.present && config_record_parse(completion.bytes, completion.size,
-      &parsed) && parsed.committed;
-  if (!ok && report && report->status == CALL_OK) {
-    failed(report, CALL_BAD_REQUEST);
-  }
-  for (unsigned i = 0; ok && i < CONFIG_SET_FILES; ++i) {
-    ok = config_storage_read(view, i, &selected[i], report) &&
-        digest_equal(&selected[i].digest, &parsed.selected[i]);
-    if (!ok && report && report->status == CALL_OK) {
-      failed(report, CALL_BAD_REQUEST);
-    }
-  }
-  /* A concurrent publisher may replace the record during reads. Require the
-   * same record again; frozen returned bytes never reopen paths during effects. */
-  struct config_blob again = {0};
-  if (ok) {
-    ok = config_storage_read_record(view, &again, report) &&
-        config_blob_equal(&completion, &again);
-  }
-  config_blob_destroy(&again);
-  config_blob_destroy(&completion);
-  if (ok) {
-    *record = parsed;
-  } else {
-    if (report && report->status == CALL_OK) {
-      failed(report, CALL_BAD_REQUEST);
-    }
-    *record = (struct config_record){0};
-    for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) {
-      config_blob_destroy(&selected[i]);
-    }
-  }
   return ok;
 }
 
@@ -421,16 +354,43 @@ static bool rename_file(handle_t parent, const char *from, const char *to,
   return status == CALL_OK || failed(report, status);
 }
 
+/* Refuses while the preceding record's obsolete menu copy still exists: a
+ * partial cleanup is retained for manual disposition, never silently dropped. */
+static bool obsolete_resolved(const struct config_storage_view *view,
+    const struct config_record *previous, struct config_storage_report *report)
+{
+  if (!previous->obsolete_menu.digest.present) {
+    return true;
+  }
+  struct config_blob artifact = {0};
+  bool ok = read_name(view->limine_parent, previous->obsolete_menu.name,
+      CONFIG_FILE_MAX_BYTES, &artifact, report);
+  bool unresolved = artifact.digest.present;
+  config_blob_destroy(&artifact);
+  return (ok && !unresolved) ||
+      failed(report, report->status == CALL_OK ? CALL_BAD_REQUEST : report->status);
+}
+
+/* The current menu equals EXPECTED; with no menu directory it must be absent. */
+static bool expected_menu(const struct config_storage_view *view,
+    const struct config_blob *expected, struct config_storage_report *report)
+{
+  if (view->limine_parent == HANDLE_INVALID) {
+    return !expected->digest.present || failed(report, CALL_BAD_REQUEST);
+  }
+  return expected_name(view->limine_parent, CONFIG_MENU_NAME, expected, report);
+}
+
 bool config_storage_check(const struct config_storage_view *view,
-    const struct config_target_facts *facts,
-    const struct config_blob expected[CONFIG_ALL_FILES],
-    const struct config_blob *expected_record, bool limine_changed,
+    const struct config_target_facts *facts, const struct config_blob *expected_menu_bytes,
+    const struct config_blob *expected_record, bool menu_changed,
     struct config_storage_report *report)
 {
-  if (!view || !expected || !report || !blob_valid(expected_record)) {
+  if (!view || !report || !blob_valid(expected_menu_bytes) || !blob_valid(expected_record) ||
+      (view->limine_parent == HANDLE_INVALID && menu_changed)) {
     return failed(report, CALL_BAD_REQUEST);
   }
-  if (!current_view(view, facts, limine_changed, 0, report)) {
+  if (!current_view(view, facts, menu_changed, 0, report)) {
     return false;
   }
   struct config_record previous = {0};
@@ -439,64 +399,29 @@ bool config_storage_check(const struct config_storage_view *view,
       !previous.committed)) {
     return failed(report, CALL_BAD_REQUEST);
   }
-  if (!expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report)) {
-    return false;
-  }
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!blob_valid(&expected[i])) {
-      return failed(report, CALL_BAD_REQUEST);
-    }
-    if (i == CONFIG_LIMINE && view->limine_parent == HANDLE_INVALID) {
-      if (expected[i].digest.present || limine_changed) {
-        return failed(report, CALL_BAD_REQUEST);
-      }
-      continue;
-    }
-    if (!expected_name(parent_for(view, i), config_storage_file_name(i), &expected[i], report)) {
-      return false;
-    }
-    if (previous.obsolete[i].digest.present) {
-      struct config_blob artifact = {0};
-      bool ok = read_name(parent_for(view, i), previous.obsolete[i].name,
-          CONFIG_FILE_MAX_BYTES, &artifact, report);
-      bool unresolved = artifact.digest.present;
-      config_blob_destroy(&artifact);
-      if (!ok || unresolved) {
-        return failed(report, report->status == CALL_OK ? CALL_BAD_REQUEST : report->status);
-      }
-    }
-  }
-  return true;
+  return expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report) &&
+      expected_menu(view, expected_menu_bytes, report) &&
+      (view->limine_parent == HANDLE_INVALID || obsolete_resolved(view, &previous, report));
 }
 
 bool config_storage_publish_boot(const struct config_storage_view *view,
-    const struct config_target_facts *facts,
-    const struct config_blob expected[CONFIG_ALL_FILES],
-    const struct config_blob *expected_record,
-    const struct config_blob selected[CONFIG_ALL_FILES], const char *transaction,
-    const char *revision, const struct install_staged_boot *boot,
+    const struct config_target_facts *facts, const struct config_blob *expected,
+    const struct config_blob *expected_record, const struct config_blob *selected,
+    const char *transaction, const struct install_staged_boot *boot,
     struct config_storage_report *report)
 {
   if (!report) {
     return false;
   }
   *report = (struct config_storage_report){.phase = CONFIG_PHASE_CHECK};
-  install_progress_begin("Checking configuration publication inputs", INSTALL_PROGRESS_WORK, NULL);
-  if (!view || !expected || !selected || !blob_valid(expected_record) ||
-      !config_transaction_valid(transaction) || !revision || strnlen(revision, 65) > 64) {
+  install_progress_begin("Checking boot publication inputs", INSTALL_PROGRESS_WORK, NULL);
+  if (!view || !boot || !blob_valid(expected) || !blob_valid(selected) ||
+      !blob_valid(expected_record) || !config_transaction_valid(transaction)) {
     return failed(report, CALL_BAD_REQUEST);
   }
-  bool archive = boot && boot->binding.source == CONFIG_ACTIVE_ARCHIVE;
-  bool changed[CONFIG_ALL_FILES] = {0};
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!blob_valid(&expected[i]) || !blob_valid(&selected[i]) ||
-        (i < CONFIG_SET_FILES && selected[i].digest.present == archive)) {
-      return failed(report, CALL_BAD_REQUEST);
-    }
-    changed[i] = !(archive && i < CONFIG_SET_FILES) &&
-        !config_blob_equal(&expected[i], &selected[i]);
-  }
-  if (changed[CONFIG_LIMINE] && !selected[CONFIG_LIMINE].digest.present) {
+  bool changed = !config_blob_equal(expected, selected);
+  if ((changed && !selected->digest.present) ||
+      (changed && view->limine_parent == HANDLE_INVALID)) {
     return failed(report, CALL_BAD_REQUEST);
   }
   uint64_t now = 0;
@@ -504,19 +429,14 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
   if (clock_status != CALL_OK) {
     return failed(report, clock_status);
   }
-  if (!current_view(view, facts, changed[CONFIG_LIMINE], 0, report)) {
+  if (!current_view(view, facts, changed, 0, report)) {
     return false;
   }
   /* Refuse an already stale plan before creating staging artifacts. Repeat
    * the same byte checks under the lease before any canonical-name swap. */
-  if (!expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report)) {
+  if (!expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report) ||
+      !expected_menu(view, expected, report)) {
     return false;
-  }
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if ((i < CONFIG_SET_FILES || view->limine_parent != HANDLE_INVALID) &&
-        !expected_name(parent_for(view, i), config_storage_file_name(i), &expected[i], report)) {
-      return false;
-    }
   }
   struct config_record previous = {0};
   if (expected_record->digest.present &&
@@ -524,52 +444,24 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
       !previous.committed)) {
     return failed(report, CALL_BAD_REQUEST);
   }
-  if (expected_record->digest.present) {
-    /* Owner edits need not match the previous selected hashes. The reviewed
-     * current snapshot is rechecked before staging and under exclusive ownership;
-     * prior hashes certify history, never authorize replacing current bytes. */
-    /* Unresolved older recovery is retained for manual disposition. A new
-     * publication must not silently discard names from a partial cleanup. */
-    for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-      if (previous.obsolete[i].digest.present) {
-        struct config_blob artifact = {0};
-        bool ok = read_name(parent_for(view, i), previous.obsolete[i].name,
-            CONFIG_FILE_MAX_BYTES, &artifact, report);
-        bool unresolved = artifact.digest.present;
-        config_blob_destroy(&artifact);
-        if (!ok || unresolved) {
-          return failed(report, report->status == CALL_OK ? CALL_BAD_REQUEST : report->status);
-        }
-      }
-    }
+  if (expected_record->digest.present && view->limine_parent != HANDLE_INVALID &&
+      !obsolete_resolved(view, &previous, report)) {
+    return false;
   }
   struct config_record *record = &report->record;
-  record->boot = boot ? boot->binding : previous.boot;
-  record->previous_boot = boot ? previous.boot : previous.previous_boot;
-  if (!boot && record->boot.present && record->boot.source == CONFIG_ACTIVE_ARCHIVE) {
-    return failed(report, CALL_BAD_REQUEST);
-  }
-  if (record->boot.present && record->boot.source == CONFIG_ACTIVE_ESP &&
-      !digest_equal(&record->boot.archive_catalog, &selected[CONFIG_CATALOG].digest)) {
-    return failed(report, CALL_BAD_REQUEST);
-  }
+  record->boot = boot->binding;
+  record->previous_boot = previous.boot;
   strcpy(record->transaction, transaction);
-  strcpy(record->revision, revision);
-  for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) {
-    record->selected[i] = selected[i].digest;
-  }
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (((!archive && i < CONFIG_SET_FILES) || changed[i]) && expected[i].digest.present) {
-      record->previous[i].digest = expected[i].digest;
-      config_record_artifact_name(transaction, i, "previous", record->previous[i].name);
-    }
-    record->obsolete[i] = previous.previous[i];
-  }
-  /* An unchanged Limine file carries its last recovery forward. A later Lua
-   * publication must not delete the only recovery from an earlier Limine edit. */
-  if (!record->previous[CONFIG_LIMINE].digest.present) {
-    record->previous[CONFIG_LIMINE] = previous.previous[CONFIG_LIMINE];
-    record->obsolete[CONFIG_LIMINE] = (struct config_recovery_file){0};
+  /* A replaced menu keeps its previous bytes as recovery and retires the copy
+   * before it; an unchanged menu carries its last recovery forward. */
+  bool keep_previous = changed && expected->digest.present;
+  if (keep_previous) {
+    record->previous_menu.digest = expected->digest;
+    config_record_artifact_name(transaction, CONFIG_MENU_NAME, "previous",
+        record->previous_menu.name);
+    record->obsolete_menu = previous.previous_menu;
+  } else {
+    record->previous_menu = previous.previous_menu;
   }
   struct config_blob prepared = {0}, committed = {0};
   bool ok = record_blob(record, &prepared);
@@ -581,22 +473,20 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
     config_blob_destroy(&committed);
     return failed(report, CALL_BAD_REQUEST);
   }
-  char staged[CONFIG_ALL_FILES][CONFIG_ARTIFACT_NAME_BYTES] = {0};
+  char staged[CONFIG_ARTIFACT_NAME_BYTES] = {0};
   char prepared_name[CONFIG_ARTIFACT_NAME_BYTES], committed_name[CONFIG_ARTIFACT_NAME_BYTES];
-  config_record_artifact_name(transaction, CONFIG_CATALOG, "prepared", prepared_name);
-  config_record_artifact_name(transaction, CONFIG_CATALOG, "committed", committed_name);
+  config_record_artifact_name(transaction, CONFIG_RECORD_NAME, "prepared", prepared_name);
+  config_record_artifact_name(transaction, CONFIG_RECORD_NAME, "committed", committed_name);
+  if (changed) {
+    config_record_artifact_name(transaction, CONFIG_MENU_NAME, "new", staged);
+  }
   report->phase = CONFIG_PHASE_STAGE;
-  install_progress_begin("Staging reviewed configuration publication", INSTALL_PROGRESS_WORK, NULL);
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    report->file = i;
-    if (record->previous[i].digest.present && ((!archive && i < CONFIG_SET_FILES) || changed[i]) &&
-        expected[i].digest.present) {
-      ok = write_new(parent_for(view, i), record->previous[i].name, &expected[i], report);
-    }
-    if (ok && changed[i]) {
-      config_record_artifact_name(transaction, i, "new", staged[i]);
-      ok = write_new(parent_for(view, i), staged[i], &selected[i], report);
-    }
+  install_progress_begin("Staging the boot menu and record", INSTALL_PROGRESS_WORK, NULL);
+  if (keep_previous) {
+    ok = write_new(view->limine_parent, record->previous_menu.name, expected, report);
+  }
+  if (ok && changed) {
+    ok = write_new(view->limine_parent, staged, selected, report);
   }
   if (ok) {
     ok = write_new(view->config_parent, prepared_name, &prepared, report) &&
@@ -605,113 +495,68 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
   }
   if (ok) {
     report->phase = CONFIG_PHASE_VERIFY;
-    install_progress_begin("Verifying staged configuration (filesystem view)",
+    install_progress_begin("Verifying the staged boot menu and record (filesystem view)",
         INSTALL_PROGRESS_WORK, NULL);
   }
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    if (record->previous[i].digest.present && ((!archive && i < CONFIG_SET_FILES) || changed[i]) &&
-        expected[i].digest.present) {
-      ok = expected_name(parent_for(view, i), record->previous[i].name, &expected[i], report);
-    }
-    if (ok && changed[i]) {
-      ok = expected_name(parent_for(view, i), staged[i], &selected[i], report);
-    }
-  }
   if (ok) {
-    ok = expected_name(view->config_parent, prepared_name, &prepared, report) &&
+    ok = (!keep_previous || expected_name(view->limine_parent,
+            record->previous_menu.name, expected, report)) &&
+        (!changed || expected_name(view->limine_parent, staged, selected, report)) &&
+        expected_name(view->config_parent, prepared_name, &prepared, report) &&
         expected_name(view->config_parent, committed_name, &committed, report);
   }
   struct mount_interval_reply interval = {0};
   if (ok) {
     report->phase = CONFIG_PHASE_EXCLUSIVE;
-    install_progress_begin("Acquiring exclusive configuration interval", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin("Acquiring the exclusive boot publication interval",
+        INSTALL_PROGRESS_NONE, NULL);
     enum call_status status = mount_begin(view->control, &interval);
     ok = status == CALL_OK || failed(report, status);
     if (ok) {
-      install_progress_begin("Checking configuration volume under interval", INSTALL_PROGRESS_NONE, NULL);
+      install_progress_begin("Checking the boot volume under interval", INSTALL_PROGRESS_NONE, NULL);
       status = mount_check(view->control);
       ok = status == CALL_OK || failed(report, status);
     }
     if (ok) {
-      install_progress_begin("Rechecking consumed and staged configuration under interval",
+      install_progress_begin("Rechecking consumed and staged boot files under interval",
           INSTALL_PROGRESS_WORK, NULL);
     }
   }
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    if (i == CONFIG_LIMINE && view->limine_parent == HANDLE_INVALID) {
-      continue;
-    }
-    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
-        expected_name(parent_for(view, i), config_storage_file_name(i), &expected[i], report);
-  }
   if (ok) {
-    ok = expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report) &&
-        current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report);
+    ok = current_view(view, facts, changed, interval.id, report) &&
+        expected_menu(view, expected, report) &&
+        expected_name(view->config_parent, CONFIG_RECORD_NAME, expected_record, report) &&
+        current_view(view, facts, changed, interval.id, report);
   }
   /* Staging happened before admission. Verify its bytes again now that other
-   * processes cannot mutate them, including the retained recovery copies. */
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report);
-    if (ok && record->previous[i].digest.present &&
-        ((!archive && i < CONFIG_SET_FILES) || changed[i]) && expected[i].digest.present) {
-      ok = expected_name(parent_for(view, i), record->previous[i].name, &expected[i], report);
-    }
-    if (ok && changed[i]) {
-      ok = expected_name(parent_for(view, i), staged[i], &selected[i], report);
-    }
-  }
+   * processes cannot mutate them, including the retained recovery copy. */
   if (ok) {
-    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
+    ok = (!keep_previous || expected_name(view->limine_parent,
+            record->previous_menu.name, expected, report)) &&
+        (!changed || expected_name(view->limine_parent, staged, selected, report)) &&
+        current_view(view, facts, changed, interval.id, report) &&
         expected_name(view->config_parent, prepared_name, &prepared, report) &&
         expected_name(view->config_parent, committed_name, &committed, report);
   }
-  if (ok && boot) {
-    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
+  if (ok) {
+    ok = current_view(view, facts, changed, interval.id, report) &&
         install_publication_verify(boot, facts->domain, report) &&
-        current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report);
+        current_view(view, facts, changed, interval.id, report);
   }
   if (ok) {
     report->phase = CONFIG_PHASE_PREPARED;
-    install_progress_begin("Publishing prepared configuration record", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin("Publishing the prepared boot record", INSTALL_PROGRESS_NONE, NULL);
     ok = rename_file(view->config_parent, prepared_name, CONFIG_RECORD_NAME, report) &&
         sync_mount(view, report);
   }
   if (ok) {
-    report->phase = CONFIG_PHASE_SWAP;
-    install_progress_begin("Switching reviewed configuration names", INSTALL_PROGRESS_NONE, "files");
-  }
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    if (changed[i] && (!boot || i != CONFIG_LIMINE)) {
-      report->file = i;
-      ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
-          rename_file(parent_for(view, i), staged[i], config_storage_file_name(i), report);
-      if (ok) {
-        install_progress_advance(0, 1);
-      }
-    }
-  }
-  if (ok) {
-    ok = sync_mount(view, report);
-  }
-  if (ok) {
-    install_progress_begin("Verifying selected configuration (filesystem view)",
-        INSTALL_PROGRESS_WORK, NULL);
-  }
-  for (unsigned i = 0; !archive && ok && i < CONFIG_SET_FILES; ++i) {
-    ok = expected_name(view->config_parent, config_storage_file_name(i), &selected[i], report);
-  }
-  if (ok && changed[CONFIG_LIMINE] && !boot) {
-    ok = expected_name(view->limine_parent, config_storage_file_name(CONFIG_LIMINE),
-        &selected[CONFIG_LIMINE], report);
-  }
-  if (ok) {
     report->phase = CONFIG_PHASE_COMMITTED;
-    install_progress_begin("Publishing committed configuration record", INSTALL_PROGRESS_NONE, NULL);
-    ok = current_view(view, facts, changed[CONFIG_LIMINE], interval.id, report) &&
+    install_progress_begin("Publishing the committed boot record", INSTALL_PROGRESS_NONE, NULL);
+    ok = current_view(view, facts, changed, interval.id, report) &&
         rename_file(view->config_parent, committed_name, CONFIG_RECORD_NAME, report) &&
         sync_mount(view, report);
     if (ok) {
-      install_progress_begin("Verifying committed configuration record", INSTALL_PROGRESS_WORK, NULL);
+      install_progress_begin("Verifying the committed boot record", INSTALL_PROGRESS_WORK, NULL);
       ok = expected_name(view->config_parent, CONFIG_RECORD_NAME, &committed, report);
     }
     if (ok) {
@@ -719,23 +564,19 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
       record->committed = true;
     }
   }
-  if (ok && boot) {
+  if (ok) {
     report->phase = CONFIG_PHASE_ACTIVATE;
     report->boot_activation_pending = true;
-    if (changed[CONFIG_LIMINE]) {
-      report->file = CONFIG_LIMINE;
+    if (changed) {
       ok = current_view(view, facts, true, interval.id, report) &&
           install_publication_verify(boot, facts->domain, report) &&
           current_view(view, facts, true, interval.id, report) &&
-          expected_name(view->limine_parent, config_storage_file_name(CONFIG_LIMINE),
-              &expected[CONFIG_LIMINE], report) &&
-          expected_name(view->limine_parent, staged[CONFIG_LIMINE],
-              &selected[CONFIG_LIMINE], report) &&
+          expected_name(view->limine_parent, CONFIG_MENU_NAME, expected, report) &&
+          expected_name(view->limine_parent, staged, selected, report) &&
           current_view(view, facts, true, interval.id, report) &&
-          rename_file(view->limine_parent, staged[CONFIG_LIMINE],
-              config_storage_file_name(CONFIG_LIMINE), report) && sync_mount(view, report) &&
-          expected_name(view->limine_parent, config_storage_file_name(CONFIG_LIMINE),
-              &selected[CONFIG_LIMINE], report);
+          rename_file(view->limine_parent, staged, CONFIG_MENU_NAME, report) &&
+          sync_mount(view, report) &&
+          expected_name(view->limine_parent, CONFIG_MENU_NAME, selected, report);
       if (ok) {
         report->boot_activated = true;
         report->boot_activation_pending = false;
@@ -746,40 +587,29 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
       }
     }
   }
-  if (ok) {
+  if (ok && report->boot_activated && record->obsolete_menu.digest.present) {
     report->phase = CONFIG_PHASE_CLEANUP;
-    install_progress_begin("Verifying and removing recorded older recovery", INSTALL_PROGRESS_WORK,
-        "files");
-  }
-  for (unsigned i = 0; ok && (!boot || report->boot_activated) && i < CONFIG_ALL_FILES; ++i) {
-    const struct config_recovery_file *artifact = &record->obsolete[i];
-    if (!artifact->digest.present) {
-      continue;
-    }
+    install_progress_begin("Verifying and removing the recorded older menu copy",
+        INSTALL_PROGRESS_WORK, NULL);
+    const struct config_recovery_file *artifact = &record->obsolete_menu;
     struct config_blob bytes = {0};
-    ok = current_view(view, facts, i == CONFIG_LIMINE, interval.id, report) &&
-        read_name(parent_for(view, i), artifact->name, CONFIG_FILE_MAX_BYTES, &bytes, report) &&
-        digest_equal(&bytes.digest, &artifact->digest);
+    ok = current_view(view, facts, true, interval.id, report) &&
+        read_name(view->limine_parent, artifact->name, CONFIG_FILE_MAX_BYTES, &bytes, report) &&
+        (digest_equal(&bytes.digest, &artifact->digest) ||
+        failed(report, report->status == CALL_OK ? CALL_BAD_REQUEST : report->status));
     config_blob_destroy(&bytes);
-    if (!ok) {
-      if (report->status == CALL_OK) {
-        failed(report, CALL_BAD_REQUEST);
-      }
-      break;
-    }
-    strcpy(report->artifact, artifact->name);
-    enum call_status status = directory_remove(parent_for(view, i), artifact->name,
-        DIRECTORY_KIND_FILE);
-    ok = status == CALL_OK || failed(report, status);
     if (ok) {
-      install_progress_advance(0, 1);
+      strcpy(report->artifact, artifact->name);
+      enum call_status status = directory_remove(view->limine_parent, artifact->name,
+          DIRECTORY_KIND_FILE);
+      ok = status == CALL_OK || failed(report, status);
     }
   }
   if (ok) {
     ok = sync_mount(view, report);
   }
   if (interval.id) {
-    install_progress_begin("Releasing configuration publication interval", INSTALL_PROGRESS_NONE, NULL);
+    install_progress_begin("Releasing the boot publication interval", INSTALL_PROGRESS_NONE, NULL);
     enum call_status status = mount_end(view->control, interval.id);
     if (ok && status != CALL_OK) {
       ok = failed(report, status);
@@ -793,17 +623,6 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
   }
   install_progress_finish();
   return ok;
-}
-
-bool config_storage_publish(const struct config_storage_view *view,
-    const struct config_target_facts *facts,
-    const struct config_blob expected[CONFIG_ALL_FILES],
-    const struct config_blob *expected_record,
-    const struct config_blob selected[CONFIG_ALL_FILES], const char *transaction,
-    const char *revision, struct config_storage_report *report)
-{
-  return config_storage_publish_boot(view, facts, expected, expected_record, selected,
-      transaction, revision, NULL, report);
 }
 
 static bool pending_payload_open(const struct install_pending_request *request,
@@ -833,7 +652,7 @@ static bool pending_staged_menu(const struct config_storage_view *view,
     struct config_storage_report *report)
 {
   char name[CONFIG_ARTIFACT_NAME_BYTES];
-  if (!config_record_artifact_name(plan->record.transaction, CONFIG_LIMINE, "new", name)) {
+  if (!config_record_artifact_name(plan->record.transaction, CONFIG_MENU_NAME, "new", name)) {
     return failed(report, CALL_BAD_REQUEST);
   }
   return read_name(view->limine_parent, name, CONFIG_FILE_MAX_BYTES, bytes, report) &&
@@ -847,11 +666,9 @@ static bool pending_snapshot(const struct install_pending_request *request,
 {
   const struct config_storage_view *view = &request->view;
   bool ok = current_view(view, &request->facts, true, interval, report) &&
-      expected_name(view->config_parent, CONFIG_RECORD_NAME, request->record, report);
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    ok = expected_name(parent_for(view, i), config_storage_file_name(i), &request->current[i], report);
-  }
-  const struct config_recovery_file *previous_menu = &plan->record.previous[CONFIG_LIMINE];
+      expected_name(view->config_parent, CONFIG_RECORD_NAME, request->record, report) &&
+      expected_name(view->limine_parent, CONFIG_MENU_NAME, request->current_menu, report);
+  const struct config_recovery_file *previous_menu = &plan->record.previous_menu;
   if (ok && previous_menu->digest.present) {
     ok = digest_equal(&request->previous_limine->digest, &previous_menu->digest) ||
         failed(report, CALL_BAD_REQUEST);
@@ -860,11 +677,10 @@ static bool pending_snapshot(const struct install_pending_request *request,
           request->previous_limine, report);
     }
   }
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    const struct config_recovery_file *old = &plan->record.obsolete[i];
-    if (!old->digest.present) continue;
+  const struct config_recovery_file *old = &plan->record.obsolete_menu;
+  if (ok && old->digest.present) {
     struct config_blob bytes = {0};
-    ok = read_name(parent_for(view, i), old->name, CONFIG_FILE_MAX_BYTES, &bytes, report);
+    ok = read_name(view->limine_parent, old->name, CONFIG_FILE_MAX_BYTES, &bytes, report);
     if (ok && bytes.digest.present) {
       ok = digest_equal(&bytes.digest, &old->digest) || failed(report, CALL_BAD_REQUEST);
     }
@@ -898,9 +714,6 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   struct mount_interval_reply interval = {0};
   bool ok = pending_snapshot(request, plan, 0, report) &&
       pending_payload_open(request, &plan->record.boot, &boot.payloads, report);
-  if (ok && !install_pending_selection(request, plan, boot.payloads)) {
-    ok = failed(report, CALL_BAD_REQUEST);
-  }
   if (ok && plan->record.previous_boot.present) {
     ok = pending_payload_open(request, &plan->record.previous_boot, &inherited, report);
   }
@@ -908,7 +721,7 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
     ok = install_publication_legacy_hold(&boot, request->workspace, request->facts.domain, report);
   }
   char staged[CONFIG_ARTIFACT_NAME_BYTES];
-  config_record_artifact_name(plan->record.transaction, CONFIG_LIMINE, "new", staged);
+  config_record_artifact_name(plan->record.transaction, CONFIG_MENU_NAME, "new", staged);
   if (ok && plan->menu_changed) {
     struct config_blob existing = {0};
     ok = read_name(view->limine_parent, staged, CONFIG_FILE_MAX_BYTES, &existing, report);
@@ -937,9 +750,6 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   for (unsigned pass = 0; ok && pass < 2; ++pass) {
     ok = pending_snapshot(request, plan, interval.id, report) &&
         install_publication_verify(&boot, request->facts.domain, report);
-    if (ok && !install_pending_selection(request, plan, boot.payloads)) {
-      ok = failed(report, CALL_BAD_REQUEST);
-    }
     if (ok && inherited) {
       struct install_esp_payload_report readback;
       ok = install_esp_payload_verify(inherited, &readback);
@@ -959,12 +769,11 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
     if (plan->menu_changed) {
       ok = expected_name(view->limine_parent, staged, &plan->menu, report) &&
           current_view(view, &request->facts, true, interval.id, report) &&
-          rename_file(view->limine_parent, staged, config_storage_file_name(CONFIG_LIMINE), report) &&
+          rename_file(view->limine_parent, staged, CONFIG_MENU_NAME, report) &&
           sync_mount(view, report);
     }
     if (ok) {
-      ok = expected_name(view->limine_parent, config_storage_file_name(CONFIG_LIMINE),
-          &plan->menu, report) && current_view(view, &request->facts, true, interval.id, report);
+      ok = expected_name(view->limine_parent, CONFIG_MENU_NAME, &plan->menu, report) && current_view(view, &request->facts, true, interval.id, report);
     }
     if (ok) {
       report->boot_activated = true;
@@ -987,19 +796,17 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
     }
     config_blob_destroy(&bytes);
   }
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    const struct config_recovery_file *old = &plan->record.obsolete[i];
-    if (!old->digest.present) {
-      continue;
-    }
+  const struct config_recovery_file *old = &plan->record.obsolete_menu;
+  if (ok && old->digest.present) {
     struct config_blob bytes = {0};
     ok = current_view(view, &request->facts, true, interval.id, report) &&
-        read_name(parent_for(view, i), old->name, CONFIG_FILE_MAX_BYTES, &bytes, report);
+        read_name(view->limine_parent, old->name, CONFIG_FILE_MAX_BYTES, &bytes, report);
     if (ok && bytes.digest.present) {
       ok = digest_equal(&bytes.digest, &old->digest) || failed(report, CALL_BAD_REQUEST);
       if (ok) {
         strcpy(report->artifact, old->name);
-        enum call_status status = directory_remove(parent_for(view, i), old->name, DIRECTORY_KIND_FILE);
+        enum call_status status = directory_remove(view->limine_parent, old->name,
+            DIRECTORY_KIND_FILE);
         ok = status == CALL_OK || failed(report, status);
       }
     }

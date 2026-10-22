@@ -1,7 +1,6 @@
 #ifndef USERSPACE_INSTALLER_BOOT_PUBLISHER_H
 #define USERSPACE_INSTALLER_BOOT_PUBLISHER_H
 
-#include "configuration.h"
 #include "publication.h"
 #include "recovery.h"
 #include "digest.h"
@@ -10,7 +9,7 @@
 #include <stdio.h>
 
 /* The shared Classic boot publisher: stage a kernel/archive attempt on an
- * already admitted ESP, then readiness, menu and retention. Front ends own
+ * already admitted ESP, then the boot record, menu and retention. Front ends own
  * target selection, view admission/retirement and consent; nothing here opens
  * disks or mounts. All handles and sources are borrowed and must stay
  * unchanged from prepare through publish. */
@@ -26,9 +25,10 @@ struct boot_publisher_input {
   struct config_target_facts target; /* Reviewed ESP facts; domain is not compared. */
 };
 
-/* Frozen review state. All snapshots and choices are fixed once prepared. */
+/* Frozen review state. All snapshots and choices are fixed once prepared.
+ * MENU and RECORD are the consumed ESP bytes; NEXT_MENU is the reviewed menu. */
 struct boot_publication {
-  struct install_configuration configuration;
+  struct config_blob menu, next_menu, record;
   struct install_recovery recovery;
   struct config_target_facts facts;
   struct config_boot_binding binding;

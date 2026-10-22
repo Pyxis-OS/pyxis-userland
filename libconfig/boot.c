@@ -695,45 +695,26 @@ static void read_num_lock(lua_State *state, int input, struct boot_config *confi
   lua_pop(state, 1);
 }
 
-static void read_input(lua_State *state, struct boot_config *config, bool archive)
+static void read_input(lua_State *state, struct boot_config *config)
 {
   config_field(state, 1, "input");
   if (!lua_isnil(state, -1)) {
-    static const char *const archive_keys[] = {"mouse_scroll_direction", "touchpad_scroll_direction",
+    static const char *const keys[] = {"mouse_scroll_direction", "touchpad_scroll_direction",
         "diagnostics", "touchpad_speed", "num_lock"};
-    static const char *const override_keys[] = {"touchpad_speed", "num_lock"};
-    if (archive) {
-      config_keys(state, -1, archive_keys, sizeof(archive_keys) / sizeof(archive_keys[0]));
-    } else {
-      config_keys(state, -1, override_keys, sizeof(override_keys) / sizeof(override_keys[0]));
-    }
+    config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
     int input = lua_absindex(state, -1);
     read_touchpad_speed(state, input, config);
     read_num_lock(state, input, config);
-    if (archive) {
-      config->mouse_scroll_natural = read_scroll_direction(state, input, archive_keys[0]);
-      config->touchpad_scroll_natural = read_scroll_direction(state, input, archive_keys[1]);
-      config_field(state, input, "diagnostics");
-      if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
-        luaL_error(state, "input.diagnostics must be a boolean");
-      }
-      config->input_diagnostics = lua_toboolean(state, -1);
-      lua_pop(state, 1);
+    config->mouse_scroll_natural = read_scroll_direction(state, input, keys[0]);
+    config->touchpad_scroll_natural = read_scroll_direction(state, input, keys[1]);
+    config_field(state, input, "diagnostics");
+    if (!lua_isnil(state, -1) && lua_type(state, -1) != LUA_TBOOLEAN) {
+      luaL_error(state, "input.diagnostics must be a boolean");
     }
+    config->input_diagnostics = lua_toboolean(state, -1);
+    lua_pop(state, 1);
   }
   lua_pop(state, 1);
-}
-
-static int decode_override(lua_State *state)
-{
-  struct boot_config *config = lua_touserdata(state, 2);
-  lua_settop(state, 1);
-  static const char *const keys[] = {"input", "volumes", "spaces"};
-  config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
-  read_input(state, config, false);
-  read_volumes(state, config);
-  read_spaces(state, config);
-  return 0;
 }
 
 static int decode_archive(lua_State *state)
@@ -788,7 +769,7 @@ static int decode_archive(lua_State *state)
 
   }
   lua_pop(state, 1);
-  read_input(state, config, true);
+  read_input(state, config);
   read_volumes(state, config);
   read_spaces(state, config);
   return 0;
@@ -809,40 +790,12 @@ enum boot_config_result boot_config_read(const char *path, struct boot_config *c
   return result_of(config_read(path, decode_archive, config), config);
 }
 
-enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config)
-{
-  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
-  return result_of(config_read_bytes(name, bytes, size, decode_override, config), config);
-}
-
-enum boot_config_result boot_config_read_archive_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config)
-{
-  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
-  return result_of(config_read_bytes(name, bytes, size, decode_archive, config), config);
-}
-
-enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config)
-{
-  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
-  return result_of(config_read_literal_bytes(name, bytes, size, decode_override, config), config);
-}
-
 enum boot_config_result boot_config_read_pool_bytes(const char *name,
     const char *bytes, size_t size, struct boot_config *config, struct config_failure *failure)
 {
   *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
   return result_of(config_read_literal_bytes_reason(name, bytes, size, decode_archive, config,
       failure), config);
-}
-
-enum boot_config_result boot_config_read_archive_literal_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config)
-{
-  *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
-  return result_of(config_read_literal_bytes(name, bytes, size, decode_archive, config), config);
 }
 
 void boot_config_free(struct boot_config *config)
@@ -954,9 +907,7 @@ bool boot_space_has_root(const struct boot_space *space, const char *name)
 void boot_plan_free(struct boot_plan *plan)
 {
   free(plan->volumes);
-  free(plan->volume_sources);
   free(plan->spaces);
-  free(plan->space_sources);
   *plan = (struct boot_plan){0};
 }
 
@@ -979,54 +930,22 @@ static bool plan_fail(struct boot_plan *plan, struct config_failure *failure,
   return false;
 }
 
-bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan, struct config_failure *failure)
+bool boot_plan_build(const struct boot_config *config, struct boot_plan *plan,
+    struct config_failure *failure)
 {
   *plan = (struct boot_plan){0};
-  if (override && (override->volume_count > SIZE_MAX - defaults->volume_count ||
-      override->space_count > SIZE_MAX - defaults->space_count)) {
-    return plan_fail(plan, failure, "boot plan is too large%s", "");
-  }
-  size_t volume_capacity = defaults->volume_count + (override ? override->volume_count : 0);
-  size_t space_capacity = defaults->space_count + (override ? override->space_count : 0);
+  size_t volume_capacity = config->volume_count;
+  size_t space_capacity = config->space_count;
   plan->volumes = calloc(volume_capacity ? volume_capacity : 1, sizeof(*plan->volumes));
   plan->spaces = calloc(space_capacity ? space_capacity : 1, sizeof(*plan->spaces));
-  plan->volume_sources = calloc(volume_capacity ? volume_capacity : 1,
-      sizeof(*plan->volume_sources));
-  plan->space_sources = calloc(space_capacity ? space_capacity : 1,
-      sizeof(*plan->space_sources));
-  if (!plan->volumes || !plan->spaces || !plan->volume_sources || !plan->space_sources) {
+  if (!plan->volumes || !plan->spaces) {
     return plan_fail(plan, failure, "cannot allocate the boot plan%s", "");
   }
-  for (size_t i = 0; i < defaults->volume_count; ++i) {
-    plan->volumes[plan->volume_count++] = &defaults->volumes[i];
+  for (size_t i = 0; i < config->volume_count; ++i) {
+    plan->volumes[plan->volume_count++] = &config->volumes[i];
   }
-  for (size_t i = 0; i < defaults->space_count; ++i) {
-    plan->spaces[plan->space_count++] = &defaults->spaces[i];
-  }
-  for (size_t i = 0; override && i < override->volume_count; ++i) {
-    const struct boot_volume *volume = &override->volumes[i];
-    size_t index;
-    for (index = 0; index < plan->volume_count; ++index) {
-      if (!strcmp(plan->volumes[index]->name, volume->name)) {
-        break;
-      }
-    }
-    plan->volumes[index] = volume;
-    plan->volume_sources[index] = BOOT_ENTRY_OVERRIDE;
-    if (index == plan->volume_count) {
-      ++plan->volume_count;
-    }
-  }
-  for (size_t i = 0; override && i < override->space_count; ++i) {
-    size_t index;
-    if (plan_space(plan, override->spaces[i].name, &index)) {
-      plan->spaces[index] = &override->spaces[i];
-      plan->space_sources[index] = BOOT_ENTRY_OVERRIDE;
-    } else {
-      plan->space_sources[plan->space_count] = BOOT_ENTRY_OVERRIDE;
-      plan->spaces[plan->space_count++] = &override->spaces[i];
-    }
+  for (size_t i = 0; i < config->space_count; ++i) {
+    plan->spaces[plan->space_count++] = &config->spaces[i];
   }
 
   const char *focus = NULL;
@@ -1041,16 +960,10 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     }
     focus = space->name;
   }
-  for (size_t i = 0; override && i < override->volume_count; ++i) {
-    if (!strcmp(override->volumes[i].name, BOOT_SYSTEM_VOLUME)) {
-      return plan_fail(plan, failure, "the override cannot redefine the %s volume",
-          BOOT_SYSTEM_VOLUME);
-    }
-  }
 
   for (size_t i = 0; i < plan->volume_count; ++i) {
     const struct boot_volume *volume = plan->volumes[i];
-    if (volume->kind == BOOT_VOLUME_RAM_NPFS && !defaults->ram_npfs_bytes) {
+    if (volume->kind == BOOT_VOLUME_RAM_NPFS && !config->ram_npfs_bytes) {
       return plan_fail(plan, failure, "volume %s requires archive ram_npfs_bytes", volume->name);
     }
     if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) &&

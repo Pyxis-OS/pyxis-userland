@@ -424,26 +424,14 @@ bool install_publication_publish(const struct install_publication_request *reque
       !request->binding.present || !config_boot_binding_valid(&request->binding) ||
       !config_transaction_valid(request->transaction) ||
       strcmp(request->transaction, request->binding.attempt) ||
-      !config_revision_valid(request->revision)) {
+      !config_blob_equal(request->selected, request->selected)) {
     return fail(report, CALL_BAD_REQUEST);
   }
-  bool archive = request->binding.source == CONFIG_ACTIVE_ARCHIVE;
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!config_blob_equal(&request->selected[i], &request->selected[i]) ||
-        (i < CONFIG_SET_FILES && request->selected[i].digest.present == archive)) {
-      return fail(report, CALL_BAD_REQUEST);
-    }
-  }
-  if (!archive && (request->selected[CONFIG_CATALOG].digest.size !=
-      request->binding.archive_catalog.size || strcmp(
-      request->selected[CONFIG_CATALOG].digest.sha256, request->binding.archive_catalog.sha256))) {
-    return fail(report, CALL_BAD_REQUEST);
-  }
+  bool menu_changed = !config_blob_equal(request->expected, request->selected);
   if (!grant(request->esp_root, PROTOCOL_DIRECTORY, BOOT_DIRECTORY_RIGHTS, report) ||
       !directory_domain(request->esp_root, request->facts.domain, report) ||
       !config_storage_check(&request->view, &request->facts, request->expected,
-          request->expected_record, !config_blob_equal(&request->expected[CONFIG_LIMINE],
-          &request->selected[CONFIG_LIMINE]), report)) {
+          request->expected_record, menu_changed, report)) {
     return false;
   }
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
@@ -457,8 +445,7 @@ bool install_publication_publish(const struct install_publication_request *reque
   /* Source hashing may take time. Repeat all consumed destination byte checks
    * immediately before the first namespace mutation. */
   if (!config_storage_check(&request->view, &request->facts, request->expected,
-      request->expected_record, !config_blob_equal(&request->expected[CONFIG_LIMINE],
-      &request->selected[CONFIG_LIMINE]), report)) {
+      request->expected_record, menu_changed, report)) {
     return false;
   }
   struct install_staged_boot staged = {.root = request->esp_root, .binding = request->binding,
@@ -473,8 +460,7 @@ bool install_publication_publish(const struct install_publication_request *reque
       request->facts.domain, staged.legacy_files, report);
   if (ok) {
     ok = config_storage_check(&request->view, &request->facts, request->expected,
-        request->expected_record, !config_blob_equal(&request->expected[CONFIG_LIMINE],
-        &request->selected[CONFIG_LIMINE]), report);
+        request->expected_record, menu_changed, report);
   }
   if (ok) {
     report->phase = CONFIG_PHASE_STAGE;
@@ -499,8 +485,7 @@ bool install_publication_publish(const struct install_publication_request *reque
   if (ok) {
     report->phase = CONFIG_PHASE_VERIFY;
     ok = config_storage_publish_boot(&request->view, &request->facts, request->expected,
-        request->expected_record, request->selected, request->transaction, request->revision,
-        &staged, report);
+        request->expected_record, request->selected, request->transaction, &staged, report);
   }
   for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
     if (staged.legacy_files[i] != HANDLE_INVALID) {

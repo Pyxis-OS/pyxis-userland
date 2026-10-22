@@ -497,19 +497,12 @@ static bool record_matches(const struct install_plan_record *expected,
 int main(int argc, char **argv)
 {
   bool print_only = false, dry_run = false, replay = false, verbose = false, coexist = false;
-#if INSTALLER_PUBLICATION_SCRATCH
-  bool scratch_publication = false;
-#endif
   const char *explicit_consent = NULL, *selected_action = NULL, *selected_guid = NULL;
   uint64_t selected_target = 0, selected_esp = 0, selected_pool = 0;
   bool selected_pending = false;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
       verbose = true;
-#if INSTALLER_PUBLICATION_SCRATCH
-    } else if (!strcmp(argv[i], "--scratch-publication")) {
-      scratch_publication = true;
-#endif
     } else if (!strcmp(argv[i], "--selected-pending") && !selected_pending) {
       selected_pending = true;
     } else if (!strncmp(argv[i], "--selected-action=", 18) && !selected_action) {
@@ -563,17 +556,6 @@ int main(int argc, char **argv)
     fputs("installer: invalid plan/apply options\n", stderr);
     return EXIT_FAILURE;
   }
-#if INSTALLER_PUBLICATION_SCRATCH
-  if (scratch_publication) {
-    if (print_only || dry_run || replay || explicit_consent) {
-      fputs("installer: scratch publication requires its own Review\n", stderr);
-      return EXIT_FAILURE;
-    }
-    struct terminal terminal = {.input = bootstrap_stdio(ENVIRONMENT_STDIN).handle,
-      .output = bootstrap_stdio(ENVIRONMENT_STDOUT).handle};
-    return install_publication_scratch(&terminal, verbose);
-  }
-#endif
   struct terminal terminal = {
     .input = bootstrap_capability("input"), .output = bootstrap_capability("output"),
   };

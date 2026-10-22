@@ -1,9 +1,13 @@
 #ifndef LIBCONFIG_HANDOFF_H
 #define LIBCONFIG_HANDOFF_H
 
-#include "selection.h"
 #include <abi/handle.h>
 #include <abi/syscall.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+/* The installed configuration files boot hands to its spaces, in order. */
+enum config_lua_file { CONFIG_LUA_BOOT, CONFIG_LUA_SESSION, CONFIG_LUA_NETWORK, CONFIG_LUA_COUNT };
 
 struct config_handoff {
   handle_t files[CONFIG_LUA_COUNT];
@@ -14,19 +18,13 @@ struct config_handoff_bytes {
   size_t size;
 };
 
-/* Initialize handles to HANDLE_INVALID (or {0}). The caller supplies a private,
- * unshared native RAM parent and keeps it private for the entire call. A RAM
- * type check cannot prove namespace exclusivity. Each fixed-name file is
- * unlinked before writing; successful output owns only native READ grants.
- * The parent and selection remain borrowed; no path or ESP authority escapes.
- * Admission requires all three frozen sources to be bounded literal tables.
- * Failure closes every created grant; no automatic retry or named-file repair.
- */
-bool config_handoff_create(handle_t private_parent, const struct config_selection *selection,
-    struct config_handoff *handoff, enum call_status *status);
+/* Initialize handles to HANDLE_INVALID (or {0}). Close releases every held
+ * grant. */
 bool config_handoff_close(struct config_handoff *handoff);
-/* One such file: NAME is created in the private parent and unlinked before any
- * byte is written; success returns only its native READ grant in FILE. */
+/* One handoff file. The caller supplies a private, unshared native RAM parent
+ * and keeps it private for the entire call. NAME is created in it and unlinked
+ * before any byte is written; success returns only its native READ grant in
+ * FILE. No automatic retry or named-file repair. */
 bool config_handoff_file(handle_t private_parent, const char *name, const char *bytes,
     size_t size, handle_t *file, enum call_status *status);
 

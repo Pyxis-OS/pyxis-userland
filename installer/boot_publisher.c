@@ -1,6 +1,5 @@
 #include "boot_publisher.h"
 #include "boot_entry.h"
-#include "pending_archive.h"
 #include "publication_snapshot.h"
 #include "esp_directory.h"
 
@@ -13,10 +12,8 @@
 
 #define BOOT_PUBLISHER_RESERVE_CLUSTERS UINT64_C(32)
 
-static const char *const current_paths[CONFIG_ALL_FILES] = {
-  "EFI/pyxis/config/boot.lua", "EFI/pyxis/config/session.lua", "EFI/pyxis/config/network.lua",
-  "EFI/pyxis/config/catalog.lua", "boot/limine/limine.conf"
-};
+#define BOOT_PUBLISHER_MENU_PATH "boot/limine/" CONFIG_MENU_NAME
+#define BOOT_PUBLISHER_RECORD_PATH "EFI/pyxis/config/" CONFIG_RECORD_NAME
 
 static bool blob_hash(struct install_digest *digest, const struct config_blob *blob)
 {
@@ -42,19 +39,17 @@ static bool facts_match(const struct config_target_facts *expected,
       !memcmp(facts->partition_type, expected->partition_type, 16);
 }
 
-static bool read_current(handle_t root, struct config_blob current[CONFIG_ALL_FILES],
-    struct config_blob *record)
+static bool read_current(handle_t root, struct config_blob *menu, struct config_blob *record)
 {
-  bool ok = true;
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    ok = install_snapshot_file(root, current_paths[i], CONFIG_FILE_MAX_BYTES, &current[i]);
-  }
-  return ok && install_snapshot_file(root, "EFI/pyxis/config/config.record", CONFIG_RECORD_MAX_BYTES, record);
+  return install_snapshot_file(root, BOOT_PUBLISHER_MENU_PATH, CONFIG_FILE_MAX_BYTES, menu) &&
+      install_snapshot_file(root, BOOT_PUBLISHER_RECORD_PATH, CONFIG_RECORD_MAX_BYTES, record);
 }
 
 void boot_publication_destroy(struct boot_publication *publication)
 {
-  install_configuration_free(&publication->configuration);
+  config_blob_destroy(&publication->menu);
+  config_blob_destroy(&publication->next_menu);
+  config_blob_destroy(&publication->record);
   install_recovery_destroy(&publication->recovery);
   *publication = (struct boot_publication){0};
 }
@@ -63,13 +58,9 @@ static bool binding_prepare(struct boot_publication *publication, const struct b
 {
   struct config_boot_binding *binding = &publication->binding;
   binding->present = true;
-  binding->source = publication->configuration.source;
   strcpy(binding->kernel_revision, input->revision);
   strcpy(binding->program_revision, input->revision);
   strcpy(binding->attempt, input->attempt);
-  binding->archive_catalog = publication->configuration.catalog_source.digest;
-  binding->legacy_override = publication->configuration.pool_override.digest;
-  binding->legacy_disposition = publication->configuration.pool_disposition;
   struct config_boot_payload *files[] = {&binding->kernel, &binding->archive, &binding->revision};
   const char *names[] = {"kernel.elf", "boot.arc", "revision.txt"};
   struct install_source sources[] = {input->kernel, input->archive,
@@ -95,33 +86,30 @@ static uint64_t required_space(const struct boot_publication *publication, uint6
     if (blocks > (UINT64_MAX - total) / cluster) return UINT64_MAX;
     total += blocks * cluster;
   }
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    uint64_t copies[] = {publication->configuration.current[i].size,
-      publication->configuration.after[i].size};
-    for (unsigned n = 0; n < 2; ++n) {
-      uint64_t blocks = copies[n] / cluster + (copies[n] % cluster != 0);
-      if (blocks > (UINT64_MAX - total) / cluster) return UINT64_MAX;
-      total += blocks * cluster;
-    }
+  /* The previous menu's recovery copy and the staged new menu. */
+  uint64_t copies[] = {publication->menu.size, publication->next_menu.size};
+  for (unsigned n = 0; n < 2; ++n) {
+    uint64_t blocks = copies[n] / cluster + (copies[n] % cluster != 0);
+    if (blocks > (UINT64_MAX - total) / cluster) return UINT64_MAX;
+    total += blocks * cluster;
   }
   uint64_t recovery = install_recovery_space(&publication->recovery, cluster);
   return recovery > UINT64_MAX - total ? UINT64_MAX : total + recovery;
 }
 
-/* Configuration, binding, menu and capacity from the frozen snapshots. */
+/* Binding, menu and capacity from the frozen snapshots in PUBLICATION. A
+ * prepared or malformed record refuses; it is never treated as absent. */
 static bool prepare_plan(struct boot_publication *publication, const struct boot_publisher_input *input,
-    struct config_blob current[CONFIG_ALL_FILES], const struct config_blob *record,
-    const struct config_blob defaults[CONFIG_SET_FILES], bool legacy)
+    bool legacy)
 {
-  struct install_configuration_input configuration = {.current = current, .record = record,
-    .archive = defaults, .catalog = &defaults[CONFIG_CATALOG],
-    .kernel_revision = input->revision, .program_revision = input->revision};
-  bool ok = install_configuration_prepare(&configuration, &publication->configuration);
-  if (ok && !publication->configuration.applicable) {
-    install_configuration_review(&publication->configuration, stderr);
-    fprintf(stderr, "%s: configuration needs explicit choices; use a fresh configuration Review; nothing written\n",
-        input->name);
-    ok = false;
+  const struct config_blob *record = &publication->record;
+  struct config_record previous = {0};
+  bool recorded = record->digest.present;
+  bool ok = !recorded || (config_record_parse(record->bytes, record->size, &previous) &&
+      previous.committed);
+  if (!ok) {
+    fprintf(stderr, "%s: the ESP boot record is prepared, malformed or from before this "
+        "release; reinstall; nothing written\n", input->name);
   }
   if (ok) ok = binding_prepare(publication, input);
   if (ok) {
@@ -129,11 +117,8 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
       publication->binding.archive.path};
     if (publication->fresh) {
       ok = install_boot_entry_render_owned(&next, input->disk_guid, input->pool_partition,
-          &publication->configuration.after[CONFIG_LIMINE]);
+          &publication->next_menu);
     } else {
-      struct config_record previous = {0};
-      bool recorded = record->digest.present && config_record_parse(record->bytes, record->size, &previous) &&
-          previous.committed && previous.boot.present;
       const struct install_boot_entry_paths old = {previous.boot.kernel.path, previous.boot.archive.path};
       const struct install_boot_entry_paths old_previous = {previous.previous_boot.kernel.path,
         previous.previous_boot.archive.path};
@@ -142,9 +127,9 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
       /* The outgoing attempt becomes the previous entry, as it becomes previous_boot. */
       const struct install_boot_menu target = {&next, recorded ? &old : NULL, false};
       bool adoption = false;
-      ok = install_boot_entry_plan(&current[CONFIG_LIMINE], recorded ? &inherited : NULL,
+      ok = install_boot_entry_plan(&publication->menu, recorded ? &inherited : NULL,
           input->disk_guid, input->pool_partition, &target, legacy,
-          &publication->configuration.after[CONFIG_LIMINE], &adoption, &publication->activation_pending);
+          &publication->next_menu, &adoption, &publication->activation_pending);
       publication->legacy_active = adoption;
       if (ok && recorded && publication->activation_pending) {
         fprintf(stderr, "%s: pending or ambiguous boot activation requires a fresh pending completion Review; nothing written\n",
@@ -164,14 +149,13 @@ bool boot_publication_prepare(struct boot_publication *publication,
     const struct boot_publisher_input *input, handle_t root, handle_t control)
 {
   boot_publication_destroy(publication);
-  struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0};
-  struct config_blob defaults[CONFIG_SET_FILES] = {0};
+  const struct config_blob *record = &publication->record;
   bool legacy = false;
-  bool ok = install_pending_archive_configs(&input->archive, defaults) &&
-      install_snapshot_facts(control, &publication->facts) &&
-      facts_match(&input->target, &publication->facts) && read_current(root, current, &record) &&
-      install_recovery_resolved(root, &record) &&
-      install_recovery_menu_review(root, &record, &publication->facts, input->pool_partition) &&
+  bool ok = install_snapshot_facts(control, &publication->facts) &&
+      facts_match(&input->target, &publication->facts) &&
+      read_current(root, &publication->menu, &publication->record) &&
+      install_recovery_resolved(root, record) &&
+      install_recovery_menu_review(root, record, &publication->facts, input->pool_partition) &&
       install_recovery_prepare(root, input->boot, input->loaded_kernel, input->workspace,
           &publication->facts, &publication->recovery);
   if (ok) {
@@ -183,15 +167,12 @@ bool boot_publication_prepare(struct boot_publication *publication,
       publication->cluster_bytes = state.cluster_bytes;
       publication->available_bytes = state.free_clusters * state.cluster_bytes;
       struct config_record inherited = {0};
-      bool owned = record.digest.present && config_record_parse(record.bytes, record.size, &inherited) &&
-          inherited.committed && inherited.boot.present;
+      bool owned = record->digest.present &&
+          config_record_parse(record->bytes, record->size, &inherited) && inherited.committed;
       if (!owned) legacy = install_boot_legacy_certify(root, input->workspace, publication->legacy);
     }
   }
-  ok = ok && prepare_plan(publication, input, current, &record, defaults, legacy);
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) config_blob_destroy(&current[i]);
-  for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) config_blob_destroy(&defaults[i]);
-  config_blob_destroy(&record);
+  ok = ok && prepare_plan(publication, input, legacy);
   publication->prepared = ok;
   return ok;
 }
@@ -205,15 +186,10 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
   publication->facts = input->target;
   publication->cluster_bytes = cluster_bytes;
   publication->available_bytes = available_bytes;
-  struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0};
-  struct config_blob defaults[CONFIG_SET_FILES] = {0};
-  bool ok = install_pending_archive_configs(&input->archive, defaults) &&
-      config_blob_set(&current[CONFIG_LIMINE], limine, limine_bytes) &&
+  bool ok = config_blob_set(&publication->menu, limine, limine_bytes) &&
       install_recovery_prepare_fresh(input->boot, input->loaded_kernel,
           &publication->facts, &publication->recovery) &&
-      prepare_plan(publication, input, current, &record, defaults, false);
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) config_blob_destroy(&current[i]);
-  for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) config_blob_destroy(&defaults[i]);
+      prepare_plan(publication, input, false);
   publication->prepared = ok;
   return ok;
 }
@@ -221,17 +197,12 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
 bool boot_publication_hash(const struct boot_publication *publication, struct install_digest *digest)
 {
   static const char domain[] = "pyxis-installed-publication-1";
-  unsigned char choices[] = {publication->configuration.source, publication->configuration.pool_disposition,
-    publication->legacy_active, publication->activation_pending, publication->fresh};
+  unsigned char choices[] = {publication->legacy_active, publication->activation_pending,
+    publication->fresh};
   bool ok = publication->prepared && install_digest_update(digest, domain, sizeof(domain)) &&
-      install_digest_update(digest, choices, sizeof(choices));
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    ok = blob_hash(digest, &publication->configuration.current[i]) &&
-        blob_hash(digest, &publication->configuration.after[i]);
-  }
-  ok = ok && blob_hash(digest, &publication->configuration.record) &&
-      blob_hash(digest, &publication->configuration.pool_override) &&
-      blob_hash(digest, &publication->configuration.catalog_source) &&
+      install_digest_update(digest, choices, sizeof(choices)) &&
+      blob_hash(digest, &publication->menu) && blob_hash(digest, &publication->next_menu) &&
+      blob_hash(digest, &publication->record) &&
       blob_hash(digest, &publication->recovery.manifest) && blob_hash(digest, &publication->recovery.fallback);
   for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS; ++i) {
     unsigned char present = publication->legacy[i].present;
@@ -247,16 +218,15 @@ bool boot_publication_hash(const struct boot_publication *publication, struct in
 void boot_publication_report(const struct boot_publication *publication,
     const struct boot_publisher_input *input, FILE *output, bool verbose)
 {
-  if (verbose) install_configuration_review(&publication->configuration, output);
-  else install_configuration_summary(&publication->configuration, output);
+  (void)verbose;
   fprintf(output, "Boot attempt: EFI/pyxis/%s/%s; ESP reserve %llu bytes, capacity bound %llu.\n",
       input->revision, input->attempt,
       (unsigned long long)publication->required_bytes, (unsigned long long)publication->available_bytes);
   fputs(publication->recovery.present ? "Verified static recovery is retained.\n" :
       "Provision the reviewed immutable recovery pair and fallback before menu activation.\n", output);
   struct config_record history = {0};
-  const struct config_blob *record = &publication->configuration.record;
-  if (record->digest.present && config_record_parse(record->bytes, record->size, &history) && history.boot.present) {
+  const struct config_blob *record = &publication->record;
+  if (record->digest.present && config_record_parse(record->bytes, record->size, &history)) {
     fprintf(output, "Retain previous boot kernel %s (%s) and archive %s (%s) as the previous menu entry.\n",
         history.boot.kernel.path, history.boot.kernel.digest.sha256,
         history.boot.archive.path, history.boot.archive.digest.sha256);
@@ -317,12 +287,10 @@ bool boot_publication_admit(struct boot_publication *publication,
         state.free_clusters <= UINT64_MAX / state.cluster_bytes &&
         publication->required_bytes <= state.free_clusters * state.cluster_bytes;
   }
-  struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0};
-  ok = ok && read_current(view->root, current, &record);
-  for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-    ok = config_blob_equal(&current[i], &publication->configuration.current[i]);
-  }
-  ok = ok && config_blob_equal(&record, &publication->configuration.record) &&
+  struct config_blob menu = {0}, record = {0};
+  ok = ok && read_current(view->root, &menu, &record) &&
+      config_blob_equal(&menu, &publication->menu) &&
+      config_blob_equal(&record, &publication->record) &&
       install_recovery_resolved(view->root, &record);
   if (ok) {
     struct install_recovery current_recovery = {0};
@@ -340,8 +308,7 @@ bool boot_publication_admit(struct boot_publication *publication,
   }
   struct config_record history = {0};
   struct install_esp_payloads *held = NULL;
-  if (ok && record.digest.present && config_record_parse(record.bytes, record.size, &history) &&
-      history.boot.present) {
+  if (ok && record.digest.present && config_record_parse(record.bytes, record.size, &history)) {
     struct install_esp_payload_request open = {.root = view->root, .control = view->control,
       .workspace = input->workspace, .expected = view->expected,
       .revision = history.boot.kernel_revision, .attempt = history.boot.attempt};
@@ -359,10 +326,10 @@ bool boot_publication_admit(struct boot_publication *publication,
         install_esp_view_end(view);
     ok = status == CALL_OK && ok;
   }
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) config_blob_destroy(&current[i]);
+  config_blob_destroy(&menu);
   config_blob_destroy(&record);
   if (!ok) {
-    fprintf(stderr, "%s: stale consumed configuration/ownership input; no program files written\n",
+    fprintf(stderr, "%s: stale consumed boot menu/ownership input; no program files written\n",
         input->name);
     return false;
   }
@@ -384,24 +351,20 @@ bool boot_publication_publish(struct boot_publication *publication,
   struct install_publication_request request = {.esp_root = view->root, .workspace = input->workspace,
     .expected_target = view->expected, .facts = publication->facts,
     .view = {.control = view->control, .clock = input->clock},
-    .expected = publication->configuration.current, .expected_record = &publication->configuration.record,
-    .selected = publication->configuration.after, .transaction = input->attempt,
-    .revision = publication->configuration.catalog->revision, .binding = publication->binding,
+    .expected = &publication->menu, .expected_record = &publication->record,
+    .selected = &publication->next_menu, .transaction = input->attempt,
+    .binding = publication->binding,
     .legacy_active = publication->legacy_active,
     .sources = {input->kernel, input->archive,
       {.memory = (uint8_t *)input->revision_record, .bytes = strlen(input->revision_record)}}};
   memcpy(request.legacy_expected, publication->legacy, sizeof(request.legacy_expected));
   ok = ok && parent_open(view->root, "EFI/pyxis/config", &request.view.config_parent) &&
       parent_open(view->root, "boot/limine", &request.view.limine_parent);
-  struct config_blob selected[CONFIG_ALL_FILES];
-  memcpy(selected, publication->configuration.after, sizeof(selected));
-  if (publication->configuration.source == CONFIG_ACTIVE_ARCHIVE) memset(selected, 0, sizeof(selected[0]) * CONFIG_SET_FILES);
-  request.selected = selected;
   if (ok) ok = install_publication_publish(&request, report);
   if (request.view.config_parent != HANDLE_INVALID) ok = handle_close(request.view.config_parent) == CALL_OK && ok;
   if (request.view.limine_parent != HANDLE_INVALID) ok = handle_close(request.view.limine_parent) == CALL_OK && ok;
   if (!ok || !report->boot_activated) {
-    fprintf(stderr, "%s: readiness phase %u status %u; boot activation %s; recovery retained\n",
+    fprintf(stderr, "%s: boot record phase %u status %u; boot activation %s; recovery retained\n",
         input->name, report->phase, report->status,
         report->boot_activated ? "confirmed, cleanup incomplete" : "pending");
     return false;

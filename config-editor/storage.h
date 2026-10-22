@@ -31,14 +31,12 @@ struct config_blob {
 
 enum config_publish_phase {
   CONFIG_PHASE_CHECK, CONFIG_PHASE_STAGE, CONFIG_PHASE_VERIFY,
-  CONFIG_PHASE_EXCLUSIVE, CONFIG_PHASE_PREPARED, CONFIG_PHASE_SWAP,
-  CONFIG_PHASE_COMMITTED, CONFIG_PHASE_ACTIVATE, CONFIG_PHASE_CLEANUP, CONFIG_PHASE_DONE
+  CONFIG_PHASE_EXCLUSIVE, CONFIG_PHASE_PREPARED, CONFIG_PHASE_COMMITTED, CONFIG_PHASE_ACTIVATE, CONFIG_PHASE_CLEANUP, CONFIG_PHASE_DONE
 };
 
 struct config_storage_report {
   enum call_status status;
   enum config_publish_phase phase;
-  enum config_storage_file file;
   char artifact[CONFIG_ARTIFACT_NAME_BYTES];
   struct config_record record;
   bool committed;
@@ -63,19 +61,18 @@ bool config_storage_guard(const struct config_storage_view *view,
 /* Read-only preflight, repeated by the publisher before staging and again
  * under its interval. Existing malformed/prepared records refuse. */
 bool config_storage_check(const struct config_storage_view *view,
-    const struct config_target_facts *facts,
-    const struct config_blob expected[CONFIG_ALL_FILES],
-    const struct config_blob *expected_record, bool limine_changed,
+    const struct config_target_facts *facts, const struct config_blob *expected_menu,
+    const struct config_blob *expected_record, bool menu_changed,
     struct config_storage_report *report);
 
-/* Installer-only extension. Staged payload handles remain retained through
- * the final checks; canonical readiness commits before the Limine name moves. */
+/* EXPECTED and SELECTED are the current and the new owned menu, borrowed and
+ * immutable. Staged payload handles remain retained through the final checks;
+ * the record commits before the menu name moves. The transaction is the boot
+ * attempt, a fresh 32-hex name: collisions stop; no retry/rollback/resume. */
 bool config_storage_publish_boot(const struct config_storage_view *view,
-    const struct config_target_facts *facts,
-    const struct config_blob expected[CONFIG_ALL_FILES],
-    const struct config_blob *expected_record,
-    const struct config_blob selected[CONFIG_ALL_FILES], const char *transaction,
-    const char *revision, const struct install_staged_boot *boot,
+    const struct config_target_facts *facts, const struct config_blob *expected,
+    const struct config_blob *expected_record, const struct config_blob *selected,
+    const char *transaction, const struct install_staged_boot *boot,
     struct config_storage_report *report);
 
 void config_blob_destroy(struct config_blob *blob);
@@ -84,26 +81,9 @@ bool config_blob_equal(const struct config_blob *left, const struct config_blob 
 bool config_target_equal(const struct config_target_facts *left,
     const struct config_target_facts *right);
 bool config_target_valid(const struct config_target_facts *facts);
-/* Missing file is successful and represented by digest.present == false.
+/* A missing record is successful and represented by digest.present == false.
  * All returned bytes are owned, bounded, NUL-terminated and hashed exactly. */
-bool config_storage_read(const struct config_storage_view *view, enum config_storage_file file,
-    struct config_blob *blob, struct config_storage_report *report);
 bool config_storage_read_record(const struct config_storage_view *view,
     struct config_blob *blob, struct config_storage_report *report);
-/* Complete committed record plus four matching files only. Caller validates
- * the frozen triple before effects and chooses archive defaults on any failure. */
-bool config_storage_load(const struct config_storage_view *view,
-    struct config_blob selected[CONFIG_SET_FILES], struct config_record *record,
-    struct config_storage_report *report);
-/* expected and selected are immutable borrowed bytes, including explicit
- * absence. A complete selected triple/catalog is required. Limine is changed
- * only when its expected/selected bytes differ. The transaction is a fresh
- * bounded 32-hex name: collisions stop; no retry/rollback/resume. */
-bool config_storage_publish(const struct config_storage_view *view,
-    const struct config_target_facts *facts,
-    const struct config_blob expected[CONFIG_ALL_FILES],
-    const struct config_blob *expected_record,
-    const struct config_blob selected[CONFIG_ALL_FILES], const char *transaction,
-    const char *revision, struct config_storage_report *report);
 
 #endif

@@ -355,8 +355,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   }
   free(plan->rescue.memory);
   plan->rescue = (struct install_source){.handle = HANDLE_INVALID};
-  if (!install_archive_filter(&plan->archive, plan->record.layout.pool_partition,
-        &plan->programs, &plan->rescue)) {
+  if (!install_archive_filter(&plan->archive, &plan->programs, &plan->rescue)) {
     return false;
   }
   if (!plan->record.coexist) {
@@ -517,7 +516,7 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
     } else if (!plan->record.updating) {
       fputs("Append only the reviewed pool GPT entry and required CRCs; format only that new pool.\n", output);
     }
-    fputs("The reviewed source commits before the owned menu changes; unknown menu ownership\n"
+    fputs("The boot record commits before the owned menu changes; unknown menu ownership\n"
         "retains the menu and reports boot activation pending. No Update formats a healthy ESP.\n", output);
   } else
 #endif

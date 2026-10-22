@@ -4,15 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const file_names[CONFIG_ALL_FILES] = {
-  "boot.lua", "session.lua", "network.lua", "catalog.lua", "limine.conf"
-};
-
-const char *config_storage_file_name(enum config_storage_file file)
-{
-  return (unsigned)file < CONFIG_ALL_FILES ? file_names[file] : NULL;
-}
-
 static bool hex_valid(const char *text, size_t count)
 {
   if (!text || strnlen(text, count + 1) != count) {
@@ -44,21 +35,21 @@ bool config_payload_digest_valid(const struct config_file_digest *digest)
       !digest->size && !digest->sha256[0]);
 }
 
-bool config_record_artifact_name(const char *transaction, enum config_storage_file file,
+bool config_record_artifact_name(const char *transaction, const char *file,
     const char *suffix, char name[CONFIG_ARTIFACT_NAME_BYTES])
 {
-  if (!name || !config_transaction_valid(transaction) || !config_storage_file_name(file) ||
-      !suffix || (strcmp(suffix, "new") && strcmp(suffix, "previous") &&
+  if (!name || !config_transaction_valid(transaction) || !file ||
+      (strcmp(file, CONFIG_MENU_NAME) && strcmp(file, CONFIG_RECORD_NAME)) || !suffix || (strcmp(suffix, "new") && strcmp(suffix, "previous") &&
       strcmp(suffix, "prepared") && strcmp(suffix, "committed"))) {
     return false;
   }
   int count = snprintf(name, CONFIG_ARTIFACT_NAME_BYTES, ".pyxis-config-%s-%s.%s",
-      transaction, config_storage_file_name(file), suffix);
+      transaction, file, suffix);
   return count > 0 && count < (int)CONFIG_ARTIFACT_NAME_BYTES;
 }
 
-static bool recovery_valid(const struct config_recovery_file *file,
-    enum config_storage_file slot, const char *transaction)
+/* A previous copy of the menu, named for the transaction that made it. */
+static bool recovery_valid(const struct config_recovery_file *file)
 {
   if (!config_digest_valid(&file->digest)) {
     return false;
@@ -77,8 +68,7 @@ static bool recovery_valid(const struct config_recovery_file *file,
   }
   memcpy(id, file->name + sizeof(prefix) - 1, 32);
   id[32] = '\0';
-  return (!transaction || !strcmp(id, transaction)) &&
-      config_record_artifact_name(id, slot, "previous", expected) &&
+  return config_record_artifact_name(id, CONFIG_MENU_NAME, "previous", expected) &&
       !strcmp(file->name, expected);
 }
 
@@ -130,57 +120,31 @@ bool config_boot_binding_valid(const struct config_boot_binding *binding)
     return false;
   }
   if (!binding->present) {
-    return binding->source == CONFIG_ACTIVE_ESP && !binding->kernel_revision[0] &&
-        !binding->program_revision[0] && !binding->attempt[0] &&
-        !binding->kernel.path[0] && !binding->archive.path[0] && !binding->revision.path[0] &&
+    return !binding->kernel_revision[0] && !binding->program_revision[0] &&
+        !binding->attempt[0] && !binding->kernel.path[0] && !binding->archive.path[0] &&
+        !binding->revision.path[0] &&
         !binding->kernel.digest.present && config_payload_digest_valid(&binding->kernel.digest) &&
         !binding->archive.digest.present && config_payload_digest_valid(&binding->archive.digest) &&
-        !binding->revision.digest.present && config_payload_digest_valid(&binding->revision.digest) &&
-        !binding->archive_catalog.present && config_digest_valid(&binding->archive_catalog) &&
-        !binding->legacy_override.present && config_payload_digest_valid(&binding->legacy_override) &&
-        binding->legacy_disposition == CONFIG_LEGACY_NONE;
+        !binding->revision.digest.present && config_payload_digest_valid(&binding->revision.digest);
   }
-  return (binding->source == CONFIG_ACTIVE_ESP || binding->source == CONFIG_ACTIVE_ARCHIVE) &&
-      config_revision_valid(binding->kernel_revision) &&
+  return config_revision_valid(binding->kernel_revision) &&
       config_revision_valid(binding->program_revision) &&
       config_transaction_valid(binding->attempt) &&
       payload_valid(&binding->kernel, binding, "kernel.elf") &&
       payload_valid(&binding->archive, binding, "boot.arc") &&
-      payload_valid(&binding->revision, binding, "revision.txt") &&
-      binding->archive_catalog.present && binding->archive_catalog.size &&
-      config_digest_valid(&binding->archive_catalog) &&
-      config_payload_digest_valid(&binding->legacy_override) &&
-      (binding->legacy_override.present ?
-          binding->legacy_disposition == CONFIG_LEGACY_INACTIVE_RECOVERY :
-          binding->legacy_disposition == CONFIG_LEGACY_NONE);
+      payload_valid(&binding->revision, binding, "revision.txt");
 }
 
 bool config_record_valid(const struct config_record *record)
 {
-  if (!record || !config_transaction_valid(record->transaction) ||
-      !config_revision_valid(record->revision) || !config_boot_binding_valid(&record->boot) ||
-      !config_boot_binding_valid(&record->previous_boot) ||
-      (record->previous_boot.present && !record->boot.present) ||
-      (record->previous_boot.present &&
-          !strcmp(record->previous_boot.kernel.path, record->boot.kernel.path))) {
-    return false;
-  }
-  for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) {
-    bool selected = !record->boot.present || record->boot.source == CONFIG_ACTIVE_ESP;
-    if (record->selected[i].present != selected || !config_digest_valid(&record->selected[i])) {
-      return false;
-    }
-  }
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!recovery_valid(&record->previous[i], i,
-        i == CONFIG_LIMINE ? NULL : record->transaction) ||
-        !recovery_valid(&record->obsolete[i], i, NULL) ||
-        (record->previous[i].digest.present && record->obsolete[i].digest.present &&
-        !strcmp(record->previous[i].name, record->obsolete[i].name))) {
-      return false;
-    }
-  }
-  return true;
+  return record && config_transaction_valid(record->transaction) &&
+      record->boot.present && config_boot_binding_valid(&record->boot) &&
+      config_boot_binding_valid(&record->previous_boot) &&
+      !(record->previous_boot.present &&
+          !strcmp(record->previous_boot.kernel.path, record->boot.kernel.path)) &&
+      recovery_valid(&record->previous_menu) && recovery_valid(&record->obsolete_menu) &&
+      !(record->previous_menu.digest.present && record->obsolete_menu.digest.present &&
+          !strcmp(record->previous_menu.name, record->obsolete_menu.name));
 }
 
 static bool render_binding(const char *label, const struct config_boot_binding *binding,
@@ -195,25 +159,17 @@ static bool render_binding(const char *label, const struct config_boot_binding *
         "%s unbound\n", label);
   } else {
     count = snprintf(text + *used, CONFIG_RECORD_MAX_BYTES + 1 - *used,
-        "%s bound %s %s %s %s\n"
+        "%s bound %s %s %s\n"
         "payload kernel %s %llu %s\n"
         "payload archive %s %llu %s\n"
-        "payload revision %s %llu %s\n"
-        "archive-catalog %llu %s\n"
-        "legacy %s %llu %s\n",
-        label, binding->source == CONFIG_ACTIVE_ESP ? "esp" : "archive",
-        binding->kernel_revision, binding->program_revision, binding->attempt,
+        "payload revision %s %llu %s\n",
+        label, binding->kernel_revision, binding->program_revision, binding->attempt,
         binding->kernel.path, (unsigned long long)binding->kernel.digest.size,
         binding->kernel.digest.sha256,
         binding->archive.path, (unsigned long long)binding->archive.digest.size,
         binding->archive.digest.sha256,
         binding->revision.path, (unsigned long long)binding->revision.digest.size,
-        binding->revision.digest.sha256,
-        (unsigned long long)binding->archive_catalog.size, binding->archive_catalog.sha256,
-        binding->legacy_disposition == CONFIG_LEGACY_INACTIVE_RECOVERY ?
-            "inactive-recovery" : "none",
-        (unsigned long long)binding->legacy_override.size,
-        binding->legacy_override.present ? binding->legacy_override.sha256 : "-");
+        binding->revision.digest.sha256);
   }
   if (count <= 0 || (size_t)count > CONFIG_RECORD_MAX_BYTES - *used) {
     return false;
@@ -237,31 +193,23 @@ bool config_record_render(const struct config_record *record, char **bytes, size
     return false;
   }
   int count = snprintf(text, CONFIG_RECORD_MAX_BYTES + 1,
-      "PYXIS-CONFIG 1\nstate %s\ntransaction %s\nrevision %s\n",
-      record->committed ? "committed" : "prepared", record->transaction, record->revision);
+      "PYXIS-CONFIG 1\nstate %s\ntransaction %s\n",
+      record->committed ? "committed" : "prepared", record->transaction);
   size_t used = count > 0 ? (size_t)count : CONFIG_RECORD_MAX_BYTES + 1;
   if (!render_binding("boot", &record->boot, text, &used) ||
       !render_binding("previous-boot", &record->previous_boot, text, &used)) {
     free(text);
     return false;
   }
-  for (unsigned i = 0; i < CONFIG_SET_FILES && used <= CONFIG_RECORD_MAX_BYTES; ++i) {
+  for (unsigned group = 0; group < 2 && used <= CONFIG_RECORD_MAX_BYTES; ++group) {
+    const struct config_recovery_file *file = group ? &record->obsolete_menu :
+        &record->previous_menu;
+    bool present = file->digest.present;
     count = snprintf(text + used, CONFIG_RECORD_MAX_BYTES + 1 - used,
-        "selected %s %llu %s\n", file_names[i],
-        (unsigned long long)record->selected[i].size,
-        record->selected[i].present ? record->selected[i].sha256 : "-");
+        "%s " CONFIG_MENU_NAME " %s %llu %s\n", group ? "obsolete" : "previous",
+        present ? file->name : "-", (unsigned long long)file->digest.size,
+        present ? file->digest.sha256 : "-");
     used += count > 0 ? (size_t)count : CONFIG_RECORD_MAX_BYTES + 1;
-  }
-  for (unsigned group = 0; group < 2; ++group) {
-    const struct config_recovery_file *files = group ? record->obsolete : record->previous;
-    for (unsigned i = 0; i < CONFIG_ALL_FILES && used <= CONFIG_RECORD_MAX_BYTES; ++i) {
-      bool present = files[i].digest.present;
-      count = snprintf(text + used, CONFIG_RECORD_MAX_BYTES + 1 - used,
-          "%s %s %s %llu %s\n", group ? "obsolete" : "previous", file_names[i],
-          present ? files[i].name : "-", (unsigned long long)files[i].digest.size,
-          present ? files[i].digest.sha256 : "-");
-      used += count > 0 ? (size_t)count : CONFIG_RECORD_MAX_BYTES + 1;
-    }
   }
   if (used > CONFIG_RECORD_MAX_BYTES) {
     free(text);
@@ -350,35 +298,20 @@ static bool parse_binding(char **cursor, const char *label, struct config_boot_b
   if (!word(cursor, "bound", ' ')) {
     return false;
   }
-  char *source = token(cursor, ' ');
-  char *kernel = source ? token(cursor, ' ') : NULL;
+  char *kernel = token(cursor, ' ');
   char *program = kernel ? token(cursor, ' ') : NULL;
   char *attempt = program ? token(cursor, '\n') : NULL;
-  if (!source || (strcmp(source, "esp") && strcmp(source, "archive")) ||
-      !config_revision_valid(kernel) || !config_revision_valid(program) ||
+  if (!config_revision_valid(kernel) || !config_revision_valid(program) ||
       !config_transaction_valid(attempt)) {
     return false;
   }
   binding->present = true;
-  binding->source = !strcmp(source, "esp") ? CONFIG_ACTIVE_ESP : CONFIG_ACTIVE_ARCHIVE;
   strcpy(binding->kernel_revision, kernel);
   strcpy(binding->program_revision, program);
   strcpy(binding->attempt, attempt);
-  if (!parse_payload(cursor, "kernel", &binding->kernel) ||
-      !parse_payload(cursor, "archive", &binding->archive) ||
-      !parse_payload(cursor, "revision", &binding->revision) ||
-      !word(cursor, "archive-catalog", ' ') ||
-      !parse_digest(cursor, &binding->archive_catalog) || !word(cursor, "legacy", ' ')) {
-    return false;
-  }
-  char *disposition = token(cursor, ' ');
-  if (!disposition || (strcmp(disposition, "none") &&
-      strcmp(disposition, "inactive-recovery"))) {
-    return false;
-  }
-  binding->legacy_disposition = !strcmp(disposition, "none") ?
-      CONFIG_LEGACY_NONE : CONFIG_LEGACY_INACTIVE_RECOVERY;
-  return parse_digest(cursor, &binding->legacy_override);
+  return parse_payload(cursor, "kernel", &binding->kernel) &&
+      parse_payload(cursor, "archive", &binding->archive) &&
+      parse_payload(cursor, "revision", &binding->revision);
 }
 
 bool config_record_parse(const void *bytes, size_t size, struct config_record *record)
@@ -410,38 +343,26 @@ bool config_record_parse(const void *bytes, size_t size, struct config_record *r
   if (ok) {
     strcpy(parsed.transaction, id);
   }
-  ok = ok && word(&cursor, "revision", ' ');
-  char *revision = ok ? token(&cursor, '\n') : NULL;
-  ok = revision && config_revision_valid(revision);
-  if (ok) {
-    strcpy(parsed.revision, revision);
-  }
   ok = ok && parse_binding(&cursor, "boot", &parsed.boot) &&
       parse_binding(&cursor, "previous-boot", &parsed.previous_boot);
-  for (unsigned i = 0; ok && i < CONFIG_SET_FILES; ++i) {
-    ok = word(&cursor, "selected", ' ') && word(&cursor, file_names[i], ' ');
-    ok = ok && parse_digest(&cursor, &parsed.selected[i]);
-  }
   for (unsigned group = 0; ok && group < 2; ++group) {
-    struct config_recovery_file *files = group ? parsed.obsolete : parsed.previous;
-    for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
-      ok = word(&cursor, group ? "obsolete" : "previous", ' ') &&
-          word(&cursor, file_names[i], ' ');
-      char *name = ok ? token(&cursor, ' ') : NULL;
-      char *length = name ? token(&cursor, ' ') : NULL;
-      char *hash = length ? token(&cursor, '\n') : NULL;
-      ok = name && strlen(name) < sizeof(files[i].name) &&
-          decimal(length, &files[i].digest.size) && hash;
-      if (ok && strcmp(name, "-")) {
-        ok = hex_valid(hash, 64);
-        if (ok) {
-          strcpy(files[i].name, name);
-          files[i].digest.present = true;
-          strcpy(files[i].digest.sha256, hash);
-        }
-      } else if (ok) {
-        ok = !strcmp(hash, "-") && !files[i].digest.size;
+    struct config_recovery_file *file = group ? &parsed.obsolete_menu : &parsed.previous_menu;
+    ok = word(&cursor, group ? "obsolete" : "previous", ' ') &&
+        word(&cursor, CONFIG_MENU_NAME, ' ');
+    char *name = ok ? token(&cursor, ' ') : NULL;
+    char *length = name ? token(&cursor, ' ') : NULL;
+    char *hash = length ? token(&cursor, '\n') : NULL;
+    ok = name && strlen(name) < sizeof(file->name) &&
+        decimal(length, &file->digest.size) && hash;
+    if (ok && strcmp(name, "-")) {
+      ok = hex_valid(hash, 64);
+      if (ok) {
+        strcpy(file->name, name);
+        file->digest.present = true;
+        strcpy(file->digest.sha256, hash);
       }
+    } else if (ok) {
+      ok = !strcmp(hash, "-") && !file->digest.size;
     }
   }
   ok = ok && !*cursor && config_record_valid(&parsed);

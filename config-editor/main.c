@@ -1,170 +1,150 @@
 #include "../common/bootstrap_environment.h"
-#include "context.h"
-#include "../xfer/hash.h"
-#include "../installer/progress.h"
+#include "../libconfig/boot.h"
+#include "../libconfig/network.h"
+#include "../libconfig/session.h"
+
+#include <literal.h>
 #include <startup.h>
-#include <term.h>
-#include <unistd.h>
+#include <system_info.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static bool line(const char *prompt, char *bytes, size_t capacity)
+#define POOL_BOOT_PATH "system://config/boot.lua"
+#define POOL_SESSION_PATH "system://config/session.lua"
+#define POOL_NETWORK_PATH "system://config/network.lua"
+
+/* Reads PATH whole, up to the literal source limit. False prints why. */
+static bool read_pool_file(const char *path, char **bytes, size_t *size)
 {
-  if (isatty(fileno(stdin)) && isatty(fileno(stderr))) {
-    struct terminal terminal = {
-      bootstrap_stdio(ENVIRONMENT_STDIN).handle,
-      bootstrap_stdio(ENVIRONMENT_STDERR).handle,
-    };
-    struct term_line_result result = term_read_line(&terminal, prompt, bytes, capacity);
-    return result.status == TERM_LINE_OK && !result.limit_reached;
-  }
-  fputs(prompt, stderr);
-  if (!fgets(bytes, capacity, stdin)) {
+  *bytes = NULL;
+  *size = 0;
+  FILE *file = fopen(path, "rb");
+  if (!file) {
+    if (errno == ENOENT) {
+      fprintf(stderr, "config: %s is missing\n", path);
+    } else {
+      fprintf(stderr, "config: %s: not checked (no readable system:// root)\n", path);
+    }
     return false;
   }
-  size_t length = strlen(bytes);
-  if (!length || bytes[length - 1] != '\n') {
+  char *buffer = malloc(LITERAL_SOURCE_LIMIT + 1);
+  size_t count = buffer ? fread(buffer, 1, LITERAL_SOURCE_LIMIT + 1, file) : 0;
+  bool ok = buffer && !ferror(file);
+  fclose(file);
+  if (!ok) {
+    fprintf(stderr, "config: %s: cannot read\n", path);
+  } else if (count > LITERAL_SOURCE_LIMIT) {
+    fprintf(stderr, "config: %s exceeds %d bytes\n", path, LITERAL_SOURCE_LIMIT);
+    ok = false;
+  }
+  if (!ok) {
+    free(buffer);
     return false;
   }
-  bytes[length - 1] = '\0';
+  *bytes = buffer;
+  *size = count;
   return true;
 }
 
-static bool confirm(void)
+/* The spaces and volumes boot would start, and their CPUs against this
+ * machine's. */
+static bool validate_boot(void)
 {
-  char answer[64];
-  return line("Type config to publish this reviewed set, or anything else to cancel: ",
-      answer, sizeof(answer)) && !strcmp(answer, "config");
-}
-
-static void review(const struct config_delta_plan *plan)
-{
-  for (size_t i = 0; i < plan->count; ++i) {
-    config_delta_plan_review(plan, i, stderr);
-  }
-  for (size_t i = 0; i < CONFIG_FILE_COUNT; ++i) {
-    if (plan->files[i].print_only) {
-      fprintf(stderr, "config: %s untouched: %s\n", config_file_name(i), plan->files[i].reason);
-    }
-  }
-}
-
-static bool print_plan(struct config_editor_context *context)
-{
-  if (!context->target.valid) {
-    fputs("config: no issuer-bound target; cannot print a replayable plan\n", stderr);
+  char *bytes;
+  size_t size;
+  if (!read_pool_file(POOL_BOOT_PATH, &bytes, &size)) {
     return false;
   }
-  struct config_replay_input inputs[CONFIG_REPLAY_INPUTS];
-  config_editor_hashes(context, inputs);
-  return config_replay_write(stdout, context->target_text, inputs, &context->plan);
-}
-
-static bool edit(struct config_editor_context *context)
-{
-  if (!context->writer || !context->target.valid) {
-    fputs("config: edit refused: declared writer and stable ESP facts are required\n", stderr);
+  struct boot_config config = {0};
+  struct boot_plan plan = {0};
+  struct config_failure failure = {0};
+  bool ok = boot_config_read_pool_bytes(POOL_BOOT_PATH, bytes, size, &config,
+      &failure) == BOOT_CONFIG_OK && boot_plan_build(&config, &plan, &failure);
+  free(bytes);
+  if (!ok) {
+    fprintf(stderr, "config: %s is invalid: %s\n", POOL_BOOT_PATH,
+        failure.text[0] ? failure.text : "invalid");
+    boot_config_free(&config);
     return false;
   }
-  bool boot_refused = false;
-  for (size_t i = 0; i < context->plan.count; ++i) {
-    const struct config_plan_change *change = &context->plan.changes[i];
-    const struct config_catalog_entry *entry = change->entry ? change->entry : change->old_entry;
-    /* Installed boot reads spaces from the pool file, never the ESP copy, so
-     * offering boot.lua choices here would edit a file nothing reads. */
-    if (entry && entry->file == CONFIG_FILE_BOOT) {
-      if (!boot_refused) {
-        fputs("config: boot.lua: edit system://config/boot.lua directly; it applies at next boot\n",
-            stderr);
-        boot_refused = true;
-      }
-      continue;
-    }
-    config_delta_plan_review(&context->plan, i, stderr);
-    char answer[64];
-    for (;;) {
-      if (!line("Choice [Enter keeps shown choice, keep/apply/adopt/remove, cancel]: ",
-          answer, sizeof(answer)) || !strcmp(answer, "cancel")) {
-        return false;
-      }
-      if (!answer[0]) {
-        break;
-      }
-      bool chosen = false;
-      for (unsigned choice = CONFIG_CHOICE_KEEP; choice <= CONFIG_CHOICE_REMOVE; ++choice) {
-        if (!strcmp(answer, config_plan_choice_name(choice)) &&
-            config_delta_plan_choose(&context->plan, i, choice)) {
-          chosen = true;
-          break;
+  fputs("config: " POOL_BOOT_PATH " is valid\n", stderr);
+  for (size_t i = 0; i < plan.space_count; ++i) {
+    fprintf(stderr, "config: space %s, init %s\n", plan.spaces[i]->name, plan.spaces[i]->init);
+  }
+  for (size_t i = 0; i < plan.volume_count; ++i) {
+    fprintf(stderr, "config: volume %s\n", plan.volumes[i]->name);
+  }
+  struct system_info_cpu cpu;
+  if (system_info_get_cpu(bootstrap_capability("system_info"), &cpu) == CALL_OK && cpu.online_count) {
+    for (size_t i = 0; i < plan.space_count; ++i) {
+      const struct boot_space *space = plan.spaces[i];
+      for (size_t j = 0; j < space->cpu_count; ++j) {
+        if (space->cpus[j] >= cpu.online_count) {
+          fprintf(stderr, "config: space %s names absent CPU %llu\n", space->name,
+              (unsigned long long)space->cpus[j]);
+          ok = false;
         }
       }
-      if (chosen) {
-        break;
-      }
-      fputs("config: choice unavailable for this change\n", stderr);
     }
+  } else {
+    fputs("config: CPU presence: not checked (read authority/inventory unavailable)\n", stderr);
   }
-  review(&context->plan);
-  char action[64];
-  if (!line("Final action [apply/print/cancel]: ", action, sizeof(action))) {
+  boot_plan_free(&plan);
+  boot_config_free(&config);
+  return ok;
+}
+
+static bool validate_session(void)
+{
+  char *bytes;
+  size_t size;
+  if (!read_pool_file(POOL_SESSION_PATH, &bytes, &size)) {
     return false;
   }
-  if (!strcmp(action, "print")) {
-    return print_plan(context);
+  struct session_config config;
+  bool ok = session_config_read_literal_bytes(POOL_SESSION_PATH, bytes, size,
+      &config) == CONFIG_OK;
+  free(bytes);
+  if (ok) {
+    session_config_free(&config);
   }
-  if (!strcmp(action, "apply")) {
-    return confirm() && config_editor_publish(context);
+  fprintf(stderr, "config: %s is %s\n", POOL_SESSION_PATH, ok ? "valid" : "invalid");
+  return ok;
+}
+
+static bool validate_network(void)
+{
+  char *bytes;
+  size_t size;
+  if (!read_pool_file(POOL_NETWORK_PATH, &bytes, &size)) {
+    return false;
   }
-  return false;
+  struct network_config config;
+  bool ok = network_config_read_literal_bytes(POOL_NETWORK_PATH, bytes, size,
+      &config) == CONFIG_OK;
+  free(bytes);
+  if (ok) {
+    network_config_free(&config);
+  }
+  fprintf(stderr, "config: %s is %s\n", POOL_NETWORK_PATH, ok ? "valid" : "invalid");
+  return ok;
 }
 
 int main(int argc, char **argv)
 {
-  bool noninteractive = argc == 3 && !strcmp(argv[2], "--confirm=config");
-  if (argc < 2 || argc > 3 || (argc == 3 && (!noninteractive || strcmp(argv[1], "apply"))) ||
-      (strcmp(argv[1], "validate") && strcmp(argv[1], "plan") && strcmp(argv[1], "edit") && strcmp(argv[1], "apply"))) {
-    fputs("usage: config validate | plan | edit | apply [--confirm=config]\n", stderr);
+  if (argc != 2 || strcmp(argv[1], "validate")) {
+    fputs("usage: config validate\n", stderr);
     return EXIT_FAILURE;
   }
-  if (!hash_init(bootstrap_capability("clock"), bootstrap_capability("random"))) {
-    fputs("config: declared clock/random unavailable for source hashing\n", stderr);
-    hash_close();
-    return EXIT_FAILURE;
-  }
-  struct config_editor_context context;
-  /* Keep local phase detail; this client has no Caelum diagnostic writer. */
-  install_progress_plain_stream(bootstrap_capability("clock"), stderr, HANDLE_INVALID, true);
-  bool ok = config_editor_load(&context);
-  if (ok && !strcmp(argv[1], "validate")) {
-    ok = config_editor_validate(&context, false);
-  } else if (ok && config_editor_plan(&context)) {
-    if (!strcmp(argv[1], "plan")) {
-      review(&context.plan);
-      if (!config_editor_validate(&context, true)) {
-        fputs("config: planned selection is invalid; revise choices before apply\n", stderr);
-      }
-      ok = print_plan(&context);
-    } else if (!strcmp(argv[1], "edit")) {
-      ok = edit(&context);
-    } else {
-      struct config_replay replay;
-      struct config_replay_input inputs[CONFIG_REPLAY_INPUTS];
-      config_editor_hashes(&context, inputs);
-      ok = context.writer && context.target.valid && config_replay_read(stdin, &replay) &&
-          config_replay_matches(&replay, context.target_text, inputs, &context.plan);
-      if (ok) {
-        review(&context.plan);
-        ok = (noninteractive || confirm()) && config_editor_publish(&context);
-      } else {
-        fputs("config: apply refused: absent authority/evidence, stale inputs or unavailable choices\n", stderr);
-      }
-    }
-  } else {
-    ok = false;
-  }
-  config_editor_close(&context);
-  install_progress_finish();
-  hash_close();
+  /* Boot applies none of the three unless all are valid. */
+  bool ok = validate_boot();
+  ok = validate_session() && ok;
+  ok = validate_network() && ok;
+  fputs("config: mounted volumes, packaged timezone data and live network availability: not checked\n",
+      stderr);
+  fputs(ok ? "config: boot applies this configuration\n" :
+      "config: boot rejects this configuration and starts the rescue space\n", stderr);
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -7,10 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const file_names[CONFIG_LUA_COUNT] = {
-  "boot.lua", "session.lua", "network.lua"
-};
-
 static bool failed(enum call_status *status, enum call_status failure)
 {
   *status = failure;
@@ -51,20 +47,6 @@ void config_handoff_bytes_free(struct config_handoff_bytes *snapshot)
     free(snapshot->bytes);
     *snapshot = (struct config_handoff_bytes){0};
   }
-}
-
-static bool source_valid(const struct config_selection *selection, size_t index)
-{
-  if (!selection->bytes[index] || !selection->sizes[index] ||
-      selection->sizes[index] > LITERAL_SOURCE_LIMIT) {
-    return false;
-  }
-  struct literal *document = NULL;
-  struct literal_diagnostic diagnostic;
-  bool ok = literal_parse(selection->bytes[index], selection->sizes[index],
-      &document, &diagnostic);
-  literal_free(document);
-  return ok;
 }
 
 bool config_handoff_file(handle_t private_parent, const char *name, const char *bytes,
@@ -108,42 +90,6 @@ bool config_handoff_file(handle_t private_parent, const char *name, const char *
   if (ok) {
     *file = reader;
   } else if (reader != HANDLE_INVALID && handle_close(reader) != 0) {
-    failed(status, CALL_OUTCOME_UNKNOWN);
-  }
-  return ok;
-}
-
-bool config_handoff_create(handle_t private_parent, const struct config_selection *selection,
-    struct config_handoff *handoff, enum call_status *status)
-{
-  if (!status) {
-    return false;
-  }
-  *status = CALL_OK;
-  if (!selection || !handoff) {
-    return failed(status, CALL_BAD_REQUEST);
-  }
-  for (size_t i = 0; i < CONFIG_LUA_COUNT; ++i) {
-    if (handoff->files[i] != HANDLE_INVALID || !source_valid(selection, i)) {
-      return failed(status, CALL_BAD_REQUEST);
-    }
-  }
-  uint64_t rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
-      DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO;
-  struct directory_filesystem_info filesystem;
-  if (!native_grant(private_parent, PROTOCOL_DIRECTORY, rights, false, status)) {
-    return false;
-  }
-  *status = directory_filesystem_info(private_parent, &filesystem);
-  if (*status != CALL_OK || filesystem.type != FILESYSTEM_TYPE_RAM) {
-    return *status != CALL_OK ? false : failed(status, CALL_DENIED);
-  }
-  bool ok = true;
-  for (size_t i = 0; ok && i < CONFIG_LUA_COUNT; ++i) {
-    ok = config_handoff_file(private_parent, file_names[i], selection->bytes[i],
-        selection->sizes[i], &handoff->files[i], status);
-  }
-  if (!ok && !config_handoff_close(handoff)) {
     failed(status, CALL_OUTCOME_UNKNOWN);
   }
   return ok;

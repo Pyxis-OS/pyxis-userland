@@ -1910,7 +1910,7 @@ int main(int argc, char **argv)
   } else if (pool_configured) {
     configured = read_pool_configuration(&authority, pool, &mounts, &defaults, &session,
         &network, rescue, sizeof(rescue));
-    if (configured && !boot_plan_build(&defaults, NULL, &plan, &failure)) {
+    if (configured && !boot_plan_build(&defaults, &plan, &failure)) {
       snprintf(rescue, sizeof(rescue), "system://" POOL_BOOT_PATH ": %s",
           failure.text[0] ? failure.text : "invalid");
       configured = false;
@@ -1924,7 +1924,7 @@ int main(int argc, char **argv)
     printf("boot-init: reading %s\n", LIVE_CONFIG);
     enum boot_config_result result = boot_config_read(LIVE_CONFIG, &defaults);
     configured = result == BOOT_CONFIG_OK &&
-        boot_plan_build(&defaults, NULL, &plan, NULL);
+        boot_plan_build(&defaults, &plan, NULL);
     if (!configured) {
       snprintf(rescue, sizeof(rescue), "%s %s", LIVE_CONFIG,
           result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");

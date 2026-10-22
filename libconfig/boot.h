@@ -22,7 +22,7 @@ struct config_failure;
 #define BOOT_SOURCE_PATH_COMPONENTS 16
 /* The highest CPU index a configuration may name; presence is checked at boot. */
 #define BOOT_CPU_INDEX_MAX 4095
-/* The volume the pool override lives on; an override cannot redefine it. */
+/* The pool's system volume, which holds the installed configuration. */
 #define BOOT_SYSTEM_VOLUME "system"
 /* Spaces start in this root unless they name another with start. */
 #define BOOT_HOME_ROOT "home"
@@ -125,17 +125,12 @@ struct boot_config {
   size_t space_count;
 };
 
-enum boot_entry_source { BOOT_ENTRY_DEFAULT, BOOT_ENTRY_OVERRIDE };
-
-/* Borrowed view of the configuration that boots: the default with an
- * override merged by name. Entries point into one or two boot_configs that
- * must outlive the plan. The plan owns its pointer and source arrays. */
+/* Borrowed view of the configuration that boots. Entries point into the
+ * boot_config, which must outlive the plan. The plan owns its pointer arrays. */
 struct boot_plan {
   const struct boot_volume **volumes;
-  enum boot_entry_source *volume_sources;
   size_t volume_count;
   const struct boot_space **spaces;
-  enum boot_entry_source *space_sources;
   size_t space_count;
 };
 
@@ -145,38 +140,23 @@ enum boot_config_result {
   BOOT_CONFIG_INVALID,
 };
 
-/* Reads archive defaults through libc, including hostname/input policy, or a pool
- * boot override from SIZE bytes. The override accepts volumes, spaces and
- * input.touchpad_speed; no other machine policy may be overridden.
- * Schema errors go to stderr. CONFIG is cleared first and must be freed. */
+/* Reads a trusted archive configuration through libc, including hostname and
+ * input policy. Schema errors go to stderr. CONFIG is cleared first and must
+ * be freed. */
 enum boot_config_result boot_config_read(const char *path, struct boot_config *config);
-enum boot_config_result boot_config_read_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config);
-/* Trusted archive bytes include machine defaults. Literal ESP bytes use the
- * same override schema and never evaluate executable Lua. */
-enum boot_config_result boot_config_read_archive_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config);
-enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config);
 /* The pool's system://config/boot.lua, the whole installed configuration:
  * archive schema, literal data only. A non-NULL FAILURE receives the reason
  * instead of stderr. */
 enum boot_config_result boot_config_read_pool_bytes(const char *name,
     const char *bytes, size_t size, struct boot_config *config, struct config_failure *failure);
-/* Archive schema, including machine defaults, without executing input Lua. */
-enum boot_config_result boot_config_read_archive_literal_bytes(const char *name, const char *bytes,
-    size_t size, struct boot_config *config);
 void boot_config_free(struct boot_config *config);
 
-/* Builds the plan for DEFAULTS and an optional OVERRIDE. An override entry
- * replaces a default of the same name whole; new names follow the defaults.
- * Then checks what spans entries: the override cannot redefine the system
- * volume, roots must name defined volumes, start must name one of its space's
- * roots and at most one space may own the network or request boot focus.
- * False reports the reason on stderr, or in a non-NULL FAILURE, and leaves PLAN
- * empty. */
-bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan, struct config_failure *failure);
+/* Builds the plan for CONFIG and checks what spans entries: roots must name
+ * defined volumes, start must name one of its space's roots and at most one
+ * space may own the network or request boot focus. False reports the reason
+ * on stderr, or in a non-NULL FAILURE, and leaves PLAN empty. */
+bool boot_plan_build(const struct boot_config *config, struct boot_plan *plan,
+    struct config_failure *failure);
 void boot_plan_free(struct boot_plan *plan);
 const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const char *name);
 /* True for the boot, tmp and bin roots and the space's configured roots. */

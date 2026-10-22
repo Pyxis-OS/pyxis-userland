@@ -566,7 +566,7 @@ static bool recorded_menu_read(handle_t root, const struct config_recovery_file 
 static bool committed_menu(handle_t root, const struct config_record *record,
     const uint8_t disk_guid[16], uint64_t pool_partition, struct config_blob *menu)
 {
-  if (!record->committed || !record->boot.present) {
+  if (!record->committed) {
     return false;
   }
   struct config_blob current = {0}, previous = {0};
@@ -586,7 +586,7 @@ static bool committed_menu(handle_t root, const struct config_record *record,
     ok = config_blob_set(menu, current.bytes, current.size);
     pending = !ok;
   } else if (ok) {
-    ok = recorded_menu_read(root, &record->previous[CONFIG_LIMINE], &previous) &&
+    ok = recorded_menu_read(root, &record->previous_menu, &previous) &&
         config_blob_equal(&current, &previous);
     /* The digest proof owns its previous entry, whatever attempt it names. */
     const struct install_boot_menu replaced = {&inherited, NULL, true};
@@ -638,7 +638,7 @@ bool install_recovery_menu_review(handle_t root, const struct config_blob *recor
     }
     bool known = name_equal(name, "limine.conf");
     const struct config_recovery_file *owned[] = {
-      &parsed.previous[CONFIG_LIMINE], &parsed.obsolete[CONFIG_LIMINE]
+      &parsed.previous_menu, &parsed.obsolete_menu
     };
     for (unsigned i = 0; !known && i < sizeof(owned) / sizeof(*owned); ++i) {
       if (!owned[i]->digest.present || !name_equal(name, owned[i]->name)) {
@@ -649,8 +649,8 @@ bool install_recovery_menu_review(handle_t root, const struct config_blob *recor
       config_blob_destroy(&bytes);
     }
     char staged[CONFIG_ARTIFACT_NAME_BYTES];
-    if (!known && parsed.committed && parsed.boot.present &&
-        config_record_artifact_name(parsed.transaction, CONFIG_LIMINE, "new", staged) &&
+    if (!known && parsed.committed &&
+        config_record_artifact_name(parsed.transaction, CONFIG_MENU_NAME, "new", staged) &&
         name_equal(name, staged)) {
       char path[sizeof("boot/limine/") + CONFIG_ARTIFACT_NAME_BYTES];
       snprintf(path, sizeof(path), "boot/limine/%s", staged);
@@ -674,11 +674,9 @@ bool install_recovery_resolved(handle_t root, const struct config_blob *record)
   struct config_record parsed = {0};
   if (!record->digest.present) return true;
   if (!config_record_parse(record->bytes, record->size, &parsed) || !parsed.committed) return false;
-  for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) {
-    if (!parsed.obsolete[i].digest.present) continue;
+  if (parsed.obsolete_menu.digest.present) {
     char path[256];
-    snprintf(path, sizeof(path), "%s/%s", i == CONFIG_LIMINE ? "boot/limine" : "EFI/pyxis/config",
-        parsed.obsolete[i].name);
+    snprintf(path, sizeof(path), "boot/limine/%s", parsed.obsolete_menu.name);
     struct config_blob artifact = {0};
     bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);
     bool present = artifact.digest.present;
@@ -689,7 +687,7 @@ bool install_recovery_resolved(handle_t root, const struct config_blob *record)
     }
   }
   char staged[CONFIG_ARTIFACT_NAME_BYTES], path[256];
-  if (!config_record_artifact_name(parsed.transaction, CONFIG_LIMINE, "new", staged)) return false;
+  if (!config_record_artifact_name(parsed.transaction, CONFIG_MENU_NAME, "new", staged)) return false;
   snprintf(path, sizeof(path), "boot/limine/%s", staged);
   struct config_blob artifact = {0};
   bool ok = install_snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &artifact);

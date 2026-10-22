@@ -540,7 +540,7 @@ done:
 #if INSTALLER_PUBLICATION_SCRATCH
   if (install_plan_publication(plan)) {
     fputs(updating ? "updated\n" : "installed\n", stderr);
-    fputs("Boot-bound configuration and owned menu activation verified.\n", stderr);
+    fputs("Boot record and owned menu activation verified.\n", stderr);
   } else
 #endif
   {

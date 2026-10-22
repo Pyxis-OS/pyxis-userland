@@ -37,6 +37,20 @@ static bool fail(struct scanner *scanner, size_t offset, const char *reason)
   return false;
 }
 
+bool config_entry_id_valid(const char *bytes, size_t size)
+{
+  if (!size || size > CONFIG_ENTRY_ID_LIMIT) return false;
+  for (size_t i = 0; i < size; ++i) {
+    char byte = bytes[i];
+    bool alphanumeric = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+        (byte >= '0' && byte <= '9');
+    if (!alphanumeric && (i == 0 || (byte != '_' && byte != '-' && byte != '.' && byte != ':'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const struct config_owned_span *config_owned_find(const struct config_owned_set *set,
     const char *id)
 {
@@ -87,7 +101,7 @@ static bool marker(struct scanner *scanner, size_t comment_start, size_t content
   if (begin) {
     if (scanner->active) return fail(scanner, comment_start, "overlapping ownership markers");
     if (config_owned_find(scanner->set, id)) return fail(scanner, comment_start, "duplicate ownership ID");
-    if (scanner->set->count == CONFIG_CATALOG_ENTRY_LIMIT) return fail(scanner, comment_start, "too many ownership spans");
+    if (scanner->set->count == CONFIG_OWNED_SPAN_LIMIT) return fail(scanner, comment_start, "too many ownership spans");
     struct config_owned_span *span = &scanner->set->spans[scanner->set->count++];
     span->id = strdup(id);
     if (!span->id) return fail(scanner, comment_start, "cannot allocate ownership ID");
@@ -109,7 +123,7 @@ static bool start(struct scanner *scanner)
 {
   scanner->set = calloc(1, sizeof(*scanner->set));
   if (!scanner->set) return fail(scanner, 0, "cannot allocate ownership set");
-  scanner->set->spans = calloc(CONFIG_CATALOG_ENTRY_LIMIT, sizeof(*scanner->set->spans));
+  scanner->set->spans = calloc(CONFIG_OWNED_SPAN_LIMIT, sizeof(*scanner->set->spans));
   if (!scanner->set->spans) {
     config_owned_free(scanner->set);
     scanner->set = NULL;
@@ -127,24 +141,6 @@ static bool finish(struct scanner *scanner, bool valid, struct config_owned_set 
   }
   *output = scanner->set;
   return true;
-}
-
-bool config_owned_scan_lua(const char *name, const struct literal *document,
-    struct config_owned_set **output)
-{
-  *output = NULL;
-  struct scanner scanner = {.name = name, .bytes = document->source, .size = document->size};
-  if (!start(&scanner)) return false;
-  bool valid = true;
-  for (size_t i = 0; i < document->comment_count; ++i) {
-    const struct literal_comment *comment = &document->comments[i];
-    if (!comment->long_comment && !marker(&scanner, comment->span.start,
-        comment->content.start, comment->content.end)) {
-      valid = false;
-      break;
-    }
-  }
-  return finish(&scanner, valid, output);
 }
 
 bool config_owned_scan_limine(const char *name, const char *bytes, size_t size,
@@ -168,54 +164,4 @@ bool config_owned_scan_limine(const char *name, const char *bytes, size_t size,
     position = next_line(bytes, size, end);
   }
   return finish(&scanner, valid, output);
-}
-
-bool config_limine_entry_valid(const char *entry_name, const char *bytes, size_t size)
-{
-  if (!bytes || !size || size > LITERAL_SOURCE_LIMIT) return false;
-  bool header = false, protocol = false, path = false;
-  for (size_t i = 0; i < size; ++i) {
-    unsigned char byte = (unsigned char)bytes[i];
-    if ((byte < 0x20 && byte != '\t' && byte != '\r' && byte != '\n') || byte == 0x7f) return false;
-  }
-  for (size_t position = 0; position < size;) {
-    size_t end = line_end(bytes, size, position);
-    size_t start = position;
-    while (start < end && horizontal(bytes[start])) ++start;
-    size_t trimmed_end = end;
-    while (trimmed_end > start && horizontal(bytes[trimmed_end - 1])) --trimmed_end;
-    if (start < trimmed_end && bytes[start] == '#') {
-      size_t comment = start + 1;
-      while (comment < trimmed_end && horizontal(bytes[comment])) ++comment;
-      if (trimmed_end - comment >= 6 && !memcmp(bytes + comment, "pyxis:", 6)) return false;
-    }
-    if (start < trimmed_end && bytes[start] != '#') {
-      if (bytes[start] == '/') {
-        if (header || (start + 1 < trimmed_end && bytes[start + 1] == '/') ||
-            trimmed_end - start - 1 != strlen(entry_name) ||
-            memcmp(bytes + start + 1, entry_name, strlen(entry_name))) return false;
-        header = true;
-      } else {
-        if (!header) return false;
-        size_t colon = start;
-        while (colon < trimmed_end && bytes[colon] != ':') ++colon;
-        if (colon == trimmed_end) return false;
-        size_t key_end = colon;
-        while (key_end > start && horizontal(bytes[key_end - 1])) --key_end;
-        if (key_end == start) return false;
-        size_t value = colon + 1;
-        while (value < trimmed_end && horizontal(bytes[value])) ++value;
-        if (value == trimmed_end) return false;
-        if (key_end - start == 8 && !memcmp(bytes + start, "protocol", 8)) {
-          if (protocol) return false;
-          protocol = true;
-        } else if (key_end - start == 4 && !memcmp(bytes + start, "path", 4)) {
-          if (path) return false;
-          path = true;
-        }
-      }
-    }
-    position = next_line(bytes, size, end);
-  }
-  return header && protocol && path;
 }
