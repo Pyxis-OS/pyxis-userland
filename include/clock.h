@@ -12,7 +12,7 @@ enum call_status clock_now(handle_t clock, uint64_t *nanoseconds);
  * normalized nanosecond fraction. No local-time conversion or setting. */
 enum call_status clock_wall_now(handle_t clock, struct clock_wall_reading *reading);
 /* READ authority. Explicit cached observations, with the same output/failure
- * rules as their precise counterparts. Each quality is monotonic separately;
+ * rules as their precise counterparts. Monotonic observations are ordered separately by quality;
  * a coarse observation may trail an earlier precise one. See abi/clock.h. */
 enum call_status clock_coarse_now(handle_t clock, uint64_t *nanoseconds);
 enum call_status clock_wall_coarse_now(handle_t clock, struct clock_wall_reading *reading);
