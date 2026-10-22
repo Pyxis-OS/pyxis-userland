@@ -531,11 +531,11 @@ static enum command_result expanded_command(struct shell *shell,
         (expansion->words[0].capture->outcome.kind == TERMINAL_COMPLETION_TERMINATED ||
          expansion->words[0].capture->outcome.kind == TERMINAL_COMPLETION_FAULTED) ?
         expansion->words[0].capture->outcome :
-        (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED};
+        (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, result == COMMAND_FAILED, false};
     return result;
   }
   if (!command->stage_count) {
-    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0};
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0, false};
     return COMMAND_OK;
   }
   for (size_t i = 0; i < command->stage_count; ++i) {
@@ -559,7 +559,7 @@ static enum command_result expanded_command(struct shell *shell,
   if (builtin) {
     enum command_result result = builtin_command(shell, expansion);
     *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN,
-        result == COMMAND_FAILED};
+        result == COMMAND_FAILED, false};
     return result;
   }
   return shell_launch_pipeline(shell, command, outcome);
@@ -568,7 +568,7 @@ static enum command_result expanded_command(struct shell *shell,
 enum command_result shell_command(struct shell *shell, char *line,
     struct shell_outcome *outcome)
 {
-  *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
+  *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0, false};
   struct shell_syntax syntax = {0};
   const char *error = shell_syntax_parse(line, &syntax);
   if (error) {
@@ -576,7 +576,7 @@ enum command_result shell_command(struct shell *shell, char *line,
   }
   enum command_result result = COMMAND_OK;
   if (!syntax.count) {
-    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0};
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_BUILTIN, 0, false};
   }
   bool faulted = false;
   for (size_t i = 0; i < syntax.count; ++i) {
@@ -591,7 +591,7 @@ enum command_result shell_command(struct shell *shell, char *line,
     }
     struct shell_expansion expansion = {0};
     enum call_status status;
-    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
+    *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0, false};
     error = shell_syntax_expand(shell, &syntax.commands[i], &expansion, &status);
     if (error) {
       result = status == CALL_OK ? shell_error(shell, "shell: %s\n", error) :
@@ -602,7 +602,7 @@ enum command_result shell_command(struct shell *shell, char *line,
           expansion.failure_outcome.kind == TERMINAL_COMPLETION_FAULTED) {
         *outcome = expansion.failure_outcome;
       } else if (status == CALL_ABANDONED) {
-        *outcome = (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0};
+        *outcome = (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0, false};
       }
     } else {
       result = expanded_command(shell, &expansion, syntax.commands[i].assignment, outcome);
@@ -612,7 +612,7 @@ enum command_result shell_command(struct shell *shell, char *line,
       }
     }
     if (result == COMMAND_FATAL || result == COMMAND_EXIT ||
-        outcome->kind == TERMINAL_COMPLETION_TERMINATED) {
+        outcome->kind == TERMINAL_COMPLETION_TERMINATED || outcome->cancelled) {
       break;
     }
     faulted = outcome->kind == TERMINAL_COMPLETION_FAULTED;

@@ -34,6 +34,7 @@ enum command_result {
 struct shell_outcome {
   uint64_t kind;
   int64_t status;
+  bool cancelled; /* Stops the command list without changing native completion. */
 };
 
 enum shell_launch_mode { SHELL_FOREGROUND, SHELL_BACKGROUND, SHELL_SESSION,

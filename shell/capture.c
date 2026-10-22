@@ -317,7 +317,7 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
     }
     result->command = COMMAND_OK;
     preparation = CALL_OK;
-    result->outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0};
+    result->outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0, false};
     struct shell_expansion expansion = {0};
     enum call_status expanded;
     diagnostic = shell_syntax_expand(shell, command, &expansion, &expanded);
@@ -333,7 +333,7 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
           expansion.failure_outcome.kind == TERMINAL_COMPLETION_FAULTED ||
           status == CALL_ABANDONED) {
         result->outcome = expansion.failure_outcome.kind ? expansion.failure_outcome :
-            (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0};
+            (struct shell_outcome){TERMINAL_COMPLETION_TERMINATED, 0, false};
         status = CALL_OK;
         break;
       }

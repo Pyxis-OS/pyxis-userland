@@ -54,3 +54,6 @@ one SET batch. See the shell reference's startup settings section.
 Trusted startup uses the separately packaged `boot://init-shell.pxe` with a
 pre-granted script input. This bundle neither grants root launch authority nor
 creates retention accounts.
+
+A Ctrl+C-cancelled foreground job ends its command list, even if an opted-in
+process exits gracefully. Its actual completion kind and status are preserved.

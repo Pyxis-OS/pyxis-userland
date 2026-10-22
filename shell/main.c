@@ -392,7 +392,7 @@ int main(int argc, char **argv)
         break;
       }
       if (!report_completion(&shell, events,
-          (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0})) {
+          (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0, false})) {
         break;
       }
       continue;

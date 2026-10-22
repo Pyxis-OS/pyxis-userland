@@ -335,7 +335,7 @@ static void free_preparation(struct prepared_stage *stages, size_t stage_count)
 static void set_outcome(struct shell_outcome *outcome, uint64_t kind, int64_t status)
 {
   if (outcome) {
-    *outcome = (struct shell_outcome){kind, status};
+    *outcome = (struct shell_outcome){kind, status, false};
   }
 }
 
@@ -3004,6 +3004,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   default:
     set_outcome(outcome, TERMINAL_COMPLETION_TERMINATED, 0);
     break;
+  }
+  if (outcome) {
+    outcome->cancelled = cancelled;
   }
   return result;
 
