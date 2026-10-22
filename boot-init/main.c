@@ -1687,9 +1687,9 @@ static bool read_pool_configuration(const struct authority *authority, uint32_t 
   return true;
 }
 
-/* The built-in rescue space. On an installed boot it holds the pool's system
- * volume read-write, so the configuration can be fixed or restored (decision
- * 22); otherwise boot and tmp only. */
+/* The built-in rescue space owns the network. On an installed boot it holds
+ * the pool's system volume read-write, so the configuration can be fixed or
+ * restored (decision 22); otherwise boot and tmp only. */
 static void start_rescue(const struct authority *authority, struct mounts *mounts,
     uint32_t pool, const char *reason)
 {
@@ -1698,11 +1698,12 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   };
   static const struct boot_space rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
-    .clipboard_local = true, .clipboard_shared = true,
+    .clipboard_local = true, .clipboard_shared = true, .network = true,
   };
   static const struct boot_space pool_rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
     .clipboard_local = true, .clipboard_shared = true, .roots = roots, .root_count = 1,
+    .network = true,
   };
   printf("boot-init: %s; starting the rescue space\n", reason);
   struct mounted_volume *system = pool ? mount_pool_system(authority, mounts, pool) : NULL;
@@ -1856,16 +1857,25 @@ int main(int argc, char **argv)
       puts("boot-init: read system://config/");
     }
   } else {
-    /* Built-in rescue settings, as the reader's empty configuration. The
-     * rescue space configures no network: loopback only. */
+    /* Built-in rescue settings, as the reader's empty configuration, and the
+     * archive's network profile so rescue can fetch packages. If that profile
+     * cannot be applied either, or a failed attempt left conflicting
+     * definitions, rescue has loopback only. */
     boot_plan_free(&plan);
     boot_config_free(&defaults);
     defaults = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
-    struct network_config loopback = {0};
-    if (!boot_network_prepare(&authority.network, registry, authority.net_policy, &loopback)) {
-      fputs("boot-init: loopback network setup failed; no spaces started\n", stderr);
-      exit_status = EXIT_FAILURE;
-      goto finish;
+    bool archive_network = boot_network_read(&profile, registry, NULL) &&
+        boot_network_prepare(&authority.network, registry, authority.net_policy, &profile);
+    network_config_free(&profile);
+    if (!archive_network) {
+      boot_network_release(&authority.network);
+      struct network_config loopback = {0};
+      puts("boot-init: boot://config/network.lua cannot be applied; rescue has loopback only");
+      if (!boot_network_prepare(&authority.network, registry, authority.net_policy, &loopback)) {
+        fputs("boot-init: loopback network setup failed; no spaces started\n", stderr);
+        exit_status = EXIT_FAILURE;
+        goto finish;
+      }
     }
   }
   authority.services[SERVICE_ECHO] = authority.network.echo;
