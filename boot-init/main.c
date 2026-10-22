@@ -71,6 +71,8 @@
 #define BIN_UNKNOWN_REVISION "unknown"
 #define FAT32_SELECTION_WAIT_NS UINT64_C(10000000000)
 #define FAT32_SELECTION_POLL_NS UINT64_C(1000000)
+/* Start failure reasons print in full; a tab keeps SPACE_REASON_MAX bytes. */
+#define START_REASON_MAX 511
 
 #define BOOT_ROOT_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
@@ -1371,7 +1373,7 @@ static const char *build_launch(const struct authority *authority, struct mounts
         &(struct launch_grant){authority->network.remote_tcp, TCP_SERVICE_RIGHTS, 0});
   }
   if (launch->overflow) {
-    return "launch tables are smaller than their contents";
+    return "launch tables exceed their counted size";
   }
   select_start(space, launch);
   return NULL;
@@ -1425,7 +1427,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     const struct boot_space *space, bool suppress_boot_focus, char *deferred)
 {
   struct space_definition definition = space_definition_of(space);
-  char text[SPACE_REASON_MAX + 1];
+  char text[START_REASON_MAX + 1];
   if (deferred) {
     deferred[0] = '\0';
   }
