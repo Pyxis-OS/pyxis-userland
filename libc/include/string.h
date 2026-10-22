@@ -47,6 +47,9 @@ char *strpbrk(const char *text, const char *accept);
  * Returns NULL when no token remains. */
 char *strtok_r(char *__restrict text, const char *__restrict separators,
     char **__restrict state);
+/* Same splitting with shared internal state; not reentrant or thread-safe.
+ * Use strtok_r for independent token sequences. */
+char *strtok(char *__restrict text, const char *__restrict separators);
 /* First occurrence; an empty needle returns text. NULL when not found. */
 char *strstr(const char *text, const char *needle);
 /* Same search with ASCII case folding; bytes outside ASCII are unchanged. */

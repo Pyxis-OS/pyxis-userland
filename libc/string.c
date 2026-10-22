@@ -157,6 +157,12 @@ char *strtok_r(char *restrict text, const char *restrict separators,
   return text;
 }
 
+char *strtok(char *restrict text, const char *restrict separators)
+{
+  static char *state;
+  return strtok_r(text, separators, &state);
+}
+
 char *strstr(const char *text, const char *needle)
 {
   if (!*needle) {
