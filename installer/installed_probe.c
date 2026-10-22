@@ -172,7 +172,8 @@ enum install_installed_probe install_installed_probe(const struct install_disk *
       goto done;
     }
   }
-  if (!install_pending_inspect(&record, current, &previous, layout->disk_guid, NULL, &pending)) {
+  if (!install_pending_inspect(&record, current, &previous, layout->disk_guid,
+      layout->pool_partition, NULL, &pending)) {
     goto done;
   }
   if (pending.state != INSTALL_PENDING_MENU_CURRENT) {

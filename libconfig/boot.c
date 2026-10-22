@@ -178,7 +178,9 @@ static void read_volume(lua_State *state, struct boot_volume *volume)
   volume->kind = npfs ? BOOT_VOLUME_NPFS : ram_npfs ? BOOT_VOLUME_RAM_NPFS :
       virtio_fs ? BOOT_VOLUME_VIRTIO_FS : ram ? BOOT_VOLUME_RAM : boot_esp ? BOOT_VOLUME_BOOT_ESP : BOOT_VOLUME_FAT32;
   config_field(state, -1, "partition");
-  if (npfs || fat32) {
+  if (npfs && lua_isnil(state, -1)) {
+    volume->partition = BOOT_POOL_PARTITION;
+  } else if (npfs || fat32) {
     volume->partition = take_integer(state, -1, 1, UINT32_MAX, "volume partition");
   } else if (!lua_isnil(state, -1)) {
     luaL_error(state, "volume %s: this kind has no partition selector", volume->name);
@@ -488,9 +490,10 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
   config_field(state, -1, "init");
   space->init = take_string(state, -1, strlen(BOOT_INIT_PREFIX) + 1, BOOT_INIT_MAX, "init");
   lua_pop(state, 1);
-  if (strncmp(space->init, BOOT_INIT_PREFIX, strlen(BOOT_INIT_PREFIX))) {
-    luaL_error(state, "space %s: init must name a " BOOT_INIT_PREFIX " archive entry",
-        space->name);
+  if (strncmp(space->init, BOOT_INIT_PREFIX, strlen(BOOT_INIT_PREFIX)) &&
+      strncmp(space->init, BOOT_POOL_INIT_PREFIX, strlen(BOOT_POOL_INIT_PREFIX))) {
+    luaL_error(state, "space %s: init must name a " BOOT_INIT_PREFIX " archive entry or a "
+        BOOT_POOL_INIT_PREFIX " file", space->name);
   }
   config_field(state, -1, "cpus");
   if (!lua_isnil(state, -1)) {
@@ -827,11 +830,11 @@ enum boot_config_result boot_config_read_literal_bytes(const char *name, const c
   return result_of(config_read_literal_bytes(name, bytes, size, decode_override, config), config);
 }
 
-enum boot_config_result boot_config_read_literal_bytes_reason(const char *name,
+enum boot_config_result boot_config_read_pool_bytes(const char *name,
     const char *bytes, size_t size, struct boot_config *config, struct config_failure *failure)
 {
   *config = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
-  return result_of(config_read_literal_bytes_reason(name, bytes, size, decode_override, config,
+  return result_of(config_read_literal_bytes_reason(name, bytes, size, decode_archive, config,
       failure), config);
 }
 

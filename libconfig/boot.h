@@ -12,9 +12,12 @@ struct config_failure;
 
 /* Names of volumes and spaces: 1..SPACE_NAME_MAX bytes of a-z, 0-9 and '-'. */
 #define BOOT_NAME_MAX SPACE_NAME_MAX
-/* Inits are boot archive entries named by URI. */
+/* Inits are boot archive entries or files on the pool's system volume, such as
+ * the installed spaces' scripts in system://config/, named by URI. */
 #define BOOT_INIT_PREFIX "boot://"
+#define BOOT_POOL_INIT_PREFIX "system://"
 #define BOOT_INIT_MAX 255
+#define BOOT_POOL_PARTITION 0
 #define BOOT_SOURCE_PATH_MAX 255
 #define BOOT_SOURCE_PATH_COMPONENTS 16
 /* The highest CPU index a configuration may name; presence is checked at boot. */
@@ -41,7 +44,9 @@ enum boot_volume_kind {
 struct boot_volume {
   char *name;
   enum boot_volume_kind kind;
-  uint64_t partition; /* npfs/FAT32 only, one-based. */
+  /* npfs/FAT32 only, one-based. An npfs volume that names none is on the pool
+   * (BOOT_POOL_PARTITION), which boot init resolves from mount.pool. */
+  uint64_t partition;
   char *volume; /* npfs and ram-npfs only. */
   uint8_t disk_guid[16]; /* FAT32 only, exact persistent GPT disk selection. */
   bool read_write; /* FAT32 admission mode, independent of delegated views. */
@@ -159,9 +164,10 @@ enum boot_config_result boot_config_read_archive_bytes(const char *name, const c
     size_t size, struct boot_config *config);
 enum boot_config_result boot_config_read_literal_bytes(const char *name, const char *bytes,
     size_t size, struct boot_config *config);
-/* The pool boot override, declarative only for now: as the literal reader, but a
- * non-NULL FAILURE receives the reason instead of stderr. */
-enum boot_config_result boot_config_read_literal_bytes_reason(const char *name,
+/* The pool's system://config/boot.lua, the whole installed configuration:
+ * archive schema, literal data only. A non-NULL FAILURE receives the reason
+ * instead of stderr. */
+enum boot_config_result boot_config_read_pool_bytes(const char *name,
     const char *bytes, size_t size, struct boot_config *config, struct config_failure *failure);
 /* Archive schema, including machine defaults, without executing input Lua. */
 enum boot_config_result boot_config_read_archive_literal_bytes(const char *name, const char *bytes,

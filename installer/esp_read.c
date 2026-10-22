@@ -464,7 +464,7 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
       continue;
     }
     cursor += 8;
-    unsigned init = 0, options = 0, rescue_option = 0;
+    unsigned init = 0, options = 0, rescue_option = 0, pool = 0;
     bool bound = false;
     while (cursor < end) {
       while (cursor < end && horizontal_space(bytes[cursor])) {
@@ -485,6 +485,9 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
       if (same_token(bytes + start, length, INSTALL_RESCUE_OPTION)) {
         ++rescue_option;
       }
+      if (length > 11 && !memcmp(bytes + start, "mount.pool=", 11)) {
+        ++pool;
+      }
       if (length >= 11 && !memcmp(bytes + start, "mount.disk=", 11)) {
         if (bound) {
           return refuse(esp, "ESP boot configuration repeats mount.disk");
@@ -500,9 +503,9 @@ static bool configuration_matches(struct esp_inspection *esp, const char *bytes,
         bound = true;
       }
     }
-    if (init == 1 && bound && !rescue_option && options == 2) {
+    if (init == 1 && bound && pool == 1 && !rescue_option && options == 3) {
       ++normal;
-    } else if (init == 1 && bound && rescue_option == 1 && options == 3) {
+    } else if (init == 1 && bound && pool == 1 && rescue_option == 1 && options == 4) {
       ++rescue;
     } else {
       ++other;

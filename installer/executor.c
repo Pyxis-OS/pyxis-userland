@@ -156,40 +156,26 @@ static bool classic_origin_prepare(const struct install_plan *plan)
   return ok;
 }
 
-/* Seed only a missing owner configuration. Update never replaces an existing
- * file, even when the new package client would reject its contents. */
-static bool package_config_prepare(const struct install_plan *plan)
+/* Copies NAME from SOURCE_DIR into TARGET_DIR unless TARGET_DIR already has it;
+ * an existing file is never replaced or checked. */
+static enum call_status seed_file(handle_t source_dir, handle_t target_dir, const char *name,
+    uint64_t limit)
 {
-  handle_t system = HANDLE_INVALID, config = HANDLE_INVALID;
-  handle_t source_config = HANDLE_INVALID, source = HANDLE_INVALID, target = HANDLE_INVALID;
-  enum call_status status = disk_open_volume(plan->disk.handle, plan->target.pool.partition,
-      "system", DIRECTORY_CONTENT_RIGHTS, &system);
+  handle_t source = HANDLE_INVALID, target = HANDLE_INVALID;
+  enum call_status status = directory_lookup(target_dir, name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ, &target);
   if (status == CALL_OK) {
-    status = directory_create(system, "config", DIRECTORY_KIND_DIRECTORY,
-        DIRECTORY_CONTENT_RIGHTS, &config);
-    if (status == CALL_ALREADY_EXISTS) {
-      status = directory_lookup(system, "config", DIRECTORY_KIND_DIRECTORY,
-          DIRECTORY_CONTENT_RIGHTS, &config);
-    }
+    return close_handle(&target) ? CALL_OK : CALL_IO;
   }
-  if (status != CALL_OK) goto done;
-  if (status == CALL_OK) {
-    status = directory_lookup(config, "packages.lua", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &target);
-    if (status == CALL_OK) goto done;
+  if (status != CALL_NOT_FOUND) {
+    return status;
   }
-  if (status != CALL_NOT_FOUND) goto done;
-  status = directory_lookup(plan->boot, "config", DIRECTORY_KIND_DIRECTORY,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &source_config);
-  if (status == CALL_OK) {
-    status = directory_lookup(source_config, "packages.lua", DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &source);
-  }
+  status = directory_lookup(source_dir, name, DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &source);
   uint64_t size = 0;
   if (status == CALL_OK) status = file_size(source, &size);
-  if (status == CALL_OK && size > PACKAGE_CONFIG_MAX_BYTES) status = CALL_LIMIT;
+  if (status == CALL_OK && size > limit) status = CALL_LIMIT;
   if (status == CALL_OK) {
-    status = directory_create(config, "packages.lua", DIRECTORY_KIND_FILE,
-        FILE_RIGHT_WRITE, &target);
+    status = directory_create(target_dir, name, DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, &target);
   }
   char buffer[512];
   for (uint64_t offset = 0; status == CALL_OK && offset < size;) {
@@ -205,17 +191,68 @@ static bool package_config_prepare(const struct install_plan *plan)
     offset += read;
   }
   if (status == CALL_OK) status = file_sync(target);
+  if (!close_handle(&target) && status == CALL_OK) status = CALL_IO;
+  if (!close_handle(&source) && status == CALL_OK) status = CALL_IO;
+  return status;
+}
+
+/* Seeds missing owner configuration in system://config/: packages.lua on every
+ * run, and on a new install the initial boot configuration from
+ * boot://share/installer/system/ (decision 27). Afterwards these files belong
+ * to the administrator, so Update never replaces one, even when the new
+ * release would reject its contents. */
+static bool system_config_prepare(const struct install_plan *plan)
+{
+  static const char *const initial[] = {
+    "boot.lua", "session.lua", "network.lua", "init-installed",
+  };
+  const uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
+  handle_t system = HANDLE_INVALID, config = HANDLE_INVALID;
+  handle_t source_config = HANDLE_INVALID, share = HANDLE_INVALID;
+  handle_t installer = HANDLE_INVALID, source_system = HANDLE_INVALID;
+  enum call_status status = disk_open_volume(plan->disk.handle, plan->target.pool.partition,
+      "system", DIRECTORY_CONTENT_RIGHTS, &system);
+  if (status == CALL_OK) {
+    status = directory_create(system, "config", DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_CONTENT_RIGHTS, &config);
+    if (status == CALL_ALREADY_EXISTS) {
+      status = directory_lookup(system, "config", DIRECTORY_KIND_DIRECTORY,
+          DIRECTORY_CONTENT_RIGHTS, &config);
+    }
+  }
+  if (status == CALL_OK) {
+    status = directory_lookup(plan->boot, "config", DIRECTORY_KIND_DIRECTORY,
+        directory_rights, &source_config);
+  }
+  if (status == CALL_OK) {
+    status = seed_file(source_config, config, "packages.lua", PACKAGE_CONFIG_MAX_BYTES);
+  }
+  if (status == CALL_OK && !plan->record.updating) {
+    status = directory_lookup(plan->boot, "share", DIRECTORY_KIND_DIRECTORY,
+        directory_rights, &share);
+    if (status == CALL_OK) {
+      status = directory_lookup(share, "installer", DIRECTORY_KIND_DIRECTORY,
+          directory_rights, &installer);
+    }
+    if (status == CALL_OK) {
+      status = directory_lookup(installer, "system", DIRECTORY_KIND_DIRECTORY,
+          directory_rights, &source_system);
+    }
+    for (size_t i = 0; status == CALL_OK && i < sizeof(initial) / sizeof(*initial); ++i) {
+      status = seed_file(source_system, config, initial[i], UINT64_MAX);
+    }
+  }
   if (status == CALL_OK) status = directory_sync(config);
   if (status == CALL_OK) status = directory_sync(system);
-done:
   bool ok = status == CALL_OK;
-  ok = close_handle(&target) && ok;
-  ok = close_handle(&source) && ok;
+  ok = close_handle(&source_system) && ok;
+  ok = close_handle(&installer) && ok;
+  ok = close_handle(&share) && ok;
   ok = close_handle(&source_config) && ok;
   ok = close_handle(&config) && ok;
   ok = close_handle(&system) && ok;
   if (!ok) {
-    fprintf(stderr, "installer: package configuration preparation failed (status %u)\n", status);
+    fprintf(stderr, "installer: system configuration preparation failed (status %u)\n", status);
   }
   return ok;
 }
@@ -458,7 +495,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     fprintf(stderr, "installer: HTTP backing volume preparation failed (status %u)\n", status);
     goto done;
   }
-  if (!package_config_prepare(plan) || !classic_origin_prepare(plan)) goto done;
+  if (!system_config_prepare(plan) || !classic_origin_prepare(plan)) goto done;
   if (!install_programs_write(disk, plan->target.pool.partition, plan->boot, &plan->programs,
         revision, &plan->manifest, plan->manifest_text, plan->manifest_bytes) ||
       !system_verify(plan)) {

@@ -41,9 +41,10 @@ void install_recovery_destroy(struct install_recovery *recovery);
  * matching bytes, or a committed transaction's exact staging name and the full
  * menu reconstructed from its boot binding and verified inherited menu bytes.
  * Legacy entry shape does not replace pending completion's payload certification.
- * Only actual absence permits creating a missing menu directory. */
+ * Only actual absence permits creating a missing menu directory. POOL_PARTITION
+ * is the menu's mount.pool=. */
 bool install_recovery_menu_review(handle_t root, const struct config_blob *record,
-    const struct config_target_facts *facts);
+    const struct config_target_facts *facts, uint64_t pool_partition);
 
 /* New publication refuses retained recorded cleanup; repeat this check at
  * writable admission before any program or recovery mutation. */

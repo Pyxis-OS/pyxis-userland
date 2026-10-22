@@ -348,13 +348,17 @@ uint64_t boot_network_id(const struct boot_network *network, const char *name)
   return 0;
 }
 
-bool boot_network_prepare(struct boot_network *network, handle_t registry, handle_t policy)
+bool boot_network_prepare(struct boot_network *network, handle_t registry, handle_t policy,
+    const struct config_handoff_bytes *bytes)
 {
   *network = (struct boot_network){.policy = policy, .echo = HANDLE_INVALID,
     .udp = HANDLE_INVALID, .tcp = HANDLE_INVALID, .remote_interface = HANDLE_INVALID,
     .remote_tcp = HANDLE_INVALID, .remote_udp = HANDLE_INVALID};
-  if (policy == HANDLE_INVALID || !network_config_read(&network->config) ||
-      !expand_wired(&network->config, registry)) {
+  bool read = policy != HANDLE_INVALID && (bytes ?
+      network_config_read_literal_bytes("system://config/network.lua", bytes->bytes, bytes->size,
+        &network->config) == CONFIG_OK :
+      network_config_read(&network->config));
+  if (!read || !expand_wired(&network->config, registry)) {
     return false;
   }
   size_t count = network->config.count;

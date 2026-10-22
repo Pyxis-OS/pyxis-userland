@@ -22,7 +22,7 @@ void install_guid_text(const uint8_t guid[16], char text[37])
 }
 
 static char *entry(const char *name, bool rescue, const char *kernel, const char *archive,
-    const uint8_t disk_guid[16], const uint8_t esp_guid[16], size_t *size)
+    const uint8_t disk_guid[16], uint64_t pool_partition, const uint8_t esp_guid[16], size_t *size)
 {
   char disk[37], location[43] = "boot()";
   install_guid_text(disk_guid, disk);
@@ -38,8 +38,8 @@ static char *entry(const char *name, bool rescue, const char *kernel, const char
   int count = snprintf(text, 1024,
       "/%s\n  protocol: limine\n  path: %s:/%s\n  module_path: %s:/%s\n"
       "  paging_mode: 4level\n  kaslr: no\n  cmdline: " INSTALL_BOOT_INIT_OPTION
-      " mount.disk=%s%s\n", name, location, kernel, location, archive,
-      disk, rescue ? " " INSTALL_RESCUE_OPTION : "");
+      " mount.disk=%s mount.pool=%llu%s\n", name, location, kernel, location, archive,
+      disk, (unsigned long long)pool_partition, rescue ? " " INSTALL_RESCUE_OPTION : "");
   if (count <= 0 || count >= 1024) {
     free(text);
     return NULL;
@@ -89,11 +89,11 @@ static const struct install_boot_entry_paths *role_paths(const struct install_bo
 
 /* The owned, marked form of one entry, optionally preceded by a blank line. */
 static char *owned_block(enum boot_entry_role role, const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], bool separated, size_t *size)
+    const uint8_t disk_guid[16], uint64_t pool_partition, bool separated, size_t *size)
 {
   size_t entry_size = 0;
   char *text = entry(role_names[role], role == ENTRY_RESCUE, paths->kernel, paths->archive,
-      disk_guid, NULL, &entry_size);
+      disk_guid, pool_partition, NULL, &entry_size);
   char *block = text ? malloc(entry_size + 128) : NULL;
   int count = block ? snprintf(block, entry_size + 128, "%s# pyxis:begin %s\n%s# pyxis:end %s\n",
       separated ? "\n" : "", role_ids[role], text, role_ids[role]) : -1;
@@ -114,7 +114,7 @@ struct menu_edit {
 
 bool install_boot_entry_plan(const struct config_blob *current,
     const struct install_boot_menu *inherited, const uint8_t disk_guid[16],
-    const struct install_boot_menu *next, bool legacy_pair_verified,
+    uint64_t pool_partition, const struct install_boot_menu *next, bool legacy_pair_verified,
     struct config_blob *selected, bool *adoption, bool *pending)
 {
   *adoption = false;
@@ -148,7 +148,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
       if (wanted) {
         edits[count] = (struct menu_edit){.start = spans[ENTRY_NORMAL].end,
           .end = spans[ENTRY_NORMAL].end};
-        edits[count].text = owned_block(role, wanted, disk_guid, true, &edits[count].size);
+        edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, true, &edits[count].size);
         ok = edits[count++].text != NULL;
       }
       break;
@@ -157,7 +157,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
       spans[role] = marked->span;
       edits[count] = (struct menu_edit){.start = spans[role].start, .end = spans[role].end};
       if (wanted) {
-        edits[count].text = owned_block(role, wanted, disk_guid, false, &edits[count].size);
+        edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, false, &edits[count].size);
         ok = edits[count].text != NULL;
       }
       ++count;
@@ -174,7 +174,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
     }
     size_t expected_size;
     char *expected = entry(role_names[role], role == ENTRY_RESCUE, old->kernel, old->archive,
-        disk_guid, NULL, &expected_size);
+        disk_guid, pool_partition, NULL, &expected_size);
     if (!expected) {
       ok = false;
       break;
@@ -195,7 +195,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
     }
     edits[count] = (struct menu_edit){.start = spans[role].start, .end = spans[role].end};
     if (wanted) {
-      edits[count].text = owned_block(role, wanted, disk_guid, false, &edits[count].size);
+      edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, false, &edits[count].size);
       ok = edits[count].text != NULL;
     }
     ++count;
@@ -248,7 +248,8 @@ bool install_boot_entry_plan(const struct config_blob *current,
 }
 
 bool install_boot_entry_current(const struct config_blob *current,
-    const struct install_boot_menu *committed, const uint8_t disk_guid[16], bool *is_current)
+    const struct install_boot_menu *committed, const uint8_t disk_guid[16],
+    uint64_t pool_partition, bool *is_current)
 {
   const struct install_boot_menu bare = {committed->normal, NULL, false};
   const struct install_boot_menu *forms[] = {committed, &bare};
@@ -256,7 +257,7 @@ bool install_boot_entry_current(const struct config_blob *current,
   for (unsigned i = 0; i < 2 && !*is_current; ++i) {
     struct config_blob menu = {0};
     bool adoption = false, pending = true;
-    if (!install_boot_entry_plan(current, forms[i], disk_guid, forms[i], false,
+    if (!install_boot_entry_plan(current, forms[i], disk_guid, pool_partition, forms[i], false,
         &menu, &adoption, &pending)) {
       config_blob_destroy(&menu);
       return false;
@@ -268,7 +269,7 @@ bool install_boot_entry_current(const struct config_blob *current,
 }
 
 bool install_boot_entry_render_owned(const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], struct config_blob *menu)
+    const uint8_t disk_guid[16], uint64_t pool_partition, struct config_blob *menu)
 {
   const char *const ids[] = {"boot.normal", "boot.rescue"};
   const char *const names[] = {"Pyxis OS (Caelum)", "Pyxis OS (rescue)"};
@@ -276,7 +277,8 @@ bool install_boot_entry_render_owned(const struct install_boot_entry_paths *path
   size_t sizes[2] = {0};
   bool ok = true;
   for (unsigned i = 0; i < 2; ++i) {
-    entries[i] = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, NULL, &sizes[i]);
+    entries[i] = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, pool_partition,
+        NULL, &sizes[i]);
     ok &= entries[i] != NULL;
   }
   if (ok) {
@@ -293,13 +295,14 @@ bool install_boot_entry_render_owned(const struct install_boot_entry_paths *path
 }
 
 bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], const uint8_t esp_guid[16], struct config_blob *pair)
+    const uint8_t disk_guid[16], uint64_t pool_partition, const uint8_t esp_guid[16],
+    struct config_blob *pair)
 {
   size_t normal_size = 0, rescue_size = 0;
   char *normal = entry("Pyxis OS (Caelum)", false, paths->kernel, paths->archive,
-      disk_guid, esp_guid, &normal_size);
+      disk_guid, pool_partition, esp_guid, &normal_size);
   char *rescue = entry("Pyxis OS (rescue)", true, paths->kernel, paths->archive,
-      disk_guid, esp_guid, &rescue_size);
+      disk_guid, pool_partition, esp_guid, &rescue_size);
   bool ok = normal && rescue;
   if (ok) {
     size_t size = normal_size + rescue_size + 2;
@@ -320,13 +323,14 @@ bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
 }
 
 void install_boot_entry_print(const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], FILE *output)
+    const uint8_t disk_guid[16], uint64_t pool_partition, FILE *output)
 {
   const char *names[] = {"Pyxis OS (Caelum)", "Pyxis OS (rescue)"};
   fputs("Manual boot entry proposal (existing menu untouched):\n", output);
   for (unsigned i = 0; i < 2; ++i) {
     size_t size = 0;
-    char *text = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, NULL, &size);
+    char *text = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, pool_partition,
+        NULL, &size);
     if (text) {
       fwrite(text, 1, size, output);
       fputc('\n', output);

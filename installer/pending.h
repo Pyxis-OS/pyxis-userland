@@ -24,7 +24,7 @@ struct install_pending_plan {
 bool install_pending_inspect(const struct config_blob *record,
     const struct config_blob current[CONFIG_ALL_FILES],
     const struct config_blob *previous_limine, const uint8_t disk_guid[16],
-    const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
+    uint64_t pool_partition, const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
     struct install_pending_plan *plan);
 void install_pending_destroy(struct install_pending_plan *plan);
 
@@ -36,6 +36,7 @@ struct install_pending_request {
   handle_t esp_root, workspace;
   struct config_storage_view view;
   struct config_target_facts facts;
+  uint64_t pool_partition; /* The entries' mount.pool=. */
   struct mount_state_reply expected_target;
   const struct config_blob *record, *current, *previous_limine;
   struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS];

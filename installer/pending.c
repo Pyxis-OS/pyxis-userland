@@ -21,7 +21,7 @@ void install_pending_destroy(struct install_pending_plan *plan)
 bool install_pending_inspect(const struct config_blob *record,
     const struct config_blob current[CONFIG_ALL_FILES],
     const struct config_blob *previous_limine, const uint8_t disk_guid[16],
-    const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
+    uint64_t pool_partition, const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
     struct install_pending_plan *plan)
 {
   if (!record || !current || !previous_limine || !disk_guid || !plan) {
@@ -59,7 +59,8 @@ bool install_pending_inspect(const struct config_blob *record,
   const struct install_boot_menu committed = {&active,
     history->previous_boot.present ? &inherited : NULL, false};
   bool adoption = false, pending = true, is_current = false;
-  if (!install_boot_entry_current(&current[CONFIG_LIMINE], &committed, disk_guid, &is_current)) {
+  if (!install_boot_entry_current(&current[CONFIG_LIMINE], &committed, disk_guid, pool_partition,
+      &is_current)) {
     return false;
   }
   if (is_current) {
@@ -88,7 +89,7 @@ bool install_pending_inspect(const struct config_blob *record,
   /* The digest proof above owns its previous entry, whatever attempt it names. */
   const struct install_boot_menu replaced = {&inherited, NULL, true};
   if (!install_boot_entry_plan(&current[CONFIG_LIMINE],
-      history->previous_boot.present ? &replaced : NULL, disk_guid, &committed,
+      history->previous_boot.present ? &replaced : NULL, disk_guid, pool_partition, &committed,
       legacy_valid, &plan->menu, &adoption, &pending)) {
     return false;
   }
@@ -114,7 +115,8 @@ bool install_pending_complete(const struct install_pending_request *request,
   }
   struct install_pending_plan plan = {0};
   bool ok = install_pending_inspect(request->record, request->current,
-      request->previous_limine, request->facts.disk_guid, request->legacy, &plan) && plan.available;
+      request->previous_limine, request->facts.disk_guid, request->pool_partition, request->legacy,
+      &plan) && plan.available;
   if (!ok) {
     report->status = CALL_BAD_REQUEST;
   } else {

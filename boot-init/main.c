@@ -5,9 +5,9 @@
 #include "../pkg/store.h"
 #include "network.h"
 #include "../libconfig/handoff.h"
-#if INSTALLER_PUBLICATION_SCRATCH
-#include "selection.h"
-#endif
+#include "../libconfig/network.h"
+#include "../libconfig/session.h"
+#include "handoff.h"
 #include <abi/clock.h>
 #include <abi/directory.h>
 #include <abi/echo.h>
@@ -59,11 +59,13 @@
 #include <system_info.h>
 
 #define LIVE_CONFIG "boot://config/live.lua"
-#define INSTALLED_CONFIG "boot://config/installed.lua"
-#define OVERRIDE_PATH "config/boot.lua"
-#define OVERRIDE_NAME "system://" OVERRIDE_PATH
-/* The literal parser's own bound, which the installer's pool snapshot also uses. */
-#define OVERRIDE_MAX_BYTES LITERAL_SOURCE_LIMIT
+/* An installed boot's whole configuration, on the system volume of the pool
+ * that mount.pool names; administrator-owned, never written by boot. */
+#define POOL_BOOT_PATH "config/boot.lua"
+#define POOL_SESSION_PATH "config/session.lua"
+#define POOL_NETWORK_PATH "config/network.lua"
+/* The literal parser's own bound. */
+#define POOL_FILE_MAX_BYTES LITERAL_SOURCE_LIMIT
 #define HOSTNAME_NAME "system://" MACHINE_HOSTNAME_PATH
 #define RESCUE_INIT "boot://init-shell.pxe"
 /* The bin volume shares the system volume's pool; see the installer. */
@@ -144,8 +146,9 @@ struct authority {
   handle_t ram;
   handle_t native_mount, host_mount, esp_mount, fat_mounts;
   handle_t ram_npfs; /* Boot-only pool creation, never forwarded to a space init. */
-  uint64_t ram_npfs_bytes; /* Captured from the archive, never from an override. */
+  uint64_t ram_npfs_bytes; /* Captured from the boot configuration. */
   handle_t input_policy; /* Boot-only, never forwarded through services. */
+  handle_t net_policy; /* Boot-only until granted to the network owner. */
   handle_t loaded_kernel, loaded_archive; /* Private kernel-issued immutable FILEs. */
   struct config_handoff configuration;
   handle_t boot_evidence; /* READ-only; granted only to package_upgrade spaces. */
@@ -189,10 +192,8 @@ static bool take_authority(struct authority *authority)
   authority->power = bootstrap_capability("power");
   authority->wifi = bootstrap_capability("wifi");
   authority->input_policy = bootstrap_capability("input_policy");
-#if INSTALLER_PUBLICATION_SCRATCH
   authority->loaded_kernel = bootstrap_take_capability("boot_kernel");
   authority->loaded_archive = bootstrap_take_capability("boot_archive");
-#endif
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID &&
       authority->input_policy != HANDLE_INVALID;
@@ -206,14 +207,7 @@ static bool take_authority(struct authority *authority)
       complete = false;
     }
   }
-  if (complete && !boot_network_prepare(&authority->network,
-      authority->services[SERVICE_NET_REGISTRY], bootstrap_capability("net_policy"))) {
-    fputs("boot-init: network profile setup failed\n", stderr);
-    complete = false;
-  }
-  authority->services[SERVICE_ECHO] = authority->network.echo;
-  authority->services[SERVICE_UDP] = authority->network.udp;
-  authority->services[SERVICE_TCP] = authority->network.tcp;
+  authority->net_policy = bootstrap_capability("net_policy");
   struct system_info_cpu cpu;
   enum call_status status = system_info_get_cpu(authority->services[SERVICE_SYSTEM_INFO], &cpu);
   if (status != CALL_OK || !cpu.online_count) {
@@ -345,7 +339,8 @@ static enum call_status mount_volume(const struct authority *authority,
     return mount_open_root(authority->host_mount,
         read_write ? MOUNT_ACCESS_READ_WRITE : MOUNT_ACCESS_READ_ONLY, root);
   }
-  if (authority->native_mount == HANDLE_INVALID) {
+  /* A pool volume in a configuration that is not the pool's, such as live.lua. */
+  if (authority->native_mount == HANDLE_INVALID || volume->partition == BOOT_POOL_PARTITION) {
     return CALL_UNAVAILABLE;
   }
   uint64_t rights = (read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) |
@@ -475,12 +470,12 @@ static void seed_live_repositories(const struct authority *authority, struct mou
   }
 }
 
-/* Reads the pool override from the mounted system root, declarative only for
- * now: literal data, never executed. MISSING when absent; INVALID fills FAILURE. */
-static enum boot_config_result read_override(handle_t system, struct boot_config *override,
-    struct config_failure *failure)
+/* Reads PATH from the mounted pool system root into BYTES, NUL-terminated.
+ * MISSING when absent; INVALID fills FAILURE. */
+static enum boot_config_result read_pool_file(handle_t system, const char *path,
+    struct config_handoff_bytes *bytes, struct config_failure *failure)
 {
-  *override = (struct boot_config){0};
+  *bytes = (struct config_handoff_bytes){0};
   struct path_context context = {.directories = &system, .count = 1};
   handle_t directories[8];
   char component[256];
@@ -489,9 +484,10 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
     .component = component, .component_capacity = sizeof(component),
   };
   handle_t file;
-  enum call_status status = path_resolve(&context, OVERRIDE_PATH, DIRECTORY_KIND_FILE,
+  enum call_status status = path_resolve(&context, path, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &workspace, &file);
   if (status == CALL_NOT_FOUND) {
+    config_failure_format(failure, "missing");
     return BOOT_CONFIG_MISSING;
   }
   if (status != CALL_OK) {
@@ -499,36 +495,36 @@ static enum boot_config_result read_override(handle_t system, struct boot_config
     return BOOT_CONFIG_INVALID;
   }
   uint64_t size;
-  char *bytes = NULL;
   status = file_size(file, &size);
-  bool too_large = status == CALL_OK && size > OVERRIDE_MAX_BYTES;
+  bool too_large = status == CALL_OK && size > POOL_FILE_MAX_BYTES;
   if (too_large) {
     status = CALL_LIMIT;
   }
   if (status == CALL_OK) {
-    bytes = malloc(size ? size : 1);
-    status = bytes ? CALL_OK : CALL_NO_MEMORY;
+    bytes->bytes = malloc(size + 1);
+    status = bytes->bytes ? CALL_OK : CALL_NO_MEMORY;
   }
   for (uint64_t used = 0; status == CALL_OK && used < size;) {
     size_t count;
-    status = file_read(file, used, bytes + used, size - used, &count);
+    status = file_read(file, used, bytes->bytes + used, size - used, &count);
     if (status == CALL_OK && !count) {
       status = CALL_BAD_REQUEST;
     }
     used += count;
   }
   handle_close(file);
-  enum boot_config_result result = BOOT_CONFIG_INVALID;
-  if (status == CALL_OK) {
-    result = boot_config_read_literal_bytes_reason(OVERRIDE_NAME, bytes, size, override,
-        failure);
-  } else if (too_large) {
-    config_failure_format(failure, "exceeds %d bytes", OVERRIDE_MAX_BYTES);
-  } else {
-    config_failure_format(failure, "cannot read (status %u)", status);
+  if (status != CALL_OK) {
+    config_handoff_bytes_free(bytes);
+    if (too_large) {
+      config_failure_format(failure, "exceeds %d bytes", POOL_FILE_MAX_BYTES);
+    } else {
+      config_failure_format(failure, "cannot read (status %u)", status);
+    }
+    return BOOT_CONFIG_INVALID;
   }
-  free(bytes);
-  return result;
+  bytes->bytes[size] = '\0';
+  bytes->size = size;
+  return BOOT_CONFIG_OK;
 }
 
 /* Probe one byte beyond the longest name plus LF. A full buffer is invalid,
@@ -601,7 +597,7 @@ static bool set_hostname(const struct authority *authority, const struct boot_co
       } else if (status == CALL_BAD_REQUEST || status == CALL_LIMIT) {
         reason = "key invalid";
       }
-      fprintf(stderr, "boot-init: hostname: %s (status %u); using archive default %s\n",
+      fprintf(stderr, "boot-init: hostname: %s (status %u); using configured %s\n",
           reason, status, hostname.name);
     }
   }
@@ -656,14 +652,12 @@ static enum call_status read_scroll_direction(handle_t system, const char *path,
 }
 
 static bool set_input_policy(const struct authority *authority, const struct boot_config *defaults,
-    const struct boot_config *override, struct mounts *mounts, bool installed)
+    struct mounts *mounts, bool installed)
 {
   bool mouse = defaults->mouse_scroll_natural;
   bool touchpad = defaults->touchpad_scroll_natural;
-  int32_t touchpad_speed = override && override->touchpad_speed_present ?
-      override->touchpad_speed : defaults->touchpad_speed;
-  bool num_lock = override && override->num_lock_present ?
-      override->num_lock : defaults->num_lock;
+  int32_t touchpad_speed = defaults->touchpad_speed;
+  bool num_lock = defaults->num_lock;
   if (installed) {
     struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
     const char *paths[] = {"system://" MACHINE_MOUSE_SCROLL_PATH,
@@ -674,7 +668,7 @@ static bool set_input_policy(const struct authority *authority, const struct boo
           system->root == HANDLE_INVALID ? system->status :
           read_scroll_direction(system->root, paths[i], directions[i]);
       if (status != CALL_OK && defaults->input_diagnostics) {
-        fprintf(stderr, "boot-init: %s unavailable or invalid (status %u); using archive %s\n",
+        fprintf(stderr, "boot-init: %s unavailable or invalid (status %u); using configured %s\n",
             paths[i], status, *directions[i] ? "natural" : "traditional");
       }
     }
@@ -1390,16 +1384,6 @@ static struct space_definition space_definition_of(const struct boot_space *spac
   };
 }
 
-static bool plan_has_space(const struct boot_plan *plan, const char *name)
-{
-  for (size_t i = 0; i < plan->space_count; ++i) {
-    if (!strcmp(plan->spaces[i]->name, name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /* An unstarted space shows REASON on its tab and keeps its name taken. The
  * kernel accepts no space flags without a launch, and a reason of at most
  * SPACE_REASON_MAX printable ASCII bytes, so the tab gets a cut, cleaned copy;
@@ -1421,16 +1405,12 @@ static void create_unstarted(const struct authority *authority, const struct boo
   }
 }
 
-/* With DEFERRED, a space that cannot start is not created: its reason is copied
- * there (SPACE_REASON_MAX + 1 bytes, empty otherwise) for the caller to place. */
+/* A space that cannot start is created unstarted, showing why on its tab. */
 static bool start_space(const struct authority *authority, struct mounts *mounts,
-    const struct boot_space *space, bool suppress_boot_focus, char *deferred)
+    const struct boot_space *space, bool suppress_boot_focus)
 {
   struct space_definition definition = space_definition_of(space);
   char text[START_REASON_MAX + 1];
-  if (deferred) {
-    deferred[0] = '\0';
-  }
   uint64_t *cpus = calloc(cpu_words(authority->cpu_count), sizeof(*cpus));
   struct space_launch launch = {0};
   handle_t image = HANDLE_INVALID, child = HANDLE_INVALID;
@@ -1447,8 +1427,19 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     .directories = directories, .directory_capacity = 8,
     .component = component, .component_capacity = sizeof(component),
   };
-    enum call_status status = path_resolve(&context, space->init, DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &workspace, &image);
+    enum call_status status;
+    /* Boot init's own namespace has boot:// but no system://; pool inits come
+     * from the mounted system volume. */
+    if (!strncmp(space->init, BOOT_POOL_INIT_PREFIX, strlen(BOOT_POOL_INIT_PREFIX))) {
+      struct mounted_volume *system = find_mount(mounts, BOOT_SYSTEM_VOLUME);
+      status = !system ? CALL_UNAVAILABLE : system->root == HANDLE_INVALID ? system->status :
+          path_resolve_native(&(struct path_context){.directories = &system->root, .count = 1},
+            space->init + strlen(BOOT_POOL_INIT_PREFIX), DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+            &workspace, &image);
+    } else {
+      status = path_resolve(&context, space->init, DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+          &workspace, &image);
+    }
     if (status != CALL_OK) {
       snprintf(text, sizeof(text), "cannot open init %.64s (status %u)", space->init, status);
       reason = text;
@@ -1460,10 +1451,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
   if (reason) {
     fprintf(stderr, "boot-init: space %s not started: %s\n", space->name, reason);
   }
-  if (reason && deferred) {
-    snprintf(deferred, SPACE_REASON_MAX + 1, "%s", reason);
-    status = CALL_OK;
-  } else if (reason) {
+  if (reason) {
     create_unstarted(authority, space, reason);
     status = CALL_OK;
   } else {
@@ -1611,14 +1599,132 @@ static void bind_bin(struct authority *authority, const struct boot_plan *plan, 
   authority->bin = directory;
 }
 
-static void start_rescue(const struct authority *authority, struct mounts *mounts)
+/* The pool's system volume, as boot init mounts it for the configuration and
+ * the rescue space before any configured plan exists. */
+static struct boot_volume pool_system = {
+  .name = BOOT_SYSTEM_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_SYSTEM_VOLUME,
+};
+
+/* Mounts the system volume of pool partition POOL read-write, once. */
+static struct mounted_volume *mount_pool_system(const struct authority *authority,
+    struct mounts *mounts, uint32_t pool)
 {
+  struct mounted_volume *mounted = find_mount(mounts, BOOT_SYSTEM_VOLUME);
+  if (mounted) {
+    return mounted;
+  }
+  struct mounted_volume *entries = realloc(mounts->entries,
+      (mounts->count + 1) * sizeof(*entries));
+  if (!entries) {
+    return NULL;
+  }
+  mounts->entries = entries;
+  pool_system.partition = pool;
+  mounted = &mounts->entries[mounts->count++];
+  *mounted = (struct mounted_volume){.volume = &pool_system,
+    .root = HANDLE_INVALID, .control = HANDLE_INVALID};
+  mounted->status = mount_volume(authority, &pool_system, true, mounted);
+  if (mounted->status != CALL_OK) {
+    printf("boot-init: volume %s unavailable (status %u)\n", BOOT_SYSTEM_VOLUME, mounted->status);
+  }
+  return mounted;
+}
+
+/* Reads the whole installed configuration from the pool: boot.lua into
+ * CONFIG, with its pool volumes bound to POOL, session.lua and network.lua as
+ * the spaces' handoff FILEs, and network.lua's bytes into NETWORK for the boot
+ * network profile. False fills REASON; boot then starts the rescue space and
+ * changes nothing on the pool. */
+static bool read_pool_configuration(struct authority *authority, uint32_t pool,
+    struct mounts *mounts, struct boot_config *config, struct config_handoff_bytes *network,
+    char *reason, size_t size)
+{
+  struct mounted_volume *system = mount_pool_system(authority, mounts, pool);
+  if (!system || system->root == HANDLE_INVALID) {
+    snprintf(reason, size, "the system volume on pool partition %u is unavailable (status %u)",
+        pool, system ? system->status : CALL_NO_MEMORY);
+    return false;
+  }
+  static const char *const paths[] = {POOL_BOOT_PATH, POOL_SESSION_PATH, POOL_NETWORK_PATH};
+  struct config_handoff_bytes bytes[3] = {0};
+  struct config_failure failure = {0};
+  char name[64];
+  bool ok = true;
+  for (size_t i = 0; ok && i < 3; ++i) {
+    snprintf(name, sizeof(name), "system://%s", paths[i]);
+    ok = read_pool_file(system->root, paths[i], &bytes[i], &failure) == BOOT_CONFIG_OK;
+    if (ok && i == 0) {
+      ok = boot_config_read_pool_bytes(name, bytes[i].bytes, bytes[i].size, config,
+          &failure) == BOOT_CONFIG_OK;
+    } else if (ok && i == 1) {
+      struct session_config session;
+      ok = session_config_read_literal_bytes(name, bytes[i].bytes, bytes[i].size,
+          &session) == CONFIG_OK;
+      if (ok) {
+        session_config_free(&session);
+      } else {
+        config_failure_format(&failure, "invalid");
+      }
+    } else if (ok) {
+      struct network_config network;
+      ok = network_config_read_literal_bytes(name, bytes[i].bytes, bytes[i].size,
+          &network) == CONFIG_OK;
+      if (ok) {
+        network_config_free(&network);
+      } else {
+        config_failure_format(&failure, "invalid");
+      }
+    }
+  }
+  if (ok) {
+    for (size_t i = 0; i < config->volume_count; ++i) {
+      if (config->volumes[i].kind == BOOT_VOLUME_NPFS &&
+          config->volumes[i].partition == BOOT_POOL_PARTITION) {
+        config->volumes[i].partition = pool;
+      }
+    }
+    enum call_status status;
+    if (!boot_configuration_handoff(authority->ram, &bytes[1], &bytes[2],
+        &authority->configuration, &status)) {
+      snprintf(name, sizeof(name), "session and network handoff");
+      config_failure_format(&failure, "cannot create (status %u)", status);
+      ok = false;
+    }
+  }
+  if (!ok) {
+    snprintf(reason, size, "%s: %s", name, failure.text[0] ? failure.text : "invalid");
+    boot_config_free(config);
+  } else {
+    *network = bytes[2];
+    bytes[2] = (struct config_handoff_bytes){0};
+  }
+  for (size_t i = 0; i < 3; ++i) {
+    config_handoff_bytes_free(&bytes[i]);
+  }
+  return ok;
+}
+
+/* The built-in rescue space. On an installed boot it holds the pool's system
+ * volume read-write, so the configuration can be fixed or restored (decision
+ * 22); otherwise boot and tmp only. */
+static void start_rescue(const struct authority *authority, struct mounts *mounts,
+    uint32_t pool, const char *reason)
+{
+  static struct boot_root roots[] = {
+    {.name = BOOT_SYSTEM_VOLUME, .volume = BOOT_SYSTEM_VOLUME, .read_write = true},
+  };
   static const struct boot_space rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
     .clipboard_local = true, .clipboard_shared = true,
   };
-  puts("boot-init: no configured space started; starting the rescue space");
-  start_space(authority, mounts, &rescue, true, NULL);
+  static const struct boot_space pool_rescue = {
+    .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
+    .clipboard_local = true, .clipboard_shared = true, .roots = roots, .root_count = 1,
+  };
+  printf("boot-init: %s; starting the rescue space\n", reason);
+  struct mounted_volume *system = pool ? mount_pool_system(authority, mounts, pool) : NULL;
+  bool with_pool = system && system->root != HANDLE_INVALID;
+  start_space(authority, mounts, with_pool ? &pool_rescue : &rescue, true);
 }
 
 static bool close_frozen(struct authority *authority)
@@ -1629,30 +1735,6 @@ static bool close_frozen(struct authority *authority)
   }
   authority->boot_evidence = HANDLE_INVALID;
   return ok;
-}
-
-#if INSTALLER_PUBLICATION_SCRATCH
-static bool freeze_configuration(struct authority *authority, bool rescue,
-    struct config_selection *selection)
-{
-  struct boot_selection_authority sources = {
-    .boot = authority->boot, .esp_mount = authority->esp_mount, .ram = authority->ram,
-    .system_info = authority->services[SERVICE_SYSTEM_INFO],
-    .clock = authority->services[SERVICE_CLOCK], .random = authority->services[SERVICE_RANDOM],
-    .loaded_kernel = authority->loaded_kernel, .loaded_archive = authority->loaded_archive,
-  };
-  return boot_selection_prepare(&sources, rescue, selection, &authority->configuration,
-      &authority->boot_evidence);
-}
-
-static bool start_archive_rescue(const struct authority *authority, struct mounts *mounts)
-{
-  static const struct boot_space readonly = {
-    .name = "readonly", .title = "Read-only", .init = "boot://init-readonly", .start = "tmp",
-    .power = true, .clipboard_local = true, .clipboard_shared = true,
-  };
-  puts("boot-init: archive rescue: boot/tmp only; no installed programs or pool override");
-  return start_space(authority, mounts, &readonly, true, NULL);
 }
 
 static bool close_boot_payloads(struct authority *authority)
@@ -1667,15 +1749,19 @@ static bool close_boot_payloads(struct authority *authority)
   }
   return ok;
 }
-#endif
 
 int main(int argc, char **argv)
 {
   bool installed = false, default_config = false;
   const char *remote_beacon = NULL;
+  uint32_t pool = 0;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--installed")) {
       installed = true;
+    } else if (!strcmp(argv[i], "--pool") && i + 1 < argc) {
+      char *end;
+      unsigned long value = strtoul(argv[++i], &end, 10);
+      pool = !*end && value <= UINT32_MAX ? (uint32_t)value : 0;
     } else if (!strcmp(argv[i], "--default-config")) {
       default_config = true;
     } else if (!strcmp(argv[i], "--remote-beacon")) {
@@ -1699,126 +1785,76 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-  struct boot_config defaults = {0}, override = {0};
-  const struct boot_config *applied_override = NULL;
+  struct boot_config defaults = {0};
+  struct config_handoff_bytes network = {0};
   struct boot_plan plan = {0};
-  struct config_selection selection = {0};
-  enum boot_plan_error plan_error;
-  bool suppress_boot_focus = false;
+  enum boot_plan_error plan_error = BOOT_PLAN_OK;
+  struct config_failure failure = {0};
+  bool suppress_boot_focus = false, configured = false;
   struct mounts mounts = {0};
   int exit_status = EXIT_SUCCESS;
-  const char *path = installed ? INSTALLED_CONFIG : LIVE_CONFIG;
-  bool frozen_configuration = false, archive_recovery = false;
-  char *deferred = NULL;
-  enum boot_config_result result;
-#if INSTALLER_PUBLICATION_SCRATCH
-  if (installed || default_config) {
-    bool prepared = freeze_configuration(&authority, default_config, &selection);
-    bool closed = close_boot_payloads(&authority);
-    if (!prepared || !closed) {
+  char rescue[START_REASON_MAX + 1] = "no configured space started";
+  if (installed) {
+    struct boot_evidence_authority sources = {
+      .esp_mount = authority.esp_mount, .ram = authority.ram,
+      .clock = authority.services[SERVICE_CLOCK], .random = authority.services[SERVICE_RANDOM],
+      .loaded_kernel = authority.loaded_kernel, .loaded_archive = authority.loaded_archive,
+    };
+    bool evidence = boot_evidence_prepare(&sources, &authority.boot_evidence);
+    if (!close_boot_payloads(&authority) || !evidence) {
       exit_status = EXIT_FAILURE;
       goto finish;
     }
-    /* Spaces never come from the published ESP boot.lua: the plan starts from
-     * the archive defaults and the pool override below applies on top. The
-     * selection keeps provenance, bin:// and the session/network snapshots. */
-    boot_plan_free(&selection.boot);
-    boot_config_free(&selection.override);
-    if (!boot_plan_build(&selection.defaults, NULL, &plan, &plan_error, NULL)) {
-      exit_status = EXIT_FAILURE;
-      goto finish;
-    }
-    /* This read-only binding happens after selection, before machine effects.
-     * An absent program revision takes archive rescue rather than starting an
-     * ordinary installed session against an incomplete program set. The rescue
-     * entry starts the stock spaces with installed programs, as in 0.0.6, so a
-     * bad pool file can be fixed from them. */
-    bind_bin(&authority, &plan, installed);
-    archive_recovery = authority.bin == authority.boot;
-    if (archive_recovery && !default_config) {
-      boot_plan_free(&plan);
-      config_selection_free(&selection);
-      if (!close_frozen(&authority) ||
-          !freeze_configuration(&authority, true, &selection) ||
-          !boot_plan_build(&selection.defaults, NULL, &plan, &plan_error, NULL)) {
-        exit_status = EXIT_FAILURE;
-        goto finish;
-      }
-    }
-    /* The plan points into these defaults; they move to the local owner. */
-    defaults = selection.defaults;
-    selection.defaults = (struct boot_config){0};
-    frozen_configuration = true;
-    result = BOOT_CONFIG_OK;
-  } else
-#endif
-  {
-#if INSTALLER_PUBLICATION_SCRATCH
-    if (!close_boot_payloads(&authority)) {
-      exit_status = EXIT_FAILURE;
-      goto finish;
-    }
-#endif
-    printf("boot-init: reading %s\n", path);
-    result = boot_config_read(path, &defaults);
-  }
-  if (result != BOOT_CONFIG_OK) {
-    fprintf(stderr, "boot-init: %s %s\n", path,
-        result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");
-  } else if (!frozen_configuration && !boot_plan_build(&defaults, NULL, &plan, &plan_error,
-      NULL)) {
-    suppress_boot_focus = plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
-    fprintf(stderr, "boot-init: %s is invalid\n", path);
-  }
-
-  authority.ram_npfs_bytes = defaults.ram_npfs_bytes;
-  const struct boot_volume *system = boot_plan_volume(&plan, BOOT_SYSTEM_VOLUME);
-  if (installed && system && !archive_recovery) {
-    /* Machine settings retain the system mount. The pool boot override is read
-     * here at every boot, with READ access only; rescue never reads it. */
-    mounts.entries = calloc(1, sizeof(*mounts.entries));
-    if (mounts.entries) {
-      struct mounted_volume *mounted = &mounts.entries[mounts.count++];
-      *mounted = (struct mounted_volume){.volume = system,
-        .root = HANDLE_INVALID, .control = HANDLE_INVALID};
-      mounted->status = mount_volume(&authority, system, true, mounted);
-      if (mounted->status != CALL_OK) {
-        printf("boot-init: volume %s unavailable (status %u)\n", system->name,
-            mounted->status);
-      } else if (plan.space_count && default_config) {
-        puts("boot-init: rescue entry: stock spaces; ignoring " OVERRIDE_NAME);
-      } else if (plan.space_count) {
-        struct config_failure failure = {0};
-        result = read_override(mounted->root, &override, &failure);
-        if (result == BOOT_CONFIG_MISSING) {
-          puts("boot-init: no " OVERRIDE_NAME "; using the default");
-        } else if (result == BOOT_CONFIG_OK) {
-          struct boot_plan merged;
-          if (boot_plan_build(&defaults, &override, &merged, &plan_error, &failure)) {
-            boot_plan_free(&plan);
-            plan = merged;
-            applied_override = &override;
-            puts("boot-init: applied " OVERRIDE_NAME);
-          } else {
-            suppress_boot_focus |= plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
-            boot_config_free(&override);
-            result = BOOT_CONFIG_INVALID;
-          }
-        }
-        if (result == BOOT_CONFIG_INVALID) {
-          printf("boot-init: ignoring " OVERRIDE_NAME ": %s; starting the stock spaces\n",
-              failure.text[0] ? failure.text : "invalid");
-        }
-      }
-    }
-  }
-
-  if (!set_hostname(&authority, &defaults, &mounts, installed && !archive_recovery)) {
+  } else if (!close_boot_payloads(&authority)) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }
-  if (!set_input_policy(&authority, &defaults, applied_override, &mounts,
-      installed && !archive_recovery)) {
+  /* Installed entries name their pool. A development build bound to a disk
+   * with MOUNT_DISK names none and describes that disk in live.lua. */
+  bool pool_configured = installed && pool;
+  if (default_config) {
+    snprintf(rescue, sizeof(rescue), "rescue entry");
+  } else if (pool_configured) {
+    if (read_pool_configuration(&authority, pool, &mounts, &defaults, &network,
+        rescue, sizeof(rescue))) {
+      configured = boot_plan_build(&defaults, NULL, &plan, &plan_error, &failure);
+      if (!configured) {
+        snprintf(rescue, sizeof(rescue), "system://" POOL_BOOT_PATH ": %s",
+            failure.text[0] ? failure.text : "invalid");
+      } else {
+        puts("boot-init: read system://config/");
+      }
+    }
+  } else {
+    printf("boot-init: reading %s\n", LIVE_CONFIG);
+    enum boot_config_result result = boot_config_read(LIVE_CONFIG, &defaults);
+    configured = result == BOOT_CONFIG_OK &&
+        boot_plan_build(&defaults, NULL, &plan, &plan_error, NULL);
+    if (!configured) {
+      fprintf(stderr, "boot-init: %s %s\n", LIVE_CONFIG,
+          result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");
+    }
+  }
+  suppress_boot_focus = plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
+
+  /* The rescue space uses the archive's network profile, like live boots. */
+  bool network_ready = boot_network_prepare(&authority.network,
+      authority.services[SERVICE_NET_REGISTRY], authority.net_policy,
+      configured && pool_configured ? &network : NULL);
+  config_handoff_bytes_free(&network);
+  if (!network_ready) {
+    fputs("boot-init: network profile setup failed; no spaces started\n", stderr);
+    exit_status = EXIT_FAILURE;
+    goto finish;
+  }
+  authority.services[SERVICE_ECHO] = authority.network.echo;
+  authority.services[SERVICE_UDP] = authority.network.udp;
+  authority.services[SERVICE_TCP] = authority.network.tcp;
+
+  authority.ram_npfs_bytes = defaults.ram_npfs_bytes;
+  bool machine_settings = installed && find_mount(&mounts, BOOT_SYSTEM_VOLUME);
+  if (!set_hostname(&authority, &defaults, &mounts, machine_settings) ||
+      !set_input_policy(&authority, &defaults, &mounts, machine_settings)) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }
@@ -1829,19 +1865,16 @@ int main(int argc, char **argv)
       fprintf(stderr, "boot-init: Wi-Fi country policy refused (status %u); no Wi-Fi TX admitted\n", policy);
     }
   }
-  if (!frozen_configuration) {
-    bind_bin(&authority, &plan, installed);
+  if (configured) {
+    bind_bin(&authority, &plan, pool_configured);
+  } else {
+    authority.bin = authority.boot;
   }
   if (suppress_boot_focus) {
     puts("boot-init: duplicate focus request; automatic focus disabled for this boot");
   }
   size_t started = 0;
-#if INSTALLER_PUBLICATION_SCRATCH
-  if (archive_recovery) {
-    started = start_archive_rescue(&authority, &mounts);
-  } else
-#endif
-  if (mount_plan(&authority, &plan, &mounts)) {
+  if (configured && mount_plan(&authority, &plan, &mounts)) {
     seed_live_repositories(&authority, &mounts);
     struct mounted_volume *packages = find_mount(&mounts, BOOT_PACKAGES_VOLUME);
     struct mounted_volume *http_work = find_mount(&mounts, BOOT_HTTP_WORK_VOLUME);
@@ -1850,62 +1883,12 @@ int main(int argc, char **argv)
             http_work->volume->kind == BOOT_VOLUME_RAM_NPFS) ? http_work->root : HANDLE_INVALID,
         authority.services[SERVICE_CLOCK]);
     check_packages(&mounts);
-    /* Pool-file spaces that cannot start are placed after the stock retry, so
-     * their unstarted tabs never take a stock space's name. */
-    deferred = applied_override ? calloc(plan.space_count ? plan.space_count : 1,
-        SPACE_REASON_MAX + 1) : NULL;
     for (size_t i = 0; i < plan.space_count; ++i) {
-      started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus,
-          deferred ? deferred + i * (SPACE_REASON_MAX + 1) : NULL);
+      started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
     }
   }
-  /* A pool file can validate and still start nothing. The stock spaces come
-   * before the read-only archive rescue because they keep system:// writable,
-   * so the file can be fixed. */
-  struct boot_plan stock = {0};
-  if (!started && applied_override && boot_plan_build(&defaults, NULL, &stock, NULL, NULL)) {
-    puts("boot-init: no space started from " OVERRIDE_NAME "; retrying the stock spaces");
-    if (mount_plan(&authority, &stock, &mounts)) {
-      for (size_t i = 0; i < stock.space_count; ++i) {
-        started += start_space(&authority, &mounts, stock.spaces[i], suppress_boot_focus, NULL);
-      }
-    }
-  }
-  for (size_t i = 0; deferred && i < plan.space_count; ++i) {
-    const char *reason = deferred + i * (SPACE_REASON_MAX + 1);
-    if (!reason[0]) {
-      continue;
-    }
-    if (plan_has_space(&stock, plan.spaces[i]->name)) {
-      printf("boot-init: space %s from " OVERRIDE_NAME " has no tab: a stock space holds its name\n",
-          plan.spaces[i]->name);
-    } else {
-      create_unstarted(&authority, plan.spaces[i], reason);
-    }
-  }
-  free(deferred);
-  deferred = NULL;
-  boot_plan_free(&stock);
   if (!started) {
-#if INSTALLER_PUBLICATION_SCRATCH
-    if (frozen_configuration && !archive_recovery) {
-      config_selection_free(&selection);
-      if (!close_frozen(&authority) ||
-          !freeze_configuration(&authority, true, &selection)) {
-        exit_status = EXIT_FAILURE;
-        goto finish;
-      }
-      if (authority.bin != authority.boot && handle_close(authority.bin)) {
-        exit_status = EXIT_FAILURE;
-        goto finish;
-      }
-      authority.bin = authority.boot;
-      if (!start_archive_rescue(&authority, &mounts)) {
-        start_rescue(&authority, &mounts);
-      }
-    } else
-#endif
-    start_rescue(&authority, &mounts);
+    start_rescue(&authority, &mounts, pool_configured ? pool : 0, rescue);
   }
 
 finish:
@@ -1932,9 +1915,8 @@ finish:
     handle_close(mounted->control);
   }
   boot_plan_free(&plan);
-  boot_config_free(&override);
   boot_config_free(&defaults);
-  config_selection_free(&selection);
+  config_handoff_bytes_free(&network);
   close_frozen(&authority);
   free(mounts.entries);
   return exit_status;

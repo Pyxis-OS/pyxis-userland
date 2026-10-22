@@ -94,10 +94,8 @@ INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c
     config-editor/record.c config-editor/storage.c config-editor/ownership.c \
     config-editor/catalog.c xfer/hash.c
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/init-install/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
-ifeq ($(INSTALLER_PUBLICATION_SCRATCH),1)
-BOOT_INIT_OBJECTS += $(BUILD)/boot-init/selection.o $(addprefix $(BUILD)/config-editor/,readiness.o record.o catalog.o ownership.o) $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
+BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/config-editor/record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
-endif
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o progress.o)
 CONFIG_REVISION := $(shell git rev-parse --short=12 HEAD)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
@@ -135,12 +133,16 @@ install: all
 	  install -m 644 init/services.pxs "$$staging/init-services"; \
 	  install -m 644 init/remote.pxs "$$staging/init-remote"; \
 	  install -m 644 init/remote-services.pxs "$$staging/init-remote-services"; \
-	  install -m 644 init/installed.pxs "$$staging/init-installed"; \
 	  mkdir -p "$$staging/share/licenses/wpa-rsn"; \
 	  cp -a "$(WPA_RSN_PREFIX)/share/licenses/wpa-rsn/." "$$staging/share/licenses/wpa-rsn/"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
 	  install -m 644 config/network.lua "$$staging/config/network.lua"; \
 	  install -m 644 config/live.lua "$$staging/config/live.lua"; \
+	  mkdir -p "$$staging/share/installer/system"; \
+	  install -m 644 config/system/boot.lua "$$staging/share/installer/system/boot.lua"; \
+	  install -m 644 config/session.lua "$$staging/share/installer/system/session.lua"; \
+	  install -m 644 config/network.lua "$$staging/share/installer/system/network.lua"; \
+	  install -m 644 init/installed.pxs "$$staging/share/installer/system/init-installed"; \
 	  install -m 644 config/installed.lua "$$staging/config/installed.lua"; \
 	  install -m 644 config/packages.lua "$$staging/config/packages.lua"; \
 	  install -m 644 "$(BUILD)/config-editor/catalog.lua" "$$staging/config/catalog.lua"; \
@@ -355,7 +357,7 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 	install -m 644 wifi/README.md "$(@D)/app/"
 	install -m 644 wifi/manifest.json "$@"
 
-$(BUILD)/boot-init/selection.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(BUILD)/boot-init/handoff.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
 $(BUILD)/config.pxe: $(NPFS_LIBRARY) $(BUILD)/installer/publication.o $(BUILD)/installer/esp_payload.o $(BUILD)/installer/esp_directory.o $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BUILD)/installer/digest.o $(BUILD)/installer/progress.o $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
@@ -379,7 +381,7 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/boot-init/main.o $(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
 
 $(INSTALL_SELECTOR_OBJECTS): private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH) -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALL_SELECTOR_OBJECTS): private CFLAGS += -ffunction-sections -fdata-sections

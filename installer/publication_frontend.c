@@ -313,7 +313,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   struct install_disk disk = {.handle = HANDLE_INVALID};
   struct mount_fat32_reply mount = {.root = HANDLE_INVALID, .control = HANDLE_INVALID};
   struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0}, archive[CONFIG_LUA_COUNT] = {0};
-  struct config_blob catalog = {0}, pool = {0};
+  struct config_blob catalog = {0};
   struct install_configuration plan = {0};
   struct config_handoff handoff = {0};
   struct install_programs programs = {0};
@@ -371,8 +371,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     goto done;
   }
   uint64_t pool_partition = completion_only ? selected_pool : INSTALL_POOL_PARTITION;
-  if (!install_pool_boot_snapshot_at(&disk, pool_partition, &pool) ||
-      disk_partition_info(disk.handle, partition, &target_selection) != CALL_OK ||
+  if (disk_partition_info(disk.handle, partition, &target_selection) != CALL_OK ||
       disks_open_owned_esp(disks, &target_selection, MOUNT_ACCESS_READ_ONLY, READ_RIGHTS, &mount) != CALL_OK ||
       !install_snapshot_facts(mount.control, &planned_facts)) {
     fputs("Planning view/identity unavailable; nothing written.\n", stderr);
@@ -397,7 +396,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     if (length <= 0 || (size_t)length >= sizeof(path) ||
         !install_snapshot_file(mount.root, path, CONFIG_FILE_MAX_BYTES, &previous_limine)) goto done;
   }
-  if (!install_recovery_menu_review(mount.root, &record, &planned_facts) ||
+  if (!install_recovery_menu_review(mount.root, &record, &planned_facts, pool_partition) ||
       !install_recovery_prepare(mount.root, boot, bootstrap_capability("boot_kernel"),
           workspace, &planned_facts, &recovery)) {
     fputs("Static recovery or menu ownership is unrecognized; nothing written.\n", stderr);
@@ -406,7 +405,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   /* A current/previous owned binding supersedes legacy fixed files. Only
    * initial adoption or an old legacy menu needs that additional proof. */
   if (!install_pending_inspect(&record, current, &previous_limine, planned_facts.disk_guid,
-        NULL, &completion)) goto done;
+        pool_partition, NULL, &completion)) goto done;
   if (completion.state == INSTALL_PENDING_NONE ||
       (completion.state == INSTALL_PENDING_REFUSED && inspected.committed &&
       inspected.boot.present && !inspected.previous_boot.present)) {
@@ -417,7 +416,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     goto done;
   }
   if (!install_pending_inspect(&record, current, &previous_limine, planned_facts.disk_guid,
-        legacy_pair ? legacy_digests : NULL, &completion)) goto done;
+        pool_partition, legacy_pair ? legacy_digests : NULL, &completion)) goto done;
   if (completion.state == INSTALL_PENDING_REFUSED) {
     fputs("Readiness/menu state is ambiguous; explicit manual disposition required.\n", stderr);
     goto done;
@@ -517,7 +516,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   }
   strcpy(revision, identity.build_revision);
   struct install_configuration_input input = {.current = current, .record = &record,
-    .archive = archive, .catalog = &catalog, .pool_override = &pool,
+    .archive = archive, .catalog = &catalog,
     .kernel_revision = revision, .program_revision = revision};
   if (!install_configuration_prepare(&input, &plan) || !ready_preview(&plan, &record)) {
     goto done;
@@ -574,7 +573,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   const struct install_boot_menu target = {&next_paths, previous_pair ? &previous_paths : NULL, false};
   bool adoption, pending;
   if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_pair,
-        planned_facts.disk_guid, &target, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
+        planned_facts.disk_guid, pool_partition, &target, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
     goto done;
   }
   for (;;) {
@@ -596,7 +595,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
         (unsigned long long)binding->archive.digest.size, pending ? "manual adoption; activation pending" : "owned switch last",
         adoption ? "; legacy adoption pre-selected" : "");
     if (verbose) {
-      install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
+      install_boot_entry_print(&next_paths, planned_facts.disk_guid, pool_partition, stderr);
     }
     if (ferror(stderr)) {
       goto done;
@@ -618,7 +617,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     }
     if (action == REVIEW_PLAN) {
       install_configuration_review(&plan, stderr);
-      install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
+      install_boot_entry_print(&next_paths, planned_facts.disk_guid, pool_partition, stderr);
       continue;
     }
     if (action == REVIEW_CONFIRM) {
@@ -690,7 +689,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
     }
     /* Rebuilding config choices copies the original Limine snapshot. */
     if (!install_boot_entry_plan(&current[CONFIG_LIMINE], previous_pair,
-          planned_facts.disk_guid, &target, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
+          planned_facts.disk_guid, pool_partition, &target, legacy_pair, &plan.after[CONFIG_LIMINE], &adoption, &pending)) {
       goto done;
     }
   }
@@ -718,7 +717,7 @@ static int publication_frontend(struct terminal *terminal, bool verbose,
   request.legacy_active = adoption;
   memcpy(request.legacy_expected, legacy_digests, sizeof(legacy_digests));
   binding->source = plan.source;
-  binding->legacy_override = pool.digest;
+  binding->legacy_override = plan.pool_override.digest;
   binding->legacy_disposition = plan.pool_disposition;
 admit:
   if (!install_battery_check(bootstrap_capability("system_info"), stderr)) goto done;
@@ -732,14 +731,10 @@ admit:
   }
   if (status == CALL_OK) status = disks_open_owned_esp(disks, &target_selection,
       MOUNT_ACCESS_READ_WRITE, WRITE_RIGHTS, &mount);
-  struct config_blob current_pool = {0};
-  if (status != CALL_OK ||
-      !install_pool_boot_snapshot_at(&disk, pool_partition, &current_pool) || !config_blob_equal(&pool, &current_pool)) {
-    config_blob_destroy(&current_pool);
+  if (status != CALL_OK) {
     fprintf(stderr, "Scoped admission/stale input refused (status %u); nothing staged.\n", status);
     goto done;
   }
-  config_blob_destroy(&current_pool);
   if (mount_observe(mount.control, &request.expected_target) != CALL_OK ||
       !install_snapshot_facts(mount.control, &request.facts) ||
       !install_snapshot_same_target(&planned_facts, &request.facts)) goto done;
@@ -778,7 +773,7 @@ admit:
       goto done;
     }
   }
-  if (!install_recovery_menu_review(mount.root, &record, &request.facts) ||
+  if (!install_recovery_menu_review(mount.root, &record, &request.facts, pool_partition) ||
       !install_recovery_provision(mount.root, mount.control, workspace, &recovery)) {
     fputs("Static fallback not verified; no readiness/menu publication.\n", stderr);
     goto done;
@@ -792,7 +787,8 @@ admit:
   if (completing) {
     struct install_pending_request resume = {.esp_root = mount.root, .workspace = workspace,
       .view = request.view, .facts = request.facts, .expected_target = request.expected_target,
-      .record = &record, .current = current, .previous_limine = &previous_limine, .fallback_ready = true};
+      .record = &record, .current = current, .previous_limine = &previous_limine,
+      .pool_partition = pool_partition, .fallback_ready = true};
     memcpy(resume.legacy, legacy_digests, sizeof(resume.legacy));
     struct config_storage_report report = {0};
     bool ok = install_pending_complete(&resume, &report);
@@ -816,7 +812,7 @@ admit:
   bool ok = install_publication_publish(&request, &report);
   publication_result(&request, &report, previous_valid ? &previous.previous_boot : NULL, ok);
   if (report.committed && pending) {
-    install_boot_entry_print(&next_paths, planned_facts.disk_guid, stderr);
+    install_boot_entry_print(&next_paths, planned_facts.disk_guid, pool_partition, stderr);
   }
   result = ok ? EXIT_SUCCESS : EXIT_FAILURE;
 done:
@@ -856,7 +852,6 @@ done:
   }
   config_blob_destroy(&record);
   config_blob_destroy(&catalog);
-  config_blob_destroy(&pool);
   install_progress_finish();
   if (crypto) {
     hash_close();

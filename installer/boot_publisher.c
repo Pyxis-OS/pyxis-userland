@@ -111,10 +111,10 @@ static uint64_t required_space(const struct boot_publication *publication, uint6
 /* Configuration, binding, menu and capacity from the frozen snapshots. */
 static bool prepare_plan(struct boot_publication *publication, const struct boot_publisher_input *input,
     struct config_blob current[CONFIG_ALL_FILES], const struct config_blob *record,
-    const struct config_blob *pool, const struct config_blob defaults[CONFIG_SET_FILES], bool legacy)
+    const struct config_blob defaults[CONFIG_SET_FILES], bool legacy)
 {
   struct install_configuration_input configuration = {.current = current, .record = record,
-    .archive = defaults, .catalog = &defaults[CONFIG_CATALOG], .pool_override = pool,
+    .archive = defaults, .catalog = &defaults[CONFIG_CATALOG],
     .kernel_revision = input->revision, .program_revision = input->revision};
   bool ok = install_configuration_prepare(&configuration, &publication->configuration);
   if (ok && !publication->configuration.applicable) {
@@ -128,7 +128,7 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
       publication->binding.archive.path};
     if (publication->fresh) {
-      ok = install_boot_entry_render_owned(&next, input->disk_guid,
+      ok = install_boot_entry_render_owned(&next, input->disk_guid, input->pool_partition,
           &publication->configuration.after[CONFIG_LIMINE]);
     } else {
       struct config_record previous = {0};
@@ -143,7 +143,7 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
       const struct install_boot_menu target = {&next, recorded ? &old : NULL, false};
       bool adoption = false;
       ok = install_boot_entry_plan(&current[CONFIG_LIMINE], recorded ? &inherited : NULL,
-          input->disk_guid, &target, legacy,
+          input->disk_guid, input->pool_partition, &target, legacy,
           &publication->configuration.after[CONFIG_LIMINE], &adoption, &publication->activation_pending);
       publication->legacy_active = adoption;
       if (ok && recorded && publication->activation_pending) {
@@ -161,8 +161,7 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
 }
 
 bool boot_publication_prepare(struct boot_publication *publication,
-    const struct boot_publisher_input *input, handle_t root, handle_t control,
-    const struct config_blob *pool)
+    const struct boot_publisher_input *input, handle_t root, handle_t control)
 {
   boot_publication_destroy(publication);
   struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0};
@@ -172,7 +171,7 @@ bool boot_publication_prepare(struct boot_publication *publication,
       install_snapshot_facts(control, &publication->facts) &&
       facts_match(&input->target, &publication->facts) && read_current(root, current, &record) &&
       install_recovery_resolved(root, &record) &&
-      install_recovery_menu_review(root, &record, &publication->facts) &&
+      install_recovery_menu_review(root, &record, &publication->facts, input->pool_partition) &&
       install_recovery_prepare(root, input->boot, input->loaded_kernel, input->workspace,
           &publication->facts, &publication->recovery);
   if (ok) {
@@ -189,7 +188,7 @@ bool boot_publication_prepare(struct boot_publication *publication,
       if (!owned) legacy = install_boot_legacy_certify(root, input->workspace, publication->legacy);
     }
   }
-  ok = ok && prepare_plan(publication, input, current, &record, pool, defaults, legacy);
+  ok = ok && prepare_plan(publication, input, current, &record, defaults, legacy);
   for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) config_blob_destroy(&current[i]);
   for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) config_blob_destroy(&defaults[i]);
   config_blob_destroy(&record);
@@ -199,7 +198,7 @@ bool boot_publication_prepare(struct boot_publication *publication,
 
 bool boot_publication_prepare_fresh(struct boot_publication *publication,
     const struct boot_publisher_input *input, const char *limine, size_t limine_bytes,
-    const struct config_blob *pool, uint64_t cluster_bytes, uint64_t available_bytes)
+    uint64_t cluster_bytes, uint64_t available_bytes)
 {
   boot_publication_destroy(publication);
   publication->fresh = true;
@@ -212,7 +211,7 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
       config_blob_set(&current[CONFIG_LIMINE], limine, limine_bytes) &&
       install_recovery_prepare_fresh(input->boot, input->loaded_kernel,
           &publication->facts, &publication->recovery) &&
-      prepare_plan(publication, input, current, &record, pool, defaults, false);
+      prepare_plan(publication, input, current, &record, defaults, false);
   for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) config_blob_destroy(&current[i]);
   for (unsigned i = 0; i < CONFIG_SET_FILES; ++i) config_blob_destroy(&defaults[i]);
   publication->prepared = ok;
@@ -267,7 +266,7 @@ void boot_publication_report(const struct boot_publication *publication,
     fputs("Existing menu remains; boot activation will be pending.\n", output);
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
       publication->binding.archive.path};
-    install_boot_entry_print(&next, input->disk_guid, output);
+    install_boot_entry_print(&next, input->disk_guid, input->pool_partition, output);
   }
 }
 
@@ -305,8 +304,7 @@ static bool parent_open(handle_t root, const char *path, handle_t *output)
 }
 
 bool boot_publication_admit(struct boot_publication *publication,
-    const struct boot_publisher_input *input, struct install_esp_view *view,
-    handle_t pool_system)
+    const struct boot_publisher_input *input, struct install_esp_view *view)
 {
   struct config_target_facts facts;
   bool ok = install_snapshot_facts(view->control, &facts) && facts_match(&input->target, &facts);
@@ -319,20 +317,16 @@ bool boot_publication_admit(struct boot_publication *publication,
         state.free_clusters <= UINT64_MAX / state.cluster_bytes &&
         publication->required_bytes <= state.free_clusters * state.cluster_bytes;
   }
-  struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0}, pool = {0};
+  struct config_blob current[CONFIG_ALL_FILES] = {0}, record = {0};
   ok = ok && read_current(view->root, current, &record);
   for (unsigned i = 0; ok && i < CONFIG_ALL_FILES; ++i) {
     ok = config_blob_equal(&current[i], &publication->configuration.current[i]);
   }
   ok = ok && config_blob_equal(&record, &publication->configuration.record) &&
       install_recovery_resolved(view->root, &record);
-  if (ok && pool_system != HANDLE_INVALID) {
-    ok = install_snapshot_file(pool_system, "config/boot.lua", CONFIG_FILE_MAX_BYTES, &pool) &&
-        config_blob_equal(&pool, &publication->configuration.pool_override);
-  }
   if (ok) {
     struct install_recovery current_recovery = {0};
-    ok = install_recovery_menu_review(view->root, &record, &facts) &&
+    ok = install_recovery_menu_review(view->root, &record, &facts, input->pool_partition) &&
         install_recovery_prepare(view->root, input->boot, input->loaded_kernel,
             input->workspace, &facts, &current_recovery) &&
         current_recovery.present == publication->recovery.present &&
@@ -367,7 +361,6 @@ bool boot_publication_admit(struct boot_publication *publication,
   }
   for (unsigned i = 0; i < CONFIG_ALL_FILES; ++i) config_blob_destroy(&current[i]);
   config_blob_destroy(&record);
-  config_blob_destroy(&pool);
   if (!ok) {
     fprintf(stderr, "%s: stale consumed configuration/ownership input; no program files written\n",
         input->name);

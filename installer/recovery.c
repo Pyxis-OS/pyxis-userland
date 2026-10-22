@@ -564,7 +564,7 @@ static bool recorded_menu_read(handle_t root, const struct config_recovery_file 
 }
 
 static bool committed_menu(handle_t root, const struct config_record *record,
-    const uint8_t disk_guid[16], struct config_blob *menu)
+    const uint8_t disk_guid[16], uint64_t pool_partition, struct config_blob *menu)
 {
   if (!record->committed || !record->boot.present) {
     return false;
@@ -579,7 +579,8 @@ static bool committed_menu(handle_t root, const struct config_record *record,
     record->previous_boot.present ? &inherited : NULL, false};
   bool adoption = false, pending = true, is_current = false;
   if (ok) {
-    ok = install_boot_entry_current(&current, &committed, disk_guid, &is_current);
+    ok = install_boot_entry_current(&current, &committed, disk_guid, pool_partition,
+        &is_current);
   }
   if (ok && is_current) {
     ok = config_blob_set(menu, current.bytes, current.size);
@@ -591,7 +592,8 @@ static bool committed_menu(handle_t root, const struct config_record *record,
     const struct install_boot_menu replaced = {&inherited, NULL, true};
     if (ok) {
       ok = install_boot_entry_plan(&current, record->previous_boot.present ? &replaced : NULL,
-          disk_guid, &committed, !record->previous_boot.present, menu, &adoption, &pending);
+          disk_guid, pool_partition, &committed, !record->previous_boot.present, menu,
+          &adoption, &pending);
     }
   }
   config_blob_destroy(&current);
@@ -600,7 +602,7 @@ static bool committed_menu(handle_t root, const struct config_record *record,
 }
 
 bool install_recovery_menu_review(handle_t root, const struct config_blob *record,
-    const struct config_target_facts *facts)
+    const struct config_target_facts *facts, uint64_t pool_partition)
 {
   if (!record || !facts || !config_target_valid(facts) || !root_bound(root, facts)) {
     return false;
@@ -654,7 +656,7 @@ bool install_recovery_menu_review(handle_t root, const struct config_blob *recor
       snprintf(path, sizeof(path), "boot/limine/%s", staged);
       struct config_blob bytes = {0}, menu = {0};
       known = snapshot_file(root, path, CONFIG_FILE_MAX_BYTES, &bytes) == CALL_OK &&
-          committed_menu(root, &parsed, facts->disk_guid, &menu) && config_blob_equal(&bytes, &menu);
+          committed_menu(root, &parsed, facts->disk_guid, pool_partition, &menu) && config_blob_equal(&bytes, &menu);
       config_blob_destroy(&bytes);
       config_blob_destroy(&menu);
     }

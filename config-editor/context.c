@@ -215,20 +215,21 @@ static void archive_bytes(const struct config_editor_context *context,
 
 #define POOL_BOOT_PATH "system://config/boot.lua"
 
-/* Installed boot reads spaces from the pool file, not the ESP copy, so check
- * that file the way boot does: declarative literal data over the archive
- * defaults. False only for a present file that boot would ignore. */
-static bool validate_pool(const struct boot_config *defaults, struct boot_config *override,
+/* Installed boot reads its whole configuration from the pool file, so check it
+ * the way boot does: declarative literal data, with no archive defaults. False
+ * when boot would start the rescue space instead. DEFAULTS is unused. */
+static bool validate_pool(const struct boot_config *defaults, struct boot_config *pool,
     struct boot_plan *plan)
 {
+  (void)defaults;
   FILE *file = fopen(POOL_BOOT_PATH, "rb");
   if (!file) {
     if (errno == ENOENT) {
-      fputs("config: no " POOL_BOOT_PATH "; boot starts the stock spaces\n", stderr);
+      fputs("config: no " POOL_BOOT_PATH "; boot starts the rescue space\n", stderr);
     } else {
       fputs("config: " POOL_BOOT_PATH ": not checked (no readable system:// root)\n", stderr);
     }
-    return boot_plan_build(defaults, NULL, plan, NULL, NULL);
+    return false;
   }
   char *bytes = malloc(LITERAL_SOURCE_LIMIT + 1);
   size_t size = bytes ? fread(bytes, 1, LITERAL_SOURCE_LIMIT + 1, file) : 0;
@@ -241,19 +242,18 @@ static bool validate_pool(const struct boot_config *defaults, struct boot_config
   } else if (size > LITERAL_SOURCE_LIMIT) {
     config_failure_format(&failure, "exceeds %d bytes", LITERAL_SOURCE_LIMIT);
   } else {
-    ok = boot_config_read_literal_bytes_reason(POOL_BOOT_PATH, bytes, size, override,
+    ok = boot_config_read_pool_bytes(POOL_BOOT_PATH, bytes, size, pool,
         &failure) == BOOT_CONFIG_OK &&
-        boot_plan_build(defaults, override, plan, NULL, &failure);
+        boot_plan_build(pool, NULL, plan, NULL, &failure);
   }
   free(bytes);
   if (ok) {
     fputs("config: " POOL_BOOT_PATH " is valid; boot reads it for spaces\n", stderr);
     return true;
   }
-  fprintf(stderr, "config: " POOL_BOOT_PATH " is invalid: %s; boot ignores it and starts "
-      "the stock spaces\n", failure.text[0] ? failure.text : "invalid");
-  boot_config_free(override);
-  boot_plan_build(defaults, NULL, plan, NULL, NULL);
+  fprintf(stderr, "config: " POOL_BOOT_PATH " is invalid: %s; boot starts the rescue space\n",
+      failure.text[0] ? failure.text : "invalid");
+  boot_config_free(pool);
   return false;
 }
 
@@ -297,13 +297,10 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
   struct boot_plan spaces = {0};
   ok = validate_pool(&selection.defaults, &pool, &spaces) && ok;
   for (size_t i = 0; i < spaces.space_count; ++i) {
-    fprintf(stderr, "config: space %s from %s, init %s\n", spaces.spaces[i]->name,
-        spaces.space_sources[i] == BOOT_ENTRY_OVERRIDE ? "pool override" : "archive default",
-        spaces.spaces[i]->init);
+    fprintf(stderr, "config: space %s, init %s\n", spaces.spaces[i]->name, spaces.spaces[i]->init);
   }
   for (size_t i = 0; i < spaces.volume_count; ++i) {
-    fprintf(stderr, "config: volume %s from %s\n", spaces.volumes[i]->name,
-        spaces.volume_sources[i] == BOOT_ENTRY_OVERRIDE ? "pool override" : "archive default");
+    fprintf(stderr, "config: volume %s\n", spaces.volumes[i]->name);
   }
   struct system_info_cpu cpu;
   if (system_info_get_cpu(bootstrap_capability("system_info"), &cpu) == CALL_OK && cpu.online_count) {

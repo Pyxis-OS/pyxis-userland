@@ -43,7 +43,7 @@ static bool source_open(const char *path, struct install_source *source)
   return true;
 }
 
-static char *boot_configuration(const uint8_t guid[16], size_t *bytes)
+static char *boot_configuration(const uint8_t guid[16], uint64_t pool, size_t *bytes)
 {
   /* Installed entries are an allowlist, independent of live-media tools. */
   static const char format[] =
@@ -56,7 +56,7 @@ static char *boot_configuration(const uint8_t guid[16], size_t *bytes)
     "  module_path: boot():/boot/initrd.cpio\n"
     "  paging_mode: 4level\n"
     "  kaslr: no\n"
-    "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s\n"
+    "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s mount.pool=%llu\n"
     "\n"
     "/Pyxis OS (rescue)\n"
     "  protocol: limine\n"
@@ -64,10 +64,12 @@ static char *boot_configuration(const uint8_t guid[16], size_t *bytes)
     "  module_path: boot():/boot/initrd.cpio\n"
     "  paging_mode: 4level\n"
     "  kaslr: no\n"
-    "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s " INSTALL_RESCUE_OPTION "\n";
+    "  cmdline: " INSTALL_BOOT_INIT_OPTION " mount.disk=%s mount.pool=%llu "
+    INSTALL_RESCUE_OPTION "\n";
   char disk_guid[37];
   install_guid_text(guid, disk_guid);
-  int length = snprintf(NULL, 0, format, INSTALL_MENU_TIMEOUT_SECONDS, disk_guid, disk_guid);
+  int length = snprintf(NULL, 0, format, INSTALL_MENU_TIMEOUT_SECONDS, disk_guid,
+      (unsigned long long)pool, disk_guid, (unsigned long long)pool);
   if (length < 0) {
     return NULL;
   }
@@ -76,7 +78,7 @@ static char *boot_configuration(const uint8_t guid[16], size_t *bytes)
     return NULL;
   }
   if (snprintf(output, (size_t)length + 1, format, INSTALL_MENU_TIMEOUT_SECONDS,
-        disk_guid, disk_guid) != length) {
+        disk_guid, (unsigned long long)pool, disk_guid, (unsigned long long)pool) != length) {
     free(output);
     return NULL;
   }
@@ -239,7 +241,7 @@ static bool payload_plan(struct install_plan *plan)
       !install_esp_payload_path(plan->record.revision, plan->record.attempt,
         INSTALL_ESP_ARCHIVE, archive_path) ||
       !install_boot_entry_render(&paths, plan->record.layout.disk_guid,
-        plan->record.layout.esp_guid, &plan->entry)) {
+        plan->record.layout.pool_partition, plan->record.layout.esp_guid, &plan->entry)) {
     return false;
   }
   plan->payload_request = (struct install_esp_payload_request){
@@ -359,7 +361,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   }
   if (!plan->record.coexist) {
     plan->configuration = boot_configuration(plan->record.layout.disk_guid,
-        &plan->configuration_bytes);
+        plan->record.layout.pool_partition, &plan->configuration_bytes);
     if (!plan->configuration) {
       return false;
     }

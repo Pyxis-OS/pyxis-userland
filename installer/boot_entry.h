@@ -40,29 +40,32 @@ struct install_boot_menu {
  * No target files are opened or changed. */
 bool install_boot_entry_plan(const struct config_blob *current,
     const struct install_boot_menu *inherited, const uint8_t disk_guid[16],
-    const struct install_boot_menu *next, bool legacy_pair_verified,
+    uint64_t pool_partition, const struct install_boot_menu *next, bool legacy_pair_verified,
     struct config_blob *selected, bool *adoption, bool *pending);
 
 /* Whether CURRENT is exactly the menu COMMITTED publishes, or that menu
  * without its previous entry, as written before the previous entry existed.
  * Same inputs and hash context as install_boot_entry_plan. */
 bool install_boot_entry_current(const struct config_blob *current,
-    const struct install_boot_menu *committed, const uint8_t disk_guid[16], bool *is_current);
+    const struct install_boot_menu *committed, const uint8_t disk_guid[16],
+    uint64_t pool_partition, bool *is_current);
 
 /* Pure manual proposal: unmarked normal/rescue entries, no global directives.
  * Borrow validated relative PATHS and GUIDs, distinct from initialized owned
  * PAIR; keep the shared hash context ready. ESP_GUID NULL uses boot():/;
- * otherwise guid(ESP_GUID):/ names the GPT partition. DISK_GUID always supplies
- * mount.disk. Success replaces PAIR; failure leaves it unchanged. This confers
- * no ownership, boot readiness or activation authority and performs no I/O. */
+ * otherwise guid(ESP_GUID):/ names the GPT partition. DISK_GUID and
+ * POOL_PARTITION always supply mount.disk and mount.pool. Success replaces
+ * PAIR; failure leaves it unchanged. This confers no ownership, boot readiness
+ * or activation authority and performs no I/O. */
 bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], const uint8_t esp_guid[16], struct config_blob *pair);
+    const uint8_t disk_guid[16], uint64_t pool_partition, const uint8_t esp_guid[16],
+    struct config_blob *pair);
 /* Fresh, exclusively created menu: owned normal/rescue pair plus the authored
  * globals. Uses the same boot-relative spelling recognized by later Review. */
 bool install_boot_entry_render_owned(const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], struct config_blob *menu);
+    const uint8_t disk_guid[16], uint64_t pool_partition, struct config_blob *menu);
 void install_boot_entry_print(const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], FILE *output);
+    const uint8_t disk_guid[16], uint64_t pool_partition, FILE *output);
 
 /* Caller owns source bytes/handles and the initialized shared hash context.
  * Success hashes exactly source->bytes; failure leaves OUTPUT absent. */

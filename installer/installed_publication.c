@@ -21,6 +21,7 @@ static struct boot_publisher_input publisher_input(const struct install_plan *pl
     .kernel = plan->kernel, .archive = plan->rescue, .revision = plan->record.revision,
     .attempt = plan->record.attempt, .revision_record = plan->revision_record,
     .disk_guid = plan->record.layout.disk_guid,
+    .pool_partition = plan->record.layout.pool_partition,
     .target = {.device = selected->id, .partition = selected->partition,
       .first_block = selected->first_block, .block_count = selected->block_count,
       .device_block_size = selected->device_block_size,
@@ -56,33 +57,22 @@ bool install_installed_prepare(struct install_plan *plan)
   const struct boot_publisher_input input = publisher_input(plan);
   boot_publication_destroy(publication);
   bool fresh = !plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild);
-  struct config_blob pool = {0};
-  bool ok = true;
-  struct install_disk reader = {.handle = HANDLE_INVALID, .info = plan->disk.info,
-    .bytes = plan->disk.bytes};
-  if (plan->record.updating) {
-    ok = disks_open(plan->disks, plan->disk.info.id, DISK_ACCESS_READ_ONLY, &reader.handle) == CALL_OK &&
-        install_pool_boot_snapshot_at(&reader, plan->record.layout.pool_partition, &pool);
-  }
-  if (reader.handle != HANDLE_INVALID) {
-    ok = handle_close(reader.handle) == CALL_OK && ok;
-  }
-  if (ok && fresh) {
+  bool ok;
+  if (fresh) {
     uint64_t cluster_bytes = 0, available_bytes = 0;
     ok = install_esp_capacity(plan->esp, &cluster_bytes, &available_bytes) &&
         boot_publication_prepare_fresh(publication, &input, plan->configuration,
-            plan->configuration_bytes, &pool, cluster_bytes, available_bytes);
-  } else if (ok) {
+            plan->configuration_bytes, cluster_bytes, available_bytes);
+  } else {
     struct mount_fat32_reply mounted = {0};
     enum call_status status = disks_open_owned_esp(plan->disks, &plan->target.esp,
         MOUNT_ACCESS_READ_ONLY, INSTALLED_READ, &mounted);
     plan->view.root = mounted.root;
     plan->view.control = mounted.control;
     ok = status == CALL_OK &&
-        boot_publication_prepare(publication, &input, mounted.root, mounted.control, &pool);
+        boot_publication_prepare(publication, &input, mounted.root, mounted.control);
     ok = close_planning(plan) && ok;
   }
-  config_blob_destroy(&pool);
   publication->prepared = ok;
   return ok;
 }
@@ -105,21 +95,11 @@ bool install_installed_admit(struct install_plan *plan)
   const struct boot_publisher_input input = publisher_input(plan);
   enum call_status status = install_esp_view_open(&plan->view, plan->disks, &plan->target.esp,
       NULL, INSTALL_ESP_VIEW_RIGHTS);
-  /* Pool admission is already selected and released. Open only its existing
-   * native system root for the consumed override; never raw-read a mount. */
-  handle_t system = HANDLE_INVALID;
-  if (status == CALL_OK && plan->record.updating) {
-    status = disk_open_volume(plan->disk.handle, plan->target.pool.partition, "system", INSTALLED_READ, &system);
-  }
   bool ok = status == CALL_OK;
   if (ok) {
-    ok = boot_publication_admit(publication, &input, &plan->view, system);
+    ok = boot_publication_admit(publication, &input, &plan->view);
   } else {
     fputs("installer: stale consumed configuration/ownership input; no program files written\n", stderr);
-  }
-  if (system != HANDLE_INVALID && handle_close(system) != CALL_OK && ok) {
-    fputs("installer: stale consumed configuration/ownership input; no program files written\n", stderr);
-    ok = false;
   }
   return ok;
 }

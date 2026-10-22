@@ -1,6 +1,7 @@
 #ifndef BOOT_INIT_NETWORK_H
 #define BOOT_INIT_NETWORK_H
 
+#include "../libconfig/handoff.h"
 #include "../libconfig/network.h"
 #include <abi/handle.h>
 
@@ -16,8 +17,10 @@ struct boot_network {
 };
 
 /* Trusted boot setup fixes identities and the immutable stock packet scopes.
- * Policy remains private to boot-init and the explicitly configured owner. */
-bool boot_network_prepare(struct boot_network *network, handle_t registry, handle_t policy);
+ * Policy remains private to boot-init and the explicitly configured owner.
+ * BYTES is the pool's network.lua, borrowed; NULL reads boot://config/network.lua. */
+bool boot_network_prepare(struct boot_network *network, handle_t registry, handle_t policy,
+    const struct config_handoff_bytes *bytes);
 uint64_t boot_network_id(const struct boot_network *network, const char *name);
 /* Resolve selectors for the entire plan before committing a binding batch.
  * Missing optional/controllers without usable carrier remain defined/unbound. */

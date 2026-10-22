@@ -1,9 +1,6 @@
--- Boot init's spaces for an installed system. system://config/boot.lua on the
--- pool can replace these spaces by name or add more; the rescue boot entry
--- ignores it. Spaces start in home:// unless start names another root. home is
--- optional so that a damaged home volume still starts pyxis, in tmp://. The
--- packages source is optional too: programs resolve declared packages through
--- it, and systems installed before packages have no such volume until Update.
+-- The defaults the installer still publishes to the ESP configuration set,
+-- which task 2b retires. Boot no longer reads this file: an installed boot
+-- reads system://config/, whose initial copy is config/system/boot.lua.
 return {
   hostname = "pyxis",
   input = {
