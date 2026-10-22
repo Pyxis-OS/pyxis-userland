@@ -43,20 +43,22 @@ reports that same resolver's selected entry and package provenance without launc
 
 [examples/pointer-min](examples/pointer-min/main.c) is a minimal commented pointer
 program for people writing their own. It is built as the `pointer-min` program, and
-the image ships its source as `boot://share/examples/pointer-min.c` for TCC.
+the image ships its source as `boot://share/examples/pointer-min.c` to build with
+hosted Clang (`pkg install clang-hosted`).
 
 [examples/font-min](examples/font-min/main.c) is pointer-min plus text with libfont:
 one line per font style and the pointer position. The `font-min` bundle requires
 the `fonts` package and reads its declared `fonts://` root. Install that package
 from a configured repository with `pkg install fonts`. The image ships its source
-and manifest for TCC; preserve the bundle so its package grant is applied:
+and manifest to build with hosted Clang; preserve the bundle so its package grant
+is applied:
 
 ```text
 mkdir font-min.pxb
 mkdir font-min.pxb/app
 mkdir font-min.pxb/app/bin
 cp boot://share/examples/font-min-manifest.json font-min.pxb/manifest.json
-tcc boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.pxe
+clang boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.pxe
 ./font-min.pxb
 ```
 

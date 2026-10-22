@@ -55,7 +55,7 @@ Header-file credentials and per-root trust are an interim design accepted
 
 `--navigation` selects an explicit response FILE prefix: a little-endian 32-bit
 metadata length (at most 4 KiB), UTF-8 JSON `effective_url`, `media_type` and
-`status`, then the raw response body. Ordinary reads stay raw. Links and TCC opt
-into and validate this content; generic describe stays URI-free. The complete
+`status`, then the raw response body. Ordinary reads stay raw. Links opts
+into and validates this content; generic describe stays URI-free. The complete
 encoded snapshot counts against the selected private backing budget. HTTP
 failures remain failed outcomes, with framed diagnostics in their error body.

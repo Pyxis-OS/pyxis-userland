@@ -6,15 +6,15 @@
  * Only the font code is new, and every part of it is commented.
  *
  * Build it with the host SDK (userspace/Makefile builds it as font-min) or
- * inside Pyxis, where the image ships this file as boot://share/examples/.
- * libfont is not a default library, so name it:
+ * inside Pyxis with hosted Clang, where the image ships this file as
+ * boot://share/examples/. libfont is not a default library, so name it:
  *
- *   pkg install fonts
+ *   pkg install clang-hosted fonts
  *   mkdir font-min.pxb
  *   mkdir font-min.pxb/app
  *   mkdir font-min.pxb/app/bin
  *   cp boot://share/examples/font-min-manifest.json font-min.pxb/manifest.json
- *   tcc boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.pxe
+ *   clang boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.pxe
  *   ./font-min.pxb
  *
  * Run it from a local shell that was given the display, keyboard and pointer

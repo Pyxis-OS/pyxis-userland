@@ -10,7 +10,7 @@ PYXIS_COMPILER_ID := $(shell $(CC) -dumpmachine) $(shell $(CC) -dumpversion)
 PYXIS_RUNTIME := $(shell $(CC) -print-libgcc-file-name)
 PYXIS_RUNTIME_LIBRARY := clang_rt.builtins
 # PYXIS_RUNTIME_LIBRARY is the -l name of the runtime archive the SDK sysroot
-# exports, for tools that link it by name, such as TCC.
+# exports, for tools that link it by name.
 
 # Keep SDK headers on a normal include path so -MMD tracks their changes.
 # Only compiler-provided headers and exported target headers are visible.

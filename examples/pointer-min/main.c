@@ -5,9 +5,11 @@
  * replace the cursor image or read the wheel; mousetest shows those.
  *
  * Build it with the host SDK (userspace/Makefile builds it as pointer-min) or
- * inside Pyxis, where the image ships this file as boot://share/examples/:
+ * inside Pyxis with hosted Clang, where the image ships this file as
+ * boot://share/examples/:
  *
- *   tcc boot://share/examples/pointer-min.c -o pointer-min.pxe
+ *   pkg install clang-hosted
+ *   clang boot://share/examples/pointer-min.c -o pointer-min.pxe
  *   ./pointer-min.pxe
  *
  * Run it from a local shell. The program only works on a space that was given

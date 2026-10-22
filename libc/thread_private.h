@@ -49,7 +49,7 @@ struct libc_thread_record {
   uint64_t thread_identity;
   struct libc_once_frame *once_frames;
   bool destroying;
-  /* Built-in implicit C state uses the TCB, keeping TLS-free TCC links valid. */
+  /* Built-in implicit C state uses the TCB, so it needs no TLS template. */
   struct tm utc_result, local_result;
   mbstate_t conversion_states[LIBC_CONVERSION_STATES];
 };
