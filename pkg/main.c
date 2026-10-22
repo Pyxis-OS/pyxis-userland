@@ -392,8 +392,10 @@ static bool record_fetch(const struct offered_package *offered)
 /* Picks the build of ID (at VERSION when given) from REPOSITORY, or from any
  * repository that offers one for this system. Several repositories give a
  * numbered choice on a console; elsewhere pkg refuses and lists the REPO/ID
- * spellings. *CHOSEN is NULL when nothing is offered. */
-static bool resolve(const char *id, const char *version, size_t repository,
+ * spellings. A DEPENDENCY is only reached after the packages needing it were
+ * fetched, so its cancellation says those stay inactive. *CHOSEN is NULL when
+ * nothing is offered. */
+static bool resolve(const char *id, const char *version, size_t repository, bool dependency,
     const struct offered_package **chosen)
 {
   *chosen = NULL;
@@ -410,7 +412,8 @@ static bool resolve(const char *id, const char *version, size_t repository,
     *chosen = count ? candidates[0] : NULL;
     return true;
   }
-  printf("pkg: %s is offered by %zu repositories\n", id, count);
+  printf("pkg: %s%s%s%s is offered by %zu repositories\n", dependency ? "dependency " : "",
+      id, version ? "@" : "", version ? version : "", count);
   for (size_t i = 0; i < count; ++i) {
     const struct pkg_identity *identity = &candidates[i]->entry.identity;
     printf("  %zu  %s/%s@%s\n", i + 1,
@@ -419,7 +422,8 @@ static bool resolve(const char *id, const char *version, size_t repository,
   }
   if (client.terminal.input == HANDLE_INVALID || client.terminal.output == HANDLE_INVALID) {
     snprintf(client.message, sizeof(client.message),
-        "%s is offered by %zu repositories; name one as REPO/%s", id, count, id);
+        "%s is offered by %zu repositories; name one as REPO/%s%s%s", id, count, id,
+        version ? "@" : "", version ? version : "");
     return fail(client.message);
   }
   char prompt[48], line[16];
@@ -431,7 +435,16 @@ static bool resolve(const char *id, const char *version, size_t repository,
   if (end != line && !*end && choice >= 1 && choice <= count) {
     *chosen = candidates[choice - 1];
   }
-  return *chosen ? true : fail("no repository chosen; nothing was fetched or changed");
+  if (*chosen) {
+    return true;
+  }
+  if (dependency) {
+    snprintf(client.message, sizeof(client.message),
+        "no repository chosen for dependency %s; packages fetched so far stay inactive and the active set is unchanged",
+        id);
+    return fail(client.message);
+  }
+  return fail("no repository chosen; nothing was fetched or changed");
 }
 
 static bool request(const char *text, struct package_request *request)
@@ -650,7 +663,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
     ok = request(argv[i], &want);
     const char *version = want.explicit_version ? want.identity.version : NULL;
     const struct offered_package *entry = NULL;
-    ok = ok && resolve(want.identity.id, version, want.repository, &entry);
+    ok = ok && resolve(want.identity.id, version, want.repository, false, &entry);
     if (ok && !entry) {
       size_t hidden = hidden_builds(want.identity.id, version, want.repository);
       if (hidden && !client.provided_readable) {
@@ -695,14 +708,17 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
     client.reason = NULL;
     if (explicit_request) {
       ok = install_version(explicit_request, &manifest);
-    } else if (i >= initial_count || !present) {
+    } else if (present) {
+      /* A stored tree is immutable. One carried over is trusted by its
+       * manifest; a dependency this set adds is hashed in place, not fetched. */
+      ok = i < initial_count ? trust_version(&selection->entries[i], &manifest) :
+          verify_version(&selection->entries[i], &manifest);
+    } else {
       const struct offered_package *entry = NULL;
       ok = resolve(selection->entries[i].id, selection->entries[i].version, ANY_REPOSITORY,
-          &entry);
+          true, &entry);
       ok = ok && (entry ? install_version(entry, &manifest) :
           fail("an exact dependency is unavailable in the configured repositories"));
-    } else {
-      ok = trust_version(&selection->entries[i], &manifest);
     }
     for (size_t d = 0; ok && d < manifest.dependency_count; ++d) {
       ok = select_version(selection, &manifest.dependencies[d], false);
