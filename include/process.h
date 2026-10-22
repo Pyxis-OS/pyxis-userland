@@ -25,4 +25,20 @@ enum call_status process_terminate(handle_t process);
 const char *process_start_step_name(uint32_t reason);
 const char *process_start_status_name(uint32_t reason);
 
+/* Requires TERMINATE authority; requests cooperative interruption of only this
+ * process. OK means accepted or coalesced, NOT_FOUND means no receiver and
+ * ENDPOINT_CLOSED means the process is stopping. Does not wait for completion. */
+enum call_status process_interrupt(handle_t process);
+
+/* Opt the calling process into cooperative interrupts. BUSY means one is
+ * already active; copies share its lifetime. Closing the last grant detaches it.
+ * Observe WAIT_READABLE, then TAKE; readiness does not consume notification.
+ * Clears *receiver on failure. OUTCOME_UNKNOWN must not be retried blindly. */
+enum call_status process_interrupt_receiver_create(handle_t *receiver);
+
+/* Owner-process-only: consume one coalesced notification. WOULD_BLOCK means
+ * none is pending; ENDPOINT_CLOSED means detached. Does not acknowledge process
+ * completion. */
+enum call_status process_interrupt_take(handle_t receiver);
+
 #endif

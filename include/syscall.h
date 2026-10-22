@@ -4,6 +4,7 @@
 #include <abi/handle.h>
 #include <abi/forwarder.h>
 #include <abi/describe.h>
+#include <abi/process.h>
 #include <abi/syscall.h>
 #include <abi/wait.h>
 #include <stddef.h>
@@ -112,6 +113,18 @@ static inline struct syscall_result syscall_forwarder_create(
   __asm__ volatile("syscall"
                    : "+a"(status), "+d"(reply_size)
                    : "D"(request), "S"(reply)
+                   : "rcx", "r11", "cc", "memory");
+  return (struct syscall_result){status, reply_size};
+}
+
+static inline struct syscall_result syscall_process_interrupt_create(
+    struct process_interrupt_create_reply *reply, size_t capacity)
+{
+  uint64_t status = SYSCALL_PROCESS_INTERRUPT_CREATE;
+  uint64_t reply_size;
+  __asm__ volatile("syscall"
+                   : "+a"(status), "=d"(reply_size)
+                   : "D"(reply), "S"(capacity)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }

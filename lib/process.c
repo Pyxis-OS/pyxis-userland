@@ -34,6 +34,16 @@ enum call_status process_wait(handle_t process, struct process_result *result)
   return CALL_OK;
 }
 
+static enum call_status process_operation(handle_t handle, uint64_t protocol, uint64_t operation)
+{
+  struct message_header message = {protocol, operation};
+  struct syscall_result call = syscall_call(handle, &message, sizeof(message), NULL, 0);
+  if (call.status >= CALL_STATUS_COUNT || call.reply_size) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return call.status;
+}
+
 enum call_status process_terminate(handle_t process)
 {
   struct message_header message = {PROTOCOL_PROCESS, PROCESS_TERMINATE};
@@ -102,4 +112,36 @@ const char *process_start_status_name(uint32_t reason)
   case CALL_PIPE_VALUE: return "pipe value pending";
   default: return "native call failed";
   }
+}
+
+enum call_status process_interrupt(handle_t process)
+{
+  return process_operation(process, PROTOCOL_PROCESS, PROCESS_INTERRUPT);
+}
+
+enum call_status process_interrupt_receiver_create(handle_t *receiver)
+{
+  if (!receiver) {
+    return CALL_BAD_REQUEST;
+  }
+  *receiver = HANDLE_INVALID;
+  struct process_interrupt_create_reply reply;
+  struct syscall_result call = syscall_process_interrupt_create(&reply, sizeof(reply));
+  if (call.status >= CALL_STATUS_COUNT ||
+      call.reply_size != (call.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (call.status != CALL_OK) {
+    return call.status;
+  }
+  if (reply.handle == HANDLE_INVALID) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *receiver = reply.handle;
+  return CALL_OK;
+}
+
+enum call_status process_interrupt_take(handle_t receiver)
+{
+  return process_operation(receiver, PROTOCOL_PROCESS_INTERRUPT, PROCESS_INTERRUPT_TAKE);
 }

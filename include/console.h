@@ -54,6 +54,10 @@ enum call_status console_set_tab_width(handle_t output, size_t columns);
  * leave the output HANDLE_INVALID on failure. */
 enum call_status console_arm_interrupt(handle_t input, handle_t *armed);
 
+/* ARMED authority. Atomically consume the pending latch without disarming;
+ * a later press remains observable. WOULD_BLOCK means no press is pending. */
+enum call_status console_ack_interrupt(handle_t armed);
+
 /* READ authority. On success *passthrough is a new handle; while any such
  * handle exists, Ctrl+C on this input is ordinary data. Close it to withdraw. */
 enum call_status console_passthrough(handle_t input, handle_t *passthrough);

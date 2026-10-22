@@ -10,6 +10,13 @@ can provision jobs, a foreground launch receives its own private provisioning su
 Typed captures retain capabilities: `api=$(http prepare POST URI)`, then
 `reply=$(printf '{}' > $api)` and `cat $reply`. Ctrl+C stops the script subtree.
 
+For ordinary direct foreground commands and pipelines, the first Ctrl+C requests
+cooperative interruption from stages that have registered a receiver and forcibly
+stops the others. A second Ctrl+C forcibly stops the remaining stages. There is
+no grace timer; completion reports each process's actual result. Script subtrees,
+owned captures and output relays, input hangup and explicit cleanup still stop
+forcibly. Programs holding input passthrough continue to receive Ctrl+C as data.
+
 Pipelines bind tighter than `&&` and `||`, which evaluate left to right. Only
 selected commands expand and launch. Scripts and `-c` stop after a failed
 conditional list; `;` starts the next list. `exit [N]` accepts a signed 32-bit

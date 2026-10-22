@@ -1757,15 +1757,15 @@ static handle_t arm_interrupt(struct shell *shell)
 static_assert(LAUNCH_BATCH_MAX + 1 <= WAIT_MAX_INTERESTS,
     "a foreground wait watches every stage and the interrupt");
 
-/* Waits until every stage completes or Ctrl+C arrives. On Ctrl+C, requests
- * termination of every stage and stops watching the interrupt; the caller
- * stays armed, so later presses are discarded, and collects results as usual.
- * Terminating a stage that already finished keeps its real result. */
+/* Direct stages get one cooperative request; a later press forces stop. Owned
+ * scopes and input failure always force stop. Keep observing real completion
+ * after accepted delivery, with the same armed grant available for escalation. */
 static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *children,
     size_t stage_count, handle_t armed, uint64_t deadline, bool *cancelled, struct launch_scope *scope)
 {
   handle_t group = scope && scope->owned ? scope->group.supervision : HANDLE_INVALID;
   bool complete[LAUNCH_BATCH_MAX] = {0};
+  bool interrupted = false;
   size_t remaining = stage_count;
   while (remaining) {
     struct wait_interest interests[LAUNCH_BATCH_MAX + 1];
@@ -1821,32 +1821,54 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
         }
       }
     }
-    if (armed != HANDLE_INVALID && (events[count] & WAIT_INTERRUPT)) {
-      *cancelled = true;
+    if (armed != HANDLE_INVALID && (events[count] & (WAIT_INTERRUPT | WAIT_ERROR))) {
       if (group != HANDLE_INVALID) {
+        *cancelled = true;
         status = execution_group_terminate(group);
         scope->stop_failed = status != CALL_OK;
         return status;
       }
+      bool force = interrupted || (events[count] & WAIT_ERROR);
+      if (!force) {
+        /* Consume before dispatch: a press during any request stays latched. */
+        status = console_ack_interrupt(armed);
+        if (status == CALL_WOULD_BLOCK) {
+          continue;
+        }
+        if (status != CALL_OK) {
+          shell_error(shell, "shell: cannot acknowledge Ctrl+C (status %u)\n", status);
+          force = true;
+        }
+      }
+      *cancelled = true;
+      bool accepted = false;
       for (size_t i = 0; i < stage_count; ++i) {
+        if (complete[i]) {
+          continue;
+        }
+        if (!force) {
+          status = process_interrupt(children[i]);
+          if (status == CALL_OK) {
+            accepted = true;
+            continue;
+          }
+          if (status == CALL_ENDPOINT_CLOSED) {
+            continue;
+          }
+          if (status != CALL_NOT_FOUND) {
+            shell_error(shell, "shell: stage %zu: cannot interrupt (status %u)\n", i + 1, status);
+          }
+        }
         status = process_terminate(children[i]);
         if (status != CALL_OK) {
           shell_error(shell, "shell: stage %zu: cannot terminate (status %u)\n", i + 1, status);
         }
       }
-      return CALL_OK;
-    }
-    if (armed != HANDLE_INVALID && (events[count] & WAIT_ERROR)) {
-      *cancelled = true;
-      if (group != HANDLE_INVALID) {
-        status = execution_group_terminate(group);
-        scope->stop_failed = status != CALL_OK;
-        return status;
+      if (accepted) {
+        interrupted = true;
+      } else {
+        return CALL_OK;
       }
-      for (size_t i = 0; i < stage_count; ++i) {
-        process_terminate(children[i]);
-      }
-      return CALL_OK;
     }
   }
   return CALL_OK;

@@ -169,6 +169,16 @@ enum call_status console_arm_interrupt(handle_t input, handle_t *armed)
   return console_handle(input, CONSOLE_ARM_INTERRUPT, armed);
 }
 
+enum call_status console_ack_interrupt(handle_t armed)
+{
+  struct message_header message = {PROTOCOL_CONSOLE, CONSOLE_ACK_INTERRUPT};
+  struct syscall_result call = syscall_call(armed, &message, sizeof(message), NULL, 0);
+  if (call.status >= CALL_STATUS_COUNT || call.reply_size) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  return call.status;
+}
+
 enum call_status console_passthrough(handle_t input, handle_t *passthrough)
 {
   return console_handle(input, CONSOLE_PASSTHROUGH, passthrough);
