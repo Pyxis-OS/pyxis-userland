@@ -20,10 +20,6 @@ static const char *const payload_names[INSTALL_BOOT_PAYLOADS] = {
   "kernel.elf", "boot.arc", "revision.txt"
 };
 
-static const char *const legacy_names[INSTALL_BOOT_PAYLOADS] = {
-  "caelum.elf", "initrd.cpio", "revision"
-};
-
 static bool fail(struct config_storage_report *report, enum call_status status)
 {
   report->status = status;
@@ -56,22 +52,6 @@ static bool directory_domain(handle_t directory, uint64_t domain,
   enum call_status status = directory_info(directory, &info);
   return status == CALL_OK ? ((info.valid & FILE_INFO_DOMAIN_VALID) &&
       info.domain == domain) || fail(report, CALL_DENIED) : fail(report, status);
-}
-
-static bool same_object(handle_t original, handle_t reopened, bool directory,
-    uint64_t domain, struct config_storage_report *report)
-{
-  struct file_info_reply held, current;
-  enum call_status status = directory ? directory_info(original, &held) : file_info(original, &held);
-  if (status == CALL_OK) {
-    status = directory ? directory_info(reopened, &current) : file_info(reopened, &current);
-  }
-  if (status != CALL_OK) {
-    return fail(report, status);
-  }
-  return ((held.valid & FILE_INFO_OBJECT_VALID) && (current.valid & FILE_INFO_OBJECT_VALID) &&
-      held.domain == domain && current.domain == domain && held.object == current.object) ||
-      fail(report, CALL_BAD_REQUEST);
 }
 
 /* Hash/copy exactly the recorded extent. A short successful native transfer
@@ -154,130 +134,6 @@ static bool stream_source(const struct install_source *source, handle_t target,
   return ok || fail(report, status == CALL_OK ? CALL_NO_MEMORY : status);
 }
 
-static bool legacy_open(handle_t root, handle_t workspace,
-    const struct config_file_digest expected[INSTALL_BOOT_PAYLOADS],
-    uint64_t domain, handle_t files[INSTALL_BOOT_PAYLOADS],
-    struct config_storage_report *report)
-{
-  handle_t parent = HANDLE_INVALID, ram = HANDLE_INVALID;
-  strcpy(report->artifact, "boot");
-  enum call_status status = install_esp_transfer_workspace(workspace, &ram);
-  bool ok = status == CALL_OK || fail(report, status);
-  if (ok) {
-    status = directory_lookup(root, "boot", DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_READ, &parent);
-    ok = status == CALL_OK || fail(report, status);
-  }
-  if (ok) {
-    ok = grant(parent, PROTOCOL_DIRECTORY, BOOT_DIRECTORY_READ, report) &&
-        directory_domain(parent, domain, report);
-  }
-  for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS; ++i) {
-    snprintf(report->artifact, sizeof(report->artifact), "boot/%s", legacy_names[i]);
-    if (!config_payload_digest_valid(&expected[i]) || !expected[i].present ||
-        !expected[i].size || expected[i].size > INSTALL_BOOT_PAYLOAD_MAX_BYTES) {
-      ok = fail(report, CALL_BAD_REQUEST);
-      break;
-    }
-    status = directory_lookup(parent, legacy_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &files[i]);
-    ok = status == CALL_OK || fail(report, status);
-    if (ok) {
-      struct file_info_reply info;
-      status = file_info(files[i], &info);
-      ok = status == CALL_OK || fail(report, status);
-      if (ok) {
-        ok = grant(files[i], PROTOCOL_FILE, FILE_RIGHT_READ, report) &&
-            (((info.valid & FILE_INFO_OBJECT_VALID) && info.domain == domain) ||
-            fail(report, CALL_DENIED));
-        if (ok) {
-          status = install_esp_transfer_file(files[i], ram, true, expected[i].size,
-              expected[i].sha256, INSTALL_BOOT_PAYLOAD_MAX_BYTES);
-          ok = status == CALL_OK || fail(report, status);
-        }
-      }
-    }
-  }
-  if (parent != HANDLE_INVALID) {
-    handle_close(parent);
-  }
-  if (ram != HANDLE_INVALID && handle_close(ram) != CALL_OK && ok) {
-    ok = fail(report, CALL_BAD_HANDLE);
-  }
-  return ok;
-}
-
-bool install_publication_legacy_check(handle_t root, handle_t workspace,
-    const struct config_file_digest expected[INSTALL_BOOT_PAYLOADS],
-    struct config_storage_report *report)
-{
-  if (!expected || !report) {
-    return false;
-  }
-  if (!grant(root, PROTOCOL_DIRECTORY, BOOT_DIRECTORY_READ, report)) {
-    return false;
-  }
-  struct file_info_reply info;
-  enum call_status status = directory_info(root, &info);
-  if (status != CALL_OK || !(info.valid & FILE_INFO_DOMAIN_VALID)) {
-    return fail(report, status == CALL_OK ? CALL_DENIED : status);
-  }
-  handle_t files[INSTALL_BOOT_PAYLOADS];
-  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    files[i] = HANDLE_INVALID;
-  }
-  bool ok = legacy_open(root, workspace, expected, info.domain, files, report);
-  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    if (files[i] != HANDLE_INVALID) {
-      handle_close(files[i]);
-    }
-  }
-  return ok;
-}
-
-bool install_publication_legacy_hold(struct install_staged_boot *boot, handle_t workspace,
-    uint64_t domain, struct config_storage_report *report)
-{
-  return boot && boot->legacy_active &&
-      legacy_open(boot->root, workspace, boot->legacy_expected, domain, boot->legacy_files, report);
-}
-
-static bool legacy_verify(const struct install_staged_boot *boot, uint64_t domain,
-    struct config_storage_report *report)
-{
-  if (!boot->legacy_active) {
-    return true;
-  }
-  handle_t parent = HANDLE_INVALID;
-  strcpy(report->artifact, "boot");
-  enum call_status status = directory_lookup(boot->root, "boot", DIRECTORY_KIND_DIRECTORY,
-      BOOT_DIRECTORY_READ, &parent);
-  bool ok = status == CALL_OK || fail(report, status);
-  for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS; ++i) {
-    snprintf(report->artifact, sizeof(report->artifact), "boot/%s", legacy_names[i]);
-    handle_t file = HANDLE_INVALID;
-    status = directory_lookup(parent, legacy_names[i], DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ, &file);
-    ok = status == CALL_OK || fail(report, status);
-    if (ok) {
-      const struct config_file_digest *expected = &boot->legacy_expected[i];
-      struct install_esp_payload_digest digest = {.size = expected->size};
-      memcpy(digest.sha256, expected->sha256, sizeof(digest.sha256));
-      struct install_esp_payload_report readback;
-      ok = same_object(boot->legacy_files[i], file, false, domain, report);
-      if (ok && !install_esp_payload_verify_file(boot->payloads, file, &digest, &readback)) {
-        ok = fail(report, readback.status);
-      }
-    }
-    if (file != HANDLE_INVALID) {
-      handle_close(file);
-    }
-  }
-  if (parent != HANDLE_INVALID) {
-    handle_close(parent);
-  }
-  return ok;
-}
-
 static bool manifest_blob(const struct config_boot_binding *binding, struct config_blob *blob)
 {
   char bytes[2048];
@@ -332,11 +188,11 @@ static bool payload_result(bool ok, const struct install_esp_payload_report *pay
 }
 
 bool install_publication_verify(const struct install_staged_boot *boot,
-    uint64_t domain, struct config_storage_report *report)
+    struct config_storage_report *report)
 {
   struct install_esp_payload_report payload_report;
   bool ok = install_esp_payload_verify(boot->payloads, &payload_report);
-  return payload_result(ok, &payload_report, report) && legacy_verify(boot, domain, report);
+  return payload_result(ok, &payload_report, report);
 }
 
 bool install_publication_cleanup(const struct install_staged_boot *boot,
@@ -448,23 +304,9 @@ bool install_publication_publish(const struct install_publication_request *reque
       request->expected_record, menu_changed, report)) {
     return false;
   }
-  struct install_staged_boot staged = {.root = request->esp_root, .binding = request->binding,
-      .legacy_active = request->legacy_active};
-  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    staged.legacy_files[i] = HANDLE_INVALID;
-    if (staged.legacy_active) {
-      staged.legacy_expected[i] = request->legacy_expected[i];
-    }
-  }
-  bool ok = !staged.legacy_active || legacy_open(staged.root, request->workspace, staged.legacy_expected,
-      request->facts.domain, staged.legacy_files, report);
-  if (ok) {
-    ok = config_storage_check(&request->view, &request->facts, request->expected,
-        request->expected_record, menu_changed, report);
-  }
-  if (ok) {
-    report->phase = CONFIG_PHASE_STAGE;
-  }
+  struct install_staged_boot staged = {.root = request->esp_root, .binding = request->binding};
+  bool ok = true;
+  report->phase = CONFIG_PHASE_STAGE;
   struct install_esp_payload_request payload_request = {
     .root = request->esp_root, .control = request->view.control,
     .workspace = request->workspace,
@@ -486,11 +328,6 @@ bool install_publication_publish(const struct install_publication_request *reque
     report->phase = CONFIG_PHASE_VERIFY;
     ok = config_storage_publish_boot(&request->view, &request->facts, request->expected,
         request->expected_record, request->selected, request->transaction, &staged, report);
-  }
-  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    if (staged.legacy_files[i] != HANDLE_INVALID) {
-      handle_close(staged.legacy_files[i]);
-    }
   }
   bool payloads_closed = install_esp_payload_close(staged.payloads);
   staged.payloads = NULL;

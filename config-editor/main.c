@@ -48,8 +48,8 @@ static bool read_pool_file(const char *path, char **bytes, size_t *size)
   return true;
 }
 
-/* The spaces and volumes boot would start, and their CPUs against this
- * machine's. */
+/* The spaces and volumes boot would start. A space naming an absent CPU is
+ * only a warning: boot leaves that space unstarted and starts the others. */
 static bool validate_boot(void)
 {
   char *bytes;
@@ -82,9 +82,8 @@ static bool validate_boot(void)
       const struct boot_space *space = plan.spaces[i];
       for (size_t j = 0; j < space->cpu_count; ++j) {
         if (space->cpus[j] >= cpu.online_count) {
-          fprintf(stderr, "config: space %s names absent CPU %llu\n", space->name,
-              (unsigned long long)space->cpus[j]);
-          ok = false;
+          fprintf(stderr, "config: warning: space %s names absent CPU %llu; boot leaves it "
+              "unstarted\n", space->name, (unsigned long long)space->cpus[j]);
         }
       }
     }

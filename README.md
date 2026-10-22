@@ -85,38 +85,35 @@ commands; ordinary shell/ls/cat children retain read-only roots. It supplies no
 installed shell binding or editor workflow.
 
 `boot://boot-init.pxe` is the boot init the kernel starts in Caelum's space. It
-reads `config/live.lua`, or `config/installed.lua` plus the pool override
-`system://config/boot.lua` on installed boots (declarative literal data for
-now; an invalid file starts the stock spaces with one line naming the reason,
-and rescue never reads it), mounts each configured volume
+reads `config/live.lua` on live boots, or the pool's `system://config/boot.lua`,
+`session.lua` and `network.lua` on installed boots (literal data; a rejected
+configuration starts only the rescue space, with one line naming the file and
+reason), mounts each configured volume
 once and creates each space with its init through the `space_factory`
 resource, forwarding only the configured roots and, to the one network owner,
 network WRITE authority. Spaces start in `home://` unless their `start` names
 another root. Live boots make `home://` a RAM volume. If no space starts it
 creates a `rescue` shell space.
-The archive's `hostname` defaults to `pyxis`. Installed boots also read
+The configuration's `hostname` defaults to `pyxis`. Installed boots also read
 `system://config/machine/network/hostname`, including rescue boots; a missing,
-unreadable or invalid key reports the reason and keeps the archive default.
+unreadable or invalid key reports the reason and keeps the configured fallback.
 Names are 1–63 ASCII letters, digits and internal hyphens, preserving case;
 the stored key accepts one trailing LF or none. Boot init sets the kernel's
-name once before creating spaces. `system://config/boot.lua` cannot set it.
-The archive's `input` table selects `mouse_scroll_direction` and
+name once before creating spaces.
+The configuration's `input` table selects `mouse_scroll_direction` and
 `touchpad_scroll_direction`, each `natural` or `traditional` (natural by default).
 `input.touchpad_speed` is a finite number from -1 to 1, defaulting to 0. It is
 rounded to the nearest normalized permille, with halfway values rounded away
-from zero. An applied installed `system://config/boot.lua` override may set only
-`touchpad_speed` and `num_lock` in its `input` table; an omitted value keeps the
-archive default, and an invalid or ignored override cannot change it.
+from zero.
 `input.num_lock` is a boolean, the initial Num Lock state (default false).
 Installed boots read `system://config/machine/input/mouse/scroll-direction` and
 `system://config/machine/input/touchpad/scroll-direction`, accepting the exact
 lowercase value with one trailing LF or none. Missing, unreadable or invalid
-keys keep their respective archive defaults. `input.diagnostics = true` in the
-archive enables fallback reports; it defaults false. Stock boot init installs
+keys keep their respective configured defaults. `input.diagnostics = true`
+enables fallback reports; it defaults false. Stock boot init installs
 both directions, touchpad speed and initial Num Lock once before starting spaces,
 including rescue.
-The `input_policy` grant stays in boot init. `system://config/boot.lua` cannot
-override scroll directions, diagnostics or hostname.
+The `input_policy` grant stays in boot init.
 Store changes apply next boot; explicitly sync
 edited keys before reboot. No settings writer or live policy update is provided.
 `clipboard_local` and `clipboard_shared` independently request the named

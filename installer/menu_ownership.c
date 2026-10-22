@@ -1,4 +1,4 @@
-#include "ownership.h"
+#include "menu_ownership.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +32,7 @@ static size_t next_line(const char *bytes, size_t size, size_t end)
 
 static bool fail(struct scanner *scanner, size_t offset, const char *reason)
 {
-  fprintf(stderr, "ownership: %s: byte %zu: %s; printed changes only\n",
+  fprintf(stderr, "ownership: %s: byte %zu: %s; markers not recognized\n",
       scanner->name, offset, reason);
   return false;
 }

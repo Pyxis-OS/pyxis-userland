@@ -145,8 +145,13 @@ enum install_installed_probe install_installed_probe(const struct install_disk *
   }
   /* Decision 28: a record from before this format is refused, never read;
    * that machine reinstalls. */
-  *reason = "the boot record is malformed, prepared or from an earlier release; back up home and reinstall";
-  if (status != FAT32_OK || !config_record_parse(record.bytes, record.size, &parsed) || !parsed.committed) {
+  *reason = "the boot record is malformed or from an earlier release; back up home and reinstall";
+  if (status != FAT32_OK || !config_record_parse(record.bytes, record.size, &parsed)) {
+    goto done;
+  }
+  if (!parsed.committed) {
+    *reason = "an earlier Update stopped before its boot record committed; the previous entries "
+        "still boot; see Interrupted Update in the installer documentation";
     goto done;
   }
   strcpy(revision, parsed.boot.program_revision);
@@ -163,12 +168,12 @@ enum install_installed_probe install_installed_probe(const struct install_disk *
     }
   }
   if (!install_pending_inspect(&record, &menu, &previous, layout->disk_guid,
-      layout->pool_partition, NULL, &pending)) {
+      layout->pool_partition, &pending)) {
     goto done;
   }
   if (pending.state != INSTALL_PENDING_MENU_CURRENT) {
     /* Discovery only routes this inherited record to a fresh completion Review.
-     * Ambiguous menus and legacy payloads confer no write authority. */
+     * Ambiguous menus confer no write authority. */
     result = INSTALL_INSTALLED_PENDING;
     *reason = "the committed boot record has pending or ambiguous activation; fresh completion Review required";
     goto done;

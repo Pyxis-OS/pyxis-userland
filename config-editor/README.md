@@ -2,8 +2,9 @@
 
 `config validate` checks the installed configuration the way boot reads it:
 `system://config/boot.lua`, `session.lua` and `network.lua` on the pool, as
-literal data. It lists the spaces and volumes `boot.lua` defines, and checks
-each space's CPUs against this machine when `system_info` is readable. Boot
+literal data. It lists the spaces and volumes `boot.lua` defines, and warns
+about a space naming a CPU this machine lacks, which boot leaves unstarted
+while starting the others. Boot
 applies none of the three files unless all are valid, so one invalid file means
 boot starts the rescue space instead; `config validate` exits nonzero then.
 

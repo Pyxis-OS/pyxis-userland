@@ -2,7 +2,7 @@
 #define INSTALLER_PUBLICATION_SNAPSHOT_H
 
 #include "installer.h"
-#include "../config-editor/storage.h"
+#include "boot_storage.h"
 
 /* Read-only snapshots through the native planning view. All returned bytes are
  * owned; no handle is retained. Missing parent/files are explicit absence. */

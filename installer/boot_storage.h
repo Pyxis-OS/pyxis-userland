@@ -1,7 +1,7 @@
-#ifndef USERSPACE_CONFIG_EDITOR_STORAGE_H
-#define USERSPACE_CONFIG_EDITOR_STORAGE_H
+#ifndef USERSPACE_INSTALLER_BOOT_STORAGE_H
+#define USERSPACE_INSTALLER_BOOT_STORAGE_H
 
-#include "record.h"
+#include "boot_record.h"
 #include <abi/handle.h>
 #include <abi/syscall.h>
 

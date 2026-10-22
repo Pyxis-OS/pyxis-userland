@@ -1,8 +1,8 @@
-#include "storage.h"
-#include "../installer/digest.h"
-#include "../installer/progress.h"
-#include "../installer/publication.h"
-#include "../installer/pending.h"
+#include "boot_storage.h"
+#include "digest.h"
+#include "progress.h"
+#include "publication.h"
+#include "pending.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -540,7 +540,7 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
   }
   if (ok) {
     ok = current_view(view, facts, changed, interval.id, report) &&
-        install_publication_verify(boot, facts->domain, report) &&
+        install_publication_verify(boot, report) &&
         current_view(view, facts, changed, interval.id, report);
   }
   if (ok) {
@@ -569,7 +569,7 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
     report->boot_activation_pending = true;
     if (changed) {
       ok = current_view(view, facts, true, interval.id, report) &&
-          install_publication_verify(boot, facts->domain, report) &&
+          install_publication_verify(boot, report) &&
           current_view(view, facts, true, interval.id, report) &&
           expected_name(view->limine_parent, CONFIG_MENU_NAME, expected, report) &&
           expected_name(view->limine_parent, staged, selected, report) &&
@@ -701,24 +701,16 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
     return failed(report, CALL_BAD_REQUEST);
   }
   const struct config_storage_view *view = &request->view;
-  struct install_staged_boot boot = {.root = request->esp_root, .binding = plan->record.boot,
-    .legacy_active = plan->legacy_active};
+  struct install_staged_boot boot = {.root = request->esp_root, .binding = plan->record.boot};
   report->record = plan->record;
   report->committed = true;
   report->boot_activation_pending = plan->menu_changed;
   struct install_esp_payloads *inherited = NULL;
-  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    boot.legacy_files[i] = HANDLE_INVALID;
-    boot.legacy_expected[i] = request->legacy[i];
-  }
   struct mount_interval_reply interval = {0};
   bool ok = pending_snapshot(request, plan, 0, report) &&
       pending_payload_open(request, &plan->record.boot, &boot.payloads, report);
   if (ok && plan->record.previous_boot.present) {
     ok = pending_payload_open(request, &plan->record.previous_boot, &inherited, report);
-  }
-  if (ok && plan->legacy_active) {
-    ok = install_publication_legacy_hold(&boot, request->workspace, request->facts.domain, report);
   }
   char staged[CONFIG_ARTIFACT_NAME_BYTES];
   config_record_artifact_name(plan->record.transaction, CONFIG_MENU_NAME, "new", staged);
@@ -749,7 +741,7 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   }
   for (unsigned pass = 0; ok && pass < 2; ++pass) {
     ok = pending_snapshot(request, plan, interval.id, report) &&
-        install_publication_verify(&boot, request->facts.domain, report);
+        install_publication_verify(&boot, report);
     if (ok && inherited) {
       struct install_esp_payload_report readback;
       ok = install_esp_payload_verify(inherited, &readback);
@@ -819,11 +811,6 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
     enum call_status status = mount_end(view->control, interval.id);
     if (ok && status != CALL_OK) {
       ok = failed(report, status);
-    }
-  }
-  for (unsigned i = 0; i < INSTALL_BOOT_PAYLOADS; ++i) {
-    if (boot.legacy_files[i] != HANDLE_INVALID) {
-      handle_close(boot.legacy_files[i]);
     }
   }
   bool closed = install_esp_payload_close(inherited);

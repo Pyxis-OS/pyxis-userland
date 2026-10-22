@@ -194,8 +194,6 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
     .workspace = workspace,
     .view = {.config_parent = HANDLE_INVALID, .limine_parent = HANDLE_INVALID, .control = HANDLE_INVALID, .clock = clock}};
   struct config_target_facts planned_facts = {0};
-  struct config_file_digest legacy_digests[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
-  bool legacy_pair = false;
   uint64_t available_bytes = 0, cluster_bytes = 0;
   int result = EXIT_FAILURE;
   bool crypto = hash_init(clock, random);
@@ -243,20 +241,12 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
     fputs("Static recovery or menu ownership is unrecognized; nothing written.\n", stderr);
     goto done;
   }
-  /* A current/previous owned binding supersedes legacy fixed files. Only an
-   * old legacy menu needs that additional proof. */
-  if (!install_pending_inspect(&record, &menu, &previous_limine, planned_facts.disk_guid,
-        pool_partition, NULL, &completion)) goto done;
-  if (completion.state == INSTALL_PENDING_REFUSED && inspected.committed &&
-      !inspected.previous_boot.present) {
-    legacy_pair = install_boot_legacy_certify(mount.root, workspace, legacy_digests);
-  }
   if (!install_snapshot_capacity(&disk, &planned_facts, &available_bytes, &cluster_bytes)) {
     fputs("Capacity inspection unavailable; nothing written.\n", stderr);
     goto done;
   }
   if (!install_pending_inspect(&record, &menu, &previous_limine, planned_facts.disk_guid,
-        pool_partition, legacy_pair ? legacy_digests : NULL, &completion)) goto done;
+        pool_partition, &completion)) goto done;
   if (completion.state == INSTALL_PENDING_REFUSED || completion.state == INSTALL_PENDING_NONE) {
     fputs("Boot record/menu state is ambiguous; explicit manual disposition required.\n", stderr);
     goto done;
@@ -377,7 +367,6 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
     .view = request.view, .facts = request.facts, .expected_target = request.expected_target,
     .record = &record, .current_menu = &menu, .previous_limine = &previous_limine,
     .pool_partition = pool_partition, .fallback_ready = true};
-  memcpy(resume.legacy, legacy_digests, sizeof(resume.legacy));
   struct config_storage_report report = {0};
   bool ok = install_pending_complete(&resume, &report);
   request.binding = completion.record.boot;

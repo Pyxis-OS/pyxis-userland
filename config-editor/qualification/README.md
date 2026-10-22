@@ -1,5 +1,11 @@
 # Configuration editor qualification
 
+**History.** This records the ESP configuration editor as qualified in 2026-10.
+Its `plan`, `edit` and `apply` commands, the revision catalog and the ESP
+configuration set were removed by task 2b of
+[package upgrades](../../../docs/wip/pkg-upgrade.md); only `config validate`
+remains, checking the pool's files. Nothing below describes current behavior.
+
 Installer task 4, 2026-10-13. Scratch-only delivery: installed startup and normal
 Install/Update remain unchanged. No owner media, native ESP activation or live
 Continuum application is qualified.

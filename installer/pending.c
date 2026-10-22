@@ -21,8 +21,7 @@ void install_pending_destroy(struct install_pending_plan *plan)
 bool install_pending_inspect(const struct config_blob *record,
     const struct config_blob *current_menu,
     const struct config_blob *previous_limine, const uint8_t disk_guid[16],
-    uint64_t pool_partition, const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
-    struct install_pending_plan *plan)
+    uint64_t pool_partition, struct install_pending_plan *plan)
 {
   if (!record || !current_menu || !previous_limine || !disk_guid || !plan) {
     return false;
@@ -44,7 +43,7 @@ bool install_pending_inspect(const struct config_blob *record,
     history->previous_boot.kernel.path, history->previous_boot.archive.path};
   const struct install_boot_menu committed = {&active,
     history->previous_boot.present ? &inherited : NULL, false};
-  bool adoption = false, pending = true, is_current = false;
+  bool pending = true, is_current = false;
   if (!install_boot_entry_current(current_menu, &committed, disk_guid, pool_partition,
       &is_current)) {
     return false;
@@ -62,18 +61,15 @@ bool install_pending_inspect(const struct config_blob *record,
       !digest_equal(&old->digest, &previous_limine->digest)) {
     return true;
   }
-  bool legacy_valid = !history->previous_boot.present && legacy;
-  for (unsigned i = 0; legacy_valid && i < INSTALL_BOOT_PAYLOADS; ++i) {
-    legacy_valid = config_payload_digest_valid(&legacy[i]) && legacy[i].present && legacy[i].size;
-  }
-  if (!history->previous_boot.present && !legacy_valid) {
+  /* Every Update records the attempt it replaced; without one there is no
+   * proven earlier menu to complete. */
+  if (!history->previous_boot.present) {
     return true;
   }
   /* The digest proof above owns its previous entry, whatever attempt it names. */
   const struct install_boot_menu replaced = {&inherited, NULL, true};
-  if (!install_boot_entry_plan(current_menu,
-      history->previous_boot.present ? &replaced : NULL, disk_guid, pool_partition, &committed,
-      legacy_valid, &plan->menu, &adoption, &pending)) {
+  if (!install_boot_entry_plan(current_menu, &replaced, disk_guid, pool_partition, &committed,
+      &plan->menu, &pending)) {
     return false;
   }
   plan->available = !pending;
@@ -81,7 +77,6 @@ bool install_pending_inspect(const struct config_blob *record,
     plan->state = INSTALL_PENDING_ACTIVATION;
   }
   plan->menu_changed = !pending && !config_blob_equal(&plan->menu, current_menu);
-  plan->legacy_active = !pending && adoption;
   return true;
 }
 
@@ -98,8 +93,7 @@ bool install_pending_complete(const struct install_pending_request *request,
   }
   struct install_pending_plan plan = {0};
   bool ok = install_pending_inspect(request->record, request->current_menu,
-      request->previous_limine, request->facts.disk_guid, request->pool_partition, request->legacy,
-      &plan) && plan.available;
+      request->previous_limine, request->facts.disk_guid, request->pool_partition, &plan) && plan.available;
   if (!ok) {
     report->status = CALL_BAD_REQUEST;
   } else {

@@ -1,10 +1,8 @@
 #ifndef INSTALLER_BOOT_ENTRY_H
 #define INSTALLER_BOOT_ENTRY_H
 
-#include "../config-editor/storage.h"
+#include "boot_storage.h"
 #include <stdio.h>
-
-#define INSTALL_BOOT_LEGACY_PAYLOADS 3u
 
 struct install_source;
 
@@ -24,8 +22,9 @@ struct install_boot_menu {
 
 /* Pure planning over borrowed frozen bytes. Paths must be validated relative
  * kernel/archive paths, such as install_esp_payload_path output. INHERITED is
- * NULL for legacy admission; otherwise the caller has certified its boot
- * bindings and payload evidence against this disk. The GUID names that same
+ * NULL when no committed record describes the menu, which is then never
+ * replaced; otherwise the caller has certified its boot bindings and payload
+ * evidence against this disk. The GUID names that same
  * reviewed target. These inputs confer no I/O authority or boot readiness.
  *
  * Only exact inherited Pyxis entries are replaceable: normal and rescue must
@@ -33,15 +32,14 @@ struct install_boot_menu {
  * unless PREVIOUS_PROVEN. A missing previous entry, as in menus written before
  * it existed, is added after the normal entry when NEXT has one; NEXT without
  * one removes it. Markers alone do not establish ownership. An ambiguous menu is retained
- * byte-for-byte, with PENDING true; LEGACY_PAIR_VERIFIED comes from the
- * read-only certifier below. Inputs remain frozen and distinct from
+ * byte-for-byte, with PENDING true. Inputs remain frozen and distinct from
  * caller-owned SELECTED, initialized as a config_blob. Keep the shared hash
  * context ready. Missing current input clears SELECTED and remains pending.
  * No target files are opened or changed. */
 bool install_boot_entry_plan(const struct config_blob *current,
     const struct install_boot_menu *inherited, const uint8_t disk_guid[16],
-    uint64_t pool_partition, const struct install_boot_menu *next, bool legacy_pair_verified,
-    struct config_blob *selected, bool *adoption, bool *pending);
+    uint64_t pool_partition, const struct install_boot_menu *next,
+    struct config_blob *selected, bool *pending);
 
 /* Whether CURRENT is exactly the menu COMMITTED publishes, or that menu
  * without its previous entry, as written before the previous entry existed.
@@ -71,20 +69,5 @@ void install_boot_entry_print(const struct install_boot_entry_paths *paths,
  * Success hashes exactly source->bytes; failure leaves OUTPUT absent. */
 bool install_boot_payload_digest(const struct install_source *source,
     struct config_file_digest *output);
-
-/* Borrow an already admitted native read-only root. Certify exactly
- * boot/caelum.elf, boot/initrd.cpio and boot/revision using the existing ELF,
- * rescue archive and revision checks plus complete hashes, in that order.
- * WORKSPACE is a borrowed private native RAM parent. Each complete source is
- * materialized through bounded FILE transfers to one owned unlinked RAM FILE;
- * semantics and full hashes run on those frozen bytes. Original native object
- * identities and sizes are checked around copying and before return.
- * True means eligible content; missing, invalid or failed inspection returns
- * false with every digest absent. No file handles escape. This is sampled
- * content evidence, not mount identity, ownership/adoption consent or authority;
- * the caller binds the root/GUID and revalidates before its own publication.
- * The caller keeps the shared hash context initialized throughout inspection. */
-bool install_boot_legacy_certify(handle_t root, handle_t workspace,
-    struct config_file_digest payloads[INSTALL_BOOT_LEGACY_PAYLOADS]);
 
 #endif

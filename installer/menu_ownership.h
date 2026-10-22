@@ -1,5 +1,5 @@
-#ifndef CONFIG_EDITOR_OWNERSHIP_H
-#define CONFIG_EDITOR_OWNERSHIP_H
+#ifndef INSTALLER_MENU_OWNERSHIP_H
+#define INSTALLER_MENU_OWNERSHIP_H
 
 #include <literal.h>
 #include <stdbool.h>

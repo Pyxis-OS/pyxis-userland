@@ -879,18 +879,6 @@ static bool private_http_backing(const struct boot_plan *plan, const struct boot
   return true;
 }
 
-static const struct boot_space *plan_space(const struct boot_plan *plan, const char *name,
-    size_t *index)
-{
-  for (size_t i = 0; i < plan->space_count; ++i) {
-    if (!strcmp(plan->spaces[i]->name, name)) {
-      *index = i;
-      return plan->spaces[i];
-    }
-  }
-  return NULL;
-}
-
 bool boot_space_has_root(const struct boot_space *space, const char *name)
 {
   if (reserved_volume(name)) {

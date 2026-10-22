@@ -83,17 +83,17 @@ INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/installer/,publication_frontend
 # this archive; front ends add their own target admission and consent.
 PUBLISHER_LIBRARY := $(BUILD)/libpublisher.a
 PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o publication.o publication_snapshot.o pending.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o boot_archive.o digest.o progress.o io.o) \
-    $(addprefix $(BUILD)/config-editor/,ownership.o storage.o record.o)
+    $(addprefix $(BUILD)/installer/,menu_ownership.o boot_storage.o boot_record.o)
 # Discovery borrows the installer validators. Separate sectioned objects let
 # the selector retain only read-only inspection from the mixed private modules.
 INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c \
     installer/consent.c installer/esp_read.c installer/review.c installer/coexist.c \
     installer/progress.c installer/digest.c installer/installed_probe.c installer/boot_entry.c \
     installer/pending.c installer/plan_record.c \
-    config-editor/record.c config-editor/storage.c config-editor/ownership.c \
+    installer/boot_record.c installer/boot_storage.c installer/menu_ownership.c \
     xfer/hash.c
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/init-install/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
-BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/config-editor/record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
+BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o progress.o)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o

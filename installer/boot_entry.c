@@ -1,6 +1,6 @@
 #include "boot_entry.h"
 #include "installer.h"
-#include "../config-editor/ownership.h"
+#include "menu_ownership.h"
 #include "digest.h"
 #include "progress.h"
 #include "esp_payload.h"
@@ -48,33 +48,6 @@ static char *entry(const char *name, bool rescue, const char *kernel, const char
   return text;
 }
 
-static bool find_exact(const struct config_blob *current, const char *text, size_t size,
-    struct literal_span *span)
-{
-  if (!current->digest.present || !size) {
-    return false;
-  }
-  bool found = false;
-  for (size_t offset = 0; offset + size <= current->size; ++offset) {
-    if ((!offset || current->bytes[offset - 1] == '\n') &&
-        !memcmp(current->bytes + offset, text, size)) {
-      if (found) {
-        return false;
-      }
-      size_t end = offset + size;
-      while (end < current->size && current->bytes[end] == '\n') {
-        ++end;
-      }
-      if (end < current->size && current->bytes[end] != '/') {
-        return false;
-      }
-      *span = (struct literal_span){offset, offset + size};
-      found = true;
-    }
-  }
-  return found;
-}
-
 enum boot_entry_role { ENTRY_NORMAL, ENTRY_PREVIOUS, ENTRY_RESCUE, ENTRY_ROLES };
 static const char *const role_ids[ENTRY_ROLES] = {"boot.normal", "boot.previous", "boot.rescue"};
 static const char *const role_names[ENTRY_ROLES] = {
@@ -114,10 +87,9 @@ struct menu_edit {
 
 bool install_boot_entry_plan(const struct config_blob *current,
     const struct install_boot_menu *inherited, const uint8_t disk_guid[16],
-    uint64_t pool_partition, const struct install_boot_menu *next, bool legacy_pair_verified,
-    struct config_blob *selected, bool *adoption, bool *pending)
+    uint64_t pool_partition, const struct install_boot_menu *next,
+    struct config_blob *selected, bool *pending)
 {
-  *adoption = false;
   *pending = true;
   if (!current->digest.present) {
     config_blob_destroy(selected);
@@ -164,10 +136,6 @@ bool install_boot_entry_plan(const struct config_blob *current,
       break;
     }
     const struct install_boot_entry_paths *old = inherited ? role_paths(inherited, role) : NULL;
-    const struct install_boot_entry_paths legacy = {"boot/caelum.elf", "boot/initrd.cpio"};
-    if (!inherited && role != ENTRY_PREVIOUS) {
-      old = &legacy;
-    }
     if (!old) {
       recognized = false;
       break;
@@ -179,13 +147,10 @@ bool install_boot_entry_plan(const struct config_blob *current,
       ok = false;
       break;
     }
-    if (marked && inherited) {
+    if (marked) {
       recognized = marked->content.end - marked->content.start == expected_size &&
           !memcmp(current->bytes + marked->content.start, expected, expected_size);
       spans[role] = marked->span;
-    } else if (!owned->count && !inherited && legacy_pair_verified) {
-      recognized = find_exact(current, expected, expected_size, &spans[role]);
-      *adoption = recognized;
     } else {
       recognized = false;
     }
@@ -256,9 +221,9 @@ bool install_boot_entry_current(const struct config_blob *current,
   *is_current = false;
   for (unsigned i = 0; i < 2 && !*is_current; ++i) {
     struct config_blob menu = {0};
-    bool adoption = false, pending = true;
-    if (!install_boot_entry_plan(current, forms[i], disk_guid, pool_partition, forms[i], false,
-        &menu, &adoption, &pending)) {
+    bool pending = true;
+    if (!install_boot_entry_plan(current, forms[i], disk_guid, pool_partition, forms[i],
+        &menu, &pending)) {
       config_blob_destroy(&menu);
       return false;
     }
@@ -373,153 +338,3 @@ bool install_boot_payload_digest(const struct install_source *source, struct con
   return ok;
 }
 
-static bool legacy_kernel_valid(handle_t file, uint64_t bytes)
-{
-  struct install_source source = {.handle = file, .bytes = bytes};
-  uint8_t header[64], program[56];
-  if (bytes < sizeof(header) || !install_source_read(&source, 0, header, sizeof(header)) ||
-      memcmp(header, "\177ELF\2\1\1", 7) || npfs_get_u16(header + 16) != 2 ||
-      npfs_get_u16(header + 18) != 62 || npfs_get_u32(header + 20) != 1 ||
-      npfs_get_u64(header + 24) < UINT64_C(0xffffffff80000000) ||
-      npfs_get_u16(header + 54) != sizeof(program)) {
-    return false;
-  }
-  uint64_t first = npfs_get_u64(header + 32);
-  uint16_t count = npfs_get_u16(header + 56);
-  if (!count || count > 128 || first > bytes || (uint64_t)count * sizeof(program) > bytes - first) {
-    return false;
-  }
-  bool executable = false;
-  for (unsigned i = 0; i < count; ++i) {
-    if (!install_source_read(&source, first + i * sizeof(program), program, sizeof(program))) {
-      return false;
-    }
-    if (npfs_get_u32(program) == 1) {
-      uint64_t offset = npfs_get_u64(program + 8), size = npfs_get_u64(program + 32);
-      if (offset > bytes || size > bytes - offset || size > npfs_get_u64(program + 40)) {
-        return false;
-      }
-      executable |= (npfs_get_u32(program + 4) & 1) != 0;
-    }
-  }
-  return executable;
-}
-
-static bool legacy_revision_valid(const struct config_blob *blob)
-{
-  if (!blob->digest.present || blob->size < 2 || blob->size > 64 || blob->bytes[blob->size - 1] != '\n' ||
-      memchr(blob->bytes, 0, blob->size)) {
-    return false;
-  }
-  char revision[65];
-  memcpy(revision, blob->bytes, blob->size - 1);
-  revision[blob->size - 1] = 0;
-  return config_revision_valid(revision) && strcmp(revision, INSTALL_UNKNOWN_REVISION);
-}
-
-static bool legacy_source_current(handle_t file, const struct file_info_reply *expected,
-    uint64_t size)
-{
-  struct file_info_reply current;
-  uint64_t bytes;
-  return file_info(file, &current) == CALL_OK &&
-      (current.valid & FILE_INFO_OBJECT_VALID) && (current.valid & FILE_INFO_DOMAIN_VALID) &&
-      current.domain == expected->domain && current.object == expected->object &&
-      file_size(file, &bytes) == CALL_OK && bytes == size;
-}
-
-/* Initial certification has no expected digest yet. Copy only confirmed native
- * extents to private RAM, then run the existing complete hash and semantic
- * checks there. Publication separately rechecks that reviewed digest on FAT. */
-static bool legacy_materialize(handle_t file, handle_t ram,
-    const struct file_info_reply *identity, uint64_t size)
-{
-  bool ok = size && size <= INSTALL_ESP_PAYLOAD_MAX_BYTES &&
-      legacy_source_current(file, identity, size) && file_resize(ram, 0) == CALL_OK;
-  install_progress_begin("Freezing legacy boot payload", INSTALL_PROGRESS_SOURCE_READ, NULL);
-  install_progress_bytes_total(size);
-  for (uint64_t offset = 0; ok && offset < size;) {
-    size_t wanted = size - offset > FILE_TRANSFER_MAX_BYTES ?
-        FILE_TRANSFER_MAX_BYTES : (size_t)(size - offset);
-    size_t copied = 0;
-    enum call_status status = file_transfer(ram, offset, file, offset, wanted, &copied);
-    ok = status == CALL_OK && copied && copied <= wanted;
-    if (ok) {
-      offset += copied;
-      install_progress_advance(copied, 0);
-    }
-  }
-  uint64_t bytes;
-  ok = ok && legacy_source_current(file, identity, size) &&
-      file_size(ram, &bytes) == CALL_OK && bytes == size;
-  install_progress_finish();
-  return ok;
-}
-
-bool install_boot_legacy_certify(handle_t root, handle_t workspace,
-    struct config_file_digest payloads[INSTALL_BOOT_LEGACY_PAYLOADS])
-{
-  if (!payloads) {
-    return false;
-  }
-  memset(payloads, 0, sizeof(*payloads) * INSTALL_BOOT_LEGACY_PAYLOADS);
-  const char *names[INSTALL_BOOT_LEGACY_PAYLOADS] = {"caelum.elf", "initrd.cpio", "revision"};
-  const uint64_t rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
-  handle_t parent = HANDLE_INVALID, ram = HANDLE_INVALID;
-  handle_t files[INSTALL_BOOT_LEGACY_PAYLOADS] = {HANDLE_INVALID, HANDLE_INVALID, HANDLE_INVALID};
-  struct config_file_digest digests[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
-  struct config_blob revision = {0};
-  uint64_t sizes[INSTALL_BOOT_LEGACY_PAYLOADS] = {0};
-  struct file_info_reply identities[INSTALL_BOOT_LEGACY_PAYLOADS] = {0}, root_info;
-  bool eligible = directory_info(root, &root_info) == CALL_OK &&
-      (root_info.valid & FILE_INFO_DOMAIN_VALID) && root_info.domain &&
-      directory_lookup(root, "boot", DIRECTORY_KIND_DIRECTORY, rights, &parent) == CALL_OK;
-  for (unsigned i = 0; eligible && i < INSTALL_BOOT_LEGACY_PAYLOADS; ++i) {
-    struct handle_info grant;
-    eligible = directory_lookup(parent, names[i], DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &files[i]) == CALL_OK &&
-        handle_query(files[i], &grant) == CALL_OK && grant.kind == HANDLE_KIND_NATIVE && !grant.transport &&
-        grant.protocol == PROTOCOL_FILE && (grant.rights & FILE_RIGHT_READ) &&
-        file_info(files[i], &identities[i]) == CALL_OK &&
-        (identities[i].valid & FILE_INFO_OBJECT_VALID) && (identities[i].valid & FILE_INFO_DOMAIN_VALID) &&
-        identities[i].domain == root_info.domain &&
-        file_size(files[i], &sizes[i]) == CALL_OK && sizes[i] && sizes[i] <= INSTALL_ESP_PAYLOAD_MAX_BYTES;
-  }
-  if (eligible) {
-    eligible = sizes[2] <= 64 && install_esp_transfer_workspace(workspace, &ram) == CALL_OK;
-  }
-  if (eligible) {
-    unsigned char bytes[64];
-    uint64_t final_size;
-    struct install_source source = {.handle = ram, .bytes = sizes[2]};
-    eligible = legacy_materialize(files[2], ram, &identities[2], sizes[2]) &&
-        install_source_read(&source, 0, bytes, (size_t)sizes[2]) &&
-        file_size(ram, &final_size) == CALL_OK && final_size == sizes[2] &&
-        config_blob_set(&revision, bytes, (size_t)sizes[2]) && legacy_revision_valid(&revision);
-  }
-  for (unsigned i = 0; eligible && i < 2; ++i) {
-    struct install_source source = {.handle = ram, .bytes = sizes[i]};
-    eligible = legacy_materialize(files[i], ram, &identities[i], sizes[i]) &&
-        (i == 0 ? legacy_kernel_valid(ram, sizes[i]) : install_archive_rescue_identity(&source)) &&
-        install_boot_payload_digest(&source, &digests[i]);
-  }
-  for (unsigned i = 0; eligible && i < INSTALL_BOOT_LEGACY_PAYLOADS; ++i) {
-    eligible = legacy_source_current(files[i], &identities[i], sizes[i]);
-  }
-  if (ram != HANDLE_INVALID && handle_close(ram) != CALL_OK) {
-    eligible = false;
-  }
-  if (parent != HANDLE_INVALID && handle_close(parent) != CALL_OK) {
-    eligible = false;
-  }
-  for (unsigned i = 0; i < INSTALL_BOOT_LEGACY_PAYLOADS; ++i) {
-    if (files[i] != HANDLE_INVALID && handle_close(files[i]) != CALL_OK) {
-      eligible = false;
-    }
-  }
-  if (eligible) {
-    digests[2] = revision.digest;
-    memcpy(payloads, digests, sizeof(digests));
-  }
-  config_blob_destroy(&revision);
-  return eligible;
-}

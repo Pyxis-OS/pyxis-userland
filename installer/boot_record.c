@@ -1,4 +1,4 @@
-#include "record.h"
+#include "boot_record.h"
 
 #include <stdio.h>
 #include <stdlib.h>

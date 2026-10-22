@@ -1,6 +1,4 @@
 #include "installer.h"
-#include "literal.h"
-#include <pxe/p1f.h>
 
 #include <directory.h>
 #include <handle.h>
@@ -9,8 +7,7 @@
 #include <string.h>
 
 /* The newc boot archive filter: splits program records from the rescue
- * archive and checks the rescue identity. Shared by the installer's program
- * copy and the boot publisher. */
+ * archive. Shared by the installer's program copy and the boot publisher. */
 #define NEWC_HEADER_BYTES 110u
 #define NEWC_TRAILER "TRAILER!!!"
 
@@ -52,7 +49,7 @@ static bool program_path(const struct install_programs *programs, const char *pa
   return false;
 }
 
-static bool archive_filter(const struct install_source *archive,
+bool install_archive_filter(const struct install_source *archive,
     struct install_programs *programs, struct install_source *rescue)
 {
   install_progress_begin("Reading source boot archive", INSTALL_PROGRESS_SOURCE_READ, NULL);
@@ -152,63 +149,3 @@ fail:
   return false;
 }
 
-
-bool install_archive_filter(const struct install_source *archive,
-    struct install_programs *programs, struct install_source *rescue)
-{
-  return archive_filter(archive, programs, rescue);
-}
-
-bool install_archive_rescue_identity(const struct install_source *archive)
-{
-  struct install_programs none = {0};
-  struct install_source checked = {.handle = HANDLE_INVALID};
-  if (!archive_filter(archive, &none, &checked)) {
-    return false;
-  }
-  bool initializer = false, defaults = false, duplicate = false;
-  bool seen_initializer = false, seen_defaults = false;
-  for (size_t offset = 0; offset < checked.bytes;) {
-    uint32_t size, name_size;
-    const uint8_t *header = checked.memory + offset;
-    if (!newc_field(header, 6, &size) || !newc_field(header, 11, &name_size)) {
-      duplicate = true;
-      break;
-    }
-    const char *name = (char *)header + NEWC_HEADER_BYTES;
-    size_t data;
-    if (!align4(offset + NEWC_HEADER_BYTES + name_size, &data)) {
-      duplicate = true;
-      break;
-    }
-    if (!strcmp(name, NEWC_TRAILER)) {
-      break;
-    }
-    if (!strncmp(name, "./", 2)) {
-      name += 2;
-    }
-    if (!strcmp(name, "boot-init.pxe")) {
-      duplicate |= seen_initializer;
-      seen_initializer = true;
-      struct p1f_header image = {0};
-      if (size >= sizeof(image)) {
-        memcpy(&image, checked.memory + data, sizeof(image));
-      }
-      initializer = image.magic == P1F_MAGIC && image.segment_count &&
-          image.segment_count <= (size - sizeof(image)) / sizeof(struct p1f_segment);
-    } else if (!strcmp(name, "config/installed.lua")) {
-      duplicate |= seen_defaults;
-      seen_defaults = true;
-      struct literal *document = NULL;
-      struct literal_diagnostic diagnostic;
-      defaults = literal_parse((char *)checked.memory + data, size, &document, &diagnostic);
-      literal_free(document);
-    }
-    if (!align4(data + size, &offset)) {
-      duplicate = true;
-      break;
-    }
-  }
-  free(checked.memory);
-  return initializer && defaults && !duplicate;
-}

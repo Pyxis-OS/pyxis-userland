@@ -32,9 +32,8 @@ struct boot_publication {
   struct install_recovery recovery;
   struct config_target_facts facts;
   struct config_boot_binding binding;
-  struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS];
   uint64_t cluster_bytes, required_bytes, available_bytes;
-  bool prepared, fresh, legacy_active, activation_pending;
+  bool prepared, fresh, activation_pending;
 };
 
 /* An existing install. ROOT/CONTROL are a read-only planning view of the

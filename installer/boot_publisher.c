@@ -98,19 +98,15 @@ static uint64_t required_space(const struct boot_publication *publication, uint6
 }
 
 /* Binding, menu and capacity from the frozen snapshots in PUBLICATION. A
- * prepared or malformed record refuses; it is never treated as absent. */
-static bool prepare_plan(struct boot_publication *publication, const struct boot_publisher_input *input,
-    bool legacy)
+ * present record has already passed install_recovery_resolved, which refuses
+ * a prepared or malformed one; it is never treated as absent. */
+static bool prepare_plan(struct boot_publication *publication, const struct boot_publisher_input *input)
 {
   const struct config_blob *record = &publication->record;
   struct config_record previous = {0};
   bool recorded = record->digest.present;
   bool ok = !recorded || (config_record_parse(record->bytes, record->size, &previous) &&
       previous.committed);
-  if (!ok) {
-    fprintf(stderr, "%s: the ESP boot record is prepared, malformed or from before this "
-        "release; reinstall; nothing written\n", input->name);
-  }
   if (ok) ok = binding_prepare(publication, input);
   if (ok) {
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
@@ -126,11 +122,9 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
         previous.previous_boot.present ? &old_previous : NULL, false};
       /* The outgoing attempt becomes the previous entry, as it becomes previous_boot. */
       const struct install_boot_menu target = {&next, recorded ? &old : NULL, false};
-      bool adoption = false;
       ok = install_boot_entry_plan(&publication->menu, recorded ? &inherited : NULL,
-          input->disk_guid, input->pool_partition, &target, legacy,
-          &publication->next_menu, &adoption, &publication->activation_pending);
-      publication->legacy_active = adoption;
+          input->disk_guid, input->pool_partition, &target,
+          &publication->next_menu, &publication->activation_pending);
       if (ok && recorded && publication->activation_pending) {
         fprintf(stderr, "%s: pending or ambiguous boot activation requires a fresh pending completion Review; nothing written\n",
             input->name);
@@ -150,7 +144,6 @@ bool boot_publication_prepare(struct boot_publication *publication,
 {
   boot_publication_destroy(publication);
   const struct config_blob *record = &publication->record;
-  bool legacy = false;
   bool ok = install_snapshot_facts(control, &publication->facts) &&
       facts_match(&input->target, &publication->facts) &&
       read_current(root, &publication->menu, &publication->record) &&
@@ -166,13 +159,9 @@ bool boot_publication_prepare(struct boot_publication *publication,
     if (ok) {
       publication->cluster_bytes = state.cluster_bytes;
       publication->available_bytes = state.free_clusters * state.cluster_bytes;
-      struct config_record inherited = {0};
-      bool owned = record->digest.present &&
-          config_record_parse(record->bytes, record->size, &inherited) && inherited.committed;
-      if (!owned) legacy = install_boot_legacy_certify(root, input->workspace, publication->legacy);
     }
   }
-  ok = ok && prepare_plan(publication, input, legacy);
+  ok = ok && prepare_plan(publication, input);
   publication->prepared = ok;
   return ok;
 }
@@ -189,7 +178,7 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
   bool ok = config_blob_set(&publication->menu, limine, limine_bytes) &&
       install_recovery_prepare_fresh(input->boot, input->loaded_kernel,
           &publication->facts, &publication->recovery) &&
-      prepare_plan(publication, input, false);
+      prepare_plan(publication, input);
   publication->prepared = ok;
   return ok;
 }
@@ -197,21 +186,12 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
 bool boot_publication_hash(const struct boot_publication *publication, struct install_digest *digest)
 {
   static const char domain[] = "pyxis-installed-publication-1";
-  unsigned char choices[] = {publication->legacy_active, publication->activation_pending,
-    publication->fresh};
+  unsigned char choices[] = {publication->activation_pending, publication->fresh};
   bool ok = publication->prepared && install_digest_update(digest, domain, sizeof(domain)) &&
       install_digest_update(digest, choices, sizeof(choices)) &&
       blob_hash(digest, &publication->menu) && blob_hash(digest, &publication->next_menu) &&
       blob_hash(digest, &publication->record) &&
       blob_hash(digest, &publication->recovery.manifest) && blob_hash(digest, &publication->recovery.fallback);
-  for (unsigned i = 0; ok && i < INSTALL_BOOT_PAYLOADS; ++i) {
-    unsigned char present = publication->legacy[i].present;
-    uint8_t size[8];
-    npfs_put_u64(size, publication->legacy[i].size);
-    ok = install_digest_update(digest, &present, sizeof(present)) &&
-        install_digest_update(digest, size, sizeof(size)) &&
-        install_digest_update(digest, publication->legacy[i].sha256, 65);
-  }
   return ok;
 }
 
@@ -231,7 +211,6 @@ void boot_publication_report(const struct boot_publication *publication,
         history.boot.kernel.path, history.boot.kernel.digest.sha256,
         history.boot.archive.path, history.boot.archive.digest.sha256);
   }
-  if (publication->legacy_active) fputs("Adopt the exact verified legacy normal/rescue pair.\n", output);
   if (publication->activation_pending) {
     fputs("Existing menu remains; boot activation will be pending.\n", output);
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
@@ -302,10 +281,6 @@ bool boot_publication_admit(struct boot_publication *publication,
         config_blob_equal(&current_recovery.fallback, &publication->recovery.fallback);
     install_recovery_destroy(&current_recovery);
   }
-  if (ok && publication->legacy_active) {
-    struct config_storage_report report = {0};
-    ok = install_publication_legacy_check(view->root, input->workspace, publication->legacy, &report);
-  }
   struct config_record history = {0};
   struct install_esp_payloads *held = NULL;
   if (ok && record.digest.present && config_record_parse(record.bytes, record.size, &history)) {
@@ -354,10 +329,8 @@ bool boot_publication_publish(struct boot_publication *publication,
     .expected = &publication->menu, .expected_record = &publication->record,
     .selected = &publication->next_menu, .transaction = input->attempt,
     .binding = publication->binding,
-    .legacy_active = publication->legacy_active,
     .sources = {input->kernel, input->archive,
       {.memory = (uint8_t *)input->revision_record, .bytes = strlen(input->revision_record)}}};
-  memcpy(request.legacy_expected, publication->legacy, sizeof(request.legacy_expected));
   ok = ok && parent_open(view->root, "EFI/pyxis/config", &request.view.config_parent) &&
       parent_open(view->root, "boot/limine", &request.view.limine_parent);
   if (ok) ok = install_publication_publish(&request, report);

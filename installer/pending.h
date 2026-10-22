@@ -12,7 +12,7 @@ enum install_pending_state {
 
 struct install_pending_plan {
   enum install_pending_state state;
-  bool available, menu_changed, legacy_active;
+  bool available, menu_changed;
   struct config_record record;
   struct config_blob menu;
 };
@@ -22,8 +22,7 @@ struct install_pending_plan {
 bool install_pending_inspect(const struct config_blob *record,
     const struct config_blob *current_menu,
     const struct config_blob *previous_limine, const uint8_t disk_guid[16],
-    uint64_t pool_partition, const struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS],
-    struct install_pending_plan *plan);
+    uint64_t pool_partition, struct install_pending_plan *plan);
 void install_pending_destroy(struct install_pending_plan *plan);
 
 /* Borrowed frozen snapshots and already admitted native target. FALLBACK_READY
@@ -37,7 +36,6 @@ struct install_pending_request {
   uint64_t pool_partition; /* The entries' mount.pool=. */
   struct mount_state_reply expected_target;
   const struct config_blob *record, *current_menu, *previous_limine;
-  struct config_file_digest legacy[INSTALL_BOOT_PAYLOADS];
   bool fallback_ready;
 };
 bool install_pending_complete(const struct install_pending_request *request,

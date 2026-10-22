@@ -1,5 +1,5 @@
 #include "handoff.h"
-#include "../config-editor/record.h"
+#include "../installer/boot_record.h"
 #include "../installer/digest.h"
 #include "../xfer/hash.h"
 

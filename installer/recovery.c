@@ -577,7 +577,7 @@ static bool committed_menu(handle_t root, const struct config_record *record,
     record->previous_boot.kernel.path, record->previous_boot.archive.path};
   const struct install_boot_menu committed = {&active,
     record->previous_boot.present ? &inherited : NULL, false};
-  bool adoption = false, pending = true, is_current = false;
+  bool pending = true, is_current = false;
   if (ok) {
     ok = install_boot_entry_current(&current, &committed, disk_guid, pool_partition,
         &is_current);
@@ -586,14 +586,14 @@ static bool committed_menu(handle_t root, const struct config_record *record,
     ok = config_blob_set(menu, current.bytes, current.size);
     pending = !ok;
   } else if (ok) {
-    ok = recorded_menu_read(root, &record->previous_menu, &previous) &&
+    ok = record->previous_boot.present &&
+        recorded_menu_read(root, &record->previous_menu, &previous) &&
         config_blob_equal(&current, &previous);
     /* The digest proof owns its previous entry, whatever attempt it names. */
     const struct install_boot_menu replaced = {&inherited, NULL, true};
     if (ok) {
-      ok = install_boot_entry_plan(&current, record->previous_boot.present ? &replaced : NULL,
-          disk_guid, pool_partition, &committed, !record->previous_boot.present, menu,
-          &adoption, &pending);
+      ok = install_boot_entry_plan(&current, &replaced, disk_guid, pool_partition, &committed,
+          menu, &pending);
     }
   }
   config_blob_destroy(&current);

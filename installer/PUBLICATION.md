@@ -39,9 +39,10 @@ Preparation is read-only. It freezes issuer-bound ESP identity, the boot record
 Temporary native views are drained and explicitly retired. Review shows the
 proposed boot attempt, the retained previous attempt, recovery and capacity.
 Review output failure refuses apply. A printed plan conveys no writer authority.
-A prepared or malformed record, or one from before task 2b of
+A malformed record, or one from before task 2b of
 [package upgrades](../../docs/wip/pkg-upgrade.md), refuses: that machine
-reinstalls (decision 28). The ESP holds no configuration; installed boot reads
+reinstalls (decision 28). A prepared record is an
+[interrupted Update](../../docs/userland/installer.md#interrupted-update). The ESP holds no configuration; installed boot reads
 `system://config/` on the pool.
 
 The record holds the committed state, its transaction (the current attempt), the
