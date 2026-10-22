@@ -217,11 +217,9 @@ static void archive_bytes(const struct config_editor_context *context,
 
 /* Installed boot reads its whole configuration from the pool file, so check it
  * the way boot does: declarative literal data, with no archive defaults. False
- * when boot would start the rescue space instead. DEFAULTS is unused. */
-static bool validate_pool(const struct boot_config *defaults, struct boot_config *pool,
-    struct boot_plan *plan)
+ * when boot would start the rescue space instead. */
+static bool validate_pool(struct boot_config *pool, struct boot_plan *plan)
 {
-  (void)defaults;
   FILE *file = fopen(POOL_BOOT_PATH, "rb");
   if (!file) {
     if (errno == ENOENT) {
@@ -244,7 +242,7 @@ static bool validate_pool(const struct boot_config *defaults, struct boot_config
   } else {
     ok = boot_config_read_pool_bytes(POOL_BOOT_PATH, bytes, size, pool,
         &failure) == BOOT_CONFIG_OK &&
-        boot_plan_build(pool, NULL, plan, NULL, &failure);
+        boot_plan_build(pool, NULL, plan, &failure);
   }
   free(bytes);
   if (ok) {
@@ -295,7 +293,7 @@ bool config_editor_validate(struct config_editor_context *context, bool planned)
   }
   struct boot_config pool = {0};
   struct boot_plan spaces = {0};
-  ok = validate_pool(&selection.defaults, &pool, &spaces) && ok;
+  ok = validate_pool(&pool, &spaces) && ok;
   for (size_t i = 0; i < spaces.space_count; ++i) {
     fprintf(stderr, "config: space %s, init %s\n", spaces.spaces[i]->name, spaces.spaces[i]->init);
   }

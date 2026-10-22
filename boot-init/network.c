@@ -348,17 +348,29 @@ uint64_t boot_network_id(const struct boot_network *network, const char *name)
   return 0;
 }
 
-bool boot_network_prepare(struct boot_network *network, handle_t registry, handle_t policy,
+bool boot_network_read(struct network_config *config, handle_t registry,
     const struct config_handoff_bytes *bytes)
 {
-  *network = (struct boot_network){.policy = policy, .echo = HANDLE_INVALID,
+  *config = (struct network_config){0};
+  bool read = bytes ?
+      network_config_read_literal_bytes("system://config/network.lua", bytes->bytes, bytes->size,
+        config) == CONFIG_OK :
+      network_config_read(config);
+  if (!read || !expand_wired(config, registry)) {
+    network_config_free(config);
+    return false;
+  }
+  return true;
+}
+
+bool boot_network_prepare(struct boot_network *network, handle_t registry, handle_t policy,
+    struct network_config *config)
+{
+  *network = (struct boot_network){.config = *config, .policy = policy, .echo = HANDLE_INVALID,
     .udp = HANDLE_INVALID, .tcp = HANDLE_INVALID, .remote_interface = HANDLE_INVALID,
     .remote_tcp = HANDLE_INVALID, .remote_udp = HANDLE_INVALID};
-  bool read = policy != HANDLE_INVALID && (bytes ?
-      network_config_read_literal_bytes("system://config/network.lua", bytes->bytes, bytes->size,
-        &network->config) == CONFIG_OK :
-      network_config_read(&network->config));
-  if (!read || !expand_wired(&network->config, registry)) {
+  *config = (struct network_config){0};
+  if (policy == HANDLE_INVALID) {
     return false;
   }
   size_t count = network->config.count;
@@ -458,4 +470,34 @@ bool boot_network_prepare(struct boot_network *network, handle_t registry, handl
     return false;
   }
   return true;
+}
+
+void boot_network_release(struct boot_network *network)
+{
+  handle_t handles[] = {network->echo, network->udp, network->tcp, network->remote_interface,
+    network->remote_tcp, network->remote_udp};
+  for (size_t i = 0; i < sizeof(handles) / sizeof(*handles); ++i) {
+    if (handles[i] != HANDLE_INVALID) {
+      handle_close(handles[i]);
+    }
+  }
+  for (size_t i = 0; i < network->config.count; ++i) {
+    if (network->facets && network->facets[i] != HANDLE_INVALID) {
+      handle_close(network->facets[i]);
+    }
+    if (network->dhcp && network->dhcp[i] != HANDLE_INVALID) {
+      handle_close(network->dhcp[i]);
+    }
+  }
+  free(network->ids);
+  free(network->facets);
+  free(network->dhcp);
+  free(network->facet_names);
+  free(network->dhcp_names);
+  free(network->controller_names);
+  free(network->controller_values);
+  network_config_free(&network->config);
+  *network = (struct boot_network){.policy = network->policy, .echo = HANDLE_INVALID,
+    .udp = HANDLE_INVALID, .tcp = HANDLE_INVALID, .remote_interface = HANDLE_INVALID,
+    .remote_tcp = HANDLE_INVALID, .remote_udp = HANDLE_INVALID};
 }

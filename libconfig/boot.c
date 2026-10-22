@@ -980,12 +980,9 @@ static bool plan_fail(struct boot_plan *plan, struct config_failure *failure,
 }
 
 bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan, enum boot_plan_error *error, struct config_failure *failure)
+    struct boot_plan *plan, struct config_failure *failure)
 {
   *plan = (struct boot_plan){0};
-  if (error) {
-    *error = BOOT_PLAN_INVALID;
-  }
   if (override && (override->volume_count > SIZE_MAX - defaults->volume_count ||
       override->space_count > SIZE_MAX - defaults->space_count)) {
     return plan_fail(plan, failure, "boot plan is too large%s", "");
@@ -1039,9 +1036,6 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
       continue;
     }
     if (focus) {
-      if (error) {
-        *error = BOOT_PLAN_DUPLICATE_FOCUS;
-      }
       return plan_fail(plan, failure, "more than one space sets focus = true, including %s and %s",
           focus, space->name);
     }
@@ -1155,9 +1149,6 @@ bool boot_plan_build(const struct boot_config *defaults, const struct boot_confi
     if (space->network) {
       owner = space->name;
     }
-  }
-  if (error) {
-    *error = BOOT_PLAN_OK;
   }
   return true;
 }

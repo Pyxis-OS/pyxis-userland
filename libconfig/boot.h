@@ -145,12 +145,6 @@ enum boot_config_result {
   BOOT_CONFIG_INVALID,
 };
 
-enum boot_plan_error {
-  BOOT_PLAN_OK,
-  BOOT_PLAN_INVALID,
-  BOOT_PLAN_DUPLICATE_FOCUS,
-};
-
 /* Reads archive defaults through libc, including hostname/input policy, or a pool
  * boot override from SIZE bytes. The override accepts volumes, spaces and
  * input.touchpad_speed; no other machine policy may be overridden.
@@ -180,10 +174,9 @@ void boot_config_free(struct boot_config *config);
  * volume, roots must name defined volumes, start must name one of its space's
  * roots and at most one space may own the network or request boot focus.
  * False reports the reason on stderr, or in a non-NULL FAILURE, and leaves PLAN
- * empty. Optional ERROR distinguishes duplicate focus so boot can suppress it
- * even after fallback. */
+ * empty. */
 bool boot_plan_build(const struct boot_config *defaults, const struct boot_config *override,
-    struct boot_plan *plan, enum boot_plan_error *error, struct config_failure *failure);
+    struct boot_plan *plan, struct config_failure *failure);
 void boot_plan_free(struct boot_plan *plan);
 const struct boot_volume *boot_plan_volume(const struct boot_plan *plan, const char *name);
 /* True for the boot, tmp and bin roots and the space's configured roots. */

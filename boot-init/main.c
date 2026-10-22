@@ -1407,7 +1407,7 @@ static void create_unstarted(const struct authority *authority, const struct boo
 
 /* A space that cannot start is created unstarted, showing why on its tab. */
 static bool start_space(const struct authority *authority, struct mounts *mounts,
-    const struct boot_space *space, bool suppress_boot_focus)
+    const struct boot_space *space)
 {
   struct space_definition definition = space_definition_of(space);
   char text[START_REASON_MAX + 1];
@@ -1455,7 +1455,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     create_unstarted(authority, space, reason);
     status = CALL_OK;
   } else {
-    if (space->focus && !suppress_boot_focus) {
+    if (space->focus) {
       definition.flags |= SPACE_CREATE_BOOT_FOCUS;
     }
     const char *arguments[] = {space->init};
@@ -1630,14 +1630,14 @@ static struct mounted_volume *mount_pool_system(const struct authority *authorit
   return mounted;
 }
 
-/* Reads the whole installed configuration from the pool: boot.lua into
- * CONFIG, with its pool volumes bound to POOL, session.lua and network.lua as
- * the spaces' handoff FILEs, and network.lua's bytes into NETWORK for the boot
- * network profile. False fills REASON; boot then starts the rescue space and
- * changes nothing on the pool. */
-static bool read_pool_configuration(struct authority *authority, uint32_t pool,
-    struct mounts *mounts, struct boot_config *config, struct config_handoff_bytes *network,
-    char *reason, size_t size)
+/* Reads the installed configuration from the pool: boot.lua into CONFIG, with
+ * its pool volumes bound to POOL, and the bytes of session.lua and network.lua
+ * into SESSION and NETWORK. boot.lua and session.lua are parsed here; the
+ * network profile is read against the controllers later. False fills REASON
+ * and leaves all three empty. Nothing is applied or written. */
+static bool read_pool_configuration(const struct authority *authority, uint32_t pool,
+    struct mounts *mounts, struct boot_config *config, struct config_handoff_bytes *session,
+    struct config_handoff_bytes *network, char *reason, size_t size)
 {
   struct mounted_volume *system = mount_pool_system(authority, mounts, pool);
   if (!system || system->root == HANDLE_INVALID) {
@@ -1657,51 +1657,34 @@ static bool read_pool_configuration(struct authority *authority, uint32_t pool,
       ok = boot_config_read_pool_bytes(name, bytes[i].bytes, bytes[i].size, config,
           &failure) == BOOT_CONFIG_OK;
     } else if (ok && i == 1) {
-      struct session_config session;
+      struct session_config parsed;
       ok = session_config_read_literal_bytes(name, bytes[i].bytes, bytes[i].size,
-          &session) == CONFIG_OK;
+          &parsed) == CONFIG_OK;
       if (ok) {
-        session_config_free(&session);
+        session_config_free(&parsed);
       } else {
         config_failure_format(&failure, "invalid");
       }
-    } else if (ok) {
-      struct network_config network;
-      ok = network_config_read_literal_bytes(name, bytes[i].bytes, bytes[i].size,
-          &network) == CONFIG_OK;
-      if (ok) {
-        network_config_free(&network);
-      } else {
-        config_failure_format(&failure, "invalid");
-      }
-    }
-  }
-  if (ok) {
-    for (size_t i = 0; i < config->volume_count; ++i) {
-      if (config->volumes[i].kind == BOOT_VOLUME_NPFS &&
-          config->volumes[i].partition == BOOT_POOL_PARTITION) {
-        config->volumes[i].partition = pool;
-      }
-    }
-    enum call_status status;
-    if (!boot_configuration_handoff(authority->ram, &bytes[1], &bytes[2],
-        &authority->configuration, &status)) {
-      snprintf(name, sizeof(name), "session and network handoff");
-      config_failure_format(&failure, "cannot create (status %u)", status);
-      ok = false;
     }
   }
   if (!ok) {
     snprintf(reason, size, "%s: %s", name, failure.text[0] ? failure.text : "invalid");
     boot_config_free(config);
-  } else {
-    *network = bytes[2];
-    bytes[2] = (struct config_handoff_bytes){0};
+    for (size_t i = 0; i < 3; ++i) {
+      config_handoff_bytes_free(&bytes[i]);
+    }
+    return false;
   }
-  for (size_t i = 0; i < 3; ++i) {
-    config_handoff_bytes_free(&bytes[i]);
+  for (size_t i = 0; i < config->volume_count; ++i) {
+    if (config->volumes[i].kind == BOOT_VOLUME_NPFS &&
+        config->volumes[i].partition == BOOT_POOL_PARTITION) {
+      config->volumes[i].partition = pool;
+    }
   }
-  return ok;
+  config_handoff_bytes_free(&bytes[0]);
+  *session = bytes[1];
+  *network = bytes[2];
+  return true;
 }
 
 /* The built-in rescue space. On an installed boot it holds the pool's system
@@ -1724,7 +1707,7 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   printf("boot-init: %s; starting the rescue space\n", reason);
   struct mounted_volume *system = pool ? mount_pool_system(authority, mounts, pool) : NULL;
   bool with_pool = system && system->root != HANDLE_INVALID;
-  start_space(authority, mounts, with_pool ? &pool_rescue : &rescue, true);
+  start_space(authority, mounts, with_pool ? &pool_rescue : &rescue);
 }
 
 static bool close_frozen(struct authority *authority)
@@ -1752,7 +1735,7 @@ static bool close_boot_payloads(struct authority *authority)
 
 int main(int argc, char **argv)
 {
-  bool installed = false, default_config = false;
+  bool installed = false, default_config = false, pool_malformed = false;
   const char *remote_beacon = NULL;
   uint32_t pool = 0;
   for (int i = 1; i < argc; ++i) {
@@ -1761,7 +1744,10 @@ int main(int argc, char **argv)
     } else if (!strcmp(argv[i], "--pool") && i + 1 < argc) {
       char *end;
       unsigned long value = strtoul(argv[++i], &end, 10);
-      pool = !*end && value <= UINT32_MAX ? (uint32_t)value : 0;
+      pool = !*end && value && value <= UINT32_MAX ? (uint32_t)value : 0;
+      pool_malformed |= !pool;
+    } else if (!strcmp(argv[i], "--pool-malformed")) {
+      pool_malformed = true;
     } else if (!strcmp(argv[i], "--default-config")) {
       default_config = true;
     } else if (!strcmp(argv[i], "--remote-beacon")) {
@@ -1786,14 +1772,15 @@ int main(int argc, char **argv)
   }
 
   struct boot_config defaults = {0};
-  struct config_handoff_bytes network = {0};
+  struct config_handoff_bytes session = {0}, network = {0};
+  struct network_config profile = {0};
   struct boot_plan plan = {0};
-  enum boot_plan_error plan_error = BOOT_PLAN_OK;
   struct config_failure failure = {0};
-  bool suppress_boot_focus = false, configured = false;
+  bool configured = false;
   struct mounts mounts = {0};
   int exit_status = EXIT_SUCCESS;
   char rescue[START_REASON_MAX + 1] = "no configured space started";
+  handle_t registry = authority.services[SERVICE_NET_REGISTRY];
   if (installed) {
     struct boot_evidence_authority sources = {
       .esp_mount = authority.esp_mount, .ram = authority.ram,
@@ -1809,43 +1796,77 @@ int main(int argc, char **argv)
     exit_status = EXIT_FAILURE;
     goto finish;
   }
-  /* Installed entries name their pool. A development build bound to a disk
+
+  /* Validate the whole configuration before applying any of it: a rejected one
+   * contributes nothing, not even its hostname fallback or input defaults.
+   * Installed entries name their pool. A development build bound to a disk
    * with MOUNT_DISK names none and describes that disk in live.lua. */
-  bool pool_configured = installed && pool;
-  if (default_config) {
+  bool pool_configured = installed && pool && !pool_malformed;
+  if (installed && pool_malformed) {
+    snprintf(rescue, sizeof(rescue), "the boot entry's mount.pool is malformed");
+  } else if (default_config) {
     snprintf(rescue, sizeof(rescue), "rescue entry");
   } else if (pool_configured) {
-    if (read_pool_configuration(&authority, pool, &mounts, &defaults, &network,
-        rescue, sizeof(rescue))) {
-      configured = boot_plan_build(&defaults, NULL, &plan, &plan_error, &failure);
-      if (!configured) {
-        snprintf(rescue, sizeof(rescue), "system://" POOL_BOOT_PATH ": %s",
-            failure.text[0] ? failure.text : "invalid");
-      } else {
-        puts("boot-init: read system://config/");
-      }
+    configured = read_pool_configuration(&authority, pool, &mounts, &defaults, &session,
+        &network, rescue, sizeof(rescue));
+    if (configured && !boot_plan_build(&defaults, NULL, &plan, &failure)) {
+      snprintf(rescue, sizeof(rescue), "system://" POOL_BOOT_PATH ": %s",
+          failure.text[0] ? failure.text : "invalid");
+      configured = false;
+    }
+    if (configured && !boot_network_read(&profile, registry, &network)) {
+      snprintf(rescue, sizeof(rescue), "system://" POOL_NETWORK_PATH
+          ": invalid, or its controllers are absent");
+      configured = false;
     }
   } else {
     printf("boot-init: reading %s\n", LIVE_CONFIG);
     enum boot_config_result result = boot_config_read(LIVE_CONFIG, &defaults);
     configured = result == BOOT_CONFIG_OK &&
-        boot_plan_build(&defaults, NULL, &plan, &plan_error, NULL);
+        boot_plan_build(&defaults, NULL, &plan, NULL);
     if (!configured) {
-      fprintf(stderr, "boot-init: %s %s\n", LIVE_CONFIG,
+      snprintf(rescue, sizeof(rescue), "%s %s", LIVE_CONFIG,
           result == BOOT_CONFIG_MISSING ? "is missing" : "is invalid");
+    } else if (!boot_network_read(&profile, registry, NULL)) {
+      snprintf(rescue, sizeof(rescue), "boot://config/network.lua: invalid, or its controllers are absent");
+      configured = false;
     }
   }
-  suppress_boot_focus = plan_error == BOOT_PLAN_DUPLICATE_FOCUS;
-
-  /* The rescue space uses the archive's network profile, like live boots. */
-  bool network_ready = boot_network_prepare(&authority.network,
-      authority.services[SERVICE_NET_REGISTRY], authority.net_policy,
-      configured && pool_configured ? &network : NULL);
+  if (configured && !boot_network_prepare(&authority.network, registry, authority.net_policy,
+      &profile)) {
+    snprintf(rescue, sizeof(rescue), "the network profile cannot be applied");
+    boot_network_release(&authority.network);
+    configured = false;
+  }
+  if (configured && pool_configured) {
+    enum call_status status;
+    if (!boot_configuration_handoff(authority.ram, &session, &network,
+        &authority.configuration, &status)) {
+      snprintf(rescue, sizeof(rescue), "session and network handoff cannot be created (status %u)",
+          status);
+      boot_network_release(&authority.network);
+      configured = false;
+    }
+  }
+  network_config_free(&profile);
+  config_handoff_bytes_free(&session);
   config_handoff_bytes_free(&network);
-  if (!network_ready) {
-    fputs("boot-init: network profile setup failed; no spaces started\n", stderr);
-    exit_status = EXIT_FAILURE;
-    goto finish;
+  if (configured) {
+    if (pool_configured) {
+      puts("boot-init: read system://config/");
+    }
+  } else {
+    /* Built-in rescue settings, as the reader's empty configuration. The
+     * rescue space configures no network: loopback only. */
+    boot_plan_free(&plan);
+    boot_config_free(&defaults);
+    defaults = (struct boot_config){.mouse_scroll_natural = true, .touchpad_scroll_natural = true};
+    struct network_config loopback = {0};
+    if (!boot_network_prepare(&authority.network, registry, authority.net_policy, &loopback)) {
+      fputs("boot-init: loopback network setup failed; no spaces started\n", stderr);
+      exit_status = EXIT_FAILURE;
+      goto finish;
+    }
   }
   authority.services[SERVICE_ECHO] = authority.network.echo;
   authority.services[SERVICE_UDP] = authority.network.udp;
@@ -1870,9 +1891,6 @@ int main(int argc, char **argv)
   } else {
     authority.bin = authority.boot;
   }
-  if (suppress_boot_focus) {
-    puts("boot-init: duplicate focus request; automatic focus disabled for this boot");
-  }
   size_t started = 0;
   if (configured && mount_plan(&authority, &plan, &mounts)) {
     seed_live_repositories(&authority, &mounts);
@@ -1884,7 +1902,7 @@ int main(int argc, char **argv)
         authority.services[SERVICE_CLOCK]);
     check_packages(&mounts);
     for (size_t i = 0; i < plan.space_count; ++i) {
-      started += start_space(&authority, &mounts, plan.spaces[i], suppress_boot_focus);
+      started += start_space(&authority, &mounts, plan.spaces[i]);
     }
   }
   if (!started) {
@@ -1916,6 +1934,8 @@ finish:
   }
   boot_plan_free(&plan);
   boot_config_free(&defaults);
+  network_config_free(&profile);
+  config_handoff_bytes_free(&session);
   config_handoff_bytes_free(&network);
   close_frozen(&authority);
   free(mounts.entries);

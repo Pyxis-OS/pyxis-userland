@@ -17,7 +17,7 @@ return {
     ["http-work"] = { kind = "npfs", partition = 2, volume = "http-work" },
   },
   spaces = {
-    { name = "pyxis", title = "Pyxis", init = "boot://init-installed",
+    { name = "pyxis", title = "Pyxis", init = "system://config/init-installed",
       network = true, focus = true, launch = true, jobs = true, screenshot = true, power = true,
       clipboard_local = true, clipboard_shared = true,
       package_management = true,
