@@ -1579,13 +1579,18 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     if (status == CALL_OK) {
       printf("boot-init: space %s started: %s%s\n", space->name, space->init,
           space->network ? " (network owner)" : "");
-      observer->process = child;
-      memcpy(observer->name, space->name, strlen(space->name) + 1);
-      observer->next = root_observers;
-      root_observers = observer;
-      observer = NULL;
-      child = HANDLE_INVALID;
       started = true;
+      enum call_status observed = handle_copy_restricted(child, PROCESS_RIGHT_WAIT, 0,
+          &observer->process);
+      if (observed == CALL_OK) {
+        memcpy(observer->name, space->name, strlen(space->name) + 1);
+        observer->next = root_observers;
+        root_observers = observer;
+        observer = NULL;
+      } else {
+        fprintf(stderr, "boot-init: cannot observe space %s init (status %u)\n",
+            space->name, observed);
+      }
     } else {
       fprintf(stderr, "boot-init: space %s not started: cannot start %s (status %u)\n",
           space->name, space->init, status);
