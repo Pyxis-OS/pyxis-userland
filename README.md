@@ -728,6 +728,10 @@ Clock grants distinguish observation (`read`) from precise readings (`read` +
 precise. `<clock.h>` provides explicit coarse observations and `<time.h>` the
 `CLOCK_REALTIME_COARSE` / `CLOCK_MONOTONIC_COARSE` IDs. Existing independently
 published bundles using precise clocks need refreshed declarations and binaries.
+Libc also takes precise deadline anchors for `getentropy`, temporary-file name
+creation and transactional file opens; a READ-only clock can therefore produce
+`EACCES` from these operations even when the caller never calls a clock API.
+Relative helpers that sleep additionally need `sleep`.
 
 ## License
 
