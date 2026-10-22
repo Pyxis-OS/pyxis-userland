@@ -115,6 +115,23 @@ static bool abi_string(const struct literal_value *value)
       package_abi_valid(value->as.string.bytes);
 }
 
+/* os-release and its readers ship in one archive, so any other field is an error. */
+static bool os_release_fields(const struct literal_value *root)
+{
+  if (root->kind != LITERAL_TABLE) {
+    return false;
+  }
+  for (const struct literal_entry *entry = root->as.table.entries; entry; entry = entry->next) {
+    const struct literal_value *key = entry->key;
+    if (entry->implicit || key->kind != LITERAL_STRING ||
+        (strcmp(key->as.string.bytes, "release") && strcmp(key->as.string.bytes, "revision") &&
+         strcmp(key->as.string.bytes, "abi"))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool provide(struct package_provided_abi *provided, const char *name)
 {
   char *copy = strdup(name);
@@ -163,7 +180,10 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
   }
   const struct literal_value *list = literal_field(document->root, "abi");
   const struct literal_value *revision = literal_field(document->root, "revision");
-  status = list && list->kind == LITERAL_TABLE && revision && revision->kind == LITERAL_STRING ?
+  const struct literal_value *release = literal_field(document->root, "release");
+  status = os_release_fields(document->root) && list && list->kind == LITERAL_TABLE &&
+      revision && revision->kind == LITERAL_STRING &&
+      (!revision->as.string.size || abi_string(revision)) && (!release || abi_string(release)) ?
       CALL_OK : CALL_BAD_REQUEST;
   size_t count = status == CALL_OK ? list->as.table.count + 1 : 0;
   if (status == CALL_OK && !(provided->names = calloc(count, sizeof(*provided->names)))) {
@@ -178,7 +198,7 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
     }
   }
   /* A build without Git has an empty revision and provides only the list. */
-  if (status == CALL_OK && revision->as.string.size && abi_string(revision) &&
+  if (status == CALL_OK && revision->as.string.size &&
       !provide(provided, revision->as.string.bytes)) {
     status = CALL_NO_MEMORY;
   }
