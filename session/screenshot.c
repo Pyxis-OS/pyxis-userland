@@ -55,7 +55,7 @@ void session_start_screenshot_saver(void)
     {capture, SCREEN_CAPTURE_RIGHT_CAPTURE, 0},
     {home, home_rights, 0},
     {memory, MEMORY_RIGHT_MANAGE, 0},
-    {clock, CLOCK_RIGHT_READ, 0},
+    {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0},
   };
   struct launch_environment_entry entries[] = {
     PROFILE_PRIVATE_CAP("screenshot_saver", 0), PROFILE_CAP("screen_capture", 1),

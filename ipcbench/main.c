@@ -436,7 +436,7 @@ static enum call_status launch_receiver(handle_t launcher, handle_t image,
   struct launch_grant grants[GRANT_COUNT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [SERVICE] = {service, ENDPOINT_SERVICE_RIGHT_CREATE, 0},
-    [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
+    [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0},
     [BOOTSTRAP] = {bootstrap, 0, HANDLE_TRANSPORT_CALL},
   };
   struct launch_environment_entry resources[GRANT_COUNT] = {

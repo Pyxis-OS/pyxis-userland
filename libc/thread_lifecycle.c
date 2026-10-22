@@ -64,7 +64,8 @@ static uint64_t identity(struct lifecycle_record *record)
   return ((uint64_t)record->generation << 32) | (uint32_t)(record - records + 1);
 }
 
-static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rights)
+static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rights,
+    uint64_t optional_rights)
 {
   handle_t source;
   if (environment_capability(startup_environment_handle(), name, &source) != CALL_OK) {
@@ -75,7 +76,8 @@ static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rig
   if (source != HANDLE_INVALID && handle_query(source, &info) == CALL_OK &&
       info.kind == HANDLE_KIND_NATIVE && info.protocol == protocol &&
       (info.rights & rights) == rights) {
-    enum call_status status = handle_copy_restricted(source, rights, 0, &retained);
+    enum call_status status = handle_copy_restricted(source,
+        rights | (info.rights & optional_rights), 0, &retained);
     if (status == CALL_OUTCOME_UNKNOWN) {
       _Exit(EXIT_FAILURE);
     }
@@ -93,9 +95,9 @@ void libc_thread_runtime_init(void)
   struct libc_thread_record *record = libc_thread_record();
   record->thread_identity = identity(&records[0]);
   memory = record->memory;
-  service = retain_startup("threads", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE);
-  clock_read = retain_startup("clock", PROTOCOL_CLOCK, CLOCK_RIGHT_READ);
-  clock_sleep = retain_startup("clock", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP);
+  service = retain_startup("threads", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE, 0);
+  clock_read = retain_startup("clock", PROTOCOL_CLOCK, CLOCK_RIGHT_READ, CLOCK_RIGHT_PRECISE);
+  clock_sleep = retain_startup("clock", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP, 0);
 }
 
 handle_t libc_thread_service(void)

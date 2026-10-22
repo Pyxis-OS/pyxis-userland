@@ -42,7 +42,7 @@ static enum call_status screenshots_directory(handle_t home, handle_t *directory
 static uint64_t timestamp(handle_t clock, char *text, size_t capacity)
 {
   struct clock_wall_reading wall;
-  enum call_status status = clock_wall_now(clock, &wall);
+  enum call_status status = clock_wall_coarse_now(clock, &wall);
   if (status != CALL_OK) {
     return status == CALL_UNAVAILABLE ? SCREENSHOT_SAVER_STATUS_NO_CLOCK : status;
   }

@@ -46,6 +46,30 @@ int timespec_get(struct timespec *result, int base)
 
 int clock_gettime(clockid_t clock, struct timespec *result)
 {
+  if (clock == CLOCK_REALTIME_COARSE || clock == CLOCK_MONOTONIC_COARSE) {
+    if (!result) {
+      errno = EINVAL;
+      return -1;
+    }
+    struct timespec reading;
+    enum call_status status;
+    if (clock == CLOCK_REALTIME_COARSE) {
+      struct clock_wall_reading wall;
+      status = clock_wall_coarse_now(libc_thread_clock(), &wall);
+      reading = (struct timespec){wall.seconds, (long)wall.nanoseconds};
+    } else {
+      uint64_t nanoseconds;
+      status = clock_coarse_now(libc_thread_clock(), &nanoseconds);
+      reading = (struct timespec){(time_t)(nanoseconds / NANOSECONDS_PER_SECOND),
+          (long)(nanoseconds % NANOSECONDS_PER_SECOND)};
+    }
+    if (status != CALL_OK) {
+      errno = libc_call_errno(status);
+      return -1;
+    }
+    *result = reading;
+    return 0;
+  }
   int base = clock == CLOCK_REALTIME ? TIME_UTC :
              clock == CLOCK_MONOTONIC ? TIME_MONOTONIC : 0;
   if (!base || !result) {

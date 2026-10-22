@@ -35,7 +35,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
   enum { MEMORY, CLOCK, LISTENER, OUTPUT, ERROR, GRANT_COUNT };
   struct launch_grant grants[GRANT_COUNT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
-    [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
+    [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0},
   };
   struct launch_environment_entry resources[] = {
     PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),

@@ -8,7 +8,7 @@
     {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
     {"name": "service", "resource": "service", "rights": ["create"], "required": true},
     {"name": "publication", "resource": "publication", "rights": ["call"], "required": true},
-    {"name": "clock", "resource": "clock", "rights": ["read", "sleep"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "precise", "sleep"], "required": true},
     {"name": "tcp", "resource": "tcp", "rights": ["connect"], "required": true},
     {"name": "dns_udp", "resource": "dns_udp", "rights": ["open"], "required": false},
     {"name": "random", "resource": "random", "rights": ["read"], "required": true},

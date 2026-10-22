@@ -19,7 +19,8 @@
       "name": "clock",
       "resource": "clock",
       "rights": [
-        "read"
+        "read",
+        "precise"
       ],
       "required": true
     },

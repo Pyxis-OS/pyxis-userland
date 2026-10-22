@@ -69,7 +69,7 @@ static enum call_status launch_client(handle_t launcher, handle_t image,
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
     [CALLER] = {caller, 0, send_only ? HANDLE_TRANSPORT_SEND : HANDLE_TRANSPORT_CALL},
     [CONTENT] = {content, FILE_RIGHT_READ, 0},
-    [CLOCK] = {clock, CLOCK_RIGHT_READ, 0},
+    [CLOCK] = {clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0},
   };
   struct launch_environment_entry resources[] = {
     PROFILE_CAP((uintptr_t)"output", OUTPUT),

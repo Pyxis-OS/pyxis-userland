@@ -1,13 +1,13 @@
 #include <clock.h>
 #include <syscall.h>
 
-enum call_status clock_now(handle_t clock, uint64_t *nanoseconds)
+static enum call_status read_monotonic(handle_t clock, uint64_t operation, uint64_t *nanoseconds)
 {
   if (!nanoseconds) {
     return CALL_BAD_REQUEST;
   }
   *nanoseconds = 0;
-  struct message_header message = {PROTOCOL_CLOCK, CLOCK_NOW};
+  struct message_header message = {PROTOCOL_CLOCK, operation};
   struct clock_reading reply;
   struct syscall_result result = syscall_call(clock, &message, sizeof(message),
       &reply, sizeof(reply));
@@ -23,13 +23,14 @@ enum call_status clock_now(handle_t clock, uint64_t *nanoseconds)
   return result.status;
 }
 
-enum call_status clock_wall_now(handle_t clock, struct clock_wall_reading *reading)
+static enum call_status read_wall(handle_t clock, uint64_t operation,
+    struct clock_wall_reading *reading)
 {
   if (!reading) {
     return CALL_BAD_REQUEST;
   }
   *reading = (struct clock_wall_reading){0};
-  struct message_header message = {PROTOCOL_CLOCK, CLOCK_WALL_NOW};
+  struct message_header message = {PROTOCOL_CLOCK, operation};
   struct clock_wall_reading reply;
   struct syscall_result result = syscall_call(clock, &message, sizeof(message),
       &reply, sizeof(reply));
@@ -46,6 +47,26 @@ enum call_status clock_wall_now(handle_t clock, struct clock_wall_reading *readi
     *reading = reply;
   }
   return result.status;
+}
+
+enum call_status clock_now(handle_t clock, uint64_t *nanoseconds)
+{
+  return read_monotonic(clock, CLOCK_NOW, nanoseconds);
+}
+
+enum call_status clock_coarse_now(handle_t clock, uint64_t *nanoseconds)
+{
+  return read_monotonic(clock, CLOCK_COARSE_NOW, nanoseconds);
+}
+
+enum call_status clock_wall_now(handle_t clock, struct clock_wall_reading *reading)
+{
+  return read_wall(clock, CLOCK_WALL_NOW, reading);
+}
+
+enum call_status clock_wall_coarse_now(handle_t clock, struct clock_wall_reading *reading)
+{
+  return read_wall(clock, CLOCK_WALL_COARSE_NOW, reading);
 }
 
 enum call_status clock_sleep_until(handle_t clock, uint64_t deadline_ns)

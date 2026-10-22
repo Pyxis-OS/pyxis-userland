@@ -6,7 +6,7 @@
   "resource_dirs": {"defaults": "defaults"},
   "grants": [
     {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
-    {"name": "clock", "resource": "clock", "rights": ["read"], "required": false},
+    {"name": "clock", "resource": "clock", "rights": ["read", "precise"], "required": false},
     {"name": "random", "resource": "random", "rights": ["read"], "required": false},
     {"name": "system_info", "resource": "system_info", "rights": ["read"], "required": false},
     {"name": "config_read", "resource": "directory", "source": "config_parent", "rights": ["lookup", "read-files"], "required": false},

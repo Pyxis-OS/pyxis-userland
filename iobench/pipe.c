@@ -326,7 +326,7 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
   struct launch_request requests[WORKERS] = {0};
   for (size_t i = 0; i < WORKERS; ++i) {
     grants[i][MEMORY] = (struct launch_grant){bootstrap_capability("memory"), MEMORY_RIGHT_MANAGE, 0};
-    grants[i][CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ, 0};
+    grants[i][CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0};
     grants[i][COORDINATOR] = (struct launch_grant){coordinator.caller, 0, HANDLE_TRANSPORT_CALL};
     grants[i][STREAM] = (struct launch_grant){i == PRODUCER ? pipe.writer : pipe.reader,
         i == PRODUCER ? PIPE_RIGHT_WRITE : PIPE_RIGHT_READ, 0};

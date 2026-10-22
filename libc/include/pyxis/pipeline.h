@@ -13,7 +13,7 @@ struct pyxis_pipeline_options {
   size_t stage_count;
   /* Trusted, exclusively provisioned RAM root. The capture audit/lifetime
    * prerequisites from capture.h apply to every stage. Sources survive. */
-  handle_t private_root, clock, pipe_service;
+  handle_t private_root, clock, pipe_service; /* clock needs READ|PRECISE. */
   /* Absent input requires NULL/zero. Present input is copied before effects;
    * present zero bytes supplies real EOF. No live producer or callback source. */
   bool has_input;

@@ -113,6 +113,7 @@ static const struct grant_right grant_rights[] = {
   {"disks", "mount-read-write", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_WRITE},
   {"clock", "read", PROTOCOL_CLOCK, CLOCK_RIGHT_READ},
   {"clock", "sleep", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP},
+  {"clock", "precise", PROTOCOL_CLOCK, CLOCK_RIGHT_PRECISE},
   {"launcher", "launch", PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
   {"random", "read", PROTOCOL_RANDOM, RANDOM_RIGHT_READ},
   {"system_info", "read", PROTOCOL_SYSTEM_INFO, SYSTEM_INFO_RIGHT_READ},

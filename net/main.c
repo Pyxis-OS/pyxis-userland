@@ -154,7 +154,7 @@ static bool print_interfaces(handle_t authority)
         "rebinding", "expired", "failed"};
       printf(" DHCP %s", interface.dhcp_phase < sizeof(phases) / sizeof(*phases) ? phases[interface.dhcp_phase] : "unknown");
       uint64_t now;
-      if (clock_now(bootstrap_capability("clock"), &now) == CALL_OK && now >= interface.dhcp_report_time_ns) {
+      if (clock_coarse_now(bootstrap_capability("clock"), &now) == CALL_OK && now >= interface.dhcp_report_time_ns) {
         printf(" reported %llu ms ago", (unsigned long long)((now - interface.dhcp_report_time_ns) / UINT64_C(1000000)));
       }
     }

@@ -318,7 +318,7 @@ static enum call_status validate_options(handle_t launcher,
   if (status != CALL_OK) {
     return status;
   }
-  status = validate_source(options->clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ);
+  status = validate_source(options->clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE);
   if (status != CALL_OK) {
     return status;
   }
@@ -350,7 +350,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
       PYXIS_CAPTURE_DEFAULT_POLL_NS;
   owned->limits[0] = options->stdout_limit ? options->stdout_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
   owned->limits[1] = options->stderr_limit ? options->stderr_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
-  status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ, 0, &owned->clock);
+  status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0, &owned->clock);
   if (status == CALL_OK) {
     status = handle_copy_restricted(options->output_account, RETENTION_RIGHT_CAPTURE, 0, &owned->output_account);
   }

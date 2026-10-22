@@ -727,3 +727,9 @@ Existing shell/Lua launch behavior is unchanged.
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See
 [LICENSING.md](LICENSING.md) for scope and third-party exceptions.
+
+Clock grants distinguish observation (`read`) from precise readings (`read` +
+`precise`); `sleep` still permits absolute sleeps. Standard libc clocks remain
+precise. `<clock.h>` provides explicit coarse observations and `<time.h>` the
+`CLOCK_REALTIME_COARSE` / `CLOCK_MONOTONIC_COARSE` IDs. Existing independently
+published bundles using precise clocks need refreshed declarations and binaries.

@@ -17,7 +17,7 @@ struct pyxis_capture_options {
   /* Explicit session account capture authority for producer/collector construction.
    * Capture retains the process-local collectors and delegates only producers. */
   handle_t output_account;
-  handle_t clock;
+  handle_t clock; /* READ|PRECISE: fresh deadline observations. */
   uint64_t deadline_ns; /* Required, absolute monotonic; never refreshed. */
   /* Zero selects the defaults above. Limits are per-stream polled triggers
    * and byte-mode read caps, not hard backing quotas; output can overshoot.

@@ -289,7 +289,7 @@ static void plain_observe(void *context, const struct install_progress_record *s
     plain.checked_bytes = plain.checked_items = 0;
     plain.activity = 0;
     plain.closed = false;
-    plain.timed = clock_now(plain.clock, &plain.started_ns) == CALL_OK;
+    plain.timed = clock_coarse_now(plain.clock, &plain.started_ns) == CALL_OK;
     plain.last_ns = plain.started_ns;
     detail_record(snapshot);
     if (snapshot->major) {
@@ -309,7 +309,7 @@ static void plain_observe(void *context, const struct install_progress_record *s
   }
   if (plain.timed) {
     uint64_t now;
-    if (clock_now(plain.clock, &now) != CALL_OK || now < plain.last_ns) {
+    if (clock_coarse_now(plain.clock, &now) != CALL_OK || now < plain.last_ns) {
       plain.timed = false;
       plain_end_row();
     } else {

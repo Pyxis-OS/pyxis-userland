@@ -559,7 +559,7 @@ static enum call_status prepare_job_work(struct bundle_launch *prepared,
   }
   handle_t clock = HANDLE_INVALID;
   bool usable = jobs && provisioner != HANDLE_INVALID &&
-      has_selected(prepared, PROTOCOL_CLOCK, CLOCK_RIGHT_READ, &clock) &&
+      has_selected(prepared, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, &clock) &&
       has_selected(prepared, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE, NULL) &&
       has_selected(prepared, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH, NULL);
   if (!usable) {

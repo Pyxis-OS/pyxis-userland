@@ -14,7 +14,7 @@ int main(int argc, char **argv)
 
   struct timespec now;
   struct tm calendar;
-  if (!timespec_get(&now, TIME_UTC) ||
+  if (clock_gettime(CLOCK_REALTIME_COARSE, &now) ||
       !(utc ? gmtime_r(&now.tv_sec, &calendar) :
               localtime_r(&now.tv_sec, &calendar))) {
     perror("date");

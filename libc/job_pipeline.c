@@ -424,7 +424,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
   enum call_status status = validate_source(launcher, PROTOCOL_LAUNCHER,
       LAUNCHER_RIGHT_LAUNCH);
   if (status == CALL_OK) {
-    status = validate_source(options->clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ);
+    status = validate_source(options->clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE);
   }
   if (status == CALL_OK) {
     status = validate_source(options->private_root, PROTOCOL_DIRECTORY, root_rights);
@@ -463,7 +463,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     }
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ, 0, &owned->clock);
+    status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0, &owned->clock);
   }
   if (status == CALL_OK) {
     status = handle_copy_restricted(options->private_root, root_rights, 0, &owned->private_root);

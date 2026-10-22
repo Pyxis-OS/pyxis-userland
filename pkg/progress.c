@@ -135,7 +135,7 @@ void pkg_progress_archive(void *context, enum pkg_archive_phase phase,
     progress->drawn_at = 0;
   }
   uint64_t now = 0;
-  if (!finished && progress->redraw && (!now_ns(progress, &now) ||
+  if (!finished && progress->redraw && (clock_coarse_now(progress->clock, &now) != CALL_OK ||
       (progress->drawn_at && now - progress->drawn_at < REDRAW_INTERVAL_NS))) {
     return;
   }

@@ -33,7 +33,7 @@ struct tm {
 #define TIME_UTC 1
 #define TIME_MONOTONIC 2
 
-/* Borrow the named startup clock with READ authority. time returns -1 on
+/* Borrow the named startup clock with READ|PRECISE authority. time returns -1 on
  * failure (also a valid pre-epoch timestamp); errno is preserved on success.
  * timespec_get supports TIME_UTC and TIME_MONOTONIC, returns the base on
  * success, otherwise zero with errno set and destination unchanged. UTC
@@ -49,11 +49,15 @@ typedef int clockid_t;
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+#define CLOCK_REALTIME_COARSE 2
+#define CLOCK_MONOTONIC_COARSE 3
 
 /* POSIX clocks on the startup clock: CLOCK_REALTIME reads it as timespec_get's
- * TIME_UTC, CLOCK_MONOTONIC as TIME_MONOTONIC. Other clocks fail with EINVAL. */
+ * TIME_UTC, CLOCK_MONOTONIC as TIME_MONOTONIC, requiring READ|PRECISE. The
+ * explicit *_COARSE IDs need READ only and use the interrupt cache. Each quality
+ * is monotonic separately; coarse may trail precise. Other IDs fail with EINVAL. */
 int clock_gettime(clockid_t clock, struct timespec *result);
-/* Sleep on the startup clock, which needs SLEEP authority, until the duration
+/* Sleep on the startup clock, which needs READ|PRECISE|SLEEP authority, until the duration
  * has passed. Pyxis has no signals, so it never returns early with EINTR and
  * never writes remaining. A tv_nsec outside 0..999999999 or a negative tv_sec
  * fails with EINVAL; a duration past the clock's range sleeps until its end. */

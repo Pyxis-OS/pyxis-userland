@@ -125,7 +125,7 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
   grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
-  grants[CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP, 0};
+  grants[CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE | CLOCK_RIGHT_SLEEP, 0};
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   grants[TERMINAL] = (struct launch_grant){terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0};
   grants[STDOUT] = (struct launch_grant){output, CONSOLE_RIGHT_WRITE, 0};

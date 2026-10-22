@@ -232,7 +232,7 @@ int main(int argc, char **argv)
       uint64_t protocol, rights;
     } required[] = {
       {shell.memory, PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
-      {shell.clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_SLEEP},
+      {shell.clock, PROTOCOL_CLOCK, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE | CLOCK_RIGHT_SLEEP},
       {shell.launcher, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
       {shell.pipe, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE},
     };
