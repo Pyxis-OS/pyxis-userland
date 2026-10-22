@@ -75,15 +75,16 @@ static inline struct syscall_result syscall_handle_info(handle_t handle,
   return (struct syscall_result){status, reply_size};
 }
 
-/* DESCRIBE uses RDX for the fixed output address on entry and reply size on exit. */
-static inline struct syscall_result syscall_describe(handle_t handle, uint64_t flags,
-    struct describe_reply *info)
+/* DESCRIBE uses RDX for the reply capacity on entry and reply size on exit. */
+static inline struct syscall_result syscall_describe(handle_t handle,
+    struct describe_reply *info, size_t capacity, uint64_t flags)
 {
   uint64_t status = SYSCALL_DESCRIBE;
-  uint64_t reply_size = (uintptr_t)info;
+  uint64_t reply_size = capacity;
+  register uint64_t arg4 __asm__("r10") = flags;
   __asm__ volatile("syscall"
                    : "+a"(status), "+d"(reply_size)
-                   : "D"(handle), "S"(flags)
+                   : "D"(handle), "S"(info), "r"(arg4)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};
 }
@@ -101,13 +102,15 @@ static inline struct syscall_result syscall_wait_many(const struct wait_interest
   return (struct syscall_result){status, reply_size};
 }
 
+/* FORWARDER_CREATE uses RDX for the reply capacity on entry and reply size on
+ * exit; its request has a fixed size. */
 static inline struct syscall_result syscall_forwarder_create(
-    const struct forwarder_create *request, struct forwarder_reply *reply)
+    const struct forwarder_create *request, struct forwarder_reply *reply, size_t capacity)
 {
   uint64_t status = SYSCALL_FORWARDER_CREATE;
-  uint64_t reply_size;
+  uint64_t reply_size = capacity;
   __asm__ volatile("syscall"
-                   : "+a"(status), "=d"(reply_size)
+                   : "+a"(status), "+d"(reply_size)
                    : "D"(request), "S"(reply)
                    : "rcx", "r11", "cc", "memory");
   return (struct syscall_result){status, reply_size};

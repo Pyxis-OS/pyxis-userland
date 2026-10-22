@@ -84,7 +84,7 @@ enum call_status handle_describe(handle_t handle, uint64_t flags,
     return CALL_BAD_REQUEST;
   }
   struct describe_reply reply = {0};
-  struct syscall_result result = syscall_describe(handle, flags, &reply);
+  struct syscall_result result = syscall_describe(handle, &reply, sizeof(reply), flags);
   enum call_status status = result.status < CALL_STATUS_COUNT ?
       (enum call_status)result.status : CALL_BAD_REQUEST;
   if (result.reply_size != (status == CALL_OK ? sizeof(reply) : 0) ||

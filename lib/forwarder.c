@@ -15,7 +15,7 @@ enum call_status forwarder_create(const struct forwarder_create *request,
   struct forwarder_create captured = *request;
   *reply = (struct forwarder_reply){0};
   struct forwarder_reply created = {0};
-  struct syscall_result result = syscall_forwarder_create(&captured, &created);
+  struct syscall_result result = syscall_forwarder_create(&captured, &created, sizeof(created));
   enum call_status status = checked_status(result);
   if (status != CALL_OK) {
     return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
