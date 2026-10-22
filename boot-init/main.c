@@ -52,6 +52,7 @@
 #include <remote/beacon.h>
 #include <space.h>
 #include <startup.h>
+#include <stdckdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -713,8 +714,15 @@ static const char *space_cpus(const struct authority *authority,
   return NULL;
 }
 
+/* The most build_launch can add for one space, counted from its definition. */
+struct launch_capacity {
+  size_t grants, resources, roots, package_trees;
+};
+
 /* Grants, bindings and roots for one space init, built in caller storage. */
 struct space_launch {
+  struct launch_capacity capacity;
+  bool overflow; /* An addition found its table full; the space is refused. */
   struct launch_grant *grants;
   struct launch_environment_entry *resources;
   char source_names[BUNDLE_SOURCE_LIMIT][sizeof(BUNDLE_SOURCE_PREFIX) + BOOT_NAME_MAX];
@@ -798,14 +806,37 @@ static enum call_status create_http_staging(const struct authority *authority,
   return status;
 }
 
+enum launch_table { LAUNCH_RESOURCES, LAUNCH_ROOTS };
+
+/* Every addition after the fixed service and root layout passes here. ENTRY
+ * joins TABLE; with GRANT, that grant is appended and ENTRY's value names it.
+ * If launch_capacity ever counts less than build_launch adds, the launch is
+ * marked overflowed and refused instead of writing past a table. */
+static void launch_add(struct space_launch *launch, enum launch_table table,
+    struct launch_environment_entry entry, const struct launch_grant *grant)
+{
+  bool roots = table == LAUNCH_ROOTS;
+  size_t *count = roots ? &launch->root_count : &launch->resource_count;
+  size_t capacity = roots ? launch->capacity.roots : launch->capacity.resources;
+  if (*count == capacity || (grant && launch->grant_count == launch->capacity.grants)) {
+    launch->overflow = true;
+    return;
+  }
+  if (grant) {
+    entry.value = launch->grant_count;
+    launch->grants[launch->grant_count++] = *grant;
+  }
+  (roots ? launch->roots : launch->resources)[(*count)++] = entry;
+}
+
 static void add_package_source(struct space_launch *launch, size_t *count,
     const char *name, handle_t handle, uint64_t rights)
 {
   snprintf(launch->source_names[*count], sizeof(launch->source_names[*count]),
       "%s%s", BUNDLE_SOURCE_PREFIX, name);
-  launch->resources[launch->resource_count++] = (struct launch_environment_entry)
-      PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[(*count)++], launch->grant_count);
-  launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
+  launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
+      PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[(*count)++], 0),
+      &(struct launch_grant){handle, rights, 0});
 }
 
 /* The writer for the install that booted: the issuer's own facts and admission
@@ -854,10 +885,9 @@ static void package_roots(struct mounts *mounts, const struct boot_space *space,
     printf("boot-init: space %s package roots unavailable (status %u)\n", space->name, status);
     return;
   }
-  launch->resources[launch->resource_count++] =
-      (struct launch_environment_entry)PROFILE_CAP(PACKAGE_ROOTS_NAME, launch->grant_count);
-  launch->grants[launch->grant_count++] =
-      (struct launch_grant){launch->package_roots, PACKAGE_TREE_RIGHTS, 0};
+  launch_add(launch, LAUNCH_RESOURCES,
+      (struct launch_environment_entry)PROFILE_CAP(PACKAGE_ROOTS_NAME, 0),
+      &(struct launch_grant){launch->package_roots, PACKAGE_TREE_RIGHTS, 0});
 }
 
 static void package_sources(struct mounts *mounts, const struct boot_space *space,
@@ -961,11 +991,78 @@ static enum call_status build_commands(const struct authority *authority,
   if (status != CALL_OK) {
     return status;
   }
-  launch->resources[launch->resource_count++] =
-      (struct launch_environment_entry)PROFILE_CAP("commands", launch->grant_count);
-  launch->grants[launch->grant_count++] =
-      (struct launch_grant){launch->commands, COMMAND_LIST_RIGHT_READ, 0};
+  launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)PROFILE_CAP("commands", 0),
+      &(struct launch_grant){launch->commands, COMMAND_LIST_RIGHT_READ, 0});
   return CALL_OK;
+}
+
+static bool capacity_add(size_t *total, size_t amount)
+{
+  return !ckd_add(total, *total, amount);
+}
+
+/* Counts each table's largest size for SPACE: the fixed layout, the configured
+ * roots and sources, and every resource its flags, the packages volume and the
+ * network can add. Returns a refusal reason when a count overflows or the launch
+ * would pass what one request can carry. */
+static const char *launch_capacity(const struct authority *authority,
+    const struct boot_space *space, struct launch_capacity *capacity, char *reason, size_t size)
+{
+  bool remote = !strcmp(space->name, "remote");
+  /* Resources that each bring one grant. */
+  size_t granted = 1; /* commands */
+  for (size_t i = CONFIG_LUA_SESSION; i < CONFIG_LUA_COUNT; ++i) {
+    granted += authority->configuration.files[i] != HANDLE_INVALID;
+  }
+  granted += 2 + (space->package_management ? 2 : 0); /* package inspect and config sources */
+  granted += 1 + (space->package_upgrade ? 2 : 0); /* package_roots, upgrade sources */
+  granted += space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
+      space->multiplexer + space->remote_multiplexer + space->screenshot +
+      space->power + space->remote_power;
+  if (space->wifi_rights) {
+    /* wifi, plus wifi_auth_setup and wifi_session_control with CONNECT. */
+    granted += 1 + ((space->wifi_rights & WIFI_RIGHT_CONNECT) ? 2 : 0);
+  }
+  granted += authority->remote_beacon && remote;
+  granted += remote && authority->network.remote_interface != HANDLE_INVALID ? 2 : 0;
+  /* Network controller names are text resources without a grant. */
+  size_t text = 0;
+  if (space->network) {
+    granted += 1; /* net_policy */
+    for (size_t i = 0; i < authority->network.config.count; ++i) {
+      granted += 1 + (authority->network.dhcp[i] != HANDLE_INVALID);
+      text += authority->network.config.interfaces[i].resolved_controller != 0;
+    }
+  }
+
+  size_t root_grants = space->acpi_tables, package_trees = 0;
+  for (size_t i = 0; i < space->root_count; ++i) {
+    package_trees += space->roots[i].package != NULL;
+  }
+  /* boot, tmp and bin come first; start_space adds OS_NAME and, in the remote
+   * space, the beacon text to the entries it sends. */
+  size_t roots = 3, grants = GRANT_FIRST_VOLUME, resources = SERVICE_COUNT, entries = 2;
+  bool counted = capacity_add(&root_grants, space->root_count) &&
+      capacity_add(&granted, space->grant_count) &&
+      capacity_add(&roots, root_grants) &&
+      capacity_add(&grants, root_grants) && capacity_add(&grants, granted) &&
+      capacity_add(&resources, granted) && capacity_add(&resources, text) &&
+      capacity_add(&entries, resources) && capacity_add(&entries, roots);
+  const size_t grant_max = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
+  const size_t entry_max = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry);
+  if (!counted) {
+    return "launch table size overflows";
+  }
+  if (grants > grant_max || entries > entry_max) {
+    snprintf(reason, size, "launch needs %zu grants and %zu entries; at most %zu and %zu fit",
+        grants, entries, grant_max, entry_max);
+    return reason;
+  }
+  *capacity = (struct launch_capacity){
+    .grants = grants, .resources = resources, .roots = roots,
+    .package_trees = package_trees ? package_trees : 1,
+  };
+  return NULL;
 }
 
 static const char *build_launch(const struct authority *authority, struct mounts *mounts,
@@ -980,16 +1077,14 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->acpi_tables && authority->acpi_tables == HANDLE_INVALID) {
     return "acpi_tables requested but the ACPI table root is unavailable";
   }
-  size_t network_entries = space->network ? authority->network.config.count * 2 + 1 : 0;
-  for (size_t i = 0; space->network && i < authority->network.config.count; ++i) {
-    network_entries += authority->network.config.interfaces[i].resolved_controller != 0;
+  const char *refused = launch_capacity(authority, space, &launch->capacity, reason, size);
+  if (refused) {
+    return refused;
   }
-  launch->resources = calloc(SERVICE_COUNT + 22 + BUNDLE_SOURCE_LIMIT + network_entries, sizeof(*launch->resources));
-  launch->grants = calloc(GRANT_FIRST_VOLUME + space->root_count + 23 + BUNDLE_SOURCE_LIMIT + network_entries,
-      sizeof(*launch->grants));
-  launch->roots = calloc(4 + space->root_count, sizeof(*launch->roots));
-  launch->package_trees = calloc(space->root_count ? space->root_count : 1,
-      sizeof(*launch->package_trees));
+  launch->resources = calloc(launch->capacity.resources, sizeof(*launch->resources));
+  launch->grants = calloc(launch->capacity.grants, sizeof(*launch->grants));
+  launch->roots = calloc(launch->capacity.roots, sizeof(*launch->roots));
+  launch->package_trees = calloc(launch->capacity.package_trees, sizeof(*launch->package_trees));
   if (!launch->resources || !launch->grants || !launch->roots || !launch->package_trees) {
     return "boot init is out of memory";
   }
@@ -1022,10 +1117,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
     if (authority->configuration.files[i] == HANDLE_INVALID) {
       continue;
     }
-    launch->resources[launch->resource_count++] = (struct launch_environment_entry)
-        PROFILE_PRIVATE_CAP((uintptr_t)configuration_names[i], launch->grant_count);
-    launch->grants[launch->grant_count++] =
-        (struct launch_grant){authority->configuration.files[i], FILE_RIGHT_READ, 0};
+    launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP((uintptr_t)configuration_names[i], 0),
+        &(struct launch_grant){authority->configuration.files[i], FILE_RIGHT_READ, 0});
   }
   for (size_t i = 0; i < space->root_count; ++i) {
     const struct boot_root *root = &space->roots[i];
@@ -1061,9 +1155,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
         return reason;
       }
       launch->package_trees[launch->package_tree_count++] = tree;
-      launch->grants[launch->grant_count] = (struct launch_grant){tree, PACKAGE_TREE_RIGHTS, 0};
-      launch->roots[launch->root_count++] =
-          (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, launch->grant_count++);
+      launch_add(launch, LAUNCH_ROOTS,
+          (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, 0),
+          &(struct launch_grant){tree, PACKAGE_TREE_RIGHTS, 0});
       continue;
     }
     struct handle_info info;
@@ -1073,16 +1167,15 @@ static const char *build_launch(const struct authority *authority, struct mounts
       return reason;
     }
     uint64_t rights = info.rights & (root->read_write ? DIRECTORY_RIGHTS : READ_ONLY_ROOT_RIGHTS);
-    launch->grants[launch->grant_count] = (struct launch_grant){mounted->root, rights, 0};
-    launch->roots[launch->root_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, launch->grant_count++);
+    launch_add(launch, LAUNCH_ROOTS,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, 0),
+        &(struct launch_grant){mounted->root, rights, 0});
   }
   /* A root like any configured one: session, remote and shell handoffs carry it on. */
   if (space->acpi_tables) {
-    launch->grants[launch->grant_count] =
-        (struct launch_grant){authority->acpi_tables, ACPI_TABLES_RIGHTS, 0};
-    launch->roots[launch->root_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)BOOT_ACPI_ROOT, launch->grant_count++);
+    launch_add(launch, LAUNCH_ROOTS,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)BOOT_ACPI_ROOT, 0),
+        &(struct launch_grant){authority->acpi_tables, ACPI_TABLES_RIGHTS, 0});
   }
   size_t source_count = 0;
   for (size_t i = 0; i < space->grant_count; ++i) {
@@ -1152,8 +1245,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
     }
     snprintf(launch->source_names[source_count], sizeof(launch->source_names[source_count]),
         "%s%s", BUNDLE_SOURCE_PREFIX, source->name);
-    launch->resources[launch->resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[source_count++], launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){handle, rights, 0};
+    launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[source_count++], 0),
+        &(struct launch_grant){handle, rights, 0});
   }
   package_sources(mounts, space, launch, &source_count);
   if (space->package_upgrade) {
@@ -1168,9 +1262,9 @@ static const char *build_launch(const struct authority *authority, struct mounts
     if (status != CALL_OK || (rights & ~info.rights)) {
       return "mount-only factory requested but unavailable";
     }
-    launch->resources[launch->resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)BUNDLE_SOURCE_PREFIX "fat_mounts", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->fat_mounts, rights, 0};
+    launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP((uintptr_t)BUNDLE_SOURCE_PREFIX "fat_mounts", 0),
+        &(struct launch_grant){authority->fat_mounts, rights, 0});
   }
   if (space->jobs) {
     enum call_status status = job_work_create(authority->ram,
@@ -1179,39 +1273,31 @@ static const char *build_launch(const struct authority *authority, struct mounts
       snprintf(reason, size, "private job provisioning unavailable (status %u)", status);
       return reason;
     }
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      job_work_directory(launch->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", 0),
+        &(struct launch_grant){job_work_directory(launch->job_provisioner), JOB_PROVISIONER_RIGHTS, 0});
   }
   if (space->launch) {
     /* Ordinary child launch is independent of init's administrative grant. */
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", 0),
+        &(struct launch_grant){authority->services[SERVICE_LAUNCHER], LAUNCHER_RIGHT_LAUNCH, 0});
     /* The archive root every trusted shell opens its script interpreter from.
      * Private: it is not a root name and the environment cannot rebind it. */
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){authority->boot, BOOT_ROOT_RIGHTS, 0};
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", 0),
+        &(struct launch_grant){authority->boot, BOOT_ROOT_RIGHTS, 0});
   }
   if (space->multiplexer) {
     /* The distinct name records opt-in, separate from trusted init authority. */
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"mux_terminal", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"mux_terminal", 0),
+        &(struct launch_grant){authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0});
   }
   if (space->remote_multiplexer) {
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", 0),
+        &(struct launch_grant){authority->services[SERVICE_TERMINAL], TERMINAL_SERVICE_RIGHT_CREATE, 0});
   }
   if (space->wifi_rights) {
     handle_t radio = authority->wifi;
@@ -1223,81 +1309,69 @@ static const char *build_launch(const struct authority *authority, struct mounts
         return reason;
       }
       radio = launch->wifi_session.holder;
-      launch->resources[launch->resource_count++] =
-          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth_setup", launch->grant_count);
-      launch->grants[launch->grant_count++] = (struct launch_grant){
-        radio, WIFI_RIGHT_SUPPLICANT, 0,
-      };
-      launch->resources[launch->resource_count++] =
-          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_session_control", launch->grant_count);
-      launch->grants[launch->grant_count++] = (struct launch_grant){
-        launch->wifi_session.controller, FORWARDER_RIGHT_CUT, 0,
-      };
+      launch_add(launch, LAUNCH_RESOURCES,
+          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_auth_setup", 0),
+          &(struct launch_grant){radio, WIFI_RIGHT_SUPPLICANT, 0});
+      launch_add(launch, LAUNCH_RESOURCES,
+          (struct launch_environment_entry)PROFILE_PRIVATE_CAP("wifi_session_control", 0),
+          &(struct launch_grant){launch->wifi_session.controller, FORWARDER_RIGHT_CUT, 0});
     }
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      radio, space->wifi_rights, 0
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", 0),
+        &(struct launch_grant){radio, space->wifi_rights, 0});
   }
   if (space->screenshot) {
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->screen_capture, SCREEN_CAPTURE_RIGHT_CAPTURE, 0
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", 0),
+        &(struct launch_grant){authority->screen_capture, SCREEN_CAPTURE_RIGHT_CAPTURE, 0});
   }
   if (space->power && authority->power != HANDLE_INVALID) {
-    launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", launch->grant_count++);
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", 0),
+        &(struct launch_grant){authority->power, POWER_RIGHTS, 0});
   }
   if (space->remote_power && authority->power != HANDLE_INVALID) {
-    launch->grants[launch->grant_count] = (struct launch_grant){authority->power, POWER_RIGHTS, 0};
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", launch->grant_count++);
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", 0),
+        &(struct launch_grant){authority->power, POWER_RIGHTS, 0});
   }
   if (authority->remote_beacon && !strcmp(space->name, "remote")) {
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->network.remote_udp, UDP_SERVICE_RIGHT_BROADCAST, 0
-    };
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", 0),
+        &(struct launch_grant){authority->network.remote_udp, UDP_SERVICE_RIGHT_BROADCAST, 0});
   }
   if (space->network) {
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("net_policy", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->network.policy, NET_POLICY_RIGHT_MANAGE, 0};
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("net_policy", 0),
+        &(struct launch_grant){authority->network.policy, NET_POLICY_RIGHT_MANAGE, 0});
     for (size_t i = 0; i < authority->network.config.count; ++i) {
       if (authority->network.config.interfaces[i].resolved_controller) {
-        launch->resources[launch->resource_count++] = (struct launch_environment_entry){
+        launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry){
           .name = (uintptr_t)authority->network.controller_names[i], .kind = ENVIRONMENT_TEXT,
           .value = (uintptr_t)authority->network.controller_values[i],
           .length = strlen(authority->network.controller_values[i]),
-        };
+        }, NULL);
       }
-      launch->resources[launch->resource_count++] = (struct launch_environment_entry)
-          PROFILE_PRIVATE_CAP(authority->network.facet_names[i], launch->grant_count);
-      launch->grants[launch->grant_count++] = (struct launch_grant){
-        authority->network.facets[i], NET_INTERFACE_RIGHTS, 0};
+      launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
+          PROFILE_PRIVATE_CAP(authority->network.facet_names[i], 0),
+          &(struct launch_grant){authority->network.facets[i], NET_INTERFACE_RIGHTS, 0});
       if (authority->network.dhcp[i] != HANDLE_INVALID) {
-        launch->resources[launch->resource_count++] = (struct launch_environment_entry)
-            PROFILE_PRIVATE_CAP(authority->network.dhcp_names[i], launch->grant_count);
-        launch->grants[launch->grant_count++] = (struct launch_grant){
-          authority->network.dhcp[i], UDP_SERVICE_RIGHT_BROADCAST, 0};
+        launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
+            PROFILE_PRIVATE_CAP(authority->network.dhcp_names[i], 0),
+            &(struct launch_grant){authority->network.dhcp[i], UDP_SERVICE_RIGHT_BROADCAST, 0});
       }
     }
   }
   if (!strcmp(space->name, "remote") && authority->network.remote_interface != HANDLE_INVALID) {
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_interface", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->network.remote_interface, NET_INTERFACE_RIGHT_READ, 0};
-    launch->resources[launch->resource_count++] =
-        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_tcp", launch->grant_count);
-    launch->grants[launch->grant_count++] = (struct launch_grant){
-      authority->network.remote_tcp, TCP_SERVICE_RIGHTS, 0};
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_interface", 0),
+        &(struct launch_grant){authority->network.remote_interface, NET_INTERFACE_RIGHT_READ, 0});
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP("remote_tcp", 0),
+        &(struct launch_grant){authority->network.remote_tcp, TCP_SERVICE_RIGHTS, 0});
+  }
+  if (launch->overflow) {
+    return "launch tables are smaller than their contents";
   }
   select_start(space, launch);
   return NULL;
@@ -1324,12 +1398,22 @@ static bool plan_has_space(const struct boot_plan *plan, const char *name)
   return false;
 }
 
-/* An unstarted space shows REASON on its tab and keeps its name taken. */
+/* An unstarted space shows REASON on its tab and keeps its name taken. The
+ * kernel accepts no space flags without a launch, and a reason of at most
+ * SPACE_REASON_MAX printable ASCII bytes, so the tab gets a cut, cleaned copy;
+ * start_space has already printed the full reason. */
 static void create_unstarted(const struct authority *authority, const struct boot_space *space,
     const char *reason)
 {
-  struct space_definition definition = space_definition_of(space);
-  enum call_status status = space_create_unstarted(authority->factory, &definition, reason);
+  char text[SPACE_REASON_MAX + 1];
+  size_t length = 0;
+  for (; reason[length] && length < SPACE_REASON_MAX; ++length) {
+    unsigned char byte = (unsigned char)reason[length];
+    text[length] = byte < 0x20 || byte > 0x7e ? '?' : (char)byte;
+  }
+  text[length] = '\0';
+  struct space_definition definition = {.name = space->name, .title = space->title};
+  enum call_status status = space_create_unstarted(authority->factory, &definition, text);
   if (status != CALL_OK) {
     fprintf(stderr, "boot-init: cannot create space %s (status %u)\n", space->name, status);
   }
@@ -1371,6 +1455,9 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
 
   bool started = false, admission_attempted = false;
   enum call_status status;
+  if (reason) {
+    fprintf(stderr, "boot-init: space %s not started: %s\n", space->name, reason);
+  }
   if (reason && deferred) {
     snprintf(deferred, SPACE_REASON_MAX + 1, "%s", reason);
     status = CALL_OK;
@@ -1416,8 +1503,8 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
           space->network ? " (network owner)" : "");
       started = true;
     } else {
-      fprintf(stderr, "boot-init: space %s: cannot start %s (status %u)\n", space->name,
-          space->init, status);
+      fprintf(stderr, "boot-init: space %s not started: cannot start %s (status %u)\n",
+          space->name, space->init, status);
     }
   }
 cleanup:
@@ -1788,8 +1875,8 @@ int main(int argc, char **argv)
       continue;
     }
     if (plan_has_space(&stock, plan.spaces[i]->name)) {
-      printf("boot-init: space %s from " OVERRIDE_NAME " not started: %s\n",
-          plan.spaces[i]->name, reason);
+      printf("boot-init: space %s from " OVERRIDE_NAME " has no tab: a stock space holds its name\n",
+          plan.spaces[i]->name);
     } else {
       create_unstarted(&authority, plan.spaces[i], reason);
     }
