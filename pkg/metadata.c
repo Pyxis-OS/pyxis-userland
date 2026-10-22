@@ -352,7 +352,12 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
   for (const struct literal_entry *item = ok ? dependencies->as.table.entries : NULL;
       ok && item; item = item->next, ++index) {
     struct pkg_identity *dependency = &manifest->dependencies[index];
-    ok = fields(item->value, dependency_fields, 2) && identity(item->value, dependency) &&
+    /* A dependency names an exact version, or only an ID, which any version
+     * satisfies. */
+    bool any_version = fields(item->value, dependency_fields, 1);
+    ok = (any_version ? text(item->value, "id", dependency->id, sizeof(dependency->id)) &&
+        package_id_valid(dependency->id) :
+        fields(item->value, dependency_fields, 2) && identity(item->value, dependency)) &&
         strcmp(dependency->id, manifest->identity.id);
     for (size_t previous = 0; ok && previous < index; ++previous) {
       ok = strcmp(manifest->dependencies[previous].id, dependency->id) ||

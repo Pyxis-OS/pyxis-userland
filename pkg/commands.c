@@ -138,7 +138,8 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     if (ok && manifest.command_count) {
       ok = pkg_directory(revision, "tree", false, PKG_READ_RIGHTS, &tree, reason);
     }
-    if (ok && !strcmp(manifest.kind, "data")) {
+    /* A data package without files, such as base, has nothing to read. */
+    if (ok && !strcmp(manifest.kind, "data") && manifest.files) {
       if (root_count == PACKAGE_ROOTS_LIMIT) {
         ok = fail(reason, "selected data packages exceed projection limit");
       } else {

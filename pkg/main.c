@@ -208,12 +208,18 @@ static size_t find_package(const struct pkg_selection *selection, const char *id
   return SIZE_MAX;
 }
 
+/* A dependency without a version (empty) keeps whatever version the selection
+ * holds; when absent, its version is chosen when it is fetched. */
 static bool select_version(struct pkg_selection *selection,
     const struct pkg_identity *identity, bool replace)
 {
   size_t index = find_package(selection, identity->id);
   if (index != SIZE_MAX) {
-    if (!replace && strcmp(selection->entries[index].version, identity->version)) {
+    if (!replace && !identity->version[0]) {
+      return true;
+    }
+    if (!replace && selection->entries[index].version[0] &&
+        strcmp(selection->entries[index].version, identity->version)) {
       return fail("incompatible exact dependencies in the proposed set");
     }
     selection->entries[index] = *identity;
@@ -609,9 +615,23 @@ static bool check_dependencies(const struct pkg_selection *selection,
   for (size_t d = 0; d < manifest->dependency_count; ++d) {
     const struct pkg_identity *dependency = &manifest->dependencies[d];
     size_t index = find_package(selection, dependency->id);
-    if (index == SIZE_MAX || strcmp(selection->entries[index].version, dependency->version)) {
-      return fail("proposed set does not satisfy every exact dependency");
+    if (index != SIZE_MAX && (!dependency->version[0] ||
+        !strcmp(selection->entries[index].version, dependency->version))) {
+      continue;
     }
+    const struct pkg_identity *owner = &manifest->identity;
+    if (index == SIZE_MAX) {
+      snprintf(client.message, sizeof(client.message),
+          "%s %s depends on %s%s%s, which the proposed set lacks; remove %s first to drop it",
+          owner->id, owner->version, dependency->id, dependency->version[0] ? "@" : "",
+          dependency->version, owner->id);
+    } else {
+      snprintf(client.message, sizeof(client.message),
+          "%s %s depends on %s@%s, but the proposed set holds %s",
+          owner->id, owner->version, dependency->id, dependency->version,
+          selection->entries[index].version);
+    }
+    return fail(client.message);
   }
   return true;
 }
@@ -711,11 +731,20 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
       ok = i < initial_count ? trust_version(&selection->entries[i], &manifest) :
           verify_version(&selection->entries[i], &manifest);
     } else {
+      const struct pkg_identity *wanted = &selection->entries[i];
       const struct offered_package *entry = NULL;
-      ok = resolve(selection->entries[i].id, selection->entries[i].version, ANY_REPOSITORY,
+      ok = resolve(wanted->id, wanted->version[0] ? wanted->version : NULL, ANY_REPOSITORY,
           true, &entry);
-      ok = ok && (entry ? install_version(entry, &manifest) :
-          fail("an exact dependency is unavailable in the configured repositories"));
+      if (ok && !entry) {
+        snprintf(client.message, sizeof(client.message),
+            "dependency %s%s%s is not available for this system in the configured repositories",
+            wanted->id, wanted->version[0] ? "@" : "", wanted->version);
+        ok = fail(client.message);
+      }
+      if (ok) {
+        selection->entries[i] = entry->entry.identity;
+        ok = install_version(entry, &manifest);
+      }
     }
     for (size_t d = 0; ok && d < manifest.dependency_count; ++d) {
       ok = select_version(selection, &manifest.dependencies[d], false);

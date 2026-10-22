@@ -32,6 +32,7 @@ struct pkg_manifest {
   char kind[10], abi[PACKAGE_ABI_MAX + 1];
   uint64_t files, bytes;
   char inventory_sha256[65];
+  /* An empty version is satisfied by any version of that ID. */
   struct pkg_identity *dependencies;
   size_t dependency_count;
   struct pkg_command *commands;
