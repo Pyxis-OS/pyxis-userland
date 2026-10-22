@@ -3,6 +3,12 @@
 `wifi status` observes the declared controller READ grant. `wifi scan` uses the
 separate SCAN grant and prints one complete passive result. Neither can associate.
 
+Status appends `boot valid=... state=...` hexadecimal masks for known boot facts
+and completed actions. Only valid groups print reset, cut, security, firmware or
+board lines; unknown groups remain absent. Board country bytes print as four
+hexadecimal digits, not text or a regulatory permission. Firmware readiness and
+stop observations do not grant scan/data readiness or prove RF silence.
+
 For an explicitly configured 2.4 GHz AP:
 
 ```text

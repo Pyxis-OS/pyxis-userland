@@ -1,5 +1,6 @@
 #include <wifi.h>
 #include <syscall.h>
+#include <stdbool.h>
 #include <string.h>
 
 static enum call_status invoke(handle_t handle, const void *request, size_t bytes,
@@ -15,6 +16,42 @@ static enum call_status invoke(handle_t handle, const void *request, size_t byte
   return result.status;
 }
 
+static bool boot_facts_valid(const struct wifi_boot_facts *boot)
+{
+  if ((boot->valid & ~WIFI_BOOT_VALID_MASK) ||
+      (boot->state & ~WIFI_BOOT_STATE_MASK) || boot->secure_boot > 1) {
+    return false;
+  }
+  if (boot->valid & WIFI_BOOT_RESET_VALID) {
+    if (boot->reset_method != WIFI_RESET_FLR && boot->reset_method != WIFI_RESET_POWER) {
+      return false;
+    }
+  } else if (boot->reset_method != WIFI_RESET_NONE ||
+      boot->pci_device_capabilities || boot->pci_power_control) {
+    return false;
+  }
+  if (!(boot->valid & WIFI_BOOT_CUT_VALID) && boot->live_cut) {
+    return false;
+  }
+  if (!(boot->valid & WIFI_BOOT_SECURITY_VALID) && boot->secure_boot) {
+    return false;
+  }
+  if (!(boot->valid & WIFI_BOOT_IMAGE_VALID)) {
+    for (size_t i = 0; i < sizeof(boot->firmware_version); ++i) {
+      if (boot->firmware_version[i]) {
+        return false;
+      }
+    }
+  }
+  if (!(boot->valid & WIFI_BOOT_BOARD_VALID) &&
+      (boot->rfe || boot->xtal || boot->tx_nss || boot->rx_nss ||
+       boot->tx_antennas || boot->rx_antennas ||
+       boot->board_country[0] || boot->board_country[1])) {
+    return false;
+  }
+  return true;
+}
+
 enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
 {
   if (!status) {
@@ -25,7 +62,7 @@ enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
   struct wifi_status_reply reply;
   enum call_status result = invoke(wifi, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
-    if (!memchr(reply.detail, 0, sizeof(reply.detail))) {
+    if (!memchr(reply.detail, 0, sizeof(reply.detail)) || !boot_facts_valid(&reply.boot)) {
       return CALL_BAD_REQUEST;
     }
     *status = reply;

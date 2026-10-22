@@ -277,6 +277,34 @@ static int link_command(const char *operation, const char *argument)
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
+static void print_boot_facts(const struct wifi_boot_facts *boot)
+{
+  printf("wifi: boot valid=%x state=%x\n", boot->valid, boot->state);
+  if (boot->valid & WIFI_BOOT_RESET_VALID) {
+    printf("wifi: reset method=%s devcap=%x pmcsr=%x\n",
+        boot->reset_method == WIFI_RESET_FLR ? "flr" : "power",
+        boot->pci_device_capabilities, (unsigned)boot->pci_power_control);
+  }
+  if (boot->valid & WIFI_BOOT_CUT_VALID) {
+    printf("wifi: cut=%u\n", (unsigned)boot->live_cut);
+  }
+  if (boot->valid & WIFI_BOOT_SECURITY_VALID) {
+    printf("wifi: security secure=%u\n", (unsigned)boot->secure_boot);
+  }
+  if (boot->valid & WIFI_BOOT_IMAGE_VALID) {
+    printf("wifi: firmware=%u.%u.%u.%u\n", (unsigned)boot->firmware_version[0],
+        (unsigned)boot->firmware_version[1], (unsigned)boot->firmware_version[2],
+        (unsigned)boot->firmware_version[3]);
+  }
+  if (boot->valid & WIFI_BOOT_BOARD_VALID) {
+    printf("wifi: board rfe=%u xtal=%u NSS=%u/%u antennas=%u/%u country=%02x%02x\n",
+        (unsigned)boot->rfe, (unsigned)boot->xtal, (unsigned)boot->tx_nss,
+        (unsigned)boot->rx_nss, (unsigned)boot->tx_antennas,
+        (unsigned)boot->rx_antennas, (unsigned)boot->board_country[0],
+        (unsigned)boot->board_country[1]);
+  }
+}
+
 int main(int argc, char **argv)
 {
   if (argc == 4 && !strcmp(argv[1], "connect") && !strcmp(argv[2], "--profile")) {
@@ -312,5 +340,6 @@ int main(int argc, char **argv)
       (unsigned long long)reply.tx_failed, (unsigned long long)reply.tx_dropped,
       reply.data_tx_pending, reply.data_tx_high_water, reply.data_ring_entries,
       (unsigned long long)reply.rx_queued, (unsigned long long)reply.rx_dropped, reply.data_rx_high_water);
+  print_boot_facts(&reply.boot);
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
