@@ -123,6 +123,7 @@ double tanh(double value);
 float sinf(float value);
 float cosf(float value);
 float tanf(float value);
+float asinf(float value);
 float acosf(float value);
 float atanf(float value);
 float atan2f(float y, float x);
@@ -152,10 +153,11 @@ double erfc(double value);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
 
-/* The remaining double functions of ISO C math.h, from musl 1.2.5. The float
- * and long double forms, the lround/llround/lrint families beyond those above,
- * the exp/log/trig forms not listed here, the comparison macros and the
- * non-ISO functions (j0, y0, gamma, drem, exp10 and similar) are absent. */
+/* The remaining double functions of ISO C math.h, from musl 1.2.5. Only the
+ * float and long double forms declared in this header are provided. The
+ * lround/llround/lrint families beyond those above, the exp/log/trig forms not
+ * listed here, the comparison macros and the non-ISO functions (j0, y0, gamma,
+ * drem, exp10 and similar) are absent. */
 double copysign(double magnitude, double sign);
 double fdim(double x, double y);
 /* Correctly rounded single-rounding x*y+z. */
@@ -164,7 +166,10 @@ double fma(double x, double y, double z);
  * unequal: fmax(-0.0, 0.0) is +0.0 and fmin is -0.0. */
 double fmax(double x, double y);
 double fmin(double x, double y);
+float fmaxf(float x, float y);
+float fminf(float x, float y);
 double hypot(double x, double y);
+float hypotf(float x, float y);
 double cbrt(double value);
 double acosh(double value);
 double asinh(double value);

@@ -342,3 +342,14 @@ expressions. The files were read from a GitHub mirror of this commit through the
 `6ad0ee58d5be7b0d8c0f1d8e9773e1d83c761f87c1f527a3e8cdf77128696964`), because the
 upstream cgit is not mirrored; a commit id fixes the tree, and five files
 already in this directory matched it byte for byte.
+
+The raylib port's prerequisites add `src/math/asinf.c`, `fminf.c`, `fmaxf.c`
+and `hypotf.c`, unmodified from the same pin, using the existing local source
+cache at `pyxis-regex/build/upstream-musl` (Git HEAD
+`0784374d561435f7c787a555aeab8ede699ed298`), without a new download.
+`asinf` reuses `fabsf` and `sqrt`; `hypotf` scales its operands before squaring
+and reuses `sqrtf`. `fminf` and `fmaxf` select the non-NaN operand when exactly
+one is NaN and preserve the minimum/maximum signed zero respectively.
+The existing FP-exception-only error profile, rounding-aware compilation flags
+and unsupported signaling-NaN limit apply. All four functions live in libc,
+leave errno unchanged and require no separate `-lm`.

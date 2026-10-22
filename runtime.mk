@@ -109,6 +109,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/__math_oflowf.c \
                 third_party/musl/src/math/__math_invalidf.c \
                 third_party/musl/src/math/acosf.c \
+                third_party/musl/src/math/asinf.c \
                 third_party/musl/src/math/atanf.c \
                 third_party/musl/src/math/atan2f.c \
                 third_party/musl/src/math/cosf.c \
@@ -137,8 +138,11 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/fdim.c \
                 third_party/musl/src/math/fma.c \
                 third_party/musl/src/math/fmax.c \
+                third_party/musl/src/math/fmaxf.c \
                 third_party/musl/src/math/fmin.c \
+                third_party/musl/src/math/fminf.c \
                 third_party/musl/src/math/hypot.c \
+                third_party/musl/src/math/hypotf.c \
                 third_party/musl/src/math/lgamma_r.c \
                 third_party/musl/src/math/nearbyint.c \
                 third_party/musl/src/math/nextafter.c \
