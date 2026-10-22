@@ -566,6 +566,12 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
   enum install_installed_probe installed = install_installed_probe(disk, layout, revision, reason);
   if (installed == INSTALL_INSTALLED_READY) return INSTALL_ESP_VALID;
   if (installed == INSTALL_INSTALLED_REFUSED || installed == INSTALL_INSTALLED_PENDING) return INSTALL_ESP_REFUSED;
+  if (installed == INSTALL_INSTALLED_UNRECORDED) {
+    /* Every Classic Install writes a boot record; without one the menu can
+     * never be proven, so Update could stage but never activate. */
+    *reason = "the ESP has no boot record; back up home and reinstall";
+    return INSTALL_ESP_REFUSED;
+  }
 #endif
   struct esp_inspection esp = {
     .disk = disk, .layout = layout, .reason = reason, .state = INSTALL_ESP_VALID,

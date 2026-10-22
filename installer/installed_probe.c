@@ -139,7 +139,7 @@ enum install_installed_probe install_installed_probe(const struct install_disk *
   }
   status = probe_file(&volume, &work, "/EFI/pyxis/config/config.record", CONFIG_RECORD_MAX_BYTES, &record);
   if (status == FAT32_NOT_FOUND) {
-    result = INSTALL_INSTALLED_ABSENT;
+    result = INSTALL_INSTALLED_UNRECORDED;
     *reason = NULL;
     goto done;
   }

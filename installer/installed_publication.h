@@ -19,8 +19,10 @@ void install_installed_destroy(struct boot_publication *publication);
 /* Discovery through the shared FAT reader. PENDING routes an inherited committed
  * record to a fresh completion Review; it proves no writable completion is safe.
  * Prepared/malformed records and failed inspection refuse normal Update. */
+/* ABSENT: no readable ESP. UNRECORDED: a readable ESP without a boot record,
+ * normal for Coexist; a Classic install always has one (decision 28). */
 enum install_installed_probe {
-  INSTALL_INSTALLED_ABSENT, INSTALL_INSTALLED_READY,
+  INSTALL_INSTALLED_ABSENT, INSTALL_INSTALLED_UNRECORDED, INSTALL_INSTALLED_READY,
   INSTALL_INSTALLED_PENDING, INSTALL_INSTALLED_REFUSED,
 };
 enum install_installed_probe install_installed_probe(const struct install_disk *disk,

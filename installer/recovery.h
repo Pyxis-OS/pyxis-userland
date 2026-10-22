@@ -37,10 +37,9 @@ bool install_recovery_provision(handle_t root, handle_t control, handle_t worksp
 uint64_t install_recovery_space(const struct install_recovery *recovery, uint64_t cluster);
 void install_recovery_destroy(struct install_recovery *recovery);
 /* The canonical primary is reviewed separately by the boot-entry planner.
- * Other entries require recorded CONFIG_LIMINE previous/obsolete names and
+ * Other entries require the record's previous/obsolete menu names and
  * matching bytes, or a committed transaction's exact staging name and the full
  * menu reconstructed from its boot binding and verified inherited menu bytes.
- * Legacy entry shape does not replace pending completion's payload certification.
  * Only actual absence permits creating a missing menu directory. POOL_PARTITION
  * is the menu's mount.pool=. */
 bool install_recovery_menu_review(handle_t root, const struct config_blob *record,

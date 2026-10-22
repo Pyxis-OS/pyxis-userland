@@ -109,16 +109,13 @@ payload transport is shared; no attempt layout or activation policy changes.
 
 
 `boot_entry.h` shares the pure planner for the owned normal, previous and rescue
-entries and the read-only legacy certifier with the coexistence caller. The
-planner accepts frozen menu bytes, the caller-certified inherited menu (a normal
-pair and an optional previous pair, or none for legacy admission), the next menu
-and the disk GUID. Only exact owned entries backed by those bindings, a previous
-entry in a digest-proven inherited menu, or the exact fully certified legacy pair
-can change; an absent previous entry is added after the normal one. Missing or
-ambiguous menus stay untouched and report activation pending; outside bytes
-are preserved. Legacy certification hashes all three existing payloads and
-checks the kernel, rescue archive and revision; failure clears all evidence.
-Its borrowed RO root stays with the caller and no file handle escapes.
+entries with the coexistence caller. The planner accepts frozen menu bytes, the
+caller-certified inherited menu (a normal pair and an optional previous pair, or
+none when no committed boot record describes the menu), the next menu and the
+disk GUID. Only exact owned entries backed by those bindings, or a previous
+entry in a digest-proven inherited menu, can change; an absent previous entry is
+added after the normal one. Missing or ambiguous menus stay untouched and report
+activation pending; outside bytes are preserved.
 
 The pure manual renderer emits unmarked normal/rescue entries only. An optional
 reviewed ESP GUID selects `guid(ESP_GUID):/`; otherwise it uses `boot():/`, per
