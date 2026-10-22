@@ -1,4 +1,5 @@
 #include "memory_operations.h"
+#include "runtime.h"
 #include <handle.h>
 #include <environment.h>
 #include <startup.h>
@@ -147,18 +148,20 @@ void libc_thread_bootstrap(const struct startup_info *info)
 {
   struct libc_thread_context context;
   struct environment_entry_reply entry;
-  if (environment_lookup(info->environment_handle, "memory", &entry, NULL, 0) != CALL_OK ||
-      entry.kind != ENVIRONMENT_CAP) {
-    _Exit(EXIT_FAILURE);
+  enum call_status status = environment_lookup(info->environment_handle, "memory",
+      &entry, NULL, 0);
+  if (status != CALL_OK || entry.kind != ENVIRONMENT_CAP) {
+    libc_start_failed(PROCESS_START_MEMORY, status != CALL_OK ? status : CALL_WRONG_TYPE);
   }
-  enum call_status prepared = libc_thread_context_prepare(entry.handle, &context);
-  int released = handle_close(entry.handle);
-  if (prepared != CALL_OK || released) {
-    _Exit(EXIT_FAILURE);
+  status = libc_thread_context_prepare(entry.handle, &context);
+  if (status != CALL_OK) {
+    libc_start_failed(PROCESS_START_TLS, status);
   }
-  enum call_status status = thread_set_fs(info->thread_fs,
+  libc_startup_close(entry.handle, PROCESS_START_MEMORY);
+  status = thread_set_fs(info->thread_fs,
       (struct thread_fs_context){context.reservation.identity, context.fs_base});
-  if (status != CALL_OK || handle_close(info->thread_fs) != 0) {
-    _Exit(EXIT_FAILURE);
+  if (status != CALL_OK) {
+    libc_start_failed(PROCESS_START_FS, status);
   }
+  libc_startup_close(info->thread_fs, PROCESS_START_FS);
 }

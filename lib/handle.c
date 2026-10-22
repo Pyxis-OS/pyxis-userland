@@ -17,6 +17,9 @@ enum call_status handle_query(handle_t handle, struct handle_info *info)
   *info = (struct handle_info){0};
   struct handle_info reply;
   struct syscall_result result = syscall_handle_info(handle, &reply, sizeof(reply));
+  if (result.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
+    return CALL_UNKNOWN_SYSTEM_CALL;
+  }
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
   }
@@ -122,6 +125,9 @@ static enum call_status copy(handle_t source, uint64_t rights, uint64_t transpor
   }
   *destination = HANDLE_INVALID;
   struct syscall_result result = syscall_copy(source, rights, transport, flags, destination);
+  if (result.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
+    return CALL_UNKNOWN_SYSTEM_CALL;
+  }
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
   }

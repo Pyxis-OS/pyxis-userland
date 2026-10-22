@@ -32,6 +32,7 @@ static_assert(CLIENT_WAIT_LIMIT <= WAIT_MAX_INTERESTS);
 #define FRAME_SIZE (REMOTE_HEADER_SIZE + REMOTE_PAYLOAD_MAX)
 
 /* Native completion kinds cross the wire by value. */
+static_assert(REMOTE_PROCESS_START_FAILED == PROCESS_START_FAILED);
 static_assert(REMOTE_COMPLETION_EXITED == TERMINAL_COMPLETION_EXITED);
 static_assert(REMOTE_COMPLETION_FAULTED == TERMINAL_COMPLETION_FAULTED);
 static_assert(REMOTE_COMPLETION_TERMINATED == TERMINAL_COMPLETION_TERMINATED);
@@ -56,6 +57,7 @@ struct client {
   bool input_ended;
   bool output_eof;
   bool final_sent;
+  bool startup_reported;
   bool shutdown;
   uint32_t cause;
   uint32_t error;
@@ -474,6 +476,15 @@ static bool finish_output(struct client *client, uint64_t now)
     return false;
   }
   if (client->ready && client->output_eof && !client->final_sent) {
+    if (client->result.kind == PROCESS_START_FAILED && !client->startup_reported) {
+      char message[256];
+      int length = snprintf(message, sizeof(message), "remote: shell did not start: %s: %s\n",
+          process_start_step_name(client->result.exit_status),
+          process_start_status_name(client->result.exit_status));
+      queue_frame(client, REMOTE_OUTPUT, message, (size_t)length);
+      client->startup_reported = true;
+      return true;
+    }
     unsigned char payload[REMOTE_FINAL_SIZE];
     remote_encode_u32(payload, client->cause);
     remote_encode_u32(payload + 4, (uint32_t)client->result.kind);

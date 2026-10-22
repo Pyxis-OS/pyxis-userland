@@ -257,7 +257,13 @@ static enum command_result wait_session_successor(struct shell *shell,
   }
   shell->exit_status = completion.kind == PROCESS_EXITED ?
       (int)completion.exit_status : EXIT_FAILURE;
-  if (completion.kind != PROCESS_EXITED &&
+  if (completion.kind == PROCESS_START_FAILED) {
+    if (shell_error(shell, "shell: session %s: did not start: %s: %s\n", name,
+        process_start_step_name(completion.exit_status),
+        process_start_status_name(completion.exit_status)) == COMMAND_FATAL) {
+      return COMMAND_FATAL;
+    }
+  } else if (completion.kind != PROCESS_EXITED &&
       shell_error(shell, "shell: session %s: Process %s\n", name,
           completion.kind == PROCESS_FAULTED ? "faulted" : "terminated") == COMMAND_FATAL) {
     return COMMAND_FATAL;
@@ -2910,6 +2916,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       if (report_scope) {
         report_scope->error = CALL_IO;
       }
+    } else if (completion[i].kind == PROCESS_START_FAILED) {
+      diagnostic = user_count == 1 ?
+          shell_error(shell, "shell: %s: did not start: %s: %s\n", stages[i].arguments[0],
+              process_start_step_name(completion[i].exit_status),
+              process_start_status_name(completion[i].exit_status)) :
+          shell_error(shell, "shell: stage %zu (%s): did not start: %s: %s\n",
+              i + 1, stages[i].arguments[0], process_start_step_name(completion[i].exit_status),
+              process_start_status_name(completion[i].exit_status));
     } else if (completion[i].kind == PROCESS_FAULTED) {
       diagnostic = user_count == 1 ?
           shell_error(shell, "shell: %s: Process faulted\n", stages[i].arguments[0]) :
@@ -2958,6 +2972,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     set_outcome(outcome, TERMINAL_COMPLETION_EXITED,
         helper_failed || (result == COMMAND_FAILED && scope && scope->all_stages) ?
             1 : last->exit_status);
+    break;
+  case PROCESS_START_FAILED:
+    set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
     break;
   case PROCESS_FAULTED:
     set_outcome(outcome, TERMINAL_COMPLETION_FAULTED, 0);

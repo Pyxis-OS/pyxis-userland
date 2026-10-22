@@ -1,5 +1,6 @@
 #include "mux.h"
 #include <console.h>
+#include <process.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,7 +119,12 @@ static enum call_status compose(struct mux *mux)
       continue;
     }
     char title[96];
-    if (pane->root_done) {
+    if (pane->root_done && pane->result.kind == PROCESS_START_FAILED) {
+      snprintf(title, sizeof(title), "[%u%s] did not start: %s: %s%s", i + 1,
+          i == mux->focused ? "*" : "", process_start_step_name(pane->result.exit_status),
+          process_start_status_name(pane->result.exit_status),
+          pane->group_done ? "" : " (cleaning up)");
+    } else if (pane->root_done) {
       snprintf(title, sizeof(title), "[%u%s] %s %lld%s", i + 1, i == mux->focused ? "*" : "",
           pane->result.kind == PROCESS_EXITED ? "exited" :
           pane->result.kind == PROCESS_FAULTED ? "faulted" : "terminated",

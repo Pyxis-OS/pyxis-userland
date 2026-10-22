@@ -3,6 +3,9 @@
 
 static enum call_status checked_status(struct syscall_result call, size_t reply_size)
 {
+  if (call.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
+    return CALL_UNKNOWN_SYSTEM_CALL;
+  }
   if (call.status >= CALL_STATUS_COUNT ||
       call.reply_size != (call.status == CALL_OK ? reply_size : 0)) {
     return CALL_OUTCOME_UNKNOWN;

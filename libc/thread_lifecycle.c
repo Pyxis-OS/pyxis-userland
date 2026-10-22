@@ -1,4 +1,5 @@
 #include "memory_operations.h"
+#include "runtime.h"
 #include <abi/message.h>
 #include <clock.h>
 #include <errno.h>
@@ -79,12 +80,10 @@ static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rig
     enum call_status status = handle_copy_restricted(source,
         rights | (info.rights & optional_rights), 0, &retained);
     if (status == CALL_OUTCOME_UNKNOWN) {
-      _Exit(EXIT_FAILURE);
+      libc_start_failed(PROCESS_START_RESOURCES, status);
     }
   }
-  if (handle_close(source)) {
-    _Exit(EXIT_FAILURE);
-  }
+  libc_startup_close(source, PROCESS_START_RESOURCES);
   return retained;
 }
 

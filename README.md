@@ -739,3 +739,10 @@ Relative helpers that sleep additionally need `sleep`.
 
 Original Pyxis material is licensed under [MPL-2.0](LICENSE). See
 [LICENSING.md](LICENSING.md) for scope and third-party exceptions.
+
+Runtime startup failures are distinct from application exit status. The TLS-free
+failure path publishes PROCESS_START_FAILED with its step and native status;
+parents can report it even when child stderr never initialized. Shell, session
+handoff and multiplexer reporting decode it. No kernel-log or alternate-stream
+fallback is used. Existing statically linked binaries retain their old runtime;
+package/launch ABI checks are their protection against stale builds.

@@ -8,7 +8,8 @@
 
 static enum call_status checked_status(struct syscall_result result)
 {
-  return result.status < CALL_STATUS_COUNT ? result.status : CALL_UNAVAILABLE;
+  return result.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL ? CALL_UNKNOWN_SYSTEM_CALL :
+      result.status < CALL_STATUS_COUNT ? (enum call_status)result.status : CALL_UNAVAILABLE;
 }
 
 bool environment_name(char target[ENVIRONMENT_NAME_MAX + 1], const char *name)
@@ -43,6 +44,9 @@ static enum call_status read_entry(handle_t table, const void *request,
   struct environment_entry_reply reply = {0};
   struct syscall_result result = syscall_call(table, request, size, &reply, sizeof(reply));
   enum call_status status = checked_status(result);
+  if (status == CALL_UNKNOWN_SYSTEM_CALL) {
+    return status;
+  }
   if (status == CALL_OK || status == CALL_BUFFER_TOO_SMALL) {
     if (result.reply_size != sizeof(reply) ||
         (reply.kind != ENVIRONMENT_CAP && reply.kind != ENVIRONMENT_TEXT) ||
@@ -203,7 +207,8 @@ enum call_status environment_snapshot(handle_t table, uint64_t flags,
   struct syscall_result result = syscall_call(table, &request, sizeof(request), &reply, sizeof(reply));
   enum call_status status = checked_status(result);
   if (status != CALL_OK) {
-    return result.reply_size ? CALL_OUTCOME_UNKNOWN : status;
+    return status == CALL_UNKNOWN_SYSTEM_CALL || !result.reply_size ?
+        status : CALL_OUTCOME_UNKNOWN;
   }
   if (result.reply_size != sizeof(reply) || !reply.handle) {
     return CALL_OUTCOME_UNKNOWN;

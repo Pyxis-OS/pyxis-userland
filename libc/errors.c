@@ -10,6 +10,7 @@ int libc_call_errno(enum call_status status)
 {
   switch (status) {
   case CALL_OK: return 0;
+  case CALL_UNKNOWN_SYSTEM_CALL: return ENOSYS;
   case CALL_BAD_HANDLE: return EBADF;
   case CALL_DENIED: return EACCES;
   case CALL_BAD_OPERATION: return ENOTSUP;
@@ -74,7 +75,7 @@ int libc_path_errno(enum call_status status, const char *path, const char *other
 
 int strerror_r(int error, char *buffer, size_t size)
 {
-  if (error < 0 || error > EISDIR) {
+  if (error < 0 || error > ENOSYS) {
     return EINVAL;
   }
   const char *message = strerror(error);
@@ -121,6 +122,7 @@ char *strerror(int error)
   case ENOTEMPTY: return "Directory not empty";
   case ENOTDIR: return "Not a directory";
   case EISDIR: return "Is a directory";
+  case ENOSYS: return "System call not implemented";
   case ENOTTY: return "Not a terminal";
   case ENAMETOOLONG: return "Name too long";
   case E2BIG: return "Output buffer too small";

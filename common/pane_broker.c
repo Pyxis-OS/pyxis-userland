@@ -196,7 +196,7 @@ enum call_status pane_broker_start(size_t columns, size_t rows, unsigned tab_wid
     if (pane_broker_envelope(&packet) && packet.size == sizeof(failure) && !packet.grant_count) {
       memcpy(&failure, packet.data, sizeof(failure));
       if (failure.magic == PANE_BROKER_MAGIC && failure.operation == PANE_BROKER_COMMIT &&
-          failure.id == chunk.header.id && failure.status == status && status != CALL_OUTCOME_UNKNOWN) {
+          failure.id == chunk.header.id && failure.status == (uint64_t)status && status != CALL_OUTCOME_UNKNOWN) {
         committed = false;
       }
     }

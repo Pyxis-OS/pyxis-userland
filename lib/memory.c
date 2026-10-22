@@ -3,6 +3,9 @@
 
 static enum call_status call_status(struct syscall_result result, size_t reply_size)
 {
+  if (result.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
+    return CALL_UNKNOWN_SYSTEM_CALL;
+  }
   if (result.status >= CALL_STATUS_COUNT) {
     return CALL_UNAVAILABLE;
   }
@@ -66,6 +69,9 @@ enum call_status memory_allocate_guarded(handle_t memory, size_t usable_size,
   struct memory_reservation reply;
   struct syscall_result call = syscall_call(memory, &message, sizeof(message),
       &reply, sizeof(reply));
+  if (call.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
+    return CALL_UNKNOWN_SYSTEM_CALL;
+  }
   if (call.status >= CALL_STATUS_COUNT ||
       call.reply_size != (call.status == CALL_OK ? sizeof(reply) : 0)) {
     return CALL_OUTCOME_UNKNOWN;
@@ -89,6 +95,9 @@ enum call_status memory_release_reservation(handle_t memory, uint64_t identity)
     .body.release_reservation.identity = identity,
   };
   struct syscall_result call = syscall_call(memory, &message, sizeof(message), NULL, 0);
+  if (call.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
+    return CALL_UNKNOWN_SYSTEM_CALL;
+  }
   if (call.status >= CALL_STATUS_COUNT || call.reply_size) {
     return CALL_OUTCOME_UNKNOWN;
   }

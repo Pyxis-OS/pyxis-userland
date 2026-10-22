@@ -22,7 +22,7 @@ static void run_init_array(void)
 [[noreturn]] void libc_enter(const struct startup_info *info)
 {
   if (!startup_init(info)) {
-    _Exit(EXIT_FAILURE);
+    libc_start_failed(PROCESS_START_RECORD, CALL_BAD_REQUEST);
   }
   libc_thread_bootstrap(info);
   libc_thread_runtime_init();

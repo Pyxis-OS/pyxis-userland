@@ -244,7 +244,7 @@ static void standard_stream(FILE *stream, enum environment_stream_index index, h
   uint64_t identity = 0;
   enum call_status status = environment_stdio(snapshot, index, &binding, &identity);
   if (status != CALL_OK && status != CALL_NOT_FOUND) {
-    _Exit(EXIT_FAILURE);
+    libc_start_failed(PROCESS_START_STDIN + index, status);
   }
   descriptor_adopt_standard(index, stream, binding, identity);
   register_stream(stream);
@@ -253,16 +253,15 @@ static void standard_stream(FILE *stream, enum environment_stream_index index, h
 void stdio_init(void)
 {
   handle_t snapshot;
-  if (environment_snapshot(startup_environment_handle(), ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE,
-      &snapshot, NULL) != CALL_OK) {
-    _Exit(EXIT_FAILURE);
+  enum call_status status = environment_snapshot(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &snapshot, NULL);
+  if (status != CALL_OK) {
+    libc_start_failed(PROCESS_START_STDIO_SNAPSHOT, status);
   }
   standard_stream(stdin, ENVIRONMENT_STDIN, snapshot);
   standard_stream(stdout, ENVIRONMENT_STDOUT, snapshot);
   standard_stream(stderr, ENVIRONMENT_STDERR, snapshot);
-  if (handle_close(snapshot)) {
-    _Exit(EXIT_FAILURE);
-  }
+  libc_startup_close(snapshot, PROCESS_START_STDIO_CLOSE);
 }
 
 static bool parse_mode(const char *text, struct descriptor_mode *mode)
