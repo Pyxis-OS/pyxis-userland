@@ -146,7 +146,6 @@ enum call_status wifi_credential_seal(handle_t wifi, uint32_t format,
   };
   memcpy(request.credential.bytes, bytes, length);
   enum call_status status = returned_handle(wifi, &request, sizeof(request), file);
-  memset_explicit(&request, 0, sizeof(request));
   return status;
 }
 

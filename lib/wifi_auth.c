@@ -82,7 +82,6 @@ enum call_status wifi_auth_read(handle_t auth, struct wifi_auth_event *event)
       *event = reply;
     }
   }
-  memset_explicit(&reply, 0, sizeof(reply));
   return result;
 }
 
@@ -96,7 +95,6 @@ enum call_status wifi_auth_send(handle_t auth, uint64_t generation,
   };
   memcpy(request.data, data, bytes);
   enum call_status result = invoke(auth, &request, sizeof(request), NULL, 0);
-  memset_explicit(&request, 0, sizeof(request));
   return result;
 }
 
@@ -110,7 +108,6 @@ enum call_status wifi_auth_key(handle_t auth, uint64_t generation, bool group,
   };
   if (key) memcpy(request.key, key, sizeof(request.key));
   enum call_status result = invoke(auth, &request, sizeof(request), NULL, 0);
-  memset_explicit(&request, 0, sizeof(request));
   return result;
 }
 
