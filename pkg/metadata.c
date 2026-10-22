@@ -337,7 +337,7 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
   }
   ok = ok && identity(root, &manifest->identity) && kind(root, manifest->kind) &&
       abi(root, manifest->kind, manifest->abi) &&
-      integer(root, "files", 1, PKG_MAX_FILES, &manifest->files) &&
+      integer(root, "files", 0, PKG_MAX_FILES, &manifest->files) &&
       integer(root, "bytes", 0, INT64_MAX, &manifest->bytes) &&
       hash(root, "inventory_sha256", manifest->inventory_sha256) && array(dependencies);
   manifest->dependency_count = ok ? dependencies->as.table.count : 0;
