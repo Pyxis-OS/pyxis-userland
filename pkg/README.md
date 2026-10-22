@@ -22,8 +22,8 @@ and is refused elsewhere, listing the `REPO/ID` spellings. The review shows
 which repository each fetched package comes from.
 
 Program and toolchain packages record the ABI they were
-built for; `pkg` reads what the running system provides through its read-only
-`system_info` grant (for now the kernel's build revision) and offers, installs
+built for; `pkg` reads what the running system provides from
+`boot://os-release` (its release ABI list and its build revision) and offers, installs
 and keeps only packages whose ABI it provides. Builds for other systems are
 hidden and counted per ID. Stale stored builds refuse install, remove,
 rollback and verify once, before any tree is hashed: one message lists every

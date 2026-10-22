@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <system_info.h>
 
 #define CURRENT_NAME "current"
 #define SETS_NAME "sets"
@@ -65,19 +64,142 @@ bool package_abi_valid(const char *abi)
   return true;
 }
 
-enum call_status package_provided_abi(handle_t system_info,
-    struct package_provided_abi *provided)
+static enum call_status read_os_release(char **bytes, size_t *size)
+{
+  *bytes = NULL;
+  *size = 0;
+  FILE *file = fopen(PACKAGE_OS_RELEASE, "rb");
+  if (!file) {
+    return CALL_NOT_FOUND;
+  }
+  enum call_status status = CALL_OK;
+  size_t capacity = 0;
+  for (;;) {
+    if (*size == capacity) {
+      /* One byte past the parser's limit shows the file is too large. */
+      if (capacity > LITERAL_SOURCE_LIMIT) {
+        status = CALL_FILE_TOO_LARGE;
+        break;
+      }
+      size_t grown = capacity ? 2 * capacity : 512;
+      if (grown > LITERAL_SOURCE_LIMIT + 1) {
+        grown = LITERAL_SOURCE_LIMIT + 1;
+      }
+      char *buffer = realloc(*bytes, grown);
+      if (!buffer) {
+        status = CALL_NO_MEMORY;
+        break;
+      }
+      *bytes = buffer;
+      capacity = grown;
+    }
+    size_t count = fread(*bytes + *size, 1, capacity - *size, file);
+    *size += count;
+    if (!count) {
+      status = ferror(file) ? CALL_IO : CALL_OK;
+      break;
+    }
+  }
+  fclose(file);
+  if (status != CALL_OK) {
+    free(*bytes);
+    *bytes = NULL;
+  }
+  return status;
+}
+
+static bool abi_string(const struct literal_value *value)
+{
+  return value && value->kind == LITERAL_STRING &&
+      strlen(value->as.string.bytes) == value->as.string.size &&
+      package_abi_valid(value->as.string.bytes);
+}
+
+static bool provide(struct package_provided_abi *provided, const char *name)
+{
+  char *copy = strdup(name);
+  if (!copy) {
+    return false;
+  }
+  provided->names[provided->count++] = copy;
+  return true;
+}
+
+static bool provided_text(struct package_provided_abi *provided)
+{
+  size_t length = sizeof("no ABI");
+  for (size_t i = 0; i < provided->count; ++i) {
+    length += strlen(provided->names[i]) + 2;
+  }
+  provided->text = malloc(length);
+  if (!provided->text) {
+    return false;
+  }
+  strcpy(provided->text, provided->count ? "" : "no ABI");
+  for (size_t i = 0; i < provided->count; ++i) {
+    if (i) {
+      strcat(provided->text, ", ");
+    }
+    strcat(provided->text, provided->names[i]);
+  }
+  return true;
+}
+
+enum call_status package_provided_abi(struct package_provided_abi *provided)
 {
   *provided = (struct package_provided_abi){0};
-  struct system_info_identity identity;
-  enum call_status status = system_info_get_identity(system_info, &identity);
+  char *bytes;
+  size_t size;
+  enum call_status status = read_os_release(&bytes, &size);
   if (status != CALL_OK) {
     return status;
   }
-  if (identity.build_revision[0] && package_abi_valid(identity.build_revision)) {
-    strcpy(provided->names[provided->count++], identity.build_revision);
+  struct literal *document = NULL;
+  struct literal_diagnostic diagnostic;
+  bool parsed = literal_parse(bytes, size, &document, &diagnostic);
+  free(bytes);
+  if (!parsed) {
+    return CALL_BAD_REQUEST;
   }
-  return CALL_OK;
+  const struct literal_value *list = literal_field(document->root, "abi");
+  const struct literal_value *revision = literal_field(document->root, "revision");
+  status = list && list->kind == LITERAL_TABLE && revision && revision->kind == LITERAL_STRING ?
+      CALL_OK : CALL_BAD_REQUEST;
+  size_t count = status == CALL_OK ? list->as.table.count + 1 : 0;
+  if (status == CALL_OK && !(provided->names = calloc(count, sizeof(*provided->names)))) {
+    status = CALL_NO_MEMORY;
+  }
+  for (const struct literal_entry *entry = status == CALL_OK ? list->as.table.entries : NULL;
+      entry && status == CALL_OK; entry = entry->next) {
+    if (!entry->implicit || !abi_string(entry->value)) {
+      status = CALL_BAD_REQUEST;
+    } else if (!provide(provided, entry->value->as.string.bytes)) {
+      status = CALL_NO_MEMORY;
+    }
+  }
+  /* A build without Git has an empty revision and provides only the list. */
+  if (status == CALL_OK && revision->as.string.size && abi_string(revision) &&
+      !provide(provided, revision->as.string.bytes)) {
+    status = CALL_NO_MEMORY;
+  }
+  if (status == CALL_OK && !provided_text(provided)) {
+    status = CALL_NO_MEMORY;
+  }
+  literal_free(document);
+  if (status != CALL_OK) {
+    package_provided_abi_free(provided);
+  }
+  return status;
+}
+
+void package_provided_abi_free(struct package_provided_abi *provided)
+{
+  for (size_t i = 0; i < provided->count; ++i) {
+    free(provided->names[i]);
+  }
+  free(provided->names);
+  free(provided->text);
+  *provided = (struct package_provided_abi){0};
 }
 
 bool package_abi_provided(const struct package_provided_abi *provided, const char *abi)
@@ -88,21 +210,6 @@ bool package_abi_provided(const struct package_provided_abi *provided, const cha
     }
   }
   return false;
-}
-
-void package_provided_abi_text(const struct package_provided_abi *provided,
-    char *text, size_t capacity)
-{
-  size_t used = 0;
-  text[0] = 0;
-  for (size_t i = 0; i < provided->count && used < capacity; ++i) {
-    int written = snprintf(text + used, capacity - used, "%s%s", i ? ", " : "",
-        provided->names[i]);
-    used += written > 0 ? (size_t)written : 0;
-  }
-  if (!provided->count) {
-    snprintf(text, capacity, "no ABI");
-  }
 }
 
 static bool version_valid(const char *version, size_t length)

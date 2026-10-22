@@ -1,11 +1,9 @@
 #include <command_selection.h>
 #include <directory.h>
-#include <environment.h>
 #include <file.h>
 #include <handle.h>
 #include <package.h>
 #include <pxe/p1f.h>
-#include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,33 +136,26 @@ static bool same_volume(const struct package_command_info *left,
 
 /* A package command runs only where the running system provides its package's
  * ABI. The kernel carries the index record's abi and never compares it. The
- * running ABI comes from the launching process's
- * own system_info grant; without one, nothing can be checked and the command is
- * refused. */
+ * running ABIs come from the launching process's boot://os-release; without it,
+ * nothing can be checked and the command is refused. */
 static enum call_status admit_abi(const struct package_command_record *target,
     char *refusal)
 {
-  handle_t system_info = HANDLE_INVALID;
   struct package_provided_abi provided;
-  bool readable = environment_capability(startup_environment_handle(), "system_info",
-      &system_info) == CALL_OK && package_provided_abi(system_info, &provided) == CALL_OK;
-  if (system_info != HANDLE_INVALID) {
-    handle_close(system_info);
-  }
-  if (readable && package_abi_provided(&provided, target->abi)) {
-    return CALL_OK;
-  }
+  bool readable = package_provided_abi(&provided) == CALL_OK;
+  bool admitted = readable && package_abi_provided(&provided, target->abi);
   if (refusal && !readable) {
-    snprintf(refusal, COMMAND_REFUSAL_MAX,
-        "%s %s: cannot check its ABI without a system_info grant", target->id, target->version);
-  } else if (refusal) {
-    char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
-    package_provided_abi_text(&provided, names, sizeof(names));
+    snprintf(refusal, COMMAND_REFUSAL_MAX, "%s %s: cannot check its ABI: %s is unreadable",
+        target->id, target->version, PACKAGE_OS_RELEASE);
+  } else if (refusal && !admitted) {
     snprintf(refusal, COMMAND_REFUSAL_MAX,
         "%s %s needs ABI %s; this system provides %s; run pkg install %s",
-        target->id, target->version, target->abi, names, target->id);
+        target->id, target->version, target->abi, provided.text, target->id);
   }
-  return CALL_DENIED;
+  if (readable) {
+    package_provided_abi_free(&provided);
+  }
+  return admitted ? CALL_OK : CALL_DENIED;
 }
 
 static enum call_status package_target(const struct path_context *context,

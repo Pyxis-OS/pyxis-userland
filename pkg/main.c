@@ -36,7 +36,7 @@ struct package_request {
 #define ANY_REPOSITORY SIZE_MAX
 
 struct client {
-  handle_t packages, clock, config, config_write, management, system_info;
+  handle_t packages, clock, config, config_write, management;
   /* What the running system provides, read once on first use. */
   struct package_provided_abi provided;
   bool provided_loaded, provided_readable;
@@ -85,8 +85,7 @@ static const struct package_provided_abi *provided_abi(void)
 {
   if (!client.provided_loaded) {
     client.provided_loaded = true;
-    client.provided_readable = client.system_info != HANDLE_INVALID &&
-        package_provided_abi(client.system_info, &client.provided) == CALL_OK;
+    client.provided_readable = package_provided_abi(&client.provided) == CALL_OK;
   }
   return &client.provided;
 }
@@ -100,8 +99,6 @@ static bool abi_check(const char *id, const char *version, const char *kind,
     return true;
   }
   const struct package_provided_abi *provided = provided_abi();
-  char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
-  package_provided_abi_text(provided, names, sizeof(names));
   char remedy[2 * PACKAGE_ID_MAX + 80] = "";
   if (installed) {
     snprintf(remedy, sizeof(remedy),
@@ -109,11 +106,12 @@ static bool abi_check(const char *id, const char *version, const char *kind,
   }
   if (!client.provided_readable) {
     snprintf(client.message, sizeof(client.message),
-        "%s %s needs an ABI check, but the running system's ABI is unreadable (no system_info)",
-        id, version);
+        "%s %s needs an ABI check, but the running system's ABI is unreadable (%s)",
+        id, version, PACKAGE_OS_RELEASE);
   } else if (!package_abi_provided(provided, abi)) {
     snprintf(client.message, sizeof(client.message),
-        "%s %s needs ABI %s; this system provides %s%s", id, version, abi, names, remedy);
+        "%s %s needs ABI %s; this system provides %s%s", id, version, abi, provided->text,
+        remedy);
   } else {
     return true;
   }
@@ -171,7 +169,8 @@ static bool stale_check(const struct pkg_selection *selection, const struct pkg_
   }
   if (!client.provided_readable) {
     snprintf(client.message, sizeof(client.message),
-        "cannot check the ABI of %s: this system's ABI is unreadable (no system_info grant)", stale);
+        "cannot check the ABI of %s: this system's ABI is unreadable (%s)", stale,
+        PACKAGE_OS_RELEASE);
     return fail(client.message);
   }
   char install[1100] = "", remove[1100] = "";
@@ -181,12 +180,10 @@ static bool stale_check(const struct pkg_selection *selection, const struct pkg_
   }
   append(install, sizeof(install), " ", stale);
   append(remove, sizeof(remove), " ", stale);
-  char names[PACKAGE_PROVIDED_ABI_MAX * (PACKAGE_ABI_MAX + 2) + 8];
-  package_provided_abi_text(provided, names, sizeof(names));
   snprintf(client.message, sizeof(client.message),
       "%zu installed package%s not built for this system, which provides %s: %s. "
       "Replace with: pkg install %s. Or drop with: pkg remove %s",
-      count, count == 1 ? " is" : "s are", names, details, install, remove);
+      count, count == 1 ? " is" : "s are", provided->text, details, install, remove);
   return fail(client.message);
 }
 
@@ -668,8 +665,8 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
       size_t hidden = hidden_builds(want.identity.id, version, want.repository);
       if (hidden && !client.provided_readable) {
         snprintf(client.message, sizeof(client.message),
-            "%s has %zu build%s, but this system's ABI is unreadable (no system_info grant)",
-            argv[i], hidden, hidden == 1 ? "" : "s");
+            "%s has %zu build%s, but this system's ABI is unreadable (%s)",
+            argv[i], hidden, hidden == 1 ? "" : "s", PACKAGE_OS_RELEASE);
         ok = fail(client.message);
       } else if (hidden) {
         snprintf(client.message, sizeof(client.message),
@@ -1117,7 +1114,6 @@ int main(int argc, char **argv)
   client.packages = bootstrap_capability(PACKAGE_INSPECT_SOURCE);
   client.config = bootstrap_capability(PACKAGE_CONFIG_SOURCE);
   client.config_write = bootstrap_capability(PACKAGE_CONFIG_WRITE_SOURCE);
-  client.system_info = bootstrap_capability("system_info");
   client.fetch = (struct pkg_fetch_authority){bootstrap_capability("http"),
     bootstrap_capability("https"), client.clock};
   struct pyxis_stdio_binding input = bootstrap_stdio(ENVIRONMENT_STDIN);
@@ -1174,7 +1170,7 @@ int main(int argc, char **argv)
     }
     if (ok && client.hidden_count) {
       printf(client.provided_readable ? "%zu builds for other systems hidden\n" :
-          "%zu builds hidden: this system's ABI is unreadable (no system_info grant)\n",
+          "%zu builds hidden: this system's ABI is unreadable (" PACKAGE_OS_RELEASE ")\n",
           client.hidden_count);
     }
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
