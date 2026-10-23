@@ -10,6 +10,7 @@
 #include <endpoint.h>
 #include <handle.h>
 #include <launcher.h>
+#include <program.h>
 #include <process.h>
 #include <startup.h>
 #include <stdbool.h>
@@ -828,7 +829,7 @@ int main(int argc, char **argv)
   }
   struct options options;
   if (!parse_options(argc, argv, &options)) {
-    fputs("usage: session bin://ipcbench.pxe call|send [--size 0..4096] "
+    fputs("usage: session ipcbench call|send [--size 0..4096] "
         "[--messages 1..256] [--rounds 1..100]\n", stderr);
     return 1;
   }
@@ -836,7 +837,6 @@ int main(int argc, char **argv)
   handle_t memory = bootstrap_capability("memory");
   handle_t service = bootstrap_capability("service");
   handle_t launcher = bootstrap_capability("launcher");
-  handle_t bin = bootstrap_capability("bin");
   handle_t image = HANDLE_INVALID;
   struct sample *samples = calloc(options.rounds + 1, sizeof(*samples));
   size_t bytes = options.size * options.messages;
@@ -850,8 +850,8 @@ int main(int argc, char **argv)
     goto done;
   }
   if (clock == HANDLE_INVALID || memory == HANDLE_INVALID || service == HANDLE_INVALID ||
-      launcher == HANDLE_INVALID || bin == HANDLE_INVALID) {
-    fputs("ipcbench: missing clock, memory, endpoint service, launcher or bin root grant\n", stderr);
+      launcher == HANDLE_INVALID) {
+    fputs("ipcbench: missing clock, memory, endpoint service or launcher grant\n", stderr);
     status = CALL_BAD_HANDLE;
     goto done;
   }
@@ -860,7 +860,7 @@ int main(int argc, char **argv)
   if (status != CALL_OK) {
     goto done;
   }
-  status = directory_lookup(bin, "ipcbench.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
+  status = program_image("ipcbench", &image);
   if (status != CALL_OK) {
     goto done;
   }

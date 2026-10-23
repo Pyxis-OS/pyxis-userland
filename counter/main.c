@@ -11,6 +11,7 @@
 #include <handle.h>
 #include <forwarder.h>
 #include <launcher.h>
+#include <program.h>
 #include <process.h>
 #include <startup.h>
 #include <stdbool.h>
@@ -576,17 +577,14 @@ int main(int argc, char **argv)
   handle_t memory = bootstrap_capability("memory");
   handle_t output = bootstrap_capability("output");
   handle_t clock = bootstrap_capability("clock");
-  handle_t bin = bootstrap_capability("bin");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (!strcmp(mode, "queued-cut") &&
-      clock == HANDLE_INVALID) ||
-      bin == HANDLE_INVALID) {
+      clock == HANDLE_INVALID)) {
     return 1;
   }
   handle_t image = HANDLE_INVALID;
-  if (directory_lookup(bin, "counter.pxe", DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image) != CALL_OK) {
+  if (program_image("counter", &image) != CALL_OK) {
     return 1;
   }
   struct endpoint_create_reply endpoint;

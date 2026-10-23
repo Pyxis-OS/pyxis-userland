@@ -1,4 +1,4 @@
--- exit-latency.lua [LAUNCHES] [SECONDS]: launch bin://echo.pxe -n until LAUNCHES
+-- exit-latency.lua [LAUNCHES] [SECONDS]: launch boot://echo.pxe -n until LAUNCHES
 -- have exited or SECONDS have passed, timing each from launch through exit, and
 -- report the median, 90th percentile and maximum.
 
@@ -14,13 +14,13 @@ end
 local launches = count(1, 100, 100000, "LAUNCHES")
 local seconds = count(2, 20, 3600, "SECONDS")
 local now, run = pyxis.monotonic_ns, pyxis.run
-local command = {"bin://echo.pxe", "-n"}
+local command = {"boot://echo.pxe", "-n"}
 
 local deadline = now() + seconds * 1000000000
 local samples = {}
 repeat
   local start = now()
-  assert(run(command) == 0, "bin://echo.pxe failed")
+  assert(run(command) == 0, "boot://echo.pxe failed")
   samples[#samples + 1] = (now() - start) // 1000
 until #samples == launches or now() > deadline
 

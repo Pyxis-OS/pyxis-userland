@@ -9,6 +9,7 @@
 #include <directory.h>
 #include <handle.h>
 #include <launcher.h>
+#include <program.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,17 +19,15 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
 {
   handle_t launcher = bootstrap_capability("launcher"), memory = bootstrap_capability("memory");
   handle_t clock = bootstrap_capability("clock"), tcp = bootstrap_capability("tcp");
-  handle_t bin = bootstrap_capability("bin");
   if (launcher == HANDLE_INVALID || memory == HANDLE_INVALID ||
-      clock == HANDLE_INVALID || tcp == HANDLE_INVALID || bin == HANDLE_INVALID) {
+      clock == HANDLE_INVALID || tcp == HANDLE_INVALID) {
     fputs("session: missing TCP server launch authority\n", stderr);
     return EXIT_FAILURE;
   }
   handle_t image;
-  enum call_status status = directory_lookup(bin, "tcp.pxe", DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
+  enum call_status status = program_image("tcp", &image);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot open bin://tcp.pxe (status %u)\n", status);
+    fprintf(stderr, "session: cannot open the tcp command (status %u)\n", status);
     return EXIT_FAILURE;
   }
 
@@ -41,7 +40,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
     PROFILE_CAP((uintptr_t)"memory", MEMORY), PROFILE_CAP((uintptr_t)"clock", CLOCK),
     PROFILE_CAP((uintptr_t)"tcp_listener", LISTENER),
   };
-  const char *arguments[] = {"bin://tcp.pxe", "--serve", count};
+  const char *arguments[] = {"tcp", "--serve", count};
     struct launch_environment_entry entries[128];
   size_t entry_count = 0;
   memcpy(entries + entry_count, resources, (sizeof(resources) / sizeof(resources[0])) * sizeof(*entries));

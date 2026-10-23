@@ -7,6 +7,7 @@
 #include <file.h>
 #include <handle.h>
 #include <launcher.h>
+#include <program.h>
 #include <screenshot_saver.h>
 #include <pyxis/resource.h>
 
@@ -23,7 +24,6 @@ void session_start_screenshot_saver(void)
     return;
   }
   handle_t image = HANDLE_INVALID;
-  handle_t bin = bootstrap_capability("bin");
   handle_t launcher = bootstrap_capability("launcher");
   handle_t home = bootstrap_capability("home");
   handle_t capture = bootstrap_capability("screen_capture");
@@ -33,7 +33,7 @@ void session_start_screenshot_saver(void)
     const char *name;
     handle_t handle;
   } required[] = {
-    {"missing bin", bin}, {"missing launcher", launcher}, {"missing home", home},
+    {"missing launcher", launcher}, {"missing home", home},
     {"missing screen_capture", capture}, {"missing memory", memory}, {"missing clock", clock},
   };
   for (size_t i = 0; i < sizeof(required) / sizeof(*required); ++i) {
@@ -42,10 +42,9 @@ void session_start_screenshot_saver(void)
       goto done;
     }
   }
-  enum call_status status = directory_lookup(bin, "screenshot-saver.pxe",
-      DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
+  enum call_status status = program_image("screenshot-saver", &image);
   if (status != CALL_OK) {
-    startup_failure("open bin://screenshot-saver.pxe", status);
+    startup_failure("open the screenshot-saver command", status);
     goto done;
   }
   const uint64_t home_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE |
@@ -61,7 +60,7 @@ void session_start_screenshot_saver(void)
     PROFILE_PRIVATE_CAP("screenshot_saver", 0), PROFILE_CAP("screen_capture", 1),
     PROFILE_CAP("home", 2), PROFILE_CAP("memory", 3), PROFILE_CAP("clock", 4),
   };
-  const char *arguments[] = {"bin://screenshot-saver.pxe"};
+  const char *arguments[] = {"screenshot-saver"};
   struct launch_request request = {
     .image = image, .grants = (uintptr_t)grants,
     .grant_count = sizeof(grants) / sizeof(*grants),
@@ -71,7 +70,7 @@ void session_start_screenshot_saver(void)
   handle_t child;
   status = launcher_launch(launcher, &request, &child);
   if (status != CALL_OK) {
-    startup_failure("launch bin://screenshot-saver.pxe", status);
+    startup_failure("launch screenshot-saver", status);
   } else if (handle_close(child) != 0) {
     startup_failure("close launch observer", CALL_BAD_HANDLE);
   }

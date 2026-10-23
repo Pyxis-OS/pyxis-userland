@@ -29,6 +29,7 @@
 #include <net_config.h>
 #include <network_environment.h>
 #include <package_maintenance.h>
+#include <program.h>
 #include <remote/beacon.h>
 #include <startup.h>
 #include <stdio.h>
@@ -88,10 +89,10 @@ int launch_remote_server(const struct session_config *config,
   handle_t launcher = bootstrap_capability("launcher"), tcp = bootstrap_capability("remote_tcp");
   handle_t terminal = bootstrap_capability("terminal"), output = bootstrap_capability("output");
   handle_t authority = bootstrap_capability("remote_interface");
-  handle_t bin = bootstrap_capability("bin"), tmp = bootstrap_capability("tmp");
+  handle_t tmp = bootstrap_capability("tmp");
   if (memory == HANDLE_INVALID || clock == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       tcp == HANDLE_INVALID || terminal == HANDLE_INVALID || output == HANDLE_INVALID ||
-      authority == HANDLE_INVALID || bin == HANDLE_INVALID || tmp == HANDLE_INVALID) {
+      authority == HANDLE_INVALID || tmp == HANDLE_INVALID) {
     fputs("session: missing remote server launch authority\n", stderr);
     return EXIT_FAILURE;
   }
@@ -315,7 +316,7 @@ int launch_remote_server(const struct session_config *config,
   }
   char tab_width[sizeof("32")];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
-  const char *arguments[] = {"bin://remote-terminal.pxe", tab_width, "--beacon", beacon};
+  const char *arguments[] = {"remote-terminal", tab_width, "--beacon", beacon};
   size_t entry_capacity = resource_count + root_count + environment_count + captured.count + 4;
   entries = calloc(entry_capacity, sizeof(*entries));
   if (!entries) {
@@ -335,10 +336,9 @@ int launch_remote_server(const struct session_config *config,
     .argv = (uintptr_t)arguments, .argc = beacon ? 4 : 2,
 
   };
-  status = directory_lookup(bin, "remote-terminal.pxe", DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
+  status = program_image("remote-terminal", &image);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: cannot open bin://remote-terminal.pxe (status %u)\n", status);
+    fprintf(stderr, "session: cannot open the remote-terminal command (status %u)\n", status);
     goto done;
   }
   request.image = image;

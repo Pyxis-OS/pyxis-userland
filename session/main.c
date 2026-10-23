@@ -10,6 +10,7 @@
 #include "remote_server.h"
 #include "tcp_server.h"
 #include "../common/udp.h"
+#include "../common/directory.h"
 #include <abi/clock.h>
 #include <abi/system_info.h>
 #include <abi/echo.h>
@@ -45,6 +46,7 @@
 #include <job_work.h>
 #include <network_environment.h>
 #include <package_maintenance.h>
+#include <program.h>
 #include <shell_settings.h>
 #include <limits.h>
 #include <startup.h>
@@ -55,8 +57,8 @@
 
 static int launch_session(const struct session_config *config, struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
-    bool start_services, bool start_remote_services, handle_t retention_account,
-    struct session_wifi_supplicant *supplicant)
+    bool start_services, bool start_remote_services, const char *services_script,
+    handle_t retention_account, struct session_wifi_supplicant *supplicant)
 {
   struct terminal terminal = {bootstrap_capability("input"), bootstrap_capability("output")};
   handle_t launcher = bootstrap_capability("launcher");
@@ -84,16 +86,14 @@ static int launch_session(const struct session_config *config, struct network_co
   session_wifi_start(supplicant);
   handle_t mux_terminal = bootstrap_capability("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
-  const char *image_name = start_remote_services ? "init-remote-services" :
-      start_services ? "init-services" : multiplex ? "mux.pxe" : "init-shell.pxe";
-  const char *image_uri = start_remote_services ? "boot://init-remote-services" :
-      start_services ? "boot://init-services" : multiplex ? "bin://mux.pxe" : "boot://init-shell.pxe";
+  /* The services script names its own location: the archive's on live images,
+   * system://config/ on installed ones. mux is a package; the core archive keeps
+   * the rescue shell. */
+  const char *image_uri = script ? services_script : multiplex ? "mux" : "boot://init-shell.pxe";
   handle_t image;
-  /* Installed archives retain only recovery programs; mux belongs to the
-   * running revision's bin directory, which aliases boot on live images. */
-  handle_t image_directory = multiplex ? bootstrap_capability("bin") : boot;
-  enum call_status status = directory_lookup(image_directory, image_name, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
+  enum call_status status = script ? resolve_file(services_script, FILE_RIGHT_READ, &image) :
+      multiplex ? program_image("mux", &image) :
+      directory_lookup(boot, "init-shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot open %s (status %u)\n", image_uri, status);
     return EXIT_FAILURE;
@@ -750,6 +750,7 @@ static int finish_network(const struct network_config *config,
 int main(int argc, char **argv)
 {
   bool configure_network = false, start_services = false, start_remote_services = false;
+  const char *services_script = NULL;
   bool tcp_server = false, remote_server = false;
   uint32_t address = 0;
   unsigned port = 0;
@@ -757,10 +758,13 @@ int main(int argc, char **argv)
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--configure-network") && !configure_network) {
       configure_network = true;
-    } else if (!strcmp(argv[i], "--start-services") && !start_services) {
+    } else if (!strcmp(argv[i], "--start-services") && !start_services && i + 1 < argc) {
       start_services = true;
-    } else if (!strcmp(argv[i], "--start-remote-services") && !start_remote_services) {
+      services_script = argv[++i];
+    } else if (!strcmp(argv[i], "--start-remote-services") && !start_remote_services &&
+        i + 1 < argc) {
       start_remote_services = true;
+      services_script = argv[++i];
     } else if (!strcmp(argv[i], "--tcp-server") && !tcp_server && i + 2 < argc) {
       if (!udp_parse_address(argv[i + 1], &address) ||
           !udp_parse_number(argv[i + 2], UINT16_MAX, &port) || !port) {
@@ -839,7 +843,7 @@ int main(int argc, char **argv)
     }
   } else {
     result = launch_session(&config, &network, &runtime, configure_network,
-        start_services, start_remote_services, retention_account, &supplicant);
+        start_services, start_remote_services, services_script, retention_account, &supplicant);
   }
   if (handle_close(retention_account) != 0) {
     result = EXIT_FAILURE;
@@ -850,7 +854,7 @@ int main(int argc, char **argv)
   return result;
 
 usage:
-  fputs("Usage: session.pxe [--configure-network] [--start-services | --start-remote-services]\n"
+  fputs("Usage: session.pxe [--configure-network] [--start-services SCRIPT | --start-remote-services SCRIPT]\n"
       "       session.pxe [--configure-network] --tcp-server ADDRESS PORT [--tcp-count COUNT]\n"
       "       session.pxe [--configure-network] --remote-server PORT\n"
       "       (native init or trusted session handoff)\n", stderr);

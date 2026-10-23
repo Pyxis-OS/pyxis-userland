@@ -96,3 +96,18 @@ enum call_status program_open_reason(const struct path_context *context, const c
   command_search_capture_close(&search);
   return status;
 }
+
+enum call_status program_image(const char *name, handle_t *image)
+{
+  *image = HANDLE_INVALID;
+  if (program_is_explicit(name)) return CALL_BAD_REQUEST;
+  struct command_selection *selection = NULL;
+  enum call_status status = program_open(NULL, name, NULL, &selection);
+  if (status == CALL_OK && selection->bundle) status = CALL_WRONG_TYPE;
+  if (status == CALL_OK) {
+    *image = selection->image;
+    selection->image = HANDLE_INVALID;
+  }
+  command_selection_close(selection);
+  return status;
+}

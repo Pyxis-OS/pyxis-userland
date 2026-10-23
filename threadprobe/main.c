@@ -10,6 +10,7 @@
 #include <endpoint.h>
 #include <handle.h>
 #include <launcher.h>
+#include <program.h>
 #include <memory.h>
 #include <process.h>
 #include <startup.h>
@@ -965,8 +966,7 @@ static int supervise(bool fault, bool parking, bool tls)
     fprintf(stderr, "threadprobe: endpoint status %u\n", status);
     return 1;
   }
-  status = directory_lookup(bootstrap_capability("bin"), "threadprobe.pxe", DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
+  status = program_image("threadprobe", &image);
   enum { MEMORY, THREADS, CLOCK, BOOTSTRAP, GRANT_COUNT };
   struct launch_grant grants[GRANT_COUNT] = {
     [MEMORY] = {memory, MEMORY_RIGHT_MANAGE, 0},
@@ -1063,7 +1063,7 @@ int main(int argc, char **argv)
   threads = bootstrap_capability("threads");
   clock_service = bootstrap_capability("clock");
   if (argc != 2) {
-    fputs("usage: session bin://threadprobe.pxe "
+    fputs("usage: session threadprobe "
         "lifecycle|inspect|tls|tls-inspect|tls-stop|tls-fault|bind|refusal|exhaust|stop|fault|close|"
         "park32|park64|park-refusal|park-inspect|park-unmap|park-stop|runtime|runtime-inspect|runtime-time|runtime-limit|runtime-cxx|runtime-io|runtime-once\n", stderr);
     return 1;

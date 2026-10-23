@@ -71,8 +71,6 @@
 #define HOSTNAME_NAME "system://" MACHINE_HOSTNAME_PATH
 #define RESCUE_INIT "boot://init-shell.pxe"
 /* The bin volume shares the system volume's pool; see the installer. */
-#define BIN_VOLUME "bin"
-#define BIN_UNKNOWN_REVISION "unknown"
 #define FAT32_SELECTION_WAIT_NS UINT64_C(10000000000)
 #define FAT32_SELECTION_POLL_NS UINT64_C(1000000)
 /* Start failure reasons print in full; a tab keeps SPACE_REASON_MAX bytes. */
@@ -143,8 +141,10 @@ struct authority {
   handle_t factory;
   handle_t services[SERVICE_COUNT];
   handle_t boot, tmp;
-  /* The running revision's program directory, or the archive itself. */
+  /* The installed packages' live command view, or the archive itself. */
   handle_t bin;
+  struct mounted_volume *bin_mount; /* The packages volume bin:// views, if any. */
+  bool core_only; /* Commands come from the archive alone, as in the rescue space. */
   /* A private RAM directory; each ram volume is one of its subdirectories. */
   handle_t ram;
   handle_t native_mount, host_mount, esp_mount, fat_mounts;
@@ -1022,7 +1022,10 @@ static enum call_status build_commands(const struct authority *authority,
     };
   }
   handle_t packages = HANDLE_INVALID;
-  struct mounted_volume *mounted = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  /* bin:// is already the packages' command view on installed boots. */
+  struct mounted_volume *mounted = authority->bin_mount || authority->core_only ? NULL :
+      find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  launch->commands_mount = authority->bin_mount;
   enum call_status status = CALL_OK;
   if (mounted && mounted->root != HANDLE_INVALID) {
     status = package_commands_open(mounted->root, &packages);
@@ -1619,40 +1622,26 @@ cleanup:
   return started;
 }
 
-/* Installed boots bind bin:// to bin/REVISION on the system pool, for the
- * running kernel's revision. Live boots bind the archive itself, which holds
- * every program. Installed boots without that directory bind it too, but an
- * installed archive holds only the rescue set. */
-static void bind_bin(struct authority *authority, const struct boot_plan *plan, bool installed)
+/* Installed boots bind bin:// to the live command view of the installed
+ * packages (docs/wip/pkg-upgrade.md, step 2 task 3). Live boots, and installed
+ * boots without a packages volume, bind the archive itself. */
+static void bind_bin(struct authority *authority, struct mounts *mounts, bool installed)
 {
   authority->bin = authority->boot;
+  authority->bin_mount = NULL;
   if (!installed) {
     return;
   }
-  struct system_info_identity identity;
-  const char *revision = BIN_UNKNOWN_REVISION;
-  if (system_info_get_identity(authority->services[SERVICE_SYSTEM_INFO], &identity) == CALL_OK &&
-      identity.build_revision[0]) {
-    revision = identity.build_revision;
-  }
-  const struct boot_volume *system = boot_plan_volume(plan, BOOT_SYSTEM_VOLUME);
-  handle_t root = HANDLE_INVALID, directory = HANDLE_INVALID;
-  enum call_status status = !system || system->kind != BOOT_VOLUME_NPFS ||
-      authority->native_mount == HANDLE_INVALID ? CALL_UNAVAILABLE :
-      mount_open_volume(authority->native_mount, system->partition, BIN_VOLUME,
-        BOOT_ROOT_RIGHTS, &root);
-  if (status == CALL_OK) {
-    status = directory_lookup(root, revision, DIRECTORY_KIND_DIRECTORY, BOOT_ROOT_RIGHTS,
-        &directory);
-    handle_close(root);
-  }
+  struct mounted_volume *mounted = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  handle_t view = HANDLE_INVALID;
+  enum call_status status = mounted && mounted->root != HANDLE_INVALID ?
+      package_commands_open(mounted->root, &view) : CALL_NOT_FOUND;
   if (status != CALL_OK) {
-    printf("boot-init: no bin://%s on the pool (status %u); only the rescue set is available\n",
-        revision, status);
+    printf("boot-init: no installed packages (status %u); bin:// is the core archive\n", status);
     return;
   }
-  printf("boot-init: bin:// is revision %s\n", revision);
-  authority->bin = directory;
+  authority->bin = view;
+  authority->bin_mount = mounted;
 }
 
 /* The pool's system volume, as boot init mounts it for the configuration and
@@ -1660,12 +1649,16 @@ static void bind_bin(struct authority *authority, const struct boot_plan *plan, 
 static struct boot_volume pool_system = {
   .name = BOOT_SYSTEM_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_SYSTEM_VOLUME,
 };
+/* The rescue space reinstalls packages here (docs/wip/pkg-upgrade.md, decision 18). */
+static struct boot_volume pool_packages = {
+  .name = BOOT_PACKAGES_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_PACKAGES_VOLUME,
+};
 
-/* Mounts the system volume of pool partition POOL read-write, once. */
-static struct mounted_volume *mount_pool_system(const struct authority *authority,
-    struct mounts *mounts, uint32_t pool)
+/* Mounts VOLUME of pool partition POOL read-write, once. */
+static struct mounted_volume *mount_pool_volume(const struct authority *authority,
+    struct mounts *mounts, uint32_t pool, struct boot_volume *volume)
 {
-  struct mounted_volume *mounted = find_mount(mounts, BOOT_SYSTEM_VOLUME);
+  struct mounted_volume *mounted = find_mount(mounts, volume->name);
   if (mounted) {
     return mounted;
   }
@@ -1675,13 +1668,13 @@ static struct mounted_volume *mount_pool_system(const struct authority *authorit
     return NULL;
   }
   mounts->entries = entries;
-  pool_system.partition = pool;
+  volume->partition = pool;
   mounted = &mounts->entries[mounts->count++];
-  *mounted = (struct mounted_volume){.volume = &pool_system,
+  *mounted = (struct mounted_volume){.volume = volume,
     .root = HANDLE_INVALID, .control = HANDLE_INVALID};
-  mounted->status = mount_volume(authority, &pool_system, true, mounted);
+  mounted->status = mount_volume(authority, volume, true, mounted);
   if (mounted->status != CALL_OK) {
-    printf("boot-init: volume %s unavailable (status %u)\n", BOOT_SYSTEM_VOLUME, mounted->status);
+    printf("boot-init: volume %s unavailable (status %u)\n", volume->name, mounted->status);
   }
   return mounted;
 }
@@ -1695,7 +1688,7 @@ static bool read_pool_configuration(const struct authority *authority, uint32_t 
     struct mounts *mounts, struct boot_config *config, struct config_handoff_bytes *session,
     struct config_handoff_bytes *network, char *reason, size_t size)
 {
-  struct mounted_volume *system = mount_pool_system(authority, mounts, pool);
+  struct mounted_volume *system = mount_pool_volume(authority, mounts, pool, &pool_system);
   if (!system || system->root == HANDLE_INVALID) {
     snprintf(reason, size, "the system volume on pool partition %u is unavailable (status %u)",
         pool, system ? system->status : CALL_NO_MEMORY);
@@ -1759,12 +1752,22 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   static const struct boot_space pool_rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
     .clipboard_local = true, .clipboard_shared = true, .roots = roots, .root_count = 1,
-    .network = true,
+    .network = true, .package_management = true,
   };
   printf("boot-init: %s; starting the rescue space\n", reason);
-  struct mounted_volume *system = pool ? mount_pool_system(authority, mounts, pool) : NULL;
+  struct mounted_volume *system = pool ? mount_pool_volume(authority, mounts, pool, &pool_system) : NULL;
   bool with_pool = system && system->root != HANDLE_INVALID;
-  start_space(authority, mounts, with_pool ? &pool_rescue : &rescue);
+  if (with_pool) {
+    /* Optional: without it the rescue space still starts, without pkg. */
+    mount_pool_volume(authority, mounts, pool, &pool_packages);
+  }
+  /* The rescue space runs the core archive alone; it manages packages but runs
+   * none of them. */
+  struct authority core = *authority;
+  core.bin = authority->boot;
+  core.bin_mount = NULL;
+  core.core_only = true;
+  start_space(&core, mounts, with_pool ? &pool_rescue : &rescue);
 }
 
 static bool close_frozen(struct authority *authority)
@@ -1952,13 +1955,10 @@ int main(int argc, char **argv)
       fprintf(stderr, "boot-init: Wi-Fi country policy refused (status %u); no Wi-Fi TX admitted\n", policy);
     }
   }
-  if (configured) {
-    bind_bin(&authority, &plan, pool_configured);
-  } else {
-    authority.bin = authority.boot;
-  }
+  authority.bin = authority.boot;
   size_t started = 0;
   if (configured && mount_plan(&authority, &plan, &mounts)) {
+    bind_bin(&authority, &mounts, pool_configured);
     seed_live_repositories(&authority, &mounts);
     struct mounted_volume *packages = find_mount(&mounts, BOOT_PACKAGES_VOLUME);
     struct mounted_volume *http_work = find_mount(&mounts, BOOT_HTTP_WORK_VOLUME);

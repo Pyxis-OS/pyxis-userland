@@ -30,6 +30,10 @@ enum call_status program_open(const struct path_context *context, const char *co
     struct path_workspace *workspace, struct command_selection **selection);
 enum call_status program_open_reason(const struct path_context *context, const char *command,
     struct path_workspace *workspace, struct command_selection **selection, char *refusal);
+/* The plain native image a bare NAME resolves to through the caller's commands
+ * entry, for a launcher that starts it with grants of its own. A bundle is
+ * WRONG_TYPE. Success owns *IMAGE. */
+enum call_status program_image(const char *name, handle_t *image);
 /* For PATH-aware adapters only: absent PATH uses SEARCH. Otherwise only the
  * exact colon-joined diagnostic labels are supported. Text never grants search
  * authority; an empty projection is empty, never cwd. */

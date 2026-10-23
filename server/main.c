@@ -12,6 +12,7 @@
 #include <file.h>
 #include <handle.h>
 #include <launcher.h>
+#include <program.h>
 #include <process.h>
 #include <startup.h>
 #include <stdio.h>
@@ -258,11 +259,11 @@ int main(int argc, char **argv)
   handle_t memory = bootstrap_capability("memory");
   handle_t output = bootstrap_capability("output");
   handle_t clock = bootstrap_capability("clock");
-  handle_t boot = bootstrap_capability("boot"), bin = bootstrap_capability("bin");
+  handle_t boot = bootstrap_capability("boot");
   if (service == HANDLE_INVALID || launcher == HANDLE_INVALID ||
       memory == HANDLE_INVALID || output == HANDLE_INVALID ||
       (deadline_mode && clock == HANDLE_INVALID) ||
-      boot == HANDLE_INVALID || bin == HANDLE_INVALID) {
+      boot == HANDLE_INVALID) {
     return 1;
   }
 
@@ -281,8 +282,7 @@ int main(int argc, char **argv)
   if (!packets) {
     goto done;
   }
-  status = directory_lookup(bin, "client.pxe", DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
+  status = program_image("client", &image);
   if (status != CALL_OK || open_content(boot, &content) != CALL_OK) {
     goto done;
   }

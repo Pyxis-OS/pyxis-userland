@@ -29,6 +29,7 @@
 #include <launcher.h>
 #include <network_environment.h>
 #include <package_maintenance.h>
+#include <program.h>
 #include <shell_settings.h>
 #include <startup.h>
 #include <string.h>
@@ -389,14 +390,18 @@ static enum call_status broker_launch(struct remote_context *context,
     goto done;
   }
   bool mux = broker_caller != HANDLE_INVALID;
-  handle_t image_root = HANDLE_INVALID;
-  for (size_t i = 0; i < context->entry_count; ++i) {
-    if (!strcmp((const char *)(uintptr_t)context->entries[i].name, mux ? "bin" : "boot")) {
-      image_root = context->grants[context->entries[i].value].source;
+  if (mux) {
+    /* mux is a package; the core archive keeps the rescue shell. */
+    status = program_image("mux", &image);
+  } else {
+    handle_t boot = HANDLE_INVALID;
+    for (size_t i = 0; i < context->entry_count; ++i) {
+      if (!strcmp((const char *)(uintptr_t)context->entries[i].name, "boot")) {
+        boot = context->grants[context->entries[i].value].source;
+      }
     }
+    status = directory_lookup(boot, "init-shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   }
-  status = directory_lookup(image_root, mux ? "mux.pxe" : "init-shell.pxe", DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     goto done;
   }
@@ -481,7 +486,7 @@ static enum call_status broker_launch(struct remote_context *context,
   }
   char width[sizeof("32")];
   snprintf(width, sizeof(width), "%u", tab_width);
-  const char *arguments[] = {mux ? "bin://mux.pxe" : "boot://init-shell.pxe",
+  const char *arguments[] = {mux ? "mux" : "boot://init-shell.pxe",
     legacy_root ? (no_echo ? "--no-echo" : "--remote-prompt") : "--tab-width", width};
   for (size_t i = 0; i < context->environment.count; ++i) {
     bool selected = false;

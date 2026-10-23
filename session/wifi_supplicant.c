@@ -154,7 +154,7 @@ static void start_attempt(struct session_wifi_supplicant *worker, uint64_t now)
     PROFILE_PRIVATE_CAP("wifi_auth", 0), PROFILE_CAP("memory", 1),
     PROFILE_CAP("clock", 2), PROFILE_CAP("random", 3),
   };
-  const char *arguments[] = {"bin://wifi-supplicant.pxe"};
+  const char *arguments[] = {"boot://wifi-supplicant.pxe"};
   struct launch_request request = {
     .image = worker->image, .grants = (uintptr_t)grants, .grant_count = 4,
     .entries = (uintptr_t)entries, .entry_count = 4,
@@ -360,10 +360,11 @@ void session_wifi_start(struct session_wifi_supplicant *worker)
   if (status == CALL_OK) {
     status = retain_resource(&capture, "random", RANDOM_RIGHT_READ, &worker->random);
   }
-  const struct environment_value *bin = environment_capture_find(&capture, "bin");
+  /* The supplicant is in the core archive (docs/wip/pkg-upgrade.md, decision 18). */
+  const struct environment_value *boot = environment_capture_find(&capture, "boot");
   if (status == CALL_OK) {
-    status = bin && bin->kind == ENVIRONMENT_CAP ?
-        directory_lookup(bin->handle, "wifi-supplicant.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &worker->image) :
+    status = boot && boot->kind == ENVIRONMENT_CAP ?
+        directory_lookup(boot->handle, "wifi-supplicant.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &worker->image) :
         CALL_DENIED;
   }
   uint64_t now = 0;
