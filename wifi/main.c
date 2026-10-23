@@ -285,6 +285,48 @@ static const char *input_state(uint32_t state)
   return names[state];
 }
 
+static void print_tas(const struct wifi_tas_diagnostic *tas)
+{
+  static const char *const stages[] = {"none", "query-0", "function-5", "alias"};
+  static const char *const reasons[] = {
+    "none", "lookup", "evaluation", "allocation", "type", "length",
+    "support-mask", "signature", "revision", "enable", "alias",
+  };
+  static const char *const objects[] = {
+    "unobserved", "integer", "buffer", "package", "string", "other",
+  };
+  printf("wifi: TAS disabled stage=%s reason=%s object=%s alias-conflict=%u",
+      stages[tas->stage], reasons[tas->reason], objects[tas->object_type],
+      !!(tas->flags & WIFI_TAS_ALIAS_CONFLICT));
+  if (tas->flags & WIFI_TAS_LENGTH_VALID) {
+    printf(" bytes=%llu", (unsigned long long)tas->length);
+  }
+  if (tas->flags & WIFI_TAS_SUPPORT_VALID) {
+    printf(" support=%llx", (unsigned long long)tas->supported);
+  }
+  putchar('\n');
+}
+
+static void print_sar_source(const char *name, const struct wifi_sar_source *source)
+{
+  printf("wifi: SAR %s CID=%x revision=%u antennas=%u subbands=%u profiles=%u\n",
+      name, source->cid, source->revision, source->antennas, source->subbands, source->profiles);
+}
+
+static void print_sar(const struct wifi_sar_inputs *sar)
+{
+  printf("wifi: SAR fixed=%s sources=%x; input only, not applied\n",
+      input_state(sar->state), sar->sources);
+  if (sar->sources & WIFI_SAR_SOURCE_WRDS) print_sar_source("WRDS", &sar->wrds);
+  if (sar->sources & WIFI_SAR_SOURCE_RWRD) print_sar_source("RWRD", &sar->rwrd);
+  if (sar->state == WIFI_INPUT_VALID) {
+    for (size_t path = 0; path < 2; ++path) {
+      printf("wifi: SAR path=%c 1TX-eighth-dBm=%d 2TX-eighth-dBm=%d\n",
+          (int)('A' + path), sar->limits_1tx_eighth_dbm[path], sar->limits_2tx_eighth_dbm[path]);
+    }
+  }
+}
+
 static void print_radio_inputs(const struct wifi_status_reply *status)
 {
   const struct wifi_radio_inputs *radio = &status->radio;
@@ -299,6 +341,8 @@ static void print_radio_inputs(const struct wifi_status_reply *status)
       input_state(radio->dynamic_sar_state), input_state(radio->sar_selector_state),
       input_state(radio->geographic_sar_state), input_state(radio->antenna_gain_state),
       input_state(radio->tas_state));
+  print_tas(&radio->tas);
+  print_sar(&radio->sar);
   for (size_t i = 0; i < WIFI_CHANNEL_24_COUNT; ++i) {
     if (radio->rule_channels & (UINT32_C(1) << i)) {
       printf("wifi: rule channel=%zu EIRP-mBm=%d flags=%x\n",

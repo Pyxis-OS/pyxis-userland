@@ -52,6 +52,15 @@ matching rule means RFK is qualified or that RF transmission is admitted.
 Missing, malformed and failed platform reads remain distinct. The input observer
 adds no RF commands; RTL scan/connect remain unavailable in this cut.
 
+TAS stays disabled. Its diagnostic identifies query-0, function-5 or alias
+rejection, with the observed object type and any known length/support mask.
+The fixed SAR observation normalizes every RWRD profile, intersecting present
+WRDS independently. It reports the source CID/revision/shape and separate path
+A/B 1TX/2TX ceilings in eighth-dBm, including the source-specific 2TX reduction.
+RWSI cannot select a less restrictive profile; TAS cannot boost the result.
+Unknown or bad required sources yield no numeric limits. These are SAR inputs,
+not a claim that regulatory, board and antenna limits or calibration are applied.
+
 Trusted `wifi_policy` configuration may omit country (or use `"00"`) for RTL
 world-domain rules while supplying the narrowing channel mask. Country `"00"`
 names the same world domain in the shared policy contract; AX200 Install support

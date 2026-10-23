@@ -52,6 +52,43 @@ static bool boot_facts_valid(const struct wifi_boot_facts *boot)
   return true;
 }
 
+static bool tas_diagnostic_valid(const struct wifi_tas_diagnostic *tas)
+{
+  return tas->stage <= WIFI_TAS_STAGE_ALIAS && tas->reason <= WIFI_TAS_REASON_ALIAS &&
+      tas->object_type <= WIFI_TAS_OBJECT_OTHER && !(tas->flags & ~WIFI_TAS_FLAGS) &&
+      ((tas->flags & WIFI_TAS_OBJECT_VALID) || !tas->object_type) &&
+      ((tas->flags & WIFI_TAS_LENGTH_VALID) || !tas->length) &&
+      ((tas->flags & WIFI_TAS_SUPPORT_VALID) || !tas->supported);
+}
+
+static bool sar_source_valid(const struct wifi_sar_source *source, bool dynamic)
+{
+  if (source->cid != WIFI_SAR_CID_HP && source->cid != WIFI_SAR_CID_RT) return false;
+  if (!((source->revision == 1 && source->subbands == 5) ||
+      (source->revision == 2 && source->subbands == 11))) return false;
+  if (source->antennas != 4 && !(source->cid == WIFI_SAR_CID_RT && source->antennas == 2)) {
+    return false;
+  }
+  return source->profiles && source->profiles <= (dynamic ? WIFI_SAR_PROFILES : 1u);
+}
+
+static bool sar_inputs_valid(const struct wifi_sar_inputs *sar)
+{
+  if (sar->state > WIFI_INPUT_FAILED || (sar->sources & ~WIFI_SAR_SOURCES)) {
+    return false;
+  }
+  if (sar->state != WIFI_INPUT_VALID) {
+    const struct wifi_sar_inputs empty = {.state = sar->state};
+    return !memcmp(sar, &empty, sizeof(empty));
+  }
+  const struct wifi_sar_source empty = {0};
+  return sar->sources &&
+      ((sar->sources & WIFI_SAR_SOURCE_WRDS) ? sar_source_valid(&sar->wrds, false) :
+        !memcmp(&sar->wrds, &empty, sizeof(empty))) &&
+      ((sar->sources & WIFI_SAR_SOURCE_RWRD) ? sar_source_valid(&sar->rwrd, true) :
+        !memcmp(&sar->rwrd, &empty, sizeof(empty)));
+}
+
 static bool radio_inputs_valid(const struct wifi_radio_inputs *radio)
 {
   if (radio->kind == WIFI_RADIO_INPUTS_NONE) {
@@ -66,7 +103,8 @@ static bool radio_inputs_valid(const struct wifi_radio_inputs *radio)
       radio->dynamic_sar_state > WIFI_INPUT_FAILED ||
       radio->sar_selector_state > WIFI_INPUT_FAILED ||
       radio->geographic_sar_state > WIFI_INPUT_FAILED ||
-      radio->antenna_gain_state > WIFI_INPUT_FAILED || radio->tas_state > WIFI_INPUT_FAILED) {
+      radio->antenna_gain_state > WIFI_INPUT_FAILED || radio->tas_state > WIFI_INPUT_FAILED ||
+      !tas_diagnostic_valid(&radio->tas) || !sar_inputs_valid(&radio->sar)) {
     return false;
   }
   for (size_t i = 0; i < WIFI_CHANNEL_24_COUNT; ++i) {
