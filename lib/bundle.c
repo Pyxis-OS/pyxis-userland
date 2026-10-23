@@ -531,17 +531,20 @@ static enum call_status parse_packages(struct bundle_program *program,
   return CALL_OK;
 }
 
-/* "sdk": true; false is the same as leaving it out. */
+/* "sdk": true requires sdk://, "sdk": "optional" launches without it when it
+ * is unavailable, and false is the same as leaving it out. */
 static enum call_status parse_sdk(struct bundle_program *program,
     const struct bundle_json_node *value)
 {
-  if (value->type != BUNDLE_JSON_BOOLEAN || program->grant_count == BUNDLE_GRANT_LIMIT) {
+  bool optional = value->type == BUNDLE_JSON_STRING && !strcmp(value->string, "optional");
+  if ((value->type != BUNDLE_JSON_BOOLEAN && !optional) ||
+      program->grant_count == BUNDLE_GRANT_LIMIT) {
     return CALL_BAD_REQUEST;
   }
-  if (value->integer) {
+  if (optional || value->integer) {
     program->grants[program->grant_count++] = (struct bundle_grant_request){
       .name = BUNDLE_SDK_ROOT, .resource = "directory", .sdk = true,
-      .protocol = PROTOCOL_DIRECTORY, .rights = PACKAGE_TREE_RIGHTS, .required = true,
+      .protocol = PROTOCOL_DIRECTORY, .rights = PACKAGE_TREE_RIGHTS, .required = !optional,
     };
   }
   return CALL_OK;

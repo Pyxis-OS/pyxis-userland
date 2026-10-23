@@ -528,6 +528,9 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     } else if (source != HANDLE_INVALID && requests[i].sdk) {
       handle_t view = HANDLE_INVALID;
       if (selected_sdk(program, source, prepared, &view) != CALL_OK) {
+        if (!requests[i].required) {
+          continue;
+        }
         *missing = requests[i].name;
         return CALL_DENIED;
       }

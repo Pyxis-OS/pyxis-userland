@@ -25,7 +25,7 @@ struct bundle_grant_request {
   const char *const *packages;
   size_t package_count;
   /* Only the grant named BUNDLE_SDK_ROOT: a read-only sdk:// of the set its
-   * pkg:// comes from. */
+   * pkg:// comes from, required unless the manifest says "sdk": "optional". */
   bool sdk;
   const char *root;
   /* Optional canonical lo/ethN/wlanN role for TCP/UDP/echo. Preparation resolves
