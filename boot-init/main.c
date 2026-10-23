@@ -83,8 +83,10 @@
 
 #define BOOT_ROOT_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
+/* FILESYSTEM_INFO lets a program confirm tmp:// is RAM-backed, as the boot
+ * publisher requires of the workspace pkg upgrade makes there. */
 #define TMP_ROOT_RIGHTS (BOOT_ROOT_RIGHTS | DIRECTORY_RIGHT_CREATE | \
-    DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE)
+    DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_FILESYSTEM_INFO)
 #define READ_ONLY_ROOT_RIGHTS (BOOT_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO)
 
 /* Services forwarded to every space init, in grant order. The network owner
