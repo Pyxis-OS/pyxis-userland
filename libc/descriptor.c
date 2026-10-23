@@ -18,6 +18,8 @@
 #include <output.h>
 #include <path.h>
 #include <pyxis/descriptor.h>
+#include <pyxis/terminal.h>
+#include <wait.h>
 #include <startup.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -52,6 +54,9 @@ struct descriptor_object {
   size_t storage; /* Aliases and admitted operations; no native grant copies. */
   bool closed;
   struct libc_mutex read_guard, write_guard;
+  struct libc_mutex terminal_guard; /* Mode owner only; never held by waits. */
+  handle_t terminal_raw;
+  int terminal_error; /* Uncertain mode ownership is never replayed. */
   bool allocated;
   enum descriptor_kind kind;
   handle_t handle;
@@ -261,6 +266,7 @@ void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream
    * before constructors or main can observe endpoint lifetime. */
   struct descriptor_object *object = &startup_objects[index];
   *object = (struct descriptor_object){
+    .terminal_guard = LIBC_MUTEX_INITIALIZER,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1,
@@ -478,6 +484,7 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
   transaction->inplace = mode->readable;
   handle_t handle = transactional ? transaction->body : opened.resource;
   *object = (struct descriptor_object){
+    .terminal_guard = LIBC_MUTEX_INITIALIZER,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = handle,
@@ -547,6 +554,7 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
     return fail(error);
   }
   *object = (struct descriptor_object){
+    .terminal_guard = LIBC_MUTEX_INITIALIZER,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
@@ -611,6 +619,241 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
   return 0;
 }
 
+/* A saved mode owns storage only. Descriptor aliases share this mode owner;
+ * independent opens and native owners retain their own PASSTHROUGH grants. */
+struct pyxis_terminal_state {
+  struct descriptor_object *object;
+  bool raw;
+};
+
+static int terminal_check(struct descriptor_object *object)
+{
+  if (!object) {
+    return -1;
+  }
+  if (__atomic_load_n(&object->closed, __ATOMIC_ACQUIRE)) {
+    return fail(EBADF);
+  }
+  return object->kind == DESCRIPTOR_CONSOLE ? 0 : fail(ENOTTY);
+}
+
+static bool terminal_matches(int descriptor, struct descriptor_object *object)
+{
+  libc_lock_acquire(&table_guard);
+  bool matches = lookup(descriptor) == object;
+  libc_lock_release(&table_guard);
+  return matches;
+}
+
+int pyxis_terminal_is_terminal(int descriptor)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int result = terminal_check(object) == 0;
+  descriptor_drop(object);
+  return result;
+}
+
+int pyxis_terminal_get_size(int descriptor, struct console_size_reply *size)
+{
+  if (!size) {
+    return fail(EINVAL);
+  }
+  *size = (struct console_size_reply){0};
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (terminal_check(object) < 0) {
+    descriptor_drop(object);
+    return -1;
+  }
+  struct console_size_reply result;
+  enum call_status status = console_size(object->handle, &result);
+  bool matches = terminal_matches(descriptor, object);
+  descriptor_drop(object);
+  if (!matches) {
+    return fail(EBADF);
+  }
+  if (status != CALL_OK) {
+    return fail(libc_call_errno(status));
+  }
+  *size = result;
+  return 0;
+}
+
+static int terminal_set_raw(struct descriptor_object *object, bool raw)
+{
+  if (object->terminal_error) {
+    return fail(object->terminal_error);
+  }
+  if (raw && !object->readable) {
+    return fail(EACCES);
+  }
+  if (raw == (object->terminal_raw != HANDLE_INVALID)) {
+    return 0;
+  }
+  if (raw) {
+    enum call_status status = console_passthrough(object->handle, &object->terminal_raw);
+    if (status != CALL_OK) {
+      /* BAD_REQUEST here can be a malformed successful reply. Never replay
+       * an acquisition whose effect cannot be established. */
+      if (status == CALL_OUTCOME_UNKNOWN || status == CALL_BAD_REQUEST) {
+        object->terminal_error = EIO;
+      }
+      return fail(object->terminal_error ? object->terminal_error : libc_call_errno(status));
+    }
+    return 0;
+  }
+  handle_t raw_handle = object->terminal_raw;
+  object->terminal_raw = HANDLE_INVALID;
+  if (descriptor_release_handle(raw_handle) < 0) {
+    object->terminal_error = errno;
+    return -1;
+  }
+  return 0;
+}
+
+static int terminal_snapshot(int descriptor, struct pyxis_terminal_state **state, bool raw)
+{
+  if (!state) {
+    return fail(EINVAL);
+  }
+  *state = NULL;
+  struct pyxis_terminal_state *saved = malloc(sizeof(*saved));
+  if (!saved) {
+    return -1;
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int error = 0;
+  if (terminal_check(object) < 0) {
+    error = errno;
+  } else {
+    error = libc_mutex_lock(&object->terminal_guard);
+    if (!error) {
+      if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+        error = EBADF;
+      } else if (object->terminal_error) {
+        error = object->terminal_error;
+      } else {
+        *saved = (struct pyxis_terminal_state){
+          .object = object, .raw = object->terminal_raw != HANDLE_INVALID,
+        };
+        if (raw && terminal_set_raw(object, true) < 0) {
+          error = errno;
+        }
+      }
+      unlock_object(&object->terminal_guard);
+    }
+  }
+  if (error) {
+    descriptor_drop(object);
+    free(saved);
+    return fail(error);
+  }
+  *state = saved;
+  return 0;
+}
+
+int pyxis_terminal_get_state(int descriptor, struct pyxis_terminal_state **state)
+{
+  return terminal_snapshot(descriptor, state, false);
+}
+
+int pyxis_terminal_make_raw(int descriptor, struct pyxis_terminal_state **previous)
+{
+  return terminal_snapshot(descriptor, previous, true);
+}
+
+int pyxis_terminal_restore(int descriptor, const struct pyxis_terminal_state *state)
+{
+  if (!state) {
+    return fail(EINVAL);
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  if (object != state->object) {
+    descriptor_drop(object);
+    return fail(EBADF);
+  }
+  int error = libc_mutex_lock(&object->terminal_guard);
+  if (!error) {
+    if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+      error = EBADF;
+    } else if (terminal_set_raw(object, state->raw) < 0) {
+      error = errno;
+    }
+    unlock_object(&object->terminal_guard);
+  }
+  descriptor_drop(object);
+  return error ? fail(error) : 0;
+}
+
+void pyxis_terminal_state_free(struct pyxis_terminal_state *state)
+{
+  if (state) {
+    descriptor_drop(state->object);
+    free(state);
+  }
+}
+
+enum call_status pyxis_terminal_wait(int descriptor, uint64_t interests,
+    uint64_t generation, uint64_t deadline, uint64_t *events)
+{
+  if (!events || !interests || (interests & ~(WAIT_READABLE | WAIT_WRITABLE | WAIT_RESIZED))) {
+    return CALL_BAD_REQUEST;
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (!object) {
+    return errno == EMFILE ? CALL_LIMIT : CALL_BAD_HANDLE;
+  }
+  libc_lock_acquire(&table_guard);
+  bool matches = lookup(descriptor) == object;
+  uint64_t descriptor_generation = matches ? entries[descriptor].generation : 0;
+  libc_lock_release(&table_guard);
+  enum call_status status = CALL_OK;
+  if (!matches) {
+    status = CALL_BAD_HANDLE;
+  } else if (terminal_check(object) < 0) {
+    status = errno == EBADF ? CALL_BAD_HANDLE : CALL_WRONG_TYPE;
+  } else if (((interests & WAIT_READABLE) && !object->readable) ||
+      ((interests & WAIT_WRITABLE) && !object->writable)) {
+    status = CALL_DENIED;
+  }
+  bool buffered = false;
+  if (status == CALL_OK && (interests & WAIT_READABLE)) {
+    /* Never wait on an active descriptor reader before entering a bounded
+     * wait. The caller can retry BUSY; no descriptor input is consumed. */
+    int error = libc_mutex_trylock(&object->read_guard);
+    if (error) {
+      status = error == EBUSY ? CALL_BUSY : CALL_IO;
+    } else {
+      buffered = object->ahead_count != 0;
+      unlock_object(&object->read_guard);
+    }
+  }
+  uint64_t result = 0;
+  if (status == CALL_OK) {
+    struct wait_interest interest = {
+      .handle = object->handle, .events = interests, .observed_generation = generation,
+    };
+    status = wait_many(&interest, 1, buffered ? 0 : deadline, &result);
+    if (status == CALL_OK && buffered) {
+      result |= WAIT_READABLE;
+    }
+  }
+  libc_lock_acquire(&table_guard);
+  matches = lookup(descriptor) == object &&
+      entries[descriptor].generation == descriptor_generation;
+  libc_lock_release(&table_guard);
+  if (!matches) {
+    status = CALL_BAD_HANDLE;
+  }
+  descriptor_drop(object);
+  if (status == CALL_OK) {
+    *events = result;
+  }
+  return status;
+}
+
 int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
 {
   if (!handle || *handle == HANDLE_INVALID || !access ||
@@ -664,6 +907,7 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
     return -1;
   }
   *object = (struct descriptor_object){
+    .terminal_guard = LIBC_MUTEX_INITIALIZER,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = *handle,
@@ -755,7 +999,22 @@ static int release_alias(struct descriptor_object *object, bool final, bool aban
     if (!abandon && !first_error && object->transaction) {
       first_error = __atomic_load_n(&object->transaction->failure, __ATOMIC_ACQUIRE);
     }
-    handle_t handles[6] = {object->handle, object->value};
+    /* Snapshots retain storage, never descriptor authority or the raw hold.
+     * Synchronize an admitted mode call, but never wait for byte I/O/readiness. */
+    handle_t raw = HANDLE_INVALID;
+    if (object->kind == DESCRIPTOR_CONSOLE) {
+      if (libc_mutex_lock(&object->terminal_guard)) {
+        __builtin_trap();
+      }
+      raw = object->terminal_raw;
+      object->terminal_raw = HANDLE_INVALID;
+      if (!first_error) {
+        first_error = object->terminal_error;
+      }
+      unlock_object(&object->terminal_guard);
+    }
+    handle_t handles[7] = {object->handle, object->value};
+    handles[6] = raw;
     if (object->transaction) {
       handles[2] = object->transaction->control;
       handles[3] = object->transaction->body;
