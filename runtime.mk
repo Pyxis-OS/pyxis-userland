@@ -137,6 +137,16 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/copysign.c \
                 third_party/musl/src/math/fdim.c \
                 third_party/musl/src/math/fma.c \
+                third_party/musl/src/math/fmaf.c \
+                third_party/musl/src/math/truncf.c \
+                third_party/musl/src/math/ldexpf.c \
+                third_party/musl/src/math/frexpf.c \
+                third_party/musl/src/math/exp2f.c \
+                third_party/musl/src/math/copysignf.c \
+                third_party/musl/src/math/llrint.c \
+                third_party/musl/src/math/llround.c \
+                third_party/musl/src/math/lroundf.c \
+                third_party/musl/src/math/scalbnf.c \
                 third_party/musl/src/math/fmax.c \
                 third_party/musl/src/math/fmaxf.c \
                 third_party/musl/src/math/fmin.c \

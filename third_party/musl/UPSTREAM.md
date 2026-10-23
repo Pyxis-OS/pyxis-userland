@@ -353,3 +353,12 @@ one is NaN and preserve the minimum/maximum signed zero respectively.
 The existing FP-exception-only error profile, rounding-aware compilation flags
 and unsupported signaling-NaN limit apply. All four functions live in libc,
 leave errno unchanged and require no separate `-lm`.
+
+Mesa softpipe prerequisites add these unmodified files from the same pin:
+`src/math/fmaf.c`, `truncf.c`, `ldexpf.c`, `scalbnf.c`, `frexpf.c`, `exp2f.c`,
+`copysignf.c`, `llrint.c`, `llround.c` and `lroundf.c` (all under `src/math/`).
+The existing exp2f coefficient table and math helpers supply their remaining
+closure. `fmaf.c` retains David Schultz's BSD-2-Clause notice; its floating-point
+exception/rounding operations use the real libc fenv implementation. Other
+files retain the upstream musl notices, including Arm's MIT notice in exp2f.
+No port-local numerical approximations or errno changes are introduced.

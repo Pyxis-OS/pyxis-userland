@@ -153,15 +153,23 @@ double erfc(double value);
 long double fabsl(long double value);
 long double copysignl(long double magnitude, long double sign);
 
-/* The remaining double functions of ISO C math.h, from musl 1.2.5. Only the
- * float and long double forms declared in this header are provided. The
- * lround/llround/lrint families beyond those above, the exp/log/trig forms not
- * listed here, the comparison macros and the non-ISO functions (j0, y0, gamma,
- * drem, exp10 and similar) are absent. */
+/* Additional ISO C math functions from musl 1.2.5. Only the forms declared
+ * here are provided; unlisted float/long-double forms, comparison macros and
+ * non-ISO functions (j0, y0, gamma, drem, exp10 and similar) are absent. */
 double copysign(double magnitude, double sign);
 double fdim(double x, double y);
 /* Correctly rounded single-rounding x*y+z. */
 double fma(double x, double y, double z);
+float fmaf(float x, float y, float z);
+float truncf(float value);
+float ldexpf(float value, int exponent);
+float scalbnf(float value, int exponent);
+float frexpf(float value, int *exponent);
+float exp2f(float value);
+float copysignf(float magnitude, float sign);
+long long llrint(double value);
+long long llround(double value);
+long lroundf(float value);
 /* A NaN argument is ignored in favor of the other. Signed zeros compare
  * unequal: fmax(-0.0, 0.0) is +0.0 and fmin is -0.0. */
 double fmax(double x, double y);
