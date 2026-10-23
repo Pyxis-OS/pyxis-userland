@@ -6,7 +6,8 @@ uses the space's declared package management grant and GET-only HTTP providers.
 
 pkg status
 pkg list [--available]
-pkg [--timeout SECONDS] install [REPO/]ID[@VERSION]...
+pkg check [REPO/]ID[@VERSION]
+pkg [--timeout SECONDS] [--yes] install [REPO/]ID[@VERSION]...
 pkg remove ID...
 pkg rollback [SET]
 pkg verify
@@ -20,6 +21,12 @@ Repository names follow the package ID rules. `REPO/ID` installs from one
 repository; a plain ID offered by several gives a numbered choice on a console
 and is refused elsewhere, listing the `REPO/ID` spellings. The review shows
 which repository each fetched package comes from.
+
+`pkg check` reads only the repository indexes and needs no packages volume. It
+prints the build of ID that this system can install, or fails saying whether
+builds exist only for other ABIs or not at all. Install runs it before its
+Review. `--yes` switches to the reviewed set without asking, which lets Install
+run pkg without a console; it does not answer a repository choice.
 
 Program and toolchain packages record the ABI they were
 built for; `pkg` reads what the running system provides from

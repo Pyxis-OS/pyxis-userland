@@ -56,6 +56,8 @@ struct client {
   const struct offered_package **fetched;
   size_t fetched_count;
   uint64_t timeout;
+  /* --yes: switch without the console question, for Install. */
+  bool yes;
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
   enum call_status cleanup_status;
@@ -492,6 +494,42 @@ static bool request(const char *text, struct package_request *request)
   return true;
 }
 
+/* check: reads only the repositories' indexes, with no packages volume, and
+ * prints the build of TEXT this system can install. Install runs it before its
+ * Review (docs/wip/pkg-upgrade.md, decision 67). */
+static bool check(const char *text)
+{
+  struct package_request wanted;
+  if (!load_repositories() || !request(text, &wanted)) {
+    return false;
+  }
+  const char *version = wanted.explicit_version ? wanted.identity.version : NULL;
+  const struct offered_package *chosen;
+  if (!resolve(wanted.identity.id, version, wanted.repository, false, &chosen)) {
+    return false;
+  }
+  if (chosen) {
+    const struct pkg_entry *entry = &chosen->entry;
+    printf("pkg: %s/%s@%s is offered for this system%s%s\n",
+        client.repositories.entries[chosen->repository].name,
+        entry->identity.id, entry->identity.version,
+        entry->abi[0] ? ", ABI " : "", entry->abi);
+    return true;
+  }
+  const struct package_provided_abi *provided = provided_abi();
+  if (!client.provided_readable) {
+    snprintf(client.message, sizeof(client.message),
+        "%s cannot be checked: this system's ABI is unreadable (%s)", text, PACKAGE_OS_RELEASE);
+  } else if (hidden_builds(wanted.identity.id, version, wanted.repository)) {
+    snprintf(client.message, sizeof(client.message),
+        "%s is offered only for other systems; none for ABI %s", text, provided->text);
+  } else {
+    snprintf(client.message, sizeof(client.message),
+        "%s is not offered by any repository; this system provides ABI %s", text, provided->text);
+  }
+  return fail(client.message);
+}
+
 static bool verify_version(const struct pkg_identity *identity, struct pkg_manifest *manifest)
 {
   handle_t tree;
@@ -800,6 +838,10 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
     if (find_package(after, before->entries[i].id) == SIZE_MAX) {
       printf("  remove %s@%s\n", before->entries[i].id, before->entries[i].version);
     }
+  }
+  if (client.yes) {
+    puts("Switching to this package set (--yes).");
+    return true;
   }
   if (client.terminal.input == HANDLE_INVALID || client.terminal.output == HANDLE_INVALID) {
     return fail("package changes require an interactive console review");
@@ -1136,7 +1178,7 @@ static bool repository_command(const char *command, const char *name, const char
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] status | list [--available] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -1158,6 +1200,10 @@ int main(int argc, char **argv)
     if (pkg_timeout_parse(argv[arg + 1], &client.timeout) != CALL_OK) return usage();
     arg += 2;
   }
+  if (arg < argc && !strcmp(argv[arg], "--yes")) {
+    client.yes = true;
+    ++arg;
+  }
   if (arg >= argc) return usage();
   const char *command = argv[arg++];
   int count = argc - arg;
@@ -1173,6 +1219,7 @@ int main(int argc, char **argv)
       !strcmp(command, "rollback") || !strcmp(command, "reindex") || !strcmp(command, "unlock");
   if (!repository && ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
       !strcmp(command, "rollback") ? count > 1 :
+      !strcmp(command, "check") ? count != 1 :
       !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {
     return usage();
   }
@@ -1191,6 +1238,8 @@ int main(int argc, char **argv)
         count > 2 ? arguments[2] : NULL);
   } else if (mutation) {
     ok = mutate(command, count, arguments);
+  } else if (!strcmp(command, "check")) {
+    ok = check(arguments[0]);
   } else if (!strcmp(command, "list") && count) {
     ok = load_repositories();
     for (size_t i = 0; ok && i < client.offered_count; ++i) {
