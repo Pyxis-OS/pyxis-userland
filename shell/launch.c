@@ -1879,6 +1879,14 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
   return CALL_OK;
 }
 
+static enum call_status wait_foreground_completion(struct launch_scope *scope)
+{
+  if (scope->terminal_output == HANDLE_INVALID) {
+    return execution_group_wait(scope->group.supervision);
+  }
+  return execution_group_wait_result(scope->group.supervision, &scope->completion);
+}
+
 static enum call_status wait_foreground_group(struct shell *shell, struct launch_scope *scope,
     handle_t armed, bool *cancelled)
 {
@@ -1894,7 +1902,7 @@ static enum call_status wait_foreground_group(struct shell *shell, struct launch
     return status;
   }
   if (armed == HANDLE_INVALID) {
-    return execution_group_wait_result(group, &scope->completion);
+    return wait_foreground_completion(scope);
   }
   for (;;) {
     struct wait_interest interests[2] = {
@@ -1916,7 +1924,7 @@ static enum call_status wait_foreground_group(struct shell *shell, struct launch
       return status;
     }
     if (events[0] & WAIT_COMPLETE) {
-      return execution_group_wait_result(group, &scope->completion);
+      return wait_foreground_completion(scope);
     }
     if (armed != HANDLE_INVALID && (events[1] & (WAIT_INTERRUPT | WAIT_ERROR))) {
       *cancelled = true;
@@ -1953,7 +1961,7 @@ static enum command_result retire_foreground(struct shell *shell,
     enum call_status status = scope->stop_failed ? CALL_OUTCOME_UNKNOWN :
         execution_group_terminate(scope->group.supervision);
     if (status == CALL_OK) {
-      status = execution_group_wait_result(scope->group.supervision, &scope->completion);
+      status = wait_foreground_completion(scope);
     }
     scope->retired = status == CALL_OK;
     if (status != CALL_OK) {
