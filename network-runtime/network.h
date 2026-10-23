@@ -4,6 +4,7 @@
 #include "../libconfig/network.h"
 #include "dhcp.h"
 #include "wifi_supplicant.h"
+#include <stdatomic.h>
 
 struct interface_runtime {
   struct dhcp_client dhcp;
@@ -25,9 +26,10 @@ struct network_runtime {
 bool network_config_apply(struct network_config *config, struct network_runtime *runtime);
 bool network_config_wait_address(const struct network_config *config, struct network_runtime *runtime);
 /* Services links still waiting for a lease and the Wi-Fi supplicant while
- * either needs it. A valid UNTIL process also ends it when that completes. */
+ * either needs it, or until a non-NULL STOP is set. Only the caller touches
+ * RUNTIME and SUPPLICANT meanwhile, so it may run on its own thread. */
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
-    struct network_wifi_supplicant *supplicant, handle_t until);
+    struct network_wifi_supplicant *supplicant, const atomic_bool *stop);
 bool network_config_stop(const struct network_config *config, struct network_runtime *runtime);
 /* Remove unrelated bootstrap grants after successor handoff while retaining
  * each independent client's declared facets, timers and packet endpoint. */

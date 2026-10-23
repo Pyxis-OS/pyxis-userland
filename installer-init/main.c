@@ -32,6 +32,10 @@
 #include <process.h>
 #include <pyxis/descriptor.h>
 #include <pyxis/working_path.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <net_config.h>
+#include <abi/net_config.h>
 #include <startup.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,28 +55,76 @@
     DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES | \
     DIRECTORY_RIGHT_FILESYSTEM_INFO)
 #define STAGING_RIGHTS (DIRECTORY_CONTENT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO)
+/* How long Install waits for the network's DNS choice, which a lease brings. */
+#define INSTALL_NETWORK_WAIT_NS UINT64_C(30000000000)
+#define INSTALL_NETWORK_POLL_NS UINT64_C(250000000)
+
+/* The archive's network. After the profile is applied, its maintenance thread
+ * alone touches RUNTIME and SUPPLICANT, from the menu until the installer
+ * exits, so a late lease or Wi-Fi association still completes. */
+struct network {
+  struct network_config config;
+  struct network_runtime runtime;
+  struct network_wifi_supplicant supplicant;
+  atomic_bool stop;
+  pthread_t thread;
+  bool started, maintaining;
+};
 
 /* The installer's GET-only package downloads. */
 struct providers {
   handle_t httpfs; /* The provider process, while it runs. */
   handle_t http, https; /* Provider roots; HTTPS is absent when TLS is not ready. */
+  bool dns; /* httpfs started with a DNS server. */
+  unsigned starts; /* Names each start's staging leaf. */
   char missing[160]; /* Why Install cannot fetch; empty when it can. */
 };
 
-/* Applies the archive's network profile and starts the Wi-Fi supplicant it
- * names. Failure leaves Install unavailable; Update needs no network. */
-static bool start_network(struct network_config *network, struct network_runtime *runtime,
-    struct network_wifi_supplicant *supplicant)
+static void *maintain_network(void *argument)
 {
-  if (!network_config_read(network)) {
-    return false;
+  struct network *network = argument;
+  network_config_maintain(&network->config, &network->runtime, &network->supplicant,
+      &network->stop);
+  return NULL;
+}
+
+/* Applies the archive's network profile, starts the Wi-Fi supplicant it names
+ * and keeps both serviced. Failure leaves Install unavailable; Update needs no
+ * network. */
+static void start_network(struct network *network)
+{
+  if (!network_config_read(&network->config)) {
+    return;
   }
-  if (!network_config_apply(network, runtime)) {
+  if (!network_config_apply(&network->config, &network->runtime)) {
     fputs("installer-init: the network profile cannot be applied\n", stderr);
-    return false;
+    return;
   }
-  network_wifi_start(supplicant);
-  return true;
+  network->started = true;
+  network_wifi_start(&network->supplicant);
+  network->maintaining = pthread_create(&network->thread, NULL, maintain_network, network) == 0;
+  if (!network->maintaining) {
+    fputs("installer-init: network maintenance unavailable; a late lease is not taken\n", stderr);
+  }
+}
+
+static bool stop_network(struct network *network)
+{
+  bool clean = true;
+  if (network->maintaining) {
+    atomic_store(&network->stop, true);
+    clean = pthread_join(network->thread, NULL) == 0;
+    network->maintaining = false;
+  }
+  if (network->started) {
+    if (!network_wifi_stop(&network->supplicant)) {
+      fputs("installer-init: Wi-Fi authentication cleanup not confirmed\n", stderr);
+    }
+    clean &= network_config_stop(&network->config, &network->runtime);
+    network->started = false;
+  }
+  network_config_free(&network->config);
+  return clean;
 }
 
 static void stop_httpfs(struct providers *providers)
@@ -136,10 +188,13 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
   struct bundle_launch *prepared = NULL;
   struct network_environment environment = {.dns_udp = HANDLE_INVALID};
   struct endpoint_create_reply publication = {0};
+  struct launch_environment_entry *entries = NULL;
   handle_t staging = HANDLE_INVALID;
   const char *step = "staging";
+  char leaf[32];
+  snprintf(leaf, sizeof(leaf), "httpfs-%u", providers->starts++);
   enum call_status status = source == HANDLE_INVALID ? CALL_UNAVAILABLE :
-      directory_create(source, "httpfs", DIRECTORY_KIND_DIRECTORY, STAGING_RIGHTS, &staging);
+      directory_create(source, leaf, DIRECTORY_KIND_DIRECTORY, STAGING_RIGHTS, &staging);
   const struct path_context *context;
   if (status == CALL_OK) {
     step = "bundle";
@@ -166,16 +221,20 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
       {bootstrap_capability("boot"), DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
         DIRECTORY_RIGHT_READ_FILES, 0},
     };
-    /* Read without a source environment, the network adds only DNS_SERVER. */
-    struct launch_environment_entry entries[4] = {
+    const struct launch_environment_entry fixed[] = {
       profile_stdio_entry(ENVIRONMENT_STDERR, 0),
       PROFILE_CAP((uintptr_t)"boot", 1),
       {.name = (uintptr_t)PROVIDER_SETUP_ROOTS_ENTRY, .kind = ENVIRONMENT_TEXT,
         .value = (uintptr_t)roles, .length = sizeof(roles) - 1},
     };
-    size_t entry_count = 3;
-    for (size_t i = 0; i < environment.count && entry_count < sizeof(entries) / sizeof(*entries); ++i) {
-      entries[entry_count++] = environment.variables[i];
+    size_t entry_count = sizeof(fixed) / sizeof(*fixed);
+    entries = calloc(entry_count + environment.count, sizeof(*entries));
+    status = entries ? CALL_OK : CALL_NO_MEMORY;
+    if (entries) {
+      memcpy(entries, fixed, sizeof(fixed));
+      memcpy(entries + entry_count, environment.variables,
+          environment.count * sizeof(*environment.variables));
+      entry_count += environment.count;
     }
     const char *arguments[] = {"boot://httpfs.pxb"};
     struct launch_request request = {
@@ -193,8 +252,10 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
       {"random", bootstrap_capability("random"), PROTOCOL_RANDOM},
       {"http_staging", staging, PROTOCOL_DIRECTORY},
     };
-    status = bundle_launch_prepare(program, &request, authority,
-        sizeof(authority) / sizeof(*authority), &prepared);
+    if (status == CALL_OK) {
+      status = bundle_launch_prepare(program, &request, authority,
+          sizeof(authority) / sizeof(*authority), &prepared);
+    }
     if (status == CALL_OK) {
       status = launcher_launch(launcher, bundle_launch_request(prepared), &providers->httpfs);
       bundle_launch_admitted(prepared, status, providers->httpfs);
@@ -211,7 +272,9 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
   }
   bundle_launch_close(prepared);
   bundle_program_close(program);
+  providers->dns = status == CALL_OK && environment.dns_udp != HANDLE_INVALID;
   network_environment_free(&environment);
+  free(entries);
   handle_t owned[] = {publication.caller, publication.receiver, staging};
   for (size_t i = 0; i < sizeof(owned) / sizeof(*owned); ++i) {
     if (owned[i] != HANDLE_INVALID) {
@@ -223,6 +286,39 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
         "the HTTP provider did not start (%s, status %u)", step, status);
     stop_httpfs(providers);
   }
+}
+
+/* Install fetches through httpfs. Waits up to INSTALL_NETWORK_WAIT_NS for the
+ * network's DNS choice, then starts httpfs again if it is missing or started
+ * before DNS was known, so a late lease still reaches a named repository. */
+static void prepare_fetch(struct providers *providers, handle_t diagnostics)
+{
+  handle_t registry = bootstrap_capability("net_registry"), clock = bootstrap_capability("clock");
+  struct net_policy_reply policy = {0};
+  uint64_t now = 0, end = 0;
+  bool waited = false;
+  if (clock_now(clock, &now) == CALL_OK && now <= UINT64_MAX - INSTALL_NETWORK_WAIT_NS) {
+    end = now + INSTALL_NETWORK_WAIT_NS;
+  }
+  while (net_registry_policy(registry, &policy) == CALL_OK &&
+      !(policy.flags & NET_POLICY_DNS_VALID) && now < end) {
+    if (!waited) {
+      puts("Waiting for the network...");
+      fflush(stdout);
+      waited = true;
+    }
+    if (clock_sleep_for(clock, INSTALL_NETWORK_POLL_NS) != CALL_OK ||
+        clock_now(clock, &now) != CALL_OK) {
+      break;
+    }
+  }
+  bool dns = policy.flags & NET_POLICY_DNS_VALID;
+  if (providers->httpfs != HANDLE_INVALID && (providers->dns || !dns)) {
+    return;
+  }
+  stop_httpfs(providers);
+  providers->missing[0] = '\0';
+  start_httpfs(providers, diagnostics);
 }
 
 static bool close_sources(const handle_t *sources, size_t count)
@@ -243,7 +339,8 @@ static bool close_sources(const handle_t *sources, size_t count)
   return success;
 }
 
-static bool prepare_replay(handle_t parent, handle_t *record_file, bool *coexist, bool *clean)
+static bool prepare_replay(handle_t parent, handle_t *record_file, bool *coexist,
+    bool *updating, bool *clean)
 {
   struct install_plan_record record;
   puts("Supply one framed printed plan on standard input (ending with end).");
@@ -303,6 +400,7 @@ static bool prepare_replay(handle_t parent, handle_t *record_file, bool *coexist
     return false;
   }
   *coexist = record.coexist;
+  *updating = record.updating;
   return true;
 }
 
@@ -331,11 +429,9 @@ int main(int argc, char **argv)
   struct installer_update_choice update_choice = {0};
   char selected_target[64], selected_esp[64], selected_pool[64], selected_guid[64];
   bool snapshot_created = false, child_retired = false;
-  struct network_config network = {0};
-  struct network_runtime runtime = {0};
-  struct network_wifi_supplicant supplicant = {0};
+  static struct network network;
   struct providers providers = {.httpfs = HANDLE_INVALID};
-  bool network_started = false;
+  bool fetch = false; /* Install, or a Replay of one: runs pkg. */
   struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
   struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
   if (argc > 1) {
@@ -368,22 +464,20 @@ int main(int argc, char **argv)
   snapshot_created = true;
 
   puts("Starting the network for package downloads...");
-  network_started = start_network(&network, &runtime, &supplicant);
-  if (network_started) {
+  start_network(&network);
+  if (network.started) {
     start_httpfs(&providers, sources[DIAGNOSTICS]);
   } else {
     snprintf(providers.missing, sizeof(providers.missing), "the network did not start");
-  }
-  sources[HTTP] = providers.http;
-  sources[HTTPS] = providers.https;
-  if (providers.missing[0]) {
-    printf("Install is unavailable: %s. Update and Replay need no network.\n", providers.missing);
+    printf("Install is unavailable: %s. Update needs no network.\n", providers.missing);
   }
 
   struct terminal terminal = {.input = sources[INPUT], .output = sources[OUTPUT]};
 choose:
   for (;;) {
     const char *actions[] = {"Install", "Update", "Replay", "Cancel"};
+    fetch = false;
+    sources[HTTP] = sources[HTTPS] = HANDLE_INVALID;
     if (fflush(stdout) != 0) {
       goto done;
     }
@@ -441,14 +535,32 @@ choose:
           (unsigned long long)update_choice.layout.pool_partition);
       snprintf(selected_guid, sizeof(selected_guid), "--selected-disk-guid=%s", guid);
     } else if (replay) {
-      if (!prepare_replay(sources[SNAPSHOT_PARENT], &sources[REPLAY], &coexist, &inspection_clean)) {
+      bool replay_updating = false;
+      if (!prepare_replay(sources[SNAPSHOT_PARENT], &sources[REPLAY], &coexist,
+          &replay_updating, &inspection_clean)) {
         continue;
       }
+      fetch = !replay_updating;
     } else {
+      fetch = true;
+    }
+    if (fetch) {
+      if (network.started) {
+        prepare_fetch(&providers, sources[DIAGNOSTICS]);
+      }
       if (providers.missing[0]) {
         printf("Install fetches the base package and needs the network: %s.\n", providers.missing);
+        fetch = false;
+        if (sources[REPLAY] != HANDLE_INVALID) {
+          handle_close(sources[REPLAY]);
+          sources[REPLAY] = HANDLE_INVALID;
+        }
         continue;
       }
+      sources[HTTP] = providers.http;
+      sources[HTTPS] = providers.https;
+    }
+    if (!updating && !replay) {
       puts("Coexist preserves other partitions; classic permits whole-disk erase.");
       if (fflush(stdout) != 0) {
         goto done;
@@ -509,19 +621,19 @@ choose:
     PROFILE_CAP((uintptr_t)"system_info", SYSTEM_INFO), PROFILE_CAP((uintptr_t)"log", LOG),
     PROFILE_PRIVATE_CAP((uintptr_t)"installer_diagnostics", DIAGNOSTICS),
     PROFILE_PRIVATE_CAP((uintptr_t)"config_snapshot_parent", SNAPSHOT_PARENT),
-    PROFILE_CAP((uintptr_t)"launcher", LAUNCHER),
     PROFILE_CAP((uintptr_t)"boot", BOOT_ROOT),
     PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
     profile_stdio_entry(ENVIRONMENT_STDIN, replay ? REPLAY : INPUT),
     profile_stdio_entry(ENVIRONMENT_STDOUT, OUTPUT),
     profile_stdio_entry(ENVIRONMENT_STDERR, ERROR),
   };
-  struct launch_environment_entry entries[sizeof(resources) / sizeof(*resources) + 3];
+  struct launch_environment_entry entries[sizeof(resources) / sizeof(*resources) + 4];
   size_t entry_count = sizeof(resources) / sizeof(*resources);
   memcpy(entries, resources, sizeof(resources));
-  const unsigned optional[] = {POWER, HTTP, HTTPS};
+  /* Only an install runs pkg, so only it gets a launcher and the providers. */
+  const unsigned optional[] = {POWER, LAUNCHER, HTTP, HTTPS};
   for (size_t i = 0; i < sizeof(optional) / sizeof(*optional); ++i) {
-    if (sources[optional[i]] != HANDLE_INVALID) {
+    if (sources[optional[i]] != HANDLE_INVALID && (optional[i] == POWER || fetch)) {
       entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP(
           (uintptr_t)names[optional[i]], optional[i]);
     }
@@ -568,9 +680,6 @@ choose:
     fprintf(stderr, "installer-init: cannot start boot://installer.pxe (status %u)\n", status);
     goto done;
   }
-  if (network_started) {
-    network_config_maintain(&network, &runtime, &supplicant, child);
-  }
   struct process_result completion;
   status = process_wait(child, &completion);
   if (status != CALL_OK) {
@@ -611,15 +720,9 @@ choose:
 done:
   sources[HTTP] = sources[HTTPS] = HANDLE_INVALID;
   stop_httpfs(&providers);
-  if (network_started) {
-    if (!network_wifi_stop(&supplicant)) {
-      fputs("installer-init: Wi-Fi authentication cleanup not confirmed\n", stderr);
-    }
-    if (!network_config_stop(&network, &runtime)) {
-      result = EXIT_FAILURE;
-    }
+  if (!stop_network(&network)) {
+    result = EXIT_FAILURE;
   }
-  network_config_free(&network);
   if (snapshot_created && (child == HANDLE_INVALID || child_retired) &&
       directory_remove(scratch, "installer-config-snapshots", DIRECTORY_KIND_DIRECTORY) != CALL_OK) {
     fputs("installer-init: scratch snapshot parent cleanup unconfirmed\n", stderr);

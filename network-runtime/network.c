@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <wait.h>
 
 #define CLIENT_SLICE_NS UINT64_C(20000000)
 #define NETWORK_POLL_NS UINT64_C(100000000)
@@ -456,7 +455,7 @@ bool network_config_wait_address(const struct network_config *config, struct net
 }
 
 static bool wait_maintenance(struct network_runtime *runtime, struct network_wifi_supplicant *supplicant,
-    handle_t until)
+    const atomic_bool *stop)
 {
   uint64_t now;
   handle_t clock = runtime->clock ? runtime->clock : bootstrap_capability("clock");
@@ -483,8 +482,8 @@ static bool wait_maintenance(struct network_runtime *runtime, struct network_wif
       wake = entry->lease.renewal_ns;
     }
   }
-  /* UNTIL is polled, so its completion is seen within one poll. */
-  if (until != HANDLE_INVALID && poll < wake) {
+  /* STOP is polled, so a request is seen within one poll. */
+  if (stop && poll < wake) {
     wake = poll;
   }
   if (network_wifi_active(supplicant)) {
@@ -502,23 +501,13 @@ static bool wait_maintenance(struct network_runtime *runtime, struct network_wif
   return clock_sleep_until(clock, wake) == CALL_OK;
 }
 
-static bool completed(handle_t process)
-{
-  if (process == HANDLE_INVALID) {
-    return false;
-  }
-  struct wait_interest interest = {.handle = process, .events = WAIT_COMPLETE};
-  uint64_t events = 0;
-  return wait_many(&interest, 1, 0, &events) == CALL_OK && events;
-}
-
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
-    struct network_wifi_supplicant *supplicant, handle_t until)
+    struct network_wifi_supplicant *supplicant, const atomic_bool *stop)
 {
-  while ((runtime->waiting_link || network_wifi_active(supplicant)) && !completed(until)) {
+  while ((runtime->waiting_link || network_wifi_active(supplicant)) && !(stop && atomic_load(stop))) {
     bool working;
     if ((runtime->waiting_link && !service(config, runtime, UINT64_MAX, &working)) ||
-        !wait_maintenance(runtime, supplicant, until)) {
+        !wait_maintenance(runtime, supplicant, stop)) {
       network_config_stop(config, runtime);
       return EXIT_FAILURE;
     }

@@ -733,7 +733,7 @@ static int finish_network(const struct network_config *config,
   if (result == EXIT_SUCCESS &&
       (runtime->waiting_link || network_wifi_active(supplicant))) {
     if (release_bootstrap_grants(runtime)) {
-      result = network_config_maintain(config, runtime, supplicant, HANDLE_INVALID);
+      result = network_config_maintain(config, runtime, supplicant, NULL);
     } else {
       result = EXIT_FAILURE;
     }

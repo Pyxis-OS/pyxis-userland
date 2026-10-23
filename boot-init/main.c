@@ -72,6 +72,8 @@
 #define POOL_FILE_MAX_BYTES LITERAL_SOURCE_LIMIT
 #define HOSTNAME_NAME "system://" MACHINE_HOSTNAME_PATH
 #define RESCUE_INIT "boot://init-shell.pxe"
+/* 2.4 GHz channels 1-13, the world domain's (bit N is channel N + 1). */
+#define INSTALL_WIFI_CHANNELS ((UINT32_C(1) << 13) - 1)
 /* The bin volume shares the system volume's pool; see the installer. */
 #define FAT32_SELECTION_WAIT_NS UINT64_C(10000000000)
 #define FAT32_SELECTION_POLL_NS UINT64_C(1000000)
@@ -1893,7 +1895,19 @@ static bool start_install(struct authority *authority, struct mounts *mounts)
   };
   puts("boot-init: Install entry; starting the install space");
   mount_builtin_volume(authority, mounts, 0, &http_work);
-  bool started = start_space(authority, mounts, &install);
+  /* Wi-Fi Install joins through the archive's network profile under the world
+   * domain's channels 1-13 (decision 70); the installed system later installs
+   * its own policy. */
+  struct boot_space space = install;
+  if (authority->wifi != HANDLE_INVALID) {
+    enum call_status policy = wifi_install_policy(authority->wifi, WIFI_COUNTRY_WORLD,
+        INSTALL_WIFI_CHANNELS);
+    if (policy != CALL_OK) {
+      printf("boot-init: Wi-Fi world policy refused (status %u); no Wi-Fi TX admitted\n", policy);
+    }
+    space.wifi_rights = WIFI_RIGHT_READ | WIFI_RIGHT_CONNECT;
+  }
+  bool started = start_space(authority, mounts, &space);
   bool closed = close_boot_payloads(authority);
   if (handle_close(authority->disks)) {
     closed = false;
