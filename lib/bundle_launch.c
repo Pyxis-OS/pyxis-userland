@@ -310,6 +310,31 @@ static enum call_status provider_source(const struct launch_request *source,
   return CALL_OK;
 }
 
+/* The launcher's own sdk root, for a bundle launched by a bundle, which holds
+ * no packages source (docs/wip/sdk-view.md, decision 59). It is passed on with
+ * at most REQUEST's read-only rights, so the child reads nothing more. */
+static enum call_status held_sdk(const struct launch_request *source,
+    const struct bundle_grant_request *request, handle_t *handle)
+{
+  *handle = HANDLE_INVALID;
+  const struct launch_environment_entry *entries = (const void *)(uintptr_t)source->entries;
+  const struct launch_grant *grants = (const void *)(uintptr_t)source->grants;
+  const struct launch_grant *selected = NULL;
+  for (size_t i = 0; i < source->entry_count; ++i) {
+    const struct launch_environment_entry *entry = &entries[i];
+    if (strcmp((const char *)(uintptr_t)entry->name, BUNDLE_SDK_ROOT)) continue;
+    if (selected) return CALL_BAD_REQUEST;
+    if (entry->kind != ENVIRONMENT_CAP || entry->value >= source->grant_count) {
+      return CALL_BAD_REQUEST;
+    }
+    selected = &grants[entry->value];
+  }
+  if (!selected) return CALL_NOT_FOUND;
+  if ((request->rights & selected->rights) != request->rights) return CALL_DENIED;
+  *handle = selected->source;
+  return CALL_OK;
+}
+
 /* The launch's fixed capture of the packages SOURCE, shared by its pkg:// and
  * sdk:// so one launch never mixes two sets, and the volume root it was taken
  * from. A package-selected command keeps its captured set, whose volume SOURCE
@@ -497,6 +522,9 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       }
       prepared->owned_grants[prepared->owned_count++] = view;
       source = view;
+    } else if (source == HANDLE_INVALID && requests[i].sdk) {
+      enum call_status status = held_sdk(launch_source, &requests[i], &source);
+      if (status == CALL_BAD_REQUEST) return status;
     } else if (source != HANDLE_INVALID && requests[i].sdk) {
       handle_t view = HANDLE_INVALID;
       if (selected_sdk(program, source, prepared, &view) != CALL_OK) {
