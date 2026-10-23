@@ -40,8 +40,11 @@ struct pkg_manifest {
 };
 
 bool pkg_version_valid(const char *version);
-/* Program and toolchain packages hold native programs and must record an ABI. */
+/* Program, toolchain and dev packages are built for one system and must record
+ * its ABI; only program and toolchain packages may export commands. A dev
+ * package's include/ and lib/ files form sdk:// (docs/wip/sdk-view.md). */
 bool pkg_kind_bound(const char *kind);
+bool pkg_kind_commands(const char *kind);
 /* Successful outputs own their arrays, independent of the literal document.
  * Free index entries with free(), manifests with pkg_manifest_free(). */
 bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,

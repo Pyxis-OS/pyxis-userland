@@ -25,6 +25,23 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
     handle_t destination, struct pkg_manifest *manifest,
     const struct pkg_archive_progress *progress, const char **reason);
 
+/* An installed package's inventory, read one file path at a time in its
+ * sorted order. */
+struct pkg_inventory {
+  handle_t file;
+  uint64_t position, end;
+  unsigned char buffer[4096];
+  size_t used, available;
+};
+
+/* directory is the installed package's store/ID/VERSION directory, borrowed.
+ * Close an opened inventory with pkg_inventory_close. */
+bool pkg_inventory_open(handle_t directory, struct pkg_inventory *inventory, const char **reason);
+/* The next path; false at the end with *reason NULL, or on damage with a reason. */
+bool pkg_inventory_next(struct pkg_inventory *inventory, char path[PKG_PATH_MAX + 1],
+    const char **reason);
+void pkg_inventory_close(struct pkg_inventory *inventory);
+
 /* Read only an installed package's manifest, unverified, for checks that can
  * refuse before the full verification. output owns its dependencies. */
 bool pkg_tree_manifest(handle_t directory, struct pkg_manifest *manifest, const char **reason);

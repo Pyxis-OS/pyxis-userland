@@ -1,6 +1,7 @@
 #include <package_commands.h>
 #include <abi/directory.h>
 #include <abi/file.h>
+#include <abi/package_sdk.h>
 #include <handle.h>
 #include <package.h>
 #include <string.h>
@@ -165,6 +166,16 @@ enum call_status package_commands_open(handle_t volume, handle_t *live)
 enum call_status package_roots_open(handle_t volume, handle_t *live)
 {
   return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_ROOTS, NULL, live);
+}
+
+enum call_status package_sdk_open(handle_t volume, handle_t *live)
+{
+  return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_SDK, NULL, live);
+}
+
+enum call_status package_sdk_capture(handle_t live, handle_t commands, handle_t *fixed)
+{
+  return child_call(live, commands, DIRECTORY_COMMAND_CAPTURE, NULL, fixed);
 }
 
 enum call_status package_commands_info(handle_t view, struct package_command_info *info)

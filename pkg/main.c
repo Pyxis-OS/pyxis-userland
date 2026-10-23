@@ -1,5 +1,6 @@
 #include "archive.h"
 #include "commands.h"
+#include "sdk.h"
 #include "fetch.h"
 #include "progress.h"
 #include "store.h"
@@ -90,7 +91,7 @@ static const struct package_provided_abi *provided_abi(void)
   return &client.provided;
 }
 
-/* A program or toolchain package is usable only on a system that provides its
+/* A program, toolchain or dev package is usable only on a system that provides its
  * ABI. Refusals name both sides; INSTALLED adds the way out for a stored one. */
 static bool abi_check(const char *id, const char *version, const char *kind,
     const char *abi, bool installed)
@@ -923,11 +924,13 @@ static bool mutate(const char *command, int argc, char **argv)
   bool ok = metadata_valid;
   uint64_t previous = before.number;
   struct pkg_projection projection = {0};
+  struct pkg_sdk sdk = {0};
   if (reindex) {
     ok = ok && stale_check(&before, NULL, 0, "reindex", 0, NULL) && verify_selection(&before, NULL) &&
         pkg_commands_build(client.packages, &before, &projection, &client.reason) &&
-        pkg_reindex(client.packages, before.number, &projection, &client.reason);
-    if (ok) puts("pkg: active command index bootstrapped; selection unchanged");
+        pkg_sdk_build(client.packages, &before, &sdk, &client.reason) &&
+        pkg_reindex(client.packages, before.number, &projection, &sdk, &client.reason);
+    if (ok) puts("pkg: active indexes bootstrapped; selection unchanged");
   } else if (!strcmp(command, "rollback")) {
     uint64_t target = 0;
     if (argc) {
@@ -961,7 +964,8 @@ static bool mutate(const char *command, int argc, char **argv)
     }
   }
   if (ok && !reindex) {
-    ok = pkg_commands_build(client.packages, &after, &projection, &client.reason);
+    ok = pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
+        pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
   }
   if (ok && !reindex) {
     ok = review(&before, &after);
@@ -971,7 +975,7 @@ static bool mutate(const char *command, int argc, char **argv)
     ok = fail("cannot guard the confirmed set switch");
   }
   if (ok && !reindex) {
-    ok = pkg_publish(client.packages, &after, previous, &projection, &uncertain,
+    ok = pkg_publish(client.packages, &after, previous, &projection, &sdk, &uncertain,
         &client.reason);
   }
   /* Root records are the set's packages with files. Say where a newly
@@ -983,6 +987,7 @@ static bool mutate(const char *command, int argc, char **argv)
     }
   }
   free(projection.records);
+  free(sdk.bytes);
   if (!ok && (!metadata_valid || !strcmp(command, "rollback"))) show_sets();
   pkg_selection_free(&after);
   pkg_selection_free(&before);
@@ -1210,11 +1215,15 @@ int main(int argc, char **argv)
       if (!strcmp(command, "verify")) {
         ok = stale_check(&selection, NULL, 0, "verify", 0, NULL) && verify_selection(&selection, NULL);
         struct pkg_projection projection = {0};
+        struct pkg_sdk sdk = {0};
         ok = ok && pkg_commands_build(client.packages, &selection, &projection,
             &client.reason) &&
-            pkg_commands_verify(client.packages, selection.number, &projection, &client.reason);
+            pkg_sdk_build(client.packages, &selection, &sdk, &client.reason) &&
+            pkg_indexes_verify(client.packages, selection.number, &projection, &sdk,
+                &client.reason);
         free(projection.records);
-        if (ok) puts("pkg: selected package files and command index verified");
+        free(sdk.bytes);
+        if (ok) puts("pkg: selected package files and indexes verified");
       }
     } else {
       show_sets();

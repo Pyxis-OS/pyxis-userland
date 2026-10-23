@@ -26,13 +26,6 @@ struct archive_reader {
   uint64_t size, position;
 };
 
-struct inventory_reader {
-  handle_t file;
-  uint64_t position, end;
-  unsigned char buffer[4096];
-  size_t used, available;
-};
-
 struct inventory_line {
   char path[PKG_PATH_MAX + 1], sha256[65];
   uint64_t size;
@@ -308,7 +301,7 @@ static bool expect_member(struct archive_reader *reader, const char *name,
   return true;
 }
 
-static bool line_read(struct inventory_reader *reader, char line[PKG_INVENTORY_LINE_MAX + 1],
+static bool line_read(struct pkg_inventory *reader, char line[PKG_INVENTORY_LINE_MAX + 1],
     bool *end, const char **reason)
 {
   size_t size = 0;
@@ -535,7 +528,7 @@ static bool walk_path(struct tree_walk *walk, struct archive_reader *archive,
   return true;
 }
 
-static bool process_inventory(struct inventory_reader *inventory,
+static bool process_inventory(struct pkg_inventory *inventory,
     struct archive_reader *archive, struct tree_walk *walk,
     const struct pkg_manifest *manifest, const struct pkg_archive_progress *progress,
     const char **reason)
@@ -684,7 +677,7 @@ bool pkg_archive(handle_t snapshot, const struct pkg_entry *entry,
   if (ok) {
     walk.stack[0] = (struct directory_frame){ .handle = root };
     walk.depth = 1;
-    struct inventory_reader inventory = {
+    struct pkg_inventory inventory = {
       .file = snapshot, .position = metadata[1].offset,
       .end = metadata[1].offset + metadata[1].size,
     };
@@ -781,7 +774,7 @@ bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
     walk.stack[0] = (struct directory_frame){ .handle = tree };
     walk.depth = 1;
     tree = HANDLE_INVALID;
-    struct inventory_reader lines = { .file = inventory, .end = inventory_size };
+    struct pkg_inventory lines = { .file = inventory, .end = inventory_size };
     ok = process_inventory(&lines, NULL, &walk, manifest, NULL, reason);
   }
   if (ok) {
@@ -798,4 +791,43 @@ bool pkg_tree_verify(handle_t directory, const struct pkg_manifest *expected,
     pkg_manifest_free(manifest);
   }
   return ok;
+}
+
+bool pkg_inventory_open(handle_t directory, struct pkg_inventory *inventory, const char **reason)
+{
+  *inventory = (struct pkg_inventory){ .file = HANDLE_INVALID };
+  handle_t file = HANDLE_INVALID;
+  uint64_t size = 0;
+  if (directory_lookup(directory, "package.files", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+      &file) != CALL_OK || file_size(file, &size) != CALL_OK || size > INVENTORY_SIZE_MAX) {
+    if (file != HANDLE_INVALID) {
+      handle_close(file);
+    }
+    return fail(reason, "cannot read bounded installed package inventory");
+  }
+  inventory->file = file;
+  inventory->end = size;
+  return true;
+}
+
+bool pkg_inventory_next(struct pkg_inventory *inventory, char path[PKG_PATH_MAX + 1],
+    const char **reason)
+{
+  *reason = NULL;
+  char text[PKG_INVENTORY_LINE_MAX + 1];
+  bool end;
+  struct inventory_line line;
+  if (!line_read(inventory, text, &end, reason) || end || !parse_line(text, &line, reason)) {
+    return false;
+  }
+  strcpy(path, line.path);
+  return true;
+}
+
+void pkg_inventory_close(struct pkg_inventory *inventory)
+{
+  if (inventory->file != HANDLE_INVALID) {
+    handle_close(inventory->file);
+  }
+  inventory->file = HANDLE_INVALID;
 }

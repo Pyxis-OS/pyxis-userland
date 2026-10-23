@@ -35,14 +35,23 @@ struct pkg_projection {
   size_t commands, roots;
 };
 
+/* A set's sdk index, the bytes of sets/N.sdk with a zero set number, which
+ * publication fills in. */
+struct pkg_sdk {
+  uint8_t *bytes;
+  size_t size;
+};
+
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, const struct pkg_projection *projection, bool *uncertain,
-    const char **reason);
-bool pkg_commands_verify(handle_t packages, uint64_t number,
-    const struct pkg_projection *projection, const char **reason);
-/* Bootstrap only a missing active index. No current or retention change. */
+    uint64_t previous, const struct pkg_projection *projection, const struct pkg_sdk *sdk,
+    bool *uncertain, const char **reason);
+/* Both of set NUMBER's indexes equal the ones built from its selection. */
+bool pkg_indexes_verify(handle_t packages, uint64_t number,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason);
+/* Bootstrap the active set's missing indexes; an index already present is
+ * neither checked nor repaired. No current or retention change. */
 bool pkg_reindex(handle_t packages, uint64_t number,
-    const struct pkg_projection *projection, const char **reason);
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason);
 bool pkg_tree_open(handle_t packages, const struct pkg_identity *identity,
     uint64_t rights, handle_t *tree, const char **reason);
 

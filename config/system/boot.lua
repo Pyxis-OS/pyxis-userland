@@ -30,6 +30,7 @@ return {
                               access = "read-only", optional = true } },
       roots = { system = "read-write",
                 home = { access = "read-write", optional = true },
-                pkg = { view = "pkg", optional = true } } },
+                pkg = { view = "pkg", optional = true },
+                sdk = { view = "sdk", optional = true } } },
   },
 }

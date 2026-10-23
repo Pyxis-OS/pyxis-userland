@@ -67,6 +67,11 @@ static bool integer(const struct literal_value *table, const char *key,
 
 bool pkg_kind_bound(const char *kind)
 {
+  return !strcmp(kind, "program") || !strcmp(kind, "toolchain") || !strcmp(kind, "dev");
+}
+
+bool pkg_kind_commands(const char *kind)
+{
   return !strcmp(kind, "program") || !strcmp(kind, "toolchain");
 }
 
@@ -81,10 +86,11 @@ static bool identity(const struct literal_value *table, struct pkg_identity *out
 static bool kind(const struct literal_value *table, char output[10])
 {
   return text(table, "kind", output, 10) &&
-      (!strcmp(output, "data") || !strcmp(output, "program") || !strcmp(output, "toolchain"));
+      (!strcmp(output, "data") || !strcmp(output, "program") || !strcmp(output, "toolchain") ||
+       !strcmp(output, "dev"));
 }
 
-/* abi is required on program and toolchain packages and refused on data. */
+/* abi is required on program, toolchain and dev packages and refused on data. */
 static bool abi(const struct literal_value *table, const char *kind,
     char output[PACKAGE_ABI_MAX + 1])
 {
@@ -366,7 +372,7 @@ bool pkg_manifest_parse(const char *bytes, size_t size,
   }
   /* Missing or empty means no exports, which every kind may have. */
   if (ok && commands && commands->kind == LITERAL_TABLE && commands->as.table.count &&
-      !pkg_kind_bound(manifest->kind)) {
+      !pkg_kind_commands(manifest->kind)) {
     *reason = "only program and toolchain packages export commands";
     ok = false;
   }

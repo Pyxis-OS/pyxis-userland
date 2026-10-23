@@ -353,6 +353,7 @@ static enum call_status parse_resources(struct bundle_program *program,
     }
     if (!valid_name(nodes[key].string) || !strcmp(nodes[key].string, "app") ||
         !strcmp(nodes[key].string, BUNDLE_PACKAGES_ROOT) ||
+        !strcmp(nodes[key].string, BUNDLE_SDK_ROOT) ||
         value->type != BUNDLE_JSON_STRING || !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
     }
@@ -462,7 +463,9 @@ static enum call_status parse_grants(struct bundle_program *program,
     }
     if (!request->name || !request->resource || !rights || !required ||
         !strcmp(request->name, "app") || !strcmp(request->name, BUNDLE_PACKAGES_ROOT) ||
-        (request->root && !strcmp(request->root, BUNDLE_PACKAGES_ROOT)) ||
+        !strcmp(request->name, BUNDLE_SDK_ROOT) ||
+        (request->root && (!strcmp(request->root, BUNDLE_PACKAGES_ROOT) ||
+          !strcmp(request->root, BUNDLE_SDK_ROOT))) ||
         !strncmp(request->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       return CALL_BAD_REQUEST;
     }
@@ -528,6 +531,22 @@ static enum call_status parse_packages(struct bundle_program *program,
   return CALL_OK;
 }
 
+/* "sdk": true; false is the same as leaving it out. */
+static enum call_status parse_sdk(struct bundle_program *program,
+    const struct bundle_json_node *value)
+{
+  if (value->type != BUNDLE_JSON_BOOLEAN || program->grant_count == BUNDLE_GRANT_LIMIT) {
+    return CALL_BAD_REQUEST;
+  }
+  if (value->integer) {
+    program->grants[program->grant_count++] = (struct bundle_grant_request){
+      .name = BUNDLE_SDK_ROOT, .resource = "directory", .sdk = true,
+      .protocol = PROTOCOL_DIRECTORY, .rights = PACKAGE_TREE_RIGHTS, .required = true,
+    };
+  }
+  return CALL_OK;
+}
+
 static enum call_status parse_manifest(const struct path_context *context,
     struct bundle_program *program)
 {
@@ -578,6 +597,8 @@ static enum call_status parse_manifest(const struct path_context *context,
       status = parse_grants(program, value);
     } else if (!strcmp(name, "packages")) {
       status = parse_packages(program, value);
+    } else if (!strcmp(name, "sdk")) {
+      status = parse_sdk(program, value);
     } else {
       return CALL_BAD_REQUEST;
     }

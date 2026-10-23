@@ -53,8 +53,9 @@ struct boot_volume {
 };
 
 /* What a root names: a volume of the same name, or a read-only view over the
- * active package set in BOOT_PACKAGES_VOLUME (docs/wip/sdk-view.md). */
-enum boot_root_view { BOOT_ROOT_VOLUME, BOOT_ROOT_PKG };
+ * active package set in BOOT_PACKAGES_VOLUME (docs/wip/sdk-view.md): pkg://,
+ * every package's tree, or sdk://, the development view. */
+enum boot_root_view { BOOT_ROOT_VOLUME, BOOT_ROOT_PKG, BOOT_ROOT_SDK };
 
 struct boot_root {
   char *name;

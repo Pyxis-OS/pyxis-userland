@@ -1,4 +1,5 @@
 #include "store.h"
+#include <abi/package_sdk.h>
 #include <file.h>
 #include <handle.h>
 #include <literal.h>
@@ -195,7 +196,8 @@ static bool next_number(handle_t sets, uint64_t *number, const char **reason)
       value = value * 10 + digit;
     }
     if (tail == name || name[0] == '0' ||
-        (strcmp(tail, ".lua") && strcmp(tail, ".previous") && strcmp(tail, ".commands"))) {
+        (strcmp(tail, ".lua") && strcmp(tail, ".previous") && strcmp(tail, ".commands") &&
+         strcmp(tail, ".sdk"))) {
       *reason = "unexpected name in sets directory";
       return false;
     }
@@ -234,40 +236,65 @@ static void *command_bytes(uint64_t number, const struct pkg_projection *project
   return header;
 }
 
-static bool compare_commands(handle_t sets, uint64_t number, const void *expected,
-    size_t expected_size, const char **reason)
+/* The set file NUMBER followed by SUFFIX must hold exactly EXPECTED. */
+static bool compare_index(handle_t sets, uint64_t number, const char *suffix, uint64_t limit,
+    const void *expected, size_t expected_size, const char **reason)
 {
   char name[48];
-  snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
+  snprintf(name, sizeof(name), "%llu%s", (unsigned long long)number, suffix);
   char *actual = NULL;
   size_t actual_size = 0;
-  bool ok = pkg_text(sets, name, PACKAGE_COMMAND_INDEX_MAX_BYTES, &actual, &actual_size, reason);
+  bool ok = pkg_text(sets, name, limit, &actual, &actual_size, reason);
   if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
-    *reason = "command index differs from verified selected exports";
+    *reason = !strcmp(suffix, ".sdk") ? "sdk index differs from the selected dev packages" :
+        "command index differs from verified selected exports";
     ok = false;
   }
   free(actual);
   return ok;
 }
 
-static bool write_commands(handle_t sets, uint64_t number,
-    const struct pkg_projection *projection, const char **reason)
+static bool write_index(handle_t sets, uint64_t number, const char *suffix, uint64_t limit,
+    const void *bytes, size_t size, const char **reason)
+{
+  char name[48];
+  snprintf(name, sizeof(name), "%llu%s", (unsigned long long)number, suffix);
+  return pkg_write_text(sets, name, bytes, size, reason) &&
+      compare_index(sets, number, suffix, limit, bytes, size, reason);
+}
+
+/* SDK's bytes with set NUMBER filled in. */
+static void *sdk_bytes(uint64_t number, const struct pkg_sdk *sdk, const char **reason)
+{
+  struct package_sdk_index_header *header = malloc(sdk->size);
+  if (!header) {
+    *reason = "cannot allocate the sdk index";
+    return NULL;
+  }
+  memcpy(header, sdk->bytes, sdk->size);
+  header->set = number;
+  return header;
+}
+
+/* Write set NUMBER's command index when COMMANDS and its sdk index when
+ * SDK_MISSING, reading each back. */
+static bool write_indexes(handle_t sets, uint64_t number, bool commands, bool sdk_missing,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason)
 {
   size_t size;
-  void *bytes = command_bytes(number, projection, &size, reason);
-  if (!bytes) {
-    return false;
-  }
-  char name[48];
-  snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
-  bool ok = pkg_write_text(sets, name, bytes, size, reason) &&
-      compare_commands(sets, number, bytes, size, reason);
+  void *bytes = commands ? command_bytes(number, projection, &size, reason) : NULL;
+  bool ok = !commands || (bytes && write_index(sets, number, ".commands",
+      PACKAGE_COMMAND_INDEX_MAX_BYTES, bytes, size, reason));
+  free(bytes);
+  bytes = ok && sdk_missing ? sdk_bytes(number, sdk, reason) : NULL;
+  ok = ok && (!sdk_missing || (bytes && write_index(sets, number, ".sdk",
+      PACKAGE_SDK_INDEX_MAX_BYTES, bytes, sdk->size, reason)));
   free(bytes);
   return ok;
 }
 
-bool pkg_commands_verify(handle_t packages, uint64_t number,
-    const struct pkg_projection *projection, const char **reason)
+bool pkg_indexes_verify(handle_t packages, uint64_t number,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason)
 {
   if (!number) {
     return !projection->commands && !projection->roots;
@@ -278,14 +305,36 @@ bool pkg_commands_verify(handle_t packages, uint64_t number,
   }
   size_t size;
   void *bytes = command_bytes(number, projection, &size, reason);
-  bool ok = bytes && compare_commands(sets, number, bytes, size, reason);
+  bool ok = bytes && compare_index(sets, number, ".commands", PACKAGE_COMMAND_INDEX_MAX_BYTES,
+      bytes, size, reason);
+  free(bytes);
+  bytes = ok ? sdk_bytes(number, sdk, reason) : NULL;
+  ok = ok && bytes && compare_index(sets, number, ".sdk", PACKAGE_SDK_INDEX_MAX_BYTES,
+      bytes, sdk->size, reason);
   free(bytes);
   handle_close(sets);
   return ok;
 }
 
+static bool index_missing(handle_t sets, uint64_t number, const char *suffix, bool *missing,
+    const char **reason)
+{
+  char name[48];
+  snprintf(name, sizeof(name), "%llu%s", (unsigned long long)number, suffix);
+  handle_t existing = HANDLE_INVALID;
+  enum call_status status = directory_lookup(sets, name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ, &existing);
+  if (existing != HANDLE_INVALID) handle_close(existing);
+  *missing = status == CALL_NOT_FOUND;
+  if (status != CALL_OK && status != CALL_NOT_FOUND) {
+    *reason = "cannot look up the active set's indexes";
+    return false;
+  }
+  return true;
+}
+
 bool pkg_reindex(handle_t packages, uint64_t number,
-    const struct pkg_projection *projection, const char **reason)
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason)
 {
   if (!number) {
     return !projection->commands && !projection->roots;
@@ -294,19 +343,16 @@ bool pkg_reindex(handle_t packages, uint64_t number,
   if (!pkg_directory(packages, "sets", false, PKG_WRITE_RIGHTS, &sets, reason)) {
     return false;
   }
-  char name[48];
-  snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
-  handle_t existing = HANDLE_INVALID;
-  enum call_status status = directory_lookup(sets, name, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_READ, &existing);
-  if (existing != HANDLE_INVALID) handle_close(existing);
-  bool ok = status == CALL_NOT_FOUND;
-  if (!ok) {
-    *reason = "reindex requires a missing active command index; existing damage is not repaired";
+  bool commands = false, sdk_missing = false;
+  bool ok = index_missing(sets, number, ".commands", &commands, reason) &&
+      index_missing(sets, number, ".sdk", &sdk_missing, reason);
+  if (ok && !commands && !sdk_missing) {
+    *reason = "reindex requires a missing active index; existing damage is not repaired";
+    ok = false;
   }
-  ok = ok && write_commands(sets, number, projection, reason);
+  ok = ok && write_indexes(sets, number, commands, sdk_missing, projection, sdk, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
-    *reason = "cannot synchronize bootstrapped command index";
+    *reason = "cannot synchronize bootstrapped indexes";
     ok = false;
   }
   handle_close(sets);
@@ -314,8 +360,8 @@ bool pkg_reindex(handle_t packages, uint64_t number,
 }
 
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, const struct pkg_projection *projection, bool *uncertain,
-    const char **reason)
+    uint64_t previous, const struct pkg_projection *projection, const struct pkg_sdk *sdk,
+    bool *uncertain, const char **reason)
 {
   *uncertain = false;
   handle_t sets = HANDLE_INVALID;
@@ -356,7 +402,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
       "return { previous = %llu }\n", (unsigned long long)previous);
   snprintf(name, sizeof(name), "%llu.previous", (unsigned long long)number);
   ok = ok && pkg_write_text(sets, name, predecessor, length, reason);
-  ok = ok && write_commands(sets, number, projection, reason);
+  ok = ok && write_indexes(sets, number, true, true, projection, sdk, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
     *reason = "cannot synchronize immutable set names";
     ok = false;

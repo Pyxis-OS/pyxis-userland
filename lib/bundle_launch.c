@@ -40,8 +40,9 @@ struct bundle_launch {
    * narrowed network factory. The launch borrows each until preparation closes. */
   handle_t *owned_grants;
   size_t owned_count;
-  /* The packages source bound to a package-selected command's capture. */
-  handle_t package_root;
+  /* The packages source bound to a package-selected command's capture, and
+   * the launch's one capture of the set. */
+  handle_t package_root, package_capture;
 };
 
 struct context_grants {
@@ -193,11 +194,12 @@ static enum call_status prepare_context(struct context_grants *context,
     if (!name || !*name) {
       return CALL_BAD_REQUEST;
     }
-    /* A bundle reads packages only through its manifest's "packages", so the
-     * space's pkg root is withheld like the packages source (decision 38 of
-     * docs/wip/sdk-view.md). */
+    /* A bundle reads packages only through its manifest's "packages" and
+     * "sdk", so the space's pkg and sdk roots are withheld like the packages
+     * source (decision 38 of docs/wip/sdk-view.md). */
     if (!strcmp(name, "app") || !strcmp(name, "job_work") ||
         !strcmp(name, "job_provisioner") || !strcmp(name, BUNDLE_PACKAGES_ROOT) ||
+        !strcmp(name, BUNDLE_SDK_ROOT) ||
         !strncmp(name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       continue;
     }
@@ -308,34 +310,49 @@ static enum call_status provider_source(const struct launch_request *source,
   return CALL_OK;
 }
 
-/* The bundle's pkg://: REQUEST's packages, selected from a capture of the
- * packages SOURCE. A package-selected command keeps its captured set, whose
- * volume SOURCE must independently hold; the capture alone never supplies
- * authority for another package. MISSING names a package that is absent. */
-static enum call_status selected_packages(const struct bundle_program *program,
-    const struct bundle_grant_request *request, handle_t source,
-    struct bundle_launch *prepared, handle_t *view, const char **missing)
+/* The launch's fixed capture of the packages SOURCE, shared by its pkg:// and
+ * sdk:// so one launch never mixes two sets, and the volume root it was taken
+ * from. A package-selected command keeps its captured set, whose volume SOURCE
+ * must independently hold; the capture alone never supplies authority for
+ * another package. Both stay owned by PREPARED. */
+static enum call_status launch_capture(const struct bundle_program *program, handle_t source,
+    struct bundle_launch *prepared, handle_t *root)
 {
-  *view = HANDLE_INVALID;
+  *root = source;
   handle_t pinned = bundle_program_package_view(program);
-  handle_t root = source, live = HANDLE_INVALID, fixed = HANDLE_INVALID;
   enum call_status status = CALL_OK;
   if (pinned != HANDLE_INVALID) {
     if (prepared->package_root == HANDLE_INVALID) {
       status = package_commands_bind(source, pinned, &prepared->package_root);
     }
-    root = prepared->package_root;
+    *root = prepared->package_root;
   }
+  if (status != CALL_OK || prepared->package_capture != HANDLE_INVALID) {
+    return status;
+  }
+  handle_t live = HANDLE_INVALID;
+  status = package_commands_open(*root, &live);
   if (status == CALL_OK) {
-    status = package_commands_open(root, &live);
+    status = package_commands_capture(live, pinned, &prepared->package_capture);
+    handle_close(live);
   }
-  if (status == CALL_OK) {
-    status = package_commands_capture(live, pinned, &fixed);
-  }
+  return status;
+}
+
+/* The bundle's pkg://: REQUEST's packages, selected from the launch's capture.
+ * MISSING names a package that is absent. */
+static enum call_status selected_packages(const struct bundle_program *program,
+    const struct bundle_grant_request *request, handle_t source,
+    struct bundle_launch *prepared, handle_t *view, const char **missing)
+{
+  *view = HANDLE_INVALID;
+  handle_t root;
+  enum call_status status = launch_capture(program, source, prepared, &root);
   handle_t selection = HANDLE_INVALID;
   for (size_t i = 0; status == CALL_OK && i < request->package_count; ++i) {
     handle_t next = HANDLE_INVALID;
-    status = package_roots_select(fixed, request->packages[i], selection, &next);
+    status = package_roots_select(prepared->package_capture, request->packages[i], selection,
+        &next);
     if (status != CALL_OK) {
       *missing = request->packages[i];
     }
@@ -343,12 +360,6 @@ static enum call_status selected_packages(const struct bundle_program *program,
       handle_close(selection);
     }
     selection = next;
-  }
-  if (live != HANDLE_INVALID) {
-    handle_close(live);
-  }
-  if (fixed != HANDLE_INVALID) {
-    handle_close(fixed);
   }
   if (status != CALL_OK) {
     if (selection != HANDLE_INVALID) {
@@ -358,6 +369,23 @@ static enum call_status selected_packages(const struct bundle_program *program,
   }
   *view = selection;
   return CALL_OK;
+}
+
+/* The bundle's sdk://, of the launch's captured set. */
+static enum call_status selected_sdk(const struct bundle_program *program, handle_t source,
+    struct bundle_launch *prepared, handle_t *view)
+{
+  *view = HANDLE_INVALID;
+  handle_t root, live = HANDLE_INVALID;
+  enum call_status status = launch_capture(program, source, prepared, &root);
+  if (status == CALL_OK) {
+    status = package_sdk_open(root, &live);
+  }
+  if (status == CALL_OK) {
+    status = package_sdk_capture(live, prepared->package_capture, view);
+    handle_close(live);
+  }
+  return status;
 }
 
 static enum call_status scoped_network_grant(const struct bundle_grant_request *request,
@@ -448,7 +476,7 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       }
     } else {
       const char *selection = requests[i].source ? requests[i].source :
-          requests[i].packages ? PACKAGE_SOURCE : requests[i].resource;
+          requests[i].packages || requests[i].sdk ? PACKAGE_SOURCE : requests[i].resource;
       for (size_t j = 0; j < authority_count; ++j) {
         if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
             authority[j].protocol == requests[i].protocol) {
@@ -465,6 +493,14 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       const char *absent = requests[i].packages[0];
       if (selected_packages(program, &requests[i], source, prepared, &view, &absent) != CALL_OK) {
         *missing = absent;
+        return CALL_DENIED;
+      }
+      prepared->owned_grants[prepared->owned_count++] = view;
+      source = view;
+    } else if (source != HANDLE_INVALID && requests[i].sdk) {
+      handle_t view = HANDLE_INVALID;
+      if (selected_sdk(program, source, prepared, &view) != CALL_OK) {
+        *missing = requests[i].name;
         return CALL_DENIED;
       }
       prepared->owned_grants[prepared->owned_count++] = view;
@@ -870,6 +906,7 @@ void bundle_launch_close(struct bundle_launch *prepared)
     }
     free(prepared->owned_grants);
     if (prepared->package_root) handle_close(prepared->package_root);
+    if (prepared->package_capture) handle_close(prepared->package_capture);
     free(prepared->directories);
     free(prepared->entries);
     free(prepared->grants);

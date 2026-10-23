@@ -6,9 +6,11 @@
 
 struct bundle_program;
 
-/* The root a manifest's "packages" list grants (docs/wip/sdk-view.md,
- * decision 48). A bundle never inherits its launcher's root of this name. */
+/* The roots a manifest's "packages" list and "sdk": true grant
+ * (docs/wip/sdk-view.md, decision 48). A bundle never inherits its launcher's
+ * roots of these names. */
 #define BUNDLE_PACKAGES_ROOT "pkg"
+#define BUNDLE_SDK_ROOT "sdk"
 
 struct bundle_grant_request {
   const char *name;
@@ -22,6 +24,9 @@ struct bundle_grant_request {
    * IDs, selected from the launcher's packages source. */
   const char *const *packages;
   size_t package_count;
+  /* Only the grant named BUNDLE_SDK_ROOT: a read-only sdk:// of the set its
+   * pkg:// comes from. */
+  bool sdk;
   const char *root;
   /* Optional canonical lo/ethN/wlanN role for TCP/UDP/echo. Preparation resolves
    * it using supplied registry READ, then attenuates the held native factory.

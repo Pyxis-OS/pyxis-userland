@@ -286,10 +286,12 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
     lua_pop(state, 1);
     config_field(state, -1, "view");
     if (!lua_isnil(state, -1)) {
-      if (lua_type(state, -1) != LUA_TSTRING || strcmp(lua_tostring(state, -1), "pkg")) {
-        luaL_error(state, "space %s: root %s: view must be \"pkg\"", space->name, root->name);
+      const char *view = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "";
+      if (strcmp(view, "pkg") && strcmp(view, "sdk")) {
+        luaL_error(state, "space %s: root %s: view must be \"pkg\" or \"sdk\"", space->name,
+            root->name);
       }
-      root->view = BOOT_ROOT_PKG;
+      root->view = !strcmp(view, "pkg") ? BOOT_ROOT_PKG : BOOT_ROOT_SDK;
       lua_pop(state, 1);
       config_field(state, -1, "access");
       if (!lua_isnil(state, -1) && (lua_type(state, -1) != LUA_TSTRING ||
@@ -345,7 +347,8 @@ static void read_roots(lua_State *state, struct boot_space *space)
     read_root(state, space, root);
     /* A view root is named after its view, and only a view root has that name,
      * so a bundle launch can withhold it by name (decision 38). */
-    if ((root->view == BOOT_ROOT_PKG) != !strcmp(name, "pkg") || !strcmp(name, "sdk")) {
+    if ((root->view == BOOT_ROOT_PKG) != !strcmp(name, "pkg") ||
+        (root->view == BOOT_ROOT_SDK) != !strcmp(name, "sdk")) {
       luaL_error(state, "space %s: root %s: pkg and sdk name only their view roots",
           space->name, name);
     }

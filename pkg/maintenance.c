@@ -179,7 +179,8 @@ static bool record_number(const char *name, uint64_t *number)
     }
     value = value * 10 + digit;
   }
-  if (strcmp(tail, ".lua") && strcmp(tail, ".previous") && strcmp(tail, ".commands")) {
+  if (strcmp(tail, ".lua") && strcmp(tail, ".previous") && strcmp(tail, ".commands") &&
+      strcmp(tail, ".sdk")) {
     return false;
   }
   *number = value;

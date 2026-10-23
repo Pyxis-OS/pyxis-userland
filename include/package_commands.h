@@ -15,6 +15,12 @@ enum call_status package_roots_open(handle_t volume, handle_t *live);
  * ID. The result has the rights of both and never more than read-only. */
 enum call_status package_roots_select(handle_t fixed, const char *id, handle_t previous,
     handle_t *selection);
+/* A live read-only directory of the active set's sdk:// view
+ * (docs/interfaces/packages.md). */
+enum call_status package_sdk_open(handle_t volume, handle_t *live);
+/* A fixed sdk:// view of one set: the set of the fixed command capture
+ * COMMANDS, or the active set when COMMANDS is INVALID. */
+enum call_status package_sdk_capture(handle_t live, handle_t commands, handle_t *fixed);
 /* Live views report set/count zero. Fixed views report captured provenance. */
 enum call_status package_commands_info(handle_t view, struct package_command_info *info);
 /* previous is zero for a fresh capture, or a held fixed view from the same

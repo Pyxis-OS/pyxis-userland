@@ -1184,10 +1184,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
           mounted ? mounted->status : CALL_UNAVAILABLE);
       return reason;
     }
-    if (root->view == BOOT_ROOT_PKG) {
+    if (root->view != BOOT_ROOT_VOLUME) {
       /* Live: each lookup reads the set active at that moment. */
       handle_t view = HANDLE_INVALID;
-      enum call_status status = package_roots_open(mounted->root, &view);
+      enum call_status status = root->view == BOOT_ROOT_PKG ?
+          package_roots_open(mounted->root, &view) : package_sdk_open(mounted->root, &view);
       if (status != CALL_OK) {
         if (root->optional) {
           continue;
