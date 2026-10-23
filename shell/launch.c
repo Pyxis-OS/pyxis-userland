@@ -98,6 +98,8 @@ struct prepared_stage {
 
 struct launch_scope {
   bool owned, all_stages, append;
+  handle_t terminal_output;
+  bool normalization_attempted;
   handle_t producer;
   uint64_t producer_mode;
   handle_t transaction;
@@ -626,8 +628,8 @@ static enum call_status validate_scope(const struct launch_request *request,
   return CALL_OK;
 }
 
-/* The grant an ordinary foreground command receives as launcher. A capture's
- * stages and a script's commands receive one bound to their own subgroup, so
+/* The grant an ordinary foreground command receives as launcher. Owned
+ * foreground stages receive one bound to their own subgroup, so
  * stopping that group stops everything they start. A session successor receives
  * the shell's own in trusted pre-granted mode; positional scripts keep every
  * successor under their owned group. */
@@ -1874,13 +1876,16 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
   return CALL_OK;
 }
 
-static enum call_status wait_capture_group(struct shell *shell, struct launch_scope *scope,
+static enum call_status wait_foreground_group(struct shell *shell, struct launch_scope *scope,
     handle_t armed, bool *cancelled)
 {
   handle_t group = scope->group.supervision;
   enum call_status status = execution_group_seal(group);
   if (status != CALL_OK) {
     return status;
+  }
+  if (armed == HANDLE_INVALID) {
+    return execution_group_wait(group);
   }
   for (;;) {
     struct wait_interest interests[2] = {
@@ -1914,6 +1919,71 @@ static enum call_status wait_capture_group(struct shell *shell, struct launch_sc
       armed = HANDLE_INVALID;
     }
   }
+}
+
+/* The interactive owner holds output independently of every redirected stream.
+ * Never touch presentation until all members and attributed cleanup retired. */
+static enum call_status normalize_foreground(struct launch_scope *scope)
+{
+  if (!scope->retired || !scope->started || scope->normalization_attempted || scope->terminal_output == HANDLE_INVALID) {
+    return CALL_OK;
+  }
+  scope->normalization_attempted = true;
+  struct terminal terminal = {.output = scope->terminal_output};
+  /* FRESH_LINE ends partial output decoding before any controls. DECSTBM homes
+   * the cursor, so save/restore the primary cursor around the region reset. */
+  enum call_status status = term_fresh_line(&terminal);
+  if (status == CALL_OK) {
+    status = term_print(&terminal, "\x1b[?1049l\x1b" "7\x1b[r\x1b" "8\x1b[0m\x1b[?25h");
+  }
+  return status == CALL_OK ? term_fresh_line(&terminal) : status;
+}
+
+static enum command_result retire_foreground(struct shell *shell,
+    struct launch_scope *scope, enum command_result result)
+{
+  if (scope->owned && !scope->retired) {
+    enum call_status status = scope->stop_failed ? CALL_OUTCOME_UNKNOWN :
+        execution_group_terminate(scope->group.supervision);
+    if (status == CALL_OK) {
+      status = execution_group_wait(scope->group.supervision);
+    }
+    scope->retired = status == CALL_OK;
+    if (status != CALL_OK) {
+      scope->error = status;
+      result = COMMAND_FATAL;
+      shell_directory_error(shell, "shell: foreground group cleanup", "", status);
+    }
+  }
+  enum call_status status = normalize_foreground(scope);
+  if (status != CALL_OK) {
+    scope->error = status;
+    result = COMMAND_FATAL;
+    shell_directory_error(shell, "shell: normalize terminal", "", status);
+  }
+  return result;
+}
+
+static enum command_result close_foreground(struct shell *shell,
+    struct launch_scope *scope, enum command_result result)
+{
+  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
+    enum call_status status = job_work_close(scope->delegations[i], scope->retired);
+    if (status != CALL_OK) {
+      scope->error = status;
+      result = COMMAND_FATAL;
+      shell_directory_error(shell, "shell: delegated job cleanup", "", status);
+    }
+  }
+  bool closed = close_handle(&scope->terminal_output);
+  closed = close_handle(&scope->group.launcher) && closed;
+  closed = close_handle(&scope->group.supervision) && closed;
+  if (!closed) {
+    scope->error = CALL_BAD_HANDLE;
+    result = COMMAND_FATAL;
+    shell_directory_error(shell, "shell: close foreground group", "", CALL_BAD_HANDLE);
+  }
+  return result;
 }
 
 static enum call_status receive_service_setup(struct shell *shell, handle_t process,
@@ -2270,14 +2340,17 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
   if (mode == SHELL_FOREGROUND && scope) {
-    if (scope->producer != HANDLE_INVALID || stage_count != user_count || shell_execution) {
+    bool interactive_terminal = !shell->script_name &&
+        (shell->terminal.input != HANDLE_INVALID || shell->terminal.output != HANDLE_INVALID);
+    if (scope->producer != HANDLE_INVALID || stage_count != user_count || shell_execution ||
+        interactive_terminal) {
       handle_t launcher = shell->script_group.launcher != HANDLE_INVALID ?
           shell->script_group.launcher : shell->child_launcher != HANDLE_INVALID ?
           shell->child_launcher : shell->launcher;
       failed_stage = user_count;
       path = "";
       operation = scope->producer != HANDLE_INVALID ?
-          "shell: capture group" : "shell: output group";
+          "shell: capture group" : "shell: foreground group";
       status = launcher_create_group(launcher, &scope->group);
       if (status != CALL_OK) {
         if (scope->producer != HANDLE_INVALID) {
@@ -2286,6 +2359,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         goto failed;
       }
       scope->owned = true;
+      if (interactive_terminal && shell->terminal.output != HANDLE_INVALID) {
+        operation = "shell: hold terminal output";
+        status = handle_copy_restricted(shell->terminal.output, CONSOLE_RIGHT_WRITE, 0,
+            &scope->terminal_output);
+        if (status != CALL_OK) {
+          goto failed;
+        }
+      }
     } else {
       /* Sharing an existing PIPE/CONSOLE adds no new ownership or grant policy. */
       scope = NULL;
@@ -2836,7 +2917,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     return mode == SHELL_SESSION ? COMMAND_EXIT : COMMAND_OK;
   }
 
-  if (armed != HANDLE_INVALID || (scope && scope->owned)) {
+  if (armed != HANDLE_INVALID) {
     status = wait_or_interrupt(shell, children, stage_count, armed,
         0, &cancelled,
         scope);
@@ -2883,15 +2964,22 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
   if (scope && scope->owned) {
-    status = wait_capture_group(shell, scope,
+    status = wait_foreground_group(shell, scope,
         cancelled ? HANDLE_INVALID : armed, &cancelled);
     if (status != CALL_OK) {
       report_scope->error = status;
       close_handle(&armed);
-      shell_directory_error(shell, "shell: capture subtree wait", "", status);
+      shell_directory_error(shell, "shell: foreground subtree wait", "", status);
       return COMMAND_FATAL;
     }
     scope->retired = true;
+    status = normalize_foreground(scope);
+    if (status != CALL_OK) {
+      report_scope->error = status;
+      close_handle(&armed);
+      shell_directory_error(shell, "shell: normalize terminal", "", status);
+      return COMMAND_FATAL;
+    }
   }
   status = bundle_jobs_reap(&shell->jobs, false);
   if (status != CALL_OK) {
@@ -2911,8 +2999,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     return COMMAND_FATAL;
   }
   /* Without the console, output went to the shell's own standard streams. */
-  status = (scope && scope->all_stages) || shell->terminal.output == HANDLE_INVALID ? CALL_OK :
-      term_fresh_line(&shell->terminal);
+  status = (scope && (scope->all_stages || scope->normalization_attempted)) ||
+      shell->terminal.output == HANDLE_INVALID ? CALL_OK : term_fresh_line(&shell->terminal);
   if (status != CALL_OK) {
     if (report_scope) {
       report_scope->error = status;
@@ -3051,7 +3139,14 @@ enum command_result shell_launch(struct shell *shell, char **arguments, size_t c
 enum command_result shell_launch_selected(struct shell *shell,
     const struct shell_stage *stage, enum shell_launch_mode mode, struct shell_outcome *outcome)
 {
-  return launch_stages(shell, stage, 1, mode, NULL, HANDLE_INVALID, false, false, outcome, NULL);
+  if (mode != SHELL_FOREGROUND) {
+    return launch_stages(shell, stage, 1, mode, NULL, HANDLE_INVALID, false, false, outcome, NULL);
+  }
+  struct launch_scope scope = {0};
+  enum command_result result = launch_stages(shell, stage, 1, mode, NULL,
+      HANDLE_INVALID, false, false, outcome, &scope);
+  result = retire_foreground(shell, &scope, result);
+  return close_foreground(shell, &scope, result);
 }
 
 static enum command_result launch_named_service(struct shell *shell,
@@ -3357,19 +3452,7 @@ static enum command_result launch_output(struct shell *shell,
       .append = producer_status.mode != OUTPUT_MODE_VALUE};
   enum command_result result = launch_stages(shell, stages, stage_count,
       SHELL_FOREGROUND, NULL, HANDLE_INVALID, false, false, outcome, &scope);
-  if (scope.owned && !scope.retired) {
-    status = scope.stop_failed ? CALL_OUTCOME_UNKNOWN :
-        execution_group_terminate(scope.group.supervision);
-    if (status == CALL_OK) {
-      status = execution_group_wait(scope.group.supervision);
-    }
-    scope.retired = status == CALL_OK;
-    if (status != CALL_OK) {
-      scope.error = status;
-      result = COMMAND_FATAL;
-      shell_directory_error(shell, "shell: capture group cleanup", "", status);
-    }
-  }
+  result = retire_foreground(shell, &scope, result);
   if (scope.transaction != HANDLE_INVALID && scope.retired) {
     if (result == COMMAND_OK && scope.error == CALL_OK) {
       struct resource_result response = {0};
@@ -3431,21 +3514,7 @@ static enum command_result launch_output(struct shell *shell,
     result = COMMAND_FATAL;
     shell_directory_error(shell, "shell: close transaction", "", CALL_BAD_HANDLE);
   }
-  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
-    status = job_work_close(scope.delegations[i], scope.retired);
-    if (status != CALL_OK) {
-      scope.error = status;
-      result = COMMAND_FATAL;
-      shell_directory_error(shell, "shell: delegated job cleanup", "", status);
-    }
-  }
-  bool closed = close_handle(&scope.group.launcher);
-  closed = close_handle(&scope.group.supervision) && closed;
-  if (!closed) {
-    scope.error = CALL_BAD_HANDLE;
-    result = COMMAND_FATAL;
-    shell_directory_error(shell, "shell: close capture group", "", CALL_BAD_HANDLE);
-  }
+  result = close_foreground(shell, &scope, result);
   *evaluated = scope.evaluated;
   *started = scope.started;
   *error_status = scope.error;

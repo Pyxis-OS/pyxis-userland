@@ -10,12 +10,22 @@ can provision jobs, a foreground launch receives its own private provisioning su
 Typed captures retain capabilities: `api=$(http prepare POST URI)`, then
 `reply=$(printf '{}' > $api)` and `cat $reply`. Ctrl+C stops the script subtree.
 
-For ordinary direct foreground commands and pipelines, the first Ctrl+C requests
-cooperative interruption from stages that have registered a receiver and forcibly
-stops the others. A second Ctrl+C forcibly stops the remaining stages. There is
-no grace timer; completion reports each process's actual result. Script subtrees,
-owned captures and output relays, input hangup and explicit cleanup still stop
-forcibly. Programs holding input passthrough continue to receive Ctrl+C as data.
+Interactive foreground commands and pipelines use an owned execution subgroup.
+The shell waits for direct stages and actual subtree retirement before returning
+input to its prompt, including when a stage faults or exits before descendants.
+The first Ctrl+C forcibly stops that entire owned subtree. Programs holding input
+passthrough continue to receive Ctrl+C as data. Noninteractive direct stages
+outside an owned scope retain cooperative interruption on the first press and
+forced stop on a second press; there is no grace timer.
+
+After a started interactive scope retires, the shell uses a separately held
+terminal output grant to leave the alternate screen, reset the scroll region and
+styles, show the cursor and start a fresh line. Redirected FILE/PIPE streams never
+receive these controls. Failed or uncertain cleanup prevents normalization and
+prompt return; normalization failures are reported as fatal. Descendant launcher
+grants remain confined to the subgroup without adding launch authority; selected
+ancestor or unrelated launchers are refused by the existing group grant policy.
+Session handoff and background command lifetimes keep their existing ownership.
 
 Pipelines bind tighter than `&&` and `||`, which evaluate left to right. Only
 selected commands expand and launch. Scripts and `-c` stop after a failed
@@ -32,7 +42,7 @@ preserved without atomic-append guarantees. Merged streams cannot seek or hand
 off capabilities. Relay workers share the eight-process batch bound; their
 failure fails the command with status 1 without replacing user fault/termination
 outcomes, and descendant writers must close before completion. Direct console
-and pipe merges keep the ordinary command lifetime. Captures without `2>&1`
+and pipe merges follow the same foreground subgroup lifetime. Captures without `2>&1`
 keep typed handoff. A captured transaction response requires an empty collector;
 `$(cmd 2>&1 >$api)` is refused before redirect OPEN because stderr bytes would
 conflict with response handoff.
