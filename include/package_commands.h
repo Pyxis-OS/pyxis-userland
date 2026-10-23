@@ -7,9 +7,14 @@
 /* All inputs are borrowed native DIRECTORY grants with zero transport.
  * Success returns a new owned read-only DIRECTORY; failure clears output. */
 enum call_status package_commands_open(handle_t volume, handle_t *live);
-/* A live read-only directory of the active set's data package trees: looking
- * up a package ID returns its tree, read at that moment. */
+/* A live read-only directory of the active set's package trees: looking up a
+ * package ID returns its tree, read at that moment. */
 enum call_status package_roots_open(handle_t volume, handle_t *live);
+/* A fixed directory of the trees of the packages selected so far from the
+ * fixed capture FIXED: PREVIOUS's selection, or none when it is INVALID, plus
+ * ID. The result has the rights of both and never more than read-only. */
+enum call_status package_roots_select(handle_t fixed, const char *id, handle_t previous,
+    handle_t *selection);
 /* Live views report set/count zero. Fixed views report captured provenance. */
 enum call_status package_commands_info(handle_t view, struct package_command_info *info);
 /* previous is zero for a fresh capture, or a held fixed view from the same

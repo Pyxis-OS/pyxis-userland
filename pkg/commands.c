@@ -4,6 +4,7 @@
 #include <handle.h>
 #include <literal.h>
 #include <pxe/p1f.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -108,10 +109,14 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     struct pkg_projection *projection, const char **reason)
 {
   *projection = (struct pkg_projection){0};
-  /* Commands fill the front; root records are gathered after the command limit
-   * and moved down behind the commands once both are sorted. */
+  /* Commands fill the front; root records, at most one per selected package,
+   * are gathered after the command limit and moved down behind the commands
+   * once both are sorted. */
+  if (selection->count > SIZE_MAX / sizeof(struct package_command_record) - PACKAGE_COMMANDS_LIMIT) {
+    return fail(reason, "selected set is too large to index");
+  }
   struct package_command_record *output =
-      calloc(PACKAGE_COMMANDS_LIMIT + PACKAGE_ROOTS_LIMIT, sizeof(*output));
+      calloc(PACKAGE_COMMANDS_LIMIT + selection->count, sizeof(*output));
   if (!output) {
     return fail(reason, "cannot allocate command projection");
   }
@@ -138,17 +143,14 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     if (ok && manifest.command_count) {
       ok = pkg_directory(revision, "tree", false, PKG_READ_RIGHTS, &tree, reason);
     }
-    /* A data package without files, such as base, has nothing to read. */
-    if (ok && !strcmp(manifest.kind, "data") && manifest.files) {
-      if (root_count == PACKAGE_ROOTS_LIMIT) {
-        ok = fail(reason, "selected data packages exceed projection limit");
-      } else {
-        struct package_command_record *root = &roots[root_count++];
-        root->kind = DIRECTORY_KIND_DIRECTORY;
-        strcpy(root->name, identity->id);
-        strcpy(root->id, identity->id);
-        strcpy(root->version, identity->version);
-      }
+    /* Every package with files is read as pkg://ID, whatever its kind. One
+     * without files, such as base, has no tree. */
+    if (ok && manifest.files) {
+      struct package_command_record *root = &roots[root_count++];
+      root->kind = DIRECTORY_KIND_DIRECTORY;
+      strcpy(root->name, identity->id);
+      strcpy(root->id, identity->id);
+      strcpy(root->version, identity->version);
     }
     for (size_t c = 0; ok && c < manifest.command_count; ++c) {
       const struct pkg_command *command = &manifest.commands[c];

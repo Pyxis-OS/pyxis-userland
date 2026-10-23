@@ -66,25 +66,9 @@ static enum call_status copy_component(struct path_workspace *workspace,
   return CALL_OK;
 }
 
-enum call_status path_package_root(const char *name, handle_t *root)
-{
-  *root = HANDLE_INVALID;
-  handle_t roots = HANDLE_INVALID;
-  if (environment_lookup_file(startup_environment_handle(), PACKAGE_ROOTS_NAME,
-        &roots) != CALL_OK) {
-    return CALL_NOT_FOUND;
-  }
-  enum call_status status = directory_lookup(roots, name, DIRECTORY_KIND_DIRECTORY,
-      PACKAGE_TREE_RIGHTS, root);
-  handle_close(roots);
-  return status;
-}
-
 enum call_status path_root(const char *name, handle_t *root)
 {
-  enum call_status status = environment_lookup_file(startup_environment_handle(), name, root);
-  /* Ordinary roots are looked up first, so a package never shadows one. */
-  return status == CALL_NOT_FOUND ? path_package_root(name, root) : status;
+  return environment_lookup_file(startup_environment_handle(), name, root);
 }
 
 /* Lookup captures one owned value; neither context nor scratch retains live

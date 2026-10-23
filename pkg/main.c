@@ -974,13 +974,12 @@ static bool mutate(const char *command, int argc, char **argv)
     ok = pkg_publish(client.packages, &after, previous, &projection, &uncertain,
         &client.reason);
   }
-  /* Root records are the set's data packages. A space without the packages
-   * source cannot see them, so say where they are readable. */
+  /* Root records are the set's packages with files. Say where a newly
+   * installed one is readable. */
   for (size_t i = 0; ok && !reindex && i < projection.roots; ++i) {
     const struct package_command_record *root = &projection.records[projection.commands + i];
     if (find_package(&before, root->id) == SIZE_MAX) {
-      printf("pkg: %s is read as %s:// in spaces that hold the packages source\n",
-          root->id, root->id);
+      printf("pkg: %s is read as pkg://%s in spaces with a pkg root\n", root->id, root->id);
     }
   }
   free(projection.records);

@@ -9,9 +9,6 @@
 /* The packages volume (docs/interfaces/packages.md): store/ID/VERSION/tree,
  * sets/N.lua and a current file naming the active set. */
 #define PACKAGE_SOURCE "packages"
-/* The exported live view of the active set's data package trees, consulted by
- * path lookup for NAME:// when no ordinary root has that name. */
-#define PACKAGE_ROOTS_NAME "package_roots"
 #define PACKAGE_ID_MAX 64
 #define PACKAGE_VERSION_MAX 64
 /* Rights a package tree may carry: packages are always read-only. */

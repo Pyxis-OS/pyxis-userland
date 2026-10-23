@@ -208,11 +208,15 @@ static bool next_number(handle_t sets, uint64_t *number, const char **reason)
 static void *command_bytes(uint64_t number, const struct pkg_projection *projection,
     size_t *size, const char **reason)
 {
-  if (projection->commands > PACKAGE_COMMANDS_LIMIT || projection->roots > PACKAGE_ROOTS_LIMIT) {
-    *reason = "command projection exceeds its record limit";
+  size_t count = projection->commands + projection->roots;
+  /* The kernel holds a captured index in memory and refuses one past this
+   * bound, so a set that large is refused here, before it is published. */
+  if (projection->commands > PACKAGE_COMMANDS_LIMIT || projection->roots > UINT32_MAX ||
+      count > (PACKAGE_COMMAND_INDEX_MAX_BYTES - sizeof(struct package_command_index_header)) /
+          sizeof(*projection->records)) {
+    *reason = "the set has too many packages or commands for its index bound";
     return NULL;
   }
-  size_t count = projection->commands + projection->roots;
   *size = sizeof(struct package_command_index_header) + count * sizeof(*projection->records);
   struct package_command_index_header *header = calloc(1, *size);
   if (!header) {
@@ -237,9 +241,7 @@ static bool compare_commands(handle_t sets, uint64_t number, const void *expecte
   snprintf(name, sizeof(name), "%llu.commands", (unsigned long long)number);
   char *actual = NULL;
   size_t actual_size = 0;
-  bool ok = pkg_text(sets, name, sizeof(struct package_command_index_header) +
-      (PACKAGE_COMMANDS_LIMIT + PACKAGE_ROOTS_LIMIT) * sizeof(struct package_command_record),
-      &actual, &actual_size, reason);
+  bool ok = pkg_text(sets, name, PACKAGE_COMMAND_INDEX_MAX_BYTES, &actual, &actual_size, reason);
   if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
     *reason = "command index differs from verified selected exports";
     ok = false;

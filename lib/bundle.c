@@ -65,6 +65,7 @@ struct bundle_program {
   size_t command_count;
   struct bundle_grant_request grants[BUNDLE_GRANT_LIMIT];
   size_t grant_count;
+  const char **packages; /* The manifest's "packages" IDs, borrowed from it. */
   handle_t package_view;
 };
 
@@ -431,16 +432,11 @@ static enum call_status parse_grants(struct bundle_program *program,
         if (value->type != BUNDLE_JSON_STRING || !valid_name(value->string)) {
           return CALL_BAD_REQUEST;
         }
-        /* The packages volume is reached per package ID, never as a whole. */
+        /* The packages volume is reached through "packages", never as a whole. */
         if (!strcmp(value->string, PACKAGE_SOURCE)) {
           return CALL_BAD_REQUEST;
         }
         request->source = value->string;
-      } else if (!strcmp(nodes[key].string, "package")) {
-        if (value->type != BUNDLE_JSON_STRING || !package_id_valid(value->string)) {
-          return CALL_BAD_REQUEST;
-        }
-        request->package = value->string;
       } else if (!strcmp(nodes[key].string, "root")) {
         if (value->type != BUNDLE_JSON_STRING || !valid_name(value->string)) {
           return CALL_BAD_REQUEST;
@@ -464,7 +460,8 @@ static enum call_status parse_grants(struct bundle_program *program,
       }
     }
     if (!request->name || !request->resource || !rights || !required ||
-        !strcmp(request->name, "app") ||
+        !strcmp(request->name, "app") || !strcmp(request->name, BUNDLE_PACKAGES_ROOT) ||
+        (request->root && !strcmp(request->root, BUNDLE_PACKAGES_ROOT)) ||
         !strncmp(request->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       return CALL_BAD_REQUEST;
     }
@@ -483,16 +480,50 @@ static enum call_status parse_grants(struct bundle_program *program,
         !strcmp(request->resource, "mount") || !strcmp(request->resource, "disks") ||
         !strcmp(request->resource, "provider") || !strcmp(request->resource, "file");
     bool directory = !strcmp(request->resource, "directory");
-    bool selected = request->source || request->package;
-    if ((request->interface && !network) || external != selected ||
-        (request->source && request->package) ||
-        (request->package && (!directory || (request->rights & ~PACKAGE_TREE_RIGHTS))) ||
+    if ((request->interface && !network) || external != (request->source != NULL) ||
         (request->root && (!directory ||
          !(request->rights & DIRECTORY_RIGHT_LOOKUP)))) {
       return CALL_BAD_REQUEST;
     }
     ++program->grant_count;
   }
+  return CALL_OK;
+}
+
+/* "packages": a nonempty list of distinct package IDs, read as pkg://ID. */
+static enum call_status parse_packages(struct bundle_program *program,
+    const struct bundle_json_node *array)
+{
+  if (array->type != BUNDLE_JSON_ARRAY || !array->child || program->packages ||
+      program->grant_count == BUNDLE_GRANT_LIMIT) {
+    return CALL_BAD_REQUEST;
+  }
+  const struct bundle_json_node *nodes = program->manifest.nodes;
+  size_t count = 0;
+  for (size_t index = array->child; index; index = nodes[index].next) {
+    if (nodes[index].type != BUNDLE_JSON_STRING || !package_id_valid(nodes[index].string)) {
+      return CALL_BAD_REQUEST;
+    }
+    for (size_t previous = array->child; previous != index; previous = nodes[previous].next) {
+      if (!strcmp(nodes[previous].string, nodes[index].string)) {
+        return CALL_BAD_REQUEST;
+      }
+    }
+    ++count;
+  }
+  program->packages = calloc(count, sizeof(*program->packages));
+  if (!program->packages) {
+    return CALL_NO_MEMORY;
+  }
+  size_t used = 0;
+  for (size_t index = array->child; index; index = nodes[index].next) {
+    program->packages[used++] = nodes[index].string;
+  }
+  program->grants[program->grant_count++] = (struct bundle_grant_request){
+    .name = BUNDLE_PACKAGES_ROOT, .resource = "directory", .packages = program->packages,
+    .package_count = count, .protocol = PROTOCOL_DIRECTORY, .rights = PACKAGE_TREE_RIGHTS,
+    .required = true,
+  };
   return CALL_OK;
 }
 
@@ -544,6 +575,8 @@ static enum call_status parse_manifest(const struct path_context *context,
     } else if (!strcmp(name, "grants")) {
       grants = true;
       status = parse_grants(program, value);
+    } else if (!strcmp(name, "packages")) {
+      status = parse_packages(program, value);
     } else {
       return CALL_BAD_REQUEST;
     }
@@ -632,6 +665,7 @@ void bundle_program_close(struct bundle_program *program)
   if (program->package_view != HANDLE_INVALID) {
     handle_close(program->package_view);
   }
+  free(program->packages);
   bundle_json_close(&program->manifest);
   free(program);
 }

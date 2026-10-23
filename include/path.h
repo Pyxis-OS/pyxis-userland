@@ -42,13 +42,10 @@ enum call_status path_context_init(struct path_context *context,
     handle_t *storage, size_t capacity, const handle_t *directories, size_t count);
 void path_context_close(struct path_context *context);
 
-/* The root NAME:// names: the environment's root of that name or, when there
- * is none, an installed data package through the live package_roots view.
- * Success returns an owned handle; NOT_FOUND means neither exists. */
+/* The root NAME:// names: the environment's root of that name. Packages are
+ * read through a pkg:// root, never as their own NAME://. Success returns an
+ * owned handle; NOT_FOUND means there is none. */
 enum call_status path_root(const char *name, handle_t *root);
-/* Only the package_roots part of path_root, for a caller that has already
- * looked NAME up in its own environment. */
-enum call_status path_package_root(const char *name, handle_t *root);
 /* Exact name:// prefixes capture the caller's current environment value.
  * Directory values start native traversal; other values open the opaque remainder.
  * TEXT values capture an immutable native READ FILE.

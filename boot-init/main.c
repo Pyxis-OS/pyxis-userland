@@ -799,7 +799,7 @@ static const char *space_cpus(const struct authority *authority,
 
 /* The most build_launch can add for one space, counted from its definition. */
 struct launch_capacity {
-  size_t grants, resources, roots, package_trees;
+  size_t grants, resources, roots, views;
 };
 
 /* Grants, bindings and roots for one space init, built in caller storage. */
@@ -812,15 +812,10 @@ struct space_launch {
   handle_t source_handles[BUNDLE_SOURCE_LIMIT];
   struct mounted_volume *source_mounts[BUNDLE_SOURCE_LIMIT];
   size_t source_handle_count;
-  handle_t *package_trees; /* Package roots opened for this space. */
-  size_t package_tree_count;
-  struct package_set *package_set; /* Loaded once, at the first package root. */
-  enum call_status package_set_status;
-  const char *package_set_reason;
-  bool package_set_loaded;
+  handle_t *views; /* View roots opened for this space. */
+  size_t view_count;
   struct job_work *job_provisioner;
   handle_t commands;
-  handle_t package_roots; /* Live data package roots, with the packages source. */
   struct forwarder_reply wifi_session;
   struct mounted_volume *commands_mount;
   handle_t http_staging;
@@ -945,32 +940,6 @@ static void upgrade_sources(const struct authority *authority, const struct boot
   add_package_source(launch, count, PACKAGE_UPGRADE_SOURCE, authority->esp_mount, rights);
   add_package_source(launch, count, PACKAGE_EVIDENCE_SOURCE, authority->boot_evidence,
       FILE_RIGHT_READ);
-}
-
-/* A space holding the packages source reads each installed data package as
- * NAME://. The exported live view resolves names against the active set at
- * each lookup and serves only data package trees, read-only. The shell and
- * plain programs inherit it; bundle launches withhold it, so a bundle reads
- * only the packages its manifest grants. */
-static void package_roots(struct mounts *mounts, const struct boot_space *space,
-    struct space_launch *launch)
-{
-  bool held = false;
-  for (size_t i = 0; i < space->grant_count && !held; ++i) {
-    const struct boot_grant *source = &space->grants[i];
-    held = !strcmp(source->name, PACKAGE_SOURCE) && source->kind == BOOT_GRANT_DIRECTORY &&
-        !source->path && !strcmp(source->volume, BOOT_PACKAGES_VOLUME);
-  }
-  struct mounted_volume *packages = held ? find_mount(mounts, BOOT_PACKAGES_VOLUME) : NULL;
-  if (!packages || packages->root == HANDLE_INVALID) return;
-  enum call_status status = package_roots_open(packages->root, &launch->package_roots);
-  if (status != CALL_OK) {
-    printf("boot-init: space %s package roots unavailable (status %u)\n", space->name, status);
-    return;
-  }
-  launch_add(launch, LAUNCH_RESOURCES,
-      (struct launch_environment_entry)PROFILE_CAP(PACKAGE_ROOTS_NAME, 0),
-      &(struct launch_grant){launch->package_roots, PACKAGE_TREE_RIGHTS, 0});
 }
 
 static void package_sources(struct mounts *mounts, const struct boot_space *space,
@@ -1098,7 +1067,7 @@ static const char *launch_capacity(const struct authority *authority,
     granted += authority->configuration.files[i] != HANDLE_INVALID;
   }
   granted += 2 + (space->package_management ? 2 : 0); /* package inspect and config sources */
-  granted += 1 + (space->package_upgrade ? 2 : 0); /* package_roots, upgrade sources */
+  granted += space->package_upgrade ? 2 : 0; /* upgrade sources */
   granted += space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
       space->multiplexer + space->remote_multiplexer + space->screenshot +
       space->power + space->remote_power;
@@ -1118,9 +1087,9 @@ static const char *launch_capacity(const struct authority *authority,
     }
   }
 
-  size_t root_grants = space->acpi_tables, package_trees = 0;
+  size_t root_grants = space->acpi_tables, views = 0;
   for (size_t i = 0; i < space->root_count; ++i) {
-    package_trees += space->roots[i].package != NULL;
+    views += space->roots[i].view != BOOT_ROOT_VOLUME;
   }
   /* boot, tmp and bin come first; start_space adds OS_NAME and, in the remote
    * space, the beacon text to the entries it sends. */
@@ -1143,7 +1112,7 @@ static const char *launch_capacity(const struct authority *authority,
   }
   *capacity = (struct launch_capacity){
     .grants = grants, .resources = resources, .roots = roots,
-    .package_trees = package_trees ? package_trees : 1,
+    .views = views ? views : 1,
   };
   return NULL;
 }
@@ -1167,8 +1136,8 @@ static const char *build_launch(const struct authority *authority, struct mounts
   launch->resources = calloc(launch->capacity.resources, sizeof(*launch->resources));
   launch->grants = calloc(launch->capacity.grants, sizeof(*launch->grants));
   launch->roots = calloc(launch->capacity.roots, sizeof(*launch->roots));
-  launch->package_trees = calloc(launch->capacity.package_trees, sizeof(*launch->package_trees));
-  if (!launch->resources || !launch->grants || !launch->roots || !launch->package_trees) {
+  launch->views = calloc(launch->capacity.views, sizeof(*launch->views));
+  if (!launch->resources || !launch->grants || !launch->roots || !launch->views) {
     return "boot init is out of memory";
   }
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
@@ -1215,32 +1184,21 @@ static const char *build_launch(const struct authority *authority, struct mounts
           mounted ? mounted->status : CALL_UNAVAILABLE);
       return reason;
     }
-    if (root->package) {
-      /* Resolved once here: this space keeps the tree it started with. */
-      if (!launch->package_set_loaded) {
-        launch->package_set_status = package_set_load(mounted->root, &launch->package_set,
-            &launch->package_set_reason);
-        launch->package_set_loaded = true;
-      }
-      const char *missing = launch->package_set_reason;
-      handle_t tree = HANDLE_INVALID;
-      enum call_status status = launch->package_set_status;
-      if (status == CALL_OK) {
-        status = package_set_open(launch->package_set, mounted->root, root->package,
-            PACKAGE_TREE_RIGHTS, &tree, &missing);
-      }
+    if (root->view == BOOT_ROOT_PKG) {
+      /* Live: each lookup reads the set active at that moment. */
+      handle_t view = HANDLE_INVALID;
+      enum call_status status = package_roots_open(mounted->root, &view);
       if (status != CALL_OK) {
         if (root->optional) {
           continue;
         }
-        snprintf(reason, size, "package %s unavailable: %s (status %u)", root->package,
-            missing, status);
+        snprintf(reason, size, "view %s unavailable (status %u)", root->name, status);
         return reason;
       }
-      launch->package_trees[launch->package_tree_count++] = tree;
+      launch->views[launch->view_count++] = view;
       launch_add(launch, LAUNCH_ROOTS,
           (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, 0),
-          &(struct launch_grant){tree, PACKAGE_TREE_RIGHTS, 0});
+          &(struct launch_grant){view, PACKAGE_TREE_RIGHTS, 0});
       continue;
     }
     struct handle_info info;
@@ -1336,7 +1294,6 @@ static const char *build_launch(const struct authority *authority, struct mounts
   if (space->package_upgrade) {
     upgrade_sources(authority, space, launch, &source_count);
   }
-  package_roots(mounts, space, launch);
   if (space->fat32_mount) {
     uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
         (space->fat32_mount_write ? DISKS_RIGHT_MOUNT_READ_WRITE : 0);
@@ -1651,11 +1608,9 @@ cleanup:
   if (launch.wifi_session.holder) handle_close(launch.wifi_session.holder);
   if (launch.wifi_session.controller) handle_close(launch.wifi_session.controller);
   if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);
-  if (launch.package_roots != HANDLE_INVALID) handle_close(launch.package_roots);
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
-  for (size_t i = 0; i < launch.package_tree_count; ++i) handle_close(launch.package_trees[i]);
-  free(launch.package_trees);
-  package_set_free(launch.package_set);
+  for (size_t i = 0; i < launch.view_count; ++i) handle_close(launch.views[i]);
+  free(launch.views);
   free(launch.roots);
   free(launch.resources);
   free(launch.grants);

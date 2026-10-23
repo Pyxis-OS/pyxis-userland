@@ -48,7 +48,7 @@ hosted Clang (`pkg install clang-hosted`).
 
 [examples/font-min](examples/font-min/main.c) is pointer-min plus text with libfont:
 one line per font style and the pointer position. The `font-min` bundle requires
-the `fonts` package and reads its declared `fonts://` root. Install that package
+the `fonts` package, listed in its manifest's `packages`, and reads it as `pkg://fonts`. Install that package
 from a configured repository with `pkg install fonts`. The image ships its source
 and manifest to build with hosted Clang; preserve the bundle so its package grant
 is applied:

@@ -275,7 +275,7 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
 {
   const char *access_name = NULL;
   if (lua_type(state, -1) == LUA_TTABLE) {
-    static const char *const keys[] = {"access", "optional", "package"};
+    static const char *const keys[] = {"access", "optional", "view"};
     config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
     config_field(state, -1, "optional");
     if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
@@ -284,24 +284,17 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
     }
     root->optional = lua_toboolean(state, -1);
     lua_pop(state, 1);
-    config_field(state, -1, "package");
+    config_field(state, -1, "view");
     if (!lua_isnil(state, -1)) {
-      size_t length = 0;
-      const char *package = lua_type(state, -1) == LUA_TSTRING ?
-          lua_tolstring(state, -1, &length) : NULL;
-      if (!package || strlen(package) != length || !package_id_valid(package)) {
-        luaL_error(state, "space %s: root %s: package must be a package ID", space->name,
-            root->name);
+      if (lua_type(state, -1) != LUA_TSTRING || strcmp(lua_tostring(state, -1), "pkg")) {
+        luaL_error(state, "space %s: root %s: view must be \"pkg\"", space->name, root->name);
       }
-      root->package = strdup(package);
-      if (!root->package) {
-        luaL_error(state, "cannot allocate package name");
-      }
+      root->view = BOOT_ROOT_PKG;
       lua_pop(state, 1);
       config_field(state, -1, "access");
       if (!lua_isnil(state, -1) && (lua_type(state, -1) != LUA_TSTRING ||
           strcmp(lua_tostring(state, -1), "read-only"))) {
-        luaL_error(state, "space %s: root %s: package roots are read-only", space->name,
+        luaL_error(state, "space %s: root %s: view roots are read-only", space->name,
             root->name);
       }
       lua_pop(state, 1);
@@ -342,7 +335,7 @@ static void read_roots(lua_State *state, struct boot_space *space)
         lua_tolstring(state, -2, &length) : NULL;
     if (!name || !valid_name(name, length) || reserved_volume(name) ||
         !strcmp(name, BOOT_ACPI_ROOT)) {
-      luaL_error(state, "space %s: roots must name configured volumes or packages", space->name);
+      luaL_error(state, "space %s: roots must name configured volumes or views", space->name);
     }
     struct boot_root *root = &space->roots[space->root_count++];
     root->name = strdup(name);
@@ -350,7 +343,13 @@ static void read_roots(lua_State *state, struct boot_space *space)
       luaL_error(state, "cannot allocate root name");
     }
     read_root(state, space, root);
-    root->volume = strdup(root->package ? BOOT_PACKAGES_VOLUME : name);
+    /* A view root is named after its view, and only a view root has that name,
+     * so a bundle launch can withhold it by name (decision 38). */
+    if ((root->view == BOOT_ROOT_PKG) != !strcmp(name, "pkg") || !strcmp(name, "sdk")) {
+      luaL_error(state, "space %s: root %s: pkg and sdk name only their view roots",
+          space->name, name);
+    }
+    root->volume = strdup(root->view != BOOT_ROOT_VOLUME ? BOOT_PACKAGES_VOLUME : name);
     if (!root->volume) {
       luaL_error(state, "cannot allocate root name");
     }
@@ -809,7 +808,6 @@ void boot_config_free(struct boot_config *config)
     for (size_t j = 0; j < space->root_count; ++j) {
       free(space->roots[j].name);
       free(space->roots[j].volume);
-      free(space->roots[j].package);
     }
     free(space->roots);
     for (size_t j = 0; j < space->grant_count; ++j) {
@@ -1001,10 +999,10 @@ bool boot_plan_build(const struct boot_config *config, struct boot_plan *plan,
         return plan_fail(plan, failure, "space %s: root %s names undefined volume %s",
             space->name, space->roots[j].name, space->roots[j].volume);
       }
-      /* A tree opened from a mount that boot init retires on exit would vanish. */
-      if (space->roots[j].package && volume->kind != BOOT_VOLUME_NPFS &&
+      /* A view over a mount that boot init retires on exit would vanish. */
+      if (space->roots[j].view != BOOT_ROOT_VOLUME && volume->kind != BOOT_VOLUME_NPFS &&
           volume->kind != BOOT_VOLUME_RAM_NPFS) {
-        return plan_fail(plan, failure, "space %s: package root %s needs an npfs %s volume",
+        return plan_fail(plan, failure, "space %s: view root %s needs an npfs %s volume",
             space->name, space->roots[j].name, BOOT_PACKAGES_VOLUME);
       }
       if (space->roots[j].read_write && (volume->kind == BOOT_VOLUME_FAT32 ||

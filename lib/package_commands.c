@@ -110,7 +110,7 @@ static bool record_valid(const struct package_command_record *record, const char
 }
 
 static enum call_status child_call(handle_t source, handle_t previous,
-    uint64_t operation, handle_t *output)
+    uint64_t operation, const char *name, handle_t *output)
 {
   if (!output) return CALL_BAD_REQUEST;
   *output = HANDLE_INVALID;
@@ -126,6 +126,11 @@ static enum call_status child_call(handle_t source, handle_t previous,
     memcpy(&message.body, &request, sizeof(request));
   } else if (operation == DIRECTORY_COMMAND_BIND) {
     struct package_command_bind_request request = {.capture = previous};
+    memcpy(&message.body, &request, sizeof(request));
+  } else if (operation == DIRECTORY_PACKAGE_ROOTS_SELECT) {
+    struct package_roots_select_request request = {
+      .name = (uintptr_t)name, .name_length = strlen(name), .previous = previous,
+    };
     memcpy(&message.body, &request, sizeof(request));
   }
   struct directory_child_reply reply = {0};
@@ -154,12 +159,12 @@ static enum call_status child_call(handle_t source, handle_t previous,
 
 enum call_status package_commands_open(handle_t volume, handle_t *live)
 {
-  return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_COMMANDS, live);
+  return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_COMMANDS, NULL, live);
 }
 
 enum call_status package_roots_open(handle_t volume, handle_t *live)
 {
-  return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_ROOTS, live);
+  return child_call(volume, HANDLE_INVALID, DIRECTORY_PACKAGE_ROOTS, NULL, live);
 }
 
 enum call_status package_commands_info(handle_t view, struct package_command_info *info)
@@ -179,7 +184,7 @@ enum call_status package_commands_info(handle_t view, struct package_command_inf
 
 enum call_status package_commands_capture(handle_t view, handle_t previous, handle_t *fixed)
 {
-  return child_call(view, previous, DIRECTORY_COMMAND_CAPTURE, fixed);
+  return child_call(view, previous, DIRECTORY_COMMAND_CAPTURE, NULL, fixed);
 }
 
 enum call_status package_commands_bind(handle_t source, handle_t fixed, handle_t *root)
@@ -188,7 +193,17 @@ enum call_status package_commands_bind(handle_t source, handle_t fixed, handle_t
     if (root) *root = HANDLE_INVALID;
     return CALL_BAD_REQUEST;
   }
-  return child_call(source, fixed, DIRECTORY_COMMAND_BIND, root);
+  return child_call(source, fixed, DIRECTORY_COMMAND_BIND, NULL, root);
+}
+
+enum call_status package_roots_select(handle_t fixed, const char *id, handle_t previous,
+    handle_t *selection)
+{
+  if (!id || !package_id_valid(id)) {
+    if (selection) *selection = HANDLE_INVALID;
+    return CALL_BAD_REQUEST;
+  }
+  return child_call(fixed, previous, DIRECTORY_PACKAGE_ROOTS_SELECT, id, selection);
 }
 
 enum call_status package_commands_lookup(handle_t fixed, const char *name,

@@ -6,16 +6,22 @@
 
 struct bundle_program;
 
+/* The root a manifest's "packages" list grants (docs/wip/sdk-view.md,
+ * decision 48). A bundle never inherits its launcher's root of this name. */
+#define BUNDLE_PACKAGES_ROOT "pkg"
+
 struct bundle_grant_request {
   const char *name;
   const char *resource;
   /* Selected external inventory key and optional directory URI-root alias.
-   * A directory grant names either a source or a package ID; a package is
-   * resolved from the launcher's packages source and is always read-only.
    * A provider source names a held exported provider root in the supplied
    * launch environment, rather than the private source inventory. */
   const char *source;
-  const char *package;
+  /* Only the grant named BUNDLE_PACKAGES_ROOT, which the manifest's
+   * "packages" list creates: a read-only pkg:// holding just these package
+   * IDs, selected from the launcher's packages source. */
+  const char *const *packages;
+  size_t package_count;
   const char *root;
   /* Optional canonical lo/ethN/wlanN role for TCP/UDP/echo. Preparation resolves
    * it using supplied registry READ, then attenuates the held native factory.

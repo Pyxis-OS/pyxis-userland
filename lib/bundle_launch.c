@@ -36,15 +36,12 @@ struct bundle_launch {
   struct launch_grant *grants;
   struct launch_environment_entry *entries;
   uint64_t *directories;
-  /* At most one temporary per manifest request: a package tree or a narrowed
-   * network factory. The launch borrows each until preparation closes. */
+  /* At most one temporary per manifest request: the packages selection or a
+   * narrowed network factory. The launch borrows each until preparation closes. */
   handle_t *owned_grants;
   size_t owned_count;
-  /* Package trees share the set selected at the first package grant. */
-  struct package_set *set;
+  /* The packages source bound to a package-selected command's capture. */
   handle_t package_root;
-  enum call_status set_status;
-  bool set_loaded;
 };
 
 struct context_grants {
@@ -196,10 +193,11 @@ static enum call_status prepare_context(struct context_grants *context,
     if (!name || !*name) {
       return CALL_BAD_REQUEST;
     }
-    /* A bundle reads packages only through its manifest's package grants, so
-     * the space's package_roots view is withheld like the packages source. */
+    /* A bundle reads packages only through its manifest's "packages", so the
+     * space's pkg root is withheld like the packages source (decision 38 of
+     * docs/wip/sdk-view.md). */
     if (!strcmp(name, "app") || !strcmp(name, "job_work") ||
-        !strcmp(name, "job_provisioner") || !strcmp(name, PACKAGE_ROOTS_NAME) ||
+        !strcmp(name, "job_provisioner") || !strcmp(name, BUNDLE_PACKAGES_ROOT) ||
         !strncmp(name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       continue;
     }
@@ -310,24 +308,56 @@ static enum call_status provider_source(const struct launch_request *source,
   return CALL_OK;
 }
 
-static enum call_status selected_package_set(const struct bundle_program *program,
-    handle_t source, struct bundle_launch *prepared, const char **reason)
+/* The bundle's pkg://: REQUEST's packages, selected from a capture of the
+ * packages SOURCE. A package-selected command keeps its captured set, whose
+ * volume SOURCE must independently hold; the capture alone never supplies
+ * authority for another package. MISSING names a package that is absent. */
+static enum call_status selected_packages(const struct bundle_program *program,
+    const struct bundle_grant_request *request, handle_t source,
+    struct bundle_launch *prepared, handle_t *view, const char **missing)
 {
-  handle_t fixed = bundle_program_package_view(program);
-  if (!fixed) {
-    return package_set_load(source, &prepared->set, reason);
+  *view = HANDLE_INVALID;
+  handle_t pinned = bundle_program_package_view(program);
+  handle_t root = source, live = HANDLE_INVALID, fixed = HANDLE_INVALID;
+  enum call_status status = CALL_OK;
+  if (pinned != HANDLE_INVALID) {
+    if (prepared->package_root == HANDLE_INVALID) {
+      status = package_commands_bind(source, pinned, &prepared->package_root);
+    }
+    root = prepared->package_root;
   }
-  struct package_command_info selected;
-  enum call_status status = package_commands_info(fixed, &selected);
   if (status == CALL_OK) {
-    status = package_commands_bind(source, fixed, &prepared->package_root);
+    status = package_commands_open(root, &live);
+  }
+  if (status == CALL_OK) {
+    status = package_commands_capture(live, pinned, &fixed);
+  }
+  handle_t selection = HANDLE_INVALID;
+  for (size_t i = 0; status == CALL_OK && i < request->package_count; ++i) {
+    handle_t next = HANDLE_INVALID;
+    status = package_roots_select(fixed, request->packages[i], selection, &next);
+    if (status != CALL_OK) {
+      *missing = request->packages[i];
+    }
+    if (selection != HANDLE_INVALID) {
+      handle_close(selection);
+    }
+    selection = next;
+  }
+  if (live != HANDLE_INVALID) {
+    handle_close(live);
+  }
+  if (fixed != HANDLE_INVALID) {
+    handle_close(fixed);
   }
   if (status != CALL_OK) {
-    *reason = "package source does not match the selected command volume";
+    if (selection != HANDLE_INVALID) {
+      handle_close(selection);
+    }
     return status;
   }
-  return package_set_load_number(prepared->package_root, selected.set,
-      &prepared->set, reason);
+  *view = selection;
+  return CALL_OK;
 }
 
 static enum call_status scoped_network_grant(const struct bundle_grant_request *request,
@@ -418,7 +448,7 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
       }
     } else {
       const char *selection = requests[i].source ? requests[i].source :
-          requests[i].package ? PACKAGE_SOURCE : requests[i].resource;
+          requests[i].packages ? PACKAGE_SOURCE : requests[i].resource;
       for (size_t j = 0; j < authority_count; ++j) {
         if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
             authority[j].protocol == requests[i].protocol) {
@@ -429,33 +459,19 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
         }
       }
     }
-    if (source != HANDLE_INVALID && requests[i].package) {
-      /* A package-selected command keeps its captured set. That snapshot never
-       * supplies authority for another package: SOURCE must independently hold
-       * the matching originating volume. */
-      const char *reason;
-      handle_t tree = HANDLE_INVALID;
-      if (!prepared->set_loaded) {
-        prepared->set_status = selected_package_set(program, source,
-            prepared, &reason);
-        prepared->set_loaded = true;
+    if (source != HANDLE_INVALID && requests[i].packages) {
+      handle_t view = HANDLE_INVALID;
+      const char *absent = requests[i].name;
+      if (selected_packages(program, &requests[i], source, prepared, &view, &absent) != CALL_OK) {
+        *missing = absent;
+        return CALL_DENIED;
       }
-      if (prepared->set_status != CALL_OK ||
-          package_set_open(prepared->set, prepared->package_root ? prepared->package_root : source,
-            requests[i].package, requests[i].rights,
-            &tree, &reason) != CALL_OK) {
-        if (requests[i].required) {
-          *missing = requests[i].package;
-          return CALL_DENIED;
-        }
-        continue;
-      }
-      prepared->owned_grants[prepared->owned_count++] = tree;
-      source = tree;
+      prepared->owned_grants[prepared->owned_count++] = view;
+      source = view;
     }
     if (source == HANDLE_INVALID) {
       if (requests[i].required) {
-        *missing = requests[i].package ? requests[i].package : requests[i].name;
+        *missing = requests[i].name;
         return CALL_DENIED;
       }
       continue;
@@ -852,7 +868,6 @@ void bundle_launch_close(struct bundle_launch *prepared)
       handle_close(prepared->owned_grants[i]);
     }
     free(prepared->owned_grants);
-    package_set_free(prepared->set);
     if (prepared->package_root) handle_close(prepared->package_root);
     free(prepared->directories);
     free(prepared->entries);

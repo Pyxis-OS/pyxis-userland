@@ -23,9 +23,11 @@ static bool alphanumeric(char byte)
       (byte >= 'A' && byte <= 'Z');
 }
 
-/* A data package is read as ID://, so an ID may not be a fixed root name. */
+/* IDs that name roots and views a package must not be confused with:
+ * today's fixed roots, and the pkg:// and sdk:// views (decision 53 of
+ * docs/wip/sdk-view.md). */
 static const char *const fixed_root_names[] = {
-  "boot", "tmp", "bin", "system", "home", "acpi", "packages",
+  "boot", "tmp", "bin", "system", "home", "acpi", "packages", "pkg", "sdk",
 };
 
 bool package_id_valid(const char *id)

@@ -53,16 +53,16 @@ struct style {
  * Icons are ordinary code points, so they need no special call. */
 static const struct style styles[STYLE_COUNT] = {
   {"Caskaydia Cove Regular \xef\x80\x93",
-      "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-Regular.ttf"},
-  {"Caskaydia Cove Bold", "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-Bold.ttf"},
-  {"Caskaydia Cove Italic", "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-Italic.ttf"},
+      "pkg://fonts/caskaydia-cove/CaskaydiaCoveNerdFont-Regular.ttf"},
+  {"Caskaydia Cove Bold", "pkg://fonts/caskaydia-cove/CaskaydiaCoveNerdFont-Bold.ttf"},
+  {"Caskaydia Cove Italic", "pkg://fonts/caskaydia-cove/CaskaydiaCoveNerdFont-Italic.ttf"},
   {"Caskaydia Cove Bold Italic",
-      "fonts://caskaydia-cove/CaskaydiaCoveNerdFont-BoldItalic.ttf"},
-  {"IBM Plex Sans Regular", "fonts://ibm-plex-sans/IBMPlexSans-Regular.ttf"},
-  {"IBM Plex Sans Bold", "fonts://ibm-plex-sans/IBMPlexSans-Bold.ttf"},
-  {"IBM Plex Serif Regular", "fonts://ibm-plex-serif/IBMPlexSerif-Regular.ttf"},
-  {"IBM Plex Serif Bold", "fonts://ibm-plex-serif/IBMPlexSerif-Bold.ttf"},
-  {"IBM Plex Serif Italic", "fonts://ibm-plex-serif/IBMPlexSerif-Italic.ttf"},
+      "pkg://fonts/caskaydia-cove/CaskaydiaCoveNerdFont-BoldItalic.ttf"},
+  {"IBM Plex Sans Regular", "pkg://fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf"},
+  {"IBM Plex Sans Bold", "pkg://fonts/ibm-plex-sans/IBMPlexSans-Bold.ttf"},
+  {"IBM Plex Serif Regular", "pkg://fonts/ibm-plex-serif/IBMPlexSerif-Regular.ttf"},
+  {"IBM Plex Serif Bold", "pkg://fonts/ibm-plex-serif/IBMPlexSerif-Bold.ttf"},
+  {"IBM Plex Serif Italic", "pkg://fonts/ibm-plex-serif/IBMPlexSerif-Italic.ttf"},
 };
 
 struct app {

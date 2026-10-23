@@ -52,12 +52,14 @@ struct boot_volume {
   bool read_write; /* FAT32 admission mode, independent of delegated views. */
 };
 
-/* A root names a volume of the same name, or a package of the current set
- * resolved through BOOT_PACKAGES_VOLUME when the space starts. */
+/* What a root names: a volume of the same name, or a read-only view over the
+ * active package set in BOOT_PACKAGES_VOLUME (docs/wip/sdk-view.md). */
+enum boot_root_view { BOOT_ROOT_VOLUME, BOOT_ROOT_PKG };
+
 struct boot_root {
   char *name;
   char *volume;
-  char *package; /* NULL for a volume root; package roots are read-only. */
+  enum boot_root_view view;
   bool read_write;
   bool optional;
 };
