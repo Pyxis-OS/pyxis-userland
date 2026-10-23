@@ -101,7 +101,7 @@ INSTALL_SELECTOR_SOURCES := installer-init/update.c installer/io.c installer/gpt
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/installer-init/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
 BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
-PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o signature.o)
+PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o signature.o upgrade.o)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
@@ -271,6 +271,8 @@ $(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
 	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
 
 $(TLS_OBJECT) $(BUILD)/xfer/hash.o $(BUILD)/pkg/signature.o: private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
+# pkg upgrade publishes through the shared boot publisher (installer/boot_publisher.h).
+$(BUILD)/pkg/upgrade.o: private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(BUILD)/xfer/hash.o: $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 $(TLS_OBJECT): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 $(TLS_LIBRARY): $(TLS_OBJECT) Makefile
@@ -487,8 +489,8 @@ $(BUILD)/httpfs.pxb: $(BUILD)/httpfs.pxe httpfs/manifest.json
 
 pkg: $(BUILD)/pkg.pxb/manifest.json
 
-$(BUILD)/pkg.pxe: $(PKG_OBJECTS) $(BUILD)/xfer/hash.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(PKG_OBJECTS) $(BUILD)/xfer/hash.o $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/pkg.pxe: $(PKG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(BUILD)/xfer/hash.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(PKG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/pkg.pxb/manifest.json: $(BUILD)/pkg.pxe pkg/manifest.json pkg/README.md
 	@mkdir -p $(BUILD)/pkg.pxb/app/bin

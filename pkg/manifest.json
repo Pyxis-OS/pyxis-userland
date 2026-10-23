@@ -100,6 +100,25 @@
         "open-read"
       ],
       "required": false
+    },
+    {
+      "name": "boot_esp_upgrade",
+      "resource": "mount",
+      "source": "boot_esp_upgrade",
+      "rights": [
+        "observe",
+        "upgrade-boot-esp"
+      ],
+      "required": false
+    },
+    {
+      "name": "boot_esp_evidence",
+      "resource": "file",
+      "source": "boot_esp_evidence",
+      "rights": [
+        "read"
+      ],
+      "required": false
     }
   ]
 }

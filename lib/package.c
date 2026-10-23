@@ -213,6 +213,9 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
       status = CALL_NO_MEMORY;
     }
   }
+  if (status == CALL_OK && release) {
+    memcpy(provided->release, release->as.string.bytes, release->as.string.size + 1);
+  }
   if (status == CALL_OK && floor) {
     if (floor->kind != LITERAL_STRING || !time_text(floor->as.string.bytes, floor->as.string.size)) {
       status = CALL_BAD_REQUEST;

@@ -32,6 +32,8 @@ struct package_provided_abi {
   /* The build commit's UTC time, YYYY-MM-DDTHH:MM:SSZ: pkg accepts no signed
    * index from before it on first contact (decision 71). Empty without Git. */
   char signed_floor[21];
+  /* The release tag of a tagged build; empty for a development build. */
+  char release[PACKAGE_ABI_MAX + 1];
 };
 
 bool package_id_valid(const char *id);

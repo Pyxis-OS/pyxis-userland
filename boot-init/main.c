@@ -1974,6 +1974,7 @@ int main(int argc, char **argv)
       .esp_mount = authority.esp_mount, .ram = authority.ram,
       .clock = authority.services[SERVICE_CLOCK], .random = authority.services[SERVICE_RANDOM],
       .loaded_kernel = authority.loaded_kernel, .loaded_archive = authority.loaded_archive,
+      .pool = pool_malformed ? 0 : pool,
     };
     bool evidence = boot_evidence_prepare(&sources, &authority.boot_evidence);
     if (!close_boot_payloads(&authority) || !evidence) {

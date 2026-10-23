@@ -6,12 +6,15 @@
 struct boot_evidence_authority {
   handle_t esp_mount, ram, clock, random;
   handle_t loaded_kernel, loaded_archive;
+  uint32_t pool; /* The boot entry's mount.pool GPT entry. */
 };
 
 /* Borrow trusted boot-init grants. When the ESP holds a committed record and
  * the loaded payloads hash, EVIDENCE receives a READ-only FILE:
  * "PYXIS-BOOT-EVIDENCE 1", then kernel, archive and record lines of size and
- * SHA-256; otherwise it stays HANDLE_INVALID and boot continues. The early ESP
+ * SHA-256 and a pool line naming the boot entry's mount.pool, which pkg
+ * upgrade writes into the new entry; otherwise it stays HANDLE_INVALID and boot
+ * continues. The early ESP
  * reader is retired before return; false only when that retirement fails.
  * Payload FILEs come directly from the kernel's private bootstrap grants; the
  * caller closes them afterwards. */

@@ -5,6 +5,7 @@
 #include "progress.h"
 #include "signature.h"
 #include "store.h"
+#include "upgrade.h"
 #include "../common/bootstrap_environment.h"
 #include "../xfer/hash.h"
 #include <clock.h>
@@ -12,6 +13,7 @@
 #include <file.h>
 #include <handle.h>
 #include <literal.h>
+#include <path.h>
 #include <package_maintenance.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +38,11 @@ struct package_request {
 };
 
 #define ANY_REPOSITORY SIZE_MAX
+/* The configured repository pkg upgrade reads releases from (decision 74);
+ * other commands do not read it. */
+#define RELEASES_REPOSITORY "releases"
+#define RELEASE_ID "pyxis"
+#define UPGRADE_STAGING ".upgrade"
 
 struct client {
   handle_t packages, clock, config, config_write, management;
@@ -507,6 +514,9 @@ static bool load_repositories(void)
   }
   for (size_t r = 0; r < client.repositories.count; ++r) {
     const struct pkg_repository *repository = &client.repositories.entries[r];
+    if (!strcmp(repository->name, RELEASES_REPOSITORY)) {
+      continue;
+    }
     printf("pkg: reading repository %s%s\n", repository->name,
         repository->unsigned_index ? " (unsigned)" : "");
     struct pkg_entry *entries = NULL;
@@ -522,6 +532,9 @@ static bool load_repositories(void)
     const struct package_provided_abi *provided = provided_abi();
     size_t usable = 0;
     for (size_t i = 0; i < count; ++i) {
+      if (pkg_kind_release(entries[i].kind)) {
+        continue;
+      }
       if (pkg_kind_bound(entries[i].kind) && (!client.provided_readable ||
           !package_abi_provided(provided, entries[i].abi))) {
         struct hidden_build *hidden = realloc(client.hidden,
@@ -1373,9 +1386,270 @@ static bool repository_command(const char *command, const char *name, const char
   return ok;
 }
 
+/* Installed packages built for an ABI the release does not provide. They are
+ * listed only: programs upgrade as ordinary packages (decision 73). */
+static void list_uncovered(const struct pkg_entry *release)
+{
+  struct pkg_selection current = {0};
+  if (!pkg_selection_load(client.packages, true, 0, &current, &client.reason)) {
+    puts("    (the active package set cannot be read)");
+    client.reason = NULL;
+    return;
+  }
+  size_t listed = 0;
+  for (size_t i = 0; i < current.count; ++i) {
+    handle_t tree;
+    struct pkg_manifest manifest = {0};
+    if (!pkg_tree_open(client.packages, &current.entries[i], PKG_READ_RIGHTS, &tree,
+          &client.reason)) {
+      continue;
+    }
+    bool read = pkg_tree_manifest(tree, &manifest, &client.reason);
+    handle_close(tree);
+    bool covered = !read || !pkg_kind_bound(manifest.kind);
+    for (size_t j = 0; !covered && j < release->provides_count; ++j) {
+      covered = !strcmp(release->provides[j], manifest.abi);
+    }
+    if (!covered) {
+      printf("    %s@%s (abi %s)\n", current.entries[i].id, current.entries[i].version,
+          manifest.abi);
+      ++listed;
+    }
+    pkg_manifest_free(&manifest);
+  }
+  if (!listed) {
+    puts("    none");
+  }
+  pkg_selection_free(&current);
+  client.reason = NULL;
+}
+
+static bool upgrade_review(const struct pkg_entry *release)
+{
+  const struct package_provided_abi *provided = provided_abi();
+  char provides[PKG_PROVIDES_MAX * (PACKAGE_ABI_MAX + 2)] = "";
+  for (size_t i = 0; i < release->provides_count; ++i) {
+    append(provides, sizeof(provides), ", ", release->provides[i]);
+  }
+  puts("Release upgrade (takes effect at the next boot):");
+  if (provided->release[0]) {
+    printf("  running: %s\n", provided->release);
+  } else {
+    printf("  running: a development build (%s)\n", provided->text);
+  }
+  printf("  new: %s@%s, %llu bytes, provides %s\n", release->identity.id,
+      release->identity.version, (unsigned long long)release->size, provides);
+  puts("  installed packages it does not provide an ABI for:");
+  list_uncovered(release);
+  puts("  the running release stays bootable as Pyxis OS (previous).");
+  if (client.yes) {
+    puts("Staging this release (--yes).");
+    return true;
+  }
+  if (client.terminal.input == HANDLE_INVALID || client.terminal.output == HANDLE_INVALID) {
+    return fail("a release upgrade requires an interactive console review");
+  }
+  char line[16];
+  struct term_line_result result = term_read_line(&client.terminal,
+      "Stage this release? [y/N] ", line, sizeof(line));
+  if (result.status != TERM_LINE_OK || result.limit_reached ||
+      (strcmp(line, "y") && strcmp(line, "Y"))) {
+    return fail("upgrade cancelled; nothing was written");
+  }
+  return true;
+}
+
+/* The release's own os-release must name it, and supplies the revision the
+ * publisher records. */
+static bool release_revision(handle_t tree, const char *version, char revision[65])
+{
+  handle_t file;
+  char *bytes = NULL;
+  size_t size = 0;
+  bool ok = directory_lookup(tree, "os-release", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
+      &file) == CALL_OK && read_snapshot(file, &bytes, &size);
+  if (file != HANDLE_INVALID) {
+    handle_close(file);
+  }
+  struct literal *document = NULL;
+  struct literal_diagnostic diagnostic;
+  ok = ok && literal_parse(bytes, size, &document, &diagnostic);
+  free(bytes);
+  const struct literal_value *release = ok ? literal_field(document->root, "release") : NULL;
+  const struct literal_value *named = ok ? literal_field(document->root, "revision") : NULL;
+  ok = release && release->kind == LITERAL_STRING && !strcmp(release->as.string.bytes, version) &&
+      named && named->kind == LITERAL_STRING && named->as.string.size &&
+      named->as.string.size < 65 && package_abi_valid(named->as.string.bytes);
+  if (ok) {
+    memcpy(revision, named->as.string.bytes, named->as.string.size + 1);
+  }
+  if (document) {
+    literal_free(document);
+  }
+  return ok || fail("the release's os-release does not name this release and a revision");
+}
+
+static bool open_payload(handle_t tree, const char *name, handle_t *file, uint64_t *size)
+{
+  return (directory_lookup(tree, name, DIRECTORY_KIND_FILE, FILE_RIGHT_READ, file) == CALL_OK &&
+      file_size(*file, size) == CALL_OK) || fail("the staged release is missing a payload");
+}
+
+/* Fetch, verify and stage RELEASE in packages/.upgrade/, then publish it as
+ * the next boot attempt. Staging is removed afterwards, and at the start of
+ * the next upgrade if this one was interrupted (decision 74). */
+static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_repository *source,
+    const struct pkg_boot_evidence *evidence, handle_t issuer)
+{
+  struct pkg_progress progress;
+  pkg_progress_init(&progress, client.clock, client.terminal.output != HANDLE_INVALID,
+      release->identity.id, release->identity.version);
+  struct pkg_archive_progress observer = { pkg_progress_archive, &progress };
+  handle_t staging = HANDLE_INVALID, destination = HANDLE_INVALID, tree = HANDLE_INVALID;
+  handle_t snapshot = HANDLE_INVALID, kernel = HANDLE_INVALID, archive = HANDLE_INVALID;
+  handle_t tmp = HANDLE_INVALID, workspace = HANDLE_INVALID;
+  struct pkg_manifest manifest = {0};
+  uint64_t kernel_size = 0, archive_size = 0, now = 0;
+  char revision[65], workspace_name[48];
+  bool ok = pkg_upgrade_clear(client.packages, UPGRADE_STAGING) ||
+      fail("cannot remove an earlier upgrade's staging");
+  ok = ok && pkg_directory(client.packages, UPGRADE_STAGING, true, PKG_WRITE_RIGHTS,
+      &staging, &client.reason);
+  ok = ok && (directory_create(staging, "release", DIRECTORY_KIND_DIRECTORY, PKG_WRITE_RIGHTS,
+      &destination) == CALL_OK || fail("cannot create the release staging"));
+  if (ok) {
+    pkg_progress_fetch_begin(&progress, release->size);
+    ok = fetch(source->url, release->archive, false, release->size, &progress, &snapshot);
+  }
+  if (ok) {
+    pkg_progress_fetch_end(&progress, release->size);
+    ok = pkg_archive(snapshot, release, destination, &manifest, &observer, &client.reason);
+    pkg_progress_abort(&progress);
+  }
+  ok = ok && (pkg_kind_release(manifest.kind) || fail("the staged archive is not a release"));
+  ok = ok && (directory_lookup(destination, "tree", DIRECTORY_KIND_DIRECTORY, PKG_READ_RIGHTS,
+      &tree) == CALL_OK || fail("the staged release has no tree"));
+  ok = ok && release_revision(tree, release->identity.version, revision) &&
+      open_payload(tree, "caelum.elf", &kernel, &kernel_size) &&
+      open_payload(tree, "initrd.cpio", &archive, &archive_size);
+  /* The publisher verifies through a RAM workspace; tmp:// is RAM-backed. */
+  ok = ok && (path_root("tmp", &tmp) == CALL_OK || fail("tmp:// is unavailable"));
+  if (ok && clock_now(client.clock, &now) == CALL_OK) {
+    snprintf(workspace_name, sizeof(workspace_name), "pkg-upgrade-%llu", (unsigned long long)now);
+    ok = directory_create(tmp, workspace_name, DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES |
+        DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE |
+        DIRECTORY_RIGHT_FILESYSTEM_INFO, &workspace) == CALL_OK ||
+        fail("cannot create a RAM workspace in tmp://");
+  } else if (ok) {
+    ok = fail("cannot name a RAM workspace");
+  }
+  if (ok) {
+    const struct pkg_upgrade_publish request = {.issuer = issuer, .clock = client.clock,
+      .random = bootstrap_capability("random"), .workspace = workspace, .kernel = kernel,
+      .archive = archive, .kernel_size = kernel_size, .archive_size = archive_size,
+      .revision = revision, .evidence = evidence};
+    ok = pkg_upgrade_publish(&request, &client.reason);
+  }
+  pkg_manifest_free(&manifest);
+  handle_t opened[] = {kernel, archive, tree, destination, staging, snapshot, workspace};
+  for (size_t i = 0; i < sizeof(opened) / sizeof(opened[0]); ++i) {
+    if (opened[i] != HANDLE_INVALID) {
+      handle_close(opened[i]);
+    }
+  }
+  if (workspace != HANDLE_INVALID && !pkg_upgrade_clear(tmp, workspace_name)) {
+    fprintf(stderr, "pkg: cannot remove tmp://%s\n", workspace_name);
+  }
+  if (tmp != HANDLE_INVALID) {
+    handle_close(tmp);
+  }
+  if (!pkg_upgrade_clear(client.packages, UPGRADE_STAGING)) {
+    fputs("pkg: cannot remove the release staging; the next upgrade removes it\n", stderr);
+  }
+  return ok;
+}
+
+/* pkg upgrade [VERSION] (docs/wip/pkg-upgrade.md, step 3): the newest release
+ * in the signed releases repository, or the one named, staged as the next boot
+ * attempt with the running one as the previous entry. */
+static bool upgrade(const char *version)
+{
+  handle_t issuer = bootstrap_capability(PACKAGE_UPGRADE_SOURCE);
+  handle_t evidence_file = bootstrap_capability(PACKAGE_EVIDENCE_SOURCE);
+  if (issuer == HANDLE_INVALID || evidence_file == HANDLE_INVALID) {
+    return fail("upgrade needs an installed system booted from its own boot entry, in a space "
+        "with package_upgrade = true; live media and rescue boots cannot upgrade");
+  }
+  struct pkg_boot_evidence evidence;
+  if (!pkg_boot_evidence_read(evidence_file, &evidence, &client.reason)) {
+    return false;
+  }
+  const struct package_provided_abi *provided = provided_abi();
+  if (!client.provided_readable) {
+    return fail("cannot read boot://os-release");
+  }
+  if (!package_volume(client.management, true)) {
+    return false;
+  }
+  client.packages = client.management;
+  handle_t lock;
+  if (directory_create(client.packages, PKG_LOCK, DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_ENUMERATE, &lock) != CALL_OK) {
+    return fail("writer lock unavailable; use pkg unlock only after the prior client has stopped");
+  }
+  bool ok = pkg_repositories_load(client.config, &client.repositories, &client.reason) == CALL_OK;
+  const struct pkg_repository *source = NULL;
+  for (size_t r = 0; ok && r < client.repositories.count; ++r) {
+    if (!strcmp(client.repositories.entries[r].name, RELEASES_REPOSITORY)) {
+      source = &client.repositories.entries[r];
+    }
+  }
+  if (ok && !source) {
+    ok = fail("no releases repository is configured");
+  } else if (ok && source->unsigned_index) {
+    ok = fail("the releases repository is always signed; its entry must not say signed = false");
+  }
+  struct pkg_entry *entries = NULL;
+  size_t count = 0;
+  const struct pkg_entry *chosen = NULL;
+  if (ok) {
+    printf("pkg: reading repository %s\n", source->name);
+    ok = read_repository(source, &entries, &count);
+  }
+  for (size_t i = 0; ok && i < count; ++i) {
+    if (pkg_kind_release(entries[i].kind) && !strcmp(entries[i].identity.id, RELEASE_ID) &&
+        (!version || !strcmp(entries[i].identity.version, version))) {
+      chosen = &entries[i];
+    }
+  }
+  if (ok && !chosen) {
+    if (version) {
+      snprintf(client.message, sizeof(client.message),
+          "the releases repository does not offer %s@%s", RELEASE_ID, version);
+    } else {
+      snprintf(client.message, sizeof(client.message),
+          "the releases repository offers no %s release", RELEASE_ID);
+    }
+    ok = fail(client.message);
+  } else if (ok && !strcmp(chosen->identity.version, provided->release)) {
+    snprintf(client.message, sizeof(client.message), "%s is already running",
+        chosen->identity.version);
+    ok = fail(client.message);
+  }
+  ok = ok && ensure_crypto() && upgrade_review(chosen) &&
+      stage_and_publish(chosen, source, &evidence, issuer);
+  if (ok) {
+    printf("pkg: upgrade staged: reboot to run %s\n", chosen->identity.version);
+  }
+  free(entries);
+  handle_close(lock);
+  return release_writer_lock(client.packages, ok);
+}
+
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -1425,6 +1699,7 @@ int main(int argc, char **argv)
   if (!repository && ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
       !strcmp(command, "rollback") ? count > 1 :
       !strcmp(command, "check") ? count != 1 :
+      !strcmp(command, "upgrade") ? count > 1 :
       !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {
     return usage();
   }
@@ -1434,7 +1709,9 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   bool ok = false;
-  if (repository) {
+  if (!strcmp(command, "upgrade")) {
+    ok = upgrade(count ? arguments[0] : NULL);
+  } else if (repository) {
     ok = repository_command(arguments[0], count > 1 ? arguments[1] : NULL,
         count > 2 ? arguments[2] : NULL, unsigned_index);
   } else if (mutation) {

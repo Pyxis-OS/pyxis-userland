@@ -142,7 +142,7 @@ bool boot_evidence_prepare(const struct boot_evidence_authority *authority, hand
     return false;
   }
   struct config_file_digest kernel = {0}, archive = {0}, digest = {0};
-  bool valid = record.bytes && hash_init(authority->clock, authority->random);
+  bool valid = record.bytes && authority->pool && hash_init(authority->clock, authority->random);
   if (valid) {
     struct install_digest hash = {0};
     valid = loaded_digest(authority->loaded_kernel, &kernel) &&
@@ -156,10 +156,10 @@ bool boot_evidence_prepare(const struct boot_evidence_authority *authority, hand
   digest.size = record.size;
   char text[EVIDENCE_BYTES];
   valid = valid && snprintf(text, sizeof(text),
-      "PYXIS-BOOT-EVIDENCE 1\nkernel %llu %s\narchive %llu %s\nrecord %llu %s\n",
+      "PYXIS-BOOT-EVIDENCE 1\nkernel %llu %s\narchive %llu %s\nrecord %llu %s\npool %u\n",
       (unsigned long long)kernel.size, kernel.sha256,
       (unsigned long long)archive.size, archive.sha256,
-      (unsigned long long)digest.size, digest.sha256) < (int)sizeof(text);
+      (unsigned long long)digest.size, digest.sha256, authority->pool) < (int)sizeof(text);
   config_handoff_bytes_free(&record);
   /* Only an upgrade needs the evidence; boot continues without it. */
   if (!valid) {

@@ -76,6 +76,11 @@ bool pkg_kind_commands(const char *kind)
   return !strcmp(kind, "program") || !strcmp(kind, "toolchain");
 }
 
+bool pkg_kind_release(const char *kind)
+{
+  return !strcmp(kind, "release");
+}
+
 static bool identity(const struct literal_value *table, struct pkg_identity *output)
 {
   return text(table, "id", output->id, sizeof(output->id)) &&
@@ -88,7 +93,43 @@ static bool kind(const struct literal_value *table, char output[10])
 {
   return text(table, "kind", output, 10) &&
       (!strcmp(output, "data") || !strcmp(output, "program") || !strcmp(output, "toolchain") ||
-       !strcmp(output, "dev"));
+       !strcmp(output, "dev") || !strcmp(output, "release"));
+}
+
+static bool array(const struct literal_value *value);
+
+/* provides is required on release entries and refused on others: a non-empty
+ * list of distinct ABI names. */
+static bool provides(const struct literal_value *table, struct pkg_entry *entry)
+{
+  const struct literal_value *list = literal_field(table, "provides");
+  entry->provides_count = 0;
+  if (!pkg_kind_release(entry->kind)) {
+    return !list;
+  }
+  if (!list || !array(list) || !list->as.table.count ||
+      list->as.table.count > PKG_PROVIDES_MAX) {
+    return false;
+  }
+  for (const struct literal_entry *item = list->as.table.entries; item; item = item->next) {
+    const struct literal_value *name = item->value;
+    char *output = entry->provides[entry->provides_count];
+    if (name->kind != LITERAL_STRING || name->as.string.size > PACKAGE_ABI_MAX ||
+        strlen(name->as.string.bytes) != name->as.string.size) {
+      return false;
+    }
+    memcpy(output, name->as.string.bytes, name->as.string.size + 1);
+    if (!package_abi_valid(output)) {
+      return false;
+    }
+    for (size_t i = 0; i < entry->provides_count; ++i) {
+      if (!strcmp(entry->provides[i], output)) {
+        return false;
+      }
+    }
+    ++entry->provides_count;
+  }
+  return true;
 }
 
 /* abi is required on program, toolchain and dev packages and refused on data. */
@@ -331,13 +372,16 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_index_header *he
       ok && item; item = item->next, ++index) {
     struct pkg_entry *entry = &result[index];
     const struct literal_value *value = item->value;
-    bool bound = value && value->kind == LITERAL_TABLE && literal_field(value, "abi");
-    ok = value && value->kind == LITERAL_TABLE && value->as.table.count == (bound ? 7 : 6);
+    bool optional_fields = value && value->kind == LITERAL_TABLE &&
+        (literal_field(value, "abi") || literal_field(value, "provides"));
+    ok = value && value->kind == LITERAL_TABLE &&
+        value->as.table.count == (optional_fields ? 7 : 6);
     for (size_t f = 0; ok && f < 6; ++f) {
       ok = literal_field(value, entry_fields[f]) != NULL;
     }
     ok = ok && identity(value, &entry->identity) &&
         kind(value, entry->kind) && abi(value, entry->kind, entry->abi) &&
+        provides(value, entry) &&
         text(value, "archive", entry->archive, sizeof(entry->archive)) &&
         integer(value, "size", 1, INT64_MAX, &entry->size) && hash(value, "sha256", entry->sha256);
     if (!ok) {

@@ -27,6 +27,12 @@ struct install_esp_view {
 enum call_status install_esp_view_open(struct install_esp_view *view, handle_t disks,
     const struct disk_partition_selection *selection,
     const struct mount_state_reply *expected_ro, uint64_t root_rights);
+/* The booted ESP through UPGRADE_BOOT_ESP on ISSUER, for pkg upgrade: BOOT
+ * holds the reviewed facts from mount_boot_observe. The admitted instance must
+ * be that ESP; the issuer admits once per boot, so a failure here is final for
+ * this boot. The same ownership and validation rules as install_esp_view_open. */
+enum call_status install_esp_view_admit_boot(struct install_esp_view *view, handle_t issuer,
+    const struct mount_boot_reply *boot, uint64_t root_rights);
 /* BEGIN then CHECK immediately, in this process. A failed CHECK retains the
  * known interval for END. Any failure stops further BEGIN attempts on the view. */
 enum call_status install_esp_view_begin_checked(struct install_esp_view *view);

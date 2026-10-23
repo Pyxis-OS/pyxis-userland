@@ -149,6 +149,46 @@ enum call_status install_esp_view_open(struct install_esp_view *view, handle_t d
   return status;
 }
 
+enum call_status install_esp_view_admit_boot(struct install_esp_view *view, handle_t issuer,
+    const struct mount_boot_reply *boot, uint64_t root_rights)
+{
+  if (!view || !boot || view->attempted || view->root != HANDLE_INVALID ||
+      view->control != HANDLE_INVALID || view->interval_id ||
+      (root_rights & ~INSTALL_ESP_VIEW_RIGHTS)) {
+    return CALL_BAD_REQUEST;
+  }
+  view->attempted = true;
+  struct mount_fat32_reply mounted;
+  enum call_status status = mount_boot_admit(issuer, boot->disk_guid, boot->partition_guid,
+      root_rights, &mounted);
+  if (status == CALL_OK) {
+    view->root = mounted.root;
+    view->control = mounted.control;
+    status = native_grant(view->root, PROTOCOL_DIRECTORY, root_rights);
+  }
+  if (status == CALL_OK) {
+    status = native_grant(view->control, PROTOCOL_MOUNT, CONTROL_RIGHTS);
+  }
+  struct mount_state_reply observed;
+  if (status == CALL_OK) {
+    status = mount_observe(view->control, &observed);
+    if (status == CALL_OK) {
+      view->expected = observed;
+      struct disk_partition_selection selection = selection_of(&observed);
+      status = (observed.flags & MOUNT_STATE_IDENTITY_VALID) && selection_valid(&selection) &&
+          !memcmp(observed.disk_guid, boot->disk_guid, 16) &&
+          !memcmp(observed.partition_guid, boot->partition_guid, 16) ?
+          writable_state(&observed, false) : CALL_NOT_FOUND;
+    }
+  }
+  if (status == CALL_OK && (observed.flags & MOUNT_STATE_INTERVAL)) {
+    status = CALL_BUSY;
+  }
+  view->admitted = status == CALL_OK;
+  view->failure_status = status;
+  return status;
+}
+
 enum call_status install_esp_view_begin_checked(struct install_esp_view *view)
 {
   if (!view || !view->admitted || view->retired || view->control == HANDLE_INVALID ||

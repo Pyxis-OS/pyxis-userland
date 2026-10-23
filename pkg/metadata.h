@@ -18,12 +18,17 @@ struct pkg_identity {
   char id[PACKAGE_ID_MAX + 1], version[PACKAGE_VERSION_MAX + 1];
 };
 
-/* abi is set for program and toolchain packages and empty for data. */
+#define PKG_PROVIDES_MAX 16
+
+/* abi is set for program, toolchain and dev packages and empty otherwise. A
+ * release entry (decision 73) instead lists the ABIs that release provides. */
 struct pkg_entry {
   struct pkg_identity identity;
   char kind[10], abi[PACKAGE_ABI_MAX + 1], archive[PKG_ARCHIVE_PATH_MAX + 1];
   uint64_t size;
   char sha256[65];
+  size_t provides_count;
+  char provides[PKG_PROVIDES_MAX][PACKAGE_ABI_MAX + 1];
 };
 
 /* A published repository index (docs/wip/pkg-upgrade.md, decision 71): the
@@ -59,6 +64,8 @@ bool pkg_version_valid(const char *version);
  * package's include/ and lib/ files form sdk:// (docs/wip/sdk-view.md). */
 bool pkg_kind_bound(const char *kind);
 bool pkg_kind_commands(const char *kind);
+/* A release is never installed as a package; only pkg upgrade reads it. */
+bool pkg_kind_release(const char *kind);
 /* Successful outputs own their arrays, independent of the literal document.
  * Free index entries with free(), manifests with pkg_manifest_free(). */
 bool pkg_time_valid(const char *text);

@@ -24,6 +24,9 @@ return {
       network = true, focus = true, launch = true, jobs = true, screenshot = true, power = true,
       clipboard_local = true, clipboard_shared = true,
       package_management = true,
+      -- pkg upgrade's boot ESP grant and boot evidence, which only the pkg
+      -- bundle declares (docs/wip/pkg-upgrade.md, decision 74).
+      package_upgrade = true,
       grants = { http_staging = { volume = "http-work", kind = "directory",
                                  access = "read-write", optional = true },
                  packages = { volume = "packages", kind = "directory",
