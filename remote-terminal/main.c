@@ -234,8 +234,7 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
     uint32_t columns = remote_decode_u32(payload), rows = remote_decode_u32(payload + 4);
     uint32_t options = remote_decode_u32(payload + 8);
     if (!columns || columns > REMOTE_COLUMNS_MAX || !rows || rows > REMOTE_ROWS_MAX ||
-        (options & ~REMOTE_OPTIONS) ||
-        ((options & REMOTE_OPTION_RESIZE) && !(options & REMOTE_OPTION_MULTIPLEXER))) {
+        (options & ~REMOTE_OPTIONS)) {
       reject(client, REMOTE_ERROR_BAD_FRAME, now);
       return true;
     }
