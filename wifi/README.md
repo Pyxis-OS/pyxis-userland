@@ -49,8 +49,16 @@ Omitted country selects world `00`; a configured country selects its rules withi
 the host mask. Table `valid` means decoded metadata, and `default-power=1`
 identifies the accepted reference RFE-0 selection. Neither that state nor a
 matching rule means RFK is qualified or that RF transmission is admitted.
-Missing, malformed and failed platform reads remain distinct. The input observer
-adds no RF commands; RTL scan/connect remain unavailable in this cut.
+Missing, malformed and failed platform reads remain distinct. RTL scan/connect
+remain unavailable in this preparation cut.
+
+RTL PHY status records the historical preparation phase, state mask, selected
+channel/region, power-image readback count and path SAR bounds in quarter-dBm.
+It prints attempted rfkill-check counts and observation validity, completed RFK
+steps, any valid report state/version and the thermal-default path mask. Stop is reported as confirmed,
+uncertain or unobserved; last status is meaningful only after completion.
+These facts describe the preparation attempt, not live radiated power or scan
+readiness. Successful calibration and confirmed stop still yield no scan FILE.
 
 TAS stays disabled. Its diagnostic identifies query-0, function-5 or alias
 rejection, with the observed object type and any known length/support mask.

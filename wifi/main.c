@@ -315,7 +315,7 @@ static void print_sar_source(const char *name, const struct wifi_sar_source *sou
 
 static void print_sar(const struct wifi_sar_inputs *sar)
 {
-  printf("wifi: SAR fixed=%s sources=%x; input only, not applied\n",
+  printf("wifi: SAR fixed=%s sources=%x; decoded input, not effective power\n",
       input_state(sar->state), sar->sources);
   if (sar->sources & WIFI_SAR_SOURCE_WRDS) print_sar_source("WRDS", &sar->wrds);
   if (sar->sources & WIFI_SAR_SOURCE_RWRD) print_sar_source("RWRD", &sar->rwrd);
@@ -379,6 +379,45 @@ static void print_boot_facts(const struct wifi_boot_facts *boot)
   }
 }
 
+static void print_phy_facts(const struct wifi_status_reply *status)
+{
+  if (status->radio.kind == WIFI_RADIO_INPUTS_NONE) {
+    return;
+  }
+  const struct wifi_phy_facts *phy = &status->phy;
+  static const char *const phases[] = {
+    "idle", "firmware", "tables", "mac", "hardware", "channel", "power", "rfk",
+    "tssi", "stopping", "complete",
+  };
+  printf("wifi: PHY historical phase=%s state=%x", phases[phy->phase], phy->state);
+  if (phy->channel) {
+    printf(" channel=%u region=%u", phy->channel, phy->region);
+  }
+  fputs("; not scan readiness\n", stdout);
+  if (phy->state & WIFI_PHY_POWER_VERIFIED) {
+    printf("wifi: PHY power-readbacks=%u SAR-quarter-dBm=%d/%d; historical limits\n",
+        phy->power_verifications, phy->sar_quarter_dbm[0], phy->sar_quarter_dbm[1]);
+  }
+  if (phy->rfkill_checks || (phy->state & WIFI_PHY_RFKILL_VALID)) {
+    printf("wifi: PHY rfkill-checks=%u observation-valid=%u; historical attempts\n",
+        phy->rfkill_checks, !!(phy->state & WIFI_PHY_RFKILL_VALID));
+  }
+  printf("wifi: PHY RFK completed=%x thermal-default-paths=%x",
+      phy->rfk_completed, phy->thermal_default_paths);
+  if (phy->state & WIFI_PHY_RFK_REPORT_VALID) {
+    static const char *const states[] = {"start", "ok", "fail", "timeout", "command-error"};
+    printf(" report=%s version=%u", states[phy->rfk_state], phy->rfk_version);
+  }
+  putchar('\n');
+  const char *stop = phy->state & WIFI_PHY_STOP_CONFIRMED ? "confirmed" :
+      phy->state & WIFI_PHY_STOP_UNCERTAIN ? "uncertain" : "unobserved";
+  printf("wifi: PHY stop=%s", stop);
+  if (phy->phase == WIFI_PHY_COMPLETE) {
+    printf(" last-status=%u", phy->last_status);
+  }
+  putchar('\n');
+}
+
 int main(int argc, char **argv)
 {
   if (argc == 4 && !strcmp(argv[1], "connect") && !strcmp(argv[2], "--profile")) {
@@ -416,5 +455,6 @@ int main(int argc, char **argv)
       (unsigned long long)reply.rx_queued, (unsigned long long)reply.rx_dropped, reply.data_rx_high_water);
   print_boot_facts(&reply.boot);
   print_radio_inputs(&reply);
+  print_phy_facts(&reply);
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }

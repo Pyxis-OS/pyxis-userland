@@ -118,6 +118,49 @@ static bool radio_inputs_valid(const struct wifi_radio_inputs *radio)
   return true;
 }
 
+static bool phy_facts_valid(const struct wifi_phy_facts *phy, uint32_t radio_kind)
+{
+  if (radio_kind == WIFI_RADIO_INPUTS_NONE) {
+    const struct wifi_phy_facts empty = {0};
+    return !memcmp(phy, &empty, sizeof(empty));
+  }
+  if (phy->reserved || (phy->state & ~WIFI_PHY_STATE_MASK) ||
+      phy->phase > WIFI_PHY_COMPLETE || phy->channel > 13 || phy->region > 15 ||
+      (phy->rfk_completed & ~WIFI_PHY_RFK_MASK) || phy->rfk_state > 4 ||
+      phy->rfk_version > UINT8_MAX || (phy->thermal_default_paths & ~UINT32_C(3)) ||
+      phy->last_status >= CALL_STATUS_COUNT ||
+      ((phy->state & WIFI_PHY_STOP_CONFIRMED) && (phy->state & WIFI_PHY_STOP_UNCERTAIN))) {
+    return false;
+  }
+  if (!(phy->state & WIFI_PHY_RFK_REPORT_VALID) &&
+      (phy->rfk_state || phy->rfk_version || phy->rfk_completed)) {
+    return false;
+  }
+  if (phy->phase != WIFI_PHY_COMPLETE && phy->last_status) {
+    return false;
+  }
+  if (phy->state & WIFI_PHY_POWER_VERIFIED) {
+    if (!phy->power_verifications || !phy->channel) {
+      return false;
+    }
+    /* Signed nine-bit RF fields, independently of narrower preparation input
+     * conversions or the observed board's particular SAR profile. */
+    for (size_t path = 0; path < 2; ++path) {
+      if (phy->sar_quarter_dbm[path] < -256 || phy->sar_quarter_dbm[path] > 255) {
+        return false;
+      }
+    }
+  } else if (phy->power_verifications || phy->sar_quarter_dbm[0] || phy->sar_quarter_dbm[1]) {
+    return false;
+  }
+  /* Checks count attempts, including failed reads. A failed read clears the
+   * validity bit without erasing the historical attempt count. */
+  if ((phy->state & WIFI_PHY_RFKILL_VALID) && !phy->rfkill_checks) {
+    return false;
+  }
+  return true;
+}
+
 enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
 {
   if (!status) {
@@ -129,7 +172,7 @@ enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
   enum call_status result = invoke(wifi, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
     if (!memchr(reply.detail, 0, sizeof(reply.detail)) || !boot_facts_valid(&reply.boot) ||
-        !radio_inputs_valid(&reply.radio)) {
+        !radio_inputs_valid(&reply.radio) || !phy_facts_valid(&reply.phy, reply.radio.kind)) {
       return CALL_BAD_REQUEST;
     }
     if (reply.radio.kind == WIFI_RADIO_INPUTS_RTL8922AE &&
