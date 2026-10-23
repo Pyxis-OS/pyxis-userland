@@ -53,5 +53,7 @@ Missing, malformed and failed platform reads remain distinct. The input observer
 adds no RF commands; RTL scan/connect remain unavailable in this cut.
 
 Trusted `wifi_policy` configuration may omit country (or use `"00"`) for RTL
-world rules while supplying the narrowing channel mask. AX200 keeps its
-explicit upper-case country requirement and rejects world policy installation.
+world-domain rules while supplying the narrowing channel mask. Country `"00"`
+names the same world domain in the shared policy contract; AX200 Install support
+is being integrated in [#1159](https://git.internal/PyxisOS/pyxis-os/pulls/1159),
+with its authoritative firmware LAR restrictions retained.
