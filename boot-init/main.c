@@ -1888,7 +1888,8 @@ static bool close_boot_payloads(struct authority *authority)
 /* The Install entry's one space (docs/wip/pkg-upgrade.md, decisions 63, 66 and
  * 69): installer-init holds the installer capability, owns the archive's
  * network and stages its downloads in RAM. Boot init keeps none of that
- * authority afterwards. */
+ * authority afterwards. It takes the boot focus, as a configured space with
+ * focus = true does, so the installer replaces the kernel log on screen. */
 static bool start_install(struct authority *authority, struct mounts *mounts)
 {
   static struct boot_volume http_work = {.name = BOOT_HTTP_WORK_VOLUME, .kind = BOOT_VOLUME_RAM};
@@ -1898,7 +1899,7 @@ static bool start_install(struct authority *authority, struct mounts *mounts)
   };
   static const struct boot_space install = {
     .name = "install", .title = "Install", .init = INSTALLER_INIT, .start = "tmp",
-    .grants = grants, .grant_count = 1, .network = true, .installer = true,
+    .grants = grants, .grant_count = 1, .network = true, .installer = true, .focus = true,
   };
   puts("boot-init: Install entry; starting the install space");
   mount_builtin_volume(authority, mounts, 0, &http_work);
