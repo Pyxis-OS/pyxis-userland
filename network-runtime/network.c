@@ -82,10 +82,10 @@ static bool apply_lease(const struct network_interface_config *config,
       lease->address, lease->prefix, lease->gateway, lease->dns);
   if (status != CALL_OK) {
     if (runtime->wifi && status == CALL_ALREADY_EXISTS) {
-      system_log("session: %s lease address is already used by another interface, gateway or DNS server (status %u)\n",
+      system_log("network: %s lease address is already used by another interface, gateway or DNS server (status %u)\n",
           config->name, status);
     } else {
-      system_log("session: %s lease rejected (status %u)\n", config->name, status);
+      system_log("network: %s lease rejected (status %u)\n", config->name, status);
     }
     return false;
   }
@@ -139,7 +139,7 @@ static bool service_interface(const struct network_interface_config *config,
       if (status == CALL_OK) {
         runtime->configured = true;
       } else if (status != CALL_UNAVAILABLE && status != CALL_QUEUE_FULL) {
-        fprintf(stderr, "session: %s configuration failed (status %u)\n", config->name, status);
+        fprintf(stderr, "network: %s configuration failed (status %u)\n", config->name, status);
         runtime->failed = true;
       }
     }
@@ -210,7 +210,7 @@ static bool expire_leases(struct network_runtime *runtime)
     if (entry->needs_clear || (entry->lease.address && now >= entry->lease.expires_ns)) {
       if (!clear_lease(entry)) {
         if (!entry->needs_clear) {
-          fprintf(stderr, "session: interface %llu clear unavailable; retrying\n", (unsigned long long)entry->id);
+          fprintf(stderr, "network: interface %llu clear unavailable; retrying\n", (unsigned long long)entry->id);
         }
         entry->needs_clear = true;
         continue;
@@ -237,7 +237,7 @@ static bool service(const struct network_config *config, struct network_runtime 
   if (unbound && !runtime->binding_failed && runtime->policy != HANDLE_INVALID) {
     enum call_status status = boot_network_bind(config, runtime->ids, runtime->registry, runtime->policy);
     if (status != CALL_OK && status != CALL_UNAVAILABLE && status != CALL_QUEUE_FULL && status != CALL_NO_MEMORY) {
-      fprintf(stderr, "session: late interface binding failed (status %u)\n", status);
+      fprintf(stderr, "network: late interface binding failed (status %u)\n", status);
       runtime->binding_failed = true;
     }
   }
@@ -249,7 +249,7 @@ static bool service(const struct network_config *config, struct network_runtime 
     }
     if (!service_interface(&config->interfaces[i], &runtime->interfaces[i], runtime->clock,
         runtime->random, deadline, working)) {
-      fprintf(stderr, "session: %s network maintainer failed\n", config->interfaces[i].name);
+      fprintf(stderr, "network: %s network maintainer failed\n", config->interfaces[i].name);
       struct interface_runtime *entry = &runtime->interfaces[i];
       entry->failed = true;
       entry->needs_clear = entry->owns_dhcp_settings;
@@ -332,7 +332,7 @@ static bool adopt_wired(struct network_config *config, handle_t registry)
         owned.interface_class != NET_INTERFACE_CLASS_ETHERNET ||
         (owned.controller_id && owned.controller_id != controller) ||
         config->count == NETWORK_INTERFACE_LIMIT) {
-      fputs("session: invalid declared automatic interface facets\n", stderr);
+      fputs("network: invalid declared automatic interface facets\n", stderr);
       return false;
     }
     struct network_interface_config *entries = realloc(config->interfaces,
@@ -369,7 +369,7 @@ bool network_config_apply(struct network_config *config, struct network_runtime 
     struct network_interface_config *definition = &config->interfaces[i];
     uint32_t captured;
     if (!captured_controller(definition->name, definition->automatic, &captured)) {
-      fprintf(stderr, "session: invalid initial controller for %s\n", definition->name);
+      fprintf(stderr, "network: invalid initial controller for %s\n", definition->name);
       return false;
     }
     definition->resolved_controller = captured;
@@ -385,7 +385,7 @@ bool network_config_apply(struct network_config *config, struct network_runtime 
         snapshot.interface_class != config->interfaces[i].interface_class ||
         (captured && snapshot.controller_id && snapshot.controller_id != captured) ||
         (config->interfaces[i].dhcp && entry->udp == HANDLE_INVALID)) {
-      fprintf(stderr, "session: missing declared network facets for %s\n", config->interfaces[i].name);
+      fprintf(stderr, "network: missing declared network facets for %s\n", config->interfaces[i].name);
       return false;
     }
     if (snapshot.controller_id) {
@@ -411,7 +411,7 @@ bool network_config_apply(struct network_config *config, struct network_runtime 
       if (!entry->failed && !entry->configured) {
         struct net_interface_reply snapshot;
         if (net_interface_query(entry->authority, &snapshot) == CALL_OK) {
-          /* An absent optional interface never delays a working/local session.
+          /* An absent optional interface never delays a working/local owner.
            * An active client shares this one aggregate foreground budget. */
           acquiring |= entry->dhcp.endpoint != HANDLE_INVALID ||
               (!config->interfaces[i].optional && (snapshot.flags & NET_INTERFACE_BOUND));
@@ -454,7 +454,7 @@ bool network_config_wait_address(const struct network_config *config, struct net
   }
 }
 
-static bool wait_maintenance(struct network_runtime *runtime, struct session_wifi_supplicant *supplicant)
+static bool wait_maintenance(struct network_runtime *runtime, struct network_wifi_supplicant *supplicant)
 {
   uint64_t now;
   handle_t clock = runtime->clock ? runtime->clock : bootstrap_capability("clock");
@@ -481,11 +481,11 @@ static bool wait_maintenance(struct network_runtime *runtime, struct session_wif
       wake = entry->lease.renewal_ns;
     }
   }
-  if (session_wifi_active(supplicant)) {
+  if (network_wifi_active(supplicant)) {
     if (wake > now && wake - now > WAIT_MAX_WAIT_NS) {
       wake = now + WAIT_MAX_WAIT_NS;
     }
-    if (session_wifi_wait(supplicant, wake)) {
+    if (network_wifi_wait(supplicant, wake)) {
       return true;
     }
     /* Optional worker supervision cannot retire unrelated interface leases. */
@@ -497,9 +497,9 @@ static bool wait_maintenance(struct network_runtime *runtime, struct session_wif
 }
 
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
-    struct session_wifi_supplicant *supplicant)
+    struct network_wifi_supplicant *supplicant)
 {
-  while (runtime->waiting_link || session_wifi_active(supplicant)) {
+  while (runtime->waiting_link || network_wifi_active(supplicant)) {
     bool working;
     if ((runtime->waiting_link && !service(config, runtime, UINT64_MAX, &working)) ||
         !wait_maintenance(runtime, supplicant)) {

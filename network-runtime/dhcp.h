@@ -1,5 +1,5 @@
-#ifndef SESSION_DHCP_H
-#define SESSION_DHCP_H
+#ifndef NETWORK_RUNTIME_DHCP_H
+#define NETWORK_RUNTIME_DHCP_H
 
 #include <abi/handle.h>
 #include <stdbool.h>

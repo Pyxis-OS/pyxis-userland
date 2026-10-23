@@ -5,8 +5,8 @@
 #include "config.h"
 #include "retention.h"
 #include "screenshot.h"
-#include "network.h"
-#include "wifi_supplicant.h"
+#include "../network-runtime/network.h"
+#include "../network-runtime/wifi_supplicant.h"
 #include "remote_server.h"
 #include "tcp_server.h"
 #include "../common/udp.h"
@@ -58,7 +58,7 @@
 static int launch_session(const struct session_config *config, struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
     bool start_services, bool start_remote_services, const char *services_script,
-    handle_t retention_account, struct session_wifi_supplicant *supplicant)
+    handle_t retention_account, struct network_wifi_supplicant *supplicant)
 {
   struct terminal terminal = {bootstrap_capability("input"), bootstrap_capability("output")};
   handle_t launcher = bootstrap_capability("launcher");
@@ -83,7 +83,7 @@ static int launch_session(const struct session_config *config, struct network_co
     }
   }
 
-  session_wifi_start(supplicant);
+  network_wifi_start(supplicant);
   handle_t mux_terminal = bootstrap_capability("mux_terminal");
   bool multiplex = !script && mux_terminal != HANDLE_INVALID;
   /* The services script names its own location: the archive's on live images,
@@ -728,17 +728,17 @@ static bool release_bootstrap_grants(struct network_runtime *runtime)
 }
 
 static int finish_network(const struct network_config *config,
-    struct network_runtime *runtime, struct session_wifi_supplicant *supplicant, int result)
+    struct network_runtime *runtime, struct network_wifi_supplicant *supplicant, int result)
 {
   if (result == EXIT_SUCCESS &&
-      (runtime->waiting_link || session_wifi_active(supplicant))) {
+      (runtime->waiting_link || network_wifi_active(supplicant))) {
     if (release_bootstrap_grants(runtime)) {
       result = network_config_maintain(config, runtime, supplicant);
     } else {
       result = EXIT_FAILURE;
     }
   }
-  if (!session_wifi_stop(supplicant)) {
+  if (!network_wifi_stop(supplicant)) {
     fputs("session: Wi-Fi authentication cleanup not confirmed\n", stderr);
   }
   if (result != EXIT_SUCCESS && !network_config_stop(config, runtime)) {
@@ -802,7 +802,7 @@ int main(int argc, char **argv)
       return EXIT_FAILURE;
     }
   }
-  struct session_wifi_supplicant supplicant = {0};
+  struct network_wifi_supplicant supplicant = {0};
   if (tcp_server) {
     struct network_config network;
     struct network_runtime runtime = {0};

@@ -419,7 +419,7 @@ enum dhcp_result dhcp_acquire(struct dhcp_client *client, uint64_t deadline_ns,
     return DHCP_FAILED;
   }
   uint8_t packet[UDP_MAX_PAYLOAD];
-  /* Preserve immediate first discovery within the session's startup budget;
+  /* Preserve immediate first discovery within the owner's startup budget;
    * later calls resume the same randomized exponential retry schedule. */
   for (;;) {
     uint64_t now;

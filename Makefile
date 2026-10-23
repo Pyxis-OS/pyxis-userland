@@ -54,7 +54,8 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/capture.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/settings.o $(BUILD)/shell/complete.o \
-                 $(BUILD)/shell/complete_path.o $(BUILD)/shell/listing.o $(BUILD)/shell/glob.o $(BUILD)/common/pane_cwd.o
+                 $(BUILD)/shell/complete_path.o $(BUILD)/shell/listing.o $(BUILD)/shell/glob.o $(BUILD)/common/pane_cwd.o \
+                 $(BUILD)/common/provider_setup.o
 COUNTER_OBJECT := $(BUILD)/counter/environment.o $(BUILD)/counter/forwarders.o
 MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o $(BUILD)/mux/pointer.o $(BUILD)/mux/clipboard.o $(BUILD)/common/pane_cwd.o $(BUILD)/common/pane_broker.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.o
@@ -67,8 +68,12 @@ FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
 FAT32_WRITE_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-write.a
 BOOT_INIT_OBJECTS := $(BUILD)/boot-init/main.o $(BUILD)/boot-init/network.o $(BUILD)/pkg/maintenance.o $(BUILD)/pkg/store.o
-SESSION_OBJECTS := $(BUILD)/session/wifi_supplicant.o $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o $(BUILD)/session/network.o $(BUILD)/common/system_log.o \
-                   $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o $(BUILD)/session/dhcp.o $(BUILD)/boot-init/network.o \
+# DHCP, interface maintenance and the Wi-Fi supplicant, for every network owner.
+NETWORK_RUNTIME_LIBRARY := $(BUILD)/libnetwork-runtime.a
+NETWORK_RUNTIME_OBJECTS := $(addprefix $(BUILD)/network-runtime/,network.o dhcp.o wifi_supplicant.o) \
+                   $(BUILD)/boot-init/network.o $(BUILD)/common/system_log.o
+SESSION_OBJECTS := $(BUILD)/session/main.o $(BUILD)/session/config.o $(BUILD)/session/retention.o $(BUILD)/session/screenshot.o \
+                   $(BUILD)/session/tcp_server.o $(BUILD)/session/remote_server.o \
                    $(BUILD)/common/directory.o
 HTTPFS_OBJECTS := $(BUILD)/httpfs/main.o $(BUILD)/httpfs/trust.o $(BUILD)/httpfs/provider.o
 HTTP_LIBRARY := $(BUILD)/libhttp.a
@@ -290,8 +295,12 @@ $(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $
 $(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(SESSION_OBJECTS) $(NETWORK_RUNTIME_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS) $(NETWORK_RUNTIME_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(NETWORK_RUNTIME_LIBRARY): $(NETWORK_RUNTIME_OBJECTS) Makefile
+	rm -f $@
+	$(AR) rcs $@ $(NETWORK_RUNTIME_OBJECTS)
+
 $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)
@@ -303,8 +312,8 @@ $(PUBLISHER_LIBRARY): $(PUBLISHER_OBJECTS) Makefile
 $(BUILD)/boot-init.pxe: $(BOOT_INIT_LIBRARIES) $(TLS_EXPORT_IDENTITY) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BOOT_INIT_LIBRARIES) $(LDLIBS)
 
-$(BUILD)/session.pxe: $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
+$(BUILD)/session.pxe: $(SESSION_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(SESSION_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
 
 $(BUILD)/udp-send.pxe $(BUILD)/udp-echo.pxe: $(UDP_OBJECT)
 
@@ -455,7 +464,7 @@ clean:
 
 .SECONDARY:
 
--include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
+-include $(MUX_OBJECTS:.o=.d) $(BUILD)/mux/main.d $(REMOTE_OBJECT:.o=.d) $(HTTPFS_OBJECTS:.o=.d) $(COUNTER_OBJECT:.o=.d) $(TLS_OBJECT:.o=.d) $(HTTP_OBJECTS:.o=.d) $(PROGRAM_OBJECTS:.o=.d) $(UTILITY_OBJECT:.o=.d) $(UDP_OBJECT:.o=.d) $(DNS_OBJECTS:.o=.d) $(DNS_LOOKUP_OBJECT:.o=.d) $(SHELL_OBJECTS:.o=.d) $(SESSION_OBJECTS:.o=.d) $(NETWORK_RUNTIME_OBJECTS:.o=.d) $(BOOT_INIT_OBJECTS:.o=.d) $(CONFIG_OBJECT:.o=.d) $(IOBENCH_OBJECTS:.o=.d) $(TCP_SERVE_OBJECT:.o=.d)
 -include $(INSTALLER_OBJECTS:.o=.d) $(XFER_OBJECTS:.o=.d) $(LS_OBJECTS:.o=.d) $(CP_OBJECT:.o=.d) $(SCREENSHOT_OBJECTS:.o=.d) $(SCREENSHOT_SAVER_OBJECTS:.o=.d)
 -include $(CONFIG_EDITOR_OBJECTS:.o=.d)
 -include $(PKG_OBJECTS:.o=.d)

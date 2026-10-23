@@ -38,20 +38,20 @@ static uint64_t deadline_after(uint64_t now, uint64_t duration)
   return UINT64_MAX - now < duration ? UINT64_MAX : now + duration;
 }
 
-bool session_wifi_active(const struct session_wifi_supplicant *worker)
+bool network_wifi_active(const struct network_wifi_supplicant *worker)
 {
   return worker->enabled || worker->group != HANDLE_INVALID;
 }
 
-static void disable_worker(struct session_wifi_supplicant *worker, enum call_status status)
+static void disable_worker(struct network_wifi_supplicant *worker, enum call_status status)
 {
   if (worker->enabled) {
-    fprintf(stderr, "session: Wi-Fi authentication supervision disabled (status %u)\n", status);
+    fprintf(stderr, "network: Wi-Fi authentication supervision disabled (status %u)\n", status);
   }
   worker->enabled = false;
 }
 
-static bool close_attempt(struct session_wifi_supplicant *worker)
+static bool close_attempt(struct network_wifi_supplicant *worker)
 {
   bool success = close_handle(&worker->auth);
   success &= close_handle(&worker->group_launcher);
@@ -63,7 +63,7 @@ static bool close_attempt(struct session_wifi_supplicant *worker)
   return success;
 }
 
-static bool close_resources(struct session_wifi_supplicant *worker)
+static bool close_resources(struct network_wifi_supplicant *worker)
 {
   bool success = close_handle(&worker->setup);
   success &= close_handle(&worker->launcher);
@@ -74,7 +74,7 @@ static bool close_resources(struct session_wifi_supplicant *worker)
   return success;
 }
 
-static void schedule_retry(struct session_wifi_supplicant *worker, uint64_t now)
+static void schedule_retry(struct network_wifi_supplicant *worker, uint64_t now)
 {
   worker->retry_deadline = deadline_after(now, worker->retry_delay);
   if (worker->retry_delay < RETRY_MAX_NS) {
@@ -85,7 +85,7 @@ static void schedule_retry(struct session_wifi_supplicant *worker, uint64_t now)
   }
 }
 
-static void retire_worker(struct session_wifi_supplicant *worker, uint64_t now)
+static void retire_worker(struct network_wifi_supplicant *worker, uint64_t now)
 {
   if (worker->group == HANDLE_INVALID || worker->stopping) {
     return;
@@ -99,13 +99,13 @@ static void retire_worker(struct session_wifi_supplicant *worker, uint64_t now)
   if (status != CALL_OK) {
     worker->uncertain = true;
     disable_worker(worker, status);
-    fputs("session: Wi-Fi worker termination unconfirmed; retaining supervision\n", stderr);
+    fputs("network: Wi-Fi worker termination unconfirmed; retaining supervision\n", stderr);
   }
 }
 
-static void attempt_failed(struct session_wifi_supplicant *worker, enum call_status status, uint64_t now)
+static void attempt_failed(struct network_wifi_supplicant *worker, enum call_status status, uint64_t now)
 {
-  fprintf(stderr, "session: Wi-Fi authentication worker unavailable (status %u)\n", status);
+  fprintf(stderr, "network: Wi-Fi authentication worker unavailable (status %u)\n", status);
   bool closed = close_handle(&worker->auth);
   closed &= close_handle(&worker->group_launcher);
   if (!closed) {
@@ -121,7 +121,7 @@ static void attempt_failed(struct session_wifi_supplicant *worker, enum call_sta
   }
 }
 
-static void start_attempt(struct session_wifi_supplicant *worker, uint64_t now)
+static void start_attempt(struct network_wifi_supplicant *worker, uint64_t now)
 {
   struct wifi_auth_open_reply pair = {0};
   enum call_status status = wifi_auth_open(worker->setup, &pair);
@@ -178,9 +178,9 @@ static void start_attempt(struct session_wifi_supplicant *worker, uint64_t now)
   worker->claim_deadline = deadline_after(now, CLAIM_TIMEOUT_NS);
 }
 
-bool session_wifi_wait(struct session_wifi_supplicant *worker, uint64_t deadline)
+bool network_wifi_wait(struct network_wifi_supplicant *worker, uint64_t deadline)
 {
-  if (!session_wifi_active(worker)) {
+  if (!network_wifi_active(worker)) {
     return true;
   }
   uint64_t now;
@@ -221,7 +221,7 @@ bool session_wifi_wait(struct session_wifi_supplicant *worker, uint64_t deadline
   if (worker->stopping && !worker->uncertain && now >= worker->retire_deadline) {
     worker->uncertain = true;
     disable_worker(worker, CALL_TIMED_OUT);
-    fputs("session: Wi-Fi worker drain unconfirmed; retaining supervision\n", stderr);
+    fputs("network: Wi-Fi worker drain unconfirmed; retaining supervision\n", stderr);
   }
   struct wait_interest interests[3];
   size_t count = 0;
@@ -283,7 +283,7 @@ bool session_wifi_wait(struct session_wifi_supplicant *worker, uint64_t deadline
   return true;
 }
 
-bool session_wifi_stop(struct session_wifi_supplicant *worker)
+bool network_wifi_stop(struct network_wifi_supplicant *worker)
 {
   worker->enabled = false;
   if (worker->group != HANDLE_INVALID) {
@@ -294,7 +294,7 @@ bool session_wifi_stop(struct session_wifi_supplicant *worker)
     }
     retire_worker(worker, now);
     while (worker->group != HANDLE_INVALID && !worker->uncertain) {
-      if (!session_wifi_wait(worker, deadline_after(now, WAIT_MAX_WAIT_NS)) ||
+      if (!network_wifi_wait(worker, deadline_after(now, WAIT_MAX_WAIT_NS)) ||
           clock_now(worker->clock, &now) != CALL_OK) {
         return false;
       }
@@ -318,15 +318,15 @@ static enum call_status retain_resource(const struct environment_capture *captur
   return handle_copy_restricted(value->handle, rights, 0, handle);
 }
 
-void session_wifi_start(struct session_wifi_supplicant *worker)
+void network_wifi_start(struct network_wifi_supplicant *worker)
 {
-  *worker = (struct session_wifi_supplicant){.retry_delay = RETRY_MIN_NS};
+  *worker = (struct network_wifi_supplicant){.retry_delay = RETRY_MIN_NS};
   handle_t table = startup_environment_handle();
   struct environment_capture capture = {0};
   enum call_status status = environment_capture_init(table,
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: Wi-Fi setup unavailable (status %u)\n", status);
+    fprintf(stderr, "network: Wi-Fi setup unavailable (status %u)\n", status);
     return;
   }
   const struct environment_value *setup = environment_capture_find(&capture, "wifi_auth_setup");
@@ -373,7 +373,7 @@ void session_wifi_start(struct session_wifi_supplicant *worker)
   }
   environment_capture_close(&capture);
   if (status != CALL_OK) {
-    fprintf(stderr, "session: Wi-Fi setup unavailable (status %u)\n", status);
+    fprintf(stderr, "network: Wi-Fi setup unavailable (status %u)\n", status);
     close_resources(worker);
     return;
   }

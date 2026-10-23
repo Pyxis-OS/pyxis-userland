@@ -2,7 +2,7 @@
 #define SESSION_REMOTE_SERVER_H
 
 #include "config.h"
-#include "network.h"
+#include "../network-runtime/network.h"
 #include <stdint.h>
 
 int launch_remote_server(const struct session_config *config,
