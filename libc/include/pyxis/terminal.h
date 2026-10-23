@@ -26,6 +26,13 @@ int pyxis_terminal_get_size(int descriptor, struct console_size_reply *size);
  * Success allocates a state; failure sets *state to NULL. */
 int pyxis_terminal_get_state(int descriptor, struct pyxis_terminal_state **state);
 
+/* Zero only while descriptor still names the snapshot's open console object;
+ * aliases qualify, closed/replaced descriptors fail with EBADF. Does not set
+ * a mode or acquire authority. A successful check is a snapshot, not a lease:
+ * exclude conflicting close/replacement across the following I/O operation. */
+int pyxis_terminal_state_validate(int descriptor,
+    const struct pyxis_terminal_state *state);
+
 /* Snapshot the preceding state and ensure this owner holds one PASSTHROUGH
  * grant. Requires input READ even when already raw. CONSOLE reads already
  * return unechoed bytes; continue using read/stdio/descriptor input so libc

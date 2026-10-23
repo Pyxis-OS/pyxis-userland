@@ -756,6 +756,22 @@ int pyxis_terminal_get_state(int descriptor, struct pyxis_terminal_state **state
   return terminal_snapshot(descriptor, state, false);
 }
 
+int pyxis_terminal_state_validate(int descriptor,
+    const struct pyxis_terminal_state *state)
+{
+  if (!state) {
+    return fail(EINVAL);
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  bool matches = object == state->object && terminal_check(object) == 0 &&
+      terminal_matches(descriptor, object);
+  descriptor_drop(object);
+  return matches ? 0 : fail(EBADF);
+}
+
 int pyxis_terminal_make_raw(int descriptor, struct pyxis_terminal_state **previous)
 {
   return terminal_snapshot(descriptor, previous, true);
