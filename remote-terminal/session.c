@@ -72,17 +72,17 @@ static void context_close(struct remote_context *context);
 static enum call_status broker_launch(struct remote_context *context,
     size_t columns, size_t rows, unsigned tab_width,
     const struct pyxis_working_snapshot *cwd, handle_t bootstrap, handle_t broker_caller,
-    uint64_t deadline, bool legacy_root, bool no_echo, struct remote_shell *shell);
+    uint64_t deadline, bool legacy_root, bool no_echo, bool records, struct remote_shell *shell);
 
 enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_width,
-    bool no_echo, struct remote_shell *shell)
+    bool no_echo, bool records, struct remote_shell *shell)
 {
   *shell = (struct remote_shell){0};
   struct remote_context context = {0};
   enum call_status status = context_init(&context, false);
   if (status == CALL_OK) {
     status = broker_launch(&context, columns, rows, tab_width, NULL, HANDLE_INVALID,
-        HANDLE_INVALID, 0, true, no_echo, shell);
+        HANDLE_INVALID, 0, true, no_echo, records, shell);
   }
   context_close(&context);
   return status;
@@ -349,7 +349,7 @@ done:
 static enum call_status broker_launch(struct remote_context *context,
     size_t columns, size_t rows, unsigned tab_width,
     const struct pyxis_working_snapshot *cwd, handle_t bootstrap, handle_t broker_caller,
-    uint64_t deadline, bool legacy_root, bool no_echo, struct remote_shell *shell)
+    uint64_t deadline, bool legacy_root, bool no_echo, bool records, struct remote_shell *shell)
 {
   *shell = (struct remote_shell){0};
   size_t depth = cwd ? cwd->context.count : 1;
@@ -487,7 +487,8 @@ static enum call_status broker_launch(struct remote_context *context,
   char width[sizeof("32")];
   snprintf(width, sizeof(width), "%u", tab_width);
   const char *arguments[] = {mux ? "mux" : "boot://init-shell.pxe",
-    legacy_root ? (no_echo ? "--no-echo" : "--remote-prompt") : "--tab-width", width};
+    legacy_root ? (no_echo ? "--no-echo" : records ? "--remote-records" :
+        "--remote-prompt") : "--tab-width", width};
   for (size_t i = 0; i < context->environment.count; ++i) {
     bool selected = false;
     for (size_t j = 0; j < entry_count; ++j) {
@@ -595,7 +596,7 @@ enum call_status remote_mux_launch(size_t columns, size_t rows, unsigned tab_wid
   }
   broker->receiver = endpoint.receiver;
   status = broker_launch(&broker->context, columns, rows, tab_width, NULL,
-      HANDLE_INVALID, endpoint.caller, 0, false, false, shell);
+      HANDLE_INVALID, endpoint.caller, 0, false, false, false, shell);
   owned_close(&endpoint.caller);
   return status;
 }
@@ -745,7 +746,7 @@ static void broker_record(struct remote_broker *broker, struct endpoint_packet *
     } else {
       status = broker_launch(&broker->context, request.columns, request.rows, request.tab_width,
           pane->directories ? &pane->cwd : NULL, pane->bootstrap, HANDLE_INVALID,
-          pane->request.deadline, false, false, &pane->shell);
+          pane->request.deadline, false, false, false, &pane->shell);
       pane->published = status == CALL_OK;
       pyxis_working_snapshot_close(&pane->cwd);
       owned_close(&pane->bootstrap);

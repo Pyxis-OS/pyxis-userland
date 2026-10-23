@@ -254,7 +254,8 @@ static bool consume_frame(struct client *client, unsigned tab_width, uint64_t no
       status = remote_mux_launch(columns, rows, tab_width, client->broker, &client->shell);
     } else {
       status = remote_shell_launch(columns, rows, tab_width,
-          options & REMOTE_OPTION_NO_SHELL_ECHO, &client->shell);
+          options & REMOTE_OPTION_NO_SHELL_ECHO, !(options & REMOTE_OPTION_RESIZE),
+          &client->shell);
     }
     if (status != CALL_OK) {
       report("launch shell", status);

@@ -163,15 +163,18 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   bool option = argc >= 2 && (!strcmp(argv[1], "--no-echo") ||
-      !strcmp(argv[1], "--remote-prompt") || !strcmp(argv[1], "-c"));
+      !strcmp(argv[1], "--remote-prompt") || !strcmp(argv[1], "--remote-records") ||
+      !strcmp(argv[1], "-c"));
   bool quiet_input = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--no-echo");
-  bool remote_prompt = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-prompt");
+  bool record_output = script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-records");
+  bool remote_prompt = record_output ||
+      (script == HANDLE_INVALID && argc == 2 && !strcmp(argv[1], "--remote-prompt"));
   bool command_line = script == HANDLE_INVALID && argc >= 3 && !strcmp(argv[1], "-c");
   bool positional = script == HANDLE_INVALID && argc >= 2 && !option;
   if (script == HANDLE_INVALID && argc > 1 && !quiet_input && !remote_prompt && !positional &&
       !command_line) {
     fputs("usage: shell [script.pxs [argument...] | -c LINE [argument...] | --no-echo | "
-        "--remote-prompt]\n", stderr);
+        "--remote-prompt | --remote-records]\n", stderr);
     return EXIT_FAILURE;
   }
   /* A -c line runs as a one-line script: no prompt, script launch rules, and
@@ -190,6 +193,7 @@ int main(int argc, char **argv)
     .arguments = command_line ? argv + 3 : interactive ? NULL : argv + 2,
     .argument_count = command_line ? (size_t)argc - 3 : interactive ? 0 : (size_t)argc - 2,
     .quiet_input = quiet_input,
+    .record_output = record_output,
     .remote_prompt = remote_prompt,
     .terminal = {bootstrap_capability("input"), bootstrap_capability("output")},
     .launcher = bootstrap_capability("launcher"),

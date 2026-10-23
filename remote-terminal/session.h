@@ -18,9 +18,9 @@ struct remote_shell {
   handle_t process;
 };
 
-/* No echo selects the root shell's quiet line editor; children never inherit it. */
+/* Root-only options: quiet input and byte records without presentation cleanup. */
 enum call_status remote_shell_launch(size_t columns, size_t rows, unsigned tab_width,
-    bool no_echo, struct remote_shell *shell);
+    bool no_echo, bool records, struct remote_shell *shell);
 
 /* Retained authority and initial environment belong to this connection. The
  * network environment borrows strings from inherited and its own DNS buffer. */

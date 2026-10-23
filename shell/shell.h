@@ -107,6 +107,8 @@ struct shell {
   /* Root-shell options only; never forwarded to children. */
   bool quiet_input;
   bool remote_prompt;
+  /* Fixed-geometry Remote records preserve bytes without presentation cleanup. */
+  bool record_output;
   bool positional_script;
   /* Keep the supervised remote root alive through session successors. */
   bool session_wait;

@@ -2368,7 +2368,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       }
       scope->owned = true;
       scope->cooperative = interactive_terminal && !force_interrupt;
-      if (interactive_terminal && shell->terminal.output != HANDLE_INVALID) {
+      bool normalize_terminal = interactive_terminal && !shell->quiet_input &&
+          !shell->record_output && scope->producer == HANDLE_INVALID;
+      if (normalize_terminal && shell->terminal.output != HANDLE_INVALID) {
         operation = "shell: hold terminal output";
         status = handle_copy_restricted(shell->terminal.output, CONSOLE_RIGHT_WRITE, 0,
             &scope->terminal_output);
