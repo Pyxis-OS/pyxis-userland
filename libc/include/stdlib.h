@@ -31,6 +31,13 @@ typedef struct {
  * zero); NUL returns zero and stores L'\0'. Invalid or incomplete input returns
  * -1 with EILSEQ and leaves output unchanged. output may be NULL. */
 int mbtowc(wchar_t *__restrict output, const char *__restrict text, size_t size);
+/* UTF-8 strings with a fresh conversion state per call. Counts exclude NUL;
+ * NULL output counts the whole string, ignoring capacity. An output limit
+ * never splits an encoded scalar. Invalid input returns (size_t)-1/EILSEQ. */
+size_t mbstowcs(wchar_t *__restrict output, const char *__restrict text,
+  size_t capacity);
+size_t wcstombs(char *__restrict output, const wchar_t *__restrict text,
+  size_t capacity);
 
 /* Thread-safe allocator, synchronized by a libc-internal lock; allocations are aligned to at least 16 bytes.
  * A zero size gives a unique minimal allocation, not NULL, and free accepts it.

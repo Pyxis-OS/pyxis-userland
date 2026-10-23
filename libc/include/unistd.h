@@ -104,6 +104,9 @@ int link(const char *source, const char *destination);
  * terminal. Files and pipes return 0 with ENOTTY; invalid descriptors return 0
  * with EBADF. */
 int isatty(int descriptor);
+/* Native clock sleep, without Unix signals. Zero needs no clock. Returns zero
+ * after the whole interval, or the requested seconds with errno on failure. */
+unsigned int sleep(unsigned int seconds);
 
 #ifdef __cplusplus
 }

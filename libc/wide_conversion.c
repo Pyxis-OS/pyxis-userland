@@ -1,6 +1,8 @@
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <wchar.h>
+#include <wctype.h>
 #include "thread_private.h"
 
 int mbsinit(const mbstate_t *state)
@@ -137,6 +139,25 @@ wint_t btowc(int byte)
 int wctob(wint_t value)
 {
   return value < 0x80 ? (int)value : -1;
+}
+
+int wcwidth(wchar_t value)
+{
+  return !value ? 0 : iswprint((wint_t)value) ? 1 : -1;
+}
+
+size_t mbstowcs(wchar_t *restrict output, const char *restrict text,
+  size_t capacity)
+{
+  mbstate_t state = {0};
+  return mbsrtowcs(output, &text, capacity, &state);
+}
+
+size_t wcstombs(char *restrict output, const wchar_t *restrict text,
+  size_t capacity)
+{
+  mbstate_t state = {0};
+  return wcsrtombs(output, &text, capacity, &state);
 }
 
 static size_t decode_string(wchar_t *output, const char **source,

@@ -72,6 +72,9 @@ size_t wcrtomb(char *__restrict output, wchar_t value,
 /* Only ASCII is a complete single-byte UTF-8 character. */
 wint_t btowc(int byte);
 int wctob(wint_t value);
+/* C-locale display width: NUL is zero, printable ASCII one, other values -1.
+ * This does not describe Unicode width or enlarge the renderer's repertoire. */
+int wcwidth(wchar_t value);
 
 /* Counts exclude NUL. With output, *source advances past consumed input and
  * becomes NULL after NUL. An error leaves it at the failing conversion's input

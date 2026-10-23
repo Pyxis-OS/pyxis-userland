@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <startup.h>
 #include <time.h>
+#include <unistd.h>
 #include "errors.h"
 #include "time_impl.h"
 #include "timezone.h"
@@ -109,6 +110,15 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining)
     return -1;
   }
   return 0;
+}
+
+unsigned int sleep(unsigned int seconds)
+{
+  if (!seconds) {
+    return 0;
+  }
+  struct timespec duration = {.tv_sec = seconds};
+  return nanosleep(&duration, NULL) == 0 ? 0 : seconds;
 }
 
 time_t time(time_t *result)
