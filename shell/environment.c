@@ -1,6 +1,7 @@
 #include "shell.h"
 #include <environment.h>
 #include <bundle_launch.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,6 +25,7 @@ enum call_status shell_environment_init(struct shell *shell)
   for (size_t i = 0; i < captured.count; ++i) {
     const struct environment_value *value = &captured.values[i];
     if (shell_environment_runtime_role(value->name)) {
+      assert(removed_count < sizeof(removed) / sizeof(*removed));
       struct environment_unset_entry *entry = &removed[removed_count++];
       memcpy(entry->name, value->name, sizeof(entry->name));
       entry->identity = value->identity;
@@ -52,6 +54,7 @@ enum call_status shell_environment_init(struct shell *shell)
     for (size_t i = 0; i < captured.count; ++i) {
       const struct environment_value *value = &captured.values[i];
       if (value->kind == ENVIRONMENT_CAP && !shell_environment_runtime_role(value->name)) {
+        assert(shell->initial_entry_count < count);
         struct shell_initial_entry *entry = &shell->initial_entries[shell->initial_entry_count++];
         memcpy(entry->name, value->name, sizeof(entry->name));
         entry->identity = value->identity;

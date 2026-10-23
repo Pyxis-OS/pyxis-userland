@@ -38,6 +38,7 @@
 #include <shell_settings.h>
 #include <startup.h>
 #include <wait.h>
+#include <assert.h>
 #include <stdlib.h>
 
 static enum call_status copy_grant(handle_t source, struct launch_grant *grant)
@@ -126,7 +127,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     environment_capture_close(&capture);
     return CALL_LIMIT;
   }
-  struct launch_grant *grants = malloc((fixed_grants + depth) * sizeof(*grants));
+  size_t grant_capacity = fixed_grants + depth;
+  struct launch_grant *grants = malloc(grant_capacity * sizeof(*grants));
   uint64_t *directories = depth ? malloc(depth * sizeof(*directories)) : NULL;
   struct launch_environment_entry *entries = calloc(entry_capacity, sizeof(*entries));
   if (!grants || (depth && !directories) || !entries) {
@@ -187,13 +189,17 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   if (bootstrap_capability("service") != HANDLE_INVALID &&
       endpoint_create(bootstrap_capability("service"), &bootstrap) == CALL_OK) {
     session->cwd_bootstrap = bootstrap.receiver;
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("pane_cwd", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){bootstrap.caller, 0, HANDLE_TRANSPORT_SEND};
   }
   handle_t tcp_listen = bootstrap_capability(BUNDLE_TCP_LISTEN_SOURCE);
   if (tcp_listen != HANDLE_INVALID) {
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){tcp_listen, TCP_SERVICE_RIGHTS, 0};
   }
   handle_t provisioner = bootstrap_capability("job_provisioner");
@@ -202,7 +208,9 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     if (status != CALL_OK) {
       goto done;
     }
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("job_provisioner", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){
       job_work_directory(session->job_provisioner), JOB_PROVISIONER_RIGHTS, 0,
     };
@@ -223,14 +231,18 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
     /* The opt-in controls delegation; only this group's launcher may enter it. */
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_CAP("child_launcher", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){bound, LAUNCHER_RIGHT_LAUNCH, 0};
   }
   handle_t interpreter_root = bootstrap_capability("interpreter_root");
   if (interpreter_root != HANDLE_INVALID) {
     struct launch_grant root = {.source = interpreter_root};
     if (handle_rights(root.source, &root.rights, &root.transport) == CALL_OK) {
+      assert(entry_count < entry_capacity);
       entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("interpreter_root", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = root;
     }
   }
@@ -238,7 +250,9 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   enum call_status opened = shell_settings_open(home && home->kind == ENVIRONMENT_CAP ?
       home->handle : HANDLE_INVALID, &settings);
   if (opened == CALL_OK) {
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(SHELL_SETTINGS_RESOURCE, grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){settings, FILE_RIGHT_READ, 0};
   } else if (opened != CALL_NOT_FOUND) {
     fprintf(stderr, "mux: cannot open %s (status %u); shell settings skipped\n",
@@ -297,6 +311,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       goto done;
     }
     grants[grant_count].rights &= allowed[i].rights;
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
       .flags = wifi_control || !strcmp(allowed[i].name, "service") ||
@@ -325,8 +340,10 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     if (selected) {
       continue;
     }
+    assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry)
         PROFILE_CAP(selected_directories[i].name, grant_count);
+    assert(grant_count < grant_capacity);
     status = copy_grant(selected_directories[i].handle, &grants[grant_count++]);
     if (status != CALL_OK) {
       goto done;
@@ -347,6 +364,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       selected |= !strcmp(value->name, (const char *)(uintptr_t)entries[j].name);
     }
     if (!selected) {
+      assert(entry_count < entry_capacity);
       entries[entry_count++] = (struct launch_environment_entry){
         .name = (uintptr_t)value->name, .kind = ENVIRONMENT_TEXT, .flags = value->flags,
         .value = (uintptr_t)value->text, .length = value->length,
@@ -355,6 +373,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
+    assert(grant_count < grant_capacity);
     status = copy_grant(context->directories[i], &grants[grant_count++]);
     if (status != CALL_OK) {
       goto done;

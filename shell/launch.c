@@ -57,6 +57,7 @@
 #include <process.h>
 #include <startup.h>
 #include <wait.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -841,8 +842,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 43 -
-      BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index) {
     return CALL_LIMIT;
   }
   size_t display_index = directory_index + depth;
@@ -887,7 +887,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_output = shell->terminal.output != HANDLE_INVALID;
   size_t output_index = network_config_index + (has_network_config ? 1 : 0);
   size_t grant_count = output_index + (has_output ? 1 : 0);
-  size_t grant_capacity = grant_count + ENVIRONMENT_STREAM_COUNT + 3 + BUNDLE_SOURCE_LIMIT + prepared->captured.count;
+  size_t extra_grants = ENVIRONMENT_STREAM_COUNT + 3 + BUNDLE_SOURCE_LIMIT;
+  size_t max_grants = SIZE_MAX / sizeof(struct launch_grant);
+  if (grant_count > max_grants - extra_grants ||
+      prepared->captured.count > max_grants - extra_grants - grant_count) {
+    return CALL_LIMIT;
+  }
+  size_t grant_capacity = grant_count + extra_grants + prepared->captured.count;
   prepared->grants = malloc(grant_capacity * sizeof(*prepared->grants));
   prepared->directories = depth ? malloc(depth * sizeof(*prepared->directories)) : NULL;
   if (!prepared->grants || (depth && !prepared->directories)) {
@@ -1095,119 +1101,156 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[network_config_index] = (struct launch_grant){network_config, FILE_RIGHT_READ, 0};
   }
   struct launch_environment_entry *resources = prepared->resources;
+  size_t resource_capacity = sizeof(prepared->resources) / sizeof(*resources);
   resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
   size_t resource_count = 1;
   if (has_output) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", output_index);
   }
   if (has_job_provisioner) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", job_provisioner_index);
   }
   if (has_tcp_listen) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, tcp_listen_index);
   }
   if (has_threads) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", threads_index);
   }
   if (named_input) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"input", input_index);
   }
   if (has_display) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"display", display_index);
   }
   if (has_clock) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clock", clock_index);
   }
   if (has_system_info) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"system_info", system_info_index);
   }
   if (has_log) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"log", log_index);
   }
   if (has_echo) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"echo", echo_index);
   }
   if (has_udp) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp", udp_index);
   }
   if (has_udp_beacons) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] =
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", udp_beacons_index);
   }
   if (has_tcp) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", tcp_index);
   }
   if (has_random) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"random", random_index);
   }
   if (has_keyboard) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"keyboard", keyboard_index);
   }
   if (has_pointer) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pointer", pointer_index);
   }
   if (has_launcher) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"launcher", launcher_index);
   }
   if (pass_child_launcher) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] =
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", child_launcher_index);
   }
   if (has_interpreter_root) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] =
         (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", interpreter_root_index);
   }
   if (has_net_registry) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", net_registry_index);
   }
   if (has_pipe) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", pipe_index);
   }
   if (has_service) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"service", service_index);
   }
   if (has_space) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"space", space_index);
   }
   if (has_profile) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"profile", profile_index);
   }
   if (provider) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"publication", publication_index);
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)PROVIDER_SETUP_ROOTS_ENTRY, .kind = ENVIRONMENT_TEXT,
       .value = (uintptr_t)scope->root_roles, .length = strlen(scope->root_roles),
     };
   }
   if (has_terminal) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal", terminal_index);
   }
   if (has_mux_terminal) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"mux_terminal", mux_terminal_index);
   }
   if (has_remote_mux_terminal) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", remote_mux_terminal_index);
   }
   if (has_terminal_pointer) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal_pointer", terminal_pointer_index);
   }
   if (has_power) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", power_index);
   }
   if (has_remote_power) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", remote_power_index);
   }
   if (has_screen_capture) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", screen_capture_index);
   }
   if (has_audio) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"audio", audio_index);
   }
   if (has_clipboard_local) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clipboard_local", clipboard_local_index);
   }
   if (has_clipboard_shared) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clipboard_shared", clipboard_shared_index);
   }
   handle_t wifi = session ? bootstrap_capability("wifi") : HANDLE_INVALID;
@@ -1218,7 +1261,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       return status == CALL_OK ? CALL_BAD_REQUEST : status;
     }
     radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT;
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = radio;
   }
   /* Only a trusted successor keeps the configured session's revocation root. */
@@ -1237,8 +1282,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           !(info.rights & FORWARDER_RIGHT_CUT)) {
         return CALL_DENIED;
       }
+      assert(resource_count < resource_capacity);
       resources[resource_count++] = (struct launch_environment_entry)
           PROFILE_PRIVATE_CAP("wifi_session_control", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){wifi_control->handle, FORWARDER_RIGHT_CUT, 0};
       prepared->wifi_private_identity[0] = wifi_control->identity;
     }
@@ -1257,26 +1304,32 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           info.protocol != PROTOCOL_WIFI || info.transport || info.rights != WIFI_RIGHT_SUPPLICANT) {
         return CALL_DENIED;
       }
-      if (grant_count == grant_capacity || resource_count == sizeof(prepared->resources) / sizeof(*resources)) {
+      if (grant_count == grant_capacity || resource_count == resource_capacity) {
         return CALL_LIMIT;
       }
+      assert(resource_count < resource_capacity);
       resources[resource_count++] = (struct launch_environment_entry)
           PROFILE_PRIVATE_CAP("wifi_auth_setup", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){setup->handle, WIFI_RIGHT_SUPPLICANT, 0};
       prepared->wifi_private_identity[1] = setup->identity;
     }
   }
   if (has_retention_factory) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_factory", retention_factory_index);
   }
   if (has_retention_account) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", retention_account_index);
   }
   if (has_session_config) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP("session_config", session_config_index);
   }
   if (has_network_config) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP("network_config", network_config_index);
   }
@@ -1289,11 +1342,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         continue;
       }
       if (grant_count == grant_capacity ||
-          resource_count == sizeof(prepared->resources) / sizeof(*resources)) {
+          resource_count == resource_capacity) {
         return CALL_LIMIT;
       }
+      assert(resource_count < resource_capacity);
       resources[resource_count++] = (struct launch_environment_entry)
           PROFILE_PRIVATE_CAP("screenshot_saver", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){entry->handle,
           SCREENSHOT_SAVER_RIGHT_SERVE, 0};
       prepared->screenshot_saver_identity = entry->identity;
@@ -1307,7 +1362,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       return status;
     }
     if (source_count > grant_capacity - grant_count ||
-        source_count > sizeof(prepared->resources) / sizeof(*resources) - resource_count) {
+        source_count > resource_capacity - resource_count) {
       return CALL_LIMIT;
     }
     for (size_t i = 0; i < source_count; ++i) {
@@ -1341,7 +1396,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           return CALL_BAD_REQUEST;
         }
       }
+      assert(resource_count < resource_capacity);
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)name, grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){sources[i].source, info.rights, transport};
     }
   }
@@ -1375,7 +1432,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
 
   if (environment->dns_udp != HANDLE_INVALID) {
+    assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){environment->dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   bool wait_session = mode == SHELL_FOREGROUND && scope && scope->owned &&
@@ -1397,6 +1456,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       const struct environment_value *entry = &prepared->captured.values[i];
       if (entry->kind == ENVIRONMENT_TEXT && !entry->flags &&
           !strncmp(entry->name, "network.", 8) && entry->name[8]) {
+        assert(entry_count < entry_capacity);
         prepared->entries[entry_count++] = (struct launch_environment_entry){
           .name = (uintptr_t)entry->name, .kind = ENVIRONMENT_TEXT,
           .value = (uintptr_t)entry->text, .length = entry->length,
@@ -1433,7 +1493,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       if (info.protocol != protocol || (info.rights & rights) != rights) {
         return CALL_DENIED;
       }
+      assert(entry_count < entry_capacity);
       prepared->entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(entry->name, grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){entry->handle, rights, 0};
     }
   }
@@ -1453,11 +1515,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     if (!stream_policy && !supplied && !(prepared->program && prepared->program->commands &&
         !strcmp((const char *)(uintptr_t)entry->name, "commands"))) {
+      assert(entry_count < entry_capacity);
       prepared->entries[entry_count++] = *entry;
     }
   }
   if (wait_session) {
     /* Keep session chains alive until their owner can seal and retire the scope. */
+    assert(entry_count < entry_capacity);
     prepared->entries[entry_count++] =
         (struct launch_environment_entry)PROFILE_TEXT(SESSION_WAIT_ENV, "1");
   }
@@ -1513,10 +1577,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           (info.kind != HANDLE_KIND_EXPORTED && !value))) {
         continue;
       }
+      assert(entry_count < entry_capacity);
       prepared->entries[entry_count++] = (struct launch_environment_entry){
         .name = (uintptr_t)entry->name, .kind = ENVIRONMENT_CAP,
         .flags = controller ? 0 : ENVIRONMENT_EXPORTED, .value = grant_count,
       };
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){entry->handle, info.rights, info.transport};
     }
   }
@@ -1545,6 +1611,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
+    assert(request->entry_count < entry_capacity);
     prepared->entries[request->entry_count++] = profile_stdio_entry(i, request->grant_count);
     uint64_t transport = 0;
     if (stream.protocol == PROTOCOL_FILE || response) {
@@ -1561,11 +1628,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         transport = HANDLE_TRANSPORT_CALL;
       }
     }
+    assert(request->grant_count < grant_capacity);
     grants[request->grant_count++] = (struct launch_grant){stream.handle, rights, transport};
     if (stream.append) {
       if (input || stream.protocol != PROTOCOL_FILE) {
         return CALL_BAD_REQUEST;
       }
+      assert(request->entry_count < entry_capacity);
       prepared->entries[request->entry_count++] = environment_stdio_append_entry(i);
     }
   }

@@ -51,6 +51,7 @@
 #include <limits.h>
 #include <startup.h>
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <term.h>
@@ -189,7 +190,9 @@ static int launch_session(const struct session_config *config, struct network_co
   resources[2] = (struct launch_environment_entry)PROFILE_CAP("memory", MEMORY);
   resources[3] = (struct launch_environment_entry)PROFILE_CAP("launcher", LAUNCHER);
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
+  assert(resource_count < grant_capacity);
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
+  assert(grant_count < grant_capacity);
   grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
   static const char *const configuration_names[] = {"session_config", "network_config"};
   for (size_t i = 0; i < sizeof(configuration_names) / sizeof(*configuration_names); ++i) {
@@ -208,29 +211,39 @@ static int launch_session(const struct session_config *config, struct network_co
           configuration_names[i], status);
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP(configuration_names[i], grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){value->handle, FILE_RIGHT_READ, 0};
   }
   handle_t threads = bootstrap_capability("threads");
   if (threads != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
   }
   handle_t tcp_listen = bootstrap_capability(BUNDLE_TCP_LISTEN_SOURCE);
   if (tcp_listen != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){tcp_listen, TCP_SERVICE_RIGHTS, 0};
   }
   handle_t job_provisioner = bootstrap_capability("job_provisioner");
   if (job_provisioner != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){job_provisioner, JOB_PROVISIONER_RIGHTS, 0};
   }
   handle_t child_launcher = bootstrap_capability("child_launcher");
   if (child_launcher != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"child_launcher", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){child_launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   }
   const struct environment_value *wifi_control =
@@ -248,26 +261,34 @@ static int launch_session(const struct session_config *config, struct network_co
       status = CALL_DENIED;
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP("wifi_session_control", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){wifi_control->handle, FORWARDER_RIGHT_CUT, 0};
   }
   handle_t interpreter_root = bootstrap_capability("interpreter_root");
   if (interpreter_root != HANDLE_INVALID) {
     struct launch_grant root = {.source = interpreter_root};
     if (handle_rights(root.source, &root.rights, &root.transport) == CALL_OK) {
+      assert(resource_count < grant_capacity);
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"interpreter_root", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = root;
     }
   }
   handle_t display = bootstrap_capability("display");
   if (display != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"display", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){display, DISPLAY_RIGHT_DRAW, 0};
   }
   handle_t audio = bootstrap_capability("audio");
   if (audio != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"audio", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){audio, AUDIO_RIGHT_PLAYBACK, 0};
   }
   handle_t wifi = bootstrap_capability("wifi");
@@ -278,44 +299,60 @@ static int launch_session(const struct session_config *config, struct network_co
       goto done;
     }
     radio.rights &= WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT;
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"wifi", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = radio;
   }
   handle_t screen_capture = bootstrap_capability("screen_capture");
   if (screen_capture != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"screen_capture", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){screen_capture,
         SCREEN_CAPTURE_RIGHT_CAPTURE, 0};
   }
   handle_t clock = bootstrap_capability("clock");
   if (clock != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"clock", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){clock, CLOCK_RIGHTS, 0};
   }
   handle_t system_info = bootstrap_capability("system_info");
   if (system_info != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"system_info", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
   }
   handle_t log = bootstrap_capability("log");
   if (log != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"log", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){log, LOG_RIGHT_READ, 0};
   }
   handle_t echo = bootstrap_capability("echo");
   if (echo != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"echo", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){echo, ECHO_RIGHT_SEND, 0};
   }
   handle_t udp = bootstrap_capability("udp");
   if (udp != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   if (start_remote_services) {
     handle_t udp_beacons = bootstrap_capability("udp_beacons");
     if (udp_beacons != HANDLE_INVALID) {
+      assert(resource_count < grant_capacity);
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"udp_beacons", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){udp_beacons, UDP_SERVICE_RIGHT_BROADCAST, 0};
     }
   }
@@ -326,7 +363,9 @@ static int launch_session(const struct session_config *config, struct network_co
     for (size_t i = 0; i < sizeof(remote) / sizeof(*remote); ++i) {
       handle_t source = bootstrap_capability(remote[i].name);
       if (source != HANDLE_INVALID) {
+        assert(resource_count < grant_capacity);
         resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(remote[i].name, grant_count);
+        assert(grant_count < grant_capacity);
         grants[grant_count++] = (struct launch_grant){source, remote[i].rights, 0};
       }
     }
@@ -342,7 +381,9 @@ static int launch_session(const struct session_config *config, struct network_co
       }
       rights &= TCP_SERVICE_RIGHT_CONNECT | TCP_SERVICE_RIGHT_LISTEN;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"tcp", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){tcp, rights, 0};
   }
   handle_t net_registry = bootstrap_capability("net_registry");
@@ -353,7 +394,9 @@ static int launch_session(const struct session_config *config, struct network_co
       fprintf(stderr, "session: cannot query network rights (status %u)\n", status);
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"net_registry", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){net_registry,
         rights & NET_REGISTRY_RIGHT_READ, 0};
   }
@@ -363,7 +406,9 @@ static int launch_session(const struct session_config *config, struct network_co
     enum call_status opened = shell_settings_open(home && home->kind == ENVIRONMENT_CAP ?
         home->handle : HANDLE_INVALID, &settings);
     if (opened == CALL_OK) {
+      assert(resource_count < grant_capacity);
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP(SHELL_SETTINGS_RESOURCE, grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){settings, FILE_RIGHT_READ, 0};
     } else if (opened != CALL_NOT_FOUND) {
       fprintf(stderr, "session: cannot open %s (status %u); shell settings skipped\n",
@@ -376,7 +421,9 @@ static int launch_session(const struct session_config *config, struct network_co
       fputs("session: missing remote service bootstrap authority\n", stderr);
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){terminal_service,
         TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
@@ -387,7 +434,9 @@ static int launch_session(const struct session_config *config, struct network_co
       fprintf(stderr, "session: cannot query multiplexer authority (status %u)\n", status);
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)(multiplex ? "terminal" : "mux_terminal"), grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){mux_terminal,
         rights & TERMINAL_SERVICE_RIGHT_CREATE, transport};
     handle_t terminal_pointer = bootstrap_capability("terminal_pointer");
@@ -395,7 +444,9 @@ static int launch_session(const struct session_config *config, struct network_co
       fputs("session: missing multiplexer pointer authority\n", stderr);
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"terminal_pointer", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){terminal_pointer,
         TERMINAL_POINTER_RIGHT_CONTROL, 0};
   }
@@ -408,57 +459,77 @@ static int launch_session(const struct session_config *config, struct network_co
       if (clipboard == HANDLE_INVALID) {
         continue;
       }
+      assert(resource_count < grant_capacity);
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)clipboard_names[i], grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){clipboard, CLIPBOARD_RIGHTS, 0};
     }
   }
   handle_t pipe = bootstrap_capability("pipe");
   if (pipe != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pipe", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){pipe, PIPE_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t service = bootstrap_capability("service");
   if (service != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"service", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){service, ENDPOINT_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t random = bootstrap_capability("random");
   if (random != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"random", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){random, RANDOM_RIGHT_READ, 0};
   }
   handle_t keyboard = bootstrap_capability("keyboard");
   if (keyboard != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"keyboard", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){keyboard, KEYBOARD_RIGHT_INPUT, 0};
   }
   handle_t pointer = bootstrap_capability("pointer");
   if (pointer != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"pointer", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){pointer, POINTER_RIGHT_INPUT, 0};
   }
 
   /* Local power never authorizes remote shells; they need the separate opt-in. */
   handle_t power = bootstrap_capability("power");
   if (power != HANDLE_INVALID && !start_remote_services) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){power, POWER_RIGHTS, 0};
   }
   handle_t remote_mux_terminal = bootstrap_capability("remote_mux_terminal");
   if (remote_mux_terminal != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_mux_terminal", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){remote_mux_terminal,
         TERMINAL_SERVICE_RIGHT_CREATE, 0};
   }
   handle_t remote_power = bootstrap_capability("remote_power");
   if (remote_power != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"remote_power", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){remote_power, POWER_RIGHTS, 0};
   }
 
   handle_t space = bootstrap_capability("space");
   if (space != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"space", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){space, SPACE_RIGHT_SET_TITLE, 0};
   }
 
@@ -470,7 +541,9 @@ static int launch_session(const struct session_config *config, struct network_co
       fprintf(stderr, "session: cannot query profile rights (status %u)\n", status);
       goto done;
     }
+    assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"profile", grant_count);
+    assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){profile,
         rights & (PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST), 0};
   }
@@ -485,8 +558,10 @@ static int launch_session(const struct session_config *config, struct network_co
         status = CALL_LIMIT;
         goto done;
       }
+      assert(resource_count < grant_capacity);
       resources[resource_count++] = (struct launch_environment_entry)
           PROFILE_PRIVATE_CAP((uintptr_t)value->name, grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){value->handle, value->rights, value->transport};
     }
     /* The remote bootstrap needs its declared private source for provider setup;
@@ -499,7 +574,9 @@ static int launch_session(const struct session_config *config, struct network_co
           info.protocol != PROTOCOL_DIRECTORY || info.transport) {
         goto done;
       }
+      assert(resource_count < grant_capacity);
       resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)BUNDLE_SOURCE_PREFIX "http_staging", grant_count);
+      assert(grant_count < grant_capacity);
       grants[grant_count++] = (struct launch_grant){staging, info.rights, 0};
     }
   } else {
@@ -514,6 +591,7 @@ static int launch_session(const struct session_config *config, struct network_co
   struct launch_environment_entry roots[PROFILE_DIRECTORY_LIMIT];
   for (size_t i = 0; i < root_count; ++i) {
     roots[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)selected_roots[i].name, grant_count);
+    assert(grant_count < grant_capacity);
     struct launch_grant *grant = &grants[grant_count++];
     *grant = (struct launch_grant){.source = selected_roots[i].handle};
     status = handle_rights(grant->source, &grant->rights, &grant->transport);
@@ -528,6 +606,7 @@ static int launch_session(const struct session_config *config, struct network_co
   const char *working_path = pyxis_working_path();
   for (size_t i = 0; i < depth; ++i) {
     directories[i] = grant_count;
+    assert(grant_count < grant_capacity);
     struct launch_grant *grant = &grants[grant_count++];
     *grant = (struct launch_grant){.source = context->directories[i]};
     status = handle_rights(grant->source, &grant->rights, &grant->transport);
@@ -575,8 +654,10 @@ static int launch_session(const struct session_config *config, struct network_co
         (input ? PIPE_RIGHT_READ : PIPE_RIGHT_WRITE) :
         response ? STREAM_RIGHT_READ :
         (input ? CONSOLE_RIGHT_READ : CONSOLE_RIGHT_WRITE);
+    assert(request.entry_count < entry_capacity);
     entries[request.entry_count++] = profile_stdio_entry(i, request.grant_count);
     if (stream.append) {
+      assert(request.entry_count < entry_capacity);
       entries[request.entry_count++] = environment_stdio_append_entry(i);
     }
     uint64_t transport = 0;
@@ -596,6 +677,7 @@ static int launch_session(const struct session_config *config, struct network_co
         transport = HANDLE_TRANSPORT_CALL;
       }
     }
+    assert(request.grant_count < grant_capacity);
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
 
@@ -615,11 +697,14 @@ static int launch_session(const struct session_config *config, struct network_co
       supplied |= !strcmp(name, (const char *)(uintptr_t)entries[j].name);
     }
     if (!supplied) {
+      assert(request.entry_count < entry_capacity);
       entries[request.entry_count++] = refreshed_environment.variables[i];
     }
   }
   if (refreshed_environment.dns_udp != HANDLE_INVALID) {
+    assert(request.entry_count < entry_capacity);
     entries[request.entry_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", request.grant_count);
+    assert(request.grant_count < grant_capacity);
     grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
   }
   size_t prepared_grants = request.grant_count;
