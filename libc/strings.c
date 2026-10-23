@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <strings.h>
+#include <string.h>
 
 int strcasecmp(const char *left, const char *right)
 {
@@ -22,4 +23,9 @@ int strncasecmp(const char *left, const char *right, size_t count)
     }
   }
   return 0;
+}
+
+void bzero(void *memory, size_t count)
+{
+  memset(memory, 0, count);
 }
