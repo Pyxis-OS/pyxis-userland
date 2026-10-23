@@ -18,7 +18,7 @@ static struct boot_publisher_input publisher_input(const struct install_plan *pl
   const struct disk_partition_selection *selected = &plan->target.esp;
   struct boot_publisher_input input = {.name = "installer", .workspace = plan->workspace,
     .clock = plan->clock, .boot = plan->boot, .loaded_kernel = plan->kernel.handle,
-    .kernel = plan->kernel, .archive = plan->rescue, .revision = plan->record.revision,
+    .kernel = plan->kernel, .archive = plan->archive, .revision = plan->record.revision,
     .attempt = plan->record.attempt, .revision_record = plan->revision_record,
     .disk_guid = plan->record.layout.disk_guid,
     .pool_partition = plan->record.layout.pool_partition,

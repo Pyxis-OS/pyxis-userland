@@ -204,7 +204,7 @@ static enum call_status seed_file(handle_t source_dir, handle_t target_dir, cons
 static bool system_config_prepare(const struct install_plan *plan)
 {
   static const char *const initial[] = {
-    "boot.lua", "session.lua", "network.lua", "init-installed",
+    "boot.lua", "session.lua", "network.lua", "init-installed", "init-services",
   };
   const uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES;
   handle_t system = HANDLE_INVALID, config = HANDLE_INVALID;
@@ -357,6 +357,7 @@ static bool stage_esp(struct install_plan *plan)
   return status == CALL_OK;
 }
 
+/* Removes program copies that no retained boot entry binds (installer.h). */
 static void cleanup_programs(struct install_plan *plan)
 {
   bool updating = plan->record.updating;
@@ -376,8 +377,7 @@ static void cleanup_programs(struct install_plan *plan)
 #endif
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {
     fputs("Older program directories were kept: the previous revision is unknown.\n", stderr);
-  } else if (!install_programs_cleanup(&plan->disk, plan->target.pool.partition,
-      plan->record.revision, previous)) {
+  } else if (!install_bin_cleanup(&plan->disk, plan->target.pool.partition, previous)) {
     fputs("installer: old program directory cleanup failed\n", stderr);
   }
 }
@@ -410,7 +410,6 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   bool updating = plan->record.updating, coexist = plan->record.coexist;
   struct install_disk *disk = &plan->disk, *raw = &plan->raw_disk;
   const struct install_layout *layout = &plan->record.layout;
-  const char *revision = plan->record.revision;
   enum call_status status;
   bool created_valid = false;
   int64_t created_ns = 0;
@@ -496,9 +495,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     goto done;
   }
   if (!system_config_prepare(plan) || !classic_origin_prepare(plan)) goto done;
-  if (!install_programs_write(disk, plan->target.pool.partition, plan->boot, &plan->programs,
-        revision, &plan->manifest, plan->manifest_text, plan->manifest_bytes) ||
-      !system_verify(plan)) {
+  if (!system_verify(plan)) {
     goto done;
   }
 #if !INSTALLER_PUBLICATION_SCRATCH

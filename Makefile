@@ -61,7 +61,7 @@ REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o gpt.o pool.o consent.o esp.o esp_read.o programs.o manifest.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o coexist_ui.o target.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o gpt.o pool.o consent.o esp.o esp_read.o bin_cleanup.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o coexist_ui.o target.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
@@ -83,7 +83,7 @@ INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/installer/,publication_frontend
 # The shared boot publisher (installer/boot_publisher.h). The installer links
 # this archive; front ends add their own target admission and consent.
 PUBLISHER_LIBRARY := $(BUILD)/libpublisher.a
-PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o publication.o publication_snapshot.o pending.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o boot_archive.o digest.o progress.o io.o) \
+PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o publication.o publication_snapshot.o pending.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o digest.o progress.o io.o) \
     $(addprefix $(BUILD)/installer/,menu_ownership.o boot_storage.o boot_record.o)
 # Discovery borrows the installer validators. Separate sectioned objects let
 # the selector retain only read-only inspection from the mixed private modules.
@@ -290,8 +290,8 @@ $(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $
 $(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
-$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o $(BUILD)/installer/programs.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
 $(CONFIG_LIBRARY): $(CONFIG_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(CONFIG_OBJECT)

@@ -184,8 +184,8 @@ static bool fresh_coexist(struct install_target *target)
   return ok;
 }
 
-static bool inspect(struct install_target *target, struct install_prior *prior,
-    struct install_consent *consent, uint64_t *free_blocks)
+static bool inspect(struct install_target *target, struct install_consent *consent,
+    uint64_t *free_blocks)
 {
   const struct install_plan_record *record = &target->record;
   struct install_update update = {0};
@@ -272,8 +272,7 @@ static bool inspect(struct install_target *target, struct install_prior *prior,
     return false;
   }
   *free_blocks = update.free_blocks;
-  target->reason = "prior program inventory inspection failed or requires explicit legacy consent";
-  return install_prior_read(&target->disk, &update, record->legacy, prior) && !prior->needs_legacy;
+  return true;
 }
 
 /* Review displays boot-scoped numeric device IDs. Canonicalize only these two
@@ -353,10 +352,10 @@ static bool fingerprint(struct install_target *target, const char raw[65], char 
 
 bool install_target_prepare(struct install_target *target, handle_t disks, handle_t clock,
     const struct disk_info *info, const struct install_plan_record *record,
-    uint64_t deadline_ns, struct install_prior *prior, struct install_consent *consent,
+    uint64_t deadline_ns, struct install_consent *consent,
     uint64_t *free_blocks, char target_hash[65])
 {
-  if (!target || target->initialized || !info || !record || !prior || !consent ||
+  if (!target || target->initialized || !info || !record || !consent ||
       !free_blocks || !target_hash) {
     return false;
   }
@@ -430,7 +429,7 @@ bool install_target_prepare(struct install_target *target, handle_t disks, handl
   bool ok = install_read_fingerprint_begin();
   if (ok) {
     ok = install_review_prepare(&review_disk, disks, clock, deadline_ns, NULL, &target->review) &&
-        inspect(target, prior, consent, free_blocks);
+        inspect(target, consent, free_blocks);
   }
   if (ok) {
     ok = install_read_fingerprint_finish(raw) && fingerprint(target, raw, target_hash);
@@ -504,14 +503,12 @@ bool install_target_revalidate(struct install_target *target, uint64_t deadline_
     return false;
   }
   target->pending_recheck = fresh;
-  struct install_prior prior = {0};
   struct install_consent consent = {0};
   uint64_t free_blocks = 0;
   char hash[65];
   bool ok = install_target_prepare(fresh, target->disks, target->clock, &target->disk.info,
-      &target->record, deadline_ns, &prior, &consent, &free_blocks, hash) &&
+      &target->record, deadline_ns, &consent, &free_blocks, hash) &&
       !strcmp(hash, target->record.target_hash);
-  install_prior_destroy(&prior);
   install_consent_destroy(&consent);
   if (install_target_destroy(fresh, deadline_ns)) {
     free(fresh);

@@ -1,7 +1,7 @@
 #ifndef USERSPACE_INSTALLER_TARGET_H
 #define USERSPACE_INSTALLER_TARGET_H
 
-#include "inventory.h"
+#include "installer.h"
 #include "plan_record.h"
 #include "review.h"
 
@@ -24,7 +24,7 @@ struct install_target {
   bool initialized, prepared;
 };
 
-/* Start with {0}; outputs prior/consent also start empty and remain caller-owned
+/* Start with {0}; output consent also starts empty and remains caller-owned
  * on failure. Record freezes choices, but source/target hashes may be unset.
  * No mutation or RW admission. Review lists both GPT copies, every known entry
  * and every known ESP's EFI entries, then drains its RO views. Selected native
@@ -33,7 +33,7 @@ struct install_target {
  * Caller owns hash_init() through this call. deadline_ns bounds cleanup only. */
 bool install_target_prepare(struct install_target *target, handle_t disks, handle_t clock,
     const struct disk_info *info, const struct install_plan_record *record,
-    uint64_t deadline_ns, struct install_prior *prior, struct install_consent *consent,
+    uint64_t deadline_ns, struct install_consent *consent,
     uint64_t *free_blocks, char target_hash[65]);
 
 /* Acquires fresh RO data and Review, recomputes the full target fingerprint and

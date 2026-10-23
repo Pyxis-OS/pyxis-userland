@@ -8,7 +8,7 @@ ordinary programs never receive it. Normal shells lack
 these installer grants. `init-install.pxe` forwards installer arguments without
 adding authority; optional RESTART authority remains narrowed.
 
-The plain frontend and later TUI share `plan.h`: source inventory, read-only
+The plain frontend and later TUI share `plan.h`: source assets, read-only
 preparation, Review and one confirmed executor. Preparing, printing, cancellation
 and dry-run never claim write access, persist replay, format or clean up.
 Temporary native RO ESP views are inspected and retired before mutation. The only frontend apply call is `install_plan_execute`, after explicit
@@ -16,7 +16,7 @@ Temporary native RO ESP views are inspected and retired before mutation. The onl
 inputs; one-use kernel grants then revalidate the exact reviewed GPT before
 mutation. Stale plans refuse without amendment.
 
-## Plans and Programs report
+## Plans
 
 The menu offers Install, Update or replay of a printed plan. After read-only
 preparation, Review offers Apply (Enter), Print or Dry-run. Install retains its
@@ -37,7 +37,7 @@ create a plan file or acquire writable namespace authority.
 hex IDs/revision bytes/hashes. Missing, duplicated, unknown or malformed fields,
 unsupported layouts and oversized input refuse. Parsing stops at the end marker;
 following bytes cannot execute or change that plan. Each plan is capped at 16 MiB.
-Source hashes bind recorded choices and all immutable source assets/inventory;
+Source hashes bind recorded choices and all immutable source assets;
 target hashes bind successful raw read extents, consumed bytes and complete
 partition/EFI-directory Review, excluding boot-scoped numeric device IDs.
 
@@ -49,64 +49,32 @@ the held target in the same interactive planning invocation. Fresh Install IDs
 and journal choices are recorded once. All source/target changes require a new
 plan and Review.
 
-Programs are whole selected non-rescue root `.pxe` files and complete `.pxb`
-trees. Reports compare paths, kinds, empty directories, file sizes and SHA-256
-per unit. Normal Review summarizes new/updated/removed/unchanged counts and
-payload bytes on one screen. `-v`/`--verbose`, `--plan` and Print show per-program
-old/new sizes and existing-volume labels. Selected target identity is re-shown
-before journal/legacy-scan questions and the post-scan Review.
-Removed means absent from the new revision, not deletion of the retained previous
-one. Missing/invalid prior manifests on a known tree require explicit `scan`
-consent (or its recorded legacy choice) for a raw read/hash inventory. Apply
-repeats that scan. Unknown prior revisions stay unknown, not unchanged. A valid
-manifest is recorded inventory, not a live audit of later payload changes.
-
 Planning extends the existing raw npfs decoder; opening even a read-only mounted
 pool retains it until reboot and blocks write admission. Traversal validates
 consumed allocation/mapping/inode/directory structure, handles sparse file holes
 as zeros and refuses cycles/aliases, I/O, allocation and capacity failures. This
-is bounded inspection, not fsck. It allows 32 directory levels, 255-byte names
-and 65,536 entries including the reserved manifest; raw scans also bound each
-directory's decoded records, including free slots, at 65,536. Metadata objects
-are capped at 16 MiB. Long trees that fit older entry/depth bounds can exceed it.
+is bounded inspection, not fsck: raw scans bound each directory's decoded
+records, including free slots, at 65,536.
 
-## Revision inventory and execution
+## Execution
 
-`bin/REVISION/.pyxis-revision-manifest` has canonical ASCII encoding:
-
-```text
-PYXIS-REVISION-MANIFEST 1
-R <revision-byte-hex>
-D <relative-path-byte-hex>
-F <decimal-size> <sha256-hex> <relative-path-byte-hex>
-```
-
-Records sort by path bytes, include directory ancestors and empty directories,
-and exclude the manifest itself. Every line ends with LF; paths use lowercase
-hex and sizes have no redundant zeros. Duplicate/invalid paths, missing
-ancestors, unsupported kinds or inconsistent totals refuse. Configured Mbed TLS
-PSA supplies SHA-256 through independent contexts; existing native clock/random
-initialization has no fallback. Unsigned hashes are not authentication.
-
-The executor preserves offline admission, claim/release order, programs before
-ESP, explicit sync and current/previous retention. Its staging reserve overcounts
-mapping/entry metadata and credits no cleanup; it is not a guarantee against all
-allocation limits. It copies programs, syncs, compares exact tree structure and
-source bytes, and hashes actual destination bytes against the inventory. Only
-then does it create, sync and byte-verify the manifest, before changing boot payloads.
-Program/manifest verification uses ordinary filesystem reads and may return
-cached pages. It is not guaranteed fresh device read-back. EFI verification
-syncs and reopens native FAT files, compares held-object identity and hashes
-all bytes, without a cache-bypass or physical-media/power-loss claim.
+The boot archive is installed as built, the core archive of
+docs/wip/pkg-upgrade.md (step 2 task 3); the installer copies no programs to the
+pool. The executor preserves offline admission, claim/release order and explicit
+sync. It prepares the pool's volumes and configuration, then publishes the boot
+payloads. Its staging reserve credits no cleanup; it is not a guarantee against
+all allocation limits. EFI verification syncs and reopens native FAT files,
+compares held-object identity and hashes all bytes, without a cache-bypass or
+physical-media/power-loss claim. Installs from before the core archive kept
+programs in `bin/REVISION`; after publication, `bin_cleanup.c` removes those
+except the known previous revision's, and an unknown previous skips it.
 
 The shared whole-ESP writer generates exactly the installed normal and rescue
 menu entries, with a three-second timeout and the selected disk binding. Live
 installer and FAT32 tool entries are never imported. Update regenerates the menu
 even for the same revision, removing extra entries from older installations.
 This task provides no FAT mount or config editor. Failed writes are not retried
-or rolled back; same/unknown-revision interruption can damage the previously used
-program tree. Failures direct the owner to live-media recovery. Best-effort old
-revision cleanup keeps current and known previous; unknown previous skips it.
+or rolled back. Failures direct the owner to live-media recovery.
 Mounted verification retains the pool until reboot. Restart is offered only after
 successful interactive apply, with the existing remove-medium reminder.
 

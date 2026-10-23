@@ -18,9 +18,9 @@
 #define INSTALL_BOOT_INIT_OPTION "init=boot://boot-init.pxe"
 #define INSTALL_RESCUE_OPTION "boot.default_config=1"
 #define INSTALL_MENU_TIMEOUT_SECONDS 3
-/* Ordinary programs live in this pool volume, one directory per revision. */
 #define INSTALL_ESP_PARTITION 1
 #define INSTALL_POOL_PARTITION 2
+/* Programs of installs before the core archive, one directory per revision. */
 #define INSTALL_BIN_VOLUME "bin"
 #define INSTALL_HOME_VOLUME "home"
 #define INSTALL_PACKAGES_VOLUME "packages"
@@ -174,37 +174,12 @@ bool install_esp_capacity(const struct install_esp *esp,
 bool install_esp_verify(const struct install_esp *esp);
 void install_esp_destroy(struct install_esp *esp);
 
-/* Complete program units that leave the boot archive: non-rescue root .pxe
- * files and root .pxb directories, sorted by name. */
-struct install_program {
-  char *name;
-  uint64_t kind;
-};
-
-struct install_programs {
-  struct install_program *entries;
-  size_t count;
-  size_t files;
-  uint64_t bytes;
-  bool totals_known;
-};
-bool install_programs_list(handle_t boot, struct install_programs *programs);
-void install_programs_destroy(struct install_programs *programs);
-/* The rescue archive: newc without selected roots or their descendants, as
- * owned memory. Descendant matching respects component boundaries. */
-bool install_archive_filter(const struct install_source *archive,
-    struct install_programs *programs, struct install_source *rescue);
-struct install_manifest;
-/* Outside any raw claim on the pool: creates the bin volume if missing, writes
- * complete program trees into bin/REVISION, replacing an earlier partial copy,
- * syncs the pool and verifies names, kinds, structure, sizes and bytes. */
-bool install_programs_write(const struct install_disk *disk, uint64_t pool_partition, handle_t boot,
-    const struct install_programs *programs, const char *revision,
-    const struct install_manifest *manifest, const char *manifest_text, size_t manifest_bytes);
-/* Recursively removes revisions except KEEP and PREVIOUS (which may be NULL).
- * The caller skips this best-effort stage when the previous revision is unknown. */
-bool install_programs_cleanup(const struct install_disk *disk, uint64_t pool_partition,
-    const char *keep,
+/* Removes bin/REVISION program copies from installs before the core archive,
+ * except PREVIOUS, which a retained boot entry may still bind (NULL keeps
+ * none). The volume itself stays, empty. A pool without a bin volume needs
+ * nothing. The caller skips this best-effort stage when the previous revision
+ * is unknown. */
+bool install_bin_cleanup(const struct install_disk *disk, uint64_t pool_partition,
     const char *previous);
 
 #endif

@@ -10,7 +10,7 @@
 /* Data only: hashes bind inspection inputs, not authority or authenticity.
  * Existing GUIDs bind logical disks; a zero GUID makes a plan nonportable. */
 struct install_plan_record {
-  bool updating, coexist, esp_rebuild, read_the_room, legacy, portable;
+  bool updating, coexist, esp_rebuild, read_the_room, portable;
   uint64_t block_count, block_size, journal_mib;
   uint8_t existing_guid[16], pool_id[16], volume_id[16];
   struct install_layout layout;

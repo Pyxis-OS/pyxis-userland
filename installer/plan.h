@@ -2,7 +2,6 @@
 #define USERSPACE_INSTALLER_PLAN_H
 
 #include "plan_record.h"
-#include "inventory.h"
 #include "target.h"
 #include "esp_activate.h"
 #include "esp_payload.h"
@@ -23,14 +22,12 @@ struct install_plan {
 #if INSTALLER_PUBLICATION_SCRATCH
   handle_t workspace;
 #endif
-  struct install_source kernel, archive, efi, rescue;
-  struct install_programs programs;
-  struct install_manifest manifest;
-  struct install_prior prior;
+  /* The boot archive is installed verbatim, as loaded. */
+  struct install_source kernel, archive, efi;
   struct install_consent consent;
   struct npfs_header header;
-  char *manifest_text, *configuration;
-  size_t manifest_bytes, configuration_bytes;
+  char *configuration;
+  size_t configuration_bytes;
   char revision_record[65];
   struct install_esp *esp;
   struct install_esp_payload_request payload_request;

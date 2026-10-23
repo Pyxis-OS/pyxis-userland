@@ -145,7 +145,7 @@ bool install_plan_record_valid(const struct install_plan_record *record)
         !nonzero_id(record->pool_id) && !nonzero_id(record->volume_id) &&
         !memcmp(record->existing_guid, record->layout.disk_guid, 16);
   }
-  if (record->legacy || record->previous[0] || !record->journal_mib ||
+  if (record->previous[0] || !record->journal_mib ||
       record->journal_mib > PLAN_JOURNAL_MAX_MIB || !nonzero_id(record->pool_id) ||
       !nonzero_id(record->volume_id)) {
     return false;
@@ -299,7 +299,6 @@ bool install_plan_record_parse(FILE *input, struct install_plan_record *output)
       !read_boolean(&reader, "coexist", &record.coexist) ||
       !read_boolean(&reader, "esp_rebuild", &record.esp_rebuild) ||
       !read_boolean(&reader, "read_the_room", &record.read_the_room) ||
-      !read_boolean(&reader, "legacy", &record.legacy) ||
       !read_boolean(&reader, "portable", &record.portable) ||
       !read_decimal(&reader, "block_count", &record.block_count) ||
       !read_decimal(&reader, "block_size", &record.block_size) ||
@@ -360,7 +359,7 @@ bool install_plan_record_format(FILE *output, const struct install_plan_record *
   char text[PLAN_TEXT_BYTES];
   int length = snprintf(text, sizeof(text), PLAN_HEADER "\n"
       "updating %u\ncoexist %u\nesp_rebuild %u\n"
-      "read_the_room %u\nlegacy %u\nportable %u\n"
+      "read_the_room %u\nportable %u\n"
       "block_count %llu\nblock_size %llu\njournal_mib %llu\n"
       "existing_guid %s\npool_id %s\nvolume_id %s\n"
       "esp_partition %llu\nesp_start %llu\nesp_bytes %llu\nesp_attributes %llu\n"
@@ -370,7 +369,7 @@ bool install_plan_record_format(FILE *output, const struct install_plan_record *
       "source_hash %s\ntarget_hash %s\n" PLAN_END "\n",
       (unsigned)record->updating, (unsigned)record->coexist,
       (unsigned)record->esp_rebuild, (unsigned)record->read_the_room,
-      (unsigned)record->legacy, (unsigned)record->portable,
+      (unsigned)record->portable,
       (unsigned long long)record->block_count, (unsigned long long)record->block_size,
       (unsigned long long)record->journal_mib, existing_guid, pool_id, volume_id,
       (unsigned long long)record->layout.esp_partition,

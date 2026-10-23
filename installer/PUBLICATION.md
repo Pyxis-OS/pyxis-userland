@@ -51,8 +51,8 @@ and the owned menu's previous and obsolete recovery copies.
 
 ## Ordering, activation and retention
 
-An initial exclusive checked interval revalidates consumed inputs before program
-writes. Programs and their revision manifest are copied, synchronized and verified
+An initial exclusive checked interval revalidates consumed inputs before pool
+writes. The pool's volumes and configuration are prepared and synchronized
 before the boot switch. Every publication stages fresh `kernel.elf`, `boot.arc`
 and `revision.txt` under `EFI/pyxis/REVISION/ATTEMPT/` through the
 [shared payload helper](ESP-PAYLOADS.md). Collisions refuse, including on
@@ -98,8 +98,7 @@ publisher never clears the dirty bit or repairs the filesystem.
 
 Retain current and one known previous boot attempt, plus pinned rescue. Older
 attempts require confirmed activation and exact owned-manifest/hash evidence
-before removal; unknown ownership skips cleanup. Program-tree retention remains
-separate: same-revision `bin/REVISION` replacement is not atomic. Failure, deadline
+before removal; unknown ownership skips cleanup. Failure, deadline
 or unknown completion stops at the reported phase with artifacts retained.
 There is no automatic repair, retry or rollback, and no firmware-variable write.
 Close is not sync or view retirement. Incomplete activation/verification does not

@@ -748,20 +748,6 @@ int main(int argc, char **argv)
       }
     }
   }
-  if (!prepared && plan.prior.needs_legacy && !replay && !coexist) {
-    if (!show_selected_target(selected)) {
-      goto done;
-    }
-    say("The previous revision has no valid manifest. Read and hash its programs once?");
-    const char *const choices[] = {"Read and hash the previous programs", "Cancel"};
-    struct term_choice_result decision = term_read_choice(&terminal, "Previous inventory: ",
-        choices, 2, 1);
-    if (decision.status != TERM_LINE_OK || decision.selected != 0) {
-      goto done;
-    }
-    plan.record.legacy = true;
-    prepared = install_plan_prepare(&plan, &selected->info);
-  }
   if (!prepared || (replay && !record_matches(&expected, &plan.record))) {
     install_progress_pause();
     fputs("installer: plan cannot be prepared, no longer matches, or exceeds capacity;\n"

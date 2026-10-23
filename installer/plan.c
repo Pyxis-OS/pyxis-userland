@@ -110,7 +110,7 @@ static bool hash_choices(struct install_digest *digest, const struct install_pla
 {
   static const char domain[] = "pyxis-install-plan-choices-1";
   uint8_t flags[] = {record->updating, record->coexist, record->esp_rebuild,
-    record->read_the_room, record->legacy, record->portable};
+    record->read_the_room, record->portable};
   uint8_t numbers[11 * 8];
   npfs_put_u64(numbers, record->block_count);
   npfs_put_u64(numbers + 8, record->block_size);
@@ -144,8 +144,6 @@ static bool source_fingerprint(const struct install_plan *plan, char output[65])
   bool ok = install_digest_begin(&digest) && hash_choices(&digest, &plan->record) &&
       hash_source(&digest, &plan->kernel) && hash_source(&digest, &plan->archive) &&
       hash_source(&digest, &plan->efi) &&
-      hash_source(&digest, &plan->rescue) &&
-      install_digest_update(&digest, plan->manifest_text, plan->manifest_bytes) &&
       install_digest_update(&digest, plan->configuration, plan->configuration_bytes) &&
       hash_source(&digest, &(struct install_source){.memory = plan->entry.bytes,
         .bytes = plan->entry.size}) &&
@@ -165,8 +163,7 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
     .disk.handle = HANDLE_INVALID,
     .raw_disk.handle = HANDLE_INVALID,
     .kernel.handle = kernel, .archive.handle = archive,
-    .efi.handle = HANDLE_INVALID,
-    .rescue.handle = HANDLE_INVALID};
+    .efi.handle = HANDLE_INVALID};
   install_progress_begin("Reading source revision", INSTALL_PROGRESS_NONE, NULL);
   struct system_info_identity identity;
   if (system_info_get_identity(system_info, &identity) != CALL_OK) {
@@ -180,34 +177,16 @@ bool install_plan_sources(struct install_plan *plan, handle_t disks, handle_t bo
   strcpy(plan->record.revision, revision);
   bool ok = source_open("boot://share/installer/BOOTX64.EFI", &plan->efi) &&
       file_size(kernel, &plan->kernel.bytes) == CALL_OK && plan->kernel.bytes &&
-      file_size(archive, &plan->archive.bytes) == CALL_OK && plan->archive.bytes &&
-      install_programs_list(boot, &plan->programs) &&
-      install_manifest_source(boot, &plan->programs, revision, &plan->manifest) == INSTALL_MANIFEST_OK &&
-      install_manifest_encode(&plan->manifest, &plan->manifest_text,
-        &plan->manifest_bytes) == INSTALL_MANIFEST_OK;
+      file_size(archive, &plan->archive.bytes) == CALL_OK && plan->archive.bytes;
   install_progress_finish();
   return ok;
 }
 
 static bool space_budget(struct install_plan *plan)
 {
-  /* Deliberately overestimate mapping and per-entry metadata, without credit
-   * for removing partial revisions or a promise against every allocation limit. */
-  uint64_t blocks = 64;
-  for (size_t i = 0; i < plan->manifest.count; i++) {
-    const struct install_manifest_entry *entry = &plan->manifest.entries[i];
-    uint64_t data = entry->size / NPFS_BLOCK_SIZE + (entry->size % NPFS_BLOCK_SIZE != 0);
-    if (data > (UINT64_MAX - blocks - 4) / 4) {
-      return false;
-    }
-    blocks += data * 4 + 4;
-  }
-  uint64_t manifest_blocks = plan->manifest_bytes / NPFS_BLOCK_SIZE +
-      (plan->manifest_bytes % NPFS_BLOCK_SIZE != 0);
-  if (manifest_blocks > (UINT64_MAX - blocks) / 4) {
-    return false;
-  }
-  plan->required_blocks = blocks + manifest_blocks * 4;
+  /* The pool receives only the initial configuration here; 64 blocks
+   * deliberately overestimates its files and their metadata. */
+  plan->required_blocks = 64;
   return plan->required_blocks <= plan->available_blocks;
 }
 
@@ -223,7 +202,7 @@ static bool payload_plan(struct install_plan *plan)
     plan->classic_request = (struct install_esp_activation_request){
       .configuration = plan->configuration, .configuration_bytes = plan->configuration_bytes,
       .revision = plan->revision_record, .revision_bytes = strlen(plan->revision_record),
-      .payloads = {plan->efi, plan->kernel, plan->rescue},
+      .payloads = {plan->efi, plan->kernel, plan->archive},
     };
     for (size_t i = 0; i < 3; ++i) {
       if (!install_boot_payload_digest(&plan->classic_request.payloads[i],
@@ -246,7 +225,7 @@ static bool payload_plan(struct install_plan *plan)
   }
   plan->payload_request = (struct install_esp_payload_request){
     .revision = plan->record.revision, .attempt = plan->record.attempt,
-    .sources = {plan->kernel, plan->rescue,
+    .sources = {plan->kernel, plan->archive,
       {.memory = (uint8_t *)plan->revision_record, .bytes = strlen(plan->revision_record)},
       {.memory = plan->entry.bytes, .bytes = plan->entry.size}},
     .entry_present = true,
@@ -316,7 +295,6 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
       !install_target_destroy(&plan->target, deadline)) {
     return false;
   }
-  install_prior_destroy(&plan->prior);
   install_consent_destroy(&plan->consent);
   install_esp_destroy(plan->esp);
   plan->esp = NULL;
@@ -336,7 +314,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   plan->raw_disk.bytes = plan->disk.bytes;
   install_progress_begin("Preparing complete target Review read-only", INSTALL_PROGRESS_NONE, NULL);
   if (!install_target_prepare(&plan->target, plan->disks, plan->clock, target,
-      &plan->record, deadline, &plan->prior, &plan->consent,
+      &plan->record, deadline, &plan->consent,
       &plan->available_blocks, plan->record.target_hash)) {
     install_progress_pause();
     fprintf(stderr, "installer: target Review unavailable: %s (status %u)\n",
@@ -352,11 +330,6 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
     uint64_t reserved = 2 + plan->header.bitmap_blocks + plan->header.volume_blocks +
         plan->header.journal_blocks;
     plan->available_blocks = plan->header.pool_blocks - reserved;
-  }
-  free(plan->rescue.memory);
-  plan->rescue = (struct install_source){.handle = HANDLE_INVALID};
-  if (!install_archive_filter(&plan->archive, &plan->programs, &plan->rescue)) {
-    return false;
   }
   if (!plan->record.coexist) {
     plan->configuration = boot_configuration(plan->record.layout.disk_guid,
@@ -389,7 +362,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
      * writes only the bootstrap tree. Native staging must not discover a known
      * oversized payload after erase or recovery has begun. */
     struct install_esp *complete = install_esp_plan(&plan->raw_disk, &plan->record.layout,
-        &plan->efi, &plan->kernel, &plan->rescue, plan->configuration,
+        &plan->efi, &plan->kernel, &plan->archive, plan->configuration,
         plan->configuration_bytes, plan->revision_record, revision_bytes,
         npfs_get_u32(plan->record.layout.esp_guid));
     if (!complete) {
@@ -421,22 +394,6 @@ bool install_plan_revalidate(struct install_plan *plan)
   return plan->ready && cleanup_deadline(plan->clock, &deadline) &&
       install_target_revalidate(&plan->target, deadline) &&
       source_fingerprint(plan, source_hash) && !strcmp(source_hash, plan->record.source_hash);
-}
-
-static void report_name(FILE *output, const char *name)
-{
-  fputc('"', output);
-  for (const unsigned char *byte = (const unsigned char *)name; *byte; byte++) {
-    if (*byte < 32 || *byte > 126 || *byte == '"' || *byte == '\\') {
-      static const char digits[] = "0123456789abcdef";
-      fputs("\\x", output);
-      fputc(digits[*byte >> 4], output);
-      fputc(digits[*byte & 15], output);
-    } else {
-      fputc(*byte, output);
-    }
-  }
-  fputc('"', output);
 }
 
 bool install_plan_report(const struct install_plan *plan, FILE *output, bool verbose)
@@ -472,36 +429,10 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
         (unsigned long long)plan->record.journal_mib,
         plan->record.read_the_room ? "yes" : "no");
   } else {
-    fprintf(output, "Previous revision: %s; explicit legacy scan: %s.\n",
-        plan->record.previous, plan->record.legacy ? "yes" : "no");
+    fprintf(output, "Previous revision: %s.\n", plan->record.previous);
   }
-  fprintf(output, "Programs revision: %s\nSelected payload: %zu files, %llu bytes.\n",
-      plan->record.revision, plan->manifest.files, (unsigned long long)plan->manifest.bytes);
-  if (plan->record.updating && plan->prior.state == INSTALL_PRIOR_UNKNOWN) {
-    fprintf(output, "Programs: %zu with unknown changes (%s).\n"
-        "Updated/new/removed/unchanged counts and old sizes are unknown.\n",
-        plan->programs.count, plan->prior.reason);
-    for (size_t i = 0; verbose && i < plan->programs.count; i++) {
-      const char *name = plan->programs.entries[i].name;
-      size_t length = strlen(name);
-      uint64_t bytes = 0;
-      for (size_t entry = 0; entry < plan->manifest.count; entry++) {
-        const struct install_manifest_entry *record = &plan->manifest.entries[entry];
-        if (!strncmp(record->path, name, length) &&
-            (!record->path[length] || record->path[length] == '/')) {
-          bytes += record->size;
-        }
-      }
-      fputs("  unknown ", output);
-      report_name(output, name);
-      fprintf(output, "; old size unknown, new %llu bytes\n", (unsigned long long)bytes);
-    }
-  } else {
-    const struct install_manifest *previous = plan->record.updating ? &plan->prior.inventory : NULL;
-    if (!install_manifest_report(output, previous, &plan->manifest, verbose)) {
-      return false;
-    }
-  }
+  fprintf(output, "Revision: %s; boot archive %llu bytes, installed as built.\n",
+      plan->record.revision, (unsigned long long)plan->archive.bytes);
   fprintf(output, "Staging reserve: %llu blocks; available %llu.\n",
       (unsigned long long)plan->required_blocks, (unsigned long long)plan->available_blocks);
 #if INSTALLER_PUBLICATION_SCRATCH
@@ -547,22 +478,14 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
     }
   }
   if (plan->record.updating) {
-    if (!strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
-      fputs("Previous program revision unknown; old revision cleanup is skipped.\n", output);
-    } else if (!strcmp(plan->record.previous, plan->record.revision)) {
-      fputs("Programs reuse the previous revision tree.\n", output);
-    } else {
-      fputs("Cleanup excludes the known previous program revision.\n", output);
-    }
-    if (!strcmp(plan->record.previous, plan->record.revision) ||
-        !strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION)) {
-      fputs("A failed program stage can leave a previously used revision incomplete.\n", output);
-    }
+    fputs(!strcmp(plan->record.previous, INSTALL_UNKNOWN_REVISION) ?
+        "Previous revision unknown; older bin:// program copies are kept.\n" :
+        "Older bin:// program copies are removed, except the previous revision's.\n", output);
   }
   if (!verbose) {
-    fputs("Details: use -v or Print plan for program changes.\n", output);
+    fputs("Details: use -v or Print plan for the partition layout.\n", output);
   }
-  fputs("Programs are synced/verified before kernel/archive publication. Failure is partial,\n"
+  fputs("The pool configuration is synced before kernel/archive publication. Failure is partial,\n"
       "with no whole-install rollback or automatic retry.\n", output);
   return !ferror(output);
 }
@@ -581,14 +504,9 @@ void install_plan_destroy(struct install_plan *plan)
     }
   }
   install_esp_destroy(plan->esp);
-  install_prior_destroy(&plan->prior);
   install_consent_destroy(&plan->consent);
-  install_manifest_destroy(&plan->manifest);
-  install_programs_destroy(&plan->programs);
-  free(plan->manifest_text);
   free(plan->configuration);
   config_blob_destroy(&plan->entry);
-  free(plan->rescue.memory);
 #if INSTALLER_PUBLICATION_SCRATCH
   install_installed_destroy(&plan->installed);
 #endif
