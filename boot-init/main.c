@@ -1895,9 +1895,9 @@ static bool start_install(struct authority *authority, struct mounts *mounts)
   };
   puts("boot-init: Install entry; starting the install space");
   mount_builtin_volume(authority, mounts, 0, &http_work);
-  /* Wi-Fi Install joins through the archive's network profile under the world
-   * domain's channels 1-13 (decision 70); the installed system later installs
-   * its own policy. */
+  /* Nothing joins Wi-Fi in 0.0.8; the rights and the world domain's channels
+   * 1-13 are ready for the TUI installer's join (decision 70). The installed
+   * system installs its own policy. */
   struct boot_space space = install;
   if (authority->wifi != HANDLE_INVALID) {
     enum call_status policy = wifi_install_policy(authority->wifi, WIFI_COUNTRY_WORLD,

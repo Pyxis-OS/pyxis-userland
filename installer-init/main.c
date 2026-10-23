@@ -61,7 +61,7 @@
 
 /* The archive's network. After the profile is applied, its maintenance thread
  * alone touches RUNTIME and SUPPLICANT, from the menu until the installer
- * exits, so a late lease or Wi-Fi association still completes. */
+ * exits, so a late lease still completes. */
 struct network {
   struct network_config config;
   struct network_runtime runtime;
