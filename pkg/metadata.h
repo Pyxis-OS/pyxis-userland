@@ -9,6 +9,10 @@
 #define PKG_INVENTORY_LINE_MAX 512
 #define PKG_FILE_SIZE_MAX UINT64_C(8589934591)
 #define PKG_ARCHIVE_PATH_MAX (9 + PACKAGE_ID_MAX + 1 + PACKAGE_VERSION_MAX + 4)
+/* YYYY-MM-DDTHH:MM:SSZ, which compares chronologically as text. */
+#define PKG_TIME_LENGTH 20
+#define PKG_SIGNER_NAME_MAX 63
+#define PKG_SERIAL_MAX (UINT64_C(1) << 62)
 
 struct pkg_identity {
   char id[PACKAGE_ID_MAX + 1], version[PACKAGE_VERSION_MAX + 1];
@@ -20,6 +24,16 @@ struct pkg_entry {
   char kind[10], abi[PACKAGE_ABI_MAX + 1], archive[PKG_ARCHIVE_PATH_MAX + 1];
   uint64_t size;
   char sha256[65];
+};
+
+/* A published repository index (docs/wip/pkg-upgrade.md, decision 71): the
+ * repository it was published as, its serial, when it was signed and, for a
+ * signed one, the certificate file beside it to check the signature with. */
+struct pkg_index_header {
+  char repository[PACKAGE_ID_MAX + 1];
+  uint64_t serial;
+  char signed_at[PKG_TIME_LENGTH + 1];
+  char signer[PKG_SIGNER_NAME_MAX + 1]; /* Empty when the index names none. */
 };
 
 struct pkg_command {
@@ -47,8 +61,9 @@ bool pkg_kind_bound(const char *kind);
 bool pkg_kind_commands(const char *kind);
 /* Successful outputs own their arrays, independent of the literal document.
  * Free index entries with free(), manifests with pkg_manifest_free(). */
-bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
-    size_t *count, const char **reason);
+bool pkg_time_valid(const char *text);
+bool pkg_index_parse(const char *bytes, size_t size, struct pkg_index_header *header,
+    struct pkg_entry **entries, size_t *count, const char **reason);
 bool pkg_manifest_parse(const char *bytes, size_t size,
     struct pkg_manifest *manifest, const char **reason);
 void pkg_manifest_free(struct pkg_manifest *manifest);

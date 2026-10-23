@@ -125,7 +125,22 @@ static bool os_release_fields(const struct literal_value *root)
     const struct literal_value *key = entry->key;
     if (entry->implicit || key->kind != LITERAL_STRING ||
         (strcmp(key->as.string.bytes, "release") && strcmp(key->as.string.bytes, "revision") &&
-         strcmp(key->as.string.bytes, "abi"))) {
+         strcmp(key->as.string.bytes, "abi") && strcmp(key->as.string.bytes, "signed_floor"))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* YYYY-MM-DDTHH:MM:SSZ, as scripts/os-release.lua writes it. */
+static bool time_text(const char *text, size_t size)
+{
+  static const char shape[] = "dddd-dd-ddTdd:dd:ddZ";
+  if (size != sizeof(shape) - 1 || strlen(text) != size) {
+    return false;
+  }
+  for (size_t i = 0; i < size; ++i) {
+    if (shape[i] == 'd' ? text[i] < '0' || text[i] > '9' : text[i] != shape[i]) {
       return false;
     }
   }
@@ -181,6 +196,7 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
   const struct literal_value *list = literal_field(document->root, "abi");
   const struct literal_value *revision = literal_field(document->root, "revision");
   const struct literal_value *release = literal_field(document->root, "release");
+  const struct literal_value *floor = literal_field(document->root, "signed_floor");
   status = os_release_fields(document->root) && list && list->kind == LITERAL_TABLE &&
       revision && revision->kind == LITERAL_STRING &&
       (!revision->as.string.size || abi_string(revision)) && (!release || abi_string(release)) ?
@@ -195,6 +211,13 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
       status = CALL_BAD_REQUEST;
     } else if (!provide(provided, entry->value->as.string.bytes)) {
       status = CALL_NO_MEMORY;
+    }
+  }
+  if (status == CALL_OK && floor) {
+    if (floor->kind != LITERAL_STRING || !time_text(floor->as.string.bytes, floor->as.string.size)) {
+      status = CALL_BAD_REQUEST;
+    } else {
+      memcpy(provided->signed_floor, floor->as.string.bytes, floor->as.string.size + 1);
     }
   }
   /* A build without Git has an empty revision and provides only the list. */

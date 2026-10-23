@@ -3,6 +3,7 @@
 #include "sdk.h"
 #include "fetch.h"
 #include "progress.h"
+#include "signature.h"
 #include "store.h"
 #include "../common/bootstrap_environment.h"
 #include "../xfer/hash.h"
@@ -58,6 +59,7 @@ struct client {
   uint64_t timeout;
   /* --yes: switch without the console question, for Install. */
   bool yes;
+  bool crypto_ready; /* PSA initialized by hash_init; closed on exit. */
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
   enum call_status cleanup_status;
@@ -262,10 +264,12 @@ static bool read_snapshot(handle_t file, char **bytes, size_t *size)
   if (file_size(file, &length) != CALL_OK || length > LITERAL_SOURCE_LIMIT) {
     return fail("repository index exceeds its metadata budget");
   }
-  char *buffer = malloc(length ? length : 1);
+  /* NUL-terminated for the PEM parser; size excludes the terminator. */
+  char *buffer = malloc(length + 1);
   if (!buffer) {
     return fail("cannot allocate repository index");
   }
+  buffer[length] = 0;
   size_t offset = 0;
   while (offset < length) {
     size_t count;
@@ -298,6 +302,199 @@ static bool fetch(const char *base, const char *relative, bool index, uint64_t s
   return true;
 }
 
+static bool ensure_crypto(void)
+{
+  if (!client.crypto_ready) {
+    client.crypto_ready = hash_init(client.clock, bootstrap_capability("random"));
+  }
+  return client.crypto_ready || fail("SHA-256 initialization unavailable");
+}
+
+static bool fetch_bytes(const char *base, const char *relative, char **bytes, size_t *size)
+{
+  handle_t file;
+  if (!fetch(base, relative, true, 0, NULL, &file)) {
+    return false;
+  }
+  bool ok = read_snapshot(file, bytes, size);
+  handle_close(file);
+  return ok;
+}
+
+/* What this packages volume last accepted from a signed repository
+ * (decision 71): repositories/NAME holds the URL, serial, signed time and the
+ * index's SHA-256, one per line. Another URL under the same name starts over. */
+struct accepted_index {
+  char url[PKG_BASE_URL_MAX + 1];
+  uint64_t serial;
+  char signed_at[PKG_TIME_LENGTH + 1];
+  char sha256[65];
+};
+
+#define ACCEPTED_DIRECTORY "repositories"
+#define ACCEPTED_MAX_BYTES (PKG_BASE_URL_MAX + 128)
+
+static bool accepted_read(const struct pkg_repository *repository, struct accepted_index *accepted)
+{
+  *accepted = (struct accepted_index){0};
+  handle_t directory;
+  const char *reason = NULL;
+  if (client.packages == HANDLE_INVALID ||
+      directory_lookup(client.packages, ACCEPTED_DIRECTORY, DIRECTORY_KIND_DIRECTORY,
+          PKG_READ_RIGHTS, &directory) != CALL_OK) {
+    return false;
+  }
+  char *bytes = NULL;
+  size_t size = 0;
+  bool read = pkg_text(directory, repository->name, ACCEPTED_MAX_BYTES, &bytes, &size, &reason);
+  handle_close(directory);
+  if (!read) {
+    return false;
+  }
+  char serial[24];
+  bool ok = sscanf(bytes, "%2048[^\n]\n%23[0-9]\n%20[0-9TZ:-]\n%64[0-9a-f]\n", accepted->url,
+      serial, accepted->signed_at, accepted->sha256) == 4 &&
+      !strcmp(accepted->url, repository->url) && pkg_time_valid(accepted->signed_at) &&
+      strlen(accepted->sha256) == 64;
+  accepted->serial = ok ? strtoull(serial, NULL, 10) : 0;
+  free(bytes);
+  if (!ok) {
+    *accepted = (struct accepted_index){0};
+  }
+  return ok;
+}
+
+/* Only a writer under the lock records what it accepted. */
+static bool accepted_write(const struct pkg_repository *repository,
+    const struct accepted_index *accepted)
+{
+  handle_t directory;
+  if (!pkg_directory(client.packages, ACCEPTED_DIRECTORY, true, PKG_WRITE_RIGHTS, &directory,
+      &client.reason)) {
+    return false;
+  }
+  char text[ACCEPTED_MAX_BYTES];
+  int length = snprintf(text, sizeof(text), "%s\n%llu\n%s\n%s\n", accepted->url,
+      (unsigned long long)accepted->serial, accepted->signed_at, accepted->sha256);
+  char staged[PACKAGE_ID_MAX + 8];
+  snprintf(staged, sizeof(staged), "%s.new", repository->name);
+  enum call_status removed = directory_remove(directory, staged, DIRECTORY_KIND_FILE);
+  bool ok = (removed == CALL_OK || removed == CALL_NOT_FOUND) &&
+      pkg_write_text(directory, staged, text, (size_t)length, &client.reason) &&
+      directory_rename(directory, staged, directory, repository->name,
+          DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE) == CALL_OK &&
+      directory_sync(directory) == CALL_OK;
+  handle_close(directory);
+  return ok || fail("cannot record the accepted repository index");
+}
+
+/* Reads REPOSITORY's published index (docs/wip/pkg-upgrade.md, decisions 71
+ * and 72): current, the index/N.lua it names and, unless the entry says
+ * signed = false, that index's signature and signer, checked against the pinned
+ * CA. A signed index with a lower serial or an earlier signed time than the one
+ * this packages volume last accepted, or signed before this image's
+ * signed_floor, is refused; a writer records the one it accepts. Success owns
+ * *entries. */
+static bool read_repository(const struct pkg_repository *repository,
+    struct pkg_entry **entries, size_t *count)
+{
+  *entries = NULL;
+  *count = 0;
+  char *current = NULL, *bytes = NULL, *signature = NULL, *signer = NULL, *anchor = NULL;
+  size_t current_size = 0, size = 0, signature_size = 0, signer_size = 0;
+  struct pkg_index_header header;
+  char path[64];
+  uint64_t serial = 0;
+  bool ok = fetch_bytes(repository->url, "current", &current, &current_size);
+  if (ok) {
+    char *end = NULL;
+    serial = current_size && current[0] >= '1' && current[0] <= '9' ?
+        strtoull(current, &end, 10) : 0;
+    ok = serial && serial <= PKG_SERIAL_MAX && end == current + current_size - 1 && *end == '\n';
+    if (!ok) fail("the repository's current is not one serial");
+  }
+  if (ok) {
+    snprintf(path, sizeof(path), "index/%llu.lua", (unsigned long long)serial);
+    ok = fetch_bytes(repository->url, path, &bytes, &size) &&
+        pkg_index_parse(bytes, size, &header, entries, count, &client.reason);
+  }
+  if (ok && header.serial != serial) {
+    ok = fail("the published index names another serial than current");
+  }
+  if (!ok || repository->unsigned_index) {
+    goto done;
+  }
+  if (strcmp(header.repository, repository->name)) {
+    snprintf(client.message, sizeof(client.message),
+        "the index was published as repository %s, not %s", header.repository, repository->name);
+    ok = fail(client.message);
+  } else if (!header.signer[0]) {
+    ok = fail("the index is unsigned; only an entry with signed = false accepts that");
+  }
+  char signature_path[80];
+  snprintf(signature_path, sizeof(signature_path), "%s.sig", path);
+  FILE *pinned = NULL;
+  ok = ok && ensure_crypto() &&
+      fetch_bytes(repository->url, signature_path, &signature, &signature_size) &&
+      fetch_bytes(repository->url, header.signer, &signer, &signer_size);
+  if (ok) {
+    pinned = fopen(PKG_SIGNING_ANCHOR, "rb");
+    anchor = pinned ? malloc(8192) : NULL;
+    size_t anchor_size = anchor ? fread(anchor, 1, 8191, pinned) : 0;
+    if (pinned) fclose(pinned);
+    ok = anchor && anchor_size && anchor_size < 8191;
+    if (!ok) {
+      fail("the pinned signing CA (" PKG_SIGNING_ANCHOR ") is unreadable");
+    } else {
+      anchor[anchor_size] = 0;
+      ok = pkg_signature_verify(anchor, anchor_size + 1, signer, signer_size + 1,
+          (const uint8_t *)bytes, size, (const uint8_t *)signature, signature_size,
+          header.signed_at, &client.reason);
+    }
+  }
+  struct accepted_index accepted = {0}, latest = {0};
+  if (ok) {
+    ok = pkg_sha256_text(bytes, size, latest.sha256) || fail("cannot hash the repository index");
+  }
+  if (ok) {
+    strcpy(latest.url, repository->url);
+    latest.serial = header.serial;
+    strcpy(latest.signed_at, header.signed_at);
+    const struct package_provided_abi *provided = provided_abi();
+    bool known = accepted_read(repository, &accepted);
+    if (known && header.serial < accepted.serial) {
+      snprintf(client.message, sizeof(client.message),
+          "index serial %llu is older than the accepted %llu; refusing a rollback",
+          (unsigned long long)header.serial, (unsigned long long)accepted.serial);
+      ok = fail(client.message);
+    } else if (known && header.serial == accepted.serial && strcmp(latest.sha256, accepted.sha256)) {
+      ok = fail("the index differs from the accepted one with the same serial");
+    } else if (known && strcmp(header.signed_at, accepted.signed_at) < 0) {
+      ok = fail("the index was signed before the accepted one; refusing it");
+    } else if (client.provided_readable && provided->signed_floor[0] &&
+        strcmp(header.signed_at, provided->signed_floor) < 0) {
+      ok = fail("the index was signed before this system was built; refusing it");
+    }
+  }
+  if (ok && client.management != HANDLE_INVALID && client.packages == client.management &&
+      (accepted.serial != latest.serial || strcmp(accepted.sha256, latest.sha256))) {
+    ok = accepted_write(repository, &latest);
+  }
+
+done:
+  free(current);
+  free(bytes);
+  free(signature);
+  free(signer);
+  free(anchor);
+  if (!ok) {
+    free(*entries);
+    *entries = NULL;
+    *count = 0;
+  }
+  return ok;
+}
+
 static bool load_repositories(void)
 {
   if (pkg_repositories_load(client.config, &client.repositories, &client.reason) != CALL_OK) {
@@ -307,20 +504,17 @@ static bool load_repositories(void)
     return fail("no repositories configured; use pkg repository add NAME URL (HTTP/HTTPS base; final / optional)");
   }
   for (size_t r = 0; r < client.repositories.count; ++r) {
-    handle_t file;
-    printf("pkg: reading repository %s\n", client.repositories.entries[r].name);
-    if (!fetch(client.repositories.entries[r].url, "index.lua", true, 0, NULL, &file)) {
-      return false;
-    }
-    char *bytes = NULL;
-    size_t size = 0;
+    const struct pkg_repository *repository = &client.repositories.entries[r];
+    printf("pkg: reading repository %s%s\n", repository->name,
+        repository->unsigned_index ? " (unsigned)" : "");
     struct pkg_entry *entries = NULL;
     size_t count = 0;
-    bool ok = read_snapshot(file, &bytes, &size) &&
-        pkg_index_parse(bytes, size, &entries, &count, &client.reason);
-    free(bytes);
-    handle_close(file);
-    if (!ok) {
+    if (!read_repository(repository, &entries, &count)) {
+      if (client.reason) {
+        snprintf(client.detail, sizeof(client.detail), "repository %s: %s",
+            repository->name, client.reason);
+        client.reason = client.detail;
+      }
       return false;
     }
     const struct package_provided_abi *provided = provided_abi();
@@ -1038,35 +1232,31 @@ static bool mutate(const char *command, int argc, char **argv)
   return ok;
 }
 
-static bool repository_available(const char *url)
+/* add checks the repository the way every later read will, before it is saved. */
+static bool repository_available(const struct pkg_repository *candidate)
 {
-  handle_t file;
-  if (!fetch(url, "index.lua", true, 0, NULL, &file)) {
-    return fail("not a package repository; repository configuration unchanged");
-  }
-  char *bytes = NULL;
-  size_t size = 0, count = 0;
   struct pkg_entry *entries = NULL;
-  bool ok = read_snapshot(file, &bytes, &size) &&
-      pkg_index_parse(bytes, size, &entries, &count, &client.reason);
-  free(bytes);
+  size_t count = 0;
+  bool ok = read_repository(candidate, &entries, &count);
   free(entries);
-  handle_close(file);
   if (!ok) {
-    fprintf(stderr, "pkg: not a package repository: %sindex.lua: %s\n",
-        url, client.reason ? client.reason : "index validation failed");
+    fprintf(stderr, "pkg: not a usable package repository: %s: %s\n", candidate->url,
+        client.reason ? client.reason : "index validation failed");
+    return fail("repository configuration unchanged");
   }
-  return ok;
+  return true;
 }
 
-static bool repository_command(const char *command, const char *name, const char *url)
+static bool repository_command(const char *command, const char *name, const char *url,
+    bool unsigned_index)
 {
   if (!strcmp(command, "list")) {
     if (pkg_repositories_load(client.config, &client.repositories, &client.reason) != CALL_OK) {
       return false;
     }
     for (size_t i = 0; i < client.repositories.count; ++i) {
-      printf("%s %s\n", client.repositories.entries[i].name, client.repositories.entries[i].url);
+      printf("%s %s%s\n", client.repositories.entries[i].name, client.repositories.entries[i].url,
+          client.repositories.entries[i].unsigned_index ? " (unsigned)" : "");
     }
     if (!client.repositories.count) puts("No repositories; use pkg repository add NAME URL.");
     return true;
@@ -1101,6 +1291,8 @@ static bool repository_command(const char *command, const char *name, const char
         DIRECTORY_RIGHT_ENUMERATE, &lock) != CALL_OK) {
     return fail("writer lock unavailable; use pkg unlock only after the prior client has stopped");
   }
+  /* Under the lock, add records the index it accepted, like any writer. */
+  client.packages = client.management;
   bool uncertain = false;
   bool ok = pkg_repositories_load(client.config_write, &client.repositories,
       &client.reason) == CALL_OK;
@@ -1126,13 +1318,16 @@ static bool repository_command(const char *command, const char *name, const char
       ok = fail(client.message);
     } else if (repositories->count == PKG_REPOSITORIES_MAX) {
       ok = fail("at most eight repositories may be configured");
-    } else if (repository_available(url)) {
-      struct pkg_repository *added = &repositories->entries[repositories->count++];
-      strcpy(added->name, name);
-      strcpy(added->url, url);
-      changed = true;
     } else {
-      ok = false;
+      struct pkg_repository candidate = {.unsigned_index = unsigned_index};
+      strcpy(candidate.name, name);
+      strcpy(candidate.url, url);
+      if (repository_available(&candidate)) {
+        repositories->entries[repositories->count++] = candidate;
+        changed = true;
+      } else {
+        ok = false;
+      }
     }
   } else if (ok) {
     if (index == repositories->count) {
@@ -1178,7 +1373,7 @@ static bool repository_command(const char *command, const char *name, const char
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -1209,6 +1404,14 @@ int main(int argc, char **argv)
   int count = argc - arg;
   char **arguments = argv + arg;
   bool repository = !strcmp(command, "repository");
+  bool unsigned_index = repository && count == 4 && !strcmp(arguments[0], "add") &&
+      !strcmp(arguments[1], "--unsigned");
+  if (unsigned_index) {
+    /* add --unsigned NAME URL: drop the flag from the positional arguments. */
+    arguments[1] = arguments[0];
+    ++arguments;
+    --count;
+  }
   if (repository && (count < 1 ||
       (!strcmp(arguments[0], "list") ? count != 1 :
       !strcmp(arguments[0], "add") ? count != 3 :
@@ -1224,18 +1427,14 @@ int main(int argc, char **argv)
     return usage();
   }
   bool needs_hash = (mutation && strcmp(command, "unlock")) || !strcmp(command, "verify");
-  bool hash_ready = false;
-  if (needs_hash) {
-    hash_ready = hash_init(client.clock, bootstrap_capability("random"));
-    if (!hash_ready) {
-      fputs("pkg: SHA-256 initialization unavailable\n", stderr);
-      return EXIT_FAILURE;
-    }
+  if (needs_hash && !ensure_crypto()) {
+    fputs("pkg: SHA-256 initialization unavailable\n", stderr);
+    return EXIT_FAILURE;
   }
   bool ok = false;
   if (repository) {
     ok = repository_command(arguments[0], count > 1 ? arguments[1] : NULL,
-        count > 2 ? arguments[2] : NULL);
+        count > 2 ? arguments[2] : NULL, unsigned_index);
   } else if (mutation) {
     ok = mutate(command, count, arguments);
   } else if (!strcmp(command, "check")) {
@@ -1280,14 +1479,14 @@ int main(int argc, char **argv)
     pkg_selection_free(&selection);
   } else {
     release_publish_guard();
-    if (hash_ready) hash_close();
+    if (client.crypto_ready) hash_close();
     free(client.offered);
     free(client.hidden);
     free(client.fetched);
     return usage();
   }
   release_publish_guard();
-  if (hash_ready) hash_close();
+  if (client.crypto_ready) hash_close();
   free(client.offered);
   free(client.hidden);
   free(client.fetched);

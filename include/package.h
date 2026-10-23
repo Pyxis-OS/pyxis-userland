@@ -29,6 +29,9 @@ struct package_provided_abi {
   size_t count;
   char **names;
   char *text;
+  /* The build commit's UTC time, YYYY-MM-DDTHH:MM:SSZ: pkg accepts no signed
+   * index from before it on first contact (decision 71). Empty without Git. */
+  char signed_floor[21];
 };
 
 bool package_id_valid(const char *id);

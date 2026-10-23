@@ -101,7 +101,7 @@ INSTALL_SELECTOR_SOURCES := installer-init/update.c installer/io.c installer/gpt
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/installer-init/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
 BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
-PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o)
+PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o signature.o)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o
@@ -270,7 +270,7 @@ $(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
 
-$(TLS_OBJECT) $(BUILD)/xfer/hash.o: private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
+$(TLS_OBJECT) $(BUILD)/xfer/hash.o $(BUILD)/pkg/signature.o: private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
 $(BUILD)/xfer/hash.o: $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 $(TLS_OBJECT): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 $(TLS_LIBRARY): $(TLS_OBJECT) Makefile

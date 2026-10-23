@@ -86,12 +86,17 @@ static enum call_status config_read(handle_t directory, const char *name,
   return CALL_OK;
 }
 
-/* One entry: a table holding exactly a name and a base URL. */
+/* One entry: a table holding a name and a base URL, and signed = false for an
+ * unsigned development repository. */
 static bool repository_parse(const struct literal_value *value, struct pkg_repository *repository)
 {
-  if (value->kind != LITERAL_TABLE || value->as.table.count != 2) {
+  const struct literal_value *flag = value->kind == LITERAL_TABLE ?
+      literal_field(value, "signed") : NULL;
+  if (value->kind != LITERAL_TABLE || value->as.table.count != (flag ? 3 : 2) ||
+      (flag && (flag->kind != LITERAL_BOOLEAN || flag->as.boolean))) {
     return false;
   }
+  repository->unsigned_index = flag != NULL;
   const struct literal_value *name = literal_field(value, "name");
   const struct literal_value *url = literal_field(value, "url");
   if (!name || name->kind != LITERAL_STRING || name->as.string.size > PACKAGE_ID_MAX ||
@@ -140,7 +145,8 @@ static enum call_status repositories_parse(const char *bytes, size_t size,
   if (!valid) {
     *repositories = (struct pkg_repositories){0};
     *reason = "system://config/packages.lua must hold only repositories: at most eight "
-        "{ name = NAME, url = URL } entries with distinct package-ID names and distinct "
+        "{ name = NAME, url = URL } entries, signed = false only for an unsigned development "
+        "repository, with distinct package-ID names and distinct "
         "HTTP/HTTPS base URLs ending in /, without credentials, query or fragment";
     return CALL_BAD_REQUEST;
   }
@@ -202,7 +208,8 @@ enum call_status pkg_repositories_stage(handle_t config,
         bytes[used++] = *byte;
       }
     }
-    used += snprintf(bytes + used, capacity - used, "\" },\n");
+    used += snprintf(bytes + used, capacity - used, "\"%s },\n",
+        repository->unsigned_index ? ", signed = false" : "");
   }
   used += snprintf(bytes + used, capacity - used, "} }\n");
   enum call_status status = directory_remove(config, "packages.lua.new", DIRECTORY_KIND_FILE);
@@ -232,7 +239,8 @@ enum call_status pkg_repositories_stage(handle_t config,
   if (status == CALL_OK && checked.count != repositories->count) status = CALL_IO;
   for (size_t i = 0; status == CALL_OK && i < checked.count; ++i) {
     if (strcmp(checked.entries[i].name, repositories->entries[i].name) ||
-        strcmp(checked.entries[i].url, repositories->entries[i].url)) {
+        strcmp(checked.entries[i].url, repositories->entries[i].url) ||
+        checked.entries[i].unsigned_index != repositories->entries[i].unsigned_index) {
       status = CALL_IO;
     }
   }

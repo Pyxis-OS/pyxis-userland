@@ -18,6 +18,9 @@
 struct pkg_repository {
   char name[PACKAGE_ID_MAX + 1];
   char url[PKG_BASE_URL_MAX + 1];
+  /* signed = false in its entry, which only development images write: its
+   * index is read without a signature (decision 72). */
+  bool unsigned_index;
 };
 
 struct pkg_repositories {

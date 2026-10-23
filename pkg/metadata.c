@@ -1,5 +1,6 @@
 #include "metadata.h"
 
+#include <ctype.h>
 #include <literal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -252,9 +253,46 @@ static bool commands_parse(const struct literal_value *value,
   return true;
 }
 
-bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
-    size_t *count, const char **reason)
+bool pkg_time_valid(const char *text)
 {
+  static const char shape[] = "dddd-dd-ddTdd:dd:ddZ";
+  if (strlen(text) != PKG_TIME_LENGTH) {
+    return false;
+  }
+  for (size_t i = 0; i < PKG_TIME_LENGTH; ++i) {
+    if (shape[i] == 'd' ? text[i] < '0' || text[i] > '9' : text[i] != shape[i]) {
+      return false;
+    }
+  }
+  unsigned month = (text[5] - '0') * 10 + (text[6] - '0');
+  unsigned day = (text[8] - '0') * 10 + (text[9] - '0');
+  unsigned hour = (text[11] - '0') * 10 + (text[12] - '0');
+  unsigned minute = (text[14] - '0') * 10 + (text[15] - '0');
+  unsigned second = (text[17] - '0') * 10 + (text[18] - '0');
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour < 24 &&
+      minute < 60 && second < 60;
+}
+
+/* The certificate file a signed index names, beside it in the repository. */
+static bool signer_name(const char *name)
+{
+  size_t length = strlen(name);
+  if (length < 5 || strcmp(name + length - 4, ".pem") || !isalnum((unsigned char)name[0])) {
+    return false;
+  }
+  for (size_t i = 0; i < length; ++i) {
+    unsigned char byte = (unsigned char)name[i];
+    if (!isalnum(byte) && byte != '.' && byte != '_' && byte != '-') {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool pkg_index_parse(const char *bytes, size_t size, struct pkg_index_header *header,
+    struct pkg_entry **entries, size_t *count, const char **reason)
+{
+  *header = (struct pkg_index_header){0};
   *entries = NULL;
   *count = 0;
   *reason = "invalid repository index";
@@ -263,12 +301,25 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_entry **entries,
   if (!literal_parse(bytes, size, &document, &diagnostic)) {
     return false;
   }
-  static const char *const root_fields[] = { "packages" };
+  static const char *const root_fields[] = { "repository", "serial", "signed", "packages" };
   static const char *const entry_fields[] = {
     "id", "version", "kind", "archive", "size", "sha256",
   };
   const struct literal_value *packages = literal_field(document->root, "packages");
-  bool ok = fields(document->root, root_fields, 1) && array(packages);
+  bool named = literal_field(document->root, "signer") != NULL;
+  bool ok = document->root->kind == LITERAL_TABLE &&
+      document->root->as.table.count == 4 + named;
+  for (size_t f = 0; ok && f < 4; ++f) {
+    ok = literal_field(document->root, root_fields[f]) != NULL;
+  }
+  ok = ok && array(packages) &&
+      text(document->root, "repository", header->repository, sizeof(header->repository)) &&
+      package_id_valid(header->repository) &&
+      integer(document->root, "serial", 1, PKG_SERIAL_MAX, &header->serial) &&
+      text(document->root, "signed", header->signed_at, sizeof(header->signed_at)) &&
+      pkg_time_valid(header->signed_at) &&
+      (!named || (text(document->root, "signer", header->signer, sizeof(header->signer)) &&
+       signer_name(header->signer)));
   size_t length = ok ? packages->as.table.count : 0;
   struct pkg_entry *result = length ? calloc(length, sizeof(*result)) : NULL;
   if (length && !result) {
