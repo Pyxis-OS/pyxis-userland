@@ -7,8 +7,9 @@
 
 /* SUBMIT copies the payload before returning admission status. Correlation IDs
  * are nonzero and increase without reuse during the owned receiver's lifetime.
- * Concurrent operations share a separate 16 MiB process metadata allowance,
- * across all receivers and native backends; exhaustion refuses with CALL_LIMIT
+ * Concurrent operations share a per-process kernel metadata allowance (see
+ * Pyxis docs/interfaces/native-completion.md), across receivers and native
+ * backends; exhaustion refuses with CALL_LIMIT
  * before acceptance. Each receiver still has ENDPOINT_DELIVERIES_MAX slots.
  * Collect ENDPOINT_MESSAGE_COMPLETION with endpoint_receive(); the attached
  * grants are independent, and closing its receipt acknowledges the operation.
