@@ -352,6 +352,7 @@ static enum call_status parse_resources(struct bundle_program *program,
       return CALL_LIMIT;
     }
     if (!valid_name(nodes[key].string) || !strcmp(nodes[key].string, "app") ||
+        !strcmp(nodes[key].string, BUNDLE_PACKAGES_ROOT) ||
         value->type != BUNDLE_JSON_STRING || !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
     }

@@ -60,10 +60,4 @@ bool package_set_entry(const struct package_set *set, size_t index,
 size_t package_set_count(const struct package_set *set);
 void package_set_free(struct package_set *set);
 
-/* Open package ID's tree from SET with RIGHTS, a subset of PACKAGE_TREE_RIGHTS.
- * CALL_NOT_FOUND means SET doesn't list ID or its store tree is missing.
- * Success owns *tree; failure clears it and sets *reason (static text). */
-enum call_status package_set_open(const struct package_set *set, handle_t packages,
-    const char *id, uint64_t rights, handle_t *tree, const char **reason);
-
 #endif

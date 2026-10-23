@@ -461,7 +461,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     if (source != HANDLE_INVALID && requests[i].packages) {
       handle_t view = HANDLE_INVALID;
-      const char *absent = requests[i].name;
+      /* A damaged set names the first listed package; a missing one names itself. */
+      const char *absent = requests[i].packages[0];
       if (selected_packages(program, &requests[i], source, prepared, &view, &absent) != CALL_OK) {
         *missing = absent;
         return CALL_DENIED;

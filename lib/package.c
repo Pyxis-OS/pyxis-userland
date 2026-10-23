@@ -9,8 +9,6 @@
 
 #define CURRENT_NAME "current"
 #define SETS_NAME "sets"
-#define STORE_NAME "store"
-#define TREE_NAME "tree"
 /* current is one small table; a set record lists at most a few thousand
  * packages, well inside the literal parser's own bounds. */
 #define CURRENT_LIMIT 256
@@ -496,59 +494,4 @@ void package_set_free(struct package_set *set)
     literal_free(set->record);
     free(set);
   }
-}
-
-/* Replace an owned intermediate *DIRECTORY with its child NAME. */
-static enum call_status lookup_directory(handle_t *directory, const char *name, uint64_t rights)
-{
-  handle_t child;
-  enum call_status status = directory_lookup(*directory, name, DIRECTORY_KIND_DIRECTORY,
-      rights, &child);
-  handle_close(*directory);
-  *directory = child;
-  return status;
-}
-
-enum call_status package_set_open(const struct package_set *set, handle_t packages,
-    const char *id, uint64_t rights, handle_t *tree, const char **reason)
-{
-  *tree = HANDLE_INVALID;
-  if (!package_id_valid(id) || !rights || (rights & ~PACKAGE_TREE_RIGHTS)) {
-    *reason = "invalid package request";
-    return CALL_BAD_REQUEST;
-  }
-  const char *version = NULL;
-  for (const struct literal_entry *entry = set->record ?
-         literal_field(set->record->root, "packages")->as.table.entries : NULL;
-       entry && !version; entry = entry->next) {
-    if (!strcmp(literal_field(entry->value, "id")->as.string.bytes, id)) {
-      version = literal_field(entry->value, "version")->as.string.bytes;
-    }
-  }
-  if (!version) {
-    *reason = "the package is not installed";
-    return CALL_NOT_FOUND;
-  }
-
-  /* Each step keeps RIGHTS plus LOOKUP so the tree can still carry RIGHTS. */
-  uint64_t path_rights = rights | DIRECTORY_RIGHT_LOOKUP;
-  handle_t directory;
-  enum call_status status = directory_lookup(packages, STORE_NAME, DIRECTORY_KIND_DIRECTORY,
-      path_rights, &directory);
-  if (status == CALL_OK) {
-    status = lookup_directory(&directory, id, path_rights);
-  }
-  if (status == CALL_OK) {
-    status = lookup_directory(&directory, version, path_rights);
-  }
-  if (status == CALL_OK) {
-    status = lookup_directory(&directory, TREE_NAME, rights);
-  }
-  if (status != CALL_OK) {
-    *reason = status == CALL_NOT_FOUND ? "the package's store tree is missing" :
-        "cannot open the package's store tree";
-    return status;
-  }
-  *tree = directory;
-  return CALL_OK;
 }
