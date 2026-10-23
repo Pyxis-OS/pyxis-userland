@@ -42,3 +42,16 @@ before any ordinary data is admitted. Optional PMF is not negotiated; required
 PMF/SAE-only APs are refused. A WPA2+WPA3 transition AP may select WPA2. `data-ready` is L2 admission,
 not an IP address. The trusted per-interface maintainer obtains the independent
 `wlan0` address; Ethernet routing, DNS and management choices remain explicit.
+
+On RTL8922AE, status also reports pinned regdb rules and independent platform
+input states. Rule EIRP is in mBm; flags preserve NO_IR/DFS/environment restrictions.
+Omitted country selects world `00`; a configured country selects its rules within
+the host mask. Table `valid` means decoded metadata, and `default-power=1`
+identifies the accepted reference RFE-0 selection. Neither that state nor a
+matching rule means RFK is qualified or that RF transmission is admitted.
+Missing, malformed and failed platform reads remain distinct. The input observer
+adds no RF commands; RTL scan/connect remain unavailable in this cut.
+
+Trusted `wifi_policy` configuration may omit country (or use `"00"`) for RTL
+world rules while supplying the narrowing channel mask. AX200 keeps its
+explicit upper-case country requirement and rejects world policy installation.

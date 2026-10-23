@@ -116,7 +116,7 @@ struct boot_space {
 struct boot_config {
   /* Machine defaults and RAM pool capacity remain archive-only. */
   char hostname[MACHINE_HOSTNAME_MAX + 1];
-  char wifi_country[2]; /* Archive-only explicit policy; zero means no TX policy. */
+  char wifi_country[2]; /* Archive-only policy; omitted RTL country uses 00. */
   uint32_t wifi_channels;
   bool mouse_scroll_natural, touchpad_scroll_natural;
   bool input_diagnostics;

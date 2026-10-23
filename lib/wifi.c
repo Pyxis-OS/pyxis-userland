@@ -52,6 +52,34 @@ static bool boot_facts_valid(const struct wifi_boot_facts *boot)
   return true;
 }
 
+static bool radio_inputs_valid(const struct wifi_radio_inputs *radio)
+{
+  if (radio->kind == WIFI_RADIO_INPUTS_NONE) {
+    const struct wifi_radio_inputs empty = {0};
+    return !memcmp(radio, &empty, sizeof(empty));
+  }
+  if (radio->kind != WIFI_RADIO_INPUTS_RTL8922AE || radio->reserved ||
+      (radio->tables_flags & ~WIFI_TABLE_POWER_DEFAULT) ||
+      (radio->rule_channels & ~WIFI_SCAN_CHANNELS) ||
+      radio->tables_state > WIFI_INPUT_FAILED || radio->acpi_state > WIFI_INPUT_FAILED ||
+      radio->static_sar_state > WIFI_INPUT_FAILED ||
+      radio->dynamic_sar_state > WIFI_INPUT_FAILED ||
+      radio->sar_selector_state > WIFI_INPUT_FAILED ||
+      radio->geographic_sar_state > WIFI_INPUT_FAILED ||
+      radio->antenna_gain_state > WIFI_INPUT_FAILED || radio->tas_state > WIFI_INPUT_FAILED) {
+    return false;
+  }
+  for (size_t i = 0; i < WIFI_CHANNEL_24_COUNT; ++i) {
+    const struct wifi_channel_rule *rule = &radio->channel[i];
+    if ((rule->flags & ~WIFI_RULE_FLAGS) ||
+        (!(radio->rule_channels & (UINT32_C(1) << i)) &&
+         (rule->flags || rule->max_eirp_mbm))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
 {
   if (!status) {
@@ -62,7 +90,14 @@ enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
   struct wifi_status_reply reply;
   enum call_status result = invoke(wifi, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
-    if (!memchr(reply.detail, 0, sizeof(reply.detail)) || !boot_facts_valid(&reply.boot)) {
+    if (!memchr(reply.detail, 0, sizeof(reply.detail)) || !boot_facts_valid(&reply.boot) ||
+        !radio_inputs_valid(&reply.radio)) {
+      return CALL_BAD_REQUEST;
+    }
+    if (reply.radio.kind == WIFI_RADIO_INPUTS_RTL8922AE &&
+        !((reply.country[0] == '0' && reply.country[1] == '0') ||
+          (reply.country[0] >= 'A' && reply.country[0] <= 'Z' &&
+           reply.country[1] >= 'A' && reply.country[1] <= 'Z'))) {
       return CALL_BAD_REQUEST;
     }
     *status = reply;

@@ -277,6 +277,36 @@ static int link_command(const char *operation, const char *argument)
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
+static const char *input_state(uint32_t state)
+{
+  static const char *const names[] = {
+    "unknown", "pending", "absent", "valid", "disabled", "unsupported", "malformed", "failed",
+  };
+  return names[state];
+}
+
+static void print_radio_inputs(const struct wifi_status_reply *status)
+{
+  const struct wifi_radio_inputs *radio = &status->radio;
+  if (radio->kind == WIFI_RADIO_INPUTS_NONE) {
+    return;
+  }
+  printf("wifi: inputs country=%c%c rule-mask=%x tables=%s default-power=%u; not RF admission\n",
+      status->country[0], status->country[1], radio->rule_channels,
+      input_state(radio->tables_state), !!(radio->tables_flags & WIFI_TABLE_POWER_DEFAULT));
+  printf("wifi: platform=%s WRDS=%s RWRD=%s RWSI=%s RWGS=%s RTAG=%s TAS=%s\n",
+      input_state(radio->acpi_state), input_state(radio->static_sar_state),
+      input_state(radio->dynamic_sar_state), input_state(radio->sar_selector_state),
+      input_state(radio->geographic_sar_state), input_state(radio->antenna_gain_state),
+      input_state(radio->tas_state));
+  for (size_t i = 0; i < WIFI_CHANNEL_24_COUNT; ++i) {
+    if (radio->rule_channels & (UINT32_C(1) << i)) {
+      printf("wifi: rule channel=%zu EIRP-mBm=%d flags=%x\n",
+          i + 1, radio->channel[i].max_eirp_mbm, radio->channel[i].flags);
+    }
+  }
+}
+
 static void print_boot_facts(const struct wifi_boot_facts *boot)
 {
   printf("wifi: boot valid=%x state=%x\n", boot->valid, boot->state);
@@ -341,5 +371,6 @@ int main(int argc, char **argv)
       reply.data_tx_pending, reply.data_tx_high_water, reply.data_ring_entries,
       (unsigned long long)reply.rx_queued, (unsigned long long)reply.rx_dropped, reply.data_rx_high_water);
   print_boot_facts(&reply.boot);
+  print_radio_inputs(&reply);
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }

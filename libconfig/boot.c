@@ -755,9 +755,15 @@ static int decode_archive(lua_State *state)
     size_t country_bytes = 0;
     const char *country = lua_type(state, -1) == LUA_TSTRING ?
         lua_tolstring(state, -1, &country_bytes) : NULL;
-    if (!country || country_bytes != 2 || country[0] < 'A' || country[0] > 'Z' ||
-        country[1] < 'A' || country[1] > 'Z' || (country[0] == 'Z' && country[1] == 'Z')) {
-      return luaL_error(state, "wifi_policy.country must be an explicit upper-case country excluding ZZ");
+    if (lua_isnil(state, -1)) {
+      country = "00";
+      country_bytes = 2;
+    }
+    bool world = country && country_bytes == 2 && country[0] == '0' && country[1] == '0';
+    bool explicit = country && country_bytes == 2 && country[0] >= 'A' && country[0] <= 'Z' &&
+        country[1] >= 'A' && country[1] <= 'Z' && !(country[0] == 'Z' && country[1] == 'Z');
+    if (!world && !explicit) {
+      return luaL_error(state, "wifi_policy.country must be 00 or upper-case country excluding ZZ");
     }
     memcpy(config->wifi_country, country, 2);
     lua_pop(state, 1);
