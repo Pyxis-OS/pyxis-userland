@@ -38,6 +38,17 @@ enum call_status term_fresh_line(struct terminal *term)
   return console_fresh_line(term->output);
 }
 
+enum call_status term_normalize(struct terminal *term)
+{
+  /* FRESH_LINE ends partial output decoding before any controls. DECSTBM homes
+   * the cursor, so save/restore the primary cursor around the region reset. */
+  enum call_status status = term_fresh_line(term);
+  if (status == CALL_OK) {
+    status = term_print(term, "\x1b[?1049l\x1b" "7\x1b[r\x1b" "8\x1b[0m\x1b[?25h");
+  }
+  return status == CALL_OK ? term_fresh_line(term) : status;
+}
+
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows)
 {
   if (!columns || !rows) {

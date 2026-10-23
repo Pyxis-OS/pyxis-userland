@@ -10,8 +10,8 @@
 #define COMPLETION_LIMIT 4096
 
 static const char *const builtins[] = {
-  "affinity", "cd", "describe", "exit", "export", "mount", "poweroff",
-  "reboot", "release", "revoke", "revocable", "service", "session",
+  "affinity", "cd", "clear", "describe", "exit", "export", "mount", "poweroff",
+  "reboot", "release", "reset", "revoke", "revocable", "service", "session",
   "sync", "title", "unset", "which",
 };
 

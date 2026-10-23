@@ -42,6 +42,10 @@ enum call_status execution_group_terminate(handle_t supervision);
  * An untrustworthy response returns CALL_OUTCOME_UNKNOWN. Open empty groups
  * are not complete. */
 enum call_status execution_group_wait(handle_t observer);
+/* Same completion boundary, with immutable subtree flags. Preserve *result on
+ * failure; does not retain additional control or inspect individual members. */
+enum call_status execution_group_wait_result(handle_t observer,
+    struct execution_group_result *result);
 
 /* Explicit pointers/counts in request refer to caller storage, borrowed until
  * return. Native statuses; clears *child on failure. Success returns an owned

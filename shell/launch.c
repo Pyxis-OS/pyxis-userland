@@ -101,6 +101,7 @@ struct launch_scope {
   bool cooperative;
   handle_t terminal_output;
   bool normalization_attempted;
+  struct execution_group_result completion;
   handle_t producer;
   uint64_t producer_mode;
   handle_t transaction;
@@ -1893,7 +1894,7 @@ static enum call_status wait_foreground_group(struct shell *shell, struct launch
     return status;
   }
   if (armed == HANDLE_INVALID) {
-    return execution_group_wait(group);
+    return execution_group_wait_result(group, &scope->completion);
   }
   for (;;) {
     struct wait_interest interests[2] = {
@@ -1915,7 +1916,7 @@ static enum call_status wait_foreground_group(struct shell *shell, struct launch
       return status;
     }
     if (events[0] & WAIT_COMPLETE) {
-      return execution_group_wait(group);
+      return execution_group_wait_result(group, &scope->completion);
     }
     if (armed != HANDLE_INVALID && (events[1] & (WAIT_INTERRUPT | WAIT_ERROR))) {
       *cancelled = true;
@@ -1936,15 +1937,13 @@ static enum call_status normalize_foreground(struct launch_scope *scope)
   if (!scope->retired || !scope->started || scope->normalization_attempted || scope->terminal_output == HANDLE_INVALID) {
     return CALL_OK;
   }
+  uint64_t relevant = EXECUTION_GROUP_USED_PASSTHROUGH | EXECUTION_GROUP_ABNORMAL;
+  if (!(scope->completion.flags & relevant)) {
+    return CALL_OK;
+  }
   scope->normalization_attempted = true;
   struct terminal terminal = {.output = scope->terminal_output};
-  /* FRESH_LINE ends partial output decoding before any controls. DECSTBM homes
-   * the cursor, so save/restore the primary cursor around the region reset. */
-  enum call_status status = term_fresh_line(&terminal);
-  if (status == CALL_OK) {
-    status = term_print(&terminal, "\x1b[?1049l\x1b" "7\x1b[r\x1b" "8\x1b[0m\x1b[?25h");
-  }
-  return status == CALL_OK ? term_fresh_line(&terminal) : status;
+  return term_normalize(&terminal);
 }
 
 static enum command_result retire_foreground(struct shell *shell,
@@ -1954,7 +1953,7 @@ static enum command_result retire_foreground(struct shell *shell,
     enum call_status status = scope->stop_failed ? CALL_OUTCOME_UNKNOWN :
         execution_group_terminate(scope->group.supervision);
     if (status == CALL_OK) {
-      status = execution_group_wait(scope->group.supervision);
+      status = execution_group_wait_result(scope->group.supervision, &scope->completion);
     }
     scope->retired = status == CALL_OK;
     if (status != CALL_OK) {

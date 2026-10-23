@@ -350,6 +350,26 @@ static enum command_result power_command(struct shell *shell, char **arguments, 
   return shell_error(shell, "%s: failed (status %u); the system stays up\n", name, status);
 }
 
+static enum command_result terminal_command(struct shell *shell, char **arguments, size_t count)
+{
+  const char *name = arguments[0];
+  if (count != 1) {
+    return shell_error(shell, "usage: %s\n", name);
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(shell->terminal.output, &info);
+  if (status != CALL_OK || info.protocol != PROTOCOL_CONSOLE ||
+      info.kind != HANDLE_KIND_NATIVE || info.transport ||
+      !(info.rights & CONSOLE_RIGHT_WRITE)) {
+    return shell_error(shell,
+        "shell: %s: requires a writable CONSOLE grant as the named terminal output\n", name);
+  }
+  status = !strcmp(name, "reset") ? term_normalize(&shell->terminal) :
+      term_print(&shell->terminal, "\x1b[2J\x1b[3J\x1b[H");
+  return status == CALL_OK ? COMMAND_OK :
+      shell_error(shell, "shell: %s: terminal output failed (status %u)\n", name, status);
+}
+
 bool shell_builtin(char **arguments, size_t count)
 {
   const char *name = arguments[0];
@@ -357,6 +377,7 @@ bool shell_builtin(char **arguments, size_t count)
       !strcmp(name, "mount") || !strcmp(name, "release") || !strcmp(name, "title") || !strcmp(name, "affinity") ||
       !strcmp(name, "session") || !strcmp(name, "which") ||
       !strcmp(name, "service") || !strcmp(name, "poweroff") || !strcmp(name, "reboot") ||
+      !strcmp(name, "reset") || !strcmp(name, "clear") ||
       (!strcmp(name, "sync") && count > 1 &&
        (!strcmp(arguments[1], "--disk") || !strcmp(arguments[1], "--mount")));
 }
@@ -462,6 +483,9 @@ static enum command_result builtin_command(struct shell *shell,
   }
   if (strcmp(arguments[0], "poweroff") == 0 || strcmp(arguments[0], "reboot") == 0) {
     return power_command(shell, arguments, count);
+  }
+  if (strcmp(arguments[0], "reset") == 0 || strcmp(arguments[0], "clear") == 0) {
+    return terminal_command(shell, arguments, count);
   }
   if (strcmp(arguments[0], "session") == 0) {
     if (count < 2) {

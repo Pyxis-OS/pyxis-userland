@@ -58,6 +58,27 @@ enum call_status execution_group_wait(handle_t observer)
   return result.status;
 }
 
+enum call_status execution_group_wait_result(handle_t observer,
+    struct execution_group_result *completion)
+{
+  if (!completion) {
+    return CALL_BAD_REQUEST;
+  }
+  struct message_header request = {PROTOCOL_EXECUTION_GROUP, EXECUTION_GROUP_WAIT};
+  struct execution_group_result reply = {0};
+  struct syscall_result result = syscall_call(observer, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0) ||
+      (result.status == CALL_OK && (reply.flags & ~EXECUTION_GROUP_RESULT_FLAGS))) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status == CALL_OK) {
+    *completion = reply;
+  }
+  return result.status;
+}
+
 enum call_status launcher_launch(handle_t launcher, const struct launch_request *request,
                                   handle_t *child)
 {

@@ -671,6 +671,10 @@ static void execute_csi(struct mux_emulator *emulator, unsigned char command)
       erase_cells(emulator, 0, cell + 1);
     } else if (parameter == 2) {
       erase_cells(emulator, 0, cells);
+    } else if (parameter == 3) {
+      emulator->history_count = 0;
+      emulator->history_start = 0;
+      mux_emulator_clear_selection(emulator);
     }
     break;
   case 'L':

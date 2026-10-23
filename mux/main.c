@@ -473,13 +473,17 @@ static bool drain(struct mux *mux, struct mux_pane *pane)
       memcpy(&width, payload, sizeof(width));
       mux_emulator_set_tab_width(&pane->emulator, (unsigned)width);
     }
-    if (pane->emulator.alternate) {
-      /* The alternate screen has no history: browsing returns to it. */
+    size_t history_rows = mux_emulator_history_rows(&pane->emulator);
+    if (!history_rows) {
+      /* The alternate screen and erased history return browsing to live rows. */
       pane->browsing = false;
       pane->scrollback = 0;
     } else if (pane->browsing && pane->scrollback) {
+      if (pane->scrollback > history_rows) {
+        pane->scrollback = history_rows;
+      }
       uint64_t moved = pane->emulator.scrolled_rows - before;
-      size_t room = pane->emulator.history_count - pane->scrollback;
+      size_t room = history_rows - pane->scrollback;
       pane->scrollback += moved < room ? (size_t)moved : room;
     }
     unsigned slot = (unsigned)(pane - mux->panes);

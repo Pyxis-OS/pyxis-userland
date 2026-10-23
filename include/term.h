@@ -22,6 +22,10 @@ enum call_status term_write_all(struct terminal *term, const void *bytes, size_t
 enum call_status term_print(struct terminal *term, const char *text);
 /* Begin a fresh line without adding a blank row when already at column zero. */
 enum call_status term_fresh_line(struct terminal *term);
+/* End partial output decoding, leave the alternate screen, restore full-screen
+ * margins, default style and a visible cursor, then begin a fresh line. Does not
+ * clear primary text or history; uses only borrowed output and stops on error. */
+enum call_status term_normalize(struct terminal *term);
 enum call_status term_size(struct terminal *term, size_t *columns, size_t *rows);
 enum call_status term_geometry(struct terminal *term, struct console_size_reply *size);
 /* Set shared TTY tab spacing through output: 1..32 columns, default 8.
