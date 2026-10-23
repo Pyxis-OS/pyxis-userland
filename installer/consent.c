@@ -979,16 +979,26 @@ bool install_scan_consent(const struct install_disk *disk, bool room, struct ins
     } else {
       consent->reason = "npfs pool, marked: every live volume has a regular SAFE_TO_WIPE";
     }
+  } else if (blank) {
+    /* The default path admits a disk with nothing on it, or one whose every
+     * live volume is marked disposable; everything else needs Any disk. */
+    consent->eligible = true;
+    consent->reason = "blank disk: no partition table";
   } else if (!valid_gpt) {
-    consent->reason = blank ? "blank disk: use Read the room" :
-      (ambiguous ? "GPT copies disagree" : "no validated protective GPT");
+    consent->reason = ambiguous ? "GPT copies disagree; choose Any disk to erase it" :
+      "no validated protective GPT; choose Any disk to erase it";
   } else if (!consent->pools) {
-    consent->reason = "no npfs pools found";
+    consent->reason = "foreign GPT disk; choose Any disk to erase it";
+  } else if (damaged_pool) {
+    consent->reason = "npfs pool, damaged; choose Any disk to erase it";
+  } else if (empty_pool) {
+    consent->reason = "npfs pool, empty; choose Any disk to erase it";
   } else if (!all_marked) {
-    consent->reason = "every npfs pool must be nonempty and every live volume must have a regular SAFE_TO_WIPE";
+    consent->reason = "npfs pool, partially marked: some live volumes lack a regular SAFE_TO_WIPE; "
+      "choose Any disk to erase it";
   } else {
     consent->eligible = true;
-    consent->reason = "all live npfs volumes have regular SAFE_TO_WIPE markers";
+    consent->reason = "npfs pool, marked: every live volume has a regular SAFE_TO_WIPE";
   }
   success = true;
 done:

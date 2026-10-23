@@ -104,7 +104,7 @@ static bool choose_action(struct terminal *terminal, bool *updating, bool *repla
 
 static bool choose_mode(struct terminal *terminal, bool *read_the_room)
 {
-  const char *const choices[] = {"Proceed with marked media", "Read the room", "Cancel"};
+  const char *const choices[] = {"Blank or marked disks", "Any disk (may erase data)", "Cancel"};
   struct term_choice_result selected = term_read_choice(terminal, "Install consent: ", choices, 3, 0);
   if (selected.status != TERM_LINE_OK || selected.selected == 2) {
     return false;

@@ -425,7 +425,7 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
         (unsigned long long)plan->record.layout.pool_bytes);
   }
   if (!plan->record.updating) {
-    fprintf(output, "Journal: %llu MiB; Read the room: %s.\n",
+    fprintf(output, "Journal: %llu MiB; Any disk: %s.\n",
         (unsigned long long)plan->record.journal_mib,
         plan->record.read_the_room ? "yes" : "no");
   } else {
