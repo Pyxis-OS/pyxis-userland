@@ -1649,9 +1649,13 @@ static void bind_bin(struct authority *authority, struct mounts *mounts, bool in
 static struct boot_volume pool_system = {
   .name = BOOT_SYSTEM_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_SYSTEM_VOLUME,
 };
-/* The rescue space reinstalls packages here (docs/wip/pkg-upgrade.md, decision 18). */
+/* The rescue space reinstalls packages here (docs/wip/pkg-upgrade.md, decision
+ * 18), fetching them through HTTP staging on the http-work volume. */
 static struct boot_volume pool_packages = {
   .name = BOOT_PACKAGES_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_PACKAGES_VOLUME,
+};
+static struct boot_volume pool_http_work = {
+  .name = BOOT_HTTP_WORK_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_HTTP_WORK_VOLUME,
 };
 
 /* Mounts VOLUME of pool partition POOL read-write, once. */
@@ -1745,6 +1749,10 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   static struct boot_root roots[] = {
     {.name = BOOT_SYSTEM_VOLUME, .volume = BOOT_SYSTEM_VOLUME, .read_write = true},
   };
+  static struct boot_grant grants[] = {
+    {.name = BOOT_HTTP_STAGING_SOURCE, .volume = BOOT_HTTP_WORK_VOLUME,
+      .kind = BOOT_GRANT_DIRECTORY, .read_write = true, .optional = true},
+  };
   static const struct boot_space rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
     .clipboard_local = true, .clipboard_shared = true, .network = true,
@@ -1752,14 +1760,16 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   static const struct boot_space pool_rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
     .clipboard_local = true, .clipboard_shared = true, .roots = roots, .root_count = 1,
-    .network = true, .package_management = true,
+    .grants = grants, .grant_count = 1, .network = true, .package_management = true,
   };
   printf("boot-init: %s; starting the rescue space\n", reason);
   struct mounted_volume *system = pool ? mount_pool_volume(authority, mounts, pool, &pool_system) : NULL;
   bool with_pool = system && system->root != HANDLE_INVALID;
   if (with_pool) {
-    /* Optional: without it the rescue space still starts, without pkg. */
+    /* Optional: without them the rescue space still starts, without pkg or
+     * HTTP downloads. */
     mount_pool_volume(authority, mounts, pool, &pool_packages);
+    mount_pool_volume(authority, mounts, pool, &pool_http_work);
   }
   /* The rescue space runs the core archive alone; it manages packages but runs
    * none of them. */
