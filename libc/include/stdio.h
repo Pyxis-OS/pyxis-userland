@@ -26,8 +26,9 @@ extern FILE *stderr;
 
 /* Output defaults to unbuffered. fread, and the character and line input built on it,
  * may read up to BUFSIZ bytes ahead from files and pipes, never from consoles.
- * fopen accepts r/w/a, optional + and optional b (no effect), resolving native
- * capability paths and the initial directory. Private descriptors own handles,
+ * fopen accepts r/w/a, optional + and b (no effect). A final C11 x with w
+ * creates exclusively: an existing name fails with EEXIST before truncation.
+ * Opens resolve native capability paths and the initial directory. Private descriptors own handles,
  * file offsets and read-ahead; FILE owns its association and indicators.
  * Read-ahead is private and never accompanies a delegated stream: do not read a
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
@@ -39,7 +40,8 @@ FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested
  * access must fit the descriptor, and FILE operations obey that selection.
- * Position/read-ahead are retained; w never creates/truncates. a enables shared
+ * Position/read-ahead are retained; w never creates/truncates and x refuses
+ * with EINVAL. a enables shared
  * non-atomic append policy without moving the cursor. A second association
  * fails with EBUSY; malformed modes use EINVAL, unavailable access EBADF. */
 FILE *fdopen(int descriptor, const char *mode);

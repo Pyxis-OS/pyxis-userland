@@ -281,6 +281,8 @@ static bool parse_mode(const char *text, struct descriptor_mode *mode)
       update = true;
       mode->readable = true;
       mode->writable = true;
+    } else if (*text == 'x' && mode->truncate && text[1] == '\0') {
+      mode->exclusive = true;
     } else {
       return false;
     }
@@ -413,7 +415,7 @@ FILE *pyxis_error_body(FILE *stream)
 FILE *fdopen(int descriptor, const char *mode)
 {
   struct descriptor_mode options;
-  if (!parse_mode(mode, &options)) {
+  if (!parse_mode(mode, &options) || options.exclusive) {
     errno = EINVAL;
     return NULL;
   }
