@@ -16,6 +16,29 @@ static int digits(const char *text, size_t count)
 }
 
 /* SIGNED_AT is already checked as YYYY-MM-DDTHH:MM:SSZ. */
+/* Only expiry may fail: it is judged at the signing time instead. Any other
+ * error, with or without flags, refuses. */
+static bool chained(mbedtls_x509_crt *leaf, mbedtls_x509_crt *trusted)
+{
+  uint32_t flags = 0;
+  int status = mbedtls_x509_crt_verify(leaf, trusted, NULL, NULL, &flags, NULL, NULL);
+  uint32_t dated = MBEDTLS_X509_BADCERT_EXPIRED | MBEDTLS_X509_BADCERT_FUTURE;
+  return status == 0 ||
+      (status == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED && flags && !(flags & ~dated));
+}
+
+/* ECDSA on secp256r1 alone, not another 256-bit curve. */
+static bool p256(const mbedtls_pk_context *key)
+{
+  psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+  bool ok = mbedtls_pk_get_psa_attributes(key, PSA_KEY_USAGE_VERIFY_HASH, &attributes) == 0 &&
+      psa_get_key_type(&attributes) == PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1) &&
+      psa_get_key_bits(&attributes) == 256 &&
+      mbedtls_pk_can_do_psa(key, PSA_ALG_ECDSA(PSA_ALG_SHA_256), PSA_KEY_USAGE_VERIFY_HASH);
+  psa_reset_key_attributes(&attributes);
+  return ok;
+}
+
 static bool within(const mbedtls_x509_crt *certificate, const mbedtls_x509_time *at)
 {
   return mbedtls_x509_time_cmp(&certificate->valid_from, at) <= 0 &&
@@ -36,7 +59,6 @@ bool pkg_signature_verify(const char *anchor, size_t anchor_size,
     .min = digits(signed_at + 14, 2), .sec = digits(signed_at + 17, 2),
   };
   bool ok = false;
-  uint32_t flags = 0;
   uint8_t hash[SHA256_BYTES];
   size_t hash_size = 0;
   if (mbedtls_x509_crt_parse(&trusted, (const unsigned char *)anchor, anchor_size) != 0 ||
@@ -45,9 +67,7 @@ bool pkg_signature_verify(const char *anchor, size_t anchor_size,
   } else if (mbedtls_x509_crt_parse(&leaf, (const unsigned char *)signer, signer_size) != 0 ||
       leaf.next) {
     *reason = "the signer certificate is not one PEM certificate";
-  } else if (mbedtls_x509_crt_verify(&leaf, &trusted, NULL, NULL, &flags, NULL, NULL) != 0 &&
-      (flags & ~(uint32_t)(MBEDTLS_X509_BADCERT_EXPIRED | MBEDTLS_X509_BADCERT_FUTURE))) {
-    /* Expiry is judged at the signing time below, not by this system's clock. */
+  } else if (!chained(&leaf, &trusted)) {
     *reason = "the signer is not issued by the Pyxis Software Signing CA";
   } else if (mbedtls_x509_crt_get_ca_istrue(&leaf) != 0) {
     *reason = "the signer certificate is not CA:FALSE";
@@ -59,8 +79,7 @@ bool pkg_signature_verify(const char *anchor, size_t anchor_size,
     *reason = "the signer certificate lacks Digital Signature or Code Signing";
   } else if (!within(&leaf, &at) || !within(&trusted, &at)) {
     *reason = "the signer or the CA is not valid at the index's signed time";
-  } else if (mbedtls_pk_get_bitlen(&leaf.pk) != 256 ||
-      !mbedtls_pk_can_do_psa(&leaf.pk, PSA_ALG_ECDSA(PSA_ALG_SHA_256), PSA_KEY_USAGE_VERIFY_HASH)) {
+  } else if (!p256(&leaf.pk)) {
     *reason = "the signer key is not ECDSA P-256";
   } else if (psa_hash_compute(PSA_ALG_SHA_256, index, index_size, hash, sizeof(hash),
       &hash_size) != PSA_SUCCESS || hash_size != sizeof(hash)) {

@@ -471,7 +471,9 @@ static bool read_repository(const struct pkg_repository *repository,
       ok = fail("the index differs from the accepted one with the same serial");
     } else if (known && strcmp(header.signed_at, accepted.signed_at) < 0) {
       ok = fail("the index was signed before the accepted one; refusing it");
-    } else if (client.provided_readable && provided->signed_floor[0] &&
+    } else if (!known && !client.provided_readable) {
+      ok = fail("cannot read boot://os-release for the first-contact signing floor");
+    } else if (!known && provided->signed_floor[0] &&
         strcmp(header.signed_at, provided->signed_floor) < 0) {
       ok = fail("the index was signed before this system was built; refusing it");
     }
