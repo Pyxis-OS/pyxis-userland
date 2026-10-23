@@ -63,6 +63,5 @@ not a claim that regulatory, board and antenna limits or calibration are applied
 
 Trusted `wifi_policy` configuration may omit country (or use `"00"`) for RTL
 world-domain rules while supplying the narrowing channel mask. Country `"00"`
-names the same world domain in the shared policy contract; AX200 Install support
-is being integrated in [#1159](https://git.internal/PyxisOS/pyxis-os/pulls/1159),
-with its authoritative firmware LAR restrictions retained.
+names the same world domain in the shared policy contract; AX200 retains its
+authoritative firmware LAR restrictions.
