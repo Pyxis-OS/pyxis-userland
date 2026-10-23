@@ -1,5 +1,6 @@
 #include "plan.h"
 #include "battery.h"
+#include "packages.h"
 #include "../common/bootstrap_environment.h"
 
 #include <clock.h>
@@ -496,6 +497,10 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   }
   if (!system_config_prepare(plan) || !classic_origin_prepare(plan)) goto done;
   if (!system_verify(plan)) {
+    goto done;
+  }
+  /* Update keeps the installed packages; pkg upgrades them later. */
+  if (!updating && !install_packages_base(disk->handle, plan->target.pool.partition)) {
     goto done;
   }
 #if !INSTALLER_PUBLICATION_SCRATCH

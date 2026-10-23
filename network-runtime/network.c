@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wait.h>
 
 #define CLIENT_SLICE_NS UINT64_C(20000000)
 #define NETWORK_POLL_NS UINT64_C(100000000)
@@ -454,7 +455,8 @@ bool network_config_wait_address(const struct network_config *config, struct net
   }
 }
 
-static bool wait_maintenance(struct network_runtime *runtime, struct network_wifi_supplicant *supplicant)
+static bool wait_maintenance(struct network_runtime *runtime, struct network_wifi_supplicant *supplicant,
+    handle_t until)
 {
   uint64_t now;
   handle_t clock = runtime->clock ? runtime->clock : bootstrap_capability("clock");
@@ -481,6 +483,10 @@ static bool wait_maintenance(struct network_runtime *runtime, struct network_wif
       wake = entry->lease.renewal_ns;
     }
   }
+  /* UNTIL is polled, so its completion is seen within one poll. */
+  if (until != HANDLE_INVALID && poll < wake) {
+    wake = poll;
+  }
   if (network_wifi_active(supplicant)) {
     if (wake > now && wake - now > WAIT_MAX_WAIT_NS) {
       wake = now + WAIT_MAX_WAIT_NS;
@@ -496,13 +502,23 @@ static bool wait_maintenance(struct network_runtime *runtime, struct network_wif
   return clock_sleep_until(clock, wake) == CALL_OK;
 }
 
-int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
-    struct network_wifi_supplicant *supplicant)
+static bool completed(handle_t process)
 {
-  while (runtime->waiting_link || network_wifi_active(supplicant)) {
+  if (process == HANDLE_INVALID) {
+    return false;
+  }
+  struct wait_interest interest = {.handle = process, .events = WAIT_COMPLETE};
+  uint64_t events = 0;
+  return wait_many(&interest, 1, 0, &events) == CALL_OK && events;
+}
+
+int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
+    struct network_wifi_supplicant *supplicant, handle_t until)
+{
+  while ((runtime->waiting_link || network_wifi_active(supplicant)) && !completed(until)) {
     bool working;
     if ((runtime->waiting_link && !service(config, runtime, UINT64_MAX, &working)) ||
-        !wait_maintenance(runtime, supplicant)) {
+        !wait_maintenance(runtime, supplicant, until)) {
       network_config_stop(config, runtime);
       return EXIT_FAILURE;
     }

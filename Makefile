@@ -21,7 +21,7 @@ HTTP_PARSER_LIBRARY := $(PICOHTTPPARSER_PREFIX)/lib/libpicohttpparser.a
 LUA_LIBRARY := $(LUA_PREFIX)/lib/liblua.a
 ZLIB_LIBRARY := $(ZLIB_PREFIX)/lib/libz.a
 LIBPNG_LIBRARY := $(LIBPNG_PREFIX)/lib/libpng.a
-INSTALL_PROGRAMS := wifi-supplicant mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest pointer-min screenshot screenshot-saver pcm
+INSTALL_PROGRAMS := wifi-supplicant mux remote-terminal xfer http httpfs http-stage allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer shell client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo mandelbrot mousetest pointer-min screenshot screenshot-saver pcm
 .DEFAULT_GOAL := all
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -48,7 +48,7 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
                    $(BUILD)/mv/main.o $(BUILD)/ln/main.o $(BUILD)/tree/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/sleep/main.o $(BUILD)/ping/main.o \
                    $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o $(BUILD)/tcp/main.o \
                    $(BUILD)/ttcp/main.o \
-                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/examples/pointer-min/main.o $(BUILD)/examples/font-min/main.o $(BUILD)/session/main.o $(BUILD)/init-install/main.o \
+                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/examples/pointer-min/main.o $(BUILD)/examples/font-min/main.o $(BUILD)/session/main.o $(BUILD)/installer-init/main.o \
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
                    $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o $(BUILD)/net/main.o $(BUILD)/wifi/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/capture.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
@@ -62,7 +62,7 @@ REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.
 XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash.o
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
-INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o gpt.o pool.o consent.o esp.o esp_read.o bin_cleanup.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o coexist_ui.o target.o)
+INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o gpt.o pool.o consent.o esp.o esp_read.o bin_cleanup.o packages.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o coexist_ui.o target.o)
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
@@ -92,13 +92,13 @@ PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o publicatio
     $(addprefix $(BUILD)/installer/,menu_ownership.o boot_storage.o boot_record.o)
 # Discovery borrows the installer validators. Separate sectioned objects let
 # the selector retain only read-only inspection from the mixed private modules.
-INSTALL_SELECTOR_SOURCES := init-install/update.c installer/io.c installer/gpt.c \
+INSTALL_SELECTOR_SOURCES := installer-init/update.c installer/io.c installer/gpt.c \
     installer/consent.c installer/esp_read.c installer/review.c installer/coexist.c \
     installer/progress.c installer/digest.c installer/installed_probe.c installer/boot_entry.c \
     installer/pending.c installer/plan_record.c \
     installer/boot_record.c installer/boot_storage.c installer/menu_ownership.c \
     xfer/hash.c
-INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/init-install/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
+INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/installer-init/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
 BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
 BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o)
@@ -111,7 +111,7 @@ SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 SCREENSHOT_SAVER_OBJECTS := $(BUILD)/screenshot/saver.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init init-install init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
+.PHONY: mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
 .PHONY: fat32ctl net wifi config pkg
 all: $(INSTALL_PROGRAMS) font-min fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
@@ -202,7 +202,7 @@ $(BUILD)/remote-terminal.pxe: $(REMOTE_OBJECT)
 
 session: $(BUILD)/session.pxe
 boot-init: $(BUILD)/boot-init.pxe
-init-install: $(BUILD)/init-install.pxe
+installer-init: $(BUILD)/installer-init.pxe
 init-fat32-inspect: $(BUILD)/init-fat32-inspect.pxe
 init-fat32-mount: $(BUILD)/init-fat32-mount.pxe
 init-fat32-mount-write: $(BUILD)/init-fat32-mount-write.pxe
@@ -295,8 +295,8 @@ $(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $
 $(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
-$(SESSION_OBJECTS) $(NETWORK_RUNTIME_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
-$(SESSION_OBJECTS) $(NETWORK_RUNTIME_OBJECTS) $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
+$(SESSION_OBJECTS) $(NETWORK_RUNTIME_OBJECTS) $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(SESSION_OBJECTS) $(NETWORK_RUNTIME_OBJECTS) $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(BOOT_INIT_OBJECTS) $(CONFIG_OBJECT) $(BUILD)/wifi/profile.o $(BUILD)/installer/boot_entry.o: $(LUA_PREFIX)/include/lua.h $(LUA_PREFIX)/include/lauxlib.h $(LUA_PREFIX)/include/luaconf.h $(LUA_PREFIX)/include/lualib.h
 $(NETWORK_RUNTIME_LIBRARY): $(NETWORK_RUNTIME_OBJECTS) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(NETWORK_RUNTIME_OBJECTS)
@@ -381,18 +381,18 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/installer/main.o $(BUILD)/init-install/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/installer/main.o $(BUILD)/installer-init/main.o $(BUILD)/boot-init/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
 
 $(INSTALL_SELECTOR_OBJECTS): private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH) -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALL_SELECTOR_OBJECTS): private CFLAGS += -ffunction-sections -fdata-sections
 $(INSTALL_SELECTOR_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/init-install/inspect/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(BUILD)/installer-init/inspect/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/init-install.pxe: $(BUILD)/init-install/main.o $(INSTALL_SELECTOR_OBJECTS) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -Wl,--gc-sections -o $@ $(PYXIS_START) $(BUILD)/init-install/main.o $(INSTALL_SELECTOR_OBJECTS) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/installer-init.pxe: $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(INSTALL_SELECTOR_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -Wl,--gc-sections -o $@ $(PYXIS_START) $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(INSTALL_SELECTOR_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
 
 $(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)

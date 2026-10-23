@@ -4,6 +4,7 @@
 #include "../libconfig/config.h"
 #include "../pkg/store.h"
 #include "network.h"
+#include "../installer/installer.h"
 #include "../libconfig/handoff.h"
 #include "../libconfig/network.h"
 #include "../libconfig/session.h"
@@ -21,6 +22,7 @@
 #include <abi/net_config.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
+#include <abi/console.h>
 #include <abi/wifi.h>
 #include <wifi.h>
 #include <forwarder.h>
@@ -153,6 +155,9 @@ struct authority {
   handle_t input_policy; /* Boot-only, never forwarded through services. */
   handle_t net_policy; /* Boot-only until granted to the network owner. */
   handle_t loaded_kernel, loaded_archive; /* Private kernel-issued immutable FILEs. */
+  /* The kernel's disk authority, issued only on the Install entry, and for
+   * the install space alone. */
+  handle_t disks;
   struct config_handoff configuration;
   handle_t boot_evidence; /* READ-only; granted only to package_upgrade spaces. */
   /* Granted only to spaces that set screenshot. */
@@ -281,9 +286,12 @@ static bool take_authority(struct authority *authority)
   authority->input_policy = bootstrap_capability("input_policy");
   authority->loaded_kernel = bootstrap_take_capability("boot_kernel");
   authority->loaded_archive = bootstrap_take_capability("boot_archive");
+  authority->disks = bootstrap_take_capability("disks");
+  /* The kernel issues the one-shot input policy and hostname right only off
+   * the Install entry; the install space keeps the kernel's defaults. */
   bool complete = authority->factory != HANDLE_INVALID &&
       authority->boot != HANDLE_INVALID && authority->tmp != HANDLE_INVALID &&
-      authority->input_policy != HANDLE_INVALID;
+      (authority->input_policy != HANDLE_INVALID || authority->disks != HANDLE_INVALID);
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
     if (i == SERVICE_ECHO || i == SERVICE_UDP || i == SERVICE_TCP) {
       continue;
@@ -822,6 +830,7 @@ struct space_launch {
   handle_t http_staging_parent; /* Borrowed until source handles close. */
   struct mounted_volume *http_staging_mount;
   char http_staging_name[96];
+  handle_t installer_scratch; /* The install space's RAM directory, if any. */
   struct launch_environment_entry *roots;
   size_t grant_count, resource_count, root_count;
   uint64_t working_directory;
@@ -915,6 +924,43 @@ static void add_package_source(struct space_launch *launch, size_t *count,
   launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
       PROFILE_PRIVATE_CAP((uintptr_t)launch->source_names[(*count)++], 0),
       &(struct launch_grant){handle, rights, 0});
+}
+
+/* The installer capability (docs/wip/pkg-upgrade.md, decision 66): the install
+ * rights over every disk, the loaded kernel and archive, restart, a WRITE-only
+ * copy of the Caelum console for the installer's diagnostics, and a private RAM
+ * directory for its scratch. All are private: no shell runs in that space. */
+static const char *installer_sources(const struct authority *authority,
+    struct space_launch *launch, char *reason, size_t size)
+{
+  struct pyxis_stdio_binding console = bootstrap_stdio(ENVIRONMENT_STDOUT);
+  if (authority->disks == HANDLE_INVALID || authority->loaded_kernel == HANDLE_INVALID ||
+      authority->loaded_archive == HANDLE_INVALID || authority->power == HANDLE_INVALID ||
+      console.protocol != PROTOCOL_CONSOLE) {
+    return "the installer capability is incomplete";
+  }
+  enum call_status status = open_ram_volume(authority->ram, "installer", &launch->installer_scratch);
+  if (status != CALL_OK) {
+    snprintf(reason, size, "installer scratch unavailable (status %u)", status);
+    return reason;
+  }
+  const struct {
+    const char *name;
+    struct launch_grant grant;
+  } sources[] = {
+    {"disks", {authority->disks, INSTALLER_DISK_RIGHTS, 0}},
+    {"boot_kernel", {authority->loaded_kernel, FILE_RIGHT_READ, 0}},
+    {"boot_archive", {authority->loaded_archive, FILE_RIGHT_READ, 0}},
+    {"power", {authority->power, POWER_RIGHT_RESTART, 0}},
+    {"installer_diagnostics", {console.handle, CONSOLE_RIGHT_WRITE, 0}},
+    {"installer_scratch", {launch->installer_scratch, TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, 0}},
+  };
+  for (size_t i = 0; i < sizeof(sources) / sizeof(*sources); ++i) {
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)sources[i].name, 0),
+        &sources[i].grant);
+  }
+  return NULL;
 }
 
 /* The writer for the install that booted: the issuer's own facts and admission
@@ -1071,6 +1117,7 @@ static const char *launch_capacity(const struct authority *authority,
   }
   granted += 2 + (space->package_management ? 2 : 0); /* package inspect and config sources */
   granted += space->package_upgrade ? 2 : 0; /* upgrade sources */
+  granted += space->installer ? 6 : 0; /* installer_sources */
   granted += space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
       space->multiplexer + space->remote_multiplexer + space->screenshot +
       space->power + space->remote_power;
@@ -1297,6 +1344,12 @@ static const char *build_launch(const struct authority *authority, struct mounts
   package_sources(mounts, space, launch, &source_count);
   if (space->package_upgrade) {
     upgrade_sources(authority, space, launch, &source_count);
+  }
+  if (space->installer) {
+    const char *refused = installer_sources(authority, launch, reason, size);
+    if (refused) {
+      return refused;
+    }
   }
   if (space->fat32_mount) {
     uint64_t rights = DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_MOUNT_READ_ONLY |
@@ -1612,6 +1665,7 @@ cleanup:
   if (launch.wifi_session.holder) handle_close(launch.wifi_session.holder);
   if (launch.wifi_session.controller) handle_close(launch.wifi_session.controller);
   if (launch.commands != HANDLE_INVALID) handle_close(launch.commands);
+  if (launch.installer_scratch != HANDLE_INVALID) handle_close(launch.installer_scratch);
   for (size_t i = 0; i < launch.source_handle_count; ++i) handle_close(launch.source_handles[i]);
   for (size_t i = 0; i < launch.view_count; ++i) handle_close(launch.views[i]);
   free(launch.views);
@@ -1675,8 +1729,9 @@ static void maintain_packages(const struct authority *authority, struct mounts *
       authority->services[SERVICE_CLOCK]);
 }
 
-/* Mounts VOLUME of pool partition POOL read-write, once. */
-static struct mounted_volume *mount_pool_volume(const struct authority *authority,
+/* Mounts the built-in VOLUME read-write, once; a pool volume is on partition
+ * POOL. */
+static struct mounted_volume *mount_builtin_volume(const struct authority *authority,
     struct mounts *mounts, uint32_t pool, struct boot_volume *volume)
 {
   struct mounted_volume *mounted = find_mount(mounts, volume->name);
@@ -1709,7 +1764,7 @@ static bool read_pool_configuration(const struct authority *authority, uint32_t 
     struct mounts *mounts, struct boot_config *config, struct config_handoff_bytes *session,
     struct config_handoff_bytes *network, char *reason, size_t size)
 {
-  struct mounted_volume *system = mount_pool_volume(authority, mounts, pool, &pool_system);
+  struct mounted_volume *system = mount_builtin_volume(authority, mounts, pool, &pool_system);
   if (!system || system->root == HANDLE_INVALID) {
     snprintf(reason, size, "the system volume on pool partition %u is unavailable (status %u)",
         pool, system ? system->status : CALL_NO_MEMORY);
@@ -1780,13 +1835,13 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
     .grants = grants, .grant_count = 1, .network = true, .package_management = true,
   };
   printf("boot-init: %s; starting the rescue space\n", reason);
-  struct mounted_volume *system = pool ? mount_pool_volume(authority, mounts, pool, &pool_system) : NULL;
+  struct mounted_volume *system = pool ? mount_builtin_volume(authority, mounts, pool, &pool_system) : NULL;
   bool with_pool = system && system->root != HANDLE_INVALID;
   if (with_pool) {
     /* Optional: without them the rescue space still starts, without pkg or
      * HTTP downloads. */
-    mount_pool_volume(authority, mounts, pool, &pool_packages);
-    mount_pool_volume(authority, mounts, pool, &pool_http_work);
+    mount_builtin_volume(authority, mounts, pool, &pool_packages);
+    mount_builtin_volume(authority, mounts, pool, &pool_http_work);
     maintain_packages(authority, mounts);
   }
   /* The rescue space runs the core archive alone; it manages packages but runs
@@ -1819,6 +1874,35 @@ static bool close_boot_payloads(struct authority *authority)
     }
   }
   return ok;
+}
+
+/* The Install entry's one space (docs/wip/pkg-upgrade.md, decisions 63, 66 and
+ * 69): installer-init holds the installer capability, owns the archive's
+ * network and stages its downloads in RAM. Boot init keeps none of that
+ * authority afterwards. */
+static bool start_install(struct authority *authority, struct mounts *mounts)
+{
+  static struct boot_volume http_work = {.name = BOOT_HTTP_WORK_VOLUME, .kind = BOOT_VOLUME_RAM};
+  static struct boot_grant grants[] = {
+    {.name = BOOT_HTTP_STAGING_SOURCE, .volume = BOOT_HTTP_WORK_VOLUME,
+      .kind = BOOT_GRANT_DIRECTORY, .read_write = true, .optional = true},
+  };
+  static const struct boot_space install = {
+    .name = "install", .title = "Install", .init = INSTALLER_INIT, .start = "tmp",
+    .grants = grants, .grant_count = 1, .network = true, .installer = true,
+  };
+  puts("boot-init: Install entry; starting the install space");
+  mount_builtin_volume(authority, mounts, 0, &http_work);
+  bool started = start_space(authority, mounts, &install);
+  bool closed = close_boot_payloads(authority);
+  if (handle_close(authority->disks)) {
+    closed = false;
+  }
+  authority->disks = HANDLE_INVALID;
+  if (!closed) {
+    puts("boot-init: installer authority release failed");
+  }
+  return started;
 }
 
 int main(int argc, char **argv)
@@ -1869,6 +1953,8 @@ int main(int argc, char **argv)
   int exit_status = EXIT_SUCCESS;
   char rescue[START_REASON_MAX + 1] = "no configured space started";
   handle_t registry = authority.services[SERVICE_NET_REGISTRY];
+  /* The kernel issues disks only on the Install entry. */
+  bool install = authority.disks != HANDLE_INVALID;
   if (installed) {
     struct boot_evidence_authority sources = {
       .esp_mount = authority.esp_mount, .ram = authority.ram,
@@ -1880,7 +1966,7 @@ int main(int argc, char **argv)
       exit_status = EXIT_FAILURE;
       goto finish;
     }
-  } else if (!close_boot_payloads(&authority)) {
+  } else if (!install && !close_boot_payloads(&authority)) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }
@@ -1890,7 +1976,10 @@ int main(int argc, char **argv)
    * Installed entries name their pool. A development build bound to a disk
    * with MOUNT_DISK names none and describes that disk in live.lua. */
   bool pool_configured = installed && pool && !pool_malformed;
-  if (installed && pool_malformed) {
+  if (install) {
+    /* The install space uses the archive's network profile, as rescue does. */
+    snprintf(rescue, sizeof(rescue), "the install space did not start");
+  } else if (installed && pool_malformed) {
     snprintf(rescue, sizeof(rescue), "the boot entry's mount.pool is malformed");
   } else if (default_config) {
     snprintf(rescue, sizeof(rescue), "rescue entry");
@@ -1971,8 +2060,8 @@ int main(int argc, char **argv)
 
   authority.ram_npfs_bytes = defaults.ram_npfs_bytes;
   bool machine_settings = installed && find_mount(&mounts, BOOT_SYSTEM_VOLUME);
-  if (!set_hostname(&authority, &defaults, &mounts, machine_settings) ||
-      !set_input_policy(&authority, &defaults, &mounts, machine_settings)) {
+  if (!install && (!set_hostname(&authority, &defaults, &mounts, machine_settings) ||
+      !set_input_policy(&authority, &defaults, &mounts, machine_settings))) {
     exit_status = EXIT_FAILURE;
     goto finish;
   }
@@ -1985,7 +2074,9 @@ int main(int argc, char **argv)
   }
   authority.bin = authority.boot;
   size_t started = 0;
-  if (configured && mount_plan(&authority, &plan, &mounts)) {
+  if (install) {
+    started = start_install(&authority, &mounts);
+  } else if (configured && mount_plan(&authority, &plan, &mounts)) {
     bind_bin(&authority, &mounts, pool_configured);
     seed_live_repositories(&authority, &mounts);
     maintain_packages(&authority, &mounts);

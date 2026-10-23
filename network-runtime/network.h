@@ -24,8 +24,10 @@ struct network_runtime {
 
 bool network_config_apply(struct network_config *config, struct network_runtime *runtime);
 bool network_config_wait_address(const struct network_config *config, struct network_runtime *runtime);
+/* Services links still waiting for a lease and the Wi-Fi supplicant while
+ * either needs it. A valid UNTIL process also ends it when that completes. */
 int network_config_maintain(const struct network_config *config, struct network_runtime *runtime,
-    struct network_wifi_supplicant *supplicant);
+    struct network_wifi_supplicant *supplicant, handle_t until);
 bool network_config_stop(const struct network_config *config, struct network_runtime *runtime);
 /* Remove unrelated bootstrap grants after successor handoff while retaining
  * each independent client's declared facets, timers and packet endpoint. */

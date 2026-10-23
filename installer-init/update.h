@@ -1,5 +1,5 @@
-#ifndef INIT_INSTALL_UPDATE_H
-#define INIT_INSTALL_UPDATE_H
+#ifndef INSTALLER_INIT_UPDATE_H
+#define INSTALLER_INIT_UPDATE_H
 
 #include "../installer/installer.h"
 #include <term.h>

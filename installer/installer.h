@@ -18,6 +18,15 @@
 #define INSTALL_BOOT_INIT_OPTION "init=boot://boot-init.pxe"
 #define INSTALL_RESCUE_OPTION "boot.default_config=1"
 #define INSTALL_MENU_TIMEOUT_SECONDS 3
+/* The disk rights of the installer capability (docs/wip/pkg-upgrade.md,
+ * decision 66): every right an installer action uses. installer-init narrows
+ * them for the chosen action before it launches the installer. */
+#define INSTALLER_DISK_RIGHTS (DISKS_RIGHT_ENUMERATE | DISKS_RIGHT_OPEN_READ_ONLY | \
+    DISKS_RIGHT_OPEN_POOL | DISKS_RIGHT_OPEN_OWNED_ESP | DISKS_RIGHT_MOUNT_READ_ONLY | \
+    DISKS_RIGHT_MOUNT_READ_WRITE | DISKS_RIGHT_APPEND_POOL | DISKS_RIGHT_ERASE | \
+    DISKS_RIGHT_REBUILD_ESP)
+/* The Install entry's space init (decision 69). */
+#define INSTALLER_INIT "boot://installer-init.pxe"
 #define INSTALL_ESP_PARTITION 1
 #define INSTALL_POOL_PARTITION 2
 /* Programs of installs before the core archive, one directory per revision. */

@@ -1,3 +1,4 @@
+#include "packages.h"
 #include "../common/bootstrap_environment.h"
 #include "plan.h"
 #include "battery.h"
@@ -611,6 +612,10 @@ int main(int argc, char **argv)
     updating = expected.updating;
     read_the_room = expected.read_the_room;
   } else if (!updating && !coexist && !choose_mode(&terminal, &read_the_room)) {
+    goto done;
+  }
+  /* Before any target is chosen: an install that cannot fetch base stops here. */
+  if (!updating && !install_packages_check()) {
     goto done;
   }
   install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"),

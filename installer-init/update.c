@@ -85,17 +85,17 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
   const char *reason = NULL;
   bool success = false;
   if (!facts) {
-    fputs("init-install: out of memory inspecting coexistence targets\n", stderr);
+    fputs("installer-init: out of memory inspecting coexistence targets\n", stderr);
     return false;
   }
   if (!install_coexist_inspect(disk, facts, &reason)) {
-    fprintf(stderr, "init-install: disk %llu coexist Update refused: %s\n",
+    fprintf(stderr, "installer-init: disk %llu coexist Update refused: %s\n",
         (unsigned long long)disk->info.id, reason ? reason : "inspection unavailable");
     success = true;
     goto done;
   }
   if (!facts->esp_count || !facts->pool_count) {
-    fprintf(stderr, "init-install: disk %llu coexist Update unavailable: %s\n",
+    fprintf(stderr, "installer-init: disk %llu coexist Update unavailable: %s\n",
         (unsigned long long)disk->info.id, !facts->esp_count ? "healthy GPT has no ESP" :
         "healthy GPT has no native pool");
     success = true;
@@ -109,12 +109,12 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
    * retirement. Its report is discarded; final Review belongs to the child. */
   if (!install_review_prepare(disk, disks, clock, now + UINT64_C(2000000000),
       &facts->gpt, &review)) {
-    fprintf(stderr, "init-install: Update ESP inspection failed: %s\n",
+    fprintf(stderr, "installer-init: Update ESP inspection failed: %s\n",
         review.reason ? review.reason : "unavailable");
     goto done;
   }
   if (!review.cache_matches) {
-    fputs("init-install: GPT changed during Update discovery\n", stderr);
+    fputs("installer-init: GPT changed during Update discovery\n", stderr);
     goto done;
   }
   for (uint32_t p = 0; p < facts->pool_count; ++p) {
@@ -122,13 +122,13 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
     install_coexist_layout(&facts->esps[0], &facts->pools[p], &layout);
     struct install_update update;
     if (!install_scan_pool_update(disk, &layout, &update)) {
-      fprintf(stderr, "init-install: disk %llu pool %llu inspection failed: %s\n",
+      fprintf(stderr, "installer-init: disk %llu pool %llu inspection failed: %s\n",
           (unsigned long long)disk->info.id, (unsigned long long)layout.pool_partition,
           update.reason ? update.reason : "unavailable");
       goto done;
     }
     if (!update.eligible) {
-      fprintf(stderr, "init-install: disk %llu pool %llu Update refused: %s\n",
+      fprintf(stderr, "installer-init: disk %llu pool %llu Update refused: %s\n",
           (unsigned long long)disk->info.id, (unsigned long long)layout.pool_partition,
           update.reason ? update.reason : "native pool not eligible");
       continue;
@@ -143,7 +143,7 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
         }
       }
       if (refusal) {
-        fprintf(stderr, "init-install: disk %llu pool %llu ESP %llu Update refused: %s\n",
+        fprintf(stderr, "installer-init: disk %llu pool %llu ESP %llu Update refused: %s\n",
             (unsigned long long)disk->info.id, (unsigned long long)update.layout.pool_partition,
             (unsigned long long)update.layout.esp_partition, refusal);
         continue;
@@ -153,7 +153,7 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
       enum install_installed_probe probe = install_installed_probe(disk, &update.layout,
           update.revision, &reason);
       if (probe == INSTALL_INSTALLED_REFUSED) {
-        fprintf(stderr, "init-install: disk %llu pool %llu ESP %llu Update refused: %s\n",
+        fprintf(stderr, "installer-init: disk %llu pool %llu ESP %llu Update refused: %s\n",
             (unsigned long long)disk->info.id, (unsigned long long)update.layout.pool_partition,
             (unsigned long long)update.layout.esp_partition, reason ? reason : "boot record refused");
         continue;
@@ -161,7 +161,7 @@ static bool inspect_coexist(struct update_inventory *inventory, const struct ins
       pending = probe == INSTALL_INSTALLED_PENDING;
 #endif
       if (!append_candidate(inventory, disk, &update, true, false, pending)) {
-        fputs("init-install: out of memory recording Update targets\n", stderr);
+        fputs("installer-init: out of memory recording Update targets\n", stderr);
         goto done;
       }
     }
@@ -176,7 +176,7 @@ done:
     }
   }
   if (!install_review_destroy(&review)) {
-    fputs("init-install: Update inspection cleanup incomplete; installer not launched\n", stderr);
+    fputs("installer-init: Update inspection cleanup incomplete; installer not launched\n", stderr);
     *clean = false;
     success = false;
   }
@@ -189,12 +189,12 @@ static bool inspect_disk(struct update_inventory *inventory, const struct instal
 {
   struct install_update update;
   if (!install_scan_update(disk, &update)) {
-    fprintf(stderr, "init-install: disk %llu Update inspection failed: %s\n",
+    fprintf(stderr, "installer-init: disk %llu Update inspection failed: %s\n",
         (unsigned long long)disk->info.id, update.reason ? update.reason : "unavailable");
     return false;
   }
   if (!update.eligible) {
-    fprintf(stderr, "init-install: disk %llu classic Update unavailable: %s\n",
+    fprintf(stderr, "installer-init: disk %llu classic Update unavailable: %s\n",
         (unsigned long long)disk->info.id, update.reason ? update.reason : "native layout not eligible");
     if (update.classic_layout) {
       return true;
@@ -210,7 +210,7 @@ static bool inspect_disk(struct update_inventory *inventory, const struct instal
     return append_candidate(inventory, disk, &update, false, false, true);
   }
   if (probe == INSTALL_INSTALLED_REFUSED) {
-    fprintf(stderr, "init-install: disk %llu classic Update refused: %s\n",
+    fprintf(stderr, "installer-init: disk %llu classic Update refused: %s\n",
         (unsigned long long)disk->info.id, update.reason ? update.reason : "boot record refused");
     return true;
   }
@@ -218,7 +218,7 @@ static bool inspect_disk(struct update_inventory *inventory, const struct instal
   enum install_esp_state state = install_esp_inspect(disk, &update.layout,
       update.revision, &update.reason);
   if (state == INSTALL_ESP_REFUSED) {
-    fprintf(stderr, "init-install: disk %llu classic Update refused: %s\n",
+    fprintf(stderr, "installer-init: disk %llu classic Update refused: %s\n",
         (unsigned long long)disk->info.id, update.reason ? update.reason : "ESP not eligible");
     return true;
   }
@@ -235,7 +235,7 @@ bool installer_update_choose(struct terminal *terminal, handle_t disks, handle_t
   *clean = true;
   *choice = (struct installer_update_choice){0};
   if (!hashing) {
-    fputs("init-install: cannot initialize Update inspection\n", stderr);
+    fputs("installer-init: cannot initialize Update inspection\n", stderr);
     goto done;
   }
   puts("Discovering existing Pyxis installations (read-only)...");
@@ -246,13 +246,13 @@ bool installer_update_choose(struct terminal *terminal, handle_t disks, handle_t
       break;
     }
     if (status != CALL_OK) {
-      fprintf(stderr, "init-install: disk inventory incomplete (status %u)\n", status);
+      fprintf(stderr, "installer-init: disk inventory incomplete (status %u)\n", status);
       goto done;
     }
     struct install_disk disk = {.handle = HANDLE_INVALID};
     status = disks_open(disks, info.id, DISK_ACCESS_READ_ONLY, &disk.handle);
     if (status != CALL_OK) {
-      fprintf(stderr, "init-install: disk %llu unavailable for read-only inspection (status %u)\n",
+      fprintf(stderr, "installer-init: disk %llu unavailable for read-only inspection (status %u)\n",
           (unsigned long long)info.id, status);
       continue;
     }
@@ -263,16 +263,16 @@ bool installer_update_choose(struct terminal *terminal, handle_t disks, handle_t
       disk.bytes = disk.info.block_count * disk.info.block_size;
       inspected = inspect_disk(&inventory, &disk, disks, clock, clean);
     } else {
-      fprintf(stderr, "init-install: disk %llu identity or geometry inspection failed (status %u)\n",
+      fprintf(stderr, "installer-init: disk %llu identity or geometry inspection failed (status %u)\n",
           (unsigned long long)info.id, status);
     }
     if (handle_close(disk.handle) != 0) {
-      fputs("init-install: read-only disk close failed; installer not launched\n", stderr);
+      fputs("installer-init: read-only disk close failed; installer not launched\n", stderr);
       *clean = false;
       goto done;
     }
     if (!inspected) {
-      fputs("init-install: Update inspection failed; returning to installer actions\n", stderr);
+      fputs("installer-init: Update inspection failed; returning to installer actions\n", stderr);
       goto done;
     }
   }

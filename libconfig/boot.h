@@ -107,6 +107,9 @@ struct boot_space {
   bool power; /* Receives power-off and restart authority. */
   uint64_t wifi_rights; /* Explicit controller READ/SCAN/CONNECT; default none. */
   bool remote_power; /* Opts remote root shells into power authority. */
+  /* The installer capability. Boot init sets it only on its built-in install
+   * space, on the Install entry; configuration never reads it. */
+  bool installer;
 };
 
 /* One parsed file. Owns every string and array. */

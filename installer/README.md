@@ -5,8 +5,11 @@ immutable boot kernel/archive FILEs, read-only boot assets, private memory,
 clock/randomness and SYSTEM_INFO plus its console streams. Trusted init also
 delegates Caelum console WRITE as `installer_diagnostics` for log records;
 ordinary programs never receive it. Normal shells lack
-these installer grants. `init-install.pxe` forwards installer arguments without
-adding authority; optional RESTART authority remains narrowed.
+these installer grants. `installer-init.pxe` passes the selected action as
+arguments; optional RESTART authority remains narrowed. Install runs `pkg check
+base` before choosing a target and `pkg --yes install base` into the new pool's
+`packages` volume after the pool stage, before the boot entries are published
+(`packages.c`); it needs installer-init's HTTP providers and launcher.
 
 The plain frontend and later TUI share `plan.h`: source assets, read-only
 preparation, Review and one confirmed executor. Preparing, printing, cancellation

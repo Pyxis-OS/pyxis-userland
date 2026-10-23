@@ -376,16 +376,17 @@ CUT reports CALL and RETIRE; the full-queue mode reports RETIRE
 before draining sixteen SENDs. Environment provider/client modes do not accept
 this option.
 
-`boot://init-install.pxe` is the install entry's boot init. It requires the
-`disks` inventory service, read-only `boot_kernel` and `boot_archive` FILE grants
-and the space factory, opens `boot://installer.pxe`, and creates the `install`
-space with only that native program. The child receives these resources,
-memory, a readable clock, random bytes and the read-only boot root; the kernel
-adds the space's console, input devices, display and title grants. It receives
-no launcher, tmp root or generic session handoff. Missing authority or an
-unpackaged installer reports failure and stops; this entry does not supply an
-installer stub. Init drops the factory, waits for completion and reports its
-status on the Caelum tab.
+`boot://installer-init.pxe` is the init of the install space boot-init starts on
+the install entry. It holds the installer capability (the `disks` inventory
+service, read-only `boot_kernel` and `boot_archive` FILE grants, restart and
+`installer_diagnostics`), applies the archive's network profile through
+`network-runtime/`, and starts `boot://httpfs.pxb` for the `http` and `https`
+providers. It then offers Install, Update and Replay and launches
+`boot://installer.pxe` with the chosen action's narrowed disk rights, memory, a
+readable clock, random bytes, the read-only boot root, a child launcher and the
+providers. Missing authority or an unpackaged installer reports failure; this
+entry does not supply an installer stub. It services the network until the
+installer exits.
 
 [disk.h](include/disk.h) provides bounded native inventory, exclusive raw-disk
 I/O, flush/release and read-only volume-open wrappers. Raw writes require a live
