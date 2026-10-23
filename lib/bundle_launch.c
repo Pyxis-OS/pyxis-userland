@@ -589,14 +589,17 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     size_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
+    /* Endpoint creation is a private runtime role, selected again explicitly
+     * when preparing another declared bundle grant. */
+    uint64_t flags = requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ? 0 : ENVIRONMENT_EXPORTED;
     prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)requests[i].name, .kind = ENVIRONMENT_CAP,
-      .flags = ENVIRONMENT_EXPORTED, .value = index,
+      .flags = flags, .value = index,
     };
     if (requests[i].root && strcmp(requests[i].root, requests[i].name)) {
       prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
         .name = (uintptr_t)requests[i].root, .kind = ENVIRONMENT_CAP,
-        .flags = ENVIRONMENT_EXPORTED, .value = index,
+        .flags = flags, .value = index,
       };
     }
   }

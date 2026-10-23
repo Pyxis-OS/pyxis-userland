@@ -1589,7 +1589,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"random", shell->random, PROTOCOL_RANDOM},
       {"profile", shell->profile, PROTOCOL_PROFILE},
       {"launcher", child_launcher, PROTOCOL_LAUNCHER},
-      {"service", provider ? shell->service : HANDLE_INVALID, PROTOCOL_ENDPOINT_SERVICE},
+      {"service", shell->service, PROTOCOL_ENDPOINT_SERVICE},
       {"publication", provider ? publication : HANDLE_INVALID, PROTOCOL_ENDPOINT},
     };
     size_t ordinary_count = sizeof(ordinary) / sizeof(*ordinary);

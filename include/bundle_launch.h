@@ -43,6 +43,8 @@ enum call_status bundle_sources_forward_capture(const struct environment_capture
  * Preserve explicit stdio/cwd/text/provider and directory entries,
  * replacing app with this bundle's view. Named resources come only from the
  * manifest: unused source resource grants are not installed in the child.
+ * Explicit service/create requests use only the supplied held constructor and
+ * install it as a private runtime role, without implicit child inheritance.
  * A bundle declaring provider grants receives only those provider roots,
  * selected by source name from held exported PROVIDER entries and attenuated
  * to the declared rights. Other bundles keep existing provider inheritance.

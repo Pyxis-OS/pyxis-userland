@@ -683,7 +683,14 @@ to borrowed native bindings and atomic handle adoption. Libc retains ownership
 of handles, file positions and read-ahead. Its try I/O supports native pipes and
 consoles; files use the standard descriptor APIs. Foreground bundles can request
 `pipe` with `create` rights in their manifest. An unrequested grant is omitted;
-an unavailable required grant prevents launch.
+an unavailable required grant prevents launch. Bundles can explicitly request
+`service` with `create` rights from their launcher's held endpoint constructor.
+The grant remains private to that runtime, including under a manifest-selected
+name; ordinary child profiles do not inherit it. A declaring descendant needs
+an explicit source selection from a launcher that already holds it. Missing or
+insufficient required authority refuses before launch. Endpoint creation adds
+neither publication authority nor a descendant launcher. Trusted raw session
+and provider handoffs retain their explicit selections.
 
 [pyxis/job.h](libc/include/pyxis/job.h) owns a single direct native child through
 the caller's existing launcher. It uses explicit resource/stream selections and
