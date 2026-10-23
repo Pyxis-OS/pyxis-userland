@@ -35,6 +35,11 @@ struct pyxis_file {
   int output_mode; /* _IONBF by default; configuration precedes stream I/O. */
   unsigned char *output; /* Borrowed caller storage, or owned allocation. */
   size_t output_capacity, output_count;
+  bool memory_stream;
+  char *memory; /* Stream-owned until close; publication borrows this allocation. */
+  size_t memory_capacity, memory_length, memory_position;
+  char **memory_pointer;
+  size_t *memory_size;
 };
 
 int stream_error(FILE *stream, int error);

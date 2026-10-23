@@ -50,6 +50,17 @@ FILE *fdopen(int descriptor, const char *mode);
  * Removal authority is checked before creation. Failure returns NULL with errno;
  * failed or uncertain native creation/removal may leave a named file. */
 FILE *tmpfile(void);
+/* Open a byte-oriented, output-only growable memory stream without a descriptor
+ * or filesystem authority. fflush/fclose publish a NUL-terminated buffer and
+ * its byte length (excluding NUL), limited by the current position. Backward
+ * seeks preserve later bytes; NUL stays at the high-water end, and SEEK_END
+ * counts from that end. The published pointer is borrowed until the next write
+ * or fclose; after fclose the caller
+ * owns it and must free it. Seeking past the end allocates only on a later
+ * write, which zero-fills the gap. setvbuf follows the ordinary FILE contract.
+ * Null arguments fail with EINVAL; open failure preserves both destinations.
+ * fileno fails with EBADF. Reads and wide output fail with EBADF/EINVAL. */
+FILE *open_memstream(char **buffer, size_t *size);
 int fclose(FILE *stream);
 /* Remove a file or empty directory through its parent capability. Existing
  * streams keep their object; roots and final . or .. are not removable. */

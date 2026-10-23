@@ -190,6 +190,9 @@ bool stream_ready(FILE *stream, bool writing)
     stream_error(stream, EBADF);
     return false;
   }
+  if (stream->memory_stream) {
+    return true;
+  }
   if (!descriptor_object_ready(stream->operation, writing)) {
     bool read_blocked = !writing && errno == EBUSY && (!stream->error || stream->transaction_read_blocked);
     stream_error(stream, errno);
@@ -324,6 +327,33 @@ FILE *pyxis_fopen(const char *path, const char *mode, struct pyxis_open_result *
 FILE *fopen(const char *restrict path, const char *restrict mode)
 {
   return pyxis_fopen(path, mode, NULL);
+}
+
+FILE *open_memstream(char **buffer, size_t *size)
+{
+  if (!buffer || !size) {
+    errno = EINVAL;
+    return NULL;
+  }
+  FILE *stream = malloc(sizeof(*stream));
+  if (!stream) {
+    return NULL;
+  }
+  char *memory = malloc(1);
+  if (!memory) {
+    free(stream);
+    return NULL;
+  }
+  memory[0] = '\0';
+  *stream = (FILE){
+    .lock = LIBC_RECURSIVE_MUTEX_INITIALIZER, .descriptor = -1, .allocated = true,
+    .writable = true, .orientation = STREAM_BYTE_ORIENTED, .memory_stream = true,
+    .memory = memory, .memory_capacity = 1, .memory_pointer = buffer, .memory_size = size,
+  };
+  register_stream(stream);
+  *buffer = memory;
+  *size = 0;
+  return stream;
 }
 
 int pyxis_open_result_close(struct pyxis_open_result *result)
@@ -622,15 +652,63 @@ int pyxis_input_take(FILE *stream, handle_t *value)
   return descriptor_object_take_value(stream->operation, value);
 }
 
+static bool memory_write(FILE *stream, const void *buffer, size_t bytes)
+{
+  if (bytes > (size_t)LONG_MAX - stream->memory_position) {
+    stream_error(stream, EOVERFLOW);
+    return false;
+  }
+  size_t end = stream->memory_position + bytes;
+  size_t required = end + 1;
+  if (required > stream->memory_capacity) {
+    size_t capacity = stream->memory_capacity;
+    while (capacity < required) {
+      capacity = capacity > ((size_t)LONG_MAX + 1) / 2 ?
+          (size_t)LONG_MAX + 1 : capacity * 2;
+    }
+    char *memory = realloc(stream->memory, capacity);
+    if (!memory) {
+      stream_error(stream, ENOMEM);
+      return false;
+    }
+    stream->memory = memory;
+    stream->memory_capacity = capacity;
+  }
+  if (stream->memory_position > stream->memory_length) {
+    memset(stream->memory + stream->memory_length, 0,
+        stream->memory_position - stream->memory_length);
+  }
+  memcpy(stream->memory + stream->memory_position, buffer, bytes);
+  stream->memory_position = end;
+  if (end > stream->memory_length) {
+    stream->memory_length = end;
+  }
+  stream->memory[stream->memory_length] = '\0';
+  return true;
+}
+
+static void memory_publish(FILE *stream)
+{
+  size_t length = stream->memory_position < stream->memory_length ?
+      stream->memory_position : stream->memory_length;
+  *stream->memory_pointer = stream->memory;
+  *stream->memory_size = length;
+}
+
 static int flush_output(FILE *stream)
 {
+  if (stream->memory_stream && stream->closed) {
+    return stream_error(stream, EBADF);
+  }
   while (stream->output_count) {
     if (!stream_ready(stream, true)) {
       stream->output_flush_failed = true;
       return EOF;
     }
-    size_t written;
-    if (descriptor_object_write(stream->operation, stream->output, stream->output_count, &written) < 0) {
+    size_t written = stream->output_count;
+    bool success = stream->memory_stream ? memory_write(stream, stream->output, written) :
+        descriptor_object_write(stream->operation, stream->output, written, &written) == 0;
+    if (!success) {
       stream->output_flush_failed = true;
       return stream_error(stream, errno);
     }
@@ -638,6 +716,9 @@ static int flush_output(FILE *stream)
     memmove(stream->output, stream->output + written, stream->output_count);
   }
   stream->output_flush_failed = false;
+  if (stream->memory_stream) {
+    memory_publish(stream);
+  }
   return 0;
 }
 
@@ -769,12 +850,13 @@ int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
     return -1;
   }
   struct stream_operation operation __attribute__((cleanup(stream_operation_end))) = {stream};
-  if (!stream || stream->closed || __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0) {
+  if (!stream || stream->closed || (!stream->memory_stream &&
+      __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE) < 0)) {
     errno = EBADF;
     return -1;
   }
   struct pyxis_stdio_binding binding;
-  if (descriptor_object_stream(stream->operation, &binding) < 0) {
+  if (!stream->memory_stream && descriptor_object_stream(stream->operation, &binding) < 0) {
     return -1;
   }
   if (stream->io_started || (mode != _IONBF && mode != _IOLBF && mode != _IOFBF)
@@ -874,6 +956,10 @@ int fflush(FILE *stream)
   if (stream->closed) {
     return stream_error(stream, EBADF);
   }
+  if (stream->memory_stream) {
+    stream->io_started = true;
+    return flush_output(stream);
+  }
   bool transaction = descriptor_object_transaction(stream->operation);
   if (transaction && !descriptor_object_transaction_pending(stream->operation)) {
     return 0;
@@ -908,6 +994,10 @@ int fflush(FILE *stream)
 
 static void dispose_stream(FILE *stream)
 {
+  if (stream->memory_stream) {
+    /* Transfer confirmed bytes even if the final queued drain failed. */
+    memory_publish(stream);
+  }
   stream->closed = true;
   if (stream->output_owned) {
     free(stream->output);
@@ -945,7 +1035,9 @@ static int close_stream(FILE *stream, bool abandon)
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
   stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
   bool cursor = descriptor_file_begin(stream->operation);
-  if (abandon && descriptor_object_transaction_pending(stream->operation)) {
+  if (stream->memory_stream) {
+    error = flush_output(stream) < 0 ? errno : 0;
+  } else if (abandon && descriptor_object_transaction_pending(stream->operation)) {
     stream->output_count = 0;
     error = descriptor_object_abandon(stream->operation, ECANCELED) < 0 ? errno : 0;
     if (descriptor_close_stream_abandon(stream, stream->operation) < 0 && !error) {
@@ -1143,7 +1235,9 @@ static size_t write_bytes(const void *buffer, size_t bytes, FILE *stream)
   discard_pushback(stream);
   stream->wide_input = (mbstate_t){0};
   stream->io_started = true;
-  descriptor_object_discard_input(stream->operation);
+  if (!stream->memory_stream) {
+    descriptor_object_discard_input(stream->operation);
+  }
   size_t total = 0;
   // A failed old queue keeps ownership even after clearerr; drain it first.
   if (stream->output_flush_failed && flush_output(stream) < 0) {
@@ -1176,6 +1270,12 @@ static size_t write_bytes(const void *buffer, size_t bytes, FILE *stream)
         break;
       }
       continue;
+    }
+    if (stream->memory_stream) {
+      if (memory_write(stream, (const char *)buffer + total, bytes - total)) {
+        total = bytes;
+      }
+      break;
     }
     size_t written;
     if (descriptor_object_write(stream->operation, (const char *)buffer + total,
@@ -1381,7 +1481,7 @@ int fwide(FILE *stream, int mode)
     return 0;
   }
   struct pyxis_stdio_binding binding;
-  if (descriptor_object_stream(stream->operation, &binding) < 0) {
+  if (!stream->memory_stream && descriptor_object_stream(stream->operation, &binding) < 0) {
     return 0;
   }
   if (!stream->orientation && mode) {
@@ -1594,7 +1694,27 @@ int fseek(FILE *stream, long offset, int origin)
     return -1;
   }
   stream->io_started = true;
-  if (flush_output(stream) < 0 || descriptor_object_seek(stream->operation, offset, origin) < 0) {
+  if (flush_output(stream) < 0) {
+    return -1;
+  }
+  if (stream->memory_stream) {
+    size_t base = origin == SEEK_SET ? 0 : origin == SEEK_CUR ?
+        stream->memory_position : stream->memory_length;
+    if (offset < 0) {
+      unsigned long distance = (unsigned long)(-(offset + 1)) + 1;
+      if (distance > base) {
+        errno = EINVAL;
+        return -1;
+      }
+      stream->memory_position = base - distance;
+    } else {
+      if ((unsigned long)offset > (size_t)LONG_MAX - base) {
+        errno = EOVERFLOW;
+        return -1;
+      }
+      stream->memory_position = base + offset;
+    }
+  } else if (descriptor_object_seek(stream->operation, offset, origin) < 0) {
     return -1;
   }
   stream->eof = false;
@@ -1614,7 +1734,16 @@ long ftell(FILE *stream)
     return -1;
   }
   stream->io_started = true;
-  long position = descriptor_object_tell_output(stream->operation, stream->output_count);
+  long position;
+  if (stream->memory_stream) {
+    if (stream->output_count > (size_t)LONG_MAX - stream->memory_position) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    position = stream->memory_position + stream->output_count;
+  } else {
+    position = descriptor_object_tell_output(stream->operation, stream->output_count);
+  }
   /* The pushed-back byte is unread again. Before the first byte the position
    * stays zero; ISO C leaves it indeterminate there. */
   size_t pushed = pushback_bytes(stream);
