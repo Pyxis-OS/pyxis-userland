@@ -1658,6 +1658,23 @@ static struct boot_volume pool_http_work = {
   .name = BOOT_HTTP_WORK_VOLUME, .kind = BOOT_VOLUME_NPFS, .volume = BOOT_HTTP_WORK_VOLUME,
 };
 
+/* Package maintenance runs once per boot, before any provider or package
+ * consumer starts: on the configured path, or for the rescue space. */
+static void maintain_packages(const struct authority *authority, struct mounts *mounts)
+{
+  static bool maintained;
+  if (maintained) {
+    return;
+  }
+  maintained = true;
+  struct mounted_volume *packages = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  struct mounted_volume *http_work = find_mount(mounts, BOOT_HTTP_WORK_VOLUME);
+  package_boot_maintain(packages ? packages->root : HANDLE_INVALID,
+      http_work && (http_work->volume->kind == BOOT_VOLUME_NPFS ||
+          http_work->volume->kind == BOOT_VOLUME_RAM_NPFS) ? http_work->root : HANDLE_INVALID,
+      authority->services[SERVICE_CLOCK]);
+}
+
 /* Mounts VOLUME of pool partition POOL read-write, once. */
 static struct mounted_volume *mount_pool_volume(const struct authority *authority,
     struct mounts *mounts, uint32_t pool, struct boot_volume *volume)
@@ -1770,6 +1787,7 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
      * HTTP downloads. */
     mount_pool_volume(authority, mounts, pool, &pool_packages);
     mount_pool_volume(authority, mounts, pool, &pool_http_work);
+    maintain_packages(authority, mounts);
   }
   /* The rescue space runs the core archive alone; it manages packages but runs
    * none of them. */
@@ -1970,12 +1988,7 @@ int main(int argc, char **argv)
   if (configured && mount_plan(&authority, &plan, &mounts)) {
     bind_bin(&authority, &mounts, pool_configured);
     seed_live_repositories(&authority, &mounts);
-    struct mounted_volume *packages = find_mount(&mounts, BOOT_PACKAGES_VOLUME);
-    struct mounted_volume *http_work = find_mount(&mounts, BOOT_HTTP_WORK_VOLUME);
-    package_boot_maintain(packages ? packages->root : HANDLE_INVALID,
-        http_work && (http_work->volume->kind == BOOT_VOLUME_NPFS ||
-            http_work->volume->kind == BOOT_VOLUME_RAM_NPFS) ? http_work->root : HANDLE_INVALID,
-        authority.services[SERVICE_CLOCK]);
+    maintain_packages(&authority, &mounts);
     check_packages(&mounts);
     for (size_t i = 0; i < plan.space_count; ++i) {
       started += start_space(&authority, &mounts, plan.spaces[i]);
