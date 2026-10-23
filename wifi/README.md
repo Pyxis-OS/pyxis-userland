@@ -50,7 +50,9 @@ the host mask. Table `valid` means decoded metadata, and `default-power=1`
 identifies the accepted reference RFE-0 selection. Neither that state nor a
 matching rule means RFK is qualified or that RF transmission is admitted.
 Missing, malformed and failed platform reads remain distinct. RTL scan/connect
-remain unavailable in this preparation cut.
+remain unavailable in this preparation cut. An explicit `wifi scan` can own
+one-PHY initialization/calibration and checked stop, but completes UNAVAILABLE
+without a result FILE; status/READ alone never starts it.
 
 RTL PHY status records the historical preparation phase, state mask, selected
 channel/region, power-image readback count and path SAR bounds in quarter-dBm.

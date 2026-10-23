@@ -391,7 +391,8 @@ static void print_phy_facts(const struct wifi_status_reply *status)
   };
   printf("wifi: PHY historical phase=%s state=%x", phases[phy->phase], phy->state);
   if (phy->channel) {
-    printf(" channel=%u region=%u", phy->channel, phy->region);
+    printf(" channel=%u", phy->channel);
+    if (phy->state & WIFI_PHY_POWER_VERIFIED) printf(" region=%u", phy->region);
   }
   fputs("; not scan readiness\n", stdout);
   if (phy->state & WIFI_PHY_POWER_VERIFIED) {
