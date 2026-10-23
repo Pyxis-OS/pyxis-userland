@@ -1489,10 +1489,33 @@ static bool release_revision(handle_t tree, const char *version, char revision[6
   return ok || fail("the release's os-release does not name this release and a revision");
 }
 
-static bool open_payload(handle_t tree, const char *name, handle_t *file, uint64_t *size)
+/* FILE_TRANSFER to the ESP takes RAM sources only, so the publisher reads each
+ * verified payload from a copy in the RAM workspace. */
+static bool ram_payload(handle_t tree, const char *name, handle_t workspace, handle_t *copy,
+    uint64_t *size)
 {
-  return (directory_lookup(tree, name, DIRECTORY_KIND_FILE, FILE_RIGHT_READ, file) == CALL_OK &&
-      file_size(*file, size) == CALL_OK) || fail("the staged release is missing a payload");
+  handle_t source = HANDLE_INVALID;
+  bool ok = directory_lookup(tree, name, DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &source) == CALL_OK &&
+      file_size(source, size) == CALL_OK &&
+      directory_create(workspace, name, DIRECTORY_KIND_FILE, FILE_RIGHT_READ | FILE_RIGHT_WRITE,
+          copy) == CALL_OK;
+  static unsigned char buffer[64 * 1024];
+  for (uint64_t offset = 0; ok && offset < *size;) {
+    size_t wanted = *size - offset > sizeof(buffer) ? sizeof(buffer) : (size_t)(*size - offset);
+    size_t count = 0, written = 0;
+    ok = file_read(source, offset, buffer, wanted, &count) == CALL_OK && count;
+    while (ok && written < count) {
+      size_t step = 0;
+      ok = file_write(*copy, offset + written, buffer + written, count - written, &step) == CALL_OK &&
+          step;
+      written += step;
+    }
+    offset += count;
+  }
+  if (source != HANDLE_INVALID) {
+    handle_close(source);
+  }
+  return ok || fail("cannot copy a staged release payload into the RAM workspace");
 }
 
 /* Fetch, verify and stage RELEASE in packages/.upgrade/, then publish it as
@@ -1529,9 +1552,7 @@ static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_
   ok = ok && (pkg_kind_release(manifest.kind) || fail("the staged archive is not a release"));
   ok = ok && (directory_lookup(destination, "tree", DIRECTORY_KIND_DIRECTORY, PKG_READ_RIGHTS,
       &tree) == CALL_OK || fail("the staged release has no tree"));
-  ok = ok && release_revision(tree, release->identity.version, revision) &&
-      open_payload(tree, "caelum.elf", &kernel, &kernel_size) &&
-      open_payload(tree, "initrd.cpio", &archive, &archive_size);
+  ok = ok && release_revision(tree, release->identity.version, revision);
   /* The publisher verifies through a RAM workspace; tmp:// is RAM-backed. */
   ok = ok && (path_root("tmp", &tmp) == CALL_OK || fail("tmp:// is unavailable"));
   if (ok && clock_now(client.clock, &now) == CALL_OK) {
@@ -1544,6 +1565,8 @@ static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_
   } else if (ok) {
     ok = fail("cannot name a RAM workspace");
   }
+  ok = ok && ram_payload(tree, "caelum.elf", workspace, &kernel, &kernel_size) &&
+      ram_payload(tree, "initrd.cpio", workspace, &archive, &archive_size);
   if (ok) {
     const struct pkg_upgrade_publish request = {.issuer = issuer, .clock = client.clock,
       .random = bootstrap_capability("random"), .workspace = workspace, .kernel = kernel,
