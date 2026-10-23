@@ -13,10 +13,17 @@ Typed captures retain capabilities: `api=$(http prepare POST URI)`, then
 Interactive foreground commands and pipelines use an owned execution subgroup.
 The shell waits for direct stages and actual subtree retirement before returning
 input to its prompt, including when a stage faults or exits before descendants.
-The first Ctrl+C forcibly stops that entire owned subtree. Programs holding input
-passthrough continue to receive Ctrl+C as data. Noninteractive direct stages
-outside an owned scope retain cooperative interruption on the first press and
-forced stop on a second press; there is no grace timer.
+For ordinary interactive commands, the first Ctrl+C acknowledges one press and
+requests cooperative interruption of unfinished direct stages. Stages without a
+receiver are terminated immediately. After the direct stages retire, the shell
+stops remaining descendants and waits for actual subtree cleanup. A second press
+forces the whole subgroup to stop immediately. There is no grace timer; actual
+stage completion/status is preserved and cancellation still ends the command list.
+Programs holding input passthrough continue to receive Ctrl+C as data.
+
+Existing script, capture and output-helper scopes retain their immediate
+whole-subtree stop policy. Noninteractive direct stages outside an owned scope
+retain first-press cooperative interruption and second-press forced stop.
 
 After a started interactive scope retires, the shell uses a separately held
 terminal output grant to leave the alternate screen, reset the scroll region and

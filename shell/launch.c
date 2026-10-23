@@ -98,6 +98,7 @@ struct prepared_stage {
 
 struct launch_scope {
   bool owned, all_stages, append;
+  bool cooperative;
   handle_t terminal_output;
   bool normalization_attempted;
   handle_t producer;
@@ -1759,9 +1760,9 @@ static handle_t arm_interrupt(struct shell *shell)
 static_assert(LAUNCH_BATCH_MAX + 1 <= WAIT_MAX_INTERESTS,
     "a foreground wait watches every stage and the interrupt");
 
-/* Direct stages get one cooperative request; a later press forces stop. Owned
- * scopes and input failure always force stop. Keep observing real completion
- * after accepted delivery, with the same armed grant available for escalation. */
+/* Ordinary direct stages get one cooperative request; a later press forces
+ * their whole owned scope to stop. Capture/script/helper scopes and input failure
+ * retain immediate stop. Observe real completion with the same armed grant. */
 static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *children,
     size_t stage_count, handle_t armed, uint64_t deadline, bool *cancelled, struct launch_scope *scope)
 {
@@ -1824,13 +1825,8 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
       }
     }
     if (armed != HANDLE_INVALID && (events[count] & (WAIT_INTERRUPT | WAIT_ERROR))) {
-      if (group != HANDLE_INVALID) {
-        *cancelled = true;
-        status = execution_group_terminate(group);
-        scope->stop_failed = status != CALL_OK;
-        return status;
-      }
-      bool force = interrupted || (events[count] & WAIT_ERROR);
+      bool force = interrupted || (events[count] & WAIT_ERROR) ||
+          (group != HANDLE_INVALID && !scope->cooperative);
       if (!force) {
         /* Consume before dispatch: a press during any request stays latched. */
         status = console_ack_interrupt(armed);
@@ -1843,6 +1839,11 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
         }
       }
       *cancelled = true;
+      if (force && group != HANDLE_INVALID) {
+        status = execution_group_terminate(group);
+        scope->stop_failed = status != CALL_OK;
+        return status;
+      }
       bool accepted = false;
       for (size_t i = 0; i < stage_count; ++i) {
         if (complete[i]) {
@@ -1866,7 +1867,8 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
           shell_error(shell, "shell: stage %zu: cannot terminate (status %u)\n", i + 1, status);
         }
       }
-      if (accepted) {
+      if (accepted || group != HANDLE_INVALID) {
+        /* Even without receivers, watch root retirement and a second press. */
         interrupted = true;
       } else {
         return CALL_OK;
@@ -1880,7 +1882,13 @@ static enum call_status wait_foreground_group(struct shell *shell, struct launch
     handle_t armed, bool *cancelled)
 {
   handle_t group = scope->group.supervision;
-  enum call_status status = execution_group_seal(group);
+  /* Direct stages have retired. Cancellation must stop any surviving children;
+   * normal completion lets them finish before the owner restores presentation. */
+  bool stop = scope->cooperative && *cancelled;
+  enum call_status status = stop ? execution_group_terminate(group) : execution_group_seal(group);
+  if (stop) {
+    scope->stop_failed = status != CALL_OK;
+  }
   if (status != CALL_OK) {
     return status;
   }
@@ -2342,8 +2350,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (mode == SHELL_FOREGROUND && scope) {
     bool interactive_terminal = !shell->script_name &&
         (shell->terminal.input != HANDLE_INVALID || shell->terminal.output != HANDLE_INVALID);
-    if (scope->producer != HANDLE_INVALID || stage_count != user_count || shell_execution ||
-        interactive_terminal) {
+    bool force_interrupt = scope->producer != HANDLE_INVALID || stage_count != user_count || shell_execution;
+    if (force_interrupt || interactive_terminal) {
       handle_t launcher = shell->script_group.launcher != HANDLE_INVALID ?
           shell->script_group.launcher : shell->child_launcher != HANDLE_INVALID ?
           shell->child_launcher : shell->launcher;
@@ -2359,6 +2367,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         goto failed;
       }
       scope->owned = true;
+      scope->cooperative = interactive_terminal && !force_interrupt;
       if (interactive_terminal && shell->terminal.output != HANDLE_INVALID) {
         operation = "shell: hold terminal output";
         status = handle_copy_restricted(shell->terminal.output, CONSOLE_RIGHT_WRITE, 0,
@@ -3063,7 +3072,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       result = diagnostic;
     }
   }
-  if (scope && scope->owned && cancelled) {
+  if (scope && scope->owned && cancelled && !scope->cooperative) {
     report_scope->error = CALL_ABANDONED;
     set_outcome(outcome, TERMINAL_COMPLETION_TERMINATED, 0);
     return COMMAND_FAILED;
