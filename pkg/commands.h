@@ -5,7 +5,7 @@
 
 /* Read only declared exports and validate each target from its held tree.
  * Successful output owns the sorted command records followed by the sorted
- * root records, one per data package; no executable discovery occurs. */
+ * root records, one per package with files; no executable discovery occurs. */
 bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection,
     struct pkg_projection *projection, const char **reason);
 

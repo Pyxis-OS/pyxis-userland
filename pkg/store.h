@@ -29,7 +29,7 @@ void pkg_selection_free(struct pkg_selection *selection);
 bool pkg_predecessor(handle_t packages, uint64_t number, uint64_t *previous,
     const char **reason);
 /* A set's command projection: commands command records followed by roots
- * root records, one per data package. */
+ * root records, one per package with files. */
 struct pkg_projection {
   struct package_command_record *records;
   size_t commands, roots;
