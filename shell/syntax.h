@@ -16,12 +16,17 @@ struct shell_piece {
   enum shell_piece_kind kind;
   char *text;
   bool management;
+  /* Literal text typed outside quotes and escapes: the only text in which `*`
+   * is a wildcard. */
+  bool unquoted;
 };
 
 struct shell_word {
   struct shell_piece *pieces;
   size_t count;
   bool plain;
+  /* An unquoted `*` appears: the expanded word may be a pattern. */
+  bool glob;
   char *assignment_name;
 };
 
@@ -62,6 +67,25 @@ struct shell_expanded_word {
   const struct environment_value *value;
   struct shell_capture_result *capture;
 };
+
+/* Wildcard expansion (glob.c). A pattern word becomes one word per match, so
+ * the expansion works on a copy of the command whose pattern words are replaced
+ * by literal words owned here. NULL command means no word was a pattern. */
+struct shell_glob {
+  struct shell_syntax_command *command;
+  struct shell_word ***arrays;
+  size_t array_count;
+  struct shell_word **words;
+  size_t word_count, word_capacity;
+};
+const char *shell_glob_prepare(struct shell *shell,
+    const struct shell_syntax_command *syntax, struct shell_glob *glob,
+    enum call_status *status);
+void shell_glob_close(struct shell_glob *glob);
+enum call_status shell_lookup_value(handle_t snapshot, const char *name,
+    struct environment_value *value);
+const char *shell_positional_argument(const struct shell *shell, const char *digits,
+    const char **argument);
 
 struct shell_expansion {
   struct shell_command_line command;

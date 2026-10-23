@@ -54,7 +54,7 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/capture.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/settings.o $(BUILD)/shell/complete.o \
-                 $(BUILD)/shell/complete_path.o $(BUILD)/common/pane_cwd.o
+                 $(BUILD)/shell/complete_path.o $(BUILD)/shell/listing.o $(BUILD)/shell/glob.o $(BUILD)/common/pane_cwd.o
 COUNTER_OBJECT := $(BUILD)/counter/environment.o $(BUILD)/counter/forwarders.o
 MUX_OBJECTS := $(BUILD)/mux/layout.o $(BUILD)/mux/render.o $(BUILD)/mux/session.o $(BUILD)/mux/emulator.o $(BUILD)/mux/pointer.o $(BUILD)/mux/clipboard.o $(BUILD)/common/pane_cwd.o $(BUILD)/common/pane_broker.o
 REMOTE_OBJECT := $(BUILD)/remote-terminal/session.o $(BUILD)/common/pane_broker.o

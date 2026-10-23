@@ -55,7 +55,7 @@ static const char *expansion_error(struct shell_expansion *expansion,
   return diagnostic;
 }
 
-static enum call_status lookup_value(handle_t snapshot, const char *name,
+enum call_status shell_lookup_value(handle_t snapshot, const char *name,
     struct environment_value *value)
 {
   struct environment_entry_reply entry;
@@ -107,7 +107,7 @@ static const char *append_text(char **text, size_t *length,
 
 /* ${N} digits were validated by the parser; an index beyond the arguments,
  * including one too large to represent, is missing. */
-static const char *positional_argument(const struct shell *shell, const char *digits,
+const char *shell_positional_argument(const struct shell *shell, const char *digits,
     const char **argument)
 {
   size_t index = 0;
@@ -140,7 +140,7 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
       const char *addition = piece->text;
       char count[24];
       if (piece->kind == SHELL_POSITIONAL) {
-        error = positional_argument(shell, piece->text, &addition);
+        error = shell_positional_argument(shell, piece->text, &addition);
       } else if (piece->kind == SHELL_ARGUMENT_COUNT) {
         snprintf(count, sizeof(count), "%zu", shell->argument_count);
         addition = count;
@@ -183,7 +183,7 @@ static const char *expand_word(struct shell *shell, handle_t snapshot,
         selected = *value;
         *value = (struct environment_value){0};
       } else {
-        *status = lookup_value(snapshot, piece->text, &selected);
+        *status = shell_lookup_value(snapshot, piece->text, &selected);
         if (*status != CALL_OK) {
           error = "Environment expansion lookup failed";
           break;
@@ -300,7 +300,7 @@ static const char *select_capability(struct environment_capture *capture,
   return NULL;
 }
 
-const char *shell_syntax_expand(struct shell *shell,
+static const char *expand_command(struct shell *shell,
     const struct shell_syntax_command *syntax, struct shell_expansion *expansion,
     enum call_status *status)
 {
@@ -444,4 +444,19 @@ const char *shell_syntax_expand(struct shell *shell,
     error = "Could not release the expansion snapshot";
   }
   return error ? expansion_error(expansion, status, error) : NULL;
+}
+
+const char *shell_syntax_expand(struct shell *shell,
+    const struct shell_syntax_command *syntax, struct shell_expansion *expansion,
+    enum call_status *status)
+{
+  *expansion = (struct shell_expansion){0};
+  *status = CALL_OK;
+  struct shell_glob glob = {0};
+  const char *error = shell_glob_prepare(shell, syntax, &glob, status);
+  if (!error) {
+    error = expand_command(shell, glob.command ? glob.command : syntax, expansion, status);
+  }
+  shell_glob_close(&glob);
+  return error;
 }

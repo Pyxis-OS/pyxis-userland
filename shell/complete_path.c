@@ -176,7 +176,7 @@ static bool special_unquoted(char byte)
 {
   return byte == ' ' || byte == '\'' || byte == '"' || byte == '\\' || byte == '|' ||
          byte == '<' || byte == '>' || byte == '&' || byte == ';' || byte == '$' ||
-         byte == '(' || byte == ')' || byte == '@';
+         byte == '(' || byte == ')' || byte == '@' || byte == '*';
 }
 
 /* The value as typed in the word's quote state, starting with the open quote. */
@@ -210,47 +210,29 @@ static char *render(const char *value, char quote)
 static bool list_directory(struct shell *shell, const char *directory, const char *prefix,
     char quote, struct entries *entries)
 {
-  handle_t handle;
-  if (shell_open_directory(shell, *directory ? directory : ".", DIRECTORY_RIGHT_ENUMERATE,
-      &handle) != CALL_OK) {
+  struct shell_listing listing;
+  enum call_status status = shell_list_directory(shell, *directory ? directory : ".",
+      ENTRY_LIMIT, &listing);
+  if (status == CALL_LIMIT || status == CALL_NO_MEMORY) {
+    return false;
+  }
+  if (status != CALL_OK) {
     return true;
   }
   size_t directory_length = strlen(directory);
   size_t prefix_length = strlen(prefix);
   bool ok = true;
-  size_t capacity = 128, seen = 0;
-  char *name = malloc(capacity);
-  struct directory_cursor cursor = {0};
-  for (ok = name != NULL; ok;) {
-    struct directory_enumerate_reply entry;
-    if (directory_enumerate(handle, &cursor, name, capacity, &entry) != CALL_OK ||
-        entry.outcome == DIRECTORY_END || entry.outcome == DIRECTORY_CHANGED) {
-      break;
-    }
-    if (entry.outcome == DIRECTORY_BUFFER_TOO_SMALL) {
-      char *larger = realloc(name, entry.name_size);
-      ok = larger != NULL;
-      if (ok) {
-        name = larger;
-        capacity = entry.name_size;
-      }
+  for (size_t i = 0; ok && i < listing.count; ++i) {
+    const char *name = shell_listing_name(&listing, i);
+    if (memcmp(name, prefix, prefix_length) || (name[0] == '.' && prefix[0] != '.') ||
+        !offerable(name, quote)) {
       continue;
     }
-    cursor = entry.cursor;
-    if (++seen > ENTRY_LIMIT) {
-      ok = false;
-      break;
-    }
-    bool is_directory = entry.kind == DIRECTORY_KIND_DIRECTORY;
-    if (!strcmp(name, ".") || !strcmp(name, "..") || memcmp(name, prefix, prefix_length) ||
-        (name[0] == '.' && prefix[0] != '.') || !offerable(name, quote)) {
-      continue;
-    }
+    bool is_directory = listing.items[i].directory;
     ok = entries_add(entries, directory, directory_length, name, is_directory ? "/" : "",
         is_directory);
   }
-  free(name);
-  handle_close(handle);
+  shell_listing_close(&listing);
   return ok;
 }
 

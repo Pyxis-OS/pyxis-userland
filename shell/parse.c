@@ -88,10 +88,11 @@ void shell_syntax_close(struct shell_syntax *syntax)
 }
 
 static const char *add_piece(struct shell_word *word, enum shell_piece_kind kind,
-    const char *text, size_t length)
+    const char *text, size_t length, bool unquoted)
 {
   if (kind == SHELL_LITERAL && word->count &&
-      word->pieces[word->count - 1].kind == SHELL_LITERAL) {
+      word->pieces[word->count - 1].kind == SHELL_LITERAL &&
+      word->pieces[word->count - 1].unquoted == unquoted) {
     struct shell_piece *last = &word->pieces[word->count - 1];
     size_t previous = strlen(last->text);
     char *combined = realloc(last->text, previous + length + 1);
@@ -114,7 +115,8 @@ static const char *add_piece(struct shell_word *word, enum shell_piece_kind kind
     return "Out of memory";
   }
   word->pieces = pieces;
-  pieces[word->count++] = (struct shell_piece){.kind = kind, .text = copy};
+  pieces[word->count++] = (struct shell_piece){.kind = kind, .text = copy,
+    .unquoted = unquoted};
   return NULL;
 }
 
@@ -182,7 +184,7 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
       if (!*read) {
         return "Unfinished escape";
       }
-      error = add_piece(word, SHELL_LITERAL, read++, 1);
+      error = add_piece(word, SHELL_LITERAL, read++, 1, false);
     } else if (quote && character == quote) {
       quote = 0;
     } else if (!quote && (character == '\'' || character == '"')) {
@@ -201,7 +203,7 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
         }
         shell_syntax_close(&nested);
         if (!error) {
-          error = add_piece(word, SHELL_SUBSTITUTION, start, read - start - 1);
+          error = add_piece(word, SHELL_SUBSTITUTION, start, read - start - 1, false);
           if (!error) {
             word->pieces[word->count - 1].management = management;
           }
@@ -219,7 +221,7 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
           return "Positional arguments start at ${1}";
         }
         error = add_piece(word, digit(*start) ? SHELL_POSITIONAL : SHELL_VARIABLE,
-            start, read - start);
+            start, read - start, false);
         ++read;
       } else if (letter(*read)) {
         const char *start = read++;
@@ -229,7 +231,7 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
         if ((size_t)(read - start) > ENVIRONMENT_NAME_MAX) {
           return "Environment name is too long";
         }
-        error = add_piece(word, SHELL_VARIABLE, start, read - start);
+        error = add_piece(word, SHELL_VARIABLE, start, read - start, false);
       } else if (digit(*read)) {
         if (*read == '0') {
           return "$0 is unsupported; positional arguments start at $1";
@@ -237,10 +239,10 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
         if (digit(read[1])) {
           return "Positional arguments after $9 need braces, as in ${10}";
         }
-        error = add_piece(word, SHELL_POSITIONAL, read++, 1);
+        error = add_piece(word, SHELL_POSITIONAL, read++, 1, false);
       } else if (*read == '#') {
         ++read;
-        error = add_piece(word, SHELL_ARGUMENT_COUNT, "#", 1);
+        error = add_piece(word, SHELL_ARGUMENT_COUNT, "#", 1, false);
       } else if (*read == '@') {
         /* Only "$@" itself: the opening quote begins the word and the closing
          * quote ends it, so no other text can join the separate words. */
@@ -249,14 +251,18 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
           return "\"$@\" must be an entire quoted word";
         }
         ++read;
-        error = add_piece(word, SHELL_ALL_ARGUMENTS, "@", 1);
+        error = add_piece(word, SHELL_ALL_ARGUMENTS, "@", 1, false);
       } else if (*read == '*') {
         return "$* is unsupported; use \"$@\"";
       } else {
-        error = add_piece(word, SHELL_LITERAL, "$", 1);
+        error = add_piece(word, SHELL_LITERAL, "$", 1, false);
       }
     } else {
-      error = add_piece(word, SHELL_LITERAL, &character, 1);
+      bool unquoted = !quote;
+      if (unquoted && character == '*') {
+        word->glob = true;
+      }
+      error = add_piece(word, SHELL_LITERAL, &character, 1, unquoted);
     }
     if (error) {
       return error;
@@ -316,6 +322,8 @@ static const char *restore_assignment(struct shell_word *word)
   ++word->count;
   free(word->assignment_name);
   word->assignment_name = NULL;
+  /* A name=value argument is literal text, so none of it is a pattern. */
+  word->glob = false;
   return NULL;
 }
 

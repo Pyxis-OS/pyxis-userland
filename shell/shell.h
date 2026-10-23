@@ -93,6 +93,9 @@ struct shell {
   /* Why the last shell_open_image refused a package command; empty otherwise.
    * Error reports print it in place of the bare status. */
   char refusal[COMMAND_REFUSAL_MAX];
+  /* Wildcard expansion's last message, which names its pattern; the error
+   * returned from expansion points here. */
+  char glob_message[192];
   /* Immutable startup provenance only; no capability or table ownership. */
   struct shell_initial_entry *initial_entries;
   size_t initial_entry_count;
@@ -168,6 +171,25 @@ enum command_result shell_sync_fat32(struct shell *shell, char **arguments, size
 enum command_result shell_release_fat32(struct shell *shell, char **arguments, size_t count);
 /* Close owned data/control grants without implicit retirement. */
 void shell_fat_close(struct shell *shell);
+/* Names in one directory, in enumeration order, without "." and "..". */
+struct shell_listing_item {
+  size_t offset; /* Into shell_listing.names. */
+  bool directory;
+};
+struct shell_listing {
+  char *names; /* NUL-terminated names, back to back. */
+  size_t name_bytes, name_capacity;
+  struct shell_listing_item *items;
+  size_t count, item_capacity;
+};
+/* Lists PATH with the shell's own grants, which need ENUMERATE. A nonzero limit
+ * refuses a longer directory with CALL_LIMIT. The listing is live, so a change
+ * while reading restarts it a few times, then reports CALL_BUSY. On failure the
+ * listing is empty. */
+enum call_status shell_list_directory(struct shell *shell, const char *path, size_t limit,
+    struct shell_listing *listing);
+const char *shell_listing_name(const struct shell_listing *listing, size_t index);
+void shell_listing_close(struct shell_listing *listing);
 /* Tab completion. The word under the cursor is a command name (the first word
  * of a pipeline stage: builtins and names from the held command list) or a
  * path (any argument or redirection target: see complete_path.c). */
