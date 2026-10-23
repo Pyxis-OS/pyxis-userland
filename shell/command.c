@@ -364,8 +364,14 @@ static enum command_result terminal_command(struct shell *shell, char **argument
     return shell_error(shell,
         "shell: %s: requires a writable CONSOLE grant as the named terminal output\n", name);
   }
-  status = !strcmp(name, "reset") ? term_normalize(&shell->terminal) :
-      term_print(&shell->terminal, "\x1b[2J\x1b[3J\x1b[H");
+  if (!strcmp(name, "reset")) {
+    status = term_normalize(&shell->terminal);
+  } else {
+    status = term_fresh_line(&shell->terminal);
+    if (status == CALL_OK) {
+      status = term_print(&shell->terminal, "\x1b[2J\x1b[3J\x1b[H");
+    }
+  }
   return status == CALL_OK ? COMMAND_OK :
       shell_error(shell, "shell: %s: terminal output failed (status %u)\n", name, status);
 }
