@@ -55,8 +55,10 @@ void pyxis_terminal_state_free(struct pyxis_terminal_state *state);
  * closure remain visible; use ordinary reads to distinguish loss/EOF/hangup.
  * Storage is held during native waits, without a mode/table/read lock. Close
  * may finish before the wait returns; closed/replaced fd returns BAD_HANDLE
- * without writing events. Other owners can keep a native wait asleep until
- * its bounded deadline. No subscription survives return; events are unchanged
+ * without writing events. A native handle closed/reused after the precheck can
+ * temporarily direct the wait to another object; the final identity check
+ * rejects its result. That wait can last until the bounded deadline (30s),
+ * as can a wait held alive by another owner. No subscription survives return; events are unchanged
  * on any failure. Readiness reserves nothing and may already be stale. */
 enum call_status pyxis_terminal_wait(int descriptor, uint64_t interests,
     uint64_t generation, uint64_t deadline, uint64_t *events);

@@ -795,6 +795,8 @@ void pyxis_terminal_state_free(struct pyxis_terminal_state *state)
   }
 }
 
+/* Closing/reusing the native handle after validation can misdirect this bounded
+ * wait. Never publish that result: recheck the descriptor generation afterward. */
 enum call_status pyxis_terminal_wait(int descriptor, uint64_t interests,
     uint64_t generation, uint64_t deadline, uint64_t *events)
 {
