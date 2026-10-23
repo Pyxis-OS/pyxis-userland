@@ -213,6 +213,7 @@ int main(int argc, char **argv)
     .service = bootstrap_capability("service"),
     .retention_account = bootstrap_capability("retention_account"),
     .job_provisioner = bootstrap_capability("job_provisioner"),
+    .tcp_listen = bootstrap_capability(BUNDLE_TCP_LISTEN_SOURCE),
     .environment = startup_environment_handle(),
     .random = bootstrap_capability("random"),
     .net_registry = bootstrap_capability("net_registry"),

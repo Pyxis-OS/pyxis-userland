@@ -51,7 +51,8 @@ static const struct {
   {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
   {"audio", AUDIO_RIGHT_PLAYBACK},
   {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
-  {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {"random", RANDOM_RIGHT_READ},
+  {"tcp", TCP_SERVICE_RIGHT_CONNECT}, {BUNDLE_TCP_LISTEN_SOURCE, TCP_SERVICE_RIGHTS},
+  {"random", RANDOM_RIGHT_READ},
   {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
   {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
   {"net_registry", NET_REGISTRY_RIGHT_READ},
@@ -220,7 +221,8 @@ static enum call_status context_init(struct remote_context *context, bool multip
     status = context_add(context, remote_allowed[i].name, value->handle,
         value->rights & remote_allowed[i].rights, 0,
         wifi_control || !strcmp(remote_allowed[i].name, "service") ||
-            !strcmp(remote_allowed[i].name, "interpreter_root") ? 0 : ENVIRONMENT_EXPORTED, &index);
+            !strcmp(remote_allowed[i].name, "interpreter_root") ||
+            !strcmp(remote_allowed[i].name, BUNDLE_TCP_LISTEN_SOURCE) ? 0 : ENVIRONMENT_EXPORTED, &index);
     if (status != CALL_OK) {
       goto done;
     }

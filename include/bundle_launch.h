@@ -12,6 +12,8 @@ struct bundle_job_context;
  * A manifest selects the suffix; it never adds a source to this inventory. */
 #define BUNDLE_SOURCE_PREFIX "source."
 #define BUNDLE_SOURCE_LIMIT 8
+/* Trusted launcher source; not a URI root or implicitly inherited resource. */
+#define BUNDLE_TCP_LISTEN_SOURCE "tcp_listen"
 
 /* Zero-initialize; keep this owner alive through all preparation and close. */
 struct bundle_jobs {
@@ -45,6 +47,9 @@ enum call_status bundle_sources_forward_capture(const struct environment_capture
  * manifest: unused source resource grants are not installed in the child.
  * Explicit service/create requests use only the supplied held constructor and
  * install it as a private runtime role, without implicit child inheritance.
+ * Explicit TCP LISTEN requests select BUNDLE_TCP_LISTEN_SOURCE when supplied,
+ * otherwise the caller's declared tcp grant; CONNECT-only requests never use
+ * that source. LISTEN grants are private and must be declared again by children.
  * A bundle declaring provider grants receives only those provider roots,
  * selected by source name from held exported PROVIDER entries and attenuated
  * to the declared rights. Other bundles keep existing provider inheritance.

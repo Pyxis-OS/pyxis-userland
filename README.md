@@ -279,6 +279,19 @@ query follows routing unless its DNS interface is explicitly pinned. See the
 [network profile and grant reference](net/README.md) for selectors, static/DHCP
 configuration, restricted delivery, Remote binding and private-profile migration.
 
+A space may explicitly set `tcp_listen = true` (default false). Trusted local,
+mux and Remote startup retain a private `tcp_listen` source for bundle admission;
+the interactive shell removes that name from its mutable environment, so it
+cannot become a URI operand, export or reassignment. A bundle must separately
+declare `{"name":"tcp","resource":"tcp","rights":["connect","listen"],"required":true}`.
+Missing authority refuses the launch. CONNECT-only requests use the ordinary
+source, and undeclaring children keep the CONNECT-only profile. A declared LISTEN
+grant is private and another bundle must declare it again. The source authorizes
+concrete configured IPv4 addresses and nonzero ports within its interface scope;
+it is not a per-port restriction and supplies no network configuration rights.
+Shipped spaces leave the setting absent. Boot configuration checking and installer
+configuration admission use the same typed parser as boot init.
+
 `session.pxe --configure-network --tcp-server ADDRESS PORT [--tcp-count COUNT]`
 hands off to a TCP echo server instead of the local shell. It needs
 explicit TCP LISTEN authority from native init or a trusted session handoff;

@@ -1122,7 +1122,7 @@ static const char *launch_capacity(const struct authority *authority,
   granted += 2 + (space->package_management ? 2 : 0); /* package inspect and config sources */
   granted += space->package_upgrade ? 2 : 0; /* upgrade sources */
   granted += space->installer ? 6 : 0; /* installer_sources */
-  granted += space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
+  granted += space->tcp_listen + space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
       space->multiplexer + space->remote_multiplexer + space->screenshot +
       space->power + space->remote_power;
   if (space->wifi_rights) {
@@ -1366,6 +1366,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP((uintptr_t)BUNDLE_SOURCE_PREFIX "fat_mounts", 0),
         &(struct launch_grant){authority->fat_mounts, rights, 0});
+  }
+  if (space->tcp_listen) {
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, 0),
+        &(struct launch_grant){authority->services[SERVICE_TCP], TCP_SERVICE_RIGHTS, 0});
   }
   if (space->jobs) {
     enum call_status status = job_work_create(authority->ram,

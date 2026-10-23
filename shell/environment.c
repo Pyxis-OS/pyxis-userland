@@ -1,11 +1,13 @@
 #include "shell.h"
 #include <environment.h>
+#include <bundle_launch.h>
 #include <stdlib.h>
 #include <string.h>
 
 bool shell_environment_runtime_role(const char *name)
 {
-  return !strcmp(name, "job_provisioner") || !strcmp(name, "interpreter_root") ||
+  return !strcmp(name, BUNDLE_TCP_LISTEN_SOURCE) ||
+      !strcmp(name, "job_provisioner") || !strcmp(name, "interpreter_root") ||
       !strcmp(name, "interpreter_image");
 }
 
@@ -17,7 +19,7 @@ enum call_status shell_environment_init(struct shell *shell)
   if (status != CALL_OK) {
     return status;
   }
-  struct environment_unset_entry removed[3];
+  struct environment_unset_entry removed[4];
   size_t removed_count = 0, count = 0;
   for (size_t i = 0; i < captured.count; ++i) {
     const struct environment_value *value = &captured.values[i];

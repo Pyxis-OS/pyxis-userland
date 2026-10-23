@@ -44,6 +44,7 @@ static inline enum call_status profile_directories(const struct environment_capt
     if (entry->kind != ENVIRONMENT_CAP || !(entry->flags & ENVIRONMENT_EXPORTED) ||
         !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
         !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
+        !strcmp(entry->name, BUNDLE_TCP_LISTEN_SOURCE) ||
         !strcmp(entry->name, "staging")) {
       continue;
     }
@@ -98,6 +99,7 @@ static inline enum call_status profile_inherit_services(
     if (value->kind != ENVIRONMENT_CAP ||
         !strncmp(value->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
         !strcmp(value->name, "job_provisioner") || !strcmp(value->name, "job_work") ||
+        !strcmp(value->name, BUNDLE_TCP_LISTEN_SOURCE) ||
         !strcmp(value->name, "staging") || !strcmp(value->name, "script") ||
         !strcmp(value->name, "screenshot_saver") ||
         !strcmp(value->name, "wifi_auth_setup") ||

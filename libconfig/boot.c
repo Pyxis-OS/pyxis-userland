@@ -464,7 +464,7 @@ static void read_grants(lua_State *state, struct boot_space *space)
 static void read_space(lua_State *state, struct boot_config *config, struct boot_space *space)
 {
   static const char *const keys[] = {"name", "title", "init", "cpus", "roots", "start",
-    "network", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
+    "network", "tcp_listen", "focus", "launch", "jobs", "multiplexer", "remote_multiplexer", "clipboard_local", "clipboard_shared",
     "screenshot", "acpi_tables", "power", "remote_power", "grants", "fat32_mount", "package_management", "package_upgrade", "wifi"};
   if (lua_type(state, -1) != LUA_TTABLE) {
     luaL_error(state, "spaces must be tables");
@@ -534,6 +534,12 @@ static void read_space(lua_State *state, struct boot_config *config, struct boot
     luaL_error(state, "space %s: network must be a boolean", space->name);
   }
   space->network = lua_toboolean(state, -1);
+  lua_pop(state, 1);
+  config_field(state, -1, "tcp_listen");
+  if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+    luaL_error(state, "space %s: tcp_listen must be a boolean", space->name);
+  }
+  space->tcp_listen = lua_toboolean(state, -1);
   lua_pop(state, 1);
   config_field(state, -1, "focus");
   if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {

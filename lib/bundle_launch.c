@@ -198,7 +198,8 @@ static enum call_status prepare_context(struct context_grants *context,
      * "sdk", so the space's pkg and sdk roots are withheld like the packages
      * source (decision 38 of docs/wip/sdk-view.md). */
     if (!strcmp(name, "app") || !strcmp(name, "job_work") ||
-        !strcmp(name, "job_provisioner") || !strcmp(name, BUNDLE_PACKAGES_ROOT) ||
+        !strcmp(name, "job_provisioner") || !strcmp(name, BUNDLE_TCP_LISTEN_SOURCE) ||
+        !strcmp(name, BUNDLE_PACKAGES_ROOT) ||
         !strcmp(name, BUNDLE_SDK_ROOT) ||
         !strncmp(name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       continue;
@@ -502,7 +503,24 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     } else {
       const char *selection = requests[i].source ? requests[i].source :
           requests[i].packages || requests[i].sdk ? PACKAGE_SOURCE : requests[i].resource;
-      for (size_t j = 0; j < authority_count; ++j) {
+      if (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
+          (requests[i].rights & TCP_SERVICE_RIGHT_LISTEN)) {
+        for (size_t j = 0; j < authority_count; ++j) {
+          if (authority[j].resource &&
+              !strcmp(authority[j].resource, BUNDLE_TCP_LISTEN_SOURCE) &&
+              authority[j].protocol == PROTOCOL_TCP_SERVICE &&
+              authority[j].source != HANDLE_INVALID) {
+            if (source != HANDLE_INVALID) {
+              return CALL_BAD_REQUEST;
+            }
+            source = authority[j].source;
+          }
+        }
+      }
+      /* A caller that already holds a declared TCP LISTEN grant may supply it
+       * as ordinary tcp authority for another explicit declaration. */
+      bool private_listen = source != HANDLE_INVALID;
+      for (size_t j = 0; !private_listen && j < authority_count; ++j) {
         if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
             authority[j].protocol == requests[i].protocol) {
           if (source != HANDLE_INVALID && authority[j].source != HANDLE_INVALID) {
@@ -589,9 +607,12 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     size_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
-    /* Endpoint creation is a private runtime role, selected again explicitly
-     * when preparing another declared bundle grant. */
-    uint64_t flags = requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ? 0 : ENVIRONMENT_EXPORTED;
+    /* Constructors and listening authority are private runtime roles, selected
+     * again explicitly when preparing another declared bundle grant. */
+    bool private_role = requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ||
+        (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
+         (requests[i].rights & TCP_SERVICE_RIGHT_LISTEN));
+    uint64_t flags = private_role ? 0 : ENVIRONMENT_EXPORTED;
     prepared->entries[prepared->request.entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)requests[i].name, .kind = ENVIRONMENT_CAP,
       .flags = flags, .value = index,

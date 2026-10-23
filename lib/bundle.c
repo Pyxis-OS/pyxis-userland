@@ -354,6 +354,7 @@ static enum call_status parse_resources(struct bundle_program *program,
     if (!valid_name(nodes[key].string) || !strcmp(nodes[key].string, "app") ||
         !strcmp(nodes[key].string, BUNDLE_PACKAGES_ROOT) ||
         !strcmp(nodes[key].string, BUNDLE_SDK_ROOT) ||
+        !strcmp(nodes[key].string, BUNDLE_TCP_LISTEN_SOURCE) ||
         value->type != BUNDLE_JSON_STRING || !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
     }
@@ -464,8 +465,10 @@ static enum call_status parse_grants(struct bundle_program *program,
     if (!request->name || !request->resource || !rights || !required ||
         !strcmp(request->name, "app") || !strcmp(request->name, BUNDLE_PACKAGES_ROOT) ||
         !strcmp(request->name, BUNDLE_SDK_ROOT) ||
+        !strcmp(request->name, BUNDLE_TCP_LISTEN_SOURCE) ||
         (request->root && (!strcmp(request->root, BUNDLE_PACKAGES_ROOT) ||
-          !strcmp(request->root, BUNDLE_SDK_ROOT))) ||
+          !strcmp(request->root, BUNDLE_SDK_ROOT) ||
+          !strcmp(request->root, BUNDLE_TCP_LISTEN_SOURCE))) ||
         !strncmp(request->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1)) {
       return CALL_BAD_REQUEST;
     }

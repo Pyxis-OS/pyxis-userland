@@ -110,7 +110,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 29 };
+  enum { OPTIONAL_RESOURCE_COUNT = 30 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -189,6 +189,12 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     session->cwd_bootstrap = bootstrap.receiver;
     entries[entry_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("pane_cwd", grant_count);
     grants[grant_count++] = (struct launch_grant){bootstrap.caller, 0, HANDLE_TRANSPORT_SEND};
+  }
+  handle_t tcp_listen = bootstrap_capability(BUNDLE_TCP_LISTEN_SOURCE);
+  if (tcp_listen != HANDLE_INVALID) {
+    entries[entry_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, grant_count);
+    grants[grant_count++] = (struct launch_grant){tcp_listen, TCP_SERVICE_RIGHTS, 0};
   }
   handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {

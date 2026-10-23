@@ -139,6 +139,7 @@ struct shell {
   /* Startup-selected shell bundle code, retained only for containment matching. */
   handle_t command_shell_image;
   handle_t job_provisioner;
+  handle_t tcp_listen; /* Retained private source for declared bundle LISTEN. */
   handle_t threads; /* Retained before commands can rebind the startup table. */
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_registry,

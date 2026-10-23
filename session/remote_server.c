@@ -116,7 +116,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 26 };
+  enum { OPTIONAL_COUNT = 27 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -146,6 +146,12 @@ int launch_remote_server(const struct session_config *config,
   size_t resource_count = 5, grant_count = FIRST_OPTIONAL;
   resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP("retention_account", grant_count);
   grants[grant_count++] = (struct launch_grant){retention_account, RETENTION_RIGHT_CAPTURE, 0};
+  handle_t tcp_listen = bootstrap_capability(BUNDLE_TCP_LISTEN_SOURCE);
+  if (tcp_listen != HANDLE_INVALID) {
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, grant_count);
+    grants[grant_count++] = (struct launch_grant){tcp_listen, TCP_SERVICE_RIGHTS, 0};
+  }
   handle_t provisioner = bootstrap_capability("job_provisioner");
   if (provisioner != HANDLE_INVALID) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", grant_count);

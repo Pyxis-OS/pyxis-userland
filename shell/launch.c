@@ -723,6 +723,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
    * ordinary clients receive a newly declared leaf through bundle preparation. */
   handle_t job_provisioner = session ? shell->job_provisioner : HANDLE_INVALID;
   bool has_job_provisioner = job_provisioner != HANDLE_INVALID;
+  bool has_tcp_listen = session && shell->tcp_listen != HANDLE_INVALID;
   handle_t threads = session ? shell->threads : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
   bool delegate = mode == SHELL_FOREGROUND &&
@@ -840,7 +841,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   root_count = retained;
   size_t directory_index = CHILD_ROOT + root_count;
   size_t depth = shell->directory->count;
-  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 42 -
+  if (depth > SIZE_MAX / sizeof(struct launch_grant) - directory_index - 43 -
       BUNDLE_SOURCE_LIMIT - ENVIRONMENT_STREAM_COUNT) {
     return CALL_LIMIT;
   }
@@ -877,7 +878,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
-  size_t retention_factory_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
+  size_t tcp_listen_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
+  size_t retention_factory_index = tcp_listen_index + (has_tcp_listen ? 1 : 0);
   size_t retention_account_index = retention_factory_index + (has_retention_factory ? 1 : 0);
   size_t session_config_index = retention_account_index + (has_retention_account ? 1 : 0);
   size_t network_config_index = session_config_index + (has_session_config ? 1 : 0);
@@ -1073,6 +1075,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       job_provisioner, JOB_PROVISIONER_RIGHTS, 0,
     };
   }
+  if (has_tcp_listen) {
+    grants[tcp_listen_index] = (struct launch_grant){shell->tcp_listen, TCP_SERVICE_RIGHTS, 0};
+  }
   if (has_retention_factory) {
     grants[retention_factory_index] = (struct launch_grant){
       retention_factory, RETENTION_FACTORY_RIGHT_CREATE, 0,
@@ -1097,6 +1102,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_job_provisioner) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_PRIVATE_CAP((uintptr_t)"job_provisioner", job_provisioner_index);
+  }
+  if (has_tcp_listen) {
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP(BUNDLE_TCP_LISTEN_SOURCE, tcp_listen_index);
   }
   if (has_threads) {
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", threads_index);
@@ -1469,6 +1478,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           !strncmp(entry->name, BUNDLE_SOURCE_PREFIX, sizeof(BUNDLE_SOURCE_PREFIX) - 1) ||
           !strcmp(entry->name, "script") ||
           !strcmp(entry->name, "job_provisioner") || !strcmp(entry->name, "job_work") ||
+          !strcmp(entry->name, BUNDLE_TCP_LISTEN_SOURCE) ||
           !strcmp(entry->name, "staging") || !strcmp(entry->name, "screenshot_saver") ||
           !strcmp(entry->name, "wifi_session_control") ||
           !strcmp(entry->name, "wifi_auth_setup") ||
@@ -1583,6 +1593,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
       {"dns_udp", environment->dns_udp, PROTOCOL_UDP_SERVICE},
       {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
+      {BUNDLE_TCP_LISTEN_SOURCE, shell->tcp_listen, PROTOCOL_TCP_SERVICE},
       {"pipe", mode == SHELL_FOREGROUND || session ? shell->pipe : HANDLE_INVALID,
         PROTOCOL_PIPE_SERVICE},
       {"retention_account", shell->retention_account, PROTOCOL_RETENTION_ACCOUNT},
