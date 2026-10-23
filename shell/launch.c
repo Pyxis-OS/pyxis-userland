@@ -121,53 +121,32 @@ static enum call_status publish_service_roots(struct shell *shell,
     const struct provider_setup *setup, struct endpoint_packet *packet, bool read_only)
 {
   size_t count = scope->roots ? scope->root_count : 1;
-  size_t selected[PROVIDER_SETUP_ROOT_MAX];
-  for (size_t i = 0; i < PROVIDER_SETUP_ROOT_MAX; ++i) {
-    selected[i] = SIZE_MAX;
+  const char *roles[PROVIDER_SETUP_ROOT_MAX];
+  for (size_t i = 0; i < count; ++i) {
+    roles[i] = scope->roots ? scope->roots[i].role : PROVIDER_SETUP_DEFAULT_ROLE;
   }
-  for (size_t i = 0; i < setup->root_count; ++i) {
-    const char *role = setup->roles[i];
-    size_t length = 0;
-    while (length <= PROVIDER_SETUP_ROLE_MAX && role[length]) {
-      ++length;
+  size_t selected[PROVIDER_SETUP_ROOT_MAX];
+  enum call_status matched = provider_setup_match(setup, packet, roles, count, selected);
+  if (matched != CALL_OK) {
+    return matched;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (selected[i] == SIZE_MAX) {
+      continue;
     }
-    if (!length || length > PROVIDER_SETUP_ROLE_MAX) {
-      return CALL_BAD_REQUEST;
-    }
-    /* Fixed strings are zero padded; reject hidden suffix bytes. */
-    for (size_t j = length + 1; j <= PROVIDER_SETUP_ROLE_MAX; ++j) {
-      if (role[j]) {
-        return CALL_BAD_REQUEST;
-      }
-    }
-    size_t match = count;
-    for (size_t j = 0; j < count; ++j) {
-      const char *declared = scope->roots ? scope->roots[j].role : PROVIDER_SETUP_DEFAULT_ROLE;
-      if (!strcmp(role, declared)) {
-        match = j;
-      }
-    }
-    if (match == count || selected[match] != SIZE_MAX) {
-      return CALL_BAD_REQUEST;
-    }
-    struct endpoint_grant *grant = &packet->grants[i];
+    struct endpoint_grant *grant = &packet->grants[selected[i]];
     struct handle_info info;
     enum call_status status = handle_query(grant->handle, &info);
     if (status != CALL_OK) {
       return status;
     }
-    if (info.kind != HANDLE_KIND_EXPORTED || grant->transport != HANDLE_TRANSPORT_CALL ||
-        info.rights != grant->rights || info.transport != grant->transport) {
-      return CALL_BAD_REQUEST;
-    }
-    uint64_t rights = scope->roots ? scope->roots[match].rights : UINT64_MAX;
-    uint64_t transport = scope->roots ? scope->roots[match].transport : HANDLE_TRANSPORT_CALL;
+    uint64_t rights = scope->roots ? scope->roots[i].rights : UINT64_MAX;
+    uint64_t transport = scope->roots ? scope->roots[i].transport : HANDLE_TRANSPORT_CALL;
     if (read_only && info.protocol == PROTOCOL_PROVIDER) {
       rights &= PROVIDER_RIGHT_OPEN_READ;
     }
     grant->rights &= rights;
     grant->transport &= transport;
-    selected[match] = i;
   }
   for (size_t i = 0; i < count; ++i) {
     if (selected[i] == SIZE_MAX && (!scope->roots || !scope->roots[i].optional)) {
@@ -2001,41 +1980,6 @@ static enum command_result close_foreground(struct shell *shell,
   return result;
 }
 
-static enum call_status receive_service_setup(struct shell *shell, handle_t process,
-    handle_t receiver, handle_t armed, struct endpoint_packet *packet)
-{
-  uint64_t now;
-  enum call_status status = clock_now(shell->clock, &now);
-  if (status != CALL_OK || now > UINT64_MAX - PROVIDER_SETUP_TIMEOUT_NS) {
-    return status == CALL_OK ? CALL_LIMIT : status;
-  }
-  uint64_t deadline = now + PROVIDER_SETUP_TIMEOUT_NS;
-  for (;;) {
-    struct wait_interest interests[] = {
-      {.handle = receiver, .events = WAIT_READABLE},
-      {.handle = process, .events = WAIT_COMPLETE},
-      {.handle = armed, .events = WAIT_INTERRUPT},
-    };
-    uint64_t events[3] = {0};
-    status = wait_many(interests, armed != HANDLE_INVALID ? 3 : 2, deadline, events);
-    if (status != CALL_OK) {
-      return status;
-    }
-    if (events[0]) {
-      status = endpoint_try_receive(receiver, packet);
-      if (status != CALL_WOULD_BLOCK) {
-        return status;
-      }
-    }
-    if (events[1]) {
-      return CALL_IO;
-    }
-    if (armed != HANDLE_INVALID && (events[2] & (WAIT_INTERRUPT | WAIT_ERROR))) {
-      return CALL_ABANDONED;
-    }
-  }
-}
-
 static enum call_status check_redirect_inputs(const struct shell_stage *stages,
     const struct prepared_stage *prepared,
     const struct pyxis_stdio_binding streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT],
@@ -2841,7 +2785,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     struct endpoint_packet packet = {0};
     status = scope && scope->service ?
-        receive_service_setup(shell, scope->service->process, publication.receiver, armed, &packet) :
+        provider_setup_receive(shell->clock, scope->service->process, publication.receiver,
+            armed, &packet) :
         endpoint_receive(publication.receiver, &packet);
     if (status != CALL_OK) {
       if (scope) {
@@ -2860,23 +2805,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       return shell_error(shell, "service: publication receive failed (status %u)\n", status);
     }
     enum call_status published = CALL_BAD_REQUEST;
-    struct provider_setup setup = {0};
-    bool reported_failure = false;
-    if (packet.kind == ENDPOINT_MESSAGE_CALL && packet.protocol == 0 &&
-        packet.operation == 0 && packet.object_id == 0 && packet.reason == 0 &&
-        packet.size == sizeof(setup)) {
-      memcpy(&setup, packet.data, sizeof(setup));
-      if (setup.status < CALL_STATUS_COUNT && setup.cleanup_status < CALL_STATUS_COUNT) {
-        if (setup.status == CALL_OK && setup.cleanup_status == CALL_OK &&
-            setup.root_count && setup.root_count <= PROVIDER_SETUP_ROOT_MAX &&
-            packet.grant_count == setup.root_count) {
-          published = publish_service_roots(shell, scope, replacement_control,
-              &setup, &packet, read_only);
-        } else if (setup.status != CALL_OK && !setup.root_count && packet.grant_count == 0) {
-          reported_failure = true;
-          published = CALL_OK;
-        }
-      }
+    struct provider_setup setup;
+    enum provider_setup_outcome outcome = provider_setup_read(&packet, &setup);
+    bool reported_failure = outcome == PROVIDER_SETUP_FAILED;
+    if (outcome == PROVIDER_SETUP_READY) {
+      published = publish_service_roots(shell, scope, replacement_control,
+          &setup, &packet, read_only);
+    } else if (reported_failure) {
+      published = CALL_OK;
     }
     bool closed_grants = true;
     for (size_t i = 0; i < packet.grant_count; ++i) {

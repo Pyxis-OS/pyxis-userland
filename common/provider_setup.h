@@ -99,4 +99,30 @@ static inline enum call_status provider_setup_report(handle_t publication,
       grant ? &root : NULL, grant ? 1 : 0, attempted);
 }
 
+/* The launcher side, shared by the shell's service start and installer-init. */
+
+/* Waits until RECEIVER holds the provider's report, at most the setup timeout
+ * read from CLOCK. CALL_IO: PROCESS completed first. CALL_ABANDONED: the
+ * optional ARMED interrupt fired. */
+enum call_status provider_setup_receive(handle_t clock, handle_t process, handle_t receiver,
+    handle_t armed, struct endpoint_packet *packet);
+
+enum provider_setup_outcome {
+  PROVIDER_SETUP_INVALID, /* Not a setup report of this layout. */
+  PROVIDER_SETUP_READY,   /* Success with 1..4 roots, one grant each. */
+  PROVIDER_SETUP_FAILED,  /* A reported failure, with no roots or grants. */
+};
+
+/* Reads PACKET as a setup report into SETUP. */
+enum provider_setup_outcome provider_setup_read(const struct endpoint_packet *packet,
+    struct provider_setup *setup);
+
+/* Matches each reported root of a READY SETUP to one of ROLES. SELECTED[i] is
+ * the PACKET grant index for ROLES[i], or SIZE_MAX when the provider did not
+ * report that role. An unknown or repeated role, or a grant that is not an
+ * exported CALL handle holding exactly its reported rights, is refused. */
+enum call_status provider_setup_match(const struct provider_setup *setup,
+    const struct endpoint_packet *packet, const char *const *roles, size_t role_count,
+    size_t *selected);
+
 #endif
