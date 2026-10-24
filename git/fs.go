@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 
@@ -32,7 +33,26 @@ func (fs *nativeFS) path(name string) (string, error) {
 			return "", fmt.Errorf("unsupported repository component %q", part)
 		}
 	}
-	return filepath.Join(fs.root, name), nil
+	path := filepath.Join(fs.root, name)
+	// Native resolution cannot follow symlinks. Keep the Linux reference
+	// profile from following existing symlinked metadata or worktree parents.
+	if runtime.GOOS == "linux" {
+		prefix := "."
+		for _, part := range strings.Split(path, string(filepath.Separator)) {
+			prefix = filepath.Join(prefix, part)
+			info, err := os.Lstat(prefix)
+			if errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			if err != nil {
+				return "", err
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("symlink routing is unsupported: %s", prefix)
+			}
+		}
+	}
+	return path, nil
 }
 
 func (fs *nativeFS) Capabilities() billy.Capability {
