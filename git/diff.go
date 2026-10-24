@@ -66,20 +66,26 @@ func showDiff(ctx context.Context, args []string) (err error) {
 	before := indexed
 	if cached {
 		before = make(map[string]*diffFile)
-		head, err := r.Head()
+		unborn, err := isUnborn(s)
 		if err != nil {
 			return err
 		}
-		commit, err := r.CommitObject(head.Hash())
-		if err != nil {
-			return err
-		}
-		tree, err := commit.Tree()
-		if err != nil {
-			return err
-		}
-		if err := diffTreeFiles(ctx, r, tree, "", 0, before); err != nil {
-			return err
+		if !unborn {
+			head, err := r.Head()
+			if err != nil {
+				return err
+			}
+			commit, err := r.CommitObject(head.Hash())
+			if err != nil {
+				return err
+			}
+			tree, err := commit.Tree()
+			if err != nil {
+				return err
+			}
+			if err := diffTreeFiles(ctx, r, tree, "", 0, before); err != nil {
+				return err
+			}
 		}
 	}
 	paths := make(map[string]bool, len(before)+len(indexed))
