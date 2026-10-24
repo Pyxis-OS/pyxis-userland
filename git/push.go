@@ -20,7 +20,7 @@ func push(ctx context.Context, args []string) (err error) {
 	if len(args) > 1 {
 		return errors.New("usage: git push [REMOTE]")
 	}
-	_, s, _, err := openRepository(false)
+	_, s, _, err := openRepository(true)
 	if err != nil {
 		return err
 	}
@@ -73,8 +73,15 @@ func push(ctx context.Context, args []string) (err error) {
 	}
 	// Freeze the selected commit and send exactly one destination branch.
 	// Never allow go-git's implicit all-branches refspec or configured defaults.
+	tracking := plumbing.NewRemoteReferenceName(name, upstream.Merge.Short())
+	if err := safeReferenceName(tracking); err != nil {
+		return err
+	}
 	source := config.RefSpec(branch.Hash().String() + ":" + string(upstream.Merge))
-	err = git.NewRemote(s, remote).PushContext(ctx, &git.PushOptions{
+	// Suppress configured post-push fetch mappings: only this tracking ref
+	// may change locally, and its failure must not hide a confirmed push.
+	selected := &config.RemoteConfig{Name: name, URLs: []string{session.URL}}
+	err = git.NewRemote(s, selected).PushContext(ctx, &git.PushOptions{
 		RemoteName: name,
 		RemoteURL:  session.URL,
 		RefSpecs:   []config.RefSpec{source},
@@ -90,6 +97,9 @@ func push(ctx context.Context, args []string) (err error) {
 			return safe
 		}
 		return fmt.Errorf("%w; remote state may have changed, inspect it before retrying", safe)
+	}
+	if err := s.SetReference(plumbing.NewHashReference(tracking, branch.Hash())); err != nil {
+		return fmt.Errorf("remote confirmed the push, but local tracking update failed: %w", err)
 	}
 	if err := s.Close(); err != nil {
 		return fmt.Errorf("remote confirmed the push, but local close failed: %w", err)
