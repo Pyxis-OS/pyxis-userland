@@ -88,8 +88,9 @@ func (fs *nativeFS) OpenFile(name string, flags int, mode os.FileMode) (billy.Fi
 	if err != nil {
 		return nil, err
 	}
-	writable := flags&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0
-	if writable && !fs.writable {
+	write_access := flags&(os.O_WRONLY|os.O_RDWR) != 0
+	mutating := write_access || flags&(os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0
+	if mutating && !fs.writable {
 		return nil, billy.ErrReadOnly
 	}
 	if flags&os.O_CREATE != 0 {
@@ -101,7 +102,7 @@ func (fs *nativeFS) OpenFile(name string, flags int, mode os.FileMode) (billy.Fi
 	if err != nil {
 		return nil, err
 	}
-	return &nativeFile{File: f, name: name, writable: writable}, nil
+	return &nativeFile{File: f, name: name, writable: write_access}, nil
 }
 
 func (fs *nativeFS) TempFile(dir, prefix string) (billy.File, error) {
