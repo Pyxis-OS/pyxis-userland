@@ -13,44 +13,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	format "github.com/go-git/go-git/v5/plumbing/format/config"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 func commitSignature() (_ *object.Signature, err error) {
-	path, err := identityPath()
+	cfg, err := readAppConfig()
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read author identity %s: %w", path, err)
-	}
-	cfg := format.New()
-	err = errors.Join(format.NewDecoder(f).Decode(cfg), f.Close())
-	if err != nil {
-		return nil, fmt.Errorf("author identity %s: %w", path, err)
-	}
-	name, email := "", ""
-	for _, section := range cfg.Sections {
-		if !section.IsName("user") || len(section.Subsections) != 0 {
-			return nil, errors.New("author configuration permits only [user] name and email")
-		}
-		for _, option := range section.Options {
-			switch {
-			case option.IsKey("name") && name == "":
-				name = option.Value
-			case option.IsKey("email") && email == "":
-				email = option.Value
-			default:
-				return nil, errors.New("unsupported or duplicate author configuration setting")
-			}
-			if !validIdentityField(option.Value) {
-				return nil, errors.New("author name and email must be nonempty text without controls or angle brackets")
-			}
-		}
-	}
-	if name == "" || email == "" {
+	if cfg.Name == "" || cfg.Email == "" {
 		return nil, errors.New("set [user] name and email in home://.config/git/config before committing")
 	}
 	when, err := wallTime()
@@ -67,7 +38,7 @@ func commitSignature() (_ *object.Signature, err error) {
 			return nil, fmt.Errorf("commit timezone %q: %w", tz, err)
 		}
 	}
-	return &object.Signature{Name: name, Email: email, When: when.In(zone)}, nil
+	return &object.Signature{Name: cfg.Name, Email: cfg.Email, When: when.In(zone)}, nil
 }
 
 func validIdentityField(value string) bool {

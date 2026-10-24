@@ -11,6 +11,15 @@ import (
 
 func identityPath() (string, error) { return "home://.config/git/config", nil }
 
+func credentialsPath() (string, error) { return "home://.config/git/credentials", nil }
+
+func caFilePath(raw string) (string, error) {
+	if _, _, err := rootedCAPath(raw); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
 func wallTime() (time.Time, error) {
 	ts, err := syscall.ClockWallNow()
 	if err != nil {
