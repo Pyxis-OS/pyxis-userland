@@ -71,7 +71,18 @@ func run(ctx context.Context, args []string) error {
 
 // The accepted checkout profile applies in memory even for a read-only open.
 // Reading log/status never rewrites an existing repository's configuration.
-type profileStorage struct{ *filesystem.Storage }
+type profileStorage struct {
+	*filesystem.Storage
+	closed bool
+}
+
+func (s *profileStorage) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	return s.Storage.Close()
+}
 
 func (s *profileStorage) Config() (*config.Config, error) {
 	cfg, err := s.Storage.Config()
@@ -92,7 +103,7 @@ func (s *profileStorage) Config() (*config.Config, error) {
 }
 
 func storage(writable bool) *profileStorage {
-	return &profileStorage{filesystem.NewStorage(&nativeFS{root: ".git", writable: writable}, cache.NewObjectLRUDefault())}
+	return &profileStorage{Storage: filesystem.NewStorage(&nativeFS{root: ".git", writable: writable}, cache.NewObjectLRUDefault())}
 }
 
 func openRepository() (*git.Repository, *profileStorage, error) {
@@ -190,6 +201,9 @@ func clone(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	if err := s.Close(); err != nil {
+		return err
+	}
 	_, err = fmt.Fprintf(os.Stdout, "Cloned %s at %s\n", dir, head.Hash())
 	return err
 }
@@ -241,6 +255,9 @@ func showStatus(ctx context.Context) (err error) {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.Close(); err != nil {
 		return err
 	}
 	if status.IsClean() {
