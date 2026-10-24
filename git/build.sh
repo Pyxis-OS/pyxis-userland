@@ -62,7 +62,7 @@ export GOPROXY=off
 if [[ "$target" == pyxis ]]; then
   stage="$out/stage"
   bundle="$stage/bin/git.pxb"
-  executable="$bundle/bin/git.pxe"
+  executable="$bundle/app/bin/git.pxe"
   metadata="$bundle/app/metadata"
 else
   stage="$out/stage-linux"
