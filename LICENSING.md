@@ -15,6 +15,10 @@ applied: MPL's standard secondary-license provisions remain available.
 
 ## Third-party and separately licensed material
 
+- `git/patches/`: adaptations of go-git v5.19.3 and go-billy v5.9.2 retain
+  their Apache-2.0 terms. The fixed module graph and checksums are in
+  `git/go.mod` and `git/go.sum`; the optional build stages the complete notices
+  for every compiled dependency. The first-party CLI remains MPL-2.0.
 - `third_party/tlsf/`: imported allocator sources and their local adaptations
   retain the BSD terms in [tlsf.h](third_party/tlsf/tlsf.h), with provenance in
   [UPSTREAM.md](third_party/tlsf/UPSTREAM.md).
