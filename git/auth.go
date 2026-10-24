@@ -120,7 +120,7 @@ func httpsCredentials(origin string) (transport.AuthMethod, error) {
 		}
 		if key == "" {
 			u, err := validateHTTPSURL(subsection)
-			if err != nil || u.Path != "" {
+			if err != nil || (u.Path != "" && u.Path != "/") || u.RawPath != "" {
 				return errCredentialConfig
 			}
 			selected, err := httpsOrigin(u)
