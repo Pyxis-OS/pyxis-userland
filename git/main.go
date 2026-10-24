@@ -36,7 +36,7 @@ func main() {
 }
 
 func usage() error {
-	return errors.New("usage: git clone HTTPS_URL [DIRECTORY] | git log [-n COUNT] | git status")
+	return errors.New("usage: git clone HTTPS_URL [DIRECTORY] | git log [-n COUNT] | git status | git add PATH... | git add -A | git commit -m MESSAGE | git diff [--cached]")
 }
 
 func run(ctx context.Context, args []string) error {
@@ -59,6 +59,12 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		return showLog(ctx, count)
+	case "add":
+		return stage(ctx, args[1:])
+	case "commit":
+		return createCommit(ctx, args[1:])
+	case "diff":
+		return showDiff(ctx, args[1:])
 	case "status":
 		if len(args) != 1 {
 			return usage()
@@ -106,27 +112,31 @@ func storage(writable bool) *profileStorage {
 	return &profileStorage{Storage: filesystem.NewStorage(&nativeFS{root: ".git", writable: writable}, cache.NewObjectLRUDefault())}
 }
 
-func openRepository() (*git.Repository, *profileStorage, error) {
+func openRepository(writable bool) (*git.Repository, *profileStorage, string, error) {
+	prefix, err := discoverRepository(writable)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	info, err := os.Lstat(".git")
 	if err != nil {
-		return nil, nil, fmt.Errorf("run from the repository root: %w", err)
+		return nil, nil, "", err
 	}
 	if !info.IsDir() {
-		return nil, nil, errors.New(".git must be a real directory; linked worktrees are unsupported")
+		return nil, nil, "", errors.New(".git must be a real directory; linked worktrees are unsupported")
 	}
 	for _, name := range []string{".git/commondir", ".git/objects/info/alternates", ".git/objects/info/http-alternates"} {
 		if _, err := os.Lstat(name); err == nil {
-			return nil, nil, fmt.Errorf("unsupported repository indirection: %s", name)
+			return nil, nil, "", fmt.Errorf("unsupported repository indirection: %s", name)
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 	}
-	s := storage(false)
-	r, err := git.Open(s, &nativeFS{root: "."})
+	s := storage(writable)
+	r, err := git.Open(s, &nativeFS{root: ".", writable: writable})
 	if err != nil {
-		return nil, nil, errors.Join(err, s.Close())
+		return nil, nil, "", errors.Join(err, s.Close())
 	}
-	return r, s, nil
+	return r, s, prefix, nil
 }
 
 func clone(ctx context.Context, args []string) (err error) {
@@ -209,7 +219,7 @@ func clone(ctx context.Context, args []string) (err error) {
 }
 
 func showLog(ctx context.Context, count int) (err error) {
-	r, s, err := openRepository()
+	r, s, _, err := openRepository(false)
 	if err != nil {
 		return err
 	}
@@ -241,7 +251,7 @@ func showLog(ctx context.Context, count int) (err error) {
 }
 
 func showStatus(ctx context.Context) (err error) {
-	r, s, err := openRepository()
+	r, s, _, err := openRepository(false)
 	if err != nil {
 		return err
 	}
