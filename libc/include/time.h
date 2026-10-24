@@ -72,6 +72,18 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining);
 size_t strftime(char *__restrict output, size_t capacity,
     const char *__restrict format, const struct tm *__restrict calendar);
 
+/* English C-locale "Www Mmm dd hh:mm:ss yyyy\n", including the trailing
+ * newline and NUL in a shared static 26-byte buffer. The next successful
+ * asctime or ctime overwrites it; do not free it. Not thread-safe.
+ * asctime does not normalize or check consistency between date fields;
+ * tm_wday, tm_mon, tm_mday, tm_hour, tm_min and tm_sec must have their standard
+ * ranges (including leap-second 60). Other fields except tm_year are ignored.
+ * Return NULL with EINVAL for NULL or invalid fields, EOVERFLOW for years
+ * outside 0000..9999. ctime converts through localtime, with its TZ behavior
+ * and errors. Success preserves errno. */
+char *asctime(const struct tm *calendar);
+char *ctime(const time_t *timer);
+
 /* English C-locale parse, the inverse of strftime for the conversions below;
  * no locale selection. Returns the first unparsed byte, or NULL if the input
  * does not match, leaving *calendar unchanged. A space in format skips any
