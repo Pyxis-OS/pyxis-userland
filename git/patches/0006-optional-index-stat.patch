@@ -1,0 +1,13 @@
+--- a/vendor/github.com/go-git/go-git/v5/worktree_status.go
++++ b/vendor/github.com/go-git/go-git/v5/worktree_status.go
+@@ -576,7 +576,9 @@
+ 	// The size of Regular and Executable files is the size of the files.
+ 	e.Size = uint32(info.Size())
+ 
+-	fillSystemInfo(e, info.Sys())
++	if fillSystemInfo != nil {
++		fillSystemInfo(e, info.Sys())
++	}
+ 	return nil
+ }
+ 
