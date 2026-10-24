@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "org.pyxis.cpuclock",
+  "entry": "bin/cpuclock.pxe",
+  "commands": {"cpuclock": "bin/cpuclock.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "threads", "resource": "threads", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "precise"], "required": true}
+  ]
+}
