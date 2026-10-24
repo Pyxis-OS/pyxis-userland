@@ -53,6 +53,9 @@ export GOMODCACHE="$out/modcache" GOCACHE="$out/gocache"
 cmp "$work/go.mod.pin" "$source_dir/go.mod"
 cmp "$work/go.sum.pin" "$source_dir/go.sum"
 # Apply the same ordered dependency revisions on both hosts.
+# OUT may be inside a source checkout: give git apply this private source root
+# instead of letting repository discovery silently skip its relative paths.
+git -C "$source_dir" init -q
 for patch in "$source_dir"/patches/*.patch; do
   [[ -f "$patch" ]] || continue
   git -C "$source_dir" apply --whitespace=error-all -- "$patch"
