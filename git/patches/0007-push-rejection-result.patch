@@ -1,0 +1,20 @@
+--- a/vendor/github.com/go-git/go-git/v5/remote.go
++++ b/vendor/github.com/go-git/go-git/v5/remote.go
+@@ -1105,7 +1105,7 @@
+ 			return err
+ 		}
+ 
+-		return fmt.Errorf("non-fast-forward update: %s", cmd.Name.String())
++		return fmt.Errorf("%w: %s", ErrNonFastForwardUpdate, cmd.Name.String())
+ 	}
+ 
+ 	ff, err := isFastForward(s, cmd.Old, cmd.New, nil)
+@@ -1114,7 +1114,7 @@
+ 	}
+ 
+ 	if !ff {
+-		return fmt.Errorf("non-fast-forward update: %s", cmd.Name.String())
++		return fmt.Errorf("%w: %s", ErrNonFastForwardUpdate, cmd.Name.String())
+ 	}
+ 
+ 	return nil

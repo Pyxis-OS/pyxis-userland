@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -21,8 +19,6 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/transport/client"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
@@ -36,7 +32,7 @@ func main() {
 }
 
 func usage() error {
-	return errors.New("usage: git clone HTTPS_URL [DIRECTORY] | git log [-n COUNT] | git status | git add PATH... | git add -A | git commit -m MESSAGE | git diff [--cached]")
+	return errors.New("usage: git clone HTTPS_URL [DIRECTORY] | git log [-n COUNT] | git status | git add PATH... | git add -A | git commit -m MESSAGE | git diff [--cached] | git init | git remote add|set-url|-v | git push [REMOTE] | git pull [REMOTE]")
 }
 
 func run(ctx context.Context, args []string) error {
@@ -44,6 +40,14 @@ func run(ctx context.Context, args []string) error {
 		return usage()
 	}
 	switch args[0] {
+	case "init":
+		return initialize(ctx, args[1:])
+	case "remote":
+		return manageRemote(ctx, args[1:])
+	case "push":
+		return push(ctx, args[1:])
+	case "pull":
+		return pull(ctx, args[1:])
 	case "clone":
 		return clone(ctx, args[1:])
 	case "log":
@@ -143,12 +147,13 @@ func clone(ctx context.Context, args []string) (err error) {
 	if len(args) < 1 || len(args) > 2 {
 		return usage()
 	}
-	u, err := url.Parse(args[0])
+	u, err := validateHTTPSURL(args[0])
 	if err != nil {
 		return err
 	}
-	if u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("clone requires a public HTTPS URL without credentials, query or fragment")
+	session, err := newHTTPS(u.String(), false)
+	if err != nil {
+		return err
 	}
 	dir := strings.TrimSuffix(path.Base(strings.TrimSuffix(u.Path, "/")), ".git")
 	if len(args) == 2 {
@@ -171,21 +176,11 @@ func clone(ctx context.Context, args []string) (err error) {
 	if err := os.Chdir(dir); err != nil {
 		return err
 	}
-	httpClient := &http.Client{CheckRedirect: func(request *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return errors.New("too many HTTPS redirects")
-		}
-		if request.URL.Scheme != "https" || request.URL.User != nil {
-			return errors.New("refusing non-HTTPS or credential-bearing redirect")
-		}
-		return nil
-	}}
-	client.InstallProtocol("https", githttp.NewClient(httpClient))
 	s := storage(true)
 	defer func() { err = errors.Join(err, s.Close()) }()
-	r, err := git.CloneContext(ctx, s, &nativeFS{root: ".", writable: true}, &git.CloneOptions{URL: u.String(), NoCheckout: true})
+	r, err := git.CloneContext(ctx, s, &nativeFS{root: ".", writable: true}, &git.CloneOptions{URL: session.URL, Auth: session.Auth, NoCheckout: true})
 	if err != nil {
-		return err
+		return session.failure(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -224,6 +219,17 @@ func showLog(ctx context.Context, count int) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, s.Close()) }()
+	unborn, err := isUnborn(s)
+	if err != nil {
+		return err
+	}
+	if unborn {
+		if err := errors.Join(ctx.Err(), s.Close()); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(os.Stdout, "no commits yet")
+		return err
+	}
 	commits, err := r.Log(&git.LogOptions{})
 	if err != nil {
 		return err
