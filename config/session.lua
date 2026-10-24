@@ -8,7 +8,7 @@ return {
   environment = {
     -- The terminal profile: exactly the sequences in Pyxis docs/userland/terminal.md.
     TERM = "pyxis",
-    -- vi: three-column tab stops, spaces for Tab and autoindent.
+    -- The vi editor's EXINIT: three-column tab stops, spaces for Tab, autoindent.
     EXINIT = "set ts=3 et ai",
   },
 }
