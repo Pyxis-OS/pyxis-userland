@@ -1,0 +1,491 @@
+diff --git a/vendor/github.com/go-git/go-billy/v5/osfs/capabilities_other.go b/vendor/github.com/go-git/go-billy/v5/osfs/capabilities_other.go
+new file mode 100644
+index 0000000..2d2886d
+--- /dev/null
++++ b/vendor/github.com/go-git/go-billy/v5/osfs/capabilities_other.go
+@@ -0,0 +1,7 @@
++//go:build !pyxis
++
++package osfs
++
++import "github.com/go-git/go-billy/v5"
++
++func osCapabilities() billy.Capability { return billy.DefaultCapabilities }
+diff --git a/vendor/github.com/go-git/go-billy/v5/osfs/os_bound.go b/vendor/github.com/go-git/go-billy/v5/osfs/os_bound.go
+index 70e6a72..7e7f7bb 100644
+--- a/vendor/github.com/go-git/go-billy/v5/osfs/os_bound.go
++++ b/vendor/github.com/go-git/go-billy/v5/osfs/os_bound.go
+@@ -349,3 +349,6 @@ func (fs *BoundOS) insideBaseDirEval(filename string) (bool, error) {
+ 	}
+ 	return true, nil
+ }
++
++// Capabilities implements the Capable interface.
++func (fs *BoundOS) Capabilities() billy.Capability { return osCapabilities() }
+diff --git a/vendor/github.com/go-git/go-billy/v5/osfs/os_chroot.go b/vendor/github.com/go-git/go-billy/v5/osfs/os_chroot.go
+index 2fa9d8b..fda3c71 100644
+--- a/vendor/github.com/go-git/go-billy/v5/osfs/os_chroot.go
++++ b/vendor/github.com/go-git/go-billy/v5/osfs/os_chroot.go
+@@ -122,5 +122,5 @@ func (fs *ChrootOS) Readlink(link string) (string, error) {
+ 
+ // Capabilities implements the Capable interface.
+ func (fs *ChrootOS) Capabilities() billy.Capability {
+-	return billy.DefaultCapabilities
++	return osCapabilities()
+ }
+diff --git a/vendor/github.com/go-git/go-billy/v5/osfs/os_posix.go b/vendor/github.com/go-git/go-billy/v5/osfs/os_posix.go
+index 6fb8273..cb05e59 100644
+--- a/vendor/github.com/go-git/go-billy/v5/osfs/os_posix.go
++++ b/vendor/github.com/go-git/go-billy/v5/osfs/os_posix.go
+@@ -1,5 +1,5 @@
+-//go:build !plan9 && !windows && !wasm
+-// +build !plan9,!windows,!wasm
++//go:build !plan9 && !windows && !wasm && !pyxis
++// +build !plan9,!windows,!wasm,!pyxis
+ 
+ package osfs
+ 
+diff --git a/vendor/github.com/go-git/go-billy/v5/osfs/os_pyxis.go b/vendor/github.com/go-git/go-billy/v5/osfs/os_pyxis.go
+new file mode 100644
+index 0000000..01c22b8
+--- /dev/null
++++ b/vendor/github.com/go-git/go-billy/v5/osfs/os_pyxis.go
+@@ -0,0 +1,15 @@
++package osfs
++
++import (
++	"os"
++
++	"github.com/go-git/go-billy/v5"
++)
++
++func (f *file) Lock() error        { return billy.ErrNotSupported }
++func (f *file) Unlock() error      { return billy.ErrNotSupported }
++func rename(from, to string) error { return os.Rename(from, to) }
++
++func osCapabilities() billy.Capability {
++	return billy.DefaultCapabilities &^ billy.LockCapability
++}
+diff --git a/vendor/github.com/go-git/go-git/v5/config/config.go b/vendor/github.com/go-git/go-git/v5/config/config.go
+index b9b753d..a2eda66 100644
+--- a/vendor/github.com/go-git/go-git/v5/config/config.go
++++ b/vendor/github.com/go-git/go-git/v5/config/config.go
+@@ -54,6 +54,10 @@ type Config struct {
+ 		// IsBare if true this repository is assumed to be bare and has no
+ 		// working directory associated with it.
+ 		IsBare bool
++		// Symlinks defaults to true. False writes link blobs as regular files.
++		Symlinks OptBool
++		// FileMode defaults to true. False ignores worktree executable bits.
++		FileMode OptBool
+ 		// Worktree is the path to the root of the working tree.
+ 		Worktree string
+ 		// CommentChar is the character indicating the start of a
+@@ -276,6 +280,8 @@ const (
+ 	repositoryFormatVersionKey = "repositoryformatversion"
+ 	objectFormat               = "objectformat"
+ 	mirrorKey                  = "mirror"
++	symlinksKey                = "symlinks"
++	fileModeKey                = "fileMode"
+ 	protectNTFSKey             = "protectNTFS"
+ 	protectHFSKey              = "protectHFS"
+ 
+@@ -319,6 +325,8 @@ func (c *Config) unmarshalCore() {
+ 		c.Core.IsBare = true
+ 	}
+ 
++	c.Core.Symlinks = parseConfigBool(s.Options.Get(symlinksKey))
++	c.Core.FileMode = parseConfigBool(s.Options.Get(fileModeKey))
+ 	c.Core.Worktree = s.Options.Get(worktreeKey)
+ 	c.Core.CommentChar = s.Options.Get(commentCharKey)
+ 
+@@ -454,6 +462,12 @@ func (c *Config) Marshal() ([]byte, error) {
+ func (c *Config) marshalCore() {
+ 	s := c.Raw.Section(coreSection)
+ 	s.SetOption(bareKey, fmt.Sprintf("%t", c.Core.IsBare))
++	if c.Core.Symlinks.IsSet() {
++		s.SetOption(symlinksKey, c.Core.Symlinks.FormatBool())
++	}
++	if c.Core.FileMode.IsSet() {
++		s.SetOption(fileModeKey, c.Core.FileMode.FormatBool())
++	}
+ 	if string(c.Core.RepositoryFormatVersion) != "" {
+ 		s.SetOption(repositoryFormatVersionKey, string(c.Core.RepositoryFormatVersion))
+ 	}
+diff --git a/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/client.go b/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/client.go
+index 1948c23..3b584f5 100644
+--- a/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/client.go
++++ b/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/client.go
+@@ -6,21 +6,8 @@ import (
+ 	"fmt"
+ 
+ 	"github.com/go-git/go-git/v5/plumbing/transport"
+-	"github.com/go-git/go-git/v5/plumbing/transport/file"
+-	"github.com/go-git/go-git/v5/plumbing/transport/git"
+-	"github.com/go-git/go-git/v5/plumbing/transport/http"
+-	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+ )
+ 
+-// Protocols are the protocols supported by default.
+-var Protocols = map[string]transport.Transport{
+-	"http":  http.DefaultClient,
+-	"https": http.DefaultClient,
+-	"ssh":   ssh.DefaultClient,
+-	"git":   git.DefaultClient,
+-	"file":  file.DefaultClient,
+-}
+-
+ // InstallProtocol adds or modifies an existing protocol.
+ func InstallProtocol(scheme string, c transport.Transport) {
+ 	if c == nil {
+diff --git a/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/protocols_other.go b/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/protocols_other.go
+new file mode 100644
+index 0000000..6c3d17c
+--- /dev/null
++++ b/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/protocols_other.go
+@@ -0,0 +1,17 @@
++//go:build !pyxis
++
++package client
++
++import (
++	"github.com/go-git/go-git/v5/plumbing/transport"
++	"github.com/go-git/go-git/v5/plumbing/transport/file"
++	"github.com/go-git/go-git/v5/plumbing/transport/git"
++	"github.com/go-git/go-git/v5/plumbing/transport/http"
++	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
++)
++
++// Protocols are the protocols supported by default.
++var Protocols = map[string]transport.Transport{
++	"http": http.DefaultClient, "https": http.DefaultClient,
++	"ssh": ssh.DefaultClient, "git": git.DefaultClient, "file": file.DefaultClient,
++}
+diff --git a/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/protocols_pyxis.go b/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/protocols_pyxis.go
+new file mode 100644
+index 0000000..17742fa
+--- /dev/null
++++ b/vendor/github.com/go-git/go-git/v5/plumbing/transport/client/protocols_pyxis.go
+@@ -0,0 +1,10 @@
++package client
++
++import (
++	"github.com/go-git/go-git/v5/plumbing/transport"
++	"github.com/go-git/go-git/v5/plumbing/transport/http"
++)
++
++// Protocols excludes transports that have no supported native implementation.
++// The frontend also enforces HTTPS on URLs and redirects on both hosts.
++var Protocols = map[string]transport.Transport{"https": http.DefaultClient}
+diff --git a/vendor/github.com/go-git/go-git/v5/repository.go b/vendor/github.com/go-git/go-git/v5/repository.go
+index 7a144fa..7fc7bc3 100644
+--- a/vendor/github.com/go-git/go-git/v5/repository.go
++++ b/vendor/github.com/go-git/go-git/v5/repository.go
+@@ -1533,16 +1533,22 @@ func (r *Repository) Worktree() (*Worktree, error) {
+ 
+ 	protectNTFS := defaultProtectNTFS()
+ 	protectHFS := defaultProtectHFS()
+-	if cfg, err := r.Config(); err == nil {
+-		if cfg.Core.ProtectNTFS.IsSet() {
+-			protectNTFS = cfg.Core.ProtectNTFS.IsTrue()
+-		}
+-		if cfg.Core.ProtectHFS.IsSet() {
+-			protectHFS = cfg.Core.ProtectHFS.IsTrue()
+-		}
++	cfg, err := r.Config()
++	if err != nil {
++		return nil, err
++	}
++	if cfg.Core.ProtectNTFS.IsSet() {
++		protectNTFS = cfg.Core.ProtectNTFS.IsTrue()
++	}
++	if cfg.Core.ProtectHFS.IsSet() {
++		protectHFS = cfg.Core.ProtectHFS.IsTrue()
+ 	}
+ 
+-	return &Worktree{r: r, Filesystem: newWorktreeFilesystem(r.wt, protectNTFS, protectHFS)}, nil
++	return &Worktree{
++		r: r, Filesystem: newWorktreeFilesystem(r.wt, protectNTFS, protectHFS),
++		disableSymlinks: cfg.Core.Symlinks == config.OptBoolFalse,
++		ignoreFileMode:  cfg.Core.FileMode == config.OptBoolFalse,
++	}, nil
+ }
+ 
+ func expand_ref(s storer.ReferenceStorer, ref plumbing.ReferenceName) (*plumbing.Reference, error) {
+diff --git a/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go b/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go
+index 83df4dd..891d62e 100644
+--- a/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go
++++ b/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go
+@@ -1,6 +1,7 @@
+ package filesystem
+ 
+ import (
++	"fmt"
+ 	"io"
+ 	"os"
+ 	"path"
+@@ -24,6 +25,11 @@ type Options struct {
+ 	// correctly handling the "racy git" condition. If no index is provided,
+ 	// the function works without the optimization.
+ 	Index *index.Index
++	// DisableSymlinks compares regular target-text files using the tracked
++	// symlink mode. IgnoreFileMode preserves tracked regular/executable modes
++	// for comparisons. Neither option changes the index or trees.
++	DisableSymlinks bool
++	IgnoreFileMode  bool
+ }
+ 
+ // The node represents a file or a directory in a billy.Filesystem. It
+@@ -32,10 +38,12 @@ type Options struct {
+ // This implementation implements a "standard" hash method being able to be
+ // compared with any other noder.Noder implementation inside of go-git.
+ type node struct {
+-	fs         billy.Filesystem
+-	submodules map[string]plumbing.Hash
+-	idx        *index.Index
+-	idxMap     map[string]*index.Entry
++	fs              billy.Filesystem
++	submodules      map[string]plumbing.Hash
++	idx             *index.Index
++	idxMap          map[string]*index.Entry
++	disableSymlinks bool
++	ignoreFileMode  bool
+ 
+ 	path     string
+ 	hash     []byte
+@@ -84,11 +92,13 @@ func NewRootNodeWithOptions(
+ 	}
+ 
+ 	return &node{
+-		fs:         fs,
+-		submodules: submodules,
+-		idx:        options.Index,
+-		idxMap:     idxMap,
+-		isDir:      true,
++		fs:              fs,
++		submodules:      submodules,
++		idx:             options.Index,
++		idxMap:          idxMap,
++		disableSymlinks: options.DisableSymlinks,
++		ignoreFileMode:  options.IgnoreFileMode,
++		isDir:           true,
+ 	}
+ }
+ 
+@@ -178,10 +188,12 @@ func (n *node) newChildNode(file os.FileInfo) (*node, error) {
+ 	path := path.Join(n.path, file.Name())
+ 
+ 	node := &node{
+-		fs:         n.fs,
+-		submodules: n.submodules,
+-		idx:        n.idx,
+-		idxMap:     n.idxMap,
++		fs:              n.fs,
++		submodules:      n.submodules,
++		idx:             n.idx,
++		idxMap:          n.idxMap,
++		disableSymlinks: n.disableSymlinks,
++		ignoreFileMode:  n.ignoreFileMode,
+ 
+ 		path:    path,
+ 		isDir:   file.IsDir(),
+@@ -194,40 +206,69 @@ func (n *node) newChildNode(file os.FileInfo) (*node, error) {
+ 		node.isDir = false
+ 	}
+ 
++	// Noder.Hash cannot return an error. Compute leaf hashes here, where the
++	// traversal can still propagate failed content reads instead of reporting
++	// a fabricated hash or a clean status after an incomplete scan.
++	if !node.isDir {
++		if err := node.calculateHash(); err != nil {
++			return nil, err
++		}
++	}
+ 	return node, nil
+ }
+ 
+-func (n *node) calculateHash() {
++func (n *node) calculateHash() error {
+ 	if n.isDir {
+ 		n.hash = make([]byte, 24)
+-		return
++		return nil
+ 	}
+-	mode, err := filemode.NewFromOSFileMode(n.mode)
++	mode, err := n.gitMode()
+ 	if err != nil {
+-		n.hash = plumbing.ZeroHash[:]
+-		return
++		return err
+ 	}
+ 	if submoduleHash, isSubmodule := n.submodules[n.path]; isSubmodule {
+ 		n.hash = append(submoduleHash[:], filemode.Submodule.Bytes()...)
+-		return
++		return nil
+ 	}
+ 
+ 	if n.idxMap != nil {
+ 		if entry, ok := n.idxMap[n.path]; ok {
+ 			if n.metadataMatches(entry) {
+ 				n.hash = append(entry.Hash[:], mode.Bytes()...)
+-				return
++				return nil
+ 			}
+ 		}
+ 	}
+ 
+ 	var hash plumbing.Hash
+ 	if n.mode&os.ModeSymlink != 0 {
+-		hash = n.doCalculateHashForSymlink()
++		hash, err = n.doCalculateHashForSymlink()
+ 	} else {
+-		hash = n.doCalculateHashForRegular()
++		hash, err = n.doCalculateHashForRegular()
++	}
++	if err != nil {
++		return fmt.Errorf("hash %s: %w", n.path, err)
+ 	}
+ 	n.hash = append(hash[:], mode.Bytes()...)
++	return nil
++}
++
++// Only a regular file may stand in for a tracked link or executable file.
++// A directory, real symlink or other changed native type remains a change.
++func (n *node) gitMode() (filemode.FileMode, error) {
++	mode, err := filemode.NewFromOSFileMode(n.mode)
++	if err != nil || !n.mode.IsRegular() {
++		return mode, err
++	}
++	if entry := n.idxMap[n.path]; entry != nil {
++		if n.disableSymlinks && entry.Mode == filemode.Symlink {
++			return entry.Mode, nil
++		}
++		if n.ignoreFileMode && (entry.Mode == filemode.Regular || entry.Mode == filemode.Executable) {
++			return entry.Mode, nil
++		}
++	}
++	return mode, nil
+ }
+ 
+ func (n *node) metadataMatches(entry *index.Entry) bool {
+@@ -239,11 +280,11 @@ func (n *node) metadataMatches(entry *index.Entry) bool {
+ 		return false
+ 	}
+ 
+-	if !n.modTime.IsZero() && !n.modTime.Equal(entry.ModifiedAt) {
++	if n.modTime.IsZero() || entry.ModifiedAt.IsZero() || !n.modTime.Equal(entry.ModifiedAt) {
+ 		return false
+ 	}
+ 
+-	mode, err := filemode.NewFromOSFileMode(n.mode)
++	mode, err := n.gitMode()
+ 	if err != nil {
+ 		return false
+ 	}
+@@ -268,34 +309,33 @@ func (n *node) metadataMatches(entry *index.Entry) bool {
+ 	return true
+ }
+ 
+-func (n *node) doCalculateHashForRegular() plumbing.Hash {
++func (n *node) doCalculateHashForRegular() (hash plumbing.Hash, err error) {
+ 	f, err := n.fs.Open(n.path)
+ 	if err != nil {
+-		return plumbing.ZeroHash
++		return hash, err
+ 	}
+-
+-	defer f.Close()
+-
++	defer func() {
++		if closeErr := f.Close(); err == nil {
++			err = closeErr
++		}
++	}()
+ 	h := plumbing.NewHasher(plumbing.BlobObject, n.size)
+-	if _, err := io.Copy(h, f); err != nil {
+-		return plumbing.ZeroHash
++	if _, err = io.Copy(h, f); err != nil {
++		return hash, err
+ 	}
+-
+-	return h.Sum()
++	return h.Sum(), nil
+ }
+ 
+-func (n *node) doCalculateHashForSymlink() plumbing.Hash {
++func (n *node) doCalculateHashForSymlink() (plumbing.Hash, error) {
+ 	target, err := n.fs.Readlink(n.path)
+ 	if err != nil {
+-		return plumbing.ZeroHash
++		return plumbing.ZeroHash, err
+ 	}
+-
+ 	h := plumbing.NewHasher(plumbing.BlobObject, n.size)
+ 	if _, err := h.Write([]byte(target)); err != nil {
+-		return plumbing.ZeroHash
++		return plumbing.ZeroHash, err
+ 	}
+-
+-	return h.Sum()
++	return h.Sum(), nil
+ }
+ 
+ func (n *node) String() string {
+diff --git a/vendor/github.com/go-git/go-git/v5/worktree.go b/vendor/github.com/go-git/go-git/v5/worktree.go
+index b935c6b..f8472ba 100644
+--- a/vendor/github.com/go-git/go-git/v5/worktree.go
++++ b/vendor/github.com/go-git/go-git/v5/worktree.go
+@@ -40,7 +40,9 @@ type Worktree struct {
+ 	// External excludes not found in the repository .gitignore
+ 	Excludes []gitignore.Pattern
+ 
+-	r *Repository
++	r               *Repository
++	disableSymlinks bool
++	ignoreFileMode  bool
+ }
+ 
+ // Pull incorporates changes from a remote repository into the current branch.
+@@ -700,7 +702,19 @@ func (w *Worktree) checkoutFile(f *object.File) (err error) {
+ 	}
+ 
+ 	if mode&os.ModeSymlink != 0 {
+-		return w.checkoutFileSymlink(f)
++		if !w.disableSymlinks {
++			return w.checkoutFileSymlink(f)
++		}
++		// Keep symlink-name protection even though the blob becomes a file.
++		if fs, ok := w.Filesystem.(*worktreeFilesystem); ok {
++			if err := fs.validSymlinkName(f.Name); err != nil {
++				return err
++			}
++		}
++		mode = 0o666
++	}
++	if w.ignoreFileMode {
++		mode = 0o666
+ 	}
+ 
+ 	from, err := f.Reader()
+diff --git a/vendor/github.com/go-git/go-git/v5/worktree_pyxis.go b/vendor/github.com/go-git/go-git/v5/worktree_pyxis.go
+new file mode 100644
+index 0000000..f2a56da
+--- /dev/null
++++ b/vendor/github.com/go-git/go-git/v5/worktree_pyxis.go
+@@ -0,0 +1,3 @@
++package git
++
++func isSymlinkWindowsNonAdmin(_ error) bool { return false }
+diff --git a/vendor/github.com/go-git/go-git/v5/worktree_status.go b/vendor/github.com/go-git/go-git/v5/worktree_status.go
+index 8a28231..35b6306 100644
+--- a/vendor/github.com/go-git/go-git/v5/worktree_status.go
++++ b/vendor/github.com/go-git/go-git/v5/worktree_status.go
+@@ -142,7 +142,7 @@ func (w *Worktree) diffStagingWithWorktree(reverse, excludeIgnoredChanges bool)
+ 		return nil, err
+ 	}
+ 
+-	to := filesystem.NewRootNodeWithOptions(w.Filesystem, submodules, filesystem.Options{Index: idx})
++	to := filesystem.NewRootNodeWithOptions(w.Filesystem, submodules, filesystem.Options{Index: idx, DisableSymlinks: w.disableSymlinks, IgnoreFileMode: w.ignoreFileMode})
+ 
+ 	var c merkletrie.Changes
+ 	if reverse {
