@@ -36,7 +36,9 @@ go-git `bdae57cc427f94a6f7c627201bfe14508b5e19bd` and go-billy
 Pyxis stages at `OUT/stage/bin/git.pxb`; Linux stages at
 `OUT/stage-linux/bin/git`. Bundle metadata retains complete upstream notices
 for compiled modules, their original checksums, the applied patches, source
-hashes, userland/Go licenses and compiler revision. Use a fresh OUT for staging.
+hashes, userland/Go licenses and compiler revision. Repeated builds reuse OUT's
+caches and replace the staged result only after compilation and notices succeed;
+do not run concurrent builds into the same OUT.
 
 The manifest requires memory, threads, precise clock and random. TCP CONNECT,
 DNS and service/create are optional so offline log/status can run without

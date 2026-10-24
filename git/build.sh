@@ -23,6 +23,7 @@ for file in LICENSE PATENTS share/pyxis-go/revision; do
 done
 
 work=$(mktemp -d "$out/work.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
 source_dir="$work/source"
 mkdir "$source_dir"
 cp "$recipe"/*.go "$recipe/go.mod" "$recipe/go.sum" "$recipe/README.md" \
@@ -60,18 +61,18 @@ export GOPROXY=off
 "$go" -C "$source_dir" build -mod=vendor -p=8 -trimpath -o "$work/git" .
 
 if [[ "$target" == pyxis ]]; then
-  stage="$out/stage"
+  final_stage="$out/stage"
+  stage="$work/stage"
   bundle="$stage/bin/git.pxb"
   executable="$bundle/app/bin/git.pxe"
   metadata="$bundle/app/metadata"
 else
-  stage="$out/stage-linux"
+  final_stage="$out/stage-linux"
+  stage="$work/stage-linux"
   executable="$stage/bin/git"
   metadata="$stage/share/git"
 fi
-# Each successful build stages into a fresh metadata directory to avoid retaining
-# licenses or metadata from a different compiled dependency graph.
-[[ ! -e "$metadata" ]] || { echo "staging exists; select a fresh OUT: $metadata" >&2; exit 1; }
+# Only replace a previous build after the complete executable and notices exist.
 if [[ "$target" == pyxis ]]; then
   install -D -m 644 "$source_dir/manifest.json" "$bundle/manifest.json"
 fi
@@ -99,4 +100,9 @@ install -m 644 "$work/source-sha256.txt" "$metadata/git/source-sha256.txt"
   echo "main_license=MPL-2.0; dependencies retain upstream terms"
   echo "patches=git/patches; source-sha256.txt records exact copied source inputs"
 } > "$metadata/git/SOURCE"
-echo "$executable"
+if [[ -e "$final_stage" ]]; then
+  mv -- "$final_stage" "$work/previous-stage"
+fi
+relative_executable=${executable#"$stage/"}
+mv -- "$stage" "$final_stage"
+echo "$final_stage/$relative_executable"
