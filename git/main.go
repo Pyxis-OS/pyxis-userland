@@ -144,7 +144,7 @@ func clone(ctx context.Context, args []string) (err error) {
 	if len(args) == 2 {
 		dir = args[1]
 	}
-	if dir == "" || dir == "." || dir == ".." || len(dir) > 255 || !utf8.ValidString(dir) || strings.ContainsAny(dir, "/\\:\x00") {
+	if dir == "" || dir == "." || dir == ".." || len(dir) > 255 || !utf8.ValidString(dir) || strings.ContainsAny(dir, "/\x00") {
 		return errors.New("clone destination must be one fresh child directory name")
 	}
 	if err := ctx.Err(); err != nil {
