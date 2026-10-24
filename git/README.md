@@ -1,19 +1,51 @@
 # Git
 
-Optional first-party CLI for public HTTPS clone, log and status, using go-git
-v5.19.3 and go-billy v5.9.2. Run log/status at the repository root. Clone creates
-a fresh child of the selected cwd and retains partial destinations on failure.
-Symlinks become regular target-text files; Git index/tree modes remain intact.
+Optional first-party CLI for public HTTPS clone and local log, status, add,
+commit and diff, using go-git v5.19.3 and go-billy v5.9.2. Clone creates a fresh
+child of the selected cwd and retains partial destinations on failure. Symlinks
+become regular target-text files; Git index/tree modes remain intact.
 
-`git clone HTTPS_URL [DIRECTORY]` refuses existing destinations; `git log [-n
-COUNT]` and `git status` run at the repository root. No parent discovery, `.git`
-pointer files, alternates, global configuration, helpers or non-HTTPS transport
-are admitted. Log/status do not write. First Ctrl+C requests cancellation;
-transport observes it, while checkout can finish an in-flight operation before
-reporting cancellation. There is no whole-clone deadline or memory bound.
+```sh
+git clone HTTPS_URL [DIRECTORY]
+git log [-n COUNT]
+git status
+git add [--] PATH...
+git add -A
+git diff
+git diff --cached
+git commit -m MESSAGE
+```
+
+Repository commands discover the nearest real `.git` along the retained cwd's
+held ancestors; they never recover authority from descriptive paths. Explicit
+add operands are relative to the invoking directory, while `add -A` covers the
+whole tree. New ignored files are skipped, tracked edits/removals still stage,
+and submodule changes are not staged. Diff compares worktree/index or, with
+`--cached`, index/HEAD: unified text with three context lines, binary markers,
+no colour/pager. Differences alone do not set an error exit status.
+
+Commit requires `home://.config/git/config` with only literal identity settings:
+
+```ini
+[user]
+    name = Chronium
+    email = chronium@example.invalid
+```
+
+Both author and committer use these values and checked native wall time with
+the configured timezone. Missing/invalid identity or unavailable time refuses.
+The Linux reference reads `.config/git/config` under its selected HOME. No
+configuration-writing command, editor, amend, automatic staging, empty commit
+or signing is supplied. Detached HEAD and unresolved indexes refuse commit.
+
+No `.git` pointer files, alternates, global configuration, helpers or non-HTTPS
+transport are admitted. Log/status/diff do not write. First Ctrl+C requests
+cancellation; an already blocking native file call remains owned until actual
+completion. There is no whole-operation deadline or memory bound.
 
 Writable files sync on close, and publication syncs the source before its
-same-store rename. Ref locks use exclusive creation. This is data-before-name
+same-store rename. Index locks span read/modify/publication; branch publication compares the
+observed reference. Ref and index locks use exclusive creation. This is data-before-name
 publication, without a directory-sync or whole-clone crash-atomicity claim.
 Forced termination can leave partial files and locks; neither is stolen or
 automatically retried. Unavailable timestamps force hashing; incomplete content
