@@ -20,7 +20,8 @@ Repository commands discover the nearest real `.git` along the retained cwd's
 held ancestors; they never recover authority from descriptive paths. Explicit
 add operands are relative to the invoking directory, while `add -A` covers the
 whole tree. New ignored files are skipped, tracked edits/removals still stage,
-and submodule changes are not staged. Diff compares worktree/index or, with
+and submodule changes are not staged. A new nested repository refuses rather
+than being flattened into ordinary files. Diff compares worktree/index or, with
 `--cached`, index/HEAD: unified text with three context lines, binary markers,
 no colour/pager. Differences alone do not set an error exit status.
 

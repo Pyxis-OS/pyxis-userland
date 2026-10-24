@@ -246,6 +246,15 @@ func stage(ctx context.Context, args []string) (err error) {
 					return nil
 				}
 			}
+			if name != "." {
+				_, err := w.Filesystem.Lstat(path.Join(name, ".git"))
+				if err == nil {
+					return fmt.Errorf("staging a nested repository is unsupported: %s", name)
+				}
+				if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
 			entries, err := w.Filesystem.ReadDir(name)
 			if err != nil {
 				return err
