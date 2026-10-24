@@ -19,6 +19,7 @@ git remote add NAME HTTPS_URL
 git remote set-url NAME HTTPS_URL
 git remote -v
 git push [REMOTE]
+git push -u REMOTE CURRENT_BRANCH
 git pull [REMOTE]
 ```
 
@@ -49,7 +50,9 @@ or signing is supplied. Detached HEAD and unresolved indexes refuse commit.
 first nonempty commit has no parent. Remote changes hold `config.lock` through
 read/modify/sync/rename. Push requires a configured upstream with the current
 branch's name and sends only its checked commit, never other branches/tags.
-A missing upstream refuses; an initial-upstream command remains under discussion.
+An absent upstream refuses with a hint to use `push -u REMOTE CURRENT_BRANCH`.
+That explicit form records the upstream under `config.lock` only after confirmed
+remote success; rejected or uncertain pushes never install one.
 Pull defaults to `origin`, hashes the tracked tree/index before and after fetch,
 refuses divergence and untracked collisions, and finishes checkout/index before
 publishing the compared branch. Failed checkout can leave partial files; it does

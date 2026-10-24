@@ -32,7 +32,7 @@ func main() {
 }
 
 func usage() error {
-	return errors.New("usage: git clone HTTPS_URL [DIRECTORY] | git log [-n COUNT] | git status | git add PATH... | git add -A | git commit -m MESSAGE | git diff [--cached] | git init | git remote add|set-url|-v | git push [REMOTE] | git pull [REMOTE]")
+	return errors.New("usage: git clone HTTPS_URL [DIRECTORY] | git log [-n COUNT] | git status | git add PATH... | git add -A | git commit -m MESSAGE | git diff [--cached] | git init | git remote add|set-url|-v | git push [REMOTE] | git push -u REMOTE CURRENT_BRANCH | git pull [REMOTE]")
 }
 
 func run(ctx context.Context, args []string) error {
