@@ -14,26 +14,69 @@ return {
     diagnostics = false,
   },
   volumes = {
-    system = { kind = "npfs", volume = "system" },
-    home = { kind = "npfs", volume = "home" },
-    packages = { kind = "npfs", volume = "packages" },
-    ["http-work"] = { kind = "npfs", volume = "http-work" },
+    system = {
+      kind = "npfs",
+      volume = "system",
+    },
+    home = {
+      kind = "npfs",
+      volume = "home",
+    },
+    packages = {
+      kind = "npfs",
+      volume = "packages",
+    },
+    ["http-work"] = {
+      kind = "npfs",
+      volume = "http-work",
+    },
   },
   spaces = {
-    { name = "pyxis", title = "Pyxis", init = "system://config/init-installed",
-      network = true, focus = true, launch = true, jobs = true, screenshot = true, power = true,
-      clipboard_local = true, clipboard_shared = true,
+    {
+      name = "pyxis",
+      title = "Pyxis",
+      init = "system://config/init-installed",
+      network = true,
+      focus = true,
+      launch = true,
+      jobs = true,
+      screenshot = true,
+      power = true,
+      clipboard_local = true,
+      clipboard_shared = true,
       package_management = true,
       -- pkg upgrade's boot ESP grant and boot evidence, which only the pkg
       -- bundle declares (docs/wip/pkg-upgrade.md, decision 74).
       package_upgrade = true,
-      grants = { http_staging = { volume = "http-work", kind = "directory",
-                                 access = "read-write", optional = true },
-                 packages = { volume = "packages", kind = "directory",
-                              access = "read-only", optional = true } },
-      roots = { system = "read-write",
-                home = { access = "read-write", optional = true },
-                pkg = { view = "pkg", optional = true },
-                sdk = { view = "sdk", optional = true } } },
+      grants = {
+        http_staging = {
+          volume = "http-work",
+          kind = "directory",
+          access = "read-write",
+          optional = true,
+        },
+        packages = {
+          volume = "packages",
+          kind = "directory",
+          access = "read-only",
+          optional = true,
+        },
+      },
+      roots = {
+        system = "read-write",
+        home = {
+          access = "read-write",
+          optional = true,
+        },
+        pkg = {
+          view = "pkg",
+          optional = true,
+        },
+        sdk = {
+          view = "sdk",
+          optional = true,
+        },
+      },
+    },
   },
 }
