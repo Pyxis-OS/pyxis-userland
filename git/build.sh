@@ -61,7 +61,7 @@ for patch in "$source_dir"/patches/*.patch; do
   git -C "$source_dir" apply --whitespace=error-all -- "$patch"
 done
 export GOPROXY=off
-"$go" -C "$source_dir" build -mod=vendor -p=8 -trimpath -o "$work/git" .
+"$go" -C "$source_dir" build -mod=vendor -buildvcs=false -p=8 -trimpath -o "$work/git" .
 
 if [[ "$target" == pyxis ]]; then
   final_stage="$out/stage"
@@ -98,7 +98,7 @@ install -m 644 "$work/source-sha256.txt" "$metadata/git/source-sha256.txt"
   echo "compiler=$("$go" version)"
   echo "target=$target/amd64; GOAMD64=v1; CGO_ENABLED=0"
   echo "module_proxy=https://repo.internal/repository/go-proxy/"
-  echo "build=-mod=vendor -p=8 -trimpath"
+  echo "build=-mod=vendor -buildvcs=false -p=8 -trimpath"
   echo "profile=HTTPS clone/log/status; core.symlinks=false; core.fileMode=false"
   echo "main_license=MPL-2.0; dependencies retain upstream terms"
   echo "patches=git/patches; source-sha256.txt records exact copied source inputs"
