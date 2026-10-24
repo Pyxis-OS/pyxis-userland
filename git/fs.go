@@ -101,7 +101,7 @@ func (fs *nativeFS) OpenFile(name string, flags int, mode os.FileMode) (billy.Fi
 	if err != nil {
 		return nil, err
 	}
-	return &nativeFile{File: f, name: name, dirty: flags&(os.O_CREATE|os.O_TRUNC) != 0}, nil
+	return &nativeFile{File: f, name: name, writable: writable}, nil
 }
 
 func (fs *nativeFS) TempFile(dir, prefix string) (billy.File, error) {
@@ -123,7 +123,7 @@ func (fs *nativeFS) TempFile(dir, prefix string) (billy.File, error) {
 	if err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
-	return &nativeFile{File: f, name: name, dirty: true}, nil
+	return &nativeFile{File: f, name: name, writable: true}, nil
 }
 
 func (fs *nativeFS) Stat(name string) (os.FileInfo, error) {
@@ -221,28 +221,15 @@ func (fs *nativeFS) Readlink(name string) (string, error) { return "", billy.Err
 
 type nativeFile struct {
 	*os.File
-	name  string
-	dirty bool
+	name     string
+	writable bool
 }
 
 func (f *nativeFile) Name() string { return f.name }
 
-func (f *nativeFile) Write(p []byte) (int, error) {
-	n, err := f.File.Write(p)
-	if n != 0 {
-		f.dirty = true
-	}
-	return n, err
-}
-
-func (f *nativeFile) Truncate(size int64) error {
-	f.dirty = true
-	return f.File.Truncate(size)
-}
-
 func (f *nativeFile) Close() error {
 	var err error
-	if f.dirty {
+	if f.writable {
 		err = f.File.Sync()
 	}
 	return errors.Join(err, f.File.Close())
