@@ -1,7 +1,7 @@
 # Git
 
-Optional first-party CLI for public HTTPS clone and local log, status, add,
-commit and diff, using go-git v5.19.3 and go-billy v5.9.2. Clone creates a fresh
+Optional first-party CLI for HTTPS clone/push/pull and local init, log, status,
+add, commit, diff and remote setup, using go-git v5.19.3 and go-billy v5.9.2. Clone creates a fresh
 child of the selected cwd and retains partial destinations on failure. Symlinks
 become regular target-text files; Git index/tree modes remain intact.
 
@@ -14,6 +14,12 @@ git add -A
 git diff
 git diff --cached
 git commit -m MESSAGE
+git init
+git remote add NAME HTTPS_URL
+git remote set-url NAME HTTPS_URL
+git remote -v
+git push [REMOTE]
+git pull [REMOTE]
 ```
 
 Repository commands discover the nearest real `.git` along the retained cwd's
@@ -25,7 +31,7 @@ than being flattened into ordinary files. Diff compares worktree/index or, with
 `--cached`, index/HEAD: unified text with three context lines, binary markers,
 no colour/pager. Differences alone do not set an error exit status.
 
-Commit requires `home://.config/git/config` with only literal identity settings:
+Commit requires literal identity settings in `home://.config/git/config`:
 
 ```ini
 [user]
@@ -38,6 +44,45 @@ the configured timezone. Missing/invalid identity or unavailable time refuses.
 The Linux reference reads `.config/git/config` under its selected HOME. No
 configuration-writing command, editor, amend, automatic staging, empty commit
 or signing is supplied. Detached HEAD and unresolved indexes refuse commit.
+
+`init` creates an unborn `main` in cwd and refuses an existing `.git`. The
+first nonempty commit has no parent. Remote changes hold `config.lock` through
+read/modify/sync/rename. Push requires a configured upstream with the current
+branch's name and sends only its checked commit, never other branches/tags.
+A missing upstream refuses; an initial-upstream command remains under discussion.
+Pull defaults to `origin`, hashes the tracked tree/index before and after fetch,
+refuses divergence and untracked collisions, and finishes checkout/index before
+publishing the compared branch. Failed checkout can leave partial files; it does
+not silently reset them.
+
+HTTPS reads optional exact-origin credentials from
+`home://.config/git/credentials`:
+
+```ini
+[credential "https://git.internal"]
+    username = YOUR_USERNAME
+    token = YOUR_TOKEN
+```
+
+Push requires a matching entry. Clone/pull can remain anonymous. Tokens are
+plaintext home data; this is no credential-manager or Unix-permission guarantee.
+Host case and omitted port 443 normalize; aliases, subdomains and other ports
+do not inherit credentials. Authenticated redirects stay on that origin.
+Credentials never go in URLs or repository config; errors discard remote body
+and parser text. An uncertain push is reported without automatic retry.
+
+The same application config admits explicit additive CA trust, separately from
+credentials, for example after `[user]`:
+
+```ini
+[http "https://git.internal/"]
+    sslCAInfo = home://.config/git/homelab-ca.pem
+```
+
+The selected regular PEM file is read through a held named root, augments the
+public roots only for that exact origin and never disables TLS verification.
+Missing/malformed selected files refuse. Other origins keep public roots. No
+system-wide trust-store mechanism is supplied.
 
 No `.git` pointer files, alternates, global configuration, helpers or non-HTTPS
 transport are admitted. Log/status/diff do not write. First Ctrl+C requests
