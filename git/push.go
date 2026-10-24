@@ -13,6 +13,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
@@ -41,6 +42,9 @@ func push(ctx context.Context, args []string) (err error) {
 	}
 	if branch.Type() != plumbing.HashReference || branch.Hash().IsZero() {
 		return errors.New("push requires a valid branch tip")
+	}
+	if _, err := object.GetCommit(s, branch.Hash()); err != nil {
+		return fmt.Errorf("push requires a readable commit tip: %w", err)
 	}
 	cfg, err := s.Config()
 	if err != nil {

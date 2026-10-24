@@ -1,0 +1,31 @@
+--- a/vendor/github.com/go-git/go-git/v5/remote.go
++++ b/vendor/github.com/go-git/go-git/v5/remote.go
+@@ -225,10 +225,24 @@
+ 		return err
+ 	}
+ 
+-	if rs != nil {
+-		if err = rs.Error(); err != nil {
+-			return err
+-		}
++	// A successful transfer is not confirmation without a status for every
++	// requested destination. Refuse missing, duplicate or unrelated reports.
++	if rs == nil || len(rs.CommandStatuses) != len(req.Commands) {
++		return errors.New("push destination acknowledgement missing")
++	}
++	if err = rs.Error(); err != nil {
++		return err
++	}
++	seen := make(map[plumbing.ReferenceName]bool, len(req.Commands))
++	for _, command := range req.Commands {
++		seen[command.Name] = false
++	}
++	for _, status := range rs.CommandStatuses {
++		acknowledged, requested := seen[status.ReferenceName]
++		if !requested || acknowledged {
++			return errors.New("push destination acknowledgement inconsistent")
++		}
++		seen[status.ReferenceName] = true
+ 	}
+ 
+ 	return r.updateRemoteReferenceStorage(req)
