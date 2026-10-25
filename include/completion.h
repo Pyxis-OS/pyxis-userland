@@ -21,8 +21,9 @@ enum call_status completion_submit(handle_t target, handle_t receiver,
     uint64_t deadline_ns, const void *payload, size_t size);
 
 /* Explicit native FILE bulk admission, without ordinary-read fallback.
- * Capacity is bounded and offset + capacity cannot wrap. One absolute deadline
- * covers admission and all backend work; zero supplies no caller deadline.
+ * Capacity is bounded and offset + capacity cannot wrap. A nonzero absolute
+ * deadline covers admission and all backend work, within native admission's
+ * existing deadline bound. Zero returns TIMED_OUT, like ordinary submission.
  * Completion contains only file_read_reply metadata. Inspect its native result
  * and independent cancellation reason before endpoint_collect_bulk(), then
  * close the receipt to acknowledge. Data has its own 16 MiB process allowance

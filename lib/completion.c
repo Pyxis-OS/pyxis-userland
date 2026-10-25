@@ -28,6 +28,9 @@ enum call_status completion_submit(handle_t target, handle_t receiver,
 enum call_status completion_submit_file_read_bulk(handle_t target, handle_t receiver,
     uint64_t correlation_id, uint64_t offset, size_t capacity, uint64_t deadline_ns)
 {
+  if (!deadline_ns) {
+    return CALL_TIMED_OUT;
+  }
   if (capacity > FILE_READ_BULK_MAX_BYTES || capacity > UINT64_MAX - offset) {
     return CALL_BAD_REQUEST;
   }
