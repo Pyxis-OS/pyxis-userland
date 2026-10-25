@@ -184,6 +184,7 @@ double asinh(double value);
 double atanh(double value);
 /* Like rint but never raises inexact. */
 double nearbyint(double value);
+float nearbyintf(float value);
 double nextafter(double from, double toward);
 double nexttoward(double from, long double toward);
 double remainder(double x, double y);

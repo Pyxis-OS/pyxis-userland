@@ -235,7 +235,7 @@ $(BUILD)/libc/tls.o $(BUILD)/libc/startup.o $(BUILD)/libc/start_failure.o: priva
 $(BUILD)/libc/time.o: private CPPFLAGS += -Ithird_party/musl/src/internal
 
 $(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CPPFLAGS += -Ithird_party/musl/src/internal
-$(MUSL_OBJECTS) $(BUILD)/libc/strtod.o: private CFLAGS += -frounding-math -fexcess-precision=standard
+$(MUSL_OBJECTS) $(BUILD)/libc/strtod.o $(BUILD)/libc/nearbyintf.o: private CFLAGS += -frounding-math -fexcess-precision=standard
 
 # libm.h forces FP evaluation by writing otherwise unread volatile locals.
 $(MUSL_OBJECTS): private CFLAGS += -Wno-unused-but-set-variable
