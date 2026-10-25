@@ -11,6 +11,9 @@
 -- configure a repository, then run: pkg install clang-hosted
 vim.lsp.enable('clangd')
 
+-- Show candidates and documentation without inserting a match while typing.
+vim.o.completeopt = 'menu,menuone,noinsert,popup'
+
 -- When a server attaches, complete as you type if it supports completion.
 vim.api.nvim_create_autocmd('LspAttach', {
   callback = function(args)
