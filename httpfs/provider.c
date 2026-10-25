@@ -25,7 +25,7 @@
 
 enum facet { FACET_RESERVED, FACET_CONTROL, FACET_BODY, FACET_SNAPSHOT, FACET_ENDPOINT };
 enum staging_operation { STAGING_NONE, STAGING_CREATE, STAGING_UNLINK,
-  STAGING_WRITE, STAGING_RESIZE, SNAPSHOT_WRITE, SNAPSHOT_READ };
+  STAGING_WRITE, STAGING_RESIZE, SNAPSHOT_WRITE, SNAPSHOT_READ, SNAPSHOT_READ_BULK };
 
 struct configured_endpoint {
   uint64_t method, timeout, rights, response_flags;
@@ -64,6 +64,7 @@ struct transaction {
   bool removing, creating_snapshot, redirecting, mutation_queued;
   bool response_charged;
   uint64_t uploaded, read_offset, read_capacity;
+  unsigned char *read_bulk;
   struct provider_http_budget charged;
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   struct http_prepare_context prepare_context;
@@ -111,12 +112,29 @@ static enum call_status reply(struct loop *loop, struct endpoint_packet *packet,
     enum call_status status, const void *data, size_t size,
     const struct endpoint_grant *grants, size_t count)
 {
-  enum call_status sent = endpoint_reply(packet->receipt, status, data, size, grants, count);
+  enum call_status sent = packet->protocol == PROTOCOL_FILE && packet->operation == FILE_READ_BULK ?
+      endpoint_reply_bulk(packet->receipt, status, data, size) :
+      endpoint_reply(packet->receipt, status, data, size, grants, count);
   if (sent != CALL_OK && endpoint_finish(packet->receipt) != CALL_OK) {
     loop->fatal = CALL_BAD_HANDLE;
   }
   clear_packet(packet);
   return sent;
+}
+
+static enum call_status reply_bulk(struct loop *loop, struct endpoint_packet *packet,
+    enum call_status status, const void *data, size_t size)
+{
+  return reply(loop, packet, status, data, size, NULL, 0);
+}
+
+static void release_read_bulk(struct transaction *transaction)
+{
+  if (transaction->read_bulk) {
+    erase(transaction->read_bulk, transaction->read_capacity);
+    free(transaction->read_bulk);
+    transaction->read_bulk = NULL;
+  }
 }
 
 static void finish(struct loop *loop, struct endpoint_packet *packet)
@@ -338,6 +356,7 @@ static void destroy_if_retired(struct loop *loop, struct transaction *transactio
   }
   close_backing(loop, &transaction->backing, &transaction->body_charge);
   close_backing(loop, &transaction->snapshot, &transaction->snapshot_charge);
+  release_read_bulk(transaction);
   if (transaction->error_body) {
     erase(transaction->error_body, transaction->error_size);
     free(transaction->error_body);
@@ -458,6 +477,17 @@ static enum call_status submit(struct loop *loop, struct transaction *transactio
   uint64_t deadline = native_deadline(loop, transaction, cleanup);
   if (!deadline) {
     return transaction->cleanup;
+  }
+  if (kind == SNAPSHOT_READ_BULK) {
+    const struct endpoint_packet *packet = &transaction->work->read;
+    struct file_bulk_read_request request;
+    memcpy(&request, packet->data, sizeof(request));
+    if (packet->deadline_ns && packet->deadline_ns < deadline) {
+      deadline = packet->deadline_ns;
+    }
+    if (request.deadline_ns && request.deadline_ns < deadline) {
+      deadline = request.deadline_ns;
+    }
   }
   uint64_t id = loop->next_id;
   enum call_status status = completion_submit(target, loop->receiver, id,
@@ -1044,6 +1074,40 @@ static void snapshot_read_reply(struct loop *loop, struct transaction *transacti
   }
 }
 
+static void snapshot_bulk_completed(struct loop *loop, struct transaction *transaction,
+    const struct endpoint_packet *packet)
+{
+  /* Native result and cancellation reason remain independent in the packet.
+   * The outer read selects cancellation before exposing collected bytes. */
+  enum call_status status = packet->reason != CALL_OK ? packet->reason : packet->result;
+  struct file_read_reply response = {0};
+  if (status == CALL_OK) {
+    if (packet->size != sizeof(response) || packet->grant_count) {
+      status = CALL_IO;
+    } else {
+      memcpy(&response, packet->data, sizeof(response));
+      if (response.read > transaction->read_capacity || !response.read ||
+          response.read > transaction->snapshot_size - transaction->read_offset) {
+        status = CALL_IO;
+      }
+    }
+  }
+  if (status == CALL_OK && transaction->work->read.receipt) {
+    size_t count = 0;
+    status = endpoint_collect_bulk(packet->receipt, transaction->read_bulk,
+        transaction->read_capacity, &count);
+    if (status == CALL_OK && count != response.read) {
+      status = CALL_IO;
+    }
+  }
+  if (transaction->work->read.receipt) {
+    reply_bulk(loop, &transaction->work->read, status,
+        status == CALL_OK ? transaction->read_bulk : NULL,
+        status == CALL_OK ? response.read : 0);
+  }
+  release_read_bulk(transaction);
+}
+
 static void write_completed(struct loop *loop, struct transaction *transaction,
     enum staging_operation kind, enum call_status status, uint64_t written)
 {
@@ -1124,6 +1188,8 @@ static void staging_completion(struct loop *loop, struct transaction *transactio
   } else if (kind == SNAPSHOT_READ) {
     snapshot_read_reply(loop, transaction, packet->grant_count ? CALL_IO : status,
         packet->data, packet->size);
+  } else if (kind == SNAPSHOT_READ_BULK) {
+    snapshot_bulk_completed(loop, transaction, packet);
   }
   for (size_t i = 0; i < packet->grant_count; ++i) {
     if (packet->grants[i].handle && handle_close(packet->grants[i].handle)) {
@@ -1211,6 +1277,32 @@ static void snapshot_request(struct loop *loop, struct transaction *transaction,
       struct file_read_reply response = {0};
       reply(loop, packet, CALL_OK, &response, sizeof(response), NULL, 0);
     } else {
+      transaction->read_offset = request.offset;
+      transaction->read_capacity = request.capacity;
+      transaction->work->read = *packet;
+      clear_packet(packet);
+    }
+  } else if (packet->operation == FILE_READ_BULK) {
+    struct file_bulk_read_request request;
+    if (packet->size != sizeof(request)) {
+      reply_bulk(loop, packet, CALL_BAD_REQUEST, NULL, 0);
+      return;
+    }
+    memcpy(&request, packet->data, sizeof(request));
+    if (request.capacity > FILE_READ_BULK_MAX_BYTES ||
+        request.capacity > UINT64_MAX - request.offset) {
+      reply_bulk(loop, packet, CALL_BAD_REQUEST, NULL, 0);
+    } else if (transaction->work->read.receipt || transaction->pending) {
+      reply_bulk(loop, packet, CALL_BUSY, NULL, 0);
+    } else if (!request.capacity || request.offset >= transaction->snapshot_size) {
+      reply_bulk(loop, packet, CALL_OK, NULL, 0);
+    } else {
+      unsigned char *data = malloc(request.capacity);
+      if (!data) {
+        reply_bulk(loop, packet, CALL_NO_MEMORY, NULL, 0);
+        return;
+      }
+      transaction->read_bulk = data;
       transaction->read_offset = request.offset;
       transaction->read_capacity = request.capacity;
       transaction->work->read = *packet;
@@ -1685,6 +1777,15 @@ static bool progress_reads(struct loop *loop)
       continue;
     }
     struct endpoint_packet *packet = &transaction->work->read;
+    if (packet->operation == FILE_READ_BULK) {
+      enum call_status status = submit(loop, transaction, transaction->snapshot,
+          PROTOCOL_FILE, FILE_READ_BULK, packet->data, packet->size, SNAPSHOT_READ_BULK, true);
+      if (status != CALL_OK) {
+        reply_bulk(loop, packet, status, NULL, 0);
+        release_read_bulk(transaction);
+      }
+      return true;
+    }
     if (loop->ram_backing) {
       /* Frozen private RAM reads copy without scheduling or allocation;
        * persistent backing still uses completion-based I/O. */
@@ -1738,8 +1839,17 @@ static void canceled(struct loop *loop, handle_t receipt)
   for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
     transaction = loop->exports[i].owner;
     if (transaction && transaction->work && transaction->work->read.receipt == receipt) {
-      /* This deferred read has not consumed bytes yet. */
+      bool bulk = transaction->work->read.operation == FILE_READ_BULK;
+      if (bulk && transaction->pending) {
+        enum call_status status = completion_cancel(loop->receiver, transaction->pending);
+        if (status != CALL_OK && status != CALL_NOT_FOUND) {
+          transaction->cleanup = status;
+        }
+      }
       finish(loop, &transaction->work->read);
+      if (bulk && !transaction->pending) {
+        release_read_bulk(transaction);
+      }
       return;
     }
   }
