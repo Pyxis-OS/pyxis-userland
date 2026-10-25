@@ -30,6 +30,16 @@ enum call_status pyxis_environment_snapshot_init(struct pyxis_environment_snapsh
       ENVIRONMENT_SNAPSHOT_TEXT_ONLY, &snapshot->capture);
 }
 
+enum call_status pyxis_environment_text_snapshot_init(struct pyxis_environment_snapshot *snapshot)
+{
+  if (!snapshot) {
+    return CALL_BAD_REQUEST;
+  }
+  return environment_capture_init(startup_environment_handle(),
+      ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE | ENVIRONMENT_SNAPSHOT_TEXT_ONLY,
+      &snapshot->capture);
+}
+
 static void environment_release(struct environment_state *state)
 {
   if (!state) {

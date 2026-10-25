@@ -476,6 +476,12 @@ service controllers. Other children receive exported service slots, selected
 filesystem directories and text, with per-child stdio overrides. Relative paths
 retain the independently owned cwd chain.
 
+Libc's `<pyxis/environment.h>` provides owned TEXT captures:
+`pyxis_environment_text_snapshot_init` includes private and exported values;
+`pyxis_environment_snapshot_init` selects exported values for child launch.
+Both preserve captured values across mutation, report capture errors separately
+from an empty table, and release storage with `pyxis_environment_snapshot_close`.
+
 Shell assignments create private values: `title="two words"; echo "$title"`
 assigns TEXT, then passes one argument. TEXT can concatenate with literals without
 field splitting, globbing or reparsing. Single quotes and escaped `$` stay literal.
