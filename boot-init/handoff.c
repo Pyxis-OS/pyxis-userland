@@ -1,7 +1,6 @@
 #include "handoff.h"
 #include "../installer/boot_record.h"
 #include "../installer/digest.h"
-#include "../xfer/hash.h"
 
 #include <directory.h>
 #include <file.h>
@@ -142,7 +141,7 @@ bool boot_evidence_prepare(const struct boot_evidence_authority *authority, hand
     return false;
   }
   struct config_file_digest kernel = {0}, archive = {0}, digest = {0};
-  bool valid = record.bytes && authority->pool && hash_init(authority->clock, authority->random);
+  bool valid = record.bytes && authority->pool;
   if (valid) {
     struct install_digest hash = {0};
     valid = loaded_digest(authority->loaded_kernel, &kernel) &&
@@ -150,7 +149,6 @@ bool boot_evidence_prepare(const struct boot_evidence_authority *authority, hand
         install_digest_update(&hash, record.bytes, record.size) &&
         install_digest_finish(&hash, digest.sha256);
     install_digest_abort(&hash);
-    hash_close();
   }
   digest.present = true;
   digest.size = record.size;

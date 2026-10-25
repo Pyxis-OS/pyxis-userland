@@ -509,7 +509,7 @@ choose:
         fprintf(stderr, "installer-init: read-only discovery grant unavailable (status %u)\n", status);
         continue;
       }
-      bool selected = installer_update_choose(&terminal, discovery, sources[CLOCK], sources[RANDOM],
+      bool selected = installer_update_choose(&terminal, discovery, sources[CLOCK],
           &update_choice, &back, &clean);
       bool closed = handle_close(discovery) == CALL_OK;
       inspection_clean &= clean && closed;

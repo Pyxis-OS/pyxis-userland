@@ -17,6 +17,6 @@ struct installer_update_choice {
  * cleanup failure clears CLEAN and prevents any later launch in this selector.
  * A failed inspection returns false; the caller returns to its action list. */
 bool installer_update_choose(struct terminal *terminal, handle_t disks, handle_t clock,
-    handle_t random, struct installer_update_choice *choice, bool *back, bool *clean);
+    struct installer_update_choice *choice, bool *back, bool *clean);
 
 #endif

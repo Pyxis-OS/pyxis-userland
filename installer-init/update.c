@@ -4,7 +4,6 @@
 #if INSTALLER_PUBLICATION_SCRATCH
 #include "../installer/installed_publication.h"
 #endif
-#include "../xfer/hash.h"
 
 #include <clock.h>
 #include <handle.h>
@@ -226,18 +225,13 @@ static bool inspect_disk(struct update_inventory *inventory, const struct instal
 }
 
 bool installer_update_choose(struct terminal *terminal, handle_t disks, handle_t clock,
-    handle_t random, struct installer_update_choice *choice, bool *back, bool *clean)
+    struct installer_update_choice *choice, bool *back, bool *clean)
 {
   struct update_inventory inventory = {0};
   bool success = false;
-  bool hashing = hash_init(clock, random);
   *back = false;
   *clean = true;
   *choice = (struct installer_update_choice){0};
-  if (!hashing) {
-    fputs("installer-init: cannot initialize Update inspection\n", stderr);
-    goto done;
-  }
   puts("Discovering existing Pyxis installations (read-only)...");
   for (uint64_t index = 0;; ++index) {
     struct disk_info info;
@@ -307,7 +301,6 @@ bool installer_update_choose(struct terminal *terminal, handle_t disks, handle_t
   }
   free(labels);
 done:
-  hash_close();
   free(inventory.candidates);
   return success;
 }

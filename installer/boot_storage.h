@@ -26,8 +26,7 @@ struct config_blob {
   struct config_file_digest digest;
 };
 
-/* Initialize blobs with {0}; setters/reads replace owned bytes. The caller
- * initializes/closes the shared PSA context with xfer/hash.h around all uses. */
+/* Initialize blobs with {0}; setters/reads replace owned bytes. */
 
 enum config_publish_phase {
   CONFIG_PHASE_CHECK, CONFIG_PHASE_STAGE, CONFIG_PHASE_VERIFY,

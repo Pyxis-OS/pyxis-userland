@@ -3,10 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <abi/handle.h>
 
-bool hash_init(handle_t clock, handle_t random);
-void hash_close(void);
 /* One incremental SHA-256 at a time; a failed update or finish ends it. */
 bool digest_begin(void);
 bool digest_update(const void *bytes, size_t size);

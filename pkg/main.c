@@ -66,7 +66,7 @@ struct client {
   uint64_t timeout;
   /* --yes: switch without the console question, for Install. */
   bool yes;
-  bool crypto_ready; /* PSA initialized by hash_init; closed on exit. */
+  bool crypto_ready; /* PSA signature crypto initialized; closed on exit. */
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
   enum call_status cleanup_status;
@@ -312,9 +312,9 @@ static bool fetch(const char *base, const char *relative, bool index, uint64_t s
 static bool ensure_crypto(void)
 {
   if (!client.crypto_ready) {
-    client.crypto_ready = hash_init(client.clock, bootstrap_capability("random"));
+    client.crypto_ready = pkg_crypto_init(client.clock, bootstrap_capability("random"));
   }
-  return client.crypto_ready || fail("SHA-256 initialization unavailable");
+  return client.crypto_ready || fail("signature crypto initialization unavailable");
 }
 
 static bool fetch_bytes(const char *base, const char *relative, char **bytes, size_t *size)
@@ -1728,7 +1728,7 @@ int main(int argc, char **argv)
   }
   bool needs_hash = (mutation && strcmp(command, "unlock")) || !strcmp(command, "verify");
   if (needs_hash && !ensure_crypto()) {
-    fputs("pkg: SHA-256 initialization unavailable\n", stderr);
+    fputs("pkg: signature crypto initialization unavailable\n", stderr);
     return EXIT_FAILURE;
   }
   bool ok = false;
@@ -1781,14 +1781,14 @@ int main(int argc, char **argv)
     pkg_selection_free(&selection);
   } else {
     release_publish_guard();
-    if (client.crypto_ready) hash_close();
+    if (client.crypto_ready) pkg_crypto_close();
     free(client.offered);
     free(client.hidden);
     free(client.fetched);
     return usage();
   }
   release_publish_guard();
-  if (client.crypto_ready) hash_close();
+  if (client.crypto_ready) pkg_crypto_close();
   free(client.offered);
   free(client.hidden);
   free(client.fetched);

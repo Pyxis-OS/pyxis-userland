@@ -65,9 +65,9 @@ bool install_esp_payload_space(const struct install_esp_payload_request *request
     uint64_t cluster_bytes, uint64_t *required_clusters);
 
 /* Initialize *result to NULL. The request, source descriptors and bytes stay
- * unchanged through stage. Retain the hash_init() context through the final
- * verify call. Root/control are borrowed and must outlive the result. The helper
- * retains its own unlinked RAM FILE for transfer and verification. It verifies
+ * unchanged through stage. Root/control are borrowed and must outlive the result.
+ * The helper retains its own unlinked RAM FILE for transfer and verification.
+ * It verifies
  * the bound root and reviewed target, creates one fresh attempt, syncs and
  * reopens each retained object before checking its exact extent/hash. No ESP
  * REMOVE rights, raw access, admission, BEGIN/CHECK/END, configuration or activation.

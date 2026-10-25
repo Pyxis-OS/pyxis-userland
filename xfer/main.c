@@ -482,7 +482,7 @@ static void cleanup(struct transfer *transfer)
   if (transfer->source >= 0 && close(transfer->source) != 0) {
     term_print(&transfer->wire.terminal, "xfer: source close failed\n");
   }
-  hash_close();
+  digest_abort();
   if (transfer->parent != HANDLE_INVALID) {
     handle_t parent = transfer->parent;
     transfer->parent = HANDLE_INVALID;
@@ -528,10 +528,8 @@ int main(int argc, char **argv)
     term_print(&wire->terminal, "xfer: terminal passthrough unavailable\n");
     return EXIT_FAILURE;
   }
-  bool success = hash_init(wire->clock, bootstrap_capability("random"));
-  if (!success) {
-    transfer_fail(&transfer, "EIO", "PSA initialization failed; native entropy and clock grants are required");
-  } else if (sending) {
+  bool success;
+  if (sending) {
     success = send_file(&transfer, argv[2]);
   } else {
     success = receive_file(&transfer, argv[overwrite ? 3 : 2], argv[overwrite ? 4 : 3], overwrite);

@@ -1,10 +1,71 @@
 #include "signature.h"
 #include <mbedtls/oid.h>
 #include <mbedtls/pk.h>
+#include <mbedtls/platform.h>
 #include <mbedtls/x509_crt.h>
 #include <psa/crypto.h>
+#include <psa/crypto_extra.h>
+#include <clock.h>
+#include <random.h>
+#include <sha256.h>
+#include <stdlib.h>
 
-#define SHA256_BYTES 32
+static handle_t entropy_clock, entropy_random;
+static uint64_t entropy_deadline;
+
+/* Signature verification retains the configured PSA initialization and RNG.
+ * Borrow only the named native entropy and monotonic-clock grants. */
+int mbedtls_platform_get_entropy(psa_driver_get_entropy_flags_t flags,
+    size_t *estimate_bits, unsigned char *output, size_t output_size)
+{
+  *estimate_bits = 0;
+  if (flags != PSA_DRIVER_GET_ENTROPY_FLAGS_NONE) {
+    return PSA_ERROR_NOT_SUPPORTED;
+  }
+  size_t offset = 0;
+  while (offset < output_size) {
+    uint64_t now;
+    if (clock_now(entropy_clock, &now) != CALL_OK || now >= entropy_deadline) {
+      return PSA_ERROR_INSUFFICIENT_ENTROPY;
+    }
+    size_t count = output_size - offset;
+    if (count > RANDOM_MAX_BYTES) {
+      count = RANDOM_MAX_BYTES;
+    }
+    if (random_read(entropy_random, output + offset, count, entropy_deadline) != CALL_OK) {
+      return PSA_ERROR_INSUFFICIENT_ENTROPY;
+    }
+    offset += count;
+  }
+  *estimate_bits = output_size * 8;
+  return PSA_SUCCESS;
+}
+
+bool pkg_crypto_init(handle_t clock, handle_t random)
+{
+  uint64_t now;
+  if (clock_now(clock, &now) != CALL_OK || now > UINT64_MAX - UINT64_C(2000000000) ||
+      random == HANDLE_INVALID) {
+    return false;
+  }
+  entropy_clock = clock;
+  entropy_random = random;
+  entropy_deadline = now + UINT64_C(2000000000);
+  mbedtls_platform_set_calloc_free(calloc, free);
+  return psa_crypto_init() == PSA_SUCCESS;
+}
+
+void pkg_crypto_close(void)
+{
+  mbedtls_psa_crypto_free();
+}
+
+static bool hash_bytes(const void *bytes, size_t size, unsigned char hash[SHA256_DIGEST_BYTES])
+{
+  struct sha256_context context;
+  sha256_init(&context);
+  return sha256_update(&context, bytes, size) && sha256_finish(&context, hash);
+}
 
 static int digits(const char *text, size_t count)
 {
@@ -59,8 +120,7 @@ bool pkg_signature_verify(const char *anchor, size_t anchor_size,
     .min = digits(signed_at + 14, 2), .sec = digits(signed_at + 17, 2),
   };
   bool ok = false;
-  uint8_t hash[SHA256_BYTES];
-  size_t hash_size = 0;
+  uint8_t hash[SHA256_DIGEST_BYTES];
   if (mbedtls_x509_crt_parse(&trusted, (const unsigned char *)anchor, anchor_size) != 0 ||
       trusted.next) {
     *reason = "the pinned signing CA (" PKG_SIGNING_ANCHOR ") is unreadable";
@@ -81,8 +141,7 @@ bool pkg_signature_verify(const char *anchor, size_t anchor_size,
     *reason = "the signer or the CA is not valid at the index's signed time";
   } else if (!p256(&leaf.pk)) {
     *reason = "the signer key is not ECDSA P-256";
-  } else if (psa_hash_compute(PSA_ALG_SHA_256, index, index_size, hash, sizeof(hash),
-      &hash_size) != PSA_SUCCESS || hash_size != sizeof(hash)) {
+  } else if (!hash_bytes(index, index_size, hash)) {
     *reason = "cannot hash the index";
   } else if (mbedtls_pk_verify(&leaf.pk, MBEDTLS_MD_SHA256, hash, sizeof(hash),
       signature, signature_size) != 0) {
@@ -97,10 +156,8 @@ bool pkg_signature_verify(const char *anchor, size_t anchor_size,
 
 bool pkg_sha256_text(const void *bytes, size_t size, char text[65])
 {
-  uint8_t hash[SHA256_BYTES];
-  size_t hash_size = 0;
-  if (psa_hash_compute(PSA_ALG_SHA_256, bytes, size, hash, sizeof(hash), &hash_size) !=
-      PSA_SUCCESS || hash_size != sizeof(hash)) {
+  uint8_t hash[SHA256_DIGEST_BYTES];
+  if (!hash_bytes(bytes, size, hash)) {
     return false;
   }
   static const char digits[] = "0123456789abcdef";

@@ -4,7 +4,6 @@
 #include "battery.h"
 #include "coexist_ui.h"
 #include "publication_frontend.h"
-#include "../xfer/hash.h"
 
 #include <clock.h>
 #include <directory.h>
@@ -571,7 +570,7 @@ int main(int argc, char **argv)
   struct target coexist_target = {0};
   struct target *targets = NULL;
   size_t count = 0;
-  bool updating = selected_update, read_the_room = false, crypto = false;
+  bool updating = selected_update, read_the_room = false;
   int result = EXIT_FAILURE;
   if (disks == HANDLE_INVALID || boot == HANDLE_INVALID || clock == HANDLE_INVALID ||
       random == HANDLE_INVALID || kernel == HANDLE_INVALID || archive == HANDLE_INVALID ||
@@ -620,9 +619,8 @@ int main(int argc, char **argv)
   }
   install_progress_plain_stream(clock, stderr, bootstrap_capability("installer_diagnostics"),
       verbose || print_only);
-  install_progress_begin("Initializing revision hashing", INSTALL_PROGRESS_NONE, NULL);
-  crypto = hash_init(clock, random);
-  if (!crypto || !install_plan_sources(&plan, disks, boot, kernel, archive, clock,
+  install_progress_begin("Inspecting revision sources", INSTALL_PROGRESS_NONE, NULL);
+  if (!install_plan_sources(&plan, disks, boot, kernel, archive, clock,
         bootstrap_capability("system_info"))) {
     install_progress_pause();
     fputs("installer: sources or inventory unavailable; nothing was written\n", stderr);
@@ -825,9 +823,6 @@ done:
       handle_close(coexist_choice.pending_inspection) != 0) {
     say("installer: pending read-only inspection handle close failed");
     result = EXIT_FAILURE;
-  }
-  if (crypto) {
-    hash_close();
   }
   return result;
 }

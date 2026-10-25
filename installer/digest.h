@@ -1,14 +1,15 @@
 #ifndef USERSPACE_INSTALLER_DIGEST_H
 #define USERSPACE_INSTALLER_DIGEST_H
 
-#include <psa/crypto.h>
+#include <sha256.h>
 #include <stdbool.h>
 #include <stddef.h>
 
-/* Initialize with {0}. Each context owns one stream; callers initialize the
- * shared PSA allocator/entropy with hash_init and close it after all streams. */
+/* Initialize with {0}. Each caller-owned context has an independent stream.
+ * A failed update or finish ends it; no shared initialization is required. */
 struct install_digest {
-  psa_hash_operation_t operation;
+  struct sha256_context context;
+  bool active;
 };
 
 bool install_digest_begin(struct install_digest *digest);

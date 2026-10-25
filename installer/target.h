@@ -30,7 +30,7 @@ struct install_target {
  * and every known ESP's EFI entries, then drains its RO views. Selected native
  * ESP evidence remains in review. Success closes disk.handle and retains only
  * the reviewed Apply grants and report; failure retains every unclosed handle.
- * Caller owns hash_init() through this call. deadline_ns bounds cleanup only. */
+ * deadline_ns bounds cleanup only. */
 bool install_target_prepare(struct install_target *target, handle_t disks, handle_t clock,
     const struct disk_info *info, const struct install_plan_record *record,
     uint64_t deadline_ns, struct install_consent *consent,
@@ -38,7 +38,7 @@ bool install_target_prepare(struct install_target *target, handle_t disks, handl
 
 /* Acquires fresh RO data and Review, recomputes the full target fingerprint and
  * compares it without replacing or consuming the original Apply authority.
- * Caller owns hash_init(). A failed recheck disables this preparation. */
+ * A failed recheck disables this preparation. */
 bool install_target_revalidate(struct install_target *target, uint64_t deadline_ns);
 
 /* Drain Review references, then close owned disk/review handles. Failed closes

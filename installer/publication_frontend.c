@@ -7,7 +7,6 @@
 #include "publication.h"
 #include "boot_entry.h"
 #include "esp_directory.h"
-#include "../xfer/hash.h"
 #include "../common/bootstrap_environment.h"
 
 #include <directory.h>
@@ -185,7 +184,7 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
     bool coexist)
 {
   handle_t disks = bootstrap_capability("disks"), boot = bootstrap_capability("boot");
-  handle_t clock = bootstrap_capability("clock"), random = bootstrap_capability("random");
+  handle_t clock = bootstrap_capability("clock");
   handle_t workspace = bootstrap_capability("config_snapshot_parent");
   struct install_disk disk = {.handle = HANDLE_INVALID};
   struct mount_fat32_reply mount = {.root = HANDLE_INVALID, .control = HANDLE_INVALID};
@@ -196,12 +195,11 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
   struct config_target_facts planned_facts = {0};
   uint64_t available_bytes = 0, cluster_bytes = 0;
   int result = EXIT_FAILURE;
-  bool crypto = hash_init(clock, random);
   struct disk_partition_selection target_selection = {0};
   struct config_blob previous_limine = {0};
   struct install_pending_plan completion = {0};
   struct install_recovery recovery = {.sources = {{.handle = HANDLE_INVALID}, {.handle = HANDLE_INVALID}}};
-  if (!crypto || !install_battery_check(bootstrap_capability("system_info"), stderr)) {
+  if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
     goto done;
   }
   if (disks_open(disks, id, DISK_ACCESS_READ_ONLY, &disk.handle) != CALL_OK ||
@@ -399,9 +397,6 @@ done:
   config_blob_destroy(&menu);
   config_blob_destroy(&record);
   install_progress_finish();
-  if (crypto) {
-    hash_close();
-  }
   return result;
 }
 
