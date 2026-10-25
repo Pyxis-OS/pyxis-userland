@@ -63,6 +63,7 @@ XFER_OBJECTS := $(BUILD)/xfer/main.o $(BUILD)/xfer/protocol.o $(BUILD)/xfer/hash
 TCP_SERVE_OBJECT := $(BUILD)/tcp/serve.o
 IOBENCH_OBJECTS := $(BUILD)/iobench/common.o $(BUILD)/iobench/write.o $(BUILD)/iobench/pipe.o
 INSTALLER_OBJECTS := $(addprefix $(BUILD)/installer/,main.o battery.o gpt.o pool.o consent.o esp.o esp_read.o bin_cleanup.o packages.o plan_record.o plan.o executor.o coexist.o review.o esp_activate.o coexist_ui.o target.o)
+SHA256_LIBRARY := $(SDK)/sysroot/usr/lib/libsha256.a
 NPFS_LIBRARY := $(SDK)/sysroot/usr/lib/libnpfs-format.a
 FONT_LIBRARY := $(SDK)/sysroot/usr/lib/libfont.a
 FAT32_LIBRARY := $(SDK)/sysroot/usr/lib/libfat32-read.a
@@ -96,11 +97,10 @@ INSTALL_SELECTOR_SOURCES := installer-init/update.c installer/io.c installer/gpt
     installer/consent.c installer/esp_read.c installer/review.c installer/coexist.c \
     installer/progress.c installer/digest.c installer/installed_probe.c installer/boot_entry.c \
     installer/pending.c installer/plan_record.c \
-    installer/boot_record.c installer/boot_storage.c installer/menu_ownership.c \
-    xfer/hash.c
+    installer/boot_record.c installer/boot_storage.c installer/menu_ownership.c
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/installer-init/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
-BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o $(BUILD)/xfer/hash.o
-BOOT_INIT_LIBRARIES := $(MBEDTLS_LIBRARIES)
+BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o
+BOOT_INIT_LIBRARIES := $(SHA256_LIBRARY)
 PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o signature.o upgrade.o)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
@@ -137,6 +137,9 @@ install: all
 	  install -m 644 init/services.pxs "$$staging/init-services"; \
 	  install -m 644 init/remote.pxs "$$staging/init-remote"; \
 	  install -m 644 init/remote-services.pxs "$$staging/init-remote-services"; \
+	  mkdir -p "$$staging/share/licenses/libsha256/tf_psa" "$$staging/share/licenses/libsha256/x86_64"; \
+	  install -m 644 third_party/tf_psa_sha256/LICENSE third_party/tf_psa_sha256/UPSTREAM.md "$$staging/share/licenses/libsha256/tf_psa/"; \
+	  install -m 644 libsha256/arch/x86_64/LICENSE.go-bsd libsha256/arch/x86_64/UPSTREAM.md "$$staging/share/licenses/libsha256/x86_64/"; \
 	  mkdir -p "$$staging/share/licenses/wpa-rsn"; \
 	  cp -a "$(WPA_RSN_PREFIX)/share/licenses/wpa-rsn/." "$$staging/share/licenses/wpa-rsn/"; \
 	  install -m 644 config/session.lua "$$staging/config/session.lua"; \
@@ -272,11 +275,10 @@ $(HTTP_LIBRARY): $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(HTTP_OBJECTS) $(DNS_OBJECTS) $(UDP_OBJECT)
 
-$(TLS_OBJECT) $(BUILD)/xfer/hash.o $(BUILD)/pkg/signature.o: private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
+$(TLS_OBJECT) $(BUILD)/pkg/signature.o: private CPPFLAGS += $(MBEDTLS_CPPFLAGS)
 # pkg upgrade publishes through the shared boot publisher (installer/boot_publisher.h).
-$(BUILD)/pkg/upgrade.o: private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
-$(BUILD)/xfer/hash.o: $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
-$(TLS_OBJECT): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+$(BUILD)/pkg/upgrade.o: private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(TLS_OBJECT) $(BUILD)/pkg/signature.o: $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 $(TLS_LIBRARY): $(TLS_OBJECT) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(TLS_OBJECT)
@@ -293,8 +295,8 @@ $(TLS_EXPORT_IDENTITY): FORCE
 	  xargs -0 sha256sum -- < "$@.files.tmp" > "$@.tmp"; \
 	  cmp -s "$@.tmp" "$@" || mv -- "$@.tmp" "$@"
 
-$(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(XFER_OBJECTS) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/xfer.pxe: $(XFER_OBJECTS) $(SHA256_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(XFER_OBJECTS) $(SHA256_LIBRARY) $(LDLIBS)
 
 $(BUILD)/httpfs.pxe: $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(HTTPFS_OBJECTS) $(HTTP_LIBRARY) $(HTTP_PARSER_LIBRARY) $(TLS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
@@ -313,7 +315,7 @@ $(PUBLISHER_LIBRARY): $(PUBLISHER_OBJECTS) Makefile
 	rm -f $@
 	$(AR) rcs $@ $(PUBLISHER_OBJECTS)
 
-$(BUILD)/boot-init.pxe: $(BOOT_INIT_LIBRARIES) $(TLS_EXPORT_IDENTITY) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+$(BUILD)/boot-init.pxe: $(BOOT_INIT_LIBRARIES) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(BOOT_INIT_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(BOOT_INIT_LIBRARIES) $(LDLIBS)
 
 $(BUILD)/session.pxe: $(SESSION_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
@@ -374,8 +376,8 @@ $(BUILD)/wifi.pxb/manifest.json: $(BUILD)/wifi.pxe wifi/manifest.json wifi/READM
 	install -m 644 wifi/README.md "$(@D)/app/"
 	install -m 644 wifi/manifest.json "$@"
 
-$(BUILD)/boot-init/handoff.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
-$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): $(LUA_PREFIX)/include/lua.h $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+$(BUILD)/boot-init/handoff.o $(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include
+$(CONFIG_EDITOR_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_OBJECTS): $(LUA_PREFIX)/include/lua.h
 
 $(BUILD)/config.pxe: $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(CONFIG_EDITOR_OBJECTS) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(LDLIBS)
@@ -393,22 +395,22 @@ $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
 $(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/installer/main.o $(BUILD)/installer-init/main.o $(BUILD)/boot-init/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
 
-$(INSTALL_SELECTOR_OBJECTS): private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH) -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(INSTALL_SELECTOR_OBJECTS): private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH) -I$(LUA_PREFIX)/include
 $(INSTALL_SELECTOR_OBJECTS): private CFLAGS += -ffunction-sections -fdata-sections
-$(INSTALL_SELECTOR_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
+
 
 $(BUILD)/installer-init/inspect/%.o: %.c Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/installer-init.pxe: $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(INSTALL_SELECTOR_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -Wl,--gc-sections -o $@ $(PYXIS_START) $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(INSTALL_SELECTOR_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/installer-init.pxe: $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(INSTALL_SELECTOR_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(SHA256_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -Wl,--gc-sections -o $@ $(PYXIS_START) $(BUILD)/installer-init/main.o $(BUILD)/common/provider_setup.o $(INSTALL_SELECTOR_OBJECTS) $(NETWORK_RUNTIME_LIBRARY) $(UDP_OBJECT) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(SHA256_LIBRARY) $(LDLIBS)
 
-$(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include $(MBEDTLS_CPPFLAGS)
+$(INSTALLER_OBJECTS): private CPPFLAGS += -I$(LUA_PREFIX)/include
 $(INSTALLER_OBJECTS): $(MBEDTLS_PREFIX)/share/mbedtls.mk $(TLS_EXPORT_IDENTITY)
 
-$(BUILD)/installer.pxe: $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(INSTALLER_OBJECTS) $(BUILD)/xfer/hash.o $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/installer.pxe: $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(INSTALLER_OBJECTS) $(SHA256_LIBRARY) $(NPFS_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(INSTALLER_OBJECTS) $(INSTALLER_CONFIG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(SHA256_LIBRARY) $(LDLIBS)
 
 $(BUILD)/fat32-inspect/main.o: $(SDK)/sysroot/usr/include/pyxis_fs/fat32.h
 $(BUILD)/fat32-inspect.pxe: $(BUILD)/fat32-inspect/main.o $(FAT32_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
@@ -497,8 +499,8 @@ $(BUILD)/httpfs.pxb: $(BUILD)/httpfs.pxe httpfs/manifest.json
 
 pkg: $(BUILD)/pkg.pxb/manifest.json
 
-$(BUILD)/pkg.pxe: $(PKG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(BUILD)/xfer/hash.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
-	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(PKG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(LDLIBS)
+$(BUILD)/pkg.pxe: $(PKG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(NPFS_LIBRARY) $(BUILD)/xfer/hash.o $(SHA256_LIBRARY) $(TLS_EXPORT_IDENTITY) $(MBEDTLS_LIBRARIES) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(PYXIS_START) $(PKG_OBJECTS) $(PUBLISHER_LIBRARY) $(CONFIG_LIBRARY) $(LUA_LIBRARY) $(FAT32_LIBRARY) $(BUILD)/xfer/hash.o $(NPFS_LIBRARY) $(MBEDTLS_LIBRARIES) $(SHA256_LIBRARY) $(LDLIBS)
 
 $(BUILD)/pkg.pxb/manifest.json: $(BUILD)/pkg.pxe pkg/manifest.json pkg/README.md
 	@mkdir -p $(BUILD)/pkg.pxb/app/bin

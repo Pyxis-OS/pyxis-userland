@@ -22,24 +22,23 @@ host names always fail. Ctrl+C cancels; Escape remains part of the OSC decoder.
 Build with the selected SDK and ports development export:
 
 ```sh
-make -j16 xfer SDK=/path/to/sdk MBEDTLS_PREFIX=/path/to/ports-dev/mbedtls
+make -j16 xfer SDK=/path/to/sdk
 ```
 
 The program borrows named `input` and `output` console grants independently of
 stdin/stdout, holds libterm passthrough, and reads raw terminal bytes. It also
-requires readable `clock` and `random` grants: the configured Mbed TLS PSA
-initialization seeds its RNG before hash operations, with a two-second native
-entropy deadline. Receiving requires CREATE, REMOVE and WRITE_FILES on the
+requires a readable `clock` for protocol deadlines. Hashing needs no random
+or entropy grant. Receiving requires CREATE, REMOVE and WRITE_FILES on the
 inherited current-directory grant. Staging and publication use native file and
 directory calls, since ordinary libc creation cannot exclusively create a name
 or select NO_REPLACE. Source reads use libc open/fstat/read and reject nonregular
-objects. SHA-256 uses the configured Mbed TLS PSA implementation from the ports
-export, without vendored cryptographic code or an additional runtime library.
+objects. SHA-256 uses the shared SDK `libsha256`, with runtime-selected
+SHA-NI or portable compression and caller-owned state.
 
 Both directions stream, so memory stays constant: one 64 KiB block, one frame
-and the SHA-256 state, whatever the file size. There is no fixed size limit; a
-transfer is bounded by its declared 64-bit size, the destination's free space
-and the reply deadlines. Sending reads the source twice. The first pass hashes
+and the SHA-256 state, whatever the file size. A transfer is bounded by its
+declared 64-bit size, SHA-256's 64-bit bit-length bound, the destination's
+free space and the reply deadlines. Sending reads the source twice. The first pass hashes
 it before the metadata and digest are announced; the second sends it and hashes
 it again, and a different digest or size fails before `end_data`, so a source
 changed during the transfer is never published. Guest file names are valid UTF-8,
