@@ -18,7 +18,10 @@ function are selected. The smaller-code configuration, context initialization,
 padding and ARM backend are not imported. Adaptations: the state is eight
 caller-owned words rather than a Mbed TLS context; byte loads use a local
 endian helper; round constants have one shared symbol for both backends;
-volatile byte clearing preserves the upstream local-state erasure; a block
+the upstream volatile-memset/assembly-barrier strategy from
+`platform/platform_util.c` preserves local-state erasure; a block
 loop implements the internal compression interface. Streaming and runtime
 architecture dispatch live outside the vendored core. No download beyond the
 existing pinned cache is needed.
+
+Original platform_util.c SHA-256: `8b2abd057d159e2d924cc30d824baeb74411460f1d2a5b1b6256bb0c54bc7330`. Only the GNU C zeroization branch is needed by the supported compilers.

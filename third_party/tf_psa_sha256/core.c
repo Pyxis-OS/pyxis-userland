@@ -10,18 +10,20 @@
 
 #include "../../libsha256/internal.h"
 
+#include <string.h>
+
 static uint32_t read_be(const unsigned char *p)
 {
     return ((uint32_t) p[0] << 24) | ((uint32_t) p[1] << 16) |
            ((uint32_t) p[2] << 8) | (uint32_t) p[3];
 }
 
+static void *(*const volatile memset_func)(void *, int, size_t) = memset;
+
 static void zeroize(void *p, size_t size)
 {
-    volatile unsigned char *bytes = p;
-    while (size--) {
-        *bytes++ = 0;
-    }
+    memset_func(p, 0, size);
+    __asm__ volatile ("" : : "m" (*(unsigned char (*)[size]) p) :);
 }
 
 const uint32_t sha256_round_constants[64] =
