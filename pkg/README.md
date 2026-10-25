@@ -37,6 +37,12 @@ rollback and verify once, before any tree is hashed: one message lists every
 stale package with its ABI and gives one `pkg install` and one `pkg remove`
 command that clear them all.
 
+Archive, member and installed-tree verification explicitly use positioned bulk
+FILE reads with a heap buffer of at most 1 MiB. Every archive/inventory/member
+hash, identity/size check and publication sync remains required. The backing
+must support bulk READ (native RAM/archive/npfs or a completed httpfs snapshot);
+a refusal is reported without silently retrying ordinary READ.
+
 Install, remove and rollback hash only the packages they add or change; members
 carried over unchanged are checked by their stored manifest, since stored trees
 are immutable and were verified when installed. pkg verify hashes everything.
