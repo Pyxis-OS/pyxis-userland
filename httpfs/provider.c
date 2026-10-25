@@ -364,6 +364,19 @@ static void abort_transaction(struct loop *loop, struct transaction *transaction
     release_body_source(loop, transaction);
     transaction->aborting = true;
     transaction->failure = failure;
+    if (!transaction->detail[0] && failure == CALL_TIMED_OUT) {
+      snprintf(transaction->detail, sizeof(transaction->detail), "Connection timed out");
+    } else if (!transaction->detail[0] && failure == CALL_CONNECTION_RESET) {
+      snprintf(transaction->detail, sizeof(transaction->detail), "Connection reset");
+    } else if (!transaction->detail[0] && transaction->response.error == HTTP_TLS_ERROR) {
+      tls_result_detail(&transaction->response.tls_failure, transaction->detail,
+          sizeof(transaction->detail));
+    } else if (!transaction->detail[0] && transaction->response.error == HTTP_NETWORK_ERROR) {
+      const char *reason = transaction->response.network_status == CALL_TIMED_OUT ?
+          "Connection timed out" : transaction->response.network_status == CALL_CONNECTION_RESET ?
+          "Connection reset" : "Network transport failed";
+      snprintf(transaction->detail, sizeof(transaction->detail), "%s", reason);
+    }
     transaction->phase = failure == CALL_ABANDONED ? HTTP_TRANSACTION_ABORTED : HTTP_TRANSACTION_FAILED;
   }
   if (transaction->pending) {

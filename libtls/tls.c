@@ -7,6 +7,7 @@
 #include <psa/crypto.h>
 #include <psa/crypto_extra.h>
 #include <random.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tcp.h>
@@ -250,6 +251,13 @@ failed:
 static bool library_result(struct tls_result *result, int code, enum tls_error fallback)
 {
   result->library_error = code;
+  if (code == MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE && owner && owner->connection) {
+    int alert = mbedtls_ssl_get_fatal_alert(&owner->connection->ssl);
+    if (alert >= 0) {
+      result->peer_alert_present = true;
+      result->peer_alert = (unsigned)alert;
+    }
+  }
   if (result->error != TLS_OK) {
     return false;
   }
@@ -911,5 +919,110 @@ const char *tls_error_name(enum tls_error error)
   case TLS_TRANSPORT_ERROR: return "native transport failure";
   case TLS_DEADLINE: return "TLS deadline expired";
   default: return "invalid TLS result";
+  }
+}
+
+static const char *alert_name(unsigned alert)
+{
+  switch (alert) {
+  case MBEDTLS_SSL_ALERT_MSG_UNEXPECTED_MESSAGE: return "unexpected_message";
+  case MBEDTLS_SSL_ALERT_MSG_BAD_RECORD_MAC: return "bad_record_mac";
+  case MBEDTLS_SSL_ALERT_MSG_HANDSHAKE_FAILURE: return "handshake_failure";
+  case MBEDTLS_SSL_ALERT_MSG_BAD_CERT: return "bad_certificate";
+  case MBEDTLS_SSL_ALERT_MSG_UNSUPPORTED_CERT: return "unsupported_certificate";
+  case MBEDTLS_SSL_ALERT_MSG_CERT_REVOKED: return "certificate_revoked";
+  case MBEDTLS_SSL_ALERT_MSG_CERT_EXPIRED: return "certificate_expired";
+  case MBEDTLS_SSL_ALERT_MSG_CERT_UNKNOWN: return "certificate_unknown";
+  case MBEDTLS_SSL_ALERT_MSG_ILLEGAL_PARAMETER: return "illegal_parameter";
+  case MBEDTLS_SSL_ALERT_MSG_UNKNOWN_CA: return "unknown_ca";
+  case MBEDTLS_SSL_ALERT_MSG_ACCESS_DENIED: return "access_denied";
+  case MBEDTLS_SSL_ALERT_MSG_DECODE_ERROR: return "decode_error";
+  case MBEDTLS_SSL_ALERT_MSG_DECRYPT_ERROR: return "decrypt_error";
+  case MBEDTLS_SSL_ALERT_MSG_PROTOCOL_VERSION: return "protocol_version";
+  case MBEDTLS_SSL_ALERT_MSG_INSUFFICIENT_SECURITY: return "insufficient_security";
+  case MBEDTLS_SSL_ALERT_MSG_INTERNAL_ERROR: return "internal_error";
+  case MBEDTLS_SSL_ALERT_MSG_UNSUPPORTED_EXT: return "unsupported_extension";
+  case MBEDTLS_SSL_ALERT_MSG_UNRECOGNIZED_NAME: return "unrecognized_name";
+  case MBEDTLS_SSL_ALERT_MSG_NO_APPLICATION_PROTOCOL: return "no_application_protocol";
+  default: return NULL;
+  }
+}
+
+void tls_result_detail(const struct tls_result *result, char *text, size_t capacity)
+{
+  if (!capacity) {
+    return;
+  }
+  text[0] = 0;
+  if (result->error == TLS_DEADLINE || result->native_status == CALL_TIMED_OUT) {
+    snprintf(text, capacity, "Connection timed out");
+    return;
+  }
+  if (result->error == TLS_TRANSPORT_ERROR) {
+    if (result->native_status == CALL_CONNECTION_RESET) {
+      snprintf(text, capacity, "Connection reset");
+    } else if (result->native_status == CALL_ENDPOINT_CLOSED) {
+      snprintf(text, capacity, "Connection closed");
+    } else {
+      snprintf(text, capacity, "Transport failed (status %u)", result->native_status);
+    }
+    return;
+  }
+  if (result->error == TLS_CERTIFICATE_ERROR && result->verify_flags &&
+      result->verify_flags != UINT32_MAX) {
+    static const struct { uint32_t flag; const char *name; } reasons[] = {
+      {MBEDTLS_X509_BADCERT_EXPIRED, "expired"},
+      {MBEDTLS_X509_BADCERT_FUTURE, "not yet valid"},
+      {MBEDTLS_X509_BADCERT_CN_MISMATCH, "name mismatch"},
+      {MBEDTLS_X509_BADCERT_REVOKED, "revoked"},
+      {MBEDTLS_X509_BADCERT_NOT_TRUSTED, "untrusted issuer or bad signature"},
+      {MBEDTLS_X509_BADCERT_BAD_MD, "unacceptable signature hash"},
+      {MBEDTLS_X509_BADCERT_BAD_PK, "unacceptable signature algorithm"},
+      {MBEDTLS_X509_BADCERT_BAD_KEY, "unacceptable key"},
+      {MBEDTLS_X509_BADCERT_KEY_USAGE, "invalid key usage"},
+      {MBEDTLS_X509_BADCERT_EXT_KEY_USAGE, "invalid extended key usage"},
+    };
+    snprintf(text, capacity, "Certificate verification failed: ");
+    uint32_t remaining = result->verify_flags;
+    bool first = true;
+    for (size_t i = 0; i < sizeof(reasons) / sizeof(*reasons); ++i) {
+      if (remaining & reasons[i].flag) {
+        size_t used = strlen(text);
+        snprintf(text + used, capacity - used, "%s%s", first ? "" : "; ", reasons[i].name);
+        remaining &= ~reasons[i].flag;
+        first = false;
+      }
+    }
+    if (remaining) {
+      size_t used = strlen(text);
+      snprintf(text + used, capacity - used, "%sverify flags 0x%x", first ? "" : "; ", remaining);
+    }
+    return;
+  }
+  if (result->peer_alert_present) {
+    const char *name = alert_name(result->peer_alert);
+    if (name) {
+      snprintf(text, capacity, "TLS peer alert: %s (%u)", name, result->peer_alert);
+    } else {
+      snprintf(text, capacity, "TLS peer alert %u", result->peer_alert);
+    }
+    return;
+  }
+  const char *reason;
+  switch (result->library_error) {
+  case MBEDTLS_ERR_SSL_BAD_PROTOCOL_VERSION: reason = "TLS protocol version not supported"; break;
+  case MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE: reason = "TLS handshake failed (no compatible negotiation)"; break;
+  case MBEDTLS_ERR_SSL_NO_APPLICATION_PROTOCOL: reason = "TLS application protocol not supported"; break;
+  case MBEDTLS_ERR_SSL_TIMEOUT: reason = "Connection timed out"; break;
+  default: reason = NULL; break;
+  }
+  if (reason) {
+    snprintf(text, capacity, "%s", reason);
+  } else if (result->library_error) {
+    unsigned code = (unsigned)result->library_error;
+    snprintf(text, capacity, "%s (TLS error %s0x%04x)", tls_error_name(result->error),
+        result->library_error < 0 ? "-" : "", result->library_error < 0 ? 0u - code : code);
+  } else {
+    snprintf(text, capacity, "%s", tls_error_name(result->error));
   }
 }

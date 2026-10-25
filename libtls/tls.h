@@ -48,6 +48,8 @@ struct tls_result {
   enum call_status native_status;
   int library_error;
   uint32_t verify_flags;
+  bool peer_alert_present;
+  unsigned peer_alert;
 };
 
 /* One runtime and one connection per process, with single-task ownership.
@@ -150,5 +152,7 @@ const char *tls_version(const struct tls_connection *connection);
 const char *tls_ciphersuite(const struct tls_connection *connection);
 void tls_connection_free(struct tls_connection *connection);
 const char *tls_error_name(enum tls_error error);
+/* Bounded local diagnostic; never includes certificates, peer text or credentials. */
+void tls_result_detail(const struct tls_result *result, char *text, size_t capacity);
 
 #endif

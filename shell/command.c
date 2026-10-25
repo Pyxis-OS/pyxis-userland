@@ -41,6 +41,24 @@ enum command_result shell_directory_error(struct shell *shell, const char *opera
   return COMMAND_FAILED;
 }
 
+enum command_result shell_resource_detail(struct shell *shell,
+    const struct resource_description *description)
+{
+  if (!description->detail_size) {
+    return COMMAND_FAILED;
+  }
+  if (!report_location(shell) || fputs("shell: provider: ", stderr) == EOF) {
+    return COMMAND_FATAL;
+  }
+  for (size_t i = 0; i < description->detail_size; ++i) {
+    unsigned char byte = description->detail[i];
+    if (fputc(byte >= ' ' && byte <= '~' ? byte : '?', stderr) == EOF) {
+      return COMMAND_FATAL;
+    }
+  }
+  return fputc('\n', stderr) == EOF ? COMMAND_FATAL : COMMAND_FAILED;
+}
+
 static enum call_status root_available(struct shell *shell, const char *binding)
 {
   struct environment_entry_reply entry;

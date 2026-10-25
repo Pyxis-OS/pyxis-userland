@@ -221,6 +221,8 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
 enum call_status shell_open_redirect_value(struct shell *shell,
     const struct shell_redirection *redirect, struct resource_result *result);
 enum command_result shell_error(struct shell *shell, const char *format, ...);
+enum command_result shell_resource_detail(struct shell *shell,
+    const struct resource_description *description);
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
 /* Interactive shells with history only. Load fills memory with the newest

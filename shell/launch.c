@@ -2667,6 +2667,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           streams[i][ENVIRONMENT_STDOUT] = (struct pyxis_stdio_binding){
             .protocol = PROTOCOL_PIPE, .handle = pipes[helper - 1].writer};
         }
+        if (status != CALL_OK && shell_resource_detail(shell,
+            &opened.info.description) == COMMAND_FATAL) {
+          cleanup_failure = true;
+        }
         enum call_status closed = resource_result_close(&opened);
         if (closed != CALL_OK) {
           cleanup_failure = true;
@@ -3511,13 +3515,15 @@ static enum command_result launch_output(struct shell *shell,
       if (handed != CALL_OK) {
         status = handed;
       }
+      bool report_failed = status != CALL_OK &&
+          shell_resource_detail(shell, &response.info.description) == COMMAND_FATAL;
       enum call_status closed = resource_result_close(&response);
       if (closed != CALL_OK) {
         status = closed;
       }
       if (status != CALL_OK) {
         scope.error = status;
-        result = closed != CALL_OK || handed != CALL_OK ? COMMAND_FATAL : COMMAND_FAILED;
+        result = closed != CALL_OK || handed != CALL_OK || report_failed ? COMMAND_FATAL : COMMAND_FAILED;
         set_outcome(outcome, TERMINAL_COMPLETION_EXITED, 1);
         shell_directory_error(shell, "shell: transaction capture", "", status);
       }

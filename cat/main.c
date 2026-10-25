@@ -10,9 +10,29 @@
 /* Bound transfer storage independently of file size. */
 static unsigned char buffer[4096];
 
+static int report_failure(const char *path, int error,
+    const struct resource_description *description)
+{
+  if (fprintf(stderr, "cat: %s: %s", path, strerror(error)) < 0) {
+    return -1;
+  }
+  if (description && description->detail_size) {
+    if (fputs(": ", stderr) == EOF) {
+      return -1;
+    }
+    for (size_t i = 0; i < description->detail_size; ++i) {
+      unsigned char byte = description->detail[i];
+      if (fputc(byte >= ' ' && byte <= '~' ? byte : '?', stderr) == EOF) {
+        return -1;
+      }
+    }
+  }
+  return fputc('\n', stderr);
+}
+
 static int report_error(const char *path, int error)
 {
-  return fprintf(stderr, "cat: %s: %s\n", path, strerror(error));
+  return report_failure(path, error, NULL);
 }
 
 /* A closed reader is a broken pipe; other final handoff failures are I/O. */
@@ -42,26 +62,28 @@ int main(int argc, char **argv)
     FILE *file = input ? stdin : pyxis_fopen(path, "rb", &opened);
     if (!file) {
       int open_error = errno;
+      struct resource_description description = opened.resource.info.description;
       if (operands == 1 && opened.available && opened.resource.resource &&
           opened.resource.info.description.outcome != RESOURCE_OK) {
         struct output_handoff_request owned = {opened.resource.resource, HANDLE_INVALID};
         enum call_status status = pyxis_stdio_handoff_owned(stdout, &owned);
         opened.resource.resource = owned.value;
-        pyxis_open_result_close(&opened);
         if (status == CALL_OK && !stdout_is_pipe()) {
+          pyxis_open_result_close(&opened);
           return EXIT_FAILURE;
         }
         if (status != CALL_BAD_OPERATION) {
-          report_error(name, open_error);
+          report_failure(name, open_error, &description);
+          pyxis_open_result_close(&opened);
           if (status != CALL_OK) {
             report_error("stdout", handoff_error(status));
           }
           return EXIT_FAILURE;
         }
-      } else {
-        pyxis_open_result_close(&opened);
       }
-      if (report_error(name, open_error) < 0) {
+      int reported = report_failure(name, open_error, &description);
+      pyxis_open_result_close(&opened);
+      if (reported < 0) {
         return EXIT_FAILURE;
       }
       result = EXIT_FAILURE;
@@ -96,7 +118,9 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
       }
       if (read_error != 0) {
-        if (report_error(name, read_error) < 0) {
+        struct describe_reply description = {0};
+        pyxis_describe(file, &description);
+        if (report_failure(name, read_error, &description.description) < 0) {
           if (!input) {
             fclose(file);
           }
