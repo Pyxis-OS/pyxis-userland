@@ -56,8 +56,8 @@ __attribute__((noreturn)) void libc_thread_exit(handle_t threads, uint64_t value
  * registration after cleanup starts returns BAD_REQUEST. Earlier destructors
  * may register it. No allocation occurs. The callback must not initialize new
  * destructor-bearing TLS or rearm keys: no further destructor passes run.
- * Late language-destructor registration stops the process because compiler-
- * generated callers cannot reliably propagate its refusal. */
+ * Language-destructor registration after a registered runtime cleanup stops
+ * the process: generated callers cannot reliably propagate its refusal. */
 enum call_status libc_thread_cleanup_register(void (*cleanup)(void));
 
 /* Process-local generational keys; values belong to the calling TCB. Deleting

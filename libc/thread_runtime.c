@@ -134,8 +134,8 @@ int __cxa_thread_atexit_impl(void (*function)(void *), void *argument, void *mod
 {
   (void)module;
   struct libc_thread_record *record = libc_thread_record();
-  if (record->cleanup_started) {
-    /* Generated callers ignore registration failure, and no drain remains. */
+  if (record->cleanup_started && record->cleanup) {
+    /* Runtime cleanup has run; generated callers ignore registration failure. */
     _Exit(EXIT_FAILURE);
   }
   struct thread_destructor_block *block = record->destructors;
@@ -213,7 +213,7 @@ void libc_thread_destructors(void)
   record->cleanup_started = true;
   if (record->cleanup) {
     void (*cleanup)(void) = record->cleanup;
-    record->cleanup = NULL;
+    /* Retain the opt-in identity for language registration after cleanup. */
     cleanup();
   }
 }
