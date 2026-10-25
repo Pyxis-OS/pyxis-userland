@@ -4,6 +4,7 @@
 #include <abi/endpoint.h>
 #include <abi/describe.h>
 #include <abi/handle.h>
+#include <abi/file.h>
 #include <abi/syscall.h>
 
 /* CREATE returns receiver ownership to this process and a transferable client
@@ -50,6 +51,27 @@ enum call_status endpoint_invoke(handle_t client, uint64_t protocol,
     const struct endpoint_grant *grants, size_t grant_count, uint64_t deadline_ns,
     struct endpoint_packet *reply);
 
+/* Typed FILE_READ_BULK transport: request/output are borrowed until return.
+ * Inner and outer deadlines are identical. Returns raw bytes with no packet
+ * prefix, validates count <= admitted capacity and clears *count on failure.
+ * There are no attachments, ordinary-read fallback or delivery-state ticket. */
+enum call_status endpoint_invoke_bulk(handle_t client,
+    const struct file_bulk_read_request *request, void *bytes, size_t *count);
+
+/* Provider-local raw bulk bytes, bounded by the receipt's admitted capacity.
+ * A successful reply consumes the CALL receipt. No attachments are sent;
+ * non-OK application_result requires size zero. Input is borrowed until return. */
+enum call_status endpoint_reply_bulk(handle_t receipt, uint64_t application_result,
+    const void *bytes, size_t size);
+
+/* Collect raw data from a native bulk completion receipt with COLLECT rights.
+ * Returns collection transport status; packet result/reason remain independent.
+ * The output span stays owned/reserved until return. Success consumes data;
+ * short/invalid output preserves retry. Failure clears *count; output contents
+ * are unspecified. Close the receipt afterward to acknowledge completion. */
+enum call_status endpoint_collect_bulk(handle_t receipt, void *bytes,
+    size_t capacity, size_t *count);
+
 /* SEND returns after admission. Success does not report provider execution.
  * The endpoint retains attached references after sender close or exit. */
 enum call_status endpoint_send(handle_t caller, const void *bytes, size_t size,
@@ -69,9 +91,10 @@ enum call_status endpoint_notify(handle_t client, uint64_t protocol,
  * an unanswered CALL receipt abandons the call. Native COMPLETION carries the
  * correlation ID, actual result/progress and separate cancellation reason.
  * Pending native work stopped by forwarder CUT reports DENIED as its reason.
- * Closing its zero-right receipt acknowledges that operation; attached native
- * grants remain independent. Failed collection leaves completion work queued
- * for retry without replaying the native operation. */
+ * Closing its receipt acknowledges that operation; bulk receipts additionally
+ * carry only that result's COLLECT authority. Attached native grants remain
+ * independent. Failed receive leaves completion work queued for retry without
+ * replaying the native operation. */
 enum call_status endpoint_receive(handle_t receiver, struct endpoint_packet *request);
 
 /* Same collection/receipt/authority as RECEIVE. An empty open receiver returns

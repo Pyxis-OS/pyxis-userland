@@ -30,6 +30,15 @@ enum call_status file_info(handle_t file, struct file_info_reply *info);
 enum call_status file_read(handle_t file, uint64_t offset, void *bytes, size_t capacity,
                             size_t *read);
 
+/* Explicit bounded bulk READ, with no ordinary-read fallback or size clamp.
+ * Capacity must fit FILE_READ_BULK_MAX_BYTES; offset + capacity cannot wrap.
+ * Requires READ and, for exports, CALL. deadline_ns is absolute monotonic time,
+ * zero for unlimited. The output span stays owned/reserved until return.
+ * Short reads and EOF follow file_read(). Only initialized bytes are returned;
+ * failure clears *read, though output contents are unspecified. */
+enum call_status file_read_bulk(handle_t file, uint64_t offset, void *bytes,
+    size_t capacity, uint64_t deadline_ns, size_t *read);
+
 /* Requires WRITE independently of READ. One call copies at most
  * FILE_WRITE_MAX_BYTES and nonempty success reports 1..that limit bytes;
  * advance offset/source by that count before submitting the remaining suffix.

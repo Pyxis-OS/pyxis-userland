@@ -50,7 +50,7 @@ static bool completion_valid(const struct endpoint_packet *packet)
   case PROTOCOL_FILE:
     if (packet->operation != FILE_READ && packet->operation != FILE_WRITE &&
         packet->operation != FILE_RESIZE && packet->operation != FILE_SIZE &&
-        packet->operation != FILE_TRANSFER) {
+        packet->operation != FILE_TRANSFER && packet->operation != FILE_READ_BULK) {
       return false;
     }
     break;
@@ -315,6 +315,90 @@ enum call_status endpoint_invoke(handle_t caller, uint64_t protocol,
   reply->delivery = packet.delivery;
   reply->deadline_ns = packet.deadline_ns;
   return status;
+}
+
+static enum call_status bulk_result(struct syscall_result result, size_t capacity,
+    size_t *count)
+{
+  *count = 0;
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size > capacity ||
+      (result.status != CALL_OK && result.reply_size != 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    *count = result.reply_size;
+  }
+  return result.status;
+}
+
+enum call_status endpoint_invoke_bulk(handle_t client,
+    const struct file_bulk_read_request *request, void *bytes, size_t *count)
+{
+  if (!count) {
+    return CALL_BAD_REQUEST;
+  }
+  if (!request) {
+    *count = 0;
+    return CALL_BAD_REQUEST;
+  }
+  struct file_bulk_read_request captured = *request;
+  *count = 0;
+  if (captured.capacity > FILE_READ_BULK_MAX_BYTES ||
+      captured.capacity > UINT64_MAX - captured.offset) {
+    return CALL_BAD_REQUEST;
+  }
+  if (captured.capacity && !bytes) {
+    return CALL_BAD_BUFFER;
+  }
+  struct endpoint_message message = {
+    .header = {PROTOCOL_ENDPOINT, ENDPOINT_CALL_BULK},
+    .buffer = (uintptr_t)&captured,
+    .size = sizeof(captured),
+    .deadline_ns = captured.deadline_ns,
+    .protocol = PROTOCOL_FILE,
+    .operation = FILE_READ_BULK,
+  };
+  return bulk_result(syscall_call(client, &message, sizeof(message),
+      bytes, captured.capacity), captured.capacity, count);
+}
+
+enum call_status endpoint_reply_bulk(handle_t receipt, uint64_t application_result,
+    const void *bytes, size_t size)
+{
+  if (size > FILE_READ_BULK_MAX_BYTES || application_result >= CALL_STATUS_COUNT ||
+      (application_result != CALL_OK && size)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (size && !bytes) {
+    return CALL_BAD_BUFFER;
+  }
+  struct endpoint_message message = {
+    .header = {PROTOCOL_ENDPOINT_RECEIPT, ENDPOINT_REPLY_BULK},
+    .buffer = (uintptr_t)bytes,
+    .size = size,
+    .result = application_result,
+  };
+  struct syscall_result result = syscall_call(receipt, &message, sizeof(message), NULL, 0);
+  enum call_status status = checked_status(result);
+  return result.reply_size == 0 ? status : CALL_OUTCOME_UNKNOWN;
+}
+
+enum call_status endpoint_collect_bulk(handle_t receipt, void *bytes,
+    size_t capacity, size_t *count)
+{
+  if (!count) {
+    return CALL_BAD_REQUEST;
+  }
+  *count = 0;
+  if (capacity > FILE_READ_BULK_MAX_BYTES) {
+    return CALL_BAD_REQUEST;
+  }
+  if (capacity && !bytes) {
+    return CALL_BAD_BUFFER;
+  }
+  struct message_header message = {PROTOCOL_ENDPOINT_RECEIPT, ENDPOINT_COLLECT_BULK};
+  return bulk_result(syscall_call(receipt, &message, sizeof(message), bytes, capacity),
+      capacity, count);
 }
 
 enum call_status endpoint_request(handle_t caller, const void *bytes, size_t size,

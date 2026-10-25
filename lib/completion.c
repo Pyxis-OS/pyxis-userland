@@ -25,6 +25,17 @@ enum call_status completion_submit(handle_t target, handle_t receiver,
   return completion_status(syscall_call(target, &request, sizeof(request), NULL, 0));
 }
 
+enum call_status completion_submit_file_read_bulk(handle_t target, handle_t receiver,
+    uint64_t correlation_id, uint64_t offset, size_t capacity, uint64_t deadline_ns)
+{
+  if (capacity > FILE_READ_BULK_MAX_BYTES || capacity > UINT64_MAX - offset) {
+    return CALL_BAD_REQUEST;
+  }
+  struct file_bulk_read_request request = {offset, capacity, deadline_ns};
+  return completion_submit(target, receiver, correlation_id, PROTOCOL_FILE,
+      FILE_READ_BULK, deadline_ns, &request, sizeof(request));
+}
+
 enum call_status completion_cancel(handle_t receiver, uint64_t correlation_id)
 {
   if (!correlation_id) {

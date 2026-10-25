@@ -195,6 +195,60 @@ enum call_status file_read(handle_t file, uint64_t offset, void *bytes, size_t c
   return status;
 }
 
+enum call_status file_read_bulk(handle_t file, uint64_t offset, void *bytes,
+    size_t capacity, uint64_t deadline_ns, size_t *read)
+{
+  if (!read) {
+    return CALL_BAD_REQUEST;
+  }
+  *read = 0;
+  if (capacity && !bytes) {
+    return CALL_BAD_BUFFER;
+  }
+  if (capacity > FILE_READ_BULK_MAX_BYTES || capacity > UINT64_MAX - offset) {
+    return CALL_BAD_REQUEST;
+  }
+  struct handle_info info;
+  enum call_status status = handle_query(file, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != PROTOCOL_FILE ||
+      (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED)) {
+    return CALL_WRONG_TYPE;
+  }
+  if (!(info.rights & FILE_RIGHT_READ)) {
+    return CALL_DENIED;
+  }
+  struct {
+    struct message_header header;
+    struct file_bulk_read_request body;
+  } message = {
+    .header = {PROTOCOL_FILE, FILE_READ_BULK},
+    .body = {offset, capacity, deadline_ns},
+  };
+  if (info.kind == HANDLE_KIND_EXPORTED) {
+    if ((info.transport & HANDLE_TRANSPORT_CALL) != HANDLE_TRANSPORT_CALL) {
+      return CALL_DENIED;
+    }
+    return endpoint_invoke_bulk(file, &message.body, bytes, read);
+  }
+  if (info.transport != 0) {
+    return CALL_BAD_REQUEST;
+  }
+  struct syscall_result result = syscall_call(file, &message, sizeof(message),
+      bytes, capacity);
+  *read = 0;
+  if (result.status >= CALL_STATUS_COUNT || result.reply_size > capacity ||
+      (result.status != CALL_OK && result.reply_size != 0)) {
+    return CALL_BAD_REQUEST;
+  }
+  if (result.status == CALL_OK) {
+    *read = result.reply_size;
+  }
+  return result.status;
+}
+
 enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
                              size_t size, size_t *written)
 {
