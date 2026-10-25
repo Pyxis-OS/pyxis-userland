@@ -13,6 +13,8 @@ PHDRS {
 }
 SECTIONS {
   . = USER_LINK_BASE;
+  /* Static image span, including BSS; these symbols allocate no storage. */
+  __pyxis_image_start = .;
   .text : { *(.text .text.*) } :text
   . = ALIGN(USER_PAGE_SIZE);
   .rodata : { *(.rodata .rodata.*) } :rodata
@@ -59,5 +61,6 @@ SECTIONS {
   } :data
   .data : { *(.data .data.*) } :data
   .bss : { *(.bss .bss.*) *(COMMON) } :data
+  __pyxis_image_end = .;
   /DISCARD/ : { *(.note .note.*) *(.comment) }
 }
