@@ -35,6 +35,8 @@ SECTIONS {
   .gcc_except_table : { *(.gcc_except_table .gcc_except_table.*) } :rodata
 
   . = ALIGN(USER_PAGE_SIZE);
+  /* Keep non-TLS GOT entries out of PT_TLS, including orphan placement. */
+  .got : { *(.got .got.*) } :data
   __tls_alignment = MAX(1, MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
   .tdata : ALIGN(__tls_alignment) {
     __tls_template_start = .;
