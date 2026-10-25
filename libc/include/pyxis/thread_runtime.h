@@ -43,11 +43,22 @@ enum call_status libc_thread_collect(handle_t memory, handle_t completion,
     struct libc_thread_context *context, struct thread_result *result);
 
 /* Run this thread's language TLS destructors in reverse registration order,
- * then up to four key passes. Native EXIT must not return; refusal stops the
- * process. Recursive exit from a destructor stops the process instead of
- * reporting normal completion with an incomplete drain. It does not run process
- * exit handlers or release its live context. */
+ * then up to four key passes, then language destructors registered by keys,
+ * then the registered runtime cleanup. Native EXIT must not return; refusal
+ * stops the process. Recursive exit from a destructor stops the process instead
+ * of reporting normal completion with an incomplete drain. It does not run
+ * process exit handlers or release its live context. */
 __attribute__((noreturn)) void libc_thread_exit(handle_t threads, uint64_t value);
+
+/* Register one calling-thread runtime cleanup, run once after all language/key
+ * drainage during orderly thread or initial-thread process exit. Repeating the
+ * same callback succeeds; a different callback returns ALREADY_EXISTS. NULL or
+ * registration after cleanup starts returns BAD_REQUEST. Earlier destructors
+ * may register it. No allocation occurs. The callback must not initialize new
+ * destructor-bearing TLS or rearm keys: no further destructor passes run.
+ * Late language-destructor registration stops the process because compiler-
+ * generated callers cannot reliably propagate its refusal. */
+enum call_status libc_thread_cleanup_register(void (*cleanup)(void));
 
 /* Process-local generational keys; values belong to the calling TCB. Deleting
  * a key neither frees values nor invokes destructors. A captured callback may

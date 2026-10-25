@@ -115,12 +115,29 @@ enum call_status libc_thread_key_get(libc_thread_key key, void **value)
   return valid ? CALL_OK : CALL_BAD_REQUEST;
 }
 
+enum call_status libc_thread_cleanup_register(void (*cleanup)(void))
+{
+  struct libc_thread_record *record = libc_thread_record();
+  if (!cleanup || record->cleanup_started) {
+    return CALL_BAD_REQUEST;
+  }
+  if (record->cleanup && record->cleanup != cleanup) {
+    return CALL_ALREADY_EXISTS;
+  }
+  record->cleanup = cleanup;
+  return CALL_OK;
+}
+
 /* Itanium ABI module argument is immaterial for one static executable. Native
  * MEMORY backing avoids dependence on gate 8's synchronized allocator. */
 int __cxa_thread_atexit_impl(void (*function)(void *), void *argument, void *module)
 {
   (void)module;
   struct libc_thread_record *record = libc_thread_record();
+  if (record->cleanup_started) {
+    /* Generated callers ignore registration failure, and no drain remains. */
+    _Exit(EXIT_FAILURE);
+  }
   struct thread_destructor_block *block = record->destructors;
   if (block->count == LIBC_THREAD_DESTRUCTOR_BLOCK) {
     struct memory_region region;
@@ -193,6 +210,12 @@ void libc_thread_destructors(void)
   /* A key callback can first initialize a language TLS object. Its destructor
    * still runs before native retirement, after the bounded key passes. */
   run_language_destructors(record);
+  record->cleanup_started = true;
+  if (record->cleanup) {
+    void (*cleanup)(void) = record->cleanup;
+    record->cleanup = NULL;
+    cleanup();
+  }
 }
 
 [[noreturn]] void libc_thread_exit(handle_t threads, uint64_t value)
