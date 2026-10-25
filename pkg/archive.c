@@ -9,7 +9,7 @@
 #include <string.h>
 
 #define BLOCK_SIZE 512
-#define IO_SIZE 16384
+#define IO_SIZE FILE_READ_BULK_MAX_BYTES
 #define INVENTORY_SIZE_MAX ((uint64_t)PKG_MAX_FILES * PKG_INVENTORY_LINE_MAX)
 #define DIRECTORY_DEPTH_MAX (PKG_PATH_MAX / 2 + 1)
 #define READ_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
@@ -57,7 +57,7 @@ static bool read_exact(handle_t file, uint64_t offset, void *bytes, size_t size,
   while (size) {
     size_t count = 0;
     size_t wanted = size > IO_SIZE ? IO_SIZE : size;
-    if (file_read(file, offset, output, wanted, &count) != CALL_OK ||
+    if (file_read_bulk(file, offset, output, wanted, 0, &count) != CALL_OK ||
         !count || count > wanted) {
       return fail(reason, "cannot read package bytes");
     }
@@ -86,7 +86,7 @@ static bool write_exact(handle_t file, uint64_t offset, const void *bytes,
 
 static bool zeroes(handle_t file, uint64_t offset, uint64_t size, const char **reason)
 {
-  unsigned char bytes[IO_SIZE];
+  unsigned char bytes[4096];
   while (size) {
     size_t count = size > sizeof(bytes) ? sizeof(bytes) : (size_t)size;
     if (!read_exact(file, offset, bytes, count, reason)) {
@@ -117,16 +117,21 @@ static bool hash_range(handle_t file, uint64_t offset, uint64_t size,
     const char *expected, handle_t destination, const struct pkg_archive_progress *progress,
     const char **reason)
 {
-  unsigned char bytes[IO_SIZE];
+  size_t capacity = size > IO_SIZE ? IO_SIZE : (size_t)size;
+  unsigned char *bytes = capacity ? malloc(capacity) : NULL;
+  if (capacity && !bytes) {
+    return fail(reason, "out of memory reading package bytes");
+  }
   char actual[65];
   if (!digest_begin()) {
+    free(bytes);
     return fail(reason, "cannot initialize SHA-256");
   }
   bool ok = true;
   uint64_t copied = 0;
   report(progress, PKG_ARCHIVE_VERIFY, 0, size);
   while (ok && copied < size) {
-    size_t count = size - copied > sizeof(bytes) ? sizeof(bytes) : (size_t)(size - copied);
+    size_t count = size - copied > capacity ? capacity : (size_t)(size - copied);
     ok = read_exact(file, offset + copied, bytes, count, reason);
     if (ok && !digest_update(bytes, count)) {
       ok = fail(reason, "cannot compute SHA-256");
@@ -143,23 +148,28 @@ static bool hash_range(handle_t file, uint64_t offset, uint64_t size,
     ok = fail(reason, "package SHA-256 mismatch");
   }
   digest_abort();
+  free(bytes);
   return ok;
 }
 
 static bool copy_range(handle_t file, uint64_t offset, uint64_t size,
     handle_t destination, const char **reason)
 {
-  unsigned char bytes[IO_SIZE];
+  size_t capacity = size > IO_SIZE ? IO_SIZE : (size_t)size;
+  unsigned char *bytes = capacity ? malloc(capacity) : NULL;
+  if (capacity && !bytes) {
+    return fail(reason, "out of memory copying package metadata");
+  }
   uint64_t copied = 0;
-  while (copied < size) {
-    size_t count = size - copied > sizeof(bytes) ? sizeof(bytes) : (size_t)(size - copied);
-    if (!read_exact(file, offset + copied, bytes, count, reason) ||
-        !write_exact(destination, copied, bytes, count, reason)) {
-      return false;
-    }
+  bool ok = true;
+  while (ok && copied < size) {
+    size_t count = size - copied > capacity ? capacity : (size_t)(size - copied);
+    ok = read_exact(file, offset + copied, bytes, count, reason) &&
+        write_exact(destination, copied, bytes, count, reason);
     copied += count;
   }
-  return true;
+  free(bytes);
+  return ok;
 }
 
 static bool all_zero(const unsigned char *bytes, size_t size)
