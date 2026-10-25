@@ -26,6 +26,9 @@ LIBTERM := $(BUILD)/libterm.a
 TERM_OBJECTS := $(BUILD)/libterm/term.o $(BUILD)/libterm/key.o $(BUILD)/libterm/line.o
 LIBFONT := $(BUILD)/libfont.a
 FONT_OBJECTS := $(BUILD)/libfont/font.o $(BUILD)/libfont/stb_adapter.o $(BUILD)/libfont/blend.o
+LIBSHA256 := $(BUILD)/libsha256.a
+SHA256_OBJECTS := $(BUILD)/libsha256/sha256.o $(BUILD)/third_party/tf_psa_sha256/core.o \
+                  $(BUILD)/libsha256/arch/x86_64/sha_ni.o $(BUILD)/libsha256/arch/x86_64/dispatch.o
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
@@ -166,11 +169,12 @@ MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
                 $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(BUILD)/libc/thread_entry.o $(MUSL_OBJECTS)
 
-.PHONY: all libpyxis libterm libfont libc clean FORCE
-all: $(START_OBJECT) libpyxis libterm libfont libc
+.PHONY: all libpyxis libterm libfont libsha256 libc clean FORCE
+all: $(START_OBJECT) libpyxis libterm libfont libsha256 libc
 libpyxis: $(LIBPYXIS)
 libterm: $(LIBTERM)
 libfont: $(LIBFONT)
+libsha256: $(LIBSHA256)
 libc: $(LIBC)
 
 $(LIBPYXIS): $(LIB_OBJECTS) runtime.mk
@@ -188,6 +192,14 @@ $(LIBFONT): $(FONT_OBJECTS) runtime.mk
 	@mkdir -p $(@D)
 	rm -f $@
 	$(AR) rcs $@ $(FONT_OBJECTS)
+
+$(LIBSHA256): $(SHA256_OBJECTS) runtime.mk
+	@mkdir -p $(@D)
+	rm -f $@
+	$(AR) rcs $@ $(SHA256_OBJECTS)
+
+# Crypto SIMD remains legacy SSE even when the build caller adds AVX flags.
+$(SHA256_OBJECTS): private CFLAGS += -mno-avx -mno-avx2 -mno-avx512f
 
 $(LIBC): $(LIBC_OBJECTS) runtime.mk
 	@mkdir -p $(@D)
@@ -257,7 +269,7 @@ $(BUILD)/%.o: %.S runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(START_OBJECT) $(LIB_OBJECTS) $(TERM_OBJECTS) $(FONT_OBJECTS) $(LIBC_OBJECTS): runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(START_OBJECT) $(LIB_OBJECTS) $(TERM_OBJECTS) $(FONT_OBJECTS) $(SHA256_OBJECTS) $(LIBC_OBJECTS): runtime.mk $(SDK)/share/pyxis.mk $(BUILD)/.config
 
 $(BUILD)/.config: FORCE
 	@mkdir -p $(@D)
@@ -270,4 +282,4 @@ FORCE:
 clean:
 	rm -rf $(BUILD)
 
--include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(FONT_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d)
+-include $(START_OBJECT:.o=.d) $(LIB_OBJECTS:.o=.d) $(TERM_OBJECTS:.o=.d) $(FONT_OBJECTS:.o=.d) $(SHA256_OBJECTS:.o=.d) $(LIBC_OBJECTS:.o=.d)

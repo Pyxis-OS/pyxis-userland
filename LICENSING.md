@@ -34,6 +34,13 @@ applied: MPL's standard secondary-license provisions remain available.
   source, cache checksum and changes are recorded in
   [UPSTREAM.md](third_party/stb_truetype/UPSTREAM.md). Its parser is for trusted
   font files only.
+- `third_party/tf_psa_sha256/`: scalar SHA-256 compression extracted from pinned
+  TF-PSA-Crypto 1.1.1 uses its Apache-2.0 option. Full licence and local changes
+  are in [LICENSE](third_party/tf_psa_sha256/LICENSE) and
+  [UPSTREAM.md](third_party/tf_psa_sha256/UPSTREAM.md).
+- `libsha256/arch/x86_64/`: the SHA-NI backend adapts pinned Go SHA-256 round
+  scheduling, preserving [Go BSD terms](libsha256/arch/x86_64/LICENSE.go-bsd)
+  and [provenance](libsha256/arch/x86_64/UPSTREAM.md).
 - The shebang parser, ABI headers and libraries consumed from an external SDK or
   ports installation keep their supplied licenses. They are not relicensed by
   inclusion in a userland build.
