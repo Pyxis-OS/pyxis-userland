@@ -4,6 +4,7 @@
 #include <handle.h>
 #include <literal.h>
 #include <package.h>
+#include <package_transition.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -329,11 +330,11 @@ bool pkg_reindex(handle_t packages, uint64_t number,
   return ok;
 }
 
-bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
+bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
     const struct pkg_projection *projection, const struct pkg_sdk *sdk,
-    bool *uncertain, const char **reason)
+    uint64_t *staged, const char **reason)
 {
-  *uncertain = false;
+  *staged = 0;
   handle_t sets = HANDLE_INVALID;
   if (!pkg_directory(packages, "sets", true, PKG_WRITE_RIGHTS, &sets, reason)) {
     return false;
@@ -411,23 +412,19 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
   if (!ok) {
     return false;
   }
-  enum call_status status = directory_remove(packages, "current.new", DIRECTORY_KIND_FILE);
-  if (status != CALL_OK && status != CALL_NOT_FOUND) {
-    *reason = "cannot remove an unpublished current.new";
-    return false;
-  }
-  char pointer[96];
-  int length = snprintf(pointer, sizeof(pointer), "return { set = %llu }\n",
-      (unsigned long long)number);
-  if (!pkg_write_text(packages, "current.new", pointer, length, reason) ||
-      directory_sync(packages) != CALL_OK) {
-    *reason = "cannot synchronize current.new";
-    return false;
-  }
+  *staged = number;
+  return true;
+}
+
+bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk,
+    bool *uncertain, const char **reason)
+{
+  *uncertain = false;
+  uint64_t number;
+  if (!pkg_stage(packages, selection, projection, sdk, &number, reason)) return false;
   *uncertain = true;
-  status = directory_rename(packages, "current.new", packages, "current",
-      DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE);
-  if (status != CALL_OK || directory_sync(packages) != CALL_OK) {
+  if (package_set_activate(packages, number) != CALL_OK) {
     *reason = "activation uncertain; retain evidence until recovery";
     return false;
   }

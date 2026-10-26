@@ -503,8 +503,14 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   if (!system_verify(plan)) {
     goto done;
   }
-  /* Update keeps the installed packages; pkg upgrades them later. */
-  if (!updating && !install_packages_base(disk->handle, plan->target.pool.partition)) {
+  if (install_plan_publication(plan)) {
+    if (updating ? !install_packages_update_stage(plan) :
+        (!install_packages_base(disk->handle, plan->target.pool.partition) ||
+         !install_packages_boot_mark(plan))) {
+      goto done;
+    }
+  } else if (!updating &&
+      !install_packages_base(disk->handle, plan->target.pool.partition)) {
     goto done;
   }
 #if !INSTALLER_PUBLICATION_SCRATCH

@@ -30,8 +30,9 @@ recorded source. `pkg update ID...` selects only those installed IDs and any
 dependencies their new manifests require; the whole resulting set is checked.
 A source is a repository name bound to its configured URL and signed/unsigned
 policy. Changing that identity requires an explicit console choice. Legacy set
-members with no source adopt a sole compatible offering, shown as
-`origin: NAME (only source)` in the review. Several possible sources are
+members with no source adopt a sole compatible offering, summarized as
+`N packages adopted from NAME (only source)` in the review. Changed package
+versions and ambiguous source choices remain individually visible. Several possible sources are
 presented in groups for one explicit choice; `--yes` never chooses one.
 Unusable selected builds are proposed removals, each requiring separate console
 approval, even with `--yes`. An unavailable dependency refuses without changing
@@ -98,10 +99,11 @@ No archive scripts execute.
 the named release or its last published release, refusing the one already
 running. It needs an installed system booted from its own boot entry and a space
 with `package_upgrade = true`; live media and rescue boots refuse. Review shows
-the release and installed packages whose ABI it does not provide. After archive
-verification, the shared boot publisher stages a fresh attempt. Success requires
-reboot to run the new
-release; ordinary packages upgrade separately. Boot admission is single-use per
+the release and the complete target-compatible package selection. It stages
+the verified package set and a durable pending proof before the shared boot
+publisher writes a fresh attempt. The running system keeps its old set; the
+verified first boot switches current before package consumers start. Success
+offers a reboot prompt; declining leaves the transition staged. Boot admission is single-use per
 boot, so a failure from admission onward needs a reboot before retrying.
 
 A package declares its command exports in package.lua. A plain export names a

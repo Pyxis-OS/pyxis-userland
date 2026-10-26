@@ -164,6 +164,8 @@ struct authority {
   handle_t disks;
   struct config_handoff configuration;
   handle_t boot_evidence; /* READ-only; granted only to package_upgrade spaces. */
+  enum boot_record_state boot_record;
+  struct package_boot_identity boot_identity;
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
   /* The read-only ACPI table root, bound as acpi only for spaces that set acpi_tables. */
@@ -474,6 +476,104 @@ static void check_packages(struct mounts *mounts)
         reason, status);
   }
   package_set_free(set);
+}
+
+/* No package view or space starts until the selected boot attempt and the
+ * package pointer agree. A pending target is finalized in current, boot mark,
+ * pending-removal order, so interruption at either latter step is repeatable.
+ * The old boot may continue with its old set while a target is pending, but
+ * neither pkg mutations nor boot cleanup may consume the staged set. */
+static bool package_boot_gate(const struct authority *authority, struct mounts *mounts,
+    bool *defer_maintenance, char *reason, size_t reason_size)
+{
+  *defer_maintenance = false;
+  struct mounted_volume *mounted = find_mount(mounts, BOOT_PACKAGES_VOLUME);
+  if (!mounted || mounted->root == HANDLE_INVALID) {
+    snprintf(reason, reason_size, "packages volume unavailable for boot selection proof");
+    return false;
+  }
+  handle_t packages = mounted->root;
+  bool marked = false, pending = false;
+  uint64_t marked_set = 0;
+  struct package_boot_identity marked_identity = {0};
+  struct package_transition transition = {0};
+  enum call_status status = package_boot_load(packages, &marked, &marked_set,
+      &marked_identity);
+  if (status == CALL_OK) {
+    status = package_transition_load(packages, &pending, &transition);
+  }
+  if (status != CALL_OK) {
+    snprintf(reason, reason_size, "package boot selection evidence invalid (status %u)", status);
+    return false;
+  }
+  if (authority->boot_record == BOOT_RECORD_ABSENT && !marked && !pending) {
+    puts("boot-init: WARNING: installed ESP has no Pyxis activation record; pkg upgrade unavailable");
+    return true;
+  }
+  if (authority->boot_record != BOOT_RECORD_VERIFIED) {
+    snprintf(reason, reason_size, "boot record or loaded payload identity cannot be verified");
+    return false;
+  }
+  struct package_set *current = NULL;
+  const char *set_reason = NULL;
+  status = package_set_load(packages, &current, &set_reason);
+  if (status != CALL_OK) {
+    snprintf(reason, reason_size, "current package set invalid: %s (status %u)",
+        set_reason ? set_reason : "unknown", status);
+    return false;
+  }
+  uint64_t current_set = package_set_number(current);
+  package_set_free(current);
+  if (pending) {
+    bool marked_old = marked && marked_set == transition.from_set;
+    bool marked_new = marked && marked_set == transition.to_set &&
+        package_boot_identity_equal(&marked_identity, &transition.target);
+    if ((marked && !marked_old && !marked_new) ||
+        (current_set != transition.from_set && current_set != transition.to_set)) {
+      snprintf(reason, reason_size, "pending transition disagrees with the recorded package set");
+      return false;
+    }
+    if (package_boot_identity_equal(&authority->boot_identity, &transition.target)) {
+      struct package_set *target = NULL;
+      status = package_set_load_number(packages, transition.to_set, &target, &set_reason);
+      if (status != CALL_OK || package_set_number(target) != transition.to_set) {
+        package_set_free(target);
+        snprintf(reason, reason_size, "staged package set cannot be validated (status %u)", status);
+        return false;
+      }
+      package_set_free(target);
+      if (current_set == transition.from_set) {
+        status = package_set_activate(packages, transition.to_set);
+      } else if (current_set != transition.to_set) {
+        status = CALL_BAD_REQUEST;
+      }
+      if (status == CALL_OK) {
+        status = package_boot_publish(packages, transition.to_set, &transition.target);
+      }
+      if (status == CALL_OK) status = package_transition_remove(packages);
+      if (status != CALL_OK) {
+        snprintf(reason, reason_size, "package first-boot switch not durable (status %u)", status);
+        return false;
+      }
+      printf("boot-init: verified package set %llu for this boot\n",
+          (unsigned long long)transition.to_set);
+      return true;
+    }
+    if (marked_old && current_set == transition.from_set &&
+        package_boot_identity_equal(&authority->boot_identity, &marked_identity)) {
+      *defer_maintenance = true;
+      puts("boot-init: prior boot selection remains active; package transition pending");
+      return true;
+    }
+    snprintf(reason, reason_size, "pending package transition names another boot attempt");
+    return false;
+  }
+  if (!marked || marked_set != current_set ||
+      !package_boot_identity_equal(&authority->boot_identity, &marked_identity)) {
+    snprintf(reason, reason_size, "boot attempt and active package set have no matching proof");
+    return false;
+  }
+  return true;
 }
 
 /* FAT mode is configured independently of views; other backends keep the
@@ -1732,6 +1832,15 @@ static void maintain_packages(const struct authority *authority, struct mounts *
   maintained = true;
   struct mounted_volume *packages = find_mount(mounts, BOOT_PACKAGES_VOLUME);
   struct mounted_volume *http_work = find_mount(mounts, BOOT_HTTP_WORK_VOLUME);
+  if (packages && packages->root != HANDLE_INVALID) {
+    bool pending = false;
+    struct package_transition transition;
+    enum call_status status = package_transition_load(packages->root, &pending, &transition);
+    if (status != CALL_OK || pending) {
+      puts("boot-init: package cleanup deferred while transition evidence remains");
+      return;
+    }
+  }
   package_boot_maintain(packages ? packages->root : HANDLE_INVALID,
       http_work && (http_work->volume->kind == BOOT_VOLUME_NPFS ||
           http_work->volume->kind == BOOT_VOLUME_RAM_NPFS) ? http_work->root : HANDLE_INVALID,
@@ -1984,7 +2093,8 @@ int main(int argc, char **argv)
       .loaded_kernel = authority.loaded_kernel, .loaded_archive = authority.loaded_archive,
       .pool = pool_malformed ? 0 : pool,
     };
-    bool evidence = boot_evidence_prepare(&sources, &authority.boot_evidence);
+    bool evidence = boot_evidence_prepare(&sources, &authority.boot_evidence,
+        &authority.boot_record, &authority.boot_identity);
     if (!close_boot_payloads(&authority) || !evidence) {
       exit_status = EXIT_FAILURE;
       goto finish;
@@ -2100,12 +2210,20 @@ int main(int argc, char **argv)
   if (install) {
     started = start_install(&authority, &mounts);
   } else if (configured && mount_plan(&authority, &plan, &mounts)) {
-    bind_bin(&authority, &mounts, pool_configured);
-    seed_live_repositories(&authority, &mounts);
-    maintain_packages(&authority, &mounts);
-    check_packages(&mounts);
-    for (size_t i = 0; i < plan.space_count; ++i) {
-      started += start_space(&authority, &mounts, plan.spaces[i]);
+    bool defer_maintenance = false;
+    if (installed && pool_configured && !default_config &&
+        !package_boot_gate(&authority, &mounts, &defer_maintenance,
+          rescue, sizeof(rescue))) {
+      configured = false;
+    }
+    if (configured) {
+      bind_bin(&authority, &mounts, pool_configured);
+      seed_live_repositories(&authority, &mounts);
+      if (!defer_maintenance) maintain_packages(&authority, &mounts);
+      check_packages(&mounts);
+      for (size_t i = 0; i < plan.space_count; ++i) {
+        started += start_space(&authority, &mounts, plan.spaces[i]);
+      }
     }
   }
   if (!started) {

@@ -17,4 +17,10 @@ bool install_packages_check(void);
 /* pkg --yes install base into the packages volume of the new pool. */
 bool install_packages_base(handle_t disk, uint64_t pool_partition);
 
+struct install_plan;
+/* Classic Install records the active set's boot identity; Classic Update
+ * stages a complete target-ABI set and durable pending proof before ESP writes. */
+bool install_packages_boot_mark(const struct install_plan *plan);
+bool install_packages_update_stage(const struct install_plan *plan);
+
 #endif

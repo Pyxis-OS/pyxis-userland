@@ -15,6 +15,8 @@
 #include <literal.h>
 #include <path.h>
 #include <package_maintenance.h>
+#include <package_transition.h>
+#include <power.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1353,9 +1355,11 @@ static bool same_selection(const struct pkg_selection *before, const struct pkg_
 }
 
 static bool review(const struct pkg_selection *before, const struct pkg_selection *after,
-    bool proposed_removals)
+    bool proposed_removals, bool staged_upgrade)
 {
-  puts("Proposed package set (new launches only):");
+  puts(staged_upgrade ? "Proposed package set (after the verified new boot):" :
+      "Proposed package set (new launches only):");
+  size_t adopted[PKG_REPOSITORIES_MAX] = {0};
   for (size_t i = 0; i < after->count; ++i) {
     size_t old = find_package(before, after->entries[i].id);
     const struct pkg_origin *source = &after->origins[i];
@@ -1364,12 +1368,25 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
     bool source_changed = old != SIZE_MAX &&
         (strcmp(before->origins[old].name, source->name) ||
          strcmp(before->origins[old].fingerprint, source->fingerprint));
-    if (changed || source_changed) {
+    if (source->only_source && old != SIZE_MAX && !before->origins[old].name[0]) {
+      for (size_t r = 0; r < client.repositories.count; ++r) {
+        if (!strcmp(client.repositories.entries[r].name, source->name)) {
+          ++adopted[r];
+          break;
+        }
+      }
+    }
+    if (changed || (source_changed && !source->only_source)) {
       const char *name = source->name[0] ? source->name : origin(&after->entries[i]);
       printf("  %s %s@%s%s%s%s\n", changed ? (old == SIZE_MAX ? "add" : "select") : "origin",
           after->entries[i].id, after->entries[i].version, name ? " (" : "",
           name ? name : "", name ? ")" : "");
-      if (source->only_source) printf("    origin: %s (only source)\n", source->name);
+    }
+  }
+  for (size_t r = 0; r < client.repositories.count; ++r) {
+    if (adopted[r]) {
+      printf("  %zu packages adopted from %s (only source)\n", adopted[r],
+          client.repositories.entries[r].name);
     }
   }
   for (size_t i = 0; i < before->count; ++i) {
@@ -1395,7 +1412,8 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
     }
   }
   if (client.yes) {
-    puts("Switching to this package set (--yes).");
+    puts(staged_upgrade ? "Staging this release and package set (--yes)." :
+        "Switching to this package set (--yes).");
     return true;
   }
   if (client.terminal.input == HANDLE_INVALID || client.terminal.output == HANDLE_INVALID) {
@@ -1403,7 +1421,8 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
   }
   char line[16];
   struct term_line_result result = term_read_line(&client.terminal,
-      "Switch to this package set? [y/N] ", line, sizeof(line));
+      staged_upgrade ? "Stage this release and package set? [y/N] " :
+        "Switch to this package set? [y/N] ", line, sizeof(line));
   if (result.status != TERM_LINE_OK || result.limit_reached ||
       (strcmp(line, "y") && strcmp(line, "Y"))) {
     return fail("change cancelled; any prepared package trees remain inactive");
@@ -1467,12 +1486,23 @@ static bool package_volume(handle_t root, bool writable)
   return true;
 }
 
+static bool transition_clear_for_mutation(void)
+{
+  bool pending = false;
+  struct package_transition transition;
+  enum call_status status = package_transition_load(client.packages, &pending, &transition);
+  if (status != CALL_OK) return fail("package transition evidence is damaged; use rescue");
+  if (pending) return fail("a release transition is pending; reboot before changing packages");
+  return true;
+}
+
 static bool mutate(const char *command, int argc, char **argv)
 {
   if (!package_volume(client.management, true)) {
     return false;
   }
   client.packages = client.management;
+  if (!transition_clear_for_mutation()) return false;
   if (!strcmp(command, "unlock")) return unlock();
   handle_t lock;
   if (directory_create(client.packages, PKG_LOCK, DIRECTORY_KIND_DIRECTORY,
@@ -1514,7 +1544,7 @@ static bool mutate(const char *command, int argc, char **argv)
         pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
   }
   if (ok && !reindex && !noop) {
-    ok = review(&before, &after, updating);
+    ok = review(&before, &after, updating, false);
     if (!ok && !client.reason) client.reason = "change cancelled";
   }
   if (ok && !reindex && !noop &&
@@ -1593,6 +1623,8 @@ static bool repository_command(const char *command, const char *name, const char
     }
   }
   if (!package_volume(client.management, true)) return false;
+  client.packages = client.management;
+  if (!transition_clear_for_mutation()) return false;
   if (client.config_write == HANDLE_INVALID) {
     return fail("confined package_config_write authority is unavailable");
   }
@@ -1602,7 +1634,6 @@ static bool repository_command(const char *command, const char *name, const char
     return fail("writer lock unavailable; use pkg unlock only after the prior client has stopped");
   }
   /* Under the lock, add records the index it accepted, like any writer. */
-  client.packages = client.management;
   bool uncertain = false;
   bool ok = pkg_repositories_load(client.config_write, &client.repositories,
       &client.reason) == CALL_OK;
@@ -1681,45 +1712,7 @@ static bool repository_command(const char *command, const char *name, const char
   return ok;
 }
 
-/* Installed packages built for an ABI the release does not provide. They are
- * listed only: programs upgrade as ordinary packages (decision 73). */
-static void list_uncovered(const struct pkg_entry *release)
-{
-  struct pkg_selection current = {0};
-  if (!pkg_selection_load(client.packages, &current, &client.reason)) {
-    puts("    (the active package set cannot be read)");
-    client.reason = NULL;
-    return;
-  }
-  size_t listed = 0;
-  for (size_t i = 0; i < current.count; ++i) {
-    handle_t tree;
-    struct pkg_manifest manifest = {0};
-    if (!pkg_tree_open(client.packages, &current.entries[i], PKG_READ_RIGHTS, &tree,
-          &client.reason)) {
-      continue;
-    }
-    bool read = pkg_tree_manifest(tree, &manifest, &client.reason);
-    handle_close(tree);
-    bool covered = !read || !pkg_kind_bound(manifest.kind);
-    for (size_t j = 0; !covered && j < release->provides_count; ++j) {
-      covered = !strcmp(release->provides[j], manifest.abi);
-    }
-    if (!covered) {
-      printf("    %s@%s (abi %s)\n", current.entries[i].id, current.entries[i].version,
-          manifest.abi);
-      ++listed;
-    }
-    pkg_manifest_free(&manifest);
-  }
-  if (!listed) {
-    puts("    none");
-  }
-  pkg_selection_free(&current);
-  client.reason = NULL;
-}
-
-static bool upgrade_review(const struct pkg_entry *release)
+static void upgrade_review(const struct pkg_entry *release)
 {
   const struct package_provided_abi *provided = provided_abi();
   char provides[PKG_PROVIDES_MAX * (PACKAGE_ABI_MAX + 2)] = "";
@@ -1734,24 +1727,7 @@ static bool upgrade_review(const struct pkg_entry *release)
   }
   printf("  new: %s@%s, %llu bytes, provides %s\n", release->identity.id,
       release->identity.version, (unsigned long long)release->size, provides);
-  puts("  installed packages it does not provide an ABI for:");
-  list_uncovered(release);
-  puts("  the current boot selection will be replaced; static rescue remains available.");
-  if (client.yes) {
-    puts("Staging this release (--yes).");
-    return true;
-  }
-  if (client.terminal.input == HANDLE_INVALID || client.terminal.output == HANDLE_INVALID) {
-    return fail("a release upgrade requires an interactive console review");
-  }
-  char line[16];
-  struct term_line_result result = term_read_line(&client.terminal,
-      "Stage this release? [y/N] ", line, sizeof(line));
-  if (result.status != TERM_LINE_OK || result.limit_reached ||
-      (strcmp(line, "y") && strcmp(line, "Y"))) {
-    return fail("upgrade cancelled; nothing was written");
-  }
-  return true;
+  puts("  current packages stay active until the verified new boot; static rescue remains available.");
 }
 
 /* The release's own os-release must name it, and supplies the revision the
@@ -1817,7 +1793,9 @@ static bool ram_payload(handle_t tree, const char *name, handle_t workspace, han
  * the next boot attempt. Staging is removed afterwards, and at the start of
  * the next upgrade if this one was interrupted (decision 74). */
 static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_repository *source,
-    const struct pkg_boot_evidence *evidence, handle_t issuer)
+    const struct pkg_boot_evidence *evidence, handle_t issuer,
+    const struct pkg_selection *before, const struct pkg_selection *after,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk)
 {
   struct pkg_progress progress;
   pkg_progress_init(&progress, client.clock, client.terminal.output != HANDLE_INVALID,
@@ -1862,9 +1840,15 @@ static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_
   }
   ok = ok && ram_payload(tree, "caelum.elf", workspace, &kernel, &kernel_size) &&
       ram_payload(tree, "initrd.cpio", workspace, &archive, &archive_size);
+  uint64_t staged_set = 0;
+  if (ok) {
+    ok = pkg_stage(client.packages, after, projection, sdk, &staged_set, &client.reason);
+  }
   if (ok) {
     const struct pkg_upgrade_publish request = {.issuer = issuer, .clock = client.clock,
-      .random = bootstrap_capability("random"), .workspace = workspace, .kernel = kernel,
+      .random = bootstrap_capability("random"), .workspace = workspace,
+      .packages = client.packages, .from_set = before->number, .to_set = staged_set,
+      .kernel = kernel,
       .archive = archive, .kernel_size = kernel_size, .archive_size = archive_size,
       .revision = revision, .evidence = evidence};
     ok = pkg_upgrade_publish(&request, &client.reason);
@@ -1911,6 +1895,7 @@ static bool upgrade(const char *version)
     return false;
   }
   client.packages = client.management;
+  if (!transition_clear_for_mutation()) return false;
   handle_t lock;
   if (directory_create(client.packages, PKG_LOCK, DIRECTORY_KIND_DIRECTORY,
         DIRECTORY_RIGHT_ENUMERATE, &lock) != CALL_OK) {
@@ -1955,12 +1940,127 @@ static bool upgrade(const char *version)
         chosen->identity.version);
     ok = fail(client.message);
   }
-  ok = ok && ensure_crypto() && upgrade_review(chosen) &&
-      stage_and_publish(chosen, source, &evidence, issuer);
+  struct pkg_selection before = {0}, after = {0};
+  struct pkg_projection projection = {0};
+  struct pkg_sdk sdk = {0};
+  ok = ok && ensure_crypto() &&
+      pkg_selection_load(client.packages, &before, &client.reason) &&
+      pkg_selection_load(client.packages, &after, &client.reason) &&
+      prepare_update(&after, 0, NULL, chosen) &&
+      pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
+      pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
   if (ok) {
-    printf("pkg: upgrade staged: reboot to run %s\n", chosen->identity.version);
+    upgrade_review(chosen);
+    ok = review(&before, &after, true, true);
+  }
+  if (ok) {
+    ok = stage_and_publish(chosen, source, &evidence, issuer,
+        &before, &after, &projection, &sdk);
+  }
+  free(projection.records);
+  free(sdk.bytes);
+  pkg_selection_free(&after);
+  pkg_selection_free(&before);
+  handle_close(lock);
+  ok = release_writer_lock(client.packages, ok);
+  if (ok) {
+    char answer[16];
+    if (client.terminal.input != HANDLE_INVALID && client.terminal.output != HANDLE_INVALID) {
+      struct term_line_result result = term_read_line(&client.terminal,
+          "Upgrade staged. Reboot now? [Y/n] ", answer, sizeof(answer));
+      if (result.status != TERM_LINE_OK || result.limit_reached) {
+        fputs("pkg: reboot prompt unavailable; reboot when ready\n", stderr);
+      } else if (!strcmp(answer, "n") || !strcmp(answer, "N")) {
+        puts("pkg: upgrade remains staged; reboot is still required");
+      } else if (!answer[0] || !strcmp(answer, "y") || !strcmp(answer, "Y")) {
+        handle_t power = bootstrap_capability("power");
+        enum call_status status = power == HANDLE_INVALID ? CALL_UNAVAILABLE :
+            power_restart(power);
+        fprintf(stderr, "pkg: restart unavailable (status %u); upgrade remains staged\n", status);
+      } else {
+        puts("pkg: unrecognized reboot answer; upgrade remains staged");
+      }
+    } else {
+      printf("pkg: upgrade staged: reboot to run %s\n", chosen->identity.version);
+    }
   }
   free(entries);
+  return ok;
+}
+
+/* The live installer's reviewed target payloads are already frozen. This
+ * command stages the target-compatible complete set and its boot proof, but
+ * never changes current in the live or installed session. */
+static bool stage_number(const char *text, uint64_t *value)
+{
+  if (!text[0] || (text[0] == '0' && text[1])) return false;
+  uint64_t number = 0;
+  for (; *text; ++text) {
+    if (*text < '0' || *text > '9' || number > (UINT64_MAX - (*text - '0')) / 10) {
+      return false;
+    }
+    number = number * 10 + (unsigned)(*text - '0');
+  }
+  *value = number;
+  return true;
+}
+
+static bool installer_stage(int argc, char **argv)
+{
+  if (argc != 6 || !package_volume(client.management, true)) return false;
+  client.packages = client.management;
+  if (!transition_clear_for_mutation()) return false;
+  struct package_boot_identity target = {0};
+  uint64_t pool;
+  if (!stage_number(argv[0], &pool) || !pool || pool > UINT32_MAX) {
+    return fail("installer stage has an invalid pool partition");
+  }
+  target.pool = (uint32_t)pool;
+  if (strlen(argv[1]) != 32 || strlen(argv[3]) != 64 || strlen(argv[5]) != 64) {
+    return fail("installer stage has an invalid payload identity");
+  }
+  strcpy(target.attempt, argv[1]);
+  if (!stage_number(argv[2], &target.kernel_size)) {
+    return fail("installer stage has an invalid kernel size");
+  }
+  strcpy(target.kernel_sha256, argv[3]);
+  if (!stage_number(argv[4], &target.archive_size)) {
+    return fail("installer stage has an invalid archive size");
+  }
+  strcpy(target.archive_sha256, argv[5]);
+  provided_abi();
+  if (!package_boot_identity_valid(&target) || !client.provided_readable) {
+    return fail("installer stage has invalid boot proof or unreadable target ABI");
+  }
+  handle_t lock = HANDLE_INVALID;
+  if (directory_create(client.packages, PKG_LOCK, DIRECTORY_KIND_DIRECTORY,
+        DIRECTORY_RIGHT_ENUMERATE, &lock) != CALL_OK) {
+    return fail("writer lock unavailable; use pkg unlock only after the prior client has stopped");
+  }
+  struct pkg_selection before = {0}, after = {0};
+  struct pkg_projection projection = {0};
+  struct pkg_sdk sdk = {0};
+  bool ok = pkg_selection_load(client.packages, &before, &client.reason) &&
+      pkg_selection_load(client.packages, &after, &client.reason) &&
+      prepare_update(&after, 0, NULL, NULL) &&
+      pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
+      pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
+  if (ok) ok = review(&before, &after, true, true);
+  uint64_t staged = 0;
+  if (ok) ok = pkg_stage(client.packages, &after, &projection, &sdk, &staged, &client.reason);
+  if (ok) {
+    struct package_transition transition = {.from_set = before.number,
+      .to_set = staged, .target = target};
+    enum call_status status = package_transition_publish(client.packages, &transition);
+    ok = status == CALL_OK;
+    if (!ok) fail("cannot durably record the installer package transition");
+  }
+  if (ok) printf("pkg: target set %llu staged for installer Update\n",
+      (unsigned long long)staged);
+  free(projection.records);
+  free(sdk.bytes);
+  pkg_selection_free(&after);
+  pkg_selection_free(&before);
   handle_close(lock);
   return release_writer_lock(client.packages, ok);
 }
@@ -2019,10 +2119,12 @@ int main(int argc, char **argv)
       !strcmp(command, "update") ? false :
       !strcmp(command, "check") ? count != 1 :
       !strcmp(command, "upgrade") ? count > 1 :
+      !strcmp(command, "stage-update") ? count != 6 :
       !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {
     return usage();
   }
-  bool needs_hash = (mutation && strcmp(command, "unlock")) || !strcmp(command, "verify");
+  bool needs_hash = (mutation && strcmp(command, "unlock")) ||
+      !strcmp(command, "verify") || !strcmp(command, "stage-update");
   if (needs_hash && !ensure_crypto()) {
     fputs("pkg: signature crypto initialization unavailable\n", stderr);
     return EXIT_FAILURE;
@@ -2030,6 +2132,8 @@ int main(int argc, char **argv)
   bool ok = false;
   if (!strcmp(command, "upgrade")) {
     ok = upgrade(count ? arguments[0] : NULL);
+  } else if (!strcmp(command, "stage-update")) {
+    ok = installer_stage(count, arguments);
   } else if (repository) {
     ok = repository_command(arguments[0], count > 1 ? arguments[1] : NULL,
         count > 2 ? arguments[2] : NULL, unsigned_index);

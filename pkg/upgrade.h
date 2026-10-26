@@ -25,9 +25,10 @@ bool pkg_upgrade_clear(handle_t parent, const char *name);
  * attempt becomes the previous menu entry. WORKSPACE is a RAM directory.
  * Handles are borrowed. PSA crypto must be initialized. */
 struct pkg_upgrade_publish {
-  handle_t issuer, clock, random, workspace;
+  handle_t issuer, clock, random, workspace, packages;
   handle_t kernel, archive;
   uint64_t kernel_size, archive_size;
+  uint64_t from_set, to_set;
   const char *revision;
   const struct pkg_boot_evidence *evidence;
 };

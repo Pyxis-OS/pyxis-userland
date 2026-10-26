@@ -50,6 +50,12 @@ struct pkg_sdk {
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
     const struct pkg_projection *projection, const struct pkg_sdk *sdk,
     bool *uncertain, const char **reason);
+/* Write and sync an immutable set and its indexes without changing current.
+ * A release transition publishes its pending proof before boot activation;
+ * only boot-init switches this staged set on the verified next boot. */
+bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk,
+    uint64_t *number, const char **reason);
 /* Both of set NUMBER's indexes equal the ones built from its selection. */
 bool pkg_indexes_verify(handle_t packages, uint64_t number,
     const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason);

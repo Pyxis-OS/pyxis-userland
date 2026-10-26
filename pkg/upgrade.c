@@ -7,6 +7,7 @@
 #include <file.h>
 #include <handle.h>
 #include <mount.h>
+#include <package_transition.h>
 #include <random.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -188,6 +189,24 @@ bool pkg_upgrade_publish(const struct pkg_upgrade_publish *request, const char *
       strcmp(publication.record.digest.sha256, request->evidence->record_sha256))) {
     ok = false;
     *reason = "the boot record changed since this boot; reboot before upgrading";
+  }
+  if (ok) {
+    const struct config_boot_binding *binding = &publication.binding;
+    struct package_transition transition = {.from_set = request->from_set,
+      .to_set = request->to_set,
+      .target = {.pool = request->evidence->pool,
+        .kernel_size = binding->kernel.digest.size,
+        .archive_size = binding->archive.digest.size}};
+    memcpy(transition.target.attempt, attempt, sizeof(transition.target.attempt));
+    memcpy(transition.target.kernel_sha256, binding->kernel.digest.sha256,
+        sizeof(transition.target.kernel_sha256));
+    memcpy(transition.target.archive_sha256, binding->archive.digest.sha256,
+        sizeof(transition.target.archive_sha256));
+    status = package_transition_publish(request->packages, &transition);
+    if (status != CALL_OK) {
+      ok = false;
+      *reason = "cannot durably record the pending package set; no ESP payload was written";
+    }
   }
   if (ok) {
     publication.prepared = true;

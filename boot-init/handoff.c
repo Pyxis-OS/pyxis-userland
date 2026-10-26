@@ -52,7 +52,7 @@ static bool loaded_digest(handle_t file, struct config_file_digest *result)
   return ok;
 }
 
-static bool read_snapshot(handle_t parent, const char *path, size_t limit,
+static enum call_status read_snapshot(handle_t parent, const char *path, size_t limit,
     struct config_handoff_bytes *bytes)
 {
   struct path_context context = {.directories = &parent, .count = 1};
@@ -66,33 +66,39 @@ static bool read_snapshot(handle_t parent, const char *path, size_t limit,
   enum call_status status = path_resolve_native(&context, path, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &workspace, &file);
   if (status != CALL_OK) {
-    return false;
+    return status;
   }
   uint64_t size = 0;
-  bool ok = file_size(file, &size) == CALL_OK && size <= limit &&
-      config_handoff_read(file, bytes, &status) && bytes->size <= limit;
-  if (handle_close(file)) {
-    ok = false;
+  status = file_size(file, &size);
+  if (status == CALL_OK && size > limit) status = CALL_LIMIT;
+  if (status == CALL_OK && (!config_handoff_read(file, bytes, &status) || bytes->size > limit)) {
+    if (status == CALL_OK) status = CALL_LIMIT;
   }
-  return ok;
+  if (handle_close(file) != CALL_OK && status == CALL_OK) status = CALL_IO;
+  return status;
 }
 
 /* The committed record, read through one early ESP reader that is retired
  * before returning. RECORD stays empty without a committed one. */
-static bool read_record(handle_t esp_mount, struct config_handoff_bytes *record)
+static bool read_record(handle_t esp_mount, struct config_handoff_bytes *record,
+    struct config_record *parsed, enum boot_record_state *state)
 {
   if (esp_mount == HANDLE_INVALID) {
     return true;
   }
   struct mount_fat32_reply reader = {0};
   if (mount_open_fat32(esp_mount, READER_ROOT_RIGHTS, &reader) != CALL_OK) {
+    *state = BOOT_RECORD_INVALID;
     return true;
   }
-  struct config_record parsed = {0};
-  if (!read_snapshot(reader.root, "EFI/pyxis/config/" CONFIG_RECORD_NAME,
-      CONFIG_RECORD_MAX_BYTES, record) ||
-      !config_record_parse(record->bytes, record->size, &parsed) || !parsed.committed) {
+  enum call_status read = read_snapshot(reader.root,
+      "EFI/pyxis/config/" CONFIG_RECORD_NAME, CONFIG_RECORD_MAX_BYTES, record);
+  if (read != CALL_NOT_FOUND) *state = BOOT_RECORD_INVALID;
+  if (read != CALL_OK || !config_record_parse(record->bytes, record->size, parsed) ||
+      !parsed->committed) {
     config_handoff_bytes_free(record);
+  } else {
+    *state = BOOT_RECORD_VERIFIED;
   }
   bool drained = handle_close(reader.root) == 0;
   enum call_status status = mount_retire(reader.control);
@@ -133,15 +139,19 @@ static bool handoff_files(handle_t ram, size_t count, const char *const names[],
   return ok;
 }
 
-bool boot_evidence_prepare(const struct boot_evidence_authority *authority, handle_t *evidence)
+bool boot_evidence_prepare(const struct boot_evidence_authority *authority, handle_t *evidence,
+    enum boot_record_state *state, struct package_boot_identity *observed)
 {
   *evidence = HANDLE_INVALID;
+  *state = BOOT_RECORD_ABSENT;
+  *observed = (struct package_boot_identity){0};
   struct config_handoff_bytes record = {0};
-  if (!read_record(authority->esp_mount, &record)) {
+  struct config_record parsed = {0};
+  if (!read_record(authority->esp_mount, &record, &parsed, state)) {
     return false;
   }
   struct config_file_digest kernel = {0}, archive = {0}, digest = {0};
-  bool valid = record.bytes && authority->pool;
+  bool valid = *state == BOOT_RECORD_VERIFIED && record.bytes && authority->pool;
   if (valid) {
     struct install_digest hash = {0};
     valid = loaded_digest(authority->loaded_kernel, &kernel) &&
@@ -150,6 +160,20 @@ bool boot_evidence_prepare(const struct boot_evidence_authority *authority, hand
         install_digest_finish(&hash, digest.sha256);
     install_digest_abort(&hash);
   }
+  valid = valid && kernel.size == parsed.boot.kernel.digest.size &&
+      !strcmp(kernel.sha256, parsed.boot.kernel.digest.sha256) &&
+      archive.size == parsed.boot.archive.digest.size &&
+      !strcmp(archive.sha256, parsed.boot.archive.digest.sha256);
+  if (valid) {
+    observed->pool = authority->pool;
+    memcpy(observed->attempt, parsed.boot.attempt, sizeof(observed->attempt));
+    observed->kernel_size = kernel.size;
+    observed->archive_size = archive.size;
+    memcpy(observed->kernel_sha256, kernel.sha256, sizeof(observed->kernel_sha256));
+    memcpy(observed->archive_sha256, archive.sha256, sizeof(observed->archive_sha256));
+    valid = package_boot_identity_valid(observed);
+  }
+  if (!valid && *state == BOOT_RECORD_VERIFIED) *state = BOOT_RECORD_INVALID;
   digest.present = true;
   digest.size = record.size;
   char text[EVIDENCE_BYTES];
