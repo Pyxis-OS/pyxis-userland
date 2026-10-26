@@ -525,11 +525,7 @@ choose:
         continue;
       }
       coexist = update_choice.coexist;
-      if (coexist) {
-        puts("Coexist Update is unavailable until activation records are supported; nothing was written.");
-        continue;
-      }
-      fetch = !coexist;
+      fetch = true;
       char guid[37];
       install_guid_text(update_choice.layout.disk_guid, guid);
       snprintf(selected_target, sizeof(selected_target), "--selected-target=%llu",
@@ -545,13 +541,7 @@ choose:
           &replay_updating, &inspection_clean)) {
         continue;
       }
-      if (replay_updating && coexist) {
-        puts("Coexist Update is unavailable until activation records are supported; nothing was written.");
-        if (handle_close(sources[REPLAY]) != CALL_OK) inspection_clean = false;
-        sources[REPLAY] = HANDLE_INVALID;
-        continue;
-      }
-      fetch = !replay_updating || !coexist;
+      fetch = true;
     } else {
       fetch = true;
     }

@@ -1,10 +1,14 @@
 # Owned ESP publication
 
-Normal builds enable the integrated Classic Install/Update publisher.
+Normal builds enable the integrated Classic and Coexist Install/Update publisher.
 `INSTALLER_PUBLICATION_SCRATCH=1` is the default build setting; explicit `=0`
-retains the legacy development build. Coexist keeps its
-immutable-payload/manual-entry path; complete Coexist Install/Update/completion
-QEMU qualification and a separate activation record gate its integrated publisher.
+retains the legacy development build. Coexist uses the same record, normal and
+rescue menu, and owned-attempt retention. It additionally freezes and verifies
+the fixed `EFI/pyxis/BOOTX64.EFI` loader before publication. An existing loader
+must match the reviewed source exactly. The installer requests the structured
+`Pyxis OS` firmware option only after the menu and record are verified; a
+firmware refusal or uncertain readback leaves the published files in place and
+reports an incomplete installation without retrying the variable write.
 
 The first action list offers Install, Update, Replay a printed plan and Cancel.
 Only Install asks Classic/Coexist; Update discovers and revalidates the selected
@@ -105,7 +109,8 @@ on the next `pkg upgrade` or installer Update after a post-commit cleanup
 interruption, never at boot. Capacity admission takes no credit for cleanup.
 Failure, deadline
 or unknown completion stops at the reported phase with artifacts retained.
-There is no automatic repair, retry or rollback, and no firmware-variable write.
+There is no automatic repair, retry or rollback. Coexist requests one bounded
+firmware-variable registration after confirmed publication; Classic makes none.
 Close is not sync or view retirement. Incomplete activation/verification does not
 report `updated` or authorize ordinary program cleanup.
 

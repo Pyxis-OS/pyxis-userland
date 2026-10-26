@@ -105,7 +105,7 @@ there is no host libc, formatter, firmware updater or compiler-container change.
 ## Classic and coexistence ESP paths
 
 `INSTALLER_PUBLICATION_SCRATCH=1` is the default. Classic stages immutable
-`EFI/pyxis/REVISION/ATTEMPT/` payloads and commits their current/previous bindings
+`EFI/pyxis/REVISION/ATTEMPT/` payloads and commits the current binding
 in `EFI/pyxis/config/config.record` before the owned menu switch. Its loader
 remains at `EFI/BOOT/BOOTX64.EFI`, with the primary menu at
 `boot/limine/limine.conf` and a separate pinned rescue pair and fallback menu.
@@ -117,7 +117,14 @@ legacy development path with fixed `boot/{caelum.elf,initrd.cpio,revision}`
 payloads and whole-menu replacement.
 
 The explicit coexistence profile receives APPEND rather than ERASE or ESP
-rebuild authority. `--coexist` selects that behaviour without adding grants.
+rebuild authority. `--coexist` selects that behaviour without adding disk grants.
+The shared publisher uses the same committed record and normal/rescue menu on
+the selected ESP, places its verified Limine at `EFI/pyxis/BOOTX64.EFI`, then
+registers a `Pyxis OS` UEFI option with the private typed UEFI grant. By default
+the option is appended to BootOrder; an interactive reviewed choice can move it
+first while retaining foreign relative order. Coexist never writes `EFI/BOOT`
+or another loader's configuration. A firmware registration failure is an
+incomplete install, with no blind retry.
 New Install appends the reviewed native-pool slot first; Update opens its
 existing selected pool. Every volume operation uses that actual GPT entry.
 Coexistence stages only immutable `EFI/pyxis/REVISION/ATTEMPT/` payloads through

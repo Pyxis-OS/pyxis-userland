@@ -698,7 +698,7 @@ int main(int argc, char **argv)
     goto done;
   }
   bool boot_first = false;
-  if (coexist && !replay && !selected_action && !explicit_consent) {
+  if (coexist && !replay && !explicit_consent) {
     const char *const choices[] = {"Keep the existing firmware boot order",
       "Put Pyxis OS first"};
     struct term_choice_result choice = term_read_choice(&terminal,
