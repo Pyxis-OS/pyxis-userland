@@ -7,6 +7,8 @@ authority. The bundle declares `gamepad` with `input` rights and a read-only
 
 Escape exits. Tab or Left/Right selects another attached controller. The display
 fits a 960 by 640 canvas to the current display size and follows display resize.
+Input updates are event driven; dirty frames are drawn at most sixty times per
+second.
 The front view shows both sticks, independent analog trigger bars, the hat and
 all nineteen digital buttons. Fn and rear paddles are shown below the sticks.
 Axis values remain raw unsigned bytes, 0 through 255; hat directions run clockwise

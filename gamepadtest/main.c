@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 
+#define FRAME_INTERVAL_NS UINT64_C(16666667)
 #define CANVAS_WIDTH 960
 #define CANVAS_HEIGHT 640
 #define BACKGROUND 0x111923
@@ -35,7 +36,7 @@ struct app {
   struct gamepad_info info;
   struct gamepad_event accepted;
   uint32_t selected;
-  bool focused, valid, reset, dirty, refresh, quit;
+  bool focused, valid, reset, dirty, refresh, resizing, quit;
   int scale, left, top;
   enum font_result draw_result;
 };
@@ -241,7 +242,7 @@ static enum call_status render(struct app *app)
   button(app, 647, 189, 110, 29, "R1", GAMEPAD_BUTTON_R1);
   button(app, 356, 227, 248, 86, "TOUCHPAD", GAMEPAD_BUTTON_TOUCHPAD);
   button(app, 319, 251, 29, 38, "C", GAMEPAD_BUTTON_CREATE);
-  button(app, 612, 251, 29, 38, GAMEPAD_BUTTON_OPTIONS);
+  button(app, 612, 251, 29, 38, "O", GAMEPAD_BUTTON_OPTIONS);
   text(app, app->small, 300, 239, "Create", INSET);
   text(app, app->small, 612, 239, "Options", INSET);
 
@@ -434,7 +435,7 @@ static enum call_status resize(struct app *app)
   if (size.generation != app->buffer.generation) {
     result = display_replace(app->display, size.generation, &app->buffer);
     if (result == CALL_BUSY) {
-      return CALL_OK;
+      return CALL_BUSY;
     }
     if (result != CALL_OK) {
       return result;
@@ -485,9 +486,21 @@ static enum call_status resize(struct app *app)
 
 static enum call_status run(struct app *app)
 {
-  enum call_status result = resize(app);
+  enum call_status result = CALL_OK;
   app->refresh = true;
+  app->resizing = true;
+  uint64_t next_frame = 0;
   while (result == CALL_OK && !app->quit) {
+    if (app->resizing) {
+      result = resize(app);
+      if (result == CALL_BUSY) {
+        result = CALL_OK;
+      } else if (result == CALL_OK) {
+        app->resizing = false;
+      } else {
+        break;
+      }
+    }
     result = drain_keyboard(app);
     if (result == CALL_OK) {
       result = drain_gamepad(app);
@@ -498,18 +511,22 @@ static enum call_status run(struct app *app)
     if (result != CALL_OK || app->quit) {
       break;
     }
-    if (app->dirty) {
+    struct timespec time;
+    if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) {
+      return CALL_UNAVAILABLE;
+    }
+    uint64_t now = (uint64_t)time.tv_sec * UINT64_C(1000000000) + (uint64_t)time.tv_nsec;
+    if (app->dirty && !app->resizing && now >= next_frame) {
       result = render(app);
       if (result != CALL_OK) {
         break;
       }
+      next_frame = now + FRAME_INTERVAL_NS;
     }
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-      return CALL_UNAVAILABLE;
-    }
-    uint64_t deadline = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
-        (uint64_t)now.tv_nsec + UINT64_C(1000000000);
+    /* High-rate reports update accepted state immediately, but a dirty frame
+     * waits for its presentation deadline instead of rasterizing every report. */
+    uint64_t deadline = app->dirty && !app->resizing ? next_frame :
+        now + UINT64_C(1000000000);
     struct wait_interest interests[] = {
       {app->keyboard, WAIT_READABLE, 0}, {app->gamepad, WAIT_READABLE, 0},
       {app->display, WAIT_RESIZED, app->buffer.generation},
@@ -525,7 +542,7 @@ static enum call_status run(struct app *app)
         return CALL_UNAVAILABLE;
       }
       if (ready[2] & WAIT_RESIZED) {
-        result = resize(app);
+        app->resizing = true;
       }
     }
   }
