@@ -14,6 +14,8 @@
 #include "working_path_internal.h"
 
 #define COPY_IDENTITY_VALID (FILE_INFO_DOMAIN_VALID | FILE_INFO_OBJECT_VALID)
+#define COPY_BUFFER_SIZE \
+  (FILE_READ_MAX_BYTES < FILE_WRITE_MAX_BYTES ? FILE_READ_MAX_BYTES : FILE_WRITE_MAX_BYTES)
 
 static enum call_status close_handle(handle_t handle, enum call_status status)
 {
@@ -264,7 +266,7 @@ int pyxis_file_copy(const char *source, const char *destination, uint64_t *copie
   if (status == CALL_OK && !created) {
     status = file_resize(to.resource, 0);
   }
-  unsigned char buffer[FILE_READ_MAX_BYTES];
+  unsigned char buffer[COPY_BUFFER_SIZE];
   uint64_t offset = 0;
   while (status == CALL_OK && offset < info.size) {
     uint64_t remaining = info.size - offset;
