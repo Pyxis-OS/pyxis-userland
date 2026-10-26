@@ -30,7 +30,7 @@ static bool check_status(const char *operation, enum call_status status)
   return false;
 }
 
-static enum call_status create_output(const char *path, handle_t *output)
+static enum call_status create_output(const char *path, bool append, handle_t *output)
 {
   *output = HANDLE_INVALID;
   if (!*path || *path == '/') {
@@ -52,8 +52,9 @@ static enum call_status create_output(const char *path, handle_t *output)
   free(parent);
   if (status == CALL_OK) {
     /* Never use open-or-create: this operation must reject existing names. */
-    status = directory_create(directory, name, DIRECTORY_KIND_FILE,
-        FILE_RIGHT_READ | FILE_RIGHT_WRITE, output);
+    status = directory_create_required(directory, name, DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ | FILE_RIGHT_WRITE,
+        append ? DIRECTORY_CREATE_REQUIRE_APPEND : 0, output);
   }
   if (directory != HANDLE_INVALID && handle_close(directory) != 0 && status == CALL_OK) {
     status = CALL_BAD_HANDLE;
@@ -147,10 +148,20 @@ static enum call_status transfer(const struct options *options, handle_t source,
       request = result->read_bytes - result->written_bytes;
     }
     size_t count;
-    result->operation = "output write";
+    result->operation = options->append ? "output append" : "output write";
     ++result->write_calls;
-    enum call_status status = file_write(output, result->written_bytes,
-        payload + result->written_bytes, request, &count);
+    enum call_status status;
+    if (options->append) {
+      uint64_t offset;
+      status = file_append(output, payload + result->written_bytes, request, &offset, &count);
+      if (status == CALL_OK && offset != result->written_bytes) {
+        result->operation = "append offset (expected sequential output)";
+        return CALL_BAD_REQUEST;
+      }
+    } else {
+      status = file_write(output, result->written_bytes,
+          payload + result->written_bytes, request, &count);
+    }
     if (status != CALL_OK) {
       return status;
     }
@@ -248,13 +259,14 @@ static bool output_pass(const struct options *options, handle_t source, handle_t
   return success;
 }
 
-static void report_pass(size_t pass, const struct output_result *result, bool success)
+static void report_pass(size_t pass, const struct output_result *result, bool success, bool append)
 {
   fprintf(stderr, "%s %zu: %s; requested=%u read=%zu written=%zu bytes; failed_pass=%u\n",
       pass ? "sample" : "warmup", pass ? pass : 1, success ? "OK" : "FAILED",
       FIXTURE_BYTES, result->read_bytes, result->written_bytes, success ? 0U : 1U);
-  fprintf(stderr, "  file_read_calls=%zu short_reads=%zu file_write_calls=%zu short_writes=%zu\n",
-      result->read_calls, result->short_reads, result->write_calls, result->short_writes);
+  fprintf(stderr, "  file_read_calls=%zu short_reads=%zu file_%s_calls=%zu short_writes=%zu\n",
+      result->read_calls, result->short_reads, append ? "append" : "write",
+      result->write_calls, result->short_writes);
   if (result->timed) {
     fprintf(stderr, "  transfer=%llu ns (%.3f ms)",
         (unsigned long long)result->elapsed, result->elapsed / 1000000.0);
@@ -287,7 +299,8 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
   }
   handle_t source = HANDLE_INVALID, output = HANDLE_INVALID;
   bool success = true;
-  fprintf(stderr, "Interface: libpyxis file handles; storage=%s sync=%s\n",
+  fprintf(stderr, "Interface: libpyxis file handles; %s; storage=%s sync=%s\n",
+      options->append ? "atomic append (FILE_APPEND)" : "positioned write (FILE_WRITE)",
       options->prepared ? "prepared overwrite" : "grow from zero",
       options->sync ? "file (preparation untimed, completion separate)" : "none");
   fprintf(stderr, "Host FILE profiling: %s (measured transfers only)\n",
@@ -302,7 +315,8 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
     fill_fixture(payload, FIXTURE_BYTES, false);
   }
   if (success) {
-    success = check_status("exclusive output creation", create_output(options->output, &output));
+    success = check_status("exclusive output creation",
+        create_output(options->output, options->append, &output));
     if (!success) {
       fputs("iobench: no creation retry or removal; inspect destination after host errors\n", stderr);
     }
@@ -311,7 +325,7 @@ bool run_output(const struct options *options, unsigned char *scratch, handle_t 
   for (size_t i = 0; success && i <= options->rounds; ++i) {
     struct output_result result;
     success = output_pass(options, source, output, payload, scratch, clock, profile, i != 0, &result);
-    report_pass(i, &result, success);
+    report_pass(i, &result, success, options->append);
     if (i) {
       times[i - 1] = result.elapsed;
       sync_times[i - 1] = result.sync_elapsed;

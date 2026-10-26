@@ -50,6 +50,17 @@ enum call_status file_read_bulk(handle_t file, uint64_t offset, void *bytes,
 enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
                              size_t size, size_t *written);
 
+/* Requires WRITE. Atomically selects EOF and appends at most
+ * FILE_APPEND_MAX_BYTES in one call, returning the selected offset and confirmed
+ * count. Nonempty success reports 1..that limit bytes; append any remaining
+ * suffix in a new call, which may interleave with other writers. Zero size
+ * probes authority/support and returns EOF plus zero without mutation.
+ * Unsupported append is refused without a SIZE+WRITE fallback. Failure clears
+ * both outputs; CALL_OUTCOME_UNKNOWN must not be replayed automatically.
+ * Output values are written after consuming bytes if they alias the source. */
+enum call_status file_append(handle_t file, const void *bytes, size_t size,
+    uint64_t *offset, size_t *written);
+
 /* Native FILE-to-FILE transfer: destination requires WRITE, source READ.
  * Submit at most FILE_TRANSFER_MAX_BYTES and advance both offsets by the
  * confirmed count. Short successful transfers, including EOF, are allowed.

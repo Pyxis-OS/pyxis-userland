@@ -26,7 +26,7 @@ static enum call_status mutation_status(struct syscall_result result)
 }
 
 static enum call_status child_call(handle_t directory, uint64_t operation, const char *name,
-    uint64_t kind, uint64_t rights, handle_t *handle)
+    uint64_t kind, uint64_t rights, uint64_t requirements, handle_t *handle)
 {
   if (!handle) {
     return CALL_BAD_REQUEST;
@@ -42,11 +42,14 @@ static enum call_status child_call(handle_t directory, uint64_t operation, const
   struct directory_message message = {
     .header = {PROTOCOL_DIRECTORY, operation},
   };
-  struct directory_child_request request = {(uintptr_t)name, length, kind, rights};
   if (operation == DIRECTORY_LOOKUP) {
-    message.body.lookup = request;
+    message.body.lookup = (struct directory_child_request){
+      (uintptr_t)name, length, kind, rights,
+    };
   } else {
-    message.body.create = request;
+    message.body.create_required = (struct directory_create_request){
+      (uintptr_t)name, length, kind, rights, requirements,
+    };
   }
   struct directory_child_reply reply;
   enum call_status status = call_status(syscall_call(directory, &message, sizeof(message),
@@ -65,13 +68,19 @@ static enum call_status child_call(handle_t directory, uint64_t operation, const
 enum call_status directory_lookup(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle)
 {
-  return child_call(directory, DIRECTORY_LOOKUP, name, kind, rights, handle);
+  return child_call(directory, DIRECTORY_LOOKUP, name, kind, rights, 0, handle);
 }
 
 enum call_status directory_create(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle)
 {
-  return child_call(directory, DIRECTORY_CREATE, name, kind, rights, handle);
+  return directory_create_required(directory, name, kind, rights, 0, handle);
+}
+
+enum call_status directory_create_required(handle_t directory, const char *name,
+    uint64_t kind, uint64_t rights, uint64_t requirements, handle_t *handle)
+{
+  return child_call(directory, DIRECTORY_CREATE, name, kind, rights, requirements, handle);
 }
 
 enum call_status directory_repository_view(handle_t directory, handle_t *view)

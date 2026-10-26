@@ -18,6 +18,12 @@ struct file_write_message {
   unsigned char bytes[FILE_WRITE_MAX_BYTES];
 };
 
+struct file_append_message {
+  struct message_header header;
+  struct file_append_request body;
+  unsigned char bytes[FILE_APPEND_MAX_BYTES];
+};
+
 struct file_read_response {
   struct file_read_reply body;
   unsigned char bytes[FILE_READ_MAX_BYTES];
@@ -36,6 +42,9 @@ struct file_transfer_message {
 _Static_assert(offsetof(struct file_write_message, bytes) ==
     sizeof(struct message_header) + sizeof(struct file_write_request),
     "file write bytes follow the request");
+_Static_assert(offsetof(struct file_append_message, bytes) ==
+    sizeof(struct message_header) + sizeof(struct file_append_request),
+    "file append bytes follow the request");
 _Static_assert(offsetof(struct file_read_response, bytes) ==
     sizeof(struct file_read_reply), "file read bytes follow the reply");
 
@@ -284,6 +293,51 @@ enum call_status file_write(handle_t file, uint64_t offset, const void *bytes,
   if (reply.written > limit || (limit && !reply.written)) {
     return CALL_OUTCOME_UNKNOWN;
   }
+  *written = (size_t)reply.written;
+  return CALL_OK;
+}
+
+enum call_status file_append(handle_t file, const void *bytes, size_t size,
+    uint64_t *offset, size_t *written)
+{
+  if (!offset || !written) {
+    if (offset) {
+      *offset = 0;
+    }
+    if (written) {
+      *written = 0;
+    }
+    return CALL_BAD_REQUEST;
+  }
+  if (size && !bytes) {
+    *offset = 0;
+    *written = 0;
+    return CALL_BAD_BUFFER;
+  }
+
+  size_t limit = size < FILE_APPEND_MAX_BYTES ? size : FILE_APPEND_MAX_BYTES;
+  struct file_append_message message = {
+    .header = {PROTOCOL_FILE, FILE_APPEND},
+    .body = {.size = limit},
+  };
+  if (limit) {
+    memcpy(message.bytes, bytes, limit);
+  }
+  struct file_append_reply reply;
+  enum call_status status = reply_status(file_call(file, &message,
+      offsetof(struct file_append_message, bytes) + limit, &reply, sizeof(reply), true),
+      sizeof(reply), true);
+  /* Consume the source first, even when either output aliases it. */
+  *offset = 0;
+  *written = 0;
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (reply.written > limit || (limit && !reply.written) ||
+      reply.written > UINT64_MAX - reply.offset) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *offset = reply.offset;
   *written = (size_t)reply.written;
   return CALL_OK;
 }

@@ -131,6 +131,7 @@ context rather than matched HTTP-download results.
 
 ```text
 iobench write home://write.bin
+iobench write home://append.bin --append --buffer 4080 --rounds 1
 iobench write host://write-prepared.bin --prepared --sync
 iobench copy boot://share/iobench.bin home://copy.bin
 iobench copy host://iobench.bin home://copy-large.bin --buffer 65536
@@ -143,12 +144,24 @@ Write/copy default to 4080-byte requests and five measured passes following one
 untimed warm-up. `--prepared` and `--sync` apply only to write/copy. All options
 follow the required source/output paths; duplicates and unknown options fail.
 
+Write alone accepts `--append` to measure native `file_append` instead of
+positioned `file_write`. Each operation selects EOF atomically and returns its
+start offset and confirmed count. The benchmark checks that every returned
+offset matches the generated fixture's confirmed prefix. Its separate calls
+are not one atomic 1 MiB record; use a fresh output without concurrent mutation
+for this measurement. Reports identify the interface and use `file_append_calls`
+for append mode. `--append --prepared` is rejected before output creation:
+append measures growth from zero, while prepared mode measures overwrite.
+
 The explicit output path must name a new regular file on a writable directory
 backend. Creation is exclusive: an existing file, directory or alias of the
 source fails without opening or truncating that entry. Missing parents are not
 created. Creation requests READ and WRITE authority for the child, and needs
 LOOKUP, CREATE, READ_FILES and WRITE_FILES on the resolved parent. A read-only
 grant or daemon rejects creation. There is no replacement option or fallback.
+Append mode requires native append support during exclusive creation, before any
+namespace mutation. HOST and other unsupported backends refuse without creating
+the output; there is no SIZE+WRITE fallback.
 
 The original output handle remains held across all preparation, transfer, sync
 and verification passes. Copy likewise holds the validated source handle.
@@ -245,16 +258,16 @@ host copy-on-write and other backing policies may still allocate during the
 overwrite. The complement also prevents old matching contents from satisfying
 output verification when bytes were not replaced.
 
-For write, each `file_write` request is capped by `--buffer` and remaining total
-payload, and positive short progress advances the next request. For copy, each
+For write, each `file_write` or `file_append` request is capped by `--buffer` and
+remaining total payload, and positive short progress advances the next request. For copy, each
 read is capped similarly, and its entire result is drained to the output before
 another read. The program retains payload bytes in a 1 MiB allocation and uses
 another 1 MiB scratch allocation for preparation/verification; `--buffer` is a
 request limit, not the total allocation size. Both allocations, all pattern
 generation, preparation and the initial source validation are outside timing.
 
-Current file helpers cap reads at 4088 bytes and writes at 4080 bytes. At the
-default 4080, a copy needs 258 read and 258 write calls. With 4088, 4096 or 65536
+Current file helpers cap reads at 4088 bytes and writes/appends at 4080 bytes. At
+the default 4080, a copy needs 258 read and 258 write calls. With 4088, 4096 or 65536
 requests it needs 257 reads but 513 writes, because each full 4088-byte read needs
 a 4080-byte write and an 8-byte suffix write. Increasing the request size does
 not increase the native transfer limits or imply fewer calls.
@@ -264,8 +277,8 @@ accounting. Write measures confirmed acceptance; copy measures the combined
 read/write loop. Read and written bytes are reported separately; copy throughput
 counts the written payload once, not both directions added together. Positive
 short reads/writes are counted relative to application requests. Reported
-`file_read_calls` and `file_write_calls` exclude preparation, source validation,
-verification and EOF probes. They are helper calls, not instrumented syscall
+`file_read_calls`, `file_write_calls` and `file_append_calls` exclude preparation,
+source validation, verification and EOF probes. They are helper calls, not instrumented syscall
 counts. A failure reports only confirmed successful progress; an uncertain
 mutation may have changed more bytes and is never replayed.
 

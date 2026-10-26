@@ -151,6 +151,38 @@ static enum call_status truncate_file(handle_t file, const struct describe_reply
   return malformed ? CALL_OUTCOME_UNKNOWN : (enum call_status)packet.result;
 }
 
+static enum call_status probe_append(handle_t file, const struct describe_reply *info,
+    uint64_t deadline_ns, uint64_t *delivery)
+{
+  if (info->kind == HANDLE_KIND_NATIVE) {
+    uint64_t offset;
+    size_t written;
+    return file_append(file, NULL, 0, &offset, &written);
+  }
+  struct file_append_request request = {0};
+  struct endpoint_packet packet = {0};
+  enum call_status status = endpoint_invoke(file, PROTOCOL_FILE, FILE_APPEND,
+      &request, sizeof(request), NULL, 0, deadline_ns, &packet);
+  *delivery = packet.delivery;
+  if (status != CALL_OK) {
+    return packet.delivery == ENDPOINT_DELIVERED ? CALL_OUTCOME_UNKNOWN : status;
+  }
+  bool malformed = packet.result >= CALL_STATUS_COUNT || packet.grant_count ||
+      packet.size != (packet.result == CALL_OK ? sizeof(struct file_append_reply) : 0);
+  for (size_t i = 0; i < packet.grant_count; ++i) {
+    handle_close(packet.grants[i].handle);
+  }
+  if (malformed) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (packet.result != CALL_OK) {
+    return (enum call_status)packet.result;
+  }
+  struct file_append_reply reply;
+  memcpy(&reply, packet.data, sizeof(reply));
+  return reply.written ? CALL_OUTCOME_UNKNOWN : CALL_OK;
+}
+
 static enum call_status finish_file(handle_t resource, uint64_t intent, uint64_t flags,
     uint64_t deadline_ns, struct resource_result *result)
 {
@@ -175,8 +207,16 @@ static enum call_status finish_file(handle_t resource, uint64_t intent, uint64_t
     resource_result_close(result);
     return CALL_BAD_REQUEST;
   }
-  /* APPEND remains consumer intent over positioned FILE operations. This copy
-   * establishes no shared offset or atomic append guarantee. */
+  if (flags & PROVIDER_OPEN_APPEND) {
+    uint64_t delivery = 0;
+    status = probe_append(resource, &result->info, deadline_ns, &delivery);
+    result->delivery = delivery;
+    if (status != CALL_OK) {
+      resource_result_close(result);
+      result->delivery = delivery;
+      return status;
+    }
+  }
   if ((flags & PROVIDER_OPEN_TRUNCATE) && result->info.description.outcome == RESOURCE_OK) {
     uint64_t delivery = 0;
     status = truncate_file(resource, &result->info, deadline_ns, &delivery);
@@ -295,16 +335,18 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
       file_rights = ((parent_info.rights & DIRECTORY_RIGHT_READ_FILES) ? FILE_RIGHT_READ : 0) |
           ((parent_info.rights & DIRECTORY_RIGHT_WRITE_FILES) ? FILE_RIGHT_WRITE : 0);
     }
+    uint64_t requirements = (flags & PROVIDER_OPEN_APPEND) ?
+        DIRECTORY_CREATE_REQUIRE_APPEND : 0;
     if (flags & PROVIDER_OPEN_EXCLUSIVE) {
-      status = directory_create(parent, component, DIRECTORY_KIND_FILE, file_rights,
-          &child.handle);
+      status = directory_create_required(parent, component, DIRECTORY_KIND_FILE, file_rights,
+          requirements, &child.handle);
       child.protocol = PROTOCOL_FILE;
     } else {
       status = directory_lookup_typed(parent, component, file_rights,
           parent_info.rights & DIRECTORY_RIGHTS, &child);
       if (status == CALL_NOT_FOUND && (flags & PROVIDER_OPEN_CREATE)) {
-        status = directory_create(parent, component, DIRECTORY_KIND_FILE, file_rights,
-            &child.handle);
+        status = directory_create_required(parent, component, DIRECTORY_KIND_FILE, file_rights,
+            requirements, &child.handle);
         child.protocol = PROTOCOL_FILE;
         /* A concurrent creator's ALREADY_EXISTS is final; do not re-open. */
       }

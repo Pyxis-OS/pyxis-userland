@@ -49,7 +49,8 @@ static bool completion_valid(const struct endpoint_packet *packet)
     break;
   case PROTOCOL_FILE:
     if (packet->operation != FILE_READ && packet->operation != FILE_WRITE &&
-        packet->operation != FILE_RESIZE && packet->operation != FILE_SIZE &&
+        packet->operation != FILE_APPEND && packet->operation != FILE_RESIZE &&
+        packet->operation != FILE_SIZE &&
         packet->operation != FILE_TRANSFER && packet->operation != FILE_READ_BULK) {
       return false;
     }

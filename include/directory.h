@@ -27,6 +27,11 @@ enum call_status directory_lookup_typed(handle_t directory, const char *name,
 enum call_status directory_create(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, handle_t *handle);
 
+/* Creation with before-effects backing support admission. Requirements use
+ * DIRECTORY_CREATE_REQUIRE_*; APPEND requires FILE kind plus WRITE rights. */
+enum call_status directory_create_required(handle_t directory, const char *name,
+    uint64_t kind, uint64_t rights, uint64_t requirements, handle_t *handle);
+
 /* Derive an owned native npfs directory confined to FILE packages.lua and
  * packages.lua.new. Requires all DIRECTORY_REPOSITORY_VIEW_RIGHTS and grants
  * exactly that subset. No enumeration, child directories or links; rename
