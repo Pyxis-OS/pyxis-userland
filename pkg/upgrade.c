@@ -200,7 +200,7 @@ bool pkg_upgrade_publish(const struct pkg_upgrade_publish *request, const char *
   struct config_storage_report report = {0};
   if (ok && !boot_publication_publish(&publication, &input, &view, &report)) {
     ok = false;
-    *reason = "publishing the release failed (see above); boot the previous entry if needed";
+    *reason = "publishing the release failed (see above); inspect boot selection before reboot";
   }
   boot_publication_destroy(&publication);
   uint64_t now = 0;

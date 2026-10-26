@@ -1380,7 +1380,7 @@ static bool upgrade_review(const struct pkg_entry *release)
       release->identity.version, (unsigned long long)release->size, provides);
   puts("  installed packages it does not provide an ABI for:");
   list_uncovered(release);
-  puts("  the running release stays bootable as Pyxis OS (previous).");
+  puts("  the current boot selection will be replaced; static rescue remains available.");
   if (client.yes) {
     puts("Staging this release (--yes).");
     return true;
@@ -1534,7 +1534,7 @@ static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_
 
 /* pkg upgrade [VERSION] (docs/wip/pkg-upgrade.md, step 3): the newest release
  * in the signed releases repository, or the one named, staged as the next boot
- * attempt with the running one as the previous entry. */
+ * attempt. */
 static bool upgrade(const char *version)
 {
   handle_t issuer = bootstrap_capability(PACKAGE_UPGRADE_SOURCE);
