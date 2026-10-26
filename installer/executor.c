@@ -398,6 +398,11 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
         stderr);
     return false;
   }
+  if (plan->record.updating && plan->record.coexist) {
+    fputs("installer: Coexist Update is unavailable until activation records are supported; no target write attempted\n",
+        stderr);
+    return false;
+  }
   if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
     plan->ready = false;
     return false;

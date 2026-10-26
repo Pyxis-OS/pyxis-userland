@@ -119,14 +119,6 @@
         "read"
       ],
       "required": false
-    },
-    {
-      "name": "power",
-      "resource": "power",
-      "rights": [
-        "restart"
-      ],
-      "required": false
     }
   ]
 }

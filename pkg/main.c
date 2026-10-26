@@ -16,7 +16,6 @@
 #include <path.h>
 #include <package_maintenance.h>
 #include <package_transition.h>
-#include <power.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1963,27 +1962,7 @@ static bool upgrade(const char *version)
   pkg_selection_free(&before);
   handle_close(lock);
   ok = release_writer_lock(client.packages, ok);
-  if (ok) {
-    char answer[16];
-    if (client.terminal.input != HANDLE_INVALID && client.terminal.output != HANDLE_INVALID) {
-      struct term_line_result result = term_read_line(&client.terminal,
-          "Upgrade staged. Reboot now? [Y/n] ", answer, sizeof(answer));
-      if (result.status != TERM_LINE_OK || result.limit_reached) {
-        fputs("pkg: reboot prompt unavailable; reboot when ready\n", stderr);
-      } else if (!strcmp(answer, "n") || !strcmp(answer, "N")) {
-        puts("pkg: upgrade remains staged; reboot is still required");
-      } else if (!answer[0] || !strcmp(answer, "y") || !strcmp(answer, "Y")) {
-        handle_t power = bootstrap_capability("power");
-        enum call_status status = power == HANDLE_INVALID ? CALL_UNAVAILABLE :
-            power_restart(power);
-        fprintf(stderr, "pkg: restart unavailable (status %u); upgrade remains staged\n", status);
-      } else {
-        puts("pkg: unrecognized reboot answer; upgrade remains staged");
-      }
-    } else {
-      printf("pkg: upgrade staged: reboot to run %s\n", chosen->identity.version);
-    }
-  }
+  if (ok) puts("Upgrade staged; type reboot to finish");
   free(entries);
   return ok;
 }

@@ -103,8 +103,9 @@ the release and the complete target-compatible package selection. It stages
 the verified package set and a durable pending proof before the shared boot
 publisher writes a fresh attempt. The running system keeps its old set; the
 verified first boot switches current before package consumers start. Success
-offers a reboot prompt; declining leaves the transition staged. Boot admission is single-use per
-boot, so a failure from admission onward needs a reboot before retrying.
+prints `Upgrade staged; type reboot to finish`; pkg does not receive power
+authority. Boot admission is single-use per boot, so a failure from admission
+onward needs a reboot before retrying.
 
 A package declares its command exports in package.lua. A plain export names a
 .pxe path within tree; a bundle export names a .pxb directory and one declared

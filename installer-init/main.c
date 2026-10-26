@@ -89,8 +89,7 @@ static void *maintain_network(void *argument)
 }
 
 /* Applies the archive's network profile, starts the Wi-Fi supplicant it names
- * and keeps both serviced. Failure leaves Install unavailable; Update needs no
- * network. */
+ * and keeps both serviced. Package staging needs this network. */
 static void start_network(struct network *network)
 {
   if (!network_config_read(&network->config)) {
@@ -288,7 +287,7 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
   }
 }
 
-/* Install fetches through httpfs. Waits up to INSTALL_NETWORK_WAIT_NS for the
+/* Package staging fetches through httpfs. Waits up to INSTALL_NETWORK_WAIT_NS for the
  * network's DNS choice, then starts httpfs again if it is missing or started
  * before DNS was known, so a late lease still reaches a named repository. */
 static void prepare_fetch(struct providers *providers, handle_t diagnostics)
@@ -469,7 +468,7 @@ int main(int argc, char **argv)
     start_httpfs(&providers, sources[DIAGNOSTICS]);
   } else {
     snprintf(providers.missing, sizeof(providers.missing), "the network did not start");
-    printf("Install is unavailable: %s. Update needs no network.\n", providers.missing);
+    printf("Install and Classic Update need package downloads: %s.\n", providers.missing);
   }
 
   struct terminal terminal = {.input = sources[INPUT], .output = sources[OUTPUT]};
@@ -525,6 +524,10 @@ choose:
         continue;
       }
       coexist = update_choice.coexist;
+      if (coexist) {
+        puts("Coexist Update is unavailable until activation records are supported; nothing was written.");
+        continue;
+      }
       fetch = !coexist;
       char guid[37];
       install_guid_text(update_choice.layout.disk_guid, guid);
@@ -539,6 +542,12 @@ choose:
       bool replay_updating = false;
       if (!prepare_replay(sources[SNAPSHOT_PARENT], &sources[REPLAY], &coexist,
           &replay_updating, &inspection_clean)) {
+        continue;
+      }
+      if (replay_updating && coexist) {
+        puts("Coexist Update is unavailable until activation records are supported; nothing was written.");
+        if (handle_close(sources[REPLAY]) != CALL_OK) inspection_clean = false;
+        sources[REPLAY] = HANDLE_INVALID;
         continue;
       }
       fetch = !replay_updating || !coexist;
