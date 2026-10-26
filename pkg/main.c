@@ -68,6 +68,7 @@ struct client {
   uint64_t timeout;
   /* --yes: switch without the console question, for Install. */
   bool yes;
+  bool update_constrained;
   bool crypto_ready; /* PSA signature crypto initialized; closed on exit. */
   char detail[RESOURCE_DETAIL_MAX_BYTES + 1];
   const char *reason;
@@ -1194,16 +1195,16 @@ static bool update_sources(struct pkg_selection *selection, struct update_work *
 }
 
 static bool update_dependency(struct pkg_selection *selection, struct update_work *work,
-    const struct pkg_identity *dependency)
+    const struct pkg_identity *owner, const struct pkg_identity *dependency)
 {
   size_t index = find_package(selection, dependency->id);
   if (index != SIZE_MAX && (!dependency->version[0] ||
       !strcmp(selection->entries[index].version, dependency->version))) return true;
   if (index != SIZE_MAX && work->named[index]) {
     snprintf(client.message, sizeof(client.message),
-        "named update of %s@%s conflicts with a required dependency on %s@%s",
+        "named update of %s@%s conflicts with %s requiring %s@%s",
         selection->entries[index].id, selection->entries[index].version,
-        dependency->id, dependency->version);
+        owner->id, dependency->id, dependency->version);
     return fail(client.message);
   }
   if (index != SIZE_MAX && work->forced[index]) {
@@ -1226,6 +1227,13 @@ static bool update_dependency(struct pkg_selection *selection, struct update_wor
         "required dependency %s%s%s is unavailable for the target ABI",
         dependency->id, dependency->version[0] ? "@" : "", dependency->version);
     return fail(client.message);
+  }
+  if (index != SIZE_MAX && work->chosen[index] &&
+      strcmp(work->chosen[index]->entry.identity.version, offer->entry.identity.version)) {
+    printf("pkg: deferring %s@%s: %s requires %s@%s\n", dependency->id,
+        work->chosen[index]->entry.identity.version, owner->id, dependency->id,
+        dependency->version);
+    client.update_constrained = true;
   }
   if (index == SIZE_MAX) {
     if (!select_version(selection, &offer->entry.identity, true)) return false;
@@ -1306,7 +1314,7 @@ static bool prepare_update(struct pkg_selection *selection, int argc, char **arg
     work->processed[index] = true;
     ++done;
     for (size_t d = 0; ok && d < manifest.dependency_count; ++d) {
-      ok = update_dependency(selection, work, &manifest.dependencies[d]);
+      ok = update_dependency(selection, work, &manifest.identity, &manifest.dependencies[d]);
     }
     pkg_manifest_free(&manifest);
     done = 0;
@@ -1494,7 +1502,8 @@ static bool mutate(const char *command, int argc, char **argv)
     }
   }
   if (ok && updating && same_selection(&before, &after)) {
-    puts("pkg: already up to date");
+    puts(client.update_constrained ? "pkg: no compatible updates; active set unchanged" :
+        "pkg: already up to date");
     noop = true;
   }
   if (ok && !reindex && !noop) {

@@ -37,6 +37,9 @@ Unusable selected builds are proposed removals, each requiring separate console
 approval, even with `--yes`. An unavailable dependency refuses without changing
 the active set. If versions and origins are already current, update reports
 `already up to date` and creates no new set.
+If a newer offered dependency is blocked by another package's exact version
+requirement, update names that constraint and reports `no compatible updates`
+when nothing else can change; it never claims that offered version is current.
 
 Repository reads fetch `current`, then its immutable `index/N.lua`. Signed
 repositories also fetch the index signature and signer certificate, verified
