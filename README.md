@@ -80,6 +80,11 @@ a zero-right type lookup. Callers keep the DIR owner alive for entry queries.
 Its native mutations include checked recursive creation; provider routes and
 exported directories are refused before invocation. Recursive creation follows
 original components and can leave a completed prefix on failure.
+The native recursive-removal helper retains parents and unlinks HOST links
+without following them. [pyxis/file.h](libc/include/pyxis/file.h) also supplies
+checked in-place file copy: contents/length only, native targets, retained
+identity checks before truncate and an explicit premature-EOF result. Both
+operations preserve partial effects and do not imply sync.
 
 `tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
 Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping

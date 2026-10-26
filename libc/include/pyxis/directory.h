@@ -49,6 +49,21 @@ int pyxis_directory_rename(const char *source, const char *destination);
  * creators are checked once. Failure can leave a completed creation prefix. */
 int pyxis_directory_create_all(const char *path);
 
+/* Remove a native directory tree or a symlink operand, without following links.
+ * Regular-file operands fail with ENOTDIR; other special entries are unsupported.
+ * Roots and final . or .. are invalid, and a trailing / requires a directory.
+ * Capture cwd once for relative operands and each explicit root once; descendants
+ * use retained parents, never reconstructed paths. No depth/name policy limit:
+ * fallible heap/handle/backend limits apply. Provider/exported routes refuse.
+ * Enumeration is live: restart after confirmed removal, allowing eight observed
+ * CHANGED restarts without removal before EAGAIN. Initial absence is ENOENT;
+ * disappearance after admission is tolerated. Other errors stop work, preserving
+ * partial effects; all owned closes are checked without hiding the primary error.
+ * No rollback, mutation retry or sync. Concurrent moves can leave a held tree
+ * being emptied elsewhere; final removal selects its original name. There is
+ * no cwd-ancestor or host mount guard, and final NOT_EMPTY/BUSY is returned. */
+int pyxis_directory_remove_all(const char *path);
+
 #ifdef __cplusplus
 }
 #endif

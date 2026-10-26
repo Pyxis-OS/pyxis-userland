@@ -15,6 +15,21 @@ extern "C" {
  * O_APPEND retains libc's non-atomic SIZE/WRITE policy. */
 int pyxis_file_open(const char *path, int flags, mode_t mode);
 
+#define PYXIS_COPY_UNEXPECTED_EOF 1
+
+/* Copy the initial regular FILE length through retained READ/WRITE objects.
+ * Existing native destinations retain their identity; known aliases fail with
+ * EINVAL and unprovable distinction with ENOTSUP before resize. Missing names
+ * use exclusive CREATE, never reopen a concurrent creator. Provider READ FILEs
+ * are allowed; destination providers/exports are refused before writer OPEN.
+ * Copy only bytes and length, using one cwd snapshot for relative operands and
+ * one capture per explicit root. No metadata copy, sync, rollback or pathname
+ * cleanup: an empty/partial destination may remain on failure.
+ * Return 0 and set copied only after checked closes; -1 sets errno. Premature
+ * source EOF returns PYXIS_COPY_UNEXPECTED_EOF with EIO instead. Both failure
+ * returns preserve copied and the first error through remaining cleanup. */
+int pyxis_file_copy(const char *source, const char *destination, uint64_t *copied);
+
 /* Sample metadata and actual grant rights from one admitted FILE, PIPE or CONSOLE descriptor,
  * retaining its open object and operation exclusion throughout both queries.
  * Does not change the cursor or upgrade the grant. Unreported response-stream metadata fails
