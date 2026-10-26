@@ -1096,6 +1096,7 @@ struct update_work {
   bool processed[PKG_SELECTION_MAX];
   bool forced[PKG_SELECTION_MAX];
   bool selected[PKG_SELECTION_MAX];
+  bool named[PKG_SELECTION_MAX];
   bool removed[PKG_SELECTION_MAX];
   size_t source[PKG_SELECTION_MAX];
   uint16_t choices[PKG_SELECTION_MAX];
@@ -1198,6 +1199,13 @@ static bool update_dependency(struct pkg_selection *selection, struct update_wor
   size_t index = find_package(selection, dependency->id);
   if (index != SIZE_MAX && (!dependency->version[0] ||
       !strcmp(selection->entries[index].version, dependency->version))) return true;
+  if (index != SIZE_MAX && work->named[index]) {
+    snprintf(client.message, sizeof(client.message),
+        "named update of %s@%s conflicts with a required dependency on %s@%s",
+        selection->entries[index].id, selection->entries[index].version,
+        dependency->id, dependency->version);
+    return fail(client.message);
+  }
   if (index != SIZE_MAX && work->forced[index]) {
     return fail("incompatible exact dependencies in the proposed set");
   }
@@ -1281,6 +1289,7 @@ static bool prepare_update(struct pkg_selection *selection, int argc, char **arg
           strcmp(old_origin.fingerprint, selection->origins[i].fingerprint))) {
       work->chosen[kept] = offer;
     }
+    work->named[kept] = argc > 0 && work->selected[i];
     selection->entries[kept] = selection->entries[i];
     selection->origins[kept] = selection->origins[i];
     ++kept;
