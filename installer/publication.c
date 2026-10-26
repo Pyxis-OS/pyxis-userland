@@ -247,6 +247,7 @@ static bool orphan_attempt(const struct install_staged_boot *boot, handle_t revi
     struct config_storage_report *report)
 {
   *removed = false;
+  snprintf(report->artifact, sizeof(report->artifact), "%s", id);
   handle_t attempt = HANDLE_INVALID;
   enum call_status status = install_esp_child_open(revision_dir, id,
       DIRECTORY_KIND_DIRECTORY, BOOT_DIRECTORY_RIGHTS, false, &attempt);
@@ -366,7 +367,8 @@ bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
       ok = fail(report, CALL_BAD_REQUEST); break;
     }
     cursor = entry.cursor;
-    if (folded_equal(revision, "config") || folded_equal(revision, "recovery")) continue;
+    if (folded_equal(revision, "config")) continue;
+    snprintf(report->artifact, sizeof(report->artifact), "%s", revision);
     if (!config_revision_valid(revision)) { ok = fail(report, CALL_BAD_REQUEST); break; }
     handle_t revision_dir = HANDLE_INVALID;
     status = install_esp_child_open(pyxis, revision, DIRECTORY_KIND_DIRECTORY,
@@ -385,6 +387,14 @@ bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
       status = directory_enumerate(revision_dir, &attempts, id, sizeof(id), &item);
       if (status != CALL_OK) { ok = fail(report, status); break; }
       if (item.outcome == DIRECTORY_END) break;
+      snprintf(report->artifact, sizeof(report->artifact), "%s", id);
+      if (item.outcome == DIRECTORY_ENTRY && item.kind == DIRECTORY_KIND_FILE &&
+          folded_equal(revision, "recovery") &&
+          (folded_equal(id, "kernel.elf") || folded_equal(id, "boot.arc") ||
+           folded_equal(id, "ownership.record"))) {
+        attempts = item.cursor;
+        continue;
+      }
       if (item.outcome != DIRECTORY_ENTRY || item.kind != DIRECTORY_KIND_DIRECTORY ||
           !config_transaction_valid(id)) { ok = fail(report, CALL_BAD_REQUEST); break; }
       if (folded_equal(revision, current->kernel_revision) && !strcmp(id, current->attempt)) {
