@@ -1134,8 +1134,7 @@ static bool update_sources(struct pkg_selection *selection, struct update_work *
       for (size_t r = 0; r < client.repositories.count; ++r) {
         if (mask & (UINT16_C(1) << r)) {
           work->source[i] = r;
-          printf("pkg: origin: %s (only source) for %s\n",
-              client.repositories.entries[r].name, selection->entries[i].id);
+          selection->origins[i].only_source = true;
         }
       }
     } else {
@@ -1367,6 +1366,7 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
       printf("  %s %s@%s%s%s%s\n", changed ? (old == SIZE_MAX ? "add" : "select") : "origin",
           after->entries[i].id, after->entries[i].version, name ? " (" : "",
           name ? name : "", name ? ")" : "");
+      if (source->only_source) printf("    origin: %s (only source)\n", source->name);
     }
   }
   for (size_t i = 0; i < before->count; ++i) {

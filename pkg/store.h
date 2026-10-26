@@ -14,6 +14,7 @@
 struct pkg_origin {
   char name[PACKAGE_ID_MAX + 1];
   char fingerprint[65];
+  bool only_source; /* Review-only legacy adoption; not stored in set records. */
 };
 
 struct pkg_selection {
