@@ -677,6 +677,14 @@ identity and modification time. Check `st_valid` with `STAT_DEV_VALID`,
 descriptors while comparing identity. Provider byte snapshots report their
 private domain without inventing object IDs or timestamps.
 
+[pyxis/file.h](libc/include/pyxis/file.h) supplies native writable FILE admission
+without preparing provider transactions, while retaining ordinary read routes.
+Its metadata queries return `stat` and actual grant rights from one retained
+object. Path queries obtain delegated FILE READ/WRITE or DIRECTORY rights;
+descriptor queries report the held FILE grant. Directory CREATE or REMOVE is
+namespace mutation authority. Provider path metadata refuses OPEN_WRITE routes
+before OPEN because their writability is unknown without preparing a writer.
+
 Libc output remains unbuffered by default. `setvbuf` selects full or line output
 buffering before stream I/O, using caller storage until `fclose`, or allocated
 storage when passed NULL. `setbuf(stream, NULL)` selects immediate output and

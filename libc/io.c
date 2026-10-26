@@ -1,11 +1,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pyxis/file.h>
 #include <stdarg.h>
 #include <unistd.h>
 #include "descriptor.h"
 
-int open(const char *path, int flags, ...)
+static int open_mode(int flags, struct descriptor_mode *mode)
 {
   int access = flags & (O_WRONLY | O_RDWR);
   if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL | O_APPEND | O_NOFOLLOW)) ||
@@ -15,24 +16,51 @@ int open(const char *path, int flags, ...)
     errno = EINVAL;
     return -1;
   }
-  if (flags & O_CREAT) {
-    va_list args;
-    va_start(args, flags);
-    mode_t creation_mode = va_arg(args, mode_t);
-    va_end(args);
-    /* Native creation has no permission-mode argument. Accept only the
-     * agreed default; never silently discard a restrictive mode request. */
-    if (creation_mode != 0666) {
-      errno = ENOTSUP;
-      return -1;
-    }
-  }
-  const struct descriptor_mode mode = {
+  *mode = (struct descriptor_mode){
     .readable = access != O_WRONLY, .writable = access != O_RDONLY,
     .create = flags & O_CREAT, .truncate = flags & O_TRUNC,
     .exclusive = flags & O_EXCL, .append = flags & O_APPEND,
   };
+  return 0;
+}
+
+static int validate_creation_mode(int flags, mode_t mode)
+{
+  /* Native creation has no permission-mode argument. Accept only the
+   * agreed default; never silently discard a restrictive mode request. */
+  if ((flags & O_CREAT) && mode != 0666) {
+    errno = ENOTSUP;
+    return -1;
+  }
+  return 0;
+}
+
+int open(const char *path, int flags, ...)
+{
+  struct descriptor_mode mode;
+  if (open_mode(flags, &mode) < 0) {
+    return -1;
+  }
+  if (mode.create) {
+    va_list args;
+    va_start(args, flags);
+    mode_t creation_mode = va_arg(args, mode_t);
+    va_end(args);
+    if (validate_creation_mode(flags, creation_mode) < 0) {
+      return -1;
+    }
+  }
   return descriptor_open(path, &mode, NULL);
+}
+
+int pyxis_file_open(const char *path, int flags, mode_t creation)
+{
+  struct descriptor_mode mode;
+  if (open_mode(flags, &mode) < 0 || validate_creation_mode(flags, creation) < 0) {
+    return -1;
+  }
+  return mode.writable ? descriptor_open_native_file(path, &mode) :
+      descriptor_open(path, &mode, NULL);
 }
 
 static bool transfer_ready(struct descriptor_object *object, size_t count, bool writing)

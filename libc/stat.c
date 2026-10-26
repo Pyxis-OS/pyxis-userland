@@ -4,9 +4,13 @@
 #include <file.h>
 #include <handle.h>
 #include <limits.h>
+#include <pyxis/file.h>
+#include <pyxis/working_path.h>
+#include <resource.h>
 #include <sys/stat.h>
 #include "descriptor.h"
 #include "errors.h"
+#include "working_path_internal.h"
 
 static enum call_status stat_result(const struct file_info_reply *info, mode_t mode,
     struct stat *result)
@@ -98,4 +102,50 @@ int lstat(const char *restrict path, struct stat *restrict result)
 int fstat(int descriptor, struct stat *result)
 {
   return descriptor_stat(descriptor, result);
+}
+
+int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *rights)
+{
+  if (!path || !*path || !metadata || !rights) {
+    errno = EINVAL;
+    return -1;
+  }
+  struct pyxis_working_snapshot working = {0};
+  enum call_status status = libc_path_root_prefix(path) ? CALL_OK :
+      pyxis_working_snapshot_init(&working, NULL);
+  struct resource_result opened = {0};
+  if (status == CALL_OK) {
+    status = resource_open_metadata_path(&working.context, path, &opened);
+  }
+  pyxis_working_snapshot_close(&working);
+  if (status == CALL_OK) {
+    status = resource_outcome_status(opened.info.description.outcome);
+  }
+  struct stat value;
+  if (status == CALL_OK) {
+    if (opened.info.protocol == PROTOCOL_FILE) {
+      status = libc_file_stat(opened.resource, &value);
+    } else if (opened.info.protocol == PROTOCOL_DIRECTORY &&
+        opened.info.kind == HANDLE_KIND_NATIVE && !opened.info.transport) {
+      struct file_info_reply info;
+      status = directory_info(opened.resource, &info);
+      if (status == CALL_OK) {
+        status = stat_result(&info, S_IFDIR, &value);
+      }
+    } else {
+      status = CALL_BAD_OPERATION;
+    }
+  }
+  uint64_t actual_rights = opened.info.rights;
+  enum call_status closed = resource_result_close(&opened);
+  if (status == CALL_OK) {
+    status = closed;
+  }
+  if (status != CALL_OK) {
+    errno = libc_path_errno(status, path, NULL);
+    return -1;
+  }
+  *metadata = value;
+  *rights = actual_rights;
+  return 0;
 }

@@ -192,10 +192,12 @@ static enum call_status finish_file(handle_t resource, uint64_t intent, uint64_t
   return CALL_OK;
 }
 
+enum open_route { OPEN_RESOURCE, OPEN_NATIVE_FILE, OPEN_METADATA };
+
 static enum call_status open_directory(const handle_t *initial, size_t initial_count,
     const char *remainder,
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
-    struct resource_result *result)
+    struct resource_result *result, enum open_route route)
 {
   size_t length = strlen(remainder);
   if (!initial_count || length == SIZE_MAX || initial_count > SIZE_MAX - length ||
@@ -226,7 +228,9 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
       ++path;
     }
     if (!*path) {
-      if (flags) {
+      if (route == OPEN_NATIVE_FILE) {
+        status = CALL_WRONG_TYPE;
+      } else if (flags) {
         status = CALL_BAD_OPERATION;
       } else {
         status = resource_result_adopt(chain[count - 1], result);
@@ -264,6 +268,11 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
     if (status != CALL_OK) {
       break;
     }
+    if (route != OPEN_RESOURCE && (parent_info.protocol != PROTOCOL_DIRECTORY ||
+        parent_info.kind != HANDLE_KIND_NATIVE || parent_info.transport)) {
+      status = CALL_BAD_OPERATION;
+      break;
+    }
     if (*path) {
       status = directory_lookup(parent, component, DIRECTORY_KIND_DIRECTORY,
           parent_info.rights & DIRECTORY_RIGHTS, &chain[count]);
@@ -282,6 +291,10 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
       break;
     }
     struct directory_typed_lookup_reply child = {0};
+    if (route == OPEN_METADATA) {
+      file_rights = ((parent_info.rights & DIRECTORY_RIGHT_READ_FILES) ? FILE_RIGHT_READ : 0) |
+          ((parent_info.rights & DIRECTORY_RIGHT_WRITE_FILES) ? FILE_RIGHT_WRITE : 0);
+    }
     if (flags & PROVIDER_OPEN_EXCLUSIVE) {
       status = directory_create(parent, component, DIRECTORY_KIND_FILE, file_rights,
           &child.handle);
@@ -304,9 +317,13 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
         handle_close(child.handle);
         status = CALL_WRONG_TYPE;
       } else {
-        status = finish_file(child.handle, intent, flags, deadline_ns, result);
+        status = route == OPEN_METADATA ? resource_result_adopt(child.handle, result) :
+            finish_file(child.handle, intent, flags, deadline_ns, result);
+        if (route == OPEN_METADATA && status != CALL_OK) {
+          handle_close(child.handle);
+        }
       }
-    } else if (flags) {
+    } else if (route == OPEN_NATIVE_FILE || flags) {
       handle_close(child.handle);
       status = CALL_BAD_OPERATION;
     } else {
@@ -351,7 +368,7 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
   }
   if (info.protocol == PROTOCOL_DIRECTORY) {
     return info.kind == HANDLE_KIND_NATIVE && !info.transport ?
-        open_directory(&target, 1, remainder, intent, flags, deadline_ns, result) :
+        open_directory(&target, 1, remainder, intent, flags, deadline_ns, result, OPEN_RESOURCE) :
         CALL_BAD_OPERATION;
   }
   if (info.protocol != PROTOCOL_FILE) {
@@ -414,8 +431,8 @@ enum call_status resource_open_held(handle_t target, const char *remainder,
   return finish_file(resource, intent, flags, deadline_ns, result);
 }
 
-enum call_status resource_open_path(const struct path_context *context, const char *path,
-    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+static enum call_status open_path(const struct path_context *context, const char *path,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns, enum open_route route,
     struct resource_result *result)
 {
   if (!result) {
@@ -433,26 +450,76 @@ enum call_status resource_open_path(const struct path_context *context, const ch
   while (*end && *end != '/' && *end != ':') {
     ++end;
   }
-  if (*end == ':' && end[1] == '/' && end[2] == '/') {
-    size_t length = end - path;
-    if (!length || length > ENVIRONMENT_NAME_MAX) {
-      return CALL_BAD_REQUEST;
+  if (*end != ':' || end[1] != '/' || end[2] != '/') {
+    if (!context || !context->count) {
+      return CALL_UNAVAILABLE;
     }
-    char name[ENVIRONMENT_NAME_MAX + 1];
-    memcpy(name, path, length);
-    name[length] = 0;
-    handle_t target = HANDLE_INVALID;
-    enum call_status status = path_root(name, &target);
-    if (status != CALL_OK) {
-      return status;
-    }
+    return open_directory(context->directories, context->count, path, intent, flags,
+        deadline_ns, result, route);
+  }
+  size_t length = end - path;
+  if (!length || length > ENVIRONMENT_NAME_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  char name[ENVIRONMENT_NAME_MAX + 1];
+  memcpy(name, path, length);
+  name[length] = 0;
+  handle_t target = HANDLE_INVALID;
+  enum call_status status = path_root(name, &target);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (route == OPEN_RESOURCE) {
     status = resource_open_held(target, end + 3, intent, flags, deadline_ns, result);
     handle_close(target);
     return status;
   }
-  if (!context || !context->count) {
-    return CALL_UNAVAILABLE;
+  struct handle_info info;
+  status = handle_query(target, &info);
+  if (status == CALL_OK && info.protocol == PROTOCOL_DIRECTORY) {
+    status = info.kind == HANDLE_KIND_NATIVE && !info.transport ?
+        open_directory(&target, 1, end + 3, intent, flags, deadline_ns, result, route) :
+        CALL_BAD_OPERATION;
+  } else if (status == CALL_OK && route == OPEN_METADATA && info.protocol == PROTOCOL_PROVIDER) {
+    status = (info.rights & PROVIDER_RIGHT_OPEN_WRITE) ? CALL_BAD_OPERATION :
+        provider_open_typed(target, end + 3, PROVIDER_INTENT_READ, 0, 0, result);
+  } else if (status == CALL_OK && info.protocol == PROTOCOL_FILE && !end[3]) {
+    if (route == OPEN_NATIVE_FILE && (info.kind != HANDLE_KIND_NATIVE || info.transport)) {
+      status = CALL_BAD_OPERATION;
+    } else if (route == OPEN_METADATA) {
+      status = resource_result_adopt(target, result);
+      if (status == CALL_OK) {
+        target = HANDLE_INVALID;
+      }
+    } else if (flags & PROVIDER_OPEN_EXCLUSIVE) {
+      status = CALL_ALREADY_EXISTS;
+    } else {
+      status = resource_open_held(target, "", intent, flags & ~PROVIDER_OPEN_CREATE, 0, result);
+    }
+  } else if (status == CALL_OK) {
+    status = CALL_BAD_OPERATION;
   }
-  return open_directory(context->directories, context->count, path, intent, flags,
-      deadline_ns, result);
+  if (target != HANDLE_INVALID) {
+    handle_close(target);
+  }
+  return status;
+}
+
+enum call_status resource_open_path(const struct path_context *context, const char *path,
+    uint64_t intent, uint64_t flags, uint64_t deadline_ns,
+    struct resource_result *result)
+{
+  return open_path(context, path, intent, flags, deadline_ns, OPEN_RESOURCE, result);
+}
+
+enum call_status resource_open_native_file_path(const struct path_context *context,
+    const char *path, uint64_t intent, uint64_t flags, struct resource_result *result)
+{
+  return open_path(context, path, intent, flags, 0, OPEN_NATIVE_FILE, result);
+}
+
+enum call_status resource_open_metadata_path(const struct path_context *context,
+    const char *path, struct resource_result *result)
+{
+  return open_path(context, path, PROVIDER_INTENT_READ, 0, 0, OPEN_METADATA, result);
 }

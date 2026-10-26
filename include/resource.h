@@ -52,6 +52,21 @@ enum call_status resource_open_path(const struct path_context *context, const ch
     uint64_t intent, uint64_t flags, uint64_t deadline_ns,
     struct resource_result *result);
 
+/* Libc FILE admission: same captured native traversal and resource flags, but
+ * reject every exported/non-FILE held target before any OPEN or mutation.
+ * A held native FILE already exists: CREATE is ignored and EXCLUSIVE fails.
+ * Ownership follows resource_open_path(); no provider call is issued. */
+enum call_status resource_open_native_file_path(const struct path_context *context,
+    const char *path, uint64_t intent, uint64_t flags, struct resource_result *result);
+
+/* Metadata admission, without mutation: retain all delegated directory rights
+ * and obtainable child FILE READ/WRITE rights in one captured traversal.
+ * Held FILE rights are preserved. A provider with OPEN_WRITE is unsupported
+ * before OPEN; a provider without it may supply a READ result with its actual
+ * received FILE rights. Success owns result as above; outcomes remain fallible. */
+enum call_status resource_open_metadata_path(const struct path_context *context,
+    const char *path, struct resource_result *result);
+
 #ifdef __cplusplus
 }
 #endif

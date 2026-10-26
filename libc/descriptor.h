@@ -27,6 +27,8 @@ void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream
     struct pyxis_stdio_binding binding, uint64_t identity);
 /* A NULL stream creates an entry without a FILE association. */
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream);
+/* Native FILE admission occurs in the captured route before mutable OPEN work. */
+int descriptor_open_native_file(const char *path, const struct descriptor_mode *mode);
 /* Reserve before exclusive creation, remove the name through the held parent,
  * then publish the FILE association. Parent has CREATE/REMOVE and file rights. */
 int descriptor_tmpfile(FILE *stream, handle_t parent);

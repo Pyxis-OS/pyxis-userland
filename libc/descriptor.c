@@ -18,6 +18,7 @@
 #include <output.h>
 #include <path.h>
 #include <pyxis/descriptor.h>
+#include <pyxis/file.h>
 #include <pyxis/terminal.h>
 #include <wait.h>
 #include <startup.h>
@@ -351,7 +352,7 @@ static enum call_status open_typed_path(const struct path_context *context,
 }
 
 static int open_common(const char *path, const struct descriptor_mode *mode, FILE *stream,
-    struct pyxis_open_result *failure)
+    struct pyxis_open_result *failure, bool native_file)
 {
   int descriptor = reserve();
   if (descriptor < 0) {
@@ -379,7 +380,9 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
           (mode->truncate ? PROVIDER_OPEN_TRUNCATE : 0) |
           (mode->append ? PROVIDER_OPEN_APPEND : 0) |
           (mode->exclusive ? PROVIDER_OPEN_EXCLUSIVE : 0);
-      status = open_typed_path(&working.context, path, intent, flags, &opened);
+      status = native_file ?
+          resource_open_native_file_path(&working.context, path, intent, flags, &opened) :
+          open_typed_path(&working.context, path, intent, flags, &opened);
     }
     pyxis_working_snapshot_close(&working);
   }
@@ -506,12 +509,17 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
 int descriptor_open_result(const char *path, const struct descriptor_mode *mode,
     FILE *stream, struct pyxis_open_result *failure)
 {
-  return open_common(path, mode, stream, failure);
+  return open_common(path, mode, stream, failure, false);
 }
 
 int descriptor_open(const char *path, const struct descriptor_mode *mode, FILE *stream)
 {
   return descriptor_open_result(path, mode, stream, NULL);
+}
+
+int descriptor_open_native_file(const char *path, const struct descriptor_mode *mode)
+{
+  return open_common(path, mode, NULL, NULL, true);
 }
 
 int descriptor_tmpfile(FILE *stream, handle_t parent)
@@ -2142,6 +2150,34 @@ int descriptor_stat(int descriptor, struct stat *metadata)
   int error = errno;
   descriptor_drop(object);
   errno = error;
+  return result;
+}
+
+int pyxis_file_metadata(int descriptor, struct stat *metadata, uint64_t *rights)
+{
+  if (!metadata || !rights) {
+    return fail(EINVAL);
+  }
+  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
+      descriptor_hold(descriptor);
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  struct stat value;
+  struct handle_info info;
+  int result = object->kind != DESCRIPTOR_FILE ? fail(ENOTSUP) :
+      stat_locked(object, &value);
+  if (!result) {
+    enum call_status status = handle_query(object->handle, &info);
+    if (status != CALL_OK) {
+      result = fail(libc_call_errno(status));
+    }
+  }
+  unlock_object(object_guard(object, false));
+  if (!result) {
+    *metadata = value;
+    *rights = info.rights;
+  }
   return result;
 }
 
