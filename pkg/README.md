@@ -9,6 +9,7 @@ pkg status
 pkg list [--available]
 pkg check [REPO/]ID[@VERSION]
 pkg [--timeout SECONDS] [--yes] install [REPO/]ID[@VERSION]...
+pkg [--timeout SECONDS] [--yes] update [ID...]
 pkg remove ID...
 pkg verify
 pkg reindex
@@ -23,6 +24,19 @@ Repository names follow the package ID rules. `REPO/ID` installs from one
 repository; a plain ID offered by several gives a numbered choice on a console
 and is refused elsewhere, listing the `REPO/ID` spellings. The review shows
 which repository each fetched package comes from.
+
+`pkg update` selects the current build of every installed package from its
+recorded source. `pkg update ID...` selects only those installed IDs and any
+dependencies their new manifests require; the whole resulting set is checked.
+A source is a repository name bound to its configured URL and signed/unsigned
+policy. Changing that identity requires an explicit console choice. Legacy set
+members with no source adopt a sole compatible offering, shown as
+`origin: NAME (only source)` in the review. Several possible sources are
+presented in groups for one explicit choice; `--yes` never chooses one.
+Unusable selected builds are proposed removals, each requiring separate console
+approval, even with `--yes`. An unavailable dependency refuses without changing
+the active set. If versions and origins are already current, update reports
+`already up to date` and creates no new set.
 
 Repository reads fetch `current`, then its immutable `index/N.lua`. Signed
 repositories also fetch the index signature and signer certificate, verified

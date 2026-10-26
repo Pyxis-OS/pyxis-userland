@@ -58,6 +58,8 @@ struct client {
   handle_t passthrough;
   struct pkg_fetch_authority fetch;
   struct pkg_repositories repositories;
+  /* Non-NULL only while resolving a set for a future release. */
+  const struct pkg_entry *target_release;
   struct offered_package *offered;
   size_t offered_count;
   /* The offers this operation fetches, for the review's origins. */
@@ -111,19 +113,27 @@ static bool abi_check(const char *id, const char *version, const char *kind,
     return true;
   }
   const struct package_provided_abi *provided = provided_abi();
+  bool supported = false;
+  if (client.target_release) {
+    for (size_t i = 0; i < client.target_release->provides_count; ++i) {
+      supported |= !strcmp(abi, client.target_release->provides[i]);
+    }
+  } else {
+    supported = client.provided_readable && package_abi_provided(provided, abi);
+  }
   char remedy[2 * PACKAGE_ID_MAX + 80] = "";
   if (installed) {
     snprintf(remedy, sizeof(remedy),
         "; pkg install %s takes a build for this system, pkg remove %s drops it", id, id);
   }
-  if (!client.provided_readable) {
+  if (!client.target_release && !client.provided_readable) {
     snprintf(client.message, sizeof(client.message),
         "%s %s needs an ABI check, but the running system's ABI is unreadable (%s)",
         id, version, PACKAGE_OS_RELEASE);
-  } else if (!package_abi_provided(provided, abi)) {
+  } else if (!supported) {
     snprintf(client.message, sizeof(client.message),
-        "%s %s needs ABI %s; this system provides %s%s", id, version, abi, provided->text,
-        remedy);
+        "%s %s needs ABI %s; the target provides %s%s", id, version, abi,
+        client.target_release ? client.target_release->identity.version : provided->text, remedy);
   } else {
     return true;
   }
@@ -220,6 +230,33 @@ static size_t find_package(const struct pkg_selection *selection, const char *id
   return SIZE_MAX;
 }
 
+/* A source name is not durable provenance: repository remove/add may reuse it
+ * for another URL or trust policy. Hash the complete configured identity. */
+static bool source_fingerprint(const struct pkg_repository *repository, char result[65])
+{
+  char source[PKG_BASE_URL_MAX + 32];
+  int length = snprintf(source, sizeof(source), "pkg-origin-v1\n%s\n%s\n", repository->url,
+      repository->unsigned_index ? "unsigned" : "signed");
+  return length > 0 && (size_t)length < sizeof(source) &&
+      pkg_sha256_text(source, (size_t)length, result);
+}
+
+static bool source_set(struct pkg_selection *selection, size_t index, size_t repository)
+{
+  struct pkg_origin *origin = &selection->origins[index];
+  strcpy(origin->name, client.repositories.entries[repository].name);
+  return source_fingerprint(&client.repositories.entries[repository], origin->fingerprint) ||
+      fail("cannot fingerprint repository identity");
+}
+
+static bool source_matches(const struct pkg_origin *origin, size_t repository)
+{
+  char fingerprint[65];
+  return source_fingerprint(&client.repositories.entries[repository], fingerprint) &&
+      !strcmp(origin->name, client.repositories.entries[repository].name) &&
+      !strcmp(origin->fingerprint, fingerprint);
+}
+
 /* A dependency without a version (empty) keeps whatever version the selection
  * holds; when absent, its version is chosen when it is fetched. */
 static bool select_version(struct pkg_selection *selection,
@@ -234,6 +271,9 @@ static bool select_version(struct pkg_selection *selection,
         strcmp(selection->entries[index].version, identity->version)) {
       return fail("incompatible exact dependencies in the proposed set");
     }
+    if (strcmp(selection->entries[index].version, identity->version)) {
+      selection->origins[index] = (struct pkg_origin){0};
+    }
     selection->entries[index] = *identity;
     return true;
   }
@@ -243,11 +283,19 @@ static bool select_version(struct pkg_selection *selection,
   if (selection->count == selection->capacity) {
     size_t capacity = selection->capacity ? selection->capacity * 2 : 8;
     if (capacity > PKG_SELECTION_MAX) capacity = PKG_SELECTION_MAX;
-    struct pkg_identity *entries = realloc(selection->entries, capacity * sizeof(*entries));
-    if (!entries) {
+    struct pkg_identity *entries = calloc(capacity, sizeof(*entries));
+    struct pkg_origin *origins = calloc(capacity, sizeof(*origins));
+    if (!entries || !origins) {
+      free(entries);
+      free(origins);
       return fail("cannot grow package selection");
     }
+    memcpy(entries, selection->entries, selection->count * sizeof(*entries));
+    memcpy(origins, selection->origins, selection->count * sizeof(*origins));
+    free(selection->entries);
+    free(selection->origins);
     selection->entries = entries;
+    selection->origins = origins;
     selection->capacity = capacity;
   }
   selection->entries[selection->count++] = *identity;
@@ -535,8 +583,15 @@ static bool load_repositories(void)
       if (pkg_kind_release(entries[i].kind)) {
         continue;
       }
-      if (pkg_kind_bound(entries[i].kind) && (!client.provided_readable ||
-          !package_abi_provided(provided, entries[i].abi))) {
+      bool supported = false;
+      if (client.target_release) {
+        for (size_t p = 0; p < client.target_release->provides_count; ++p) {
+          supported |= !strcmp(entries[i].abi, client.target_release->provides[p]);
+        }
+      } else {
+        supported = client.provided_readable && package_abi_provided(provided, entries[i].abi);
+      }
+      if (pkg_kind_bound(entries[i].kind) && !supported) {
         struct hidden_build *hidden = realloc(client.hidden,
             (client.hidden_count + 1) * sizeof(*hidden));
         if (!hidden) {
@@ -972,7 +1027,18 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
     if (present) handle_close(existing);
     client.reason = NULL;
     if (explicit_request) {
-      ok = install_version(explicit_request, &manifest);
+      ok = install_version(explicit_request, &manifest) &&
+          source_set(selection, i, explicit_request->repository);
+    } else if (present && i >= initial_count) {
+      const struct pkg_identity *wanted = &selection->entries[i];
+      const struct offered_package *entry = NULL;
+      ok = resolve(wanted->id, wanted->version[0] ? wanted->version : NULL,
+          ANY_REPOSITORY, true, &entry);
+      if (ok && !entry) ok = fail("stored dependency has no configured repository source");
+      if (ok) {
+        selection->entries[i] = entry->entry.identity;
+        ok = install_version(entry, &manifest) && source_set(selection, i, entry->repository);
+      }
     } else if (present) {
       /* A stored tree is immutable. One carried over is trusted by its
        * manifest; a dependency this set adds is hashed in place, not fetched. */
@@ -991,7 +1057,7 @@ static bool prepare_install(struct pkg_selection *selection, int argc, char **ar
       }
       if (ok) {
         selection->entries[i] = entry->entry.identity;
-        ok = install_version(entry, &manifest);
+        ok = install_version(entry, &manifest) && source_set(selection, i, entry->repository);
       }
     }
     for (size_t d = 0; ok && d < manifest.dependency_count; ++d) {
@@ -1012,11 +1078,218 @@ static bool prepare_remove(struct pkg_selection *selection, int argc, char **arg
     if (index == SIZE_MAX) return fail("package to remove is not installed");
     memmove(selection->entries + index, selection->entries + index + 1,
         (selection->count - index - 1) * sizeof(*selection->entries));
+    memmove(selection->origins + index, selection->origins + index + 1,
+        (selection->count - index - 1) * sizeof(*selection->origins));
     --selection->count;
   }
   /* Every remaining member is carried over from the current set. */
   return stale_check(selection, NULL, 0, "remove", argc, argv) &&
       verify_selection(selection, selection);
+}
+
+struct update_work {
+  const struct offered_package *chosen[PKG_SELECTION_MAX];
+  bool processed[PKG_SELECTION_MAX];
+  bool forced[PKG_SELECTION_MAX];
+  bool selected[PKG_SELECTION_MAX];
+  bool removed[PKG_SELECTION_MAX];
+  size_t source[PKG_SELECTION_MAX];
+  uint16_t choices[PKG_SELECTION_MAX];
+};
+
+/* The legacy set has no source. A sole offering can be adopted in the full
+ * review; several offerings require an explicit console choice. Entries with
+ * a recorded but changed source always need an explicit rebind. */
+static bool update_sources(struct pkg_selection *selection, struct update_work *work)
+{
+  for (size_t i = 0; i < selection->count; ++i) {
+    work->source[i] = ANY_REPOSITORY;
+    if (!work->selected[i]) continue;
+    const struct pkg_origin *old = &selection->origins[i];
+    for (size_t r = 0; old->name[0] && r < client.repositories.count; ++r) {
+      if (source_matches(old, r)) work->source[i] = r;
+    }
+    if (work->source[i] != ANY_REPOSITORY) continue;
+    uint16_t mask = 0;
+    for (size_t r = 0; r < client.repositories.count; ++r) {
+      if (offering(selection->entries[i].id, NULL, r)) mask |= UINT16_C(1) << r;
+    }
+    if (!mask) {
+      if (old->name[0]) {
+        snprintf(client.message, sizeof(client.message),
+            "origin %s for %s is unavailable or changed; cannot infer a replacement",
+            old->name, selection->entries[i].id);
+        return fail(client.message);
+      }
+      work->removed[i] = true;
+      continue;
+    }
+    if (!old->name[0] && (mask & (mask - 1)) == 0) {
+      for (size_t r = 0; r < client.repositories.count; ++r) {
+        if (mask & (UINT16_C(1) << r)) {
+          work->source[i] = r;
+          printf("pkg: origin: %s (only source) for %s\n",
+              client.repositories.entries[r].name, selection->entries[i].id);
+        }
+      }
+    } else {
+      work->choices[i] = mask;
+    }
+  }
+  for (size_t i = 0; i < selection->count; ++i) {
+    uint16_t mask = work->choices[i];
+    if (!mask) continue;
+    if (client.yes || client.terminal.input == HANDLE_INVALID ||
+        client.terminal.output == HANDLE_INVALID) {
+      return fail("ambiguous or changed package origins need an interactive source choice; --yes cannot choose");
+    }
+    printf("pkg: choose one repository for this origin group:");
+    for (size_t j = i; j < selection->count; ++j) {
+      if (work->choices[j] == mask) printf(" %s", selection->entries[j].id);
+    }
+    putchar('\n');
+    for (size_t r = 0; r < client.repositories.count; ++r) {
+      if (mask & (UINT16_C(1) << r)) {
+        printf("  %zu  %s (%s)\n", r + 1, client.repositories.entries[r].name,
+            client.repositories.entries[r].url);
+      }
+    }
+    char line[16], prompt[48];
+    snprintf(prompt, sizeof(prompt), "Choose repository 1-%zu [none]: ",
+        client.repositories.count);
+    struct term_line_result result = term_read_line(&client.terminal, prompt, line, sizeof(line));
+    char *end = line;
+    unsigned long choice = result.status == TERM_LINE_OK && !result.limit_reached ?
+        strtoul(line, &end, 10) : 0;
+    if (end == line || *end || choice < 1 || choice > client.repositories.count ||
+        !(mask & (UINT16_C(1) << (choice - 1)))) {
+      return fail("origin choice cancelled; active set unchanged");
+    }
+    for (size_t j = i; j < selection->count; ++j) {
+      if (work->choices[j] == mask) {
+        work->source[j] = choice - 1;
+        work->choices[j] = 0;
+      }
+    }
+  }
+  return true;
+}
+
+static bool update_dependency(struct pkg_selection *selection, struct update_work *work,
+    const struct pkg_identity *dependency)
+{
+  size_t index = find_package(selection, dependency->id);
+  if (index != SIZE_MAX && (!dependency->version[0] ||
+      !strcmp(selection->entries[index].version, dependency->version))) return true;
+  if (index != SIZE_MAX && work->forced[index]) {
+    return fail("incompatible exact dependencies in the proposed set");
+  }
+  size_t source = ANY_REPOSITORY;
+  if (index != SIZE_MAX && selection->origins[index].name[0]) {
+    for (size_t r = 0; r < client.repositories.count; ++r) {
+      if (source_matches(&selection->origins[index], r)) source = r;
+    }
+    if (source == ANY_REPOSITORY) {
+      return fail("a required dependency's repository origin changed; review its source first");
+    }
+  }
+  const struct offered_package *offer = NULL;
+  if (!resolve(dependency->id, dependency->version[0] ? dependency->version : NULL,
+        source, true, &offer)) return false;
+  if (!offer) {
+    snprintf(client.message, sizeof(client.message),
+        "required dependency %s%s%s is unavailable for the target ABI",
+        dependency->id, dependency->version[0] ? "@" : "", dependency->version);
+    return fail(client.message);
+  }
+  if (index == SIZE_MAX) {
+    if (!select_version(selection, &offer->entry.identity, true)) return false;
+    index = selection->count - 1;
+  } else {
+    selection->entries[index] = offer->entry.identity;
+  }
+  if (!source_set(selection, index, offer->repository)) return false;
+  work->chosen[index] = offer;
+  work->processed[index] = false;
+  work->forced[index] = true;
+  return true;
+}
+
+/* Resolve all installed members and dependency changes before publishing any
+ * set. RELEASE, when supplied by a later upgrade task, selects its ABI list. */
+static bool prepare_update(struct pkg_selection *selection, int argc, char **argv,
+    const struct pkg_entry *release)
+{
+  client.target_release = release;
+  if (!argc && !selection->count) {
+    client.target_release = NULL;
+    return true;
+  }
+  struct update_work *work = calloc(1, sizeof(*work));
+  if (!work) return fail("cannot allocate package update plan");
+  bool ok = load_repositories();
+  for (int a = 0; ok && a < argc; ++a) {
+    if (!package_id_valid(argv[a])) {
+      ok = fail("pkg update accepts installed package IDs only");
+      break;
+    }
+    size_t index = find_package(selection, argv[a]);
+    if (index == SIZE_MAX || work->selected[index]) {
+      ok = fail("pkg update names an absent or duplicate installed package");
+      break;
+    }
+    work->selected[index] = true;
+  }
+  if (!argc) {
+    for (size_t i = 0; i < selection->count; ++i) work->selected[i] = true;
+  }
+  ok = ok && update_sources(selection, work);
+  size_t kept = 0;
+  for (size_t i = 0; ok && i < selection->count; ++i) {
+    const struct offered_package *offer = NULL;
+    if (work->selected[i] && !work->removed[i]) {
+      offer = offering(selection->entries[i].id, NULL, work->source[i]);
+      if (!offer) work->removed[i] = true;
+    }
+    if (work->removed[i]) continue;
+    struct pkg_identity old = selection->entries[i];
+    struct pkg_origin old_origin = selection->origins[i];
+    if (offer) {
+      selection->entries[i] = offer->entry.identity;
+      ok = source_set(selection, i, offer->repository);
+    }
+    if (!ok) break;
+    if (offer && (strcmp(old.version, selection->entries[i].version) ||
+          strcmp(old_origin.name, selection->origins[i].name) ||
+          strcmp(old_origin.fingerprint, selection->origins[i].fingerprint))) {
+      work->chosen[kept] = offer;
+    }
+    selection->entries[kept] = selection->entries[i];
+    selection->origins[kept] = selection->origins[i];
+    ++kept;
+  }
+  if (ok) selection->count = kept;
+  for (size_t done = 0; ok && done < selection->count;) {
+    size_t index = 0;
+    while (index < selection->count && work->processed[index]) ++index;
+    if (index == selection->count) break;
+    struct pkg_manifest manifest = {0};
+    ok = work->chosen[index] ? install_version(work->chosen[index], &manifest) :
+        trust_version(&selection->entries[index], &manifest);
+    if (!ok) break;
+    work->processed[index] = true;
+    ++done;
+    for (size_t d = 0; ok && d < manifest.dependency_count; ++d) {
+      ok = update_dependency(selection, work, &manifest.dependencies[d]);
+    }
+    pkg_manifest_free(&manifest);
+    done = 0;
+    for (size_t i = 0; i < selection->count; ++i) done += work->processed[i];
+  }
+  ok = ok && verify_selection(selection, NULL);
+  free(work);
+  client.target_release = NULL;
+  return ok;
 }
 
 /* The repository IDENTITY was fetched from in this operation, if any. */
@@ -1031,21 +1304,57 @@ static const char *origin(const struct pkg_identity *identity)
   return NULL;
 }
 
-static bool review(const struct pkg_selection *before, const struct pkg_selection *after)
+static bool same_selection(const struct pkg_selection *before, const struct pkg_selection *after)
+{
+  if (before->count != after->count) return false;
+  for (size_t i = 0; i < before->count; ++i) {
+    if (strcmp(before->entries[i].id, after->entries[i].id) ||
+        strcmp(before->entries[i].version, after->entries[i].version) ||
+        strcmp(before->origins[i].name, after->origins[i].name) ||
+        strcmp(before->origins[i].fingerprint, after->origins[i].fingerprint)) return false;
+  }
+  return true;
+}
+
+static bool review(const struct pkg_selection *before, const struct pkg_selection *after,
+    bool proposed_removals)
 {
   puts("Proposed package set (new launches only):");
   for (size_t i = 0; i < after->count; ++i) {
     size_t old = find_package(before, after->entries[i].id);
-    if (old == SIZE_MAX || strcmp(before->entries[old].version, after->entries[i].version)) {
-      const char *name = origin(&after->entries[i]);
-      printf("  %s %s@%s%s%s%s\n", old == SIZE_MAX ? "add" : "select",
-          after->entries[i].id, after->entries[i].version,
-          name ? " (" : "", name ? name : "", name ? ")" : "");
+    const struct pkg_origin *source = &after->origins[i];
+    bool changed = old == SIZE_MAX || strcmp(before->entries[old].version,
+        after->entries[i].version);
+    bool source_changed = old != SIZE_MAX &&
+        (strcmp(before->origins[old].name, source->name) ||
+         strcmp(before->origins[old].fingerprint, source->fingerprint));
+    if (changed || source_changed) {
+      const char *name = source->name[0] ? source->name : origin(&after->entries[i]);
+      printf("  %s %s@%s%s%s%s\n", changed ? (old == SIZE_MAX ? "add" : "select") : "origin",
+          after->entries[i].id, after->entries[i].version, name ? " (" : "",
+          name ? name : "", name ? ")" : "");
     }
   }
   for (size_t i = 0; i < before->count; ++i) {
     if (find_package(after, before->entries[i].id) == SIZE_MAX) {
       printf("  remove %s@%s\n", before->entries[i].id, before->entries[i].version);
+    }
+  }
+  if (proposed_removals) {
+    for (size_t i = 0; i < before->count; ++i) {
+      if (find_package(after, before->entries[i].id) != SIZE_MAX) continue;
+      if (client.yes || client.terminal.input == HANDLE_INVALID ||
+          client.terminal.output == HANDLE_INVALID) {
+        return fail("proposed removals need individual console approval; --yes cannot approve them");
+      }
+      char prompt[2 * PACKAGE_ID_MAX + PACKAGE_VERSION_MAX + 48], line[16];
+      snprintf(prompt, sizeof(prompt), "Remove %s@%s? [y/N] ", before->entries[i].id,
+          before->entries[i].version);
+      struct term_line_result result = term_read_line(&client.terminal, prompt, line, sizeof(line));
+      if (result.status != TERM_LINE_OK || result.limit_reached ||
+          (strcmp(line, "y") && strcmp(line, "Y"))) {
+        return fail("proposed removal refused; active set unchanged");
+      }
     }
   }
   if (client.yes) {
@@ -1137,6 +1446,8 @@ static bool mutate(const char *command, int argc, char **argv)
   struct pkg_selection before = {0}, after = {0};
   bool current_valid = pkg_selection_load(client.packages, &before, &client.reason);
   bool reindex = !strcmp(command, "reindex");
+  bool updating = !strcmp(command, "update");
+  bool noop = false;
   bool ok = current_valid;
   struct pkg_projection projection = {0};
   struct pkg_sdk sdk = {0};
@@ -1150,28 +1461,35 @@ static bool mutate(const char *command, int argc, char **argv)
     ok = pkg_selection_load(client.packages, &after, &client.reason);
     if (ok && !strcmp(command, "install")) {
       ok = prepare_install(&after, argc, argv);
+    } else if (ok && updating) {
+      ok = prepare_update(&after, argc, argv, NULL);
     } else if (ok) {
       ok = prepare_remove(&after, argc, argv);
     }
   }
-  if (ok && !reindex) {
+  if (ok && updating && same_selection(&before, &after)) {
+    puts("pkg: already up to date");
+    noop = true;
+  }
+  if (ok && !reindex && !noop) {
     ok = pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
         pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
   }
-  if (ok && !reindex) {
-    ok = review(&before, &after);
+  if (ok && !reindex && !noop) {
+    ok = review(&before, &after, updating);
     if (!ok && !client.reason) client.reason = "change cancelled";
   }
-  if (ok && !reindex && console_passthrough(client.terminal.input, &client.passthrough) != CALL_OK) {
+  if (ok && !reindex && !noop &&
+      console_passthrough(client.terminal.input, &client.passthrough) != CALL_OK) {
     ok = fail("cannot guard the confirmed set switch");
   }
-  if (ok && !reindex) {
+  if (ok && !reindex && !noop) {
     ok = pkg_publish(client.packages, &after, &projection, &sdk, &uncertain,
         &client.reason);
   }
   /* Root records are the set's packages with files. Say where a newly
    * installed one is readable. */
-  for (size_t i = 0; ok && !reindex && i < projection.roots; ++i) {
+  for (size_t i = 0; ok && !reindex && !noop && i < projection.roots; ++i) {
     const struct package_command_record *root = &projection.records[projection.commands + i];
     if (find_package(&before, root->id) == SIZE_MAX) {
       printf("pkg: %s is read as pkg://%s in spaces with a pkg root\n", root->id, root->id);
@@ -1611,7 +1929,7 @@ static bool upgrade(const char *version)
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | update [ID...] | remove ID... | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -1656,9 +1974,11 @@ int main(int argc, char **argv)
       !strcmp(arguments[0], "remove") ? count != 2 : true))) {
     return usage();
   }
-  bool mutation = !strcmp(command, "install") || !strcmp(command, "remove") ||
+  bool mutation = !strcmp(command, "install") || !strcmp(command, "update") ||
+      !strcmp(command, "remove") ||
       !strcmp(command, "reindex") || !strcmp(command, "unlock");
   if (!repository && ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
+      !strcmp(command, "update") ? false :
       !strcmp(command, "check") ? count != 1 :
       !strcmp(command, "upgrade") ? count > 1 :
       !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {

@@ -414,7 +414,8 @@ static enum call_status load_record(handle_t packages, int64_t requested,
   }
 
   static const char *const set_keys[] = {"packages"};
-  static const char *const package_keys[] = {"id", "version"};
+  static const char *const legacy_keys[] = {"id", "version"};
+  static const char *const sourced_keys[] = {"id", "version", "origin", "origin_hash"};
   const struct literal_value *list = literal_field(record->root, "packages");
   bool valid = exact_fields(record->root, set_keys, 1) && list->kind == LITERAL_TABLE;
   int64_t index = 0;
@@ -422,10 +423,21 @@ static enum call_status load_record(handle_t packages, int64_t requested,
        valid && entry; entry = entry->next) {
     const struct literal_value *id = literal_field(entry->value, "id");
     const struct literal_value *version = literal_field(entry->value, "version");
+    const struct literal_value *origin = literal_field(entry->value, "origin");
+    const struct literal_value *hash = literal_field(entry->value, "origin_hash");
     valid = entry->key->kind == LITERAL_INTEGER && entry->key->as.integer == ++index &&
-        exact_fields(entry->value, package_keys, 2) && text(id) && text(version) &&
+        (origin ? exact_fields(entry->value, sourced_keys, 4) :
+            exact_fields(entry->value, legacy_keys, 2)) && text(id) && text(version) &&
         package_id_valid(id->as.string.bytes) &&
         version_valid(version->as.string.bytes, version->as.string.size);
+    if (valid && origin) {
+      valid = text(origin) && package_id_valid(origin->as.string.bytes) && text(hash) &&
+          hash->as.string.size == 64;
+      for (size_t h = 0; valid && h < 64; ++h) {
+        char byte = hash->as.string.bytes[h];
+        valid = (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f');
+      }
+    }
     for (const struct literal_entry *prior = list->as.table.entries;
          valid && prior != entry; prior = prior->next) {
       valid = strcmp(literal_field(prior->value, "id")->as.string.bytes,
@@ -506,6 +518,24 @@ bool package_set_entry(const struct package_set *set, size_t index,
   }
   *id = literal_field(entry->value, "id")->as.string.bytes;
   *version = literal_field(entry->value, "version")->as.string.bytes;
+  return true;
+}
+
+bool package_set_origin(const struct package_set *set, size_t index,
+    const char **name, const char **fingerprint)
+{
+  *name = NULL;
+  *fingerprint = NULL;
+  const struct literal_value *list = set->record ?
+      literal_field(set->record->root, "packages") : NULL;
+  const struct literal_entry *entry = list ? list->as.table.entries : NULL;
+  for (size_t i = 0; entry && i < index; ++i) entry = entry->next;
+  if (!entry) return false;
+  const struct literal_value *origin = literal_field(entry->value, "origin");
+  if (origin) {
+    *name = origin->as.string.bytes;
+    *fingerprint = literal_field(entry->value, "origin_hash")->as.string.bytes;
+  }
   return true;
 }
 

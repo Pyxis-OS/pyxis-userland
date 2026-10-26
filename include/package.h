@@ -62,6 +62,10 @@ uint64_t package_set_number(const struct package_set *set);
 /* Borrowed strings remain valid until set is freed. */
 bool package_set_entry(const struct package_set *set, size_t index,
     const char **id, const char **version);
+/* NULL outputs identify a legacy entry with no recorded source. New entries
+ * carry a repository name and a SHA-256 fingerprint of its URL and policy. */
+bool package_set_origin(const struct package_set *set, size_t index,
+    const char **name, const char **fingerprint);
 size_t package_set_count(const struct package_set *set);
 void package_set_free(struct package_set *set);
 

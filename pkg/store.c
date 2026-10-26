@@ -98,6 +98,7 @@ bool pkg_write_text(handle_t parent, const char *name, const void *bytes, size_t
 void pkg_selection_free(struct pkg_selection *selection)
 {
   free(selection->entries);
+  free(selection->origins);
   *selection = (struct pkg_selection){0};
 }
 
@@ -115,9 +116,10 @@ bool pkg_selection_load(handle_t packages,
   selection->capacity = selection->count ? selection->count : 1;
   selection->entries = calloc(selection->capacity,
       sizeof(*selection->entries));
-  if (!selection->entries) {
+  selection->origins = calloc(selection->capacity, sizeof(*selection->origins));
+  if (!selection->entries || !selection->origins) {
     package_set_free(set);
-    *selection = (struct pkg_selection){0};
+    pkg_selection_free(selection);
     *reason = "cannot allocate package selection";
     return false;
   }
@@ -126,6 +128,12 @@ bool pkg_selection_load(handle_t packages,
     package_set_entry(set, i, &id, &version);
     strcpy(selection->entries[i].id, id);
     strcpy(selection->entries[i].version, version);
+    const char *name, *fingerprint;
+    package_set_origin(set, i, &name, &fingerprint);
+    if (name) {
+      strcpy(selection->origins[i].name, name);
+      strcpy(selection->origins[i].fingerprint, fingerprint);
+    }
   }
   package_set_free(set);
   return true;
@@ -332,7 +340,19 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
   }
   uint64_t number;
   bool ok = next_number(sets, &number, reason);
-  size_t capacity = 64 + selection->count * 180;
+  size_t capacity = 64;
+  for (size_t i = 0; ok && i < selection->count; ++i) {
+    const struct pkg_identity *identity = &selection->entries[i];
+    const struct pkg_origin *origin = &selection->origins[i];
+    size_t extra = 80 + strlen(identity->id) + strlen(identity->version) +
+        strlen(origin->name) + strlen(origin->fingerprint);
+    if (extra > LITERAL_SOURCE_LIMIT - capacity) {
+      ok = false;
+      *reason = "set record exceeds metadata budget";
+    } else {
+      capacity += extra;
+    }
+  }
   char *bytes = ok && capacity <= LITERAL_SOURCE_LIMIT ? malloc(capacity) : NULL;
   if (!bytes) {
     if (ok) {
@@ -343,11 +363,34 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
   }
   size_t used = snprintf(bytes, capacity, "return { packages = {\n");
   for (size_t i = 0; i < selection->count; ++i) {
-    used += snprintf(bytes + used, capacity - used,
-        "  { id = \"%s\", version = \"%s\" },\n", selection->entries[i].id,
-        selection->entries[i].version);
+    const struct pkg_origin *origin = &selection->origins[i];
+    int count;
+    if (origin->name[0]) {
+      count = snprintf(bytes + used, capacity - used,
+          "  { id = \"%s\", version = \"%s\", origin = \"%s\", origin_hash = \"%s\" },\n",
+          selection->entries[i].id, selection->entries[i].version, origin->name,
+          origin->fingerprint);
+    } else {
+      count = snprintf(bytes + used, capacity - used,
+          "  { id = \"%s\", version = \"%s\" },\n", selection->entries[i].id,
+          selection->entries[i].version);
+    }
+    if (count < 0 || (size_t)count >= capacity - used) {
+      *reason = "set record exceeds metadata budget";
+      free(bytes);
+      handle_close(sets);
+      return false;
+    }
+    used += (size_t)count;
   }
-  used += snprintf(bytes + used, capacity - used, "} }\n");
+  int tail = snprintf(bytes + used, capacity - used, "} }\n");
+  if (tail < 0 || (size_t)tail >= capacity - used) {
+    *reason = "set record exceeds metadata budget";
+    free(bytes);
+    handle_close(sets);
+    return false;
+  }
+  used += (size_t)tail;
   struct literal *document = NULL;
   struct literal_diagnostic diagnostic;
   ok = literal_parse(bytes, used, &document, &diagnostic);

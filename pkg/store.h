@@ -11,9 +11,15 @@
     DIRECTORY_RIGHT_REMOVE | DIRECTORY_RIGHT_WRITE_FILES)
 #define PKG_LOCK ".writer-lock"
 
+struct pkg_origin {
+  char name[PACKAGE_ID_MAX + 1];
+  char fingerprint[65];
+};
+
 struct pkg_selection {
   uint64_t number;
   struct pkg_identity *entries;
+  struct pkg_origin *origins;
   size_t count, capacity;
 };
 
