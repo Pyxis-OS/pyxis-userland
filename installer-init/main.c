@@ -19,6 +19,7 @@
 #include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/power.h>
+#include <abi/uefi.h>
 #include <abi/provider.h>
 #include <abi/random.h>
 #include <abi/system_info.h>
@@ -407,16 +408,16 @@ int main(int argc, char **argv)
 {
   (void)argv;
   enum { DISKS, KERNEL, ARCHIVE, MEMORY, CLOCK, RANDOM, SYSTEM_INFO, LOG, BOOT_ROOT, DIAGNOSTICS,
-    SNAPSHOT_PARENT, POWER, LAUNCHER, INPUT, OUTPUT, ERROR, REPLAY, HTTP, HTTPS, SOURCE_COUNT };
+    SNAPSHOT_PARENT, UEFI, POWER, LAUNCHER, INPUT, OUTPUT, ERROR, REPLAY, HTTP, HTTPS, SOURCE_COUNT };
   const char *names[SOURCE_COUNT] = {"disks", "boot_kernel", "boot_archive", "memory",
     "clock", "random", "system_info", "log", "boot", "installer_diagnostics", "installer_scratch",
-    "power", "launcher", "input", "output", "stderr", "replay", "http", "https"};
+    "uefi", "power", "launcher", "input", "output", "stderr", "replay", "http", "https"};
   handle_t sources[SOURCE_COUNT] = {
     bootstrap_capability("disks"), bootstrap_capability("boot_kernel"), bootstrap_capability("boot_archive"),
     bootstrap_capability("memory"), bootstrap_capability("clock"), bootstrap_capability("random"),
     bootstrap_capability("system_info"), bootstrap_capability("log"), bootstrap_capability("boot"),
     bootstrap_capability("installer_diagnostics"), HANDLE_INVALID,
-    bootstrap_capability("power"), bootstrap_capability("launcher"),
+    bootstrap_capability("uefi"), bootstrap_capability("power"), bootstrap_capability("launcher"),
     bootstrap_capability("input"), bootstrap_capability("output"),
     HANDLE_INVALID, HANDLE_INVALID, HANDLE_INVALID, HANDLE_INVALID,
   };
@@ -613,6 +614,7 @@ choose:
     [LOG] = {sources[LOG], LOG_RIGHT_READ, 0},
     [DIAGNOSTICS] = {sources[DIAGNOSTICS], CONSOLE_RIGHT_WRITE, 0},
     [SNAPSHOT_PARENT] = {sources[SNAPSHOT_PARENT], SNAPSHOT_PARENT_RIGHTS, 0},
+    [UEFI] = {sources[UEFI], UEFI_RIGHT_BOOT_REGISTER, 0},
     [BOOT_ROOT] = {sources[BOOT_ROOT], DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
       DIRECTORY_RIGHT_READ_FILES, 0},
     [POWER] = {sources[POWER], POWER_RIGHT_RESTART, 0},
@@ -631,6 +633,7 @@ choose:
     PROFILE_CAP((uintptr_t)"system_info", SYSTEM_INFO), PROFILE_CAP((uintptr_t)"log", LOG),
     PROFILE_PRIVATE_CAP((uintptr_t)"installer_diagnostics", DIAGNOSTICS),
     PROFILE_PRIVATE_CAP((uintptr_t)"config_snapshot_parent", SNAPSHOT_PARENT),
+    PROFILE_PRIVATE_CAP((uintptr_t)"uefi", UEFI),
     PROFILE_CAP((uintptr_t)"boot", BOOT_ROOT),
     PROFILE_CAP((uintptr_t)"input", INPUT), PROFILE_CAP((uintptr_t)"output", OUTPUT),
     profile_stdio_entry(ENVIRONMENT_STDIN, replay ? REPLAY : INPUT),

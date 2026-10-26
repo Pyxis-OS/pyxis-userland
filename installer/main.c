@@ -697,12 +697,25 @@ int main(int argc, char **argv)
   if (!selected) {
     goto done;
   }
+  bool boot_first = false;
+  if (coexist && !replay && !selected_action && !explicit_consent) {
+    const char *const choices[] = {"Keep the existing firmware boot order",
+      "Put Pyxis OS first"};
+    struct term_choice_result choice = term_read_choice(&terminal,
+        "Firmware BootOrder: ", choices, 2, 0);
+    if (choice.status != TERM_LINE_OK) {
+      say("Cancelled. Nothing was written.");
+      goto done;
+    }
+    boot_first = choice.selected == 1;
+  }
   if (replay) {
     plan.record = expected;
     strcpy(plan.record.revision, revision);
   } else {
     plan.record.updating = updating;
     plan.record.coexist = coexist;
+    plan.record.boot_first = boot_first;
     plan.record.read_the_room = read_the_room;
     plan.record.esp_rebuild = !coexist && updating && selected->boot_rebuild;
     memset(plan.record.attempt, '0', 32);

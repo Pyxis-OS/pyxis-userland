@@ -2,6 +2,7 @@
 #include "boot_entry.h"
 #include "publication_snapshot.h"
 #include "esp_directory.h"
+#include "esp_transfer.h"
 
 #include <directory.h>
 #include <file.h>
@@ -43,6 +44,38 @@ static bool read_current(handle_t root, struct config_blob *menu, struct config_
 {
   return install_snapshot_file(root, BOOT_PUBLISHER_MENU_PATH, CONFIG_FILE_MAX_BYTES, menu) &&
       install_snapshot_file(root, BOOT_PUBLISHER_RECORD_PATH, CONFIG_RECORD_MAX_BYTES, record);
+}
+
+/* A pre-existing fixed loader must be byte-identical to the reviewed source.
+ * An alias or an uncertain parent is never treated as an absent owned file. */
+static bool loader_inspect(handle_t root, const struct config_file_digest *expected,
+    bool *present)
+{
+  const uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+      DIRECTORY_RIGHT_READ_FILES;
+  handle_t efi = HANDLE_INVALID, pyxis = HANDLE_INVALID, file = HANDLE_INVALID;
+  enum call_status status = install_esp_child_open(root, "EFI", DIRECTORY_KIND_DIRECTORY,
+      directory_rights, false, &efi);
+  if (status == CALL_OK) status = install_esp_child_open(efi, "pyxis",
+      DIRECTORY_KIND_DIRECTORY, directory_rights, false, &pyxis);
+  if (status == CALL_OK) status = install_esp_child_open(pyxis, "BOOTX64.EFI",
+      DIRECTORY_KIND_FILE, FILE_RIGHT_READ, false, &file);
+  *present = status == CALL_OK;
+  bool ok = status == CALL_OK || status == CALL_NOT_FOUND;
+  if (ok && *present) {
+    uint64_t size = 0, final_size = 0;
+    struct config_file_digest actual = {0};
+    struct install_source source = {.handle = file};
+    ok = file_size(file, &size) == CALL_OK && size == expected->size;
+    source.bytes = size;
+    ok = ok && install_boot_payload_digest(&source, &actual) &&
+        file_size(file, &final_size) == CALL_OK && final_size == size &&
+        actual.present && !strcmp(actual.sha256, expected->sha256);
+  }
+  if (file != HANDLE_INVALID) ok = handle_close(file) == CALL_OK && ok;
+  if (pyxis != HANDLE_INVALID) ok = handle_close(pyxis) == CALL_OK && ok;
+  if (efi != HANDLE_INVALID) ok = handle_close(efi) == CALL_OK && ok;
+  return ok;
 }
 
 void boot_publication_destroy(struct boot_publication *publication)
@@ -94,7 +127,15 @@ static uint64_t required_space(const struct boot_publication *publication, uint6
     total += blocks * cluster;
   }
   uint64_t recovery = install_recovery_space(&publication->recovery, cluster);
-  return recovery > UINT64_MAX - total ? UINT64_MAX : total + recovery;
+  if (recovery > UINT64_MAX - total) return UINT64_MAX;
+  total += recovery;
+  if (publication->loader_digest.present && !publication->loader_present) {
+    uint64_t size = publication->loader_digest.size;
+    uint64_t blocks = size / cluster + (size % cluster != 0);
+    if (blocks > (UINT64_MAX - total) / cluster) return UINT64_MAX;
+    total += blocks * cluster;
+  }
+  return total;
 }
 
 /* Binding, menu and capacity from the frozen snapshots in PUBLICATION. A
@@ -111,7 +152,7 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
   if (ok) {
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
       publication->binding.archive.path};
-    if (publication->fresh) {
+    if (publication->fresh || (!recorded && !publication->menu.digest.present)) {
       ok = install_boot_entry_render_owned(&next, input->disk_guid, input->pool_partition,
           &publication->next_menu);
     } else {
@@ -124,7 +165,7 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
       ok = install_boot_entry_plan(&publication->menu, recorded ? &inherited : NULL,
           input->disk_guid, input->pool_partition, &target,
           &publication->next_menu, &publication->activation_pending);
-      if (ok && recorded && publication->activation_pending) {
+      if (ok && publication->activation_pending) {
         fprintf(stderr, "%s: pending or ambiguous boot activation requires a fresh pending completion Review; nothing written\n",
             input->name);
         ok = false;
@@ -150,6 +191,10 @@ bool boot_publication_prepare(struct boot_publication *publication,
       install_recovery_menu_review(root, record, &publication->facts, input->pool_partition) &&
       install_recovery_prepare(root, input->boot, input->loaded_kernel, input->workspace,
           &publication->facts, &publication->recovery);
+  if (ok && input->coexist) {
+    ok = install_boot_payload_digest(&input->loader, &publication->loader_digest) &&
+        loader_inspect(root, &publication->loader_digest, &publication->loader_present);
+  }
   if (ok) {
     struct mount_state_reply state;
     ok = mount_observe(control, &state) == CALL_OK &&
@@ -184,12 +229,18 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
 
 bool boot_publication_hash(const struct boot_publication *publication, struct install_digest *digest)
 {
-  static const char domain[] = "pyxis-installed-publication-1";
-  unsigned char choices[] = {publication->activation_pending, publication->fresh};
+  static const char domain[] = "pyxis-installed-publication-2";
+  unsigned char choices[] = {publication->activation_pending, publication->fresh,
+    publication->loader_present};
+  uint8_t loader_size[8];
+  npfs_put_u64(loader_size, publication->loader_digest.size);
   bool ok = publication->prepared && install_digest_update(digest, domain, sizeof(domain)) &&
       install_digest_update(digest, choices, sizeof(choices)) &&
       blob_hash(digest, &publication->menu) && blob_hash(digest, &publication->next_menu) &&
       blob_hash(digest, &publication->record) &&
+      install_digest_update(digest, loader_size, sizeof(loader_size)) &&
+      install_digest_update(digest, publication->loader_digest.sha256,
+          sizeof(publication->loader_digest.sha256)) &&
       blob_hash(digest, &publication->recovery.manifest) && blob_hash(digest, &publication->recovery.fallback);
   return ok;
 }
@@ -244,6 +295,47 @@ static bool parent_open(handle_t root, const char *path, handle_t *output)
   return false;
 }
 
+static bool loader_publish(const struct boot_publication *publication,
+    const struct boot_publisher_input *input, const struct install_esp_view *view)
+{
+  if (!input->coexist) return true;
+  handle_t parent = HANDLE_INVALID, file = HANDLE_INVALID, ram = HANDLE_INVALID;
+  bool ok = parent_open(view->root, "EFI/pyxis", &parent);
+  enum call_status status = CALL_BAD_REQUEST;
+  if (ok) {
+    status = install_esp_child_open(parent, "BOOTX64.EFI", DIRECTORY_KIND_FILE,
+        FILE_RIGHT_READ, false, &file);
+  }
+  if (ok && publication->loader_present) {
+    bool present = false;
+    ok = status == CALL_OK && loader_inspect(view->root,
+        &publication->loader_digest, &present) && present;
+  } else if (ok) {
+    ok = status == CALL_NOT_FOUND;
+    if (ok) {
+      status = directory_create(parent, "BOOTX64.EFI", DIRECTORY_KIND_FILE,
+          FILE_RIGHT_READ | FILE_RIGHT_WRITE, &file);
+      ok = status == CALL_OK;
+    }
+    if (ok) {
+      ok = install_esp_transfer_workspace(input->workspace, &ram) == CALL_OK &&
+          install_esp_transfer_source(&input->loader, file, ram,
+              publication->loader_digest.size, publication->loader_digest.sha256,
+              INSTALL_ESP_PAYLOAD_MAX_BYTES) == CALL_OK &&
+          file_sync(file) == CALL_OK && directory_sync(parent) == CALL_OK &&
+          mount_sync(view->control) == CALL_OK;
+    }
+    if (ok) {
+      bool present = false;
+      ok = loader_inspect(view->root, &publication->loader_digest, &present) && present;
+    }
+  }
+  if (ram != HANDLE_INVALID) ok = handle_close(ram) == CALL_OK && ok;
+  if (file != HANDLE_INVALID) ok = handle_close(file) == CALL_OK && ok;
+  if (parent != HANDLE_INVALID) ok = handle_close(parent) == CALL_OK && ok;
+  return ok;
+}
+
 bool boot_publication_admit(struct boot_publication *publication,
     const struct boot_publisher_input *input, struct install_esp_view *view)
 {
@@ -263,6 +355,11 @@ bool boot_publication_admit(struct boot_publication *publication,
       config_blob_equal(&menu, &publication->menu) &&
       config_blob_equal(&record, &publication->record) &&
       install_recovery_resolved(view->root, &record);
+  if (ok && input->coexist) {
+    bool present = false;
+    ok = loader_inspect(view->root, &publication->loader_digest, &present) &&
+        present == publication->loader_present;
+  }
   if (ok) {
     struct install_recovery current_recovery = {0};
     ok = install_recovery_menu_review(view->root, &record, &facts, input->pool_partition) &&
@@ -309,7 +406,8 @@ bool boot_publication_publish(struct boot_publication *publication,
     const struct boot_publisher_input *input, const struct install_esp_view *view,
     struct config_storage_report *report)
 {
-  bool ok = install_recovery_provision(view->root, view->control, input->workspace, &publication->recovery);
+  bool ok = loader_publish(publication, input, view) &&
+      install_recovery_provision(view->root, view->control, input->workspace, &publication->recovery);
   if (!ok) {
     fprintf(stderr, "%s: static recovery verification/provision failed; no menu activation attempted; artifacts retained\n",
         input->name);
@@ -320,6 +418,7 @@ bool boot_publication_publish(struct boot_publication *publication,
     .view = {.control = view->control, .clock = input->clock},
     .expected = &publication->menu, .expected_record = &publication->record,
     .selected = &publication->next_menu, .transaction = input->attempt,
+    .stable_loader = input->coexist ? &publication->loader_digest : NULL,
     .binding = publication->binding,
     .sources = {input->kernel, input->archive,
       {.memory = (uint8_t *)input->revision_record, .bytes = strlen(input->revision_record)}}};

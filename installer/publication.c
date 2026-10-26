@@ -339,6 +339,25 @@ static bool orphan_attempt(const struct install_staged_boot *boot, handle_t revi
   return ok;
 }
 
+static bool stable_loader_matches(handle_t pyxis,
+    const struct config_file_digest *expected, struct config_storage_report *report)
+{
+  handle_t file = HANDLE_INVALID;
+  enum call_status status = install_esp_child_open(pyxis, "BOOTX64.EFI",
+      DIRECTORY_KIND_FILE, FILE_RIGHT_READ, false, &file);
+  bool ok = status == CALL_OK || fail(report, status);
+  if (ok) {
+    const struct install_source source = {.handle = file, .bytes = expected->size};
+    status = install_esp_transfer_stream(&source, HANDLE_INVALID, expected->size,
+        expected->sha256, INSTALL_ESP_PAYLOAD_MAX_BYTES);
+    ok = status == CALL_OK || fail(report, status);
+  }
+  if (file != HANDLE_INVALID && handle_close(file) != CALL_OK) {
+    ok = fail(report, CALL_BAD_HANDLE);
+  }
+  return ok;
+}
+
 bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
     const struct config_boot_binding *current, const struct config_storage_view *view,
     const struct config_target_facts *facts, uint64_t interval,
@@ -363,6 +382,12 @@ bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
     status = directory_enumerate(pyxis, &cursor, revision, sizeof(revision), &entry);
     if (status != CALL_OK) { ok = fail(report, status); break; }
     if (entry.outcome == DIRECTORY_END) break;
+    if (entry.outcome == DIRECTORY_ENTRY && entry.kind == DIRECTORY_KIND_FILE &&
+        folded_equal(revision, "BOOTX64.EFI") && boot->stable_loader) {
+      ok = stable_loader_matches(pyxis, boot->stable_loader, report);
+      cursor = entry.cursor;
+      continue;
+    }
     if (entry.outcome != DIRECTORY_ENTRY || entry.kind != DIRECTORY_KIND_DIRECTORY) {
       ok = fail(report, CALL_BAD_REQUEST); break;
     }
@@ -450,7 +475,8 @@ bool install_publication_publish(const struct install_publication_request *reque
       request->expected_record, menu_changed, report)) {
     return false;
   }
-  struct install_staged_boot staged = {.root = request->esp_root, .binding = request->binding};
+  struct install_staged_boot staged = {.root = request->esp_root,
+    .binding = request->binding, .stable_loader = request->stable_loader};
   bool ok = true;
   report->phase = CONFIG_PHASE_STAGE;
   struct install_esp_payload_request payload_request = {

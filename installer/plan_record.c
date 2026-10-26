@@ -7,7 +7,7 @@
 #define PLAN_TEXT_BYTES 2048
 #define PLAN_JOURNAL_MAX_MIB 1024
 #define PLAN_GPT_RESERVED_ATTRIBUTES UINT64_C(0x0000fffffffffff8)
-#define PLAN_HEADER "pyxis-install-plan 1"
+#define PLAN_HEADER "pyxis-install-plan 2"
 #define PLAN_END "end"
 
 struct plan_reader {
@@ -126,6 +126,7 @@ bool install_plan_record_valid(const struct install_plan_record *record)
       return false;
     }
   } else {
+    if (record->boot_first) return false;
     struct install_layout expected = {0};
     if ((record->esp_rebuild && !record->updating) ||
         !install_layout_plan(&disk, &expected) ||
@@ -297,6 +298,7 @@ bool install_plan_record_parse(FILE *input, struct install_plan_record *output)
   if (!read_line(&reader, line) || strcmp(line, PLAN_HEADER) ||
       !read_boolean(&reader, "updating", &record.updating) ||
       !read_boolean(&reader, "coexist", &record.coexist) ||
+      !read_boolean(&reader, "boot_first", &record.boot_first) ||
       !read_boolean(&reader, "esp_rebuild", &record.esp_rebuild) ||
       !read_boolean(&reader, "read_the_room", &record.read_the_room) ||
       !read_boolean(&reader, "portable", &record.portable) ||
@@ -358,7 +360,7 @@ bool install_plan_record_format(FILE *output, const struct install_plan_record *
   encode_hex((const uint8_t *)record->previous, strlen(record->previous), previous);
   char text[PLAN_TEXT_BYTES];
   int length = snprintf(text, sizeof(text), PLAN_HEADER "\n"
-      "updating %u\ncoexist %u\nesp_rebuild %u\n"
+      "updating %u\ncoexist %u\nboot_first %u\nesp_rebuild %u\n"
       "read_the_room %u\nportable %u\n"
       "block_count %llu\nblock_size %llu\njournal_mib %llu\n"
       "existing_guid %s\npool_id %s\nvolume_id %s\n"
@@ -368,6 +370,7 @@ bool install_plan_record_format(FILE *output, const struct install_plan_record *
       "revision %s\nprevious %s\nattempt %s\n"
       "source_hash %s\ntarget_hash %s\n" PLAN_END "\n",
       (unsigned)record->updating, (unsigned)record->coexist,
+      (unsigned)record->boot_first,
       (unsigned)record->esp_rebuild, (unsigned)record->read_the_room,
       (unsigned)record->portable,
       (unsigned long long)record->block_count, (unsigned long long)record->block_size,

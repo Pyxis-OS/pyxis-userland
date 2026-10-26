@@ -22,6 +22,7 @@
 #include <abi/net_config.h>
 #include <abi/pipe.h>
 #include <abi/power.h>
+#include <abi/uefi.h>
 #include <abi/console.h>
 #include <abi/wifi.h>
 #include <wifi.h>
@@ -173,6 +174,7 @@ struct authority {
   handle_t acpi_tables;
   /* Granted only to spaces that set power or remote_power. */
   handle_t power;
+  handle_t uefi; /* Boot-entry variable grant; only the Install space receives it. */
   handle_t wifi; /* Boot-only policy right is never forwarded. */
   uint64_t cpu_count;
   const char *remote_beacon;
@@ -289,6 +291,7 @@ static bool take_authority(struct authority *authority)
   authority->screen_capture = bootstrap_capability("screen_capture");
   authority->acpi_tables = bootstrap_capability("acpi_tables");
   authority->power = bootstrap_capability("power");
+  authority->uefi = bootstrap_capability("uefi");
   authority->wifi = bootstrap_capability("wifi");
   authority->input_policy = bootstrap_capability("input_policy");
   authority->loaded_kernel = bootstrap_take_capability("boot_kernel");
@@ -1041,6 +1044,7 @@ static const char *installer_sources(const struct authority *authority,
   struct pyxis_stdio_binding console = bootstrap_stdio(ENVIRONMENT_STDOUT);
   if (authority->disks == HANDLE_INVALID || authority->loaded_kernel == HANDLE_INVALID ||
       authority->loaded_archive == HANDLE_INVALID || authority->power == HANDLE_INVALID ||
+      authority->uefi == HANDLE_INVALID ||
       console.protocol != PROTOCOL_CONSOLE) {
     return "the installer capability is incomplete";
   }
@@ -1057,6 +1061,7 @@ static const char *installer_sources(const struct authority *authority,
     {"boot_kernel", {authority->loaded_kernel, FILE_RIGHT_READ, 0}},
     {"boot_archive", {authority->loaded_archive, FILE_RIGHT_READ, 0}},
     {"power", {authority->power, POWER_RIGHT_RESTART, 0}},
+    {"uefi", {authority->uefi, UEFI_RIGHT_BOOT_REGISTER, 0}},
     {"installer_diagnostics", {console.handle, CONSOLE_RIGHT_WRITE, 0}},
     {"installer_scratch", {launch->installer_scratch, TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, 0}},
   };
@@ -1222,7 +1227,7 @@ static const char *launch_capacity(const struct authority *authority,
   }
   granted += 2 + (space->package_management ? 2 : 0); /* package inspect and config sources */
   granted += space->package_upgrade ? 2 : 0; /* upgrade sources */
-  granted += space->installer ? 6 : 0; /* installer_sources */
+  granted += space->installer ? 7 : 0; /* installer_sources */
   granted += space->tcp_listen + space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
       space->multiplexer + space->remote_multiplexer + space->screenshot +
       space->power + space->remote_power;

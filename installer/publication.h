@@ -24,6 +24,7 @@ struct install_publication_request {
   const struct config_blob *selected;
   const char *transaction;
   struct config_boot_binding binding;
+  const struct config_file_digest *stable_loader; /* Coexist only. */
   struct install_source sources[INSTALL_BOOT_PAYLOADS];
 };
 
@@ -32,6 +33,7 @@ struct install_staged_boot {
   handle_t root;
   struct install_esp_payloads *payloads;
   struct config_boot_binding binding;
+  const struct config_file_digest *stable_loader;
 };
 
 bool install_publication_publish(const struct install_publication_request *request,

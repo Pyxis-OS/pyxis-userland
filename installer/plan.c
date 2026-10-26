@@ -110,7 +110,7 @@ static bool hash_choices(struct install_digest *digest, const struct install_pla
 {
   static const char domain[] = "pyxis-install-plan-choices-1";
   uint8_t flags[] = {record->updating, record->coexist, record->esp_rebuild,
-    record->read_the_room, record->portable};
+    record->read_the_room, record->portable, record->boot_first};
   uint8_t numbers[11 * 8];
   npfs_put_u64(numbers, record->block_count);
   npfs_put_u64(numbers + 8, record->block_size);
@@ -417,6 +417,10 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
       plan->record.coexist ? "coexistence" : "classic",
       (unsigned long long)plan->record.layout.esp_partition,
       (unsigned long long)plan->record.layout.pool_partition);
+  if (plan->record.coexist) {
+    fprintf(output, "Firmware Pyxis OS entry: %s in BootOrder (foreign order retained).\n",
+        plan->record.boot_first ? "move first" : "append");
+  }
   if (verbose) {
     fprintf(output, "ESP: byte %llu, length %llu; pool: byte %llu, length %llu.\n",
         (unsigned long long)plan->record.layout.esp_start,
@@ -446,6 +450,11 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
       fputs("RECOVERY: the explicitly reviewed damaged ESP will be initialized; other partitions stay.\n", output);
     } else if (!plan->record.updating) {
       fputs("Append only the reviewed pool GPT entry and required CRCs; format only that new pool.\n", output);
+    }
+    if (plan->record.coexist) {
+      fputs("Publish owned Limine at EFI/pyxis/BOOTX64.EFI and the normal/rescue menu, then\n"
+          "register Pyxis OS with UEFI after verified publication. Foreign loaders and\n"
+          "their boot order remain unchanged unless moving Pyxis first was reviewed.\n", output);
     }
     fputs("The boot record commits before the owned menu changes; unknown menu ownership\n"
         "retains the menu and reports boot activation pending. No Update formats a healthy ESP.\n", output);

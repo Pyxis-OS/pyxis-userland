@@ -18,6 +18,8 @@ struct boot_publisher_input {
   handle_t workspace, clock;
   handle_t boot, loaded_kernel; /* Recovery sources: boot tree, kernel-issued FILE. */
   struct install_source kernel, archive;
+  struct install_source loader; /* Coexist's pinned EFI/pyxis/BOOTX64.EFI. */
+  bool coexist;
   const char *revision; /* Kernel and program revision. */
   const char *attempt, *revision_record;
   const uint8_t *disk_guid; /* Menu mount.disk= of the installed pool. */
@@ -32,6 +34,8 @@ struct boot_publication {
   struct install_recovery recovery;
   struct config_target_facts facts;
   struct config_boot_binding binding;
+  struct config_file_digest loader_digest;
+  bool loader_present;
   uint64_t cluster_bytes, required_bytes, available_bytes;
   bool prepared, fresh, activation_pending;
 };

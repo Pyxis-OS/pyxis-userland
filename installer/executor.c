@@ -8,6 +8,7 @@
 #include <file.h>
 #include <handle.h>
 #include <string.h>
+#include <uefi.h>
 
 #define EXECUTION_CLEANUP_NS UINT64_C(30000000000)
 #define COEXIST_ESP_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES | \
@@ -398,11 +399,6 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
         stderr);
     return false;
   }
-  if (plan->record.updating && plan->record.coexist) {
-    fputs("installer: Coexist Update is unavailable until activation records are supported; no target write attempted\n",
-        stderr);
-    return false;
-  }
   if (!install_battery_check(bootstrap_capability("system_info"), stderr)) {
     plan->ready = false;
     return false;
@@ -539,6 +535,25 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   if (!stage_esp(plan)) {
     goto done;
   }
+  if (coexist) {
+    const struct disk_partition_selection *esp = &plan->target.esp;
+    if (esp->partition > UINT32_MAX) {
+      fputs("installer: reviewed ESP partition number exceeds UEFI device-path capacity\n", stderr);
+      goto done;
+    }
+    struct uefi_boot_register_request request = {
+      .first_lba = esp->first_block, .block_count = esp->block_count,
+      .partition_number = (uint32_t)esp->partition,
+      .flags = plan->record.boot_first ? UEFI_BOOT_FIRST : 0,
+    };
+    memcpy(request.partition_guid, esp->partition_guid, sizeof(request.partition_guid));
+    status = uefi_boot_register(bootstrap_capability("uefi"), &request);
+    if (status != CALL_OK) {
+      fprintf(stderr, "installer: Pyxis OS UEFI entry registration incomplete (status %u); "
+          "published files remain, no firmware write will be retried automatically\n", status);
+      goto done;
+    }
+  }
   cleanup_programs(plan);
   ok = true;
 
@@ -558,7 +573,8 @@ done:
 #if INSTALLER_PUBLICATION_SCRATCH
   if (install_plan_publication(plan)) {
     fputs(updating ? "updated\n" : "installed\n", stderr);
-    fputs("Boot record and owned menu activation verified.\n", stderr);
+    fputs(coexist ? "Boot record, owned menu and Pyxis OS firmware entry verified.\n" :
+        "Boot record and owned menu activation verified.\n", stderr);
   } else
 #endif
   {
