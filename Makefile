@@ -394,7 +394,7 @@ $(BUILD)/counter.pxe: $(COUNTER_OBJECT)
 
 $(BUILD)/iobench.pxe: $(IOBENCH_OBJECTS) $(UTILITY_OBJECT)
 
-$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/installer/main.o $(BUILD)/installer-init/main.o $(BUILD)/boot-init/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
+$(BUILD)/installer/plan.o $(BUILD)/installer/executor.o $(BUILD)/installer/target.o $(BUILD)/installer/esp_read.o $(BUILD)/installer/installed_publication.o $(BUILD)/installer/installed_probe.o $(BUILD)/installer/esp_view.o $(BUILD)/installer/review.o $(BUILD)/installer/packages.o $(BUILD)/installer/main.o $(BUILD)/installer-init/main.o $(BUILD)/boot-init/main.o: private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH)
 
 $(INSTALL_SELECTOR_OBJECTS): private CPPFLAGS += -DINSTALLER_PUBLICATION_SCRATCH=$(INSTALLER_PUBLICATION_SCRATCH) -I$(LUA_PREFIX)/include
 $(INSTALL_SELECTOR_OBJECTS): private CFLAGS += -ffunction-sections -fdata-sections

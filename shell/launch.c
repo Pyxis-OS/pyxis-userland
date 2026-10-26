@@ -1658,7 +1658,6 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"gamepad", has_gamepad ? shell->gamepad : HANDLE_INVALID, PROTOCOL_GAMEPAD},
       {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID, PROTOCOL_POINTER},
       {"clock", shell->clock, PROTOCOL_CLOCK},
-      {"power", shell->power, PROTOCOL_POWER},
       {"display", shell->display, PROTOCOL_DISPLAY},
       {"audio", shell->audio, PROTOCOL_AUDIO},
       {"screen_capture", shell->screen_capture, PROTOCOL_SCREEN_CAPTURE},
