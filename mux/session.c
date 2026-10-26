@@ -15,6 +15,7 @@
 #include <abi/memory.h>
 #include <abi/thread.h>
 #include <abi/keyboard.h>
+#include <abi/gamepad.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
 #include <abi/retention.h>
@@ -111,7 +112,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 30 };
+  enum { OPTIONAL_RESOURCE_COUNT = 31 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -269,6 +270,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"audio", AUDIO_RIGHT_PLAYBACK},
     /* Graphics remain a shared space layer, never a pane surface. */
     {"display", DISPLAY_RIGHT_DRAW}, {"keyboard", KEYBOARD_RIGHT_INPUT},
+    {"gamepad", GAMEPAD_RIGHT_INPUT},
     {"pointer", POINTER_RIGHT_INPUT}, {"power", POWER_RIGHTS},
     /* Store grants permit owned graphics actions, never terminal CONTROL. */
     {"clipboard_local", CLIPBOARD_RIGHTS}, {"clipboard_shared", CLIPBOARD_RIGHTS},

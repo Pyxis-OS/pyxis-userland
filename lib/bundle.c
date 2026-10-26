@@ -16,6 +16,7 @@
 #include <abi/pipe.h>
 #include <abi/thread.h>
 #include <abi/keyboard.h>
+#include <abi/gamepad.h>
 #include <abi/pointer.h>
 #include <abi/profile.h>
 #include <abi/provider.h>
@@ -83,6 +84,7 @@ static const struct grant_right grant_rights[] = {
   {"memory", "manage", PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
   {"threads", "manage", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE},
   {"keyboard", "input", PROTOCOL_KEYBOARD, KEYBOARD_RIGHT_INPUT},
+  {"gamepad", "input", PROTOCOL_GAMEPAD, GAMEPAD_RIGHT_INPUT},
   {"pointer", "input", PROTOCOL_POINTER, POINTER_RIGHT_INPUT},
   {"job_provisioner", "create", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_CREATE},
   {"job_provisioner", "remove", PROTOCOL_DIRECTORY, DIRECTORY_RIGHT_REMOVE},

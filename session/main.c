@@ -28,6 +28,7 @@
 #include <abi/wifi.h>
 #include <abi/forwarder.h>
 #include <abi/keyboard.h>
+#include <abi/gamepad.h>
 #include <abi/pointer.h>
 #include <abi/space.h>
 #include <abi/profile.h>
@@ -101,7 +102,7 @@ static int launch_session(const struct session_config *config, struct network_co
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 37 };
+  enum { OPTIONAL_RESOURCE_COUNT = 38 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -492,6 +493,13 @@ static int launch_session(const struct session_config *config, struct network_co
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"keyboard", grant_count);
     assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){keyboard, KEYBOARD_RIGHT_INPUT, 0};
+  }
+  handle_t gamepad = bootstrap_capability("gamepad");
+  if (gamepad != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"gamepad", grant_count);
+    assert(grant_count < grant_capacity);
+    grants[grant_count++] = (struct launch_grant){gamepad, GAMEPAD_RIGHT_INPUT, 0};
   }
   handle_t pointer = bootstrap_capability("pointer");
   if (pointer != HANDLE_INVALID) {

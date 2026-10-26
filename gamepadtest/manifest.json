@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "id": "org.pyxis.gamepadtest",
+  "entry": "bin/gamepadtest.pxe",
+  "commands": {"gamepadtest": "bin/gamepadtest.pxe"},
+  "resource_dirs": {},
+  "packages": ["fonts"],
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "precise", "sleep"], "required": true},
+    {"name": "display", "resource": "display", "rights": ["draw"], "required": true},
+    {"name": "keyboard", "resource": "keyboard", "rights": ["input"], "required": true},
+    {"name": "gamepad", "resource": "gamepad", "rights": ["input"], "required": true}
+  ]
+}

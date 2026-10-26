@@ -218,6 +218,7 @@ int main(int argc, char **argv)
     .random = bootstrap_capability("random"),
     .net_registry = bootstrap_capability("net_registry"),
     .keyboard = bootstrap_capability("keyboard"),
+    .gamepad = bootstrap_capability("gamepad"),
     .pointer = bootstrap_capability("pointer"),
     .space = bootstrap_capability("space"),
     .profile = bootstrap_capability("profile"),

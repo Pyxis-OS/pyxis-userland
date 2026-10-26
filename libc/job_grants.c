@@ -14,6 +14,7 @@
 #include <abi/file.h>
 #include <abi/forwarder.h>
 #include <abi/keyboard.h>
+#include <abi/gamepad.h>
 #include <abi/log.h>
 #include <abi/memory.h>
 #include <abi/mount.h>
@@ -76,6 +77,9 @@ static enum call_status validate_authority(const struct handle_info *info,
     break;
   case PROTOCOL_KEYBOARD:
     allowed_rights = KEYBOARD_RIGHT_INPUT;
+    break;
+  case PROTOCOL_GAMEPAD:
+    allowed_rights = GAMEPAD_RIGHT_INPUT;
     break;
   case PROTOCOL_POINTER:
     allowed_rights = POINTER_RIGHT_INPUT;
@@ -200,6 +204,7 @@ static bool capture_protocol_denied(uint64_t protocol)
   switch (protocol) {
   case PROTOCOL_CONSOLE:
   case PROTOCOL_KEYBOARD:
+  case PROTOCOL_GAMEPAD:
   case PROTOCOL_POINTER:
   case PROTOCOL_DISPLAY:
   case PROTOCOL_SCREEN_CAPTURE:

@@ -70,6 +70,10 @@ clang boot://share/examples/font-min.c -lfont -o font-min.pxb/app/bin/font-min.p
 Run from a local shell with display, keyboard, pointer and packages authority.
 Launching the inner `.pxe` directly does not apply the bundle's package grant.
 
+[gamepadtest](gamepadtest/README.md) is a native graphical DualSense Edge USB
+controller viewer. It uses the existing `fonts` package and declares gamepad
+input authority in its bundle.
+
 `tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
 Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping
 can split a UTF-8 branch. `--ascii` selects ASCII branches and continuation
@@ -655,11 +659,11 @@ slots, shared by response, body, control and observation facets. The provider
 follows redirects without client-side rebinding or automatic transport retry. Build the provider with
 `PICOHTTPPARSER_PREFIX=/path/to/ports-dev/picohttpparser`.
 
-Foreground pipelines preserve the first stage's console-input, keyboard and
-pointer grants. A final stage with file/pipe stdin and console stdout also receives
-named terminal input with READ alone, so pagers can read keys separately from
-content. It receives no keyboard, pointer or interrupt-arming right through this
-rule. Both ends reading the console compete for one input queue; use a file or a
+Foreground pipelines preserve the first stage's console-input, keyboard, gamepad
+and pointer grants. A final stage with file/pipe stdin and console stdout also
+receives named terminal input with READ alone, so pagers can read keys separately from
+content. It receives no keyboard, gamepad, pointer or interrupt-arming right through
+this rule. Both ends reading the console compete for one input queue; use a file or a
 producer that does not read console stdin with an interactive pager.
 
 Before truncating any redirected output, the shell checks it against every

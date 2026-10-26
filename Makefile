@@ -48,7 +48,7 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
                    $(BUILD)/mv/main.o $(BUILD)/ln/main.o $(BUILD)/tree/main.o $(BUILD)/sync/main.o $(BUILD)/date/main.o $(BUILD)/sleep/main.o $(BUILD)/ping/main.o \
                    $(BUILD)/udp-send/main.o $(BUILD)/udp-echo/main.o $(BUILD)/dig/main.o $(BUILD)/tcp/main.o \
                    $(BUILD)/ttcp/main.o \
-                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/examples/pointer-min/main.o $(BUILD)/examples/font-min/main.o $(BUILD)/session/main.o $(BUILD)/installer-init/main.o \
+                   $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/gamepadtest/main.o $(BUILD)/examples/pointer-min/main.o $(BUILD)/examples/font-min/main.o $(BUILD)/session/main.o $(BUILD)/installer-init/main.o \
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
                    $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o $(BUILD)/net/main.o $(BUILD)/wifi/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/capture.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
@@ -111,9 +111,9 @@ SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 SCREENSHOT_SAVER_OBJECTS := $(BUILD)/screenshot/saver.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: cpuclock mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
+.PHONY: cpuclock mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest gamepadtest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
 .PHONY: fat32ctl net wifi config pkg
-all: $(INSTALL_PROGRAMS) cpuclock font-min fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+all: $(INSTALL_PROGRAMS) cpuclock font-min gamepadtest fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Lua scripts for hand-run native checks, installed as boot://share/checks/.
 CHECK_SCRIPTS := console-burst.lua console-flood.lua cpu-busy.lua exit-latency.lua
@@ -131,7 +131,7 @@ install: all
 	    if [ "$$program" = shell ]; then name=init-shell; fi; \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/$$name.pxe"; \
 	  done; \
-	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/wifi.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$(BUILD)/font-min.pxb" "$(BUILD)/cpuclock.pxb" "$$staging/"; \
+	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/wifi.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$(BUILD)/font-min.pxb" "$(BUILD)/gamepadtest.pxb" "$(BUILD)/cpuclock.pxb" "$$staging/"; \
 	  install -m 644 init/development.pxs "$$staging/init"; \
 	  install -m 644 init/readonly.pxs "$$staging/init-readonly"; \
 	  install -m 644 init/services.pxs "$$staging/init-services"; \
@@ -257,6 +257,7 @@ mandelbrot: $(BUILD)/mandelbrot.pxe
 mousetest: $(BUILD)/mousetest.pxe
 pointer-min: $(BUILD)/pointer-min.pxe
 font-min: $(BUILD)/font-min.pxb/manifest.json
+gamepadtest: $(BUILD)/gamepadtest.pxb/manifest.json
 screenshot: $(BUILD)/screenshot.pxe
 screenshot-saver: $(BUILD)/screenshot-saver.pxe
 pcm: $(BUILD)/pcm.pxe
@@ -452,6 +453,15 @@ $(BUILD)/font-min.pxb/manifest.json: $(BUILD)/font-min.pxe examples/font-min/man
 
 # font-min links libfont, which is not one of the default libraries.
 $(BUILD)/font-min.pxe: $(BUILD)/examples/font-min/main.o $(FONT_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(FONT_LIBRARY) $(LDLIBS)
+
+$(BUILD)/gamepadtest.pxb/manifest.json: $(BUILD)/gamepadtest.pxe gamepadtest/manifest.json
+	@rm -rf "$(@D)"
+	@mkdir -p "$(@D)/app/bin"
+	install -m 644 $(BUILD)/gamepadtest.pxe "$(@D)/app/bin/"
+	install -m 644 gamepadtest/manifest.json "$@"
+
+$(BUILD)/gamepadtest.pxe: $(BUILD)/gamepadtest/main.o $(FONT_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(FONT_LIBRARY) $(LDLIBS)
 
 # Runtime objects and libraries come from the selected SDK.

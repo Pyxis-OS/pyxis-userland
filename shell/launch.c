@@ -30,6 +30,7 @@
 #include <abi/random.h>
 #include <abi/net_config.h>
 #include <abi/keyboard.h>
+#include <abi/gamepad.h>
 #include <abi/pointer.h>
 #include <abi/space.h>
 #include <abi/profile.h>
@@ -754,6 +755,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool device_input = named_input &&
       streams[ENVIRONMENT_STDIN].protocol == PROTOCOL_CONSOLE;
   bool has_keyboard = device_input && shell->keyboard != HANDLE_INVALID;
+  bool has_gamepad = device_input && shell->gamepad != HANDLE_INVALID;
   bool has_pointer = device_input && shell->pointer != HANDLE_INVALID;
   bool has_profile = shell->profile != HANDLE_INVALID;
   bool has_space = session && shell->space != HANDLE_INVALID;
@@ -855,7 +857,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t tcp_index = udp_beacons_index + (has_udp_beacons ? 1 : 0);
   size_t random_index = tcp_index + (has_tcp ? 1 : 0);
   size_t keyboard_index = random_index + (has_random ? 1 : 0);
-  size_t pointer_index = keyboard_index + (has_keyboard ? 1 : 0);
+  size_t gamepad_index = keyboard_index + (has_keyboard ? 1 : 0);
+  size_t pointer_index = gamepad_index + (has_gamepad ? 1 : 0);
   size_t launcher_index = pointer_index + (has_pointer ? 1 : 0);
   size_t child_launcher_index = launcher_index + (has_launcher ? 1 : 0);
   size_t interpreter_root_index = child_launcher_index + (pass_child_launcher ? 1 : 0);
@@ -973,6 +976,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   if (has_keyboard) {
     grants[keyboard_index] = (struct launch_grant){shell->keyboard, KEYBOARD_RIGHT_INPUT, 0};
+  }
+  if (has_gamepad) {
+    grants[gamepad_index] = (struct launch_grant){shell->gamepad, GAMEPAD_RIGHT_INPUT, 0};
   }
   if (has_pointer) {
     grants[pointer_index] = (struct launch_grant){shell->pointer, POINTER_RIGHT_INPUT, 0};
@@ -1165,6 +1171,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (has_keyboard) {
     assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"keyboard", keyboard_index);
+  }
+  if (has_gamepad) {
+    assert(resource_count < resource_capacity);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"gamepad", gamepad_index);
   }
   if (has_pointer) {
     assert(resource_count < resource_capacity);
@@ -1645,6 +1655,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"memory", shell->memory, PROTOCOL_MEMORY},
       {"threads", shell->threads, PROTOCOL_THREAD_SERVICE},
       {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID, PROTOCOL_KEYBOARD},
+      {"gamepad", has_gamepad ? shell->gamepad : HANDLE_INVALID, PROTOCOL_GAMEPAD},
       {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID, PROTOCOL_POINTER},
       {"clock", shell->clock, PROTOCOL_CLOCK},
       {"display", shell->display, PROTOCOL_DISPLAY},
