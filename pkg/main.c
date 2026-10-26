@@ -1385,8 +1385,8 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
   }
   for (size_t r = 0; r < client.repositories.count; ++r) {
     if (adopted[r]) {
-      printf("  %zu packages adopted from %s (only source)\n", adopted[r],
-          client.repositories.entries[r].name);
+      printf("  %zu %s adopted from %s (only source)\n", adopted[r],
+          adopted[r] == 1 ? "package" : "packages", client.repositories.entries[r].name);
     }
   }
   for (size_t i = 0; i < before->count; ++i) {
