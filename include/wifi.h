@@ -8,6 +8,9 @@
 /* READ observes only; SCAN starts an explicit operation. The operation is local
  * to its owning process; closing requests cancellation and asynchronous drain. */
 enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status);
+/* Requires the complete extended WIFI_STATUS reply. CALL_OK validates base and
+ * PHY facts; on failure the output is zero. No partial PHY snapshot is valid. */
+enum call_status wifi_status_full(handle_t wifi, struct wifi_status_full_reply *status);
 enum call_status wifi_scan_start(handle_t wifi, uint32_t channels,
     uint64_t deadline_ns, handle_t *operation);
 enum call_status wifi_scan_status(handle_t operation,

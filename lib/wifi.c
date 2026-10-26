@@ -161,6 +161,21 @@ static bool phy_facts_valid(const struct wifi_phy_facts *phy, uint32_t radio_kin
   return true;
 }
 
+static bool status_reply_valid(const struct wifi_status_reply *reply)
+{
+  if (!memchr(reply->detail, 0, sizeof(reply->detail)) || !boot_facts_valid(&reply->boot) ||
+      !radio_inputs_valid(&reply->radio)) {
+    return false;
+  }
+  if (reply->radio.kind == WIFI_RADIO_INPUTS_RTL8922AE &&
+      !((reply->country[0] == '0' && reply->country[1] == '0') ||
+        (reply->country[0] >= 'A' && reply->country[0] <= 'Z' &&
+         reply->country[1] >= 'A' && reply->country[1] <= 'Z'))) {
+    return false;
+  }
+  return true;
+}
+
 enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
 {
   if (!status) {
@@ -171,14 +186,25 @@ enum call_status wifi_status(handle_t wifi, struct wifi_status_reply *status)
   struct wifi_status_reply reply;
   enum call_status result = invoke(wifi, &request, sizeof(request), &reply, sizeof(reply));
   if (result == CALL_OK) {
-    if (!memchr(reply.detail, 0, sizeof(reply.detail)) || !boot_facts_valid(&reply.boot) ||
-        !radio_inputs_valid(&reply.radio) || !phy_facts_valid(&reply.phy, reply.radio.kind)) {
+    if (!status_reply_valid(&reply)) {
       return CALL_BAD_REQUEST;
     }
-    if (reply.radio.kind == WIFI_RADIO_INPUTS_RTL8922AE &&
-        !((reply.country[0] == '0' && reply.country[1] == '0') ||
-          (reply.country[0] >= 'A' && reply.country[0] <= 'Z' &&
-           reply.country[1] >= 'A' && reply.country[1] <= 'Z'))) {
+    *status = reply;
+  }
+  return result;
+}
+
+enum call_status wifi_status_full(handle_t wifi, struct wifi_status_full_reply *status)
+{
+  if (!status) {
+    return CALL_BAD_REQUEST;
+  }
+  *status = (struct wifi_status_full_reply){0};
+  struct message_header request = {PROTOCOL_WIFI, WIFI_STATUS};
+  struct wifi_status_full_reply reply;
+  enum call_status result = invoke(wifi, &request, sizeof(request), &reply, sizeof(reply));
+  if (result == CALL_OK) {
+    if (!status_reply_valid(&reply.base) || !phy_facts_valid(&reply.phy, reply.base.radio.kind)) {
       return CALL_BAD_REQUEST;
     }
     *status = reply;

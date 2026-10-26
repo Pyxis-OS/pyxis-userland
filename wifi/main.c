@@ -379,9 +379,9 @@ static void print_boot_facts(const struct wifi_boot_facts *boot)
   }
 }
 
-static void print_phy_facts(const struct wifi_status_reply *status)
+static void print_phy_facts(const struct wifi_status_full_reply *status)
 {
-  if (status->radio.kind == WIFI_RADIO_INPUTS_NONE) {
+  if (status->base.radio.kind == WIFI_RADIO_INPUTS_NONE) {
     return;
   }
   const struct wifi_phy_facts *phy = &status->phy;
@@ -434,28 +434,29 @@ int main(int argc, char **argv)
   if (!strcmp(argv[1], "scan")) return scan();
   handle_t radio = bootstrap_capability("wifi");
   if (!radio) return failure("READ authority", CALL_DENIED);
-  struct wifi_status_reply reply;
-  enum call_status status = wifi_status(radio, &reply);
+  struct wifi_status_full_reply full;
+  enum call_status status = wifi_status_full(radio, &full);
   if (status != CALL_OK) return failure("status", status);
+  const struct wifi_status_reply *reply = &full.base;
   printf("wifi: present=%u enabled=%u prepared=%u ready=%u rfkill=%u failed=%u\n",
-      !!(reply.flags & WIFI_PRESENT), !!(reply.flags & WIFI_ENABLED),
-      !!(reply.flags & WIFI_PREPARED), !!(reply.flags & WIFI_READY),
-      !!(reply.flags & WIFI_RFKILL), !!(reply.flags & WIFI_FAILED));
-  printf("wifi: %s\n", reply.detail);
+      !!(reply->flags & WIFI_PRESENT), !!(reply->flags & WIFI_ENABLED),
+      !!(reply->flags & WIFI_PREPARED), !!(reply->flags & WIFI_READY),
+      !!(reply->flags & WIFI_RFKILL), !!(reply->flags & WIFI_FAILED));
+  printf("wifi: %s\n", reply->detail);
   printf("wifi: DMA=%llu firmware=%llu RX=%u buffers=%u command=%u queues=%u high-water=%u/%u\n",
-      (unsigned long long)reply.dma_bytes, (unsigned long long)reply.firmware_dma_bytes,
-      reply.rx_entries, reply.rx_buffers, reply.command_entries, reply.command_queues,
-      reply.rx_high_water, reply.command_high_water);
+      (unsigned long long)reply->dma_bytes, (unsigned long long)reply->firmware_dma_bytes,
+      reply->rx_entries, reply->rx_buffers, reply->command_entries, reply->command_queues,
+      reply->rx_high_water, reply->command_high_water);
   printf("wifi: interrupts=%llu packets=%llu passive-mask=%x policy-mask=%x\n",
-      (unsigned long long)reply.interrupts, (unsigned long long)reply.received_packets,
-      reply.allowed_channels, reply.policy_channels);
+      (unsigned long long)reply->interrupts, (unsigned long long)reply->received_packets,
+      reply->allowed_channels, reply->policy_channels);
   printf("wifi: data TX queued=%llu complete=%llu failed=%llu dropped=%llu pending=%u high-water=%u ring=%u RX queued=%llu dropped=%llu high-water=%u\n",
-      (unsigned long long)reply.tx_queued, (unsigned long long)reply.tx_completed,
-      (unsigned long long)reply.tx_failed, (unsigned long long)reply.tx_dropped,
-      reply.data_tx_pending, reply.data_tx_high_water, reply.data_ring_entries,
-      (unsigned long long)reply.rx_queued, (unsigned long long)reply.rx_dropped, reply.data_rx_high_water);
-  print_boot_facts(&reply.boot);
-  print_radio_inputs(&reply);
-  print_phy_facts(&reply);
+      (unsigned long long)reply->tx_queued, (unsigned long long)reply->tx_completed,
+      (unsigned long long)reply->tx_failed, (unsigned long long)reply->tx_dropped,
+      reply->data_tx_pending, reply->data_tx_high_water, reply->data_ring_entries,
+      (unsigned long long)reply->rx_queued, (unsigned long long)reply->rx_dropped, reply->data_rx_high_water);
+  print_boot_facts(&reply->boot);
+  print_radio_inputs(reply);
+  print_phy_facts(&full);
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }

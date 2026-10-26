@@ -75,3 +75,7 @@ Trusted `wifi_policy` configuration may omit country (or use `"00"`) for RTL
 world-domain rules while supplying the narrowing channel mask. Country `"00"`
 names the same world domain in the shared policy contract; AX200 retains its
 authoritative firmware LAR restrictions.
+
+`wifi_status()` retains the released 544-byte status prefix. The preparation
+command uses `wifi_status_full()` for the complete 600-byte base/PHY snapshot;
+partial PHY facts are never published as valid. Neither query starts the radio.
