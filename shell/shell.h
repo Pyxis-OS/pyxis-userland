@@ -58,6 +58,14 @@ struct shell_redirection {
   handle_t root; /* Owned by the redirect coordinator, borrowed during launch. */
   const char *remainder;
   const struct environment_value *value;
+  bool positioned_output; /* Unsupported APPEND: descendants receive a byte PIPE. */
+};
+
+/* Retains either an existing FILE or the exact native parent and absent name.
+ * Preparation has no namespace or content effects; publication never relooks up. */
+struct shell_redirect_target {
+  handle_t file, parent;
+  char *component;
 };
 
 struct shell_stage {
@@ -220,6 +228,10 @@ enum call_status shell_open_redirect(struct shell *shell, const char *path,
 /* Typed OPEN without truncation; the caller owns the complete result. */
 enum call_status shell_open_redirect_value(struct shell *shell,
     const struct shell_redirection *redirect, struct resource_result *result);
+enum call_status shell_prepare_output_redirect(struct shell *shell,
+    struct shell_redirection *redirect, struct shell_redirect_target *target);
+enum call_status shell_publish_output_redirect(const struct shell_redirection *redirect,
+    struct shell_redirect_target *target, struct resource_result *result);
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_resource_detail(struct shell *shell,
     const struct resource_description *description);

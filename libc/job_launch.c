@@ -6,6 +6,7 @@
 #include <abi/pipe.h>
 #include <abi/stream.h>
 #include <errno.h>
+#include <file.h>
 #include <handle.h>
 #include <pyxis/descriptor.h>
 #include <pyxis/job.h>
@@ -269,6 +270,14 @@ static enum call_status capture_stream(struct job_preparation *prepared,
   if ((binding.info.rights & rights) != rights ||
       (binding.info.transport & transport) != transport) {
     return CALL_DENIED;
+  }
+  if (binding.append) {
+    uint64_t offset;
+    size_t written;
+    enum call_status status = file_append(binding.handle, NULL, 0, &offset, &written);
+    if (status != CALL_OK) {
+      return status;
+    }
   }
   stream->protocol = binding.info.protocol;
   stream->append = binding.append;

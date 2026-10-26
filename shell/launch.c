@@ -72,6 +72,7 @@ struct prepared_stage {
   struct bundle_launch *bundle_launch;
   struct pyxis_stdio_binding default_streams[ENVIRONMENT_STREAM_COUNT];
   handle_t redirected[ENVIRONMENT_STREAM_COUNT];
+  struct shell_redirect_target output_targets[ENVIRONMENT_STREAM_COUNT];
   handle_t staging_leaf;
   bool transaction_body;
   struct launch_grant *grants;
@@ -287,6 +288,12 @@ static bool release_sources(struct prepared_stage *stages, size_t stage_count,
       if (!close_handle(&stages[i].redirected[stream])) {
         closed = false;
       }
+      if (!close_handle(&stages[i].output_targets[stream].file)) {
+        closed = false;
+      }
+      if (!close_handle(&stages[i].output_targets[stream].parent)) {
+        closed = false;
+      }
     }
   }
   for (size_t i = 0; i + 1 < stage_count; ++i) {
@@ -312,6 +319,9 @@ static void free_preparation(struct prepared_stage *stages, size_t stage_count)
     free(stages[i].selected_grants);
     free(stages[i].selected_entries);
     free(stages[i].selection);
+    for (size_t j = 0; j < ENVIRONMENT_STREAM_COUNT; ++j) {
+      free(stages[i].output_targets[j].component);
+    }
     environment_capture_close(&stages[i].captured);
   }
   free(stages);
@@ -1752,14 +1762,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   return status == CALL_OK ? validate_scope(request, scope) : status;
 }
 
-/* A redirected output file is truncated once by the shell, if it is not
- * appended to, and then every writer of that stream appends. Children never
- * inherit a file cursor, so a program that launches commands of its own, such as
- * a script, would otherwise have each of them start again at offset zero. */
+/* Native append keeps one EOF policy across descendants. Unsupported plain >
+ * uses an owned byte worker's positioned cursor after the one truncation. */
 static bool redirect_appends(const struct shell_redirection *redirect)
 {
   return redirect->stream != ENVIRONMENT_STDIN && !redirect->staging_output &&
-      !redirect->duplicate_stdout;
+      !redirect->duplicate_stdout && !redirect->positioned_output;
 }
 
 static const char *selected_stream_conflict(const struct prepared_stage *prepared,
@@ -2190,10 +2198,14 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   memcpy(stages, user_stages, user_count * sizeof(*stages));
   size_t stage_count = user_count;
   size_t merge_helper[LAUNCH_BATCH_MAX], staging_helper[LAUNCH_BATCH_MAX];
+  size_t positioned_helper[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT];
   size_t owner[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
     merge_helper[i] = staging_helper[i] = SIZE_MAX;
     owner[i] = i;
+    for (size_t j = 0; j < ENVIRONMENT_STREAM_COUNT; ++j) {
+      positioned_helper[i][j] = SIZE_MAX;
+    }
   }
   char *worker_arguments[] = {"boot://http-stage.pxe", NULL};
   struct prepared_stage *prepared = calloc(LAUNCH_BATCH_MAX, sizeof(*prepared));
@@ -2322,6 +2334,25 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
 
+  /* Classify retained FILEs or absent native names without creation. Helper
+   * admission must finish before any target is published or truncated. */
+  for (size_t i = 0; i < user_count; ++i) {
+    for (size_t j = 0; j < stages[i].redirection_count; ++j) {
+      struct shell_redirection *redirect = &stages[i].redirections[j];
+      if (redirect->stream == ENVIRONMENT_STDIN || redirect->duplicate_stdout ||
+          redirect->staging_output) {
+        continue;
+      }
+      failed_stage = i;
+      operation = "shell: prepare output";
+      path = redirect->path;
+      status = shell_prepare_output_redirect(shell, redirect, &prepared[i].output_targets[j]);
+      if (status != CALL_OK) {
+        goto failed;
+      }
+    }
+  }
+
   /* Plan helpers from sink identity before redirect OPEN can create anything.
    * The user pipeline always occupies [0, user_count); helpers have no implicit
    * neighbors. A duplication after a staged redirect reuses that sink's worker. */
@@ -2366,30 +2397,21 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
           goto failed;
         }
         known_stdout = (struct pyxis_stdio_binding){0};
-        stdout_protocol = redirect->staging_output ? PROTOCOL_PIPE : PROTOCOL_FILE;
+        stdout_protocol = redirect->staging_output || redirect->positioned_output ?
+            PROTOCOL_PIPE : PROTOCOL_FILE;
         if (redirect->staging_output) {
           helper = &staging_helper[i];
-        } else if (redirect->value || (redirect->root != HANDLE_INVALID &&
-            redirect->remainder && !*redirect->remainder)) {
-          handle_t target = redirect->value ? redirect->value->handle : redirect->root;
-          struct handle_info info;
-          status = handle_query(target, &info);
-          if (status != CALL_OK) {
-            operation = "shell: query output";
-            path = redirect->path;
-            goto failed;
-          }
-          if (info.protocol != PROTOCOL_FILE) {
-            operation = "shell: typed redirect requires a FILE";
-            path = redirect->path;
-            status = CALL_BAD_OPERATION;
-            goto failed;
-          }
+        } else if (redirect->positioned_output) {
+          helper = &positioned_helper[i][j];
+        } else if (prepared[i].output_targets[j].file != HANDLE_INVALID) {
+          handle_t target = prepared[i].output_targets[j].file;
           known_stdout = (struct pyxis_stdio_binding){.protocol = PROTOCOL_FILE,
-            .handle = target, .append = redirect->append};
+            .handle = target, .append = true};
         }
+      } else if (redirect->positioned_output) {
+        helper = &positioned_helper[i][j];
       }
-      if (helper) {
+      if (helper && *helper == SIZE_MAX) {
         if (stage_count == LAUNCH_BATCH_MAX) {
           status = CALL_LIMIT;
           operation = "shell: output workers";
@@ -2643,7 +2665,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       bool input = redirect->stream == ENVIRONMENT_STDIN;
       {
         struct resource_result opened = {0};
-        status = shell_open_redirect_value(shell, redirect, &opened);
+        status = !input && !redirect->staging_output ?
+            shell_publish_output_redirect(redirect, &prepared[i].output_targets[j], &opened) :
+            shell_open_redirect_value(shell, redirect, &opened);
         if (status == CALL_OK) {
           status = resource_outcome_status(opened.info.description.outcome);
         }
@@ -2689,10 +2713,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
             .append = opened.info.protocol == PROTOCOL_FILE && redirect_appends(redirect),
           };
         }
-        if (status == CALL_OK && redirect->staging_output) {
-          size_t helper = staging_helper[i];
-          streams[helper][ENVIRONMENT_STDOUT] = streams[i][ENVIRONMENT_STDOUT];
-          streams[i][ENVIRONMENT_STDOUT] = (struct pyxis_stdio_binding){
+        if (status == CALL_OK && (redirect->staging_output || redirect->positioned_output)) {
+          size_t helper = redirect->staging_output ? staging_helper[i] : positioned_helper[i][j];
+          streams[helper][ENVIRONMENT_STDOUT] = streams[i][redirect->stream];
+          streams[i][redirect->stream] = (struct pyxis_stdio_binding){
             .protocol = PROTOCOL_PIPE, .handle = pipes[helper - 1].writer};
         }
         if (status != CALL_OK && shell_resource_detail(shell,

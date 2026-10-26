@@ -591,6 +591,9 @@ static enum command_result expanded_command(struct shell *shell,
     if (!stage->count || !stage->arguments[0][0]) {
       return shell_error(shell, "shell: Pipeline stage requires a command name\n");
     }
+    if (stage->redirection_count && command->background) {
+      return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
+    }
     if (command->stage_count > 1 && shell_builtin(stage->arguments, stage->count)) {
       return shell_error(shell, "shell: %s: Builtins are unsupported in pipelines\n",
           stage->arguments[0]);
@@ -598,7 +601,7 @@ static enum command_result expanded_command(struct shell *shell,
   }
   const struct shell_stage *stage = &command->stages[0];
   bool builtin = shell_builtin(stage->arguments, stage->count);
-  if ((stage->redirection_count) && (builtin || command->background)) {
+  if (stage->redirection_count && builtin) {
     return shell_error(shell, "shell: Redirection is only supported for foreground external commands\n");
   }
   if (command->background && builtin) {

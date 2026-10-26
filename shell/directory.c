@@ -6,6 +6,7 @@
 #include <resource.h>
 #include <startup.h>
 #include <handle.h>
+#include <file.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -166,6 +167,232 @@ enum call_status shell_open_redirect_value(struct shell *shell,
     flags |= PROVIDER_OPEN_CREATE;
   }
   return resource_open_path(shell->directory, redirect->path, intent, flags, 0, result);
+}
+
+static enum call_status classify_output(struct shell_redirection *redirect,
+    struct shell_redirect_target *target)
+{
+  struct describe_reply info;
+  enum call_status status = handle_describe(target->file, 0, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  /* Retain a declared failure for the normal redirect result/capture handoff.
+   * No helper will launch; publication reports this same held resource. */
+  if (!redirect->append && info.description.outcome != RESOURCE_OK) {
+    return CALL_OK;
+  }
+  uint64_t offset;
+  size_t written;
+  status = file_append(target->file, NULL, 0, &offset, &written);
+  if (status == CALL_BAD_OPERATION && !redirect->append) {
+    redirect->positioned_output = true;
+    return CALL_OK;
+  }
+  return status;
+}
+
+/* Retain the full cwd chain for ordered .. traversal. Explicit roots instead
+ * start a confined chain; neither route rediscovers a captured environment name. */
+enum call_status shell_prepare_output_redirect(struct shell *shell,
+    struct shell_redirection *redirect, struct shell_redirect_target *target)
+{
+  const char *path = redirect->remainder;
+  handle_t root = redirect->root;
+  handle_t captured = HANDLE_INVALID;
+  enum call_status status = CALL_OK;
+  if (redirect->value) {
+    if (redirect->value->kind != ENVIRONMENT_CAP) {
+      return CALL_BAD_REQUEST;
+    }
+    root = redirect->value->handle;
+    path = "";
+  } else if (root == HANDLE_INVALID) {
+    path = redirect->path;
+    if (!path || !*path || *path == '/') {
+      return CALL_BAD_REQUEST;
+    }
+    const char *end = path;
+    while (*end && *end != '/' && *end != ':') {
+      ++end;
+    }
+    if (*end == ':' && end[1] == '/' && end[2] == '/') {
+      size_t length = end - path;
+      if (!length || length > ENVIRONMENT_NAME_MAX) {
+        return CALL_BAD_REQUEST;
+      }
+      char name[ENVIRONMENT_NAME_MAX + 1];
+      memcpy(name, path, length);
+      name[length] = 0;
+      status = environment_lookup_file(shell->environment, name, &captured);
+      if (status != CALL_OK) {
+        return status;
+      }
+      root = captured;
+      path = end + 3;
+    }
+  }
+  if (root != HANDLE_INVALID) {
+    struct handle_info info;
+    status = handle_query(root, &info);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    if (info.protocol == PROTOCOL_FILE) {
+      struct resource_result held = {0};
+      status = resource_open_held(root, path, PROVIDER_INTENT_WRITE, 0, 0, &held);
+      if (status == CALL_OK) {
+        target->file = held.resource;
+        held.resource = HANDLE_INVALID;
+        status = classify_output(redirect, target);
+      }
+      enum call_status closed = resource_result_close(&held);
+      if (status == CALL_OK) {
+        status = closed;
+      }
+      goto done;
+    }
+    if (info.protocol != PROTOCOL_DIRECTORY || info.kind != HANDLE_KIND_NATIVE ||
+        info.transport) {
+      status = CALL_BAD_OPERATION;
+      goto done;
+    }
+  }
+  size_t initial_count = root != HANDLE_INVALID ? 1 : shell->directory->count;
+  size_t length = strlen(path);
+  if (!initial_count) {
+    status = CALL_UNAVAILABLE;
+    goto done;
+  }
+  if (initial_count > SIZE_MAX - length ||
+      initial_count + length > SIZE_MAX / sizeof(handle_t)) {
+    status = CALL_LIMIT;
+    goto done;
+  }
+  handle_t *chain = calloc(initial_count + length, sizeof(*chain));
+  char *component = malloc(length + 1);
+  if (!chain || !component) {
+    free(component);
+    free(chain);
+    status = CALL_NO_MEMORY;
+    goto done;
+  }
+  size_t count = 0;
+  while (count < initial_count) {
+    status = handle_copy(root != HANDLE_INVALID ? root : shell->directory->directories[count],
+        &chain[count]);
+    if (status != CALL_OK) {
+      goto unwind;
+    }
+    ++count;
+  }
+  for (;;) {
+    while (*path == '/') {
+      ++path;
+    }
+    if (!*path) {
+      status = CALL_WRONG_TYPE;
+      break;
+    }
+    const char *start = path;
+    while (*path && *path != '/') {
+      ++path;
+    }
+    size_t size = path - start;
+    bool separator = *path != 0;
+    while (*path == '/') {
+      ++path;
+    }
+    if (size == 1 && start[0] == '.') {
+      continue;
+    }
+    if (size == 2 && start[0] == '.' && start[1] == '.') {
+      if (count == 1) {
+        status = CALL_DENIED;
+        break;
+      }
+      if (handle_close(chain[--count])) {
+        status = CALL_BAD_HANDLE;
+        break;
+      }
+      continue;
+    }
+    memcpy(component, start, size);
+    component[size] = 0;
+    handle_t parent = chain[count - 1];
+    struct handle_info info;
+    status = handle_query(parent, &info);
+    if (status != CALL_OK) {
+      break;
+    }
+    if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_DIRECTORY ||
+        info.transport) {
+      status = CALL_BAD_OPERATION;
+      break;
+    }
+    if (*path) {
+      status = directory_lookup(parent, component, DIRECTORY_KIND_DIRECTORY,
+          info.rights & DIRECTORY_RIGHTS, &chain[count]);
+      if (status != CALL_OK) {
+        break;
+      }
+      ++count;
+      continue;
+    }
+    if (separator) {
+      status = CALL_WRONG_TYPE;
+      break;
+    }
+    status = directory_lookup(parent, component, DIRECTORY_KIND_FILE,
+        FILE_RIGHT_WRITE, &target->file);
+    if (status == CALL_OK) {
+      status = classify_output(redirect, target);
+    } else if (status == CALL_NOT_FOUND) {
+      status = directory_append_support(parent);
+      if (status == CALL_BAD_OPERATION && !redirect->append) {
+        redirect->positioned_output = true;
+        status = CALL_OK;
+      }
+      if (status == CALL_OK) {
+        target->parent = chain[--count];
+        target->component = component;
+        component = NULL;
+      }
+    }
+    break;
+  }
+unwind:
+  while (count) {
+    if (handle_close(chain[--count])) {
+      status = CALL_BAD_HANDLE;
+    }
+  }
+  free(component);
+  free(chain);
+done:
+  if (captured != HANDLE_INVALID && handle_close(captured)) {
+    status = CALL_BAD_HANDLE;
+  }
+  return status;
+}
+
+enum call_status shell_publish_output_redirect(const struct shell_redirection *redirect,
+    struct shell_redirect_target *target, struct resource_result *result)
+{
+  *result = (struct resource_result){0};
+  if (target->file == HANDLE_INVALID) {
+    uint64_t requirements = redirect->positioned_output ? 0 : DIRECTORY_CREATE_REQUIRE_APPEND;
+    enum call_status status = directory_create_required(target->parent, target->component,
+        DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, requirements, &target->file);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
+  enum call_status status = resource_result_adopt(target->file, result);
+  if (status == CALL_OK) {
+    target->file = HANDLE_INVALID;
+  }
+  return status;
 }
 
 enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,

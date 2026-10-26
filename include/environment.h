@@ -75,7 +75,8 @@ void environment_capture_close(struct environment_capture *capture);
 const struct environment_value *environment_capture_find(
     const struct environment_capture *capture, const char *name);
 enum call_status environment_capability(handle_t table, const char *name, handle_t *handle);
-/* Append is output FILE policy, not a resource right or atomicity guarantee.
+/* Append is output FILE policy, not a resource right. Each native operation
+ * selects EOF atomically; larger flushes are not record-atomic.
  * Launch it as the optional TEXT companion stdout.append/stderr.append="1";
  * an absent companion selects ordinary writes. Stage an entry only for an
  * output stream with append set; it borrows static bytes. */

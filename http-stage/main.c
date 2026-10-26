@@ -26,13 +26,15 @@ int main(void)
     for (size_t done = 0; done < count;) {
       size_t written;
       if (output.append) {
-        status = file_size(output.handle, &offset);
-        if (status != CALL_OK) {
-          break;
-        }
+        status = file_append(output.handle, bytes + done, count - done, &offset, &written);
+      } else {
+        status = file_write(output.handle, offset, bytes + done, count - done, &written);
       }
-      status = file_write(output.handle, offset, bytes + done, count - done, &written);
       if (status != CALL_OK) {
+        break;
+      }
+      if (!written || written > count - done || written > UINT64_MAX - offset) {
+        status = CALL_OUTCOME_UNKNOWN;
         break;
       }
       offset += written;

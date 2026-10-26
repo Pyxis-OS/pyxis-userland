@@ -457,7 +457,8 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
         status == CALL_ENDPOINT_CLOSED ? EIO : libc_call_errno(status);
   }
   if (!error && !transactional && kind == DESCRIPTOR_FILE && mode->append && !mode->readable) {
-    status = file_size(opened.resource, &position);
+    size_t written;
+    status = file_append(opened.resource, NULL, 0, &position, &written);
     error = status == CALL_OK ? 0 : libc_call_errno(status);
   }
   if (error) {
@@ -962,6 +963,37 @@ int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FIL
   int error = !object ? EBADF :
       (mode->readable && !object->readable) || (mode->writable && !object->writable) ?
       EBADF : entries[descriptor].stream ? EBUSY : 0;
+  uint64_t generation = 0;
+  if (!error) {
+    if (!retain_storage(object)) {
+      error = EMFILE;
+    } else {
+      generation = entries[descriptor].generation;
+    }
+  }
+  libc_lock_release(&table_guard);
+  if (error) {
+    return fail(error);
+  }
+  /* Probe before association or policy changes, without holding table_guard.
+   * Revalidate the exact descriptor slot after the potentially blocking call. */
+  if (mode->append) {
+    uint64_t offset;
+    size_t written;
+    enum call_status status = object->kind == DESCRIPTOR_FILE && !object->transaction ?
+        file_append(object->handle, NULL, 0, &offset, &written) : CALL_BAD_OPERATION;
+    if (status != CALL_OK) {
+      error = libc_call_errno(status);
+    }
+  }
+  libc_lock_acquire(&table_guard);
+  if (!error && (lookup(descriptor) != object ||
+      entries[descriptor].generation != generation)) {
+    error = EBADF;
+  }
+  if (!error && entries[descriptor].stream) {
+    error = EBUSY;
+  }
   if (!error) {
     if (mode->append) {
       __atomic_store_n(&object->append, true, __ATOMIC_RELEASE);
@@ -971,10 +1003,8 @@ int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FIL
     __atomic_store_n(&stream->descriptor, descriptor, __ATOMIC_RELEASE);
   }
   libc_lock_release(&table_guard);
-  if (error) {
-    return fail(error);
-  }
-  return 0;
+  descriptor_drop(object);
+  return error ? fail(error) : 0;
 }
 
 int dup(int descriptor)
@@ -1637,16 +1667,13 @@ static int write_locked(struct descriptor_object *entry, const void *buffer, siz
   enum call_status status;
   if (entry->kind == DESCRIPTOR_FILE) {
     if (__atomic_load_n(&entry->append, __ATOMIC_ACQUIRE)) {
-      /* SIZE followed by WRITE preserves stdio's non-atomic append behavior. */
-      status = file_size(entry->handle, &position);
-      if (status != CALL_OK) {
-        return fail(libc_call_errno(status));
+      status = file_append(entry->handle, buffer, size, &position, written);
+    } else {
+      if (size > UINT64_MAX - position) {
+        return fail(EOVERFLOW);
       }
+      status = file_write(entry->handle, position, buffer, size, written);
     }
-    if (size > UINT64_MAX - position) {
-      return fail(EOVERFLOW);
-    }
-    status = file_write(entry->handle, position, buffer, size, written);
   } else if (entry->kind == DESCRIPTOR_PIPE) {
     status = pipe_write(entry->handle, buffer, size, written);
   } else {

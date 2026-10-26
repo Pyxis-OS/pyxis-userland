@@ -83,6 +83,25 @@ enum call_status directory_create_required(handle_t directory, const char *name,
   return child_call(directory, DIRECTORY_CREATE, name, kind, rights, requirements, handle);
 }
 
+enum call_status directory_append_support(handle_t directory)
+{
+  struct handle_info info;
+  enum call_status status = handle_query(directory, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.protocol != PROTOCOL_DIRECTORY) {
+    return CALL_WRONG_TYPE;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.transport) {
+    return CALL_BAD_OPERATION;
+  }
+  struct directory_message message = {
+    .header = {PROTOCOL_DIRECTORY, DIRECTORY_APPEND_SUPPORT},
+  };
+  return call_status(syscall_call(directory, &message, sizeof(message), NULL, 0), 0);
+}
+
 enum call_status directory_repository_view(handle_t directory, handle_t *view)
 {
   if (!view) {

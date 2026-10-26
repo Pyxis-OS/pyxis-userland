@@ -436,8 +436,9 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
     return valid ? CALL_DENIED : CALL_WRONG_TYPE;
   }
   if (append) {
-    uint64_t size;
-    status = file_size(entry.handle, &size);
+    uint64_t offset;
+    size_t written;
+    status = file_append(entry.handle, NULL, 0, &offset, &written);
     if (status != CALL_OK) {
       handle_close(entry.handle);
       return status;

@@ -32,6 +32,11 @@ enum call_status directory_create(handle_t directory, const char *name,
 enum call_status directory_create_required(handle_t directory, const char *name,
     uint64_t kind, uint64_t rights, uint64_t requirements, handle_t *handle);
 
+/* Read-only backing check on a borrowed native directory. Requires CREATE and
+ * WRITE_FILES. No name lookup, reservation or mutation; OK does not guarantee
+ * later creation/append success. Unsupported backing returns BAD_OPERATION. */
+enum call_status directory_append_support(handle_t directory);
+
 /* Derive an owned native npfs directory confined to FILE packages.lua and
  * packages.lua.new. Requires all DIRECTORY_REPOSITORY_VIEW_RIGHTS and grants
  * exactly that subset. No enumeration, child directories or links; rename
