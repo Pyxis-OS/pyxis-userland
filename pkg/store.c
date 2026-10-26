@@ -101,13 +101,12 @@ void pkg_selection_free(struct pkg_selection *selection)
   *selection = (struct pkg_selection){0};
 }
 
-bool pkg_selection_load(handle_t packages, bool current, uint64_t number,
+bool pkg_selection_load(handle_t packages,
     struct pkg_selection *selection, const char **reason)
 {
   *selection = (struct pkg_selection){0};
   struct package_set *set = NULL;
-  enum call_status status = current ? package_set_load(packages, &set, reason) :
-      package_set_load_number(packages, number, &set, reason);
+  enum call_status status = package_set_load(packages, &set, reason);
   if (status != CALL_OK) {
     return false;
   }
@@ -130,43 +129,6 @@ bool pkg_selection_load(handle_t packages, bool current, uint64_t number,
   }
   package_set_free(set);
   return true;
-}
-
-bool pkg_predecessor(handle_t packages, uint64_t number, uint64_t *previous,
-    const char **reason)
-{
-  if (!number) {
-    *previous = 0;
-    return true;
-  }
-  handle_t sets;
-  if (!pkg_directory(packages, "sets", false, PKG_READ_RIGHTS, &sets, reason)) {
-    return false;
-  }
-  char name[48];
-  snprintf(name, sizeof(name), "%llu.previous", (unsigned long long)number);
-  char *bytes;
-  size_t size;
-  bool ok = pkg_text(sets, name, 256, &bytes, &size, reason);
-  handle_close(sets);
-  if (!ok) {
-    return false;
-  }
-  struct literal *document = NULL;
-  struct literal_diagnostic diagnostic;
-  ok = literal_parse(bytes, size, &document, &diagnostic);
-  free(bytes);
-  const struct literal_value *value = ok ? literal_field(document->root, "previous") : NULL;
-  ok = ok && document->root->kind == LITERAL_TABLE &&
-      document->root->as.table.count == 1 && value && value->kind == LITERAL_INTEGER &&
-      value->as.integer >= 0 && (uint64_t)value->as.integer < number;
-  if (ok) {
-    *previous = value->as.integer;
-  } else {
-    *reason = "invalid predecessor record; use explicit pkg rollback SET";
-  }
-  literal_free(document);
-  return ok;
 }
 
 static bool next_number(handle_t sets, uint64_t *number, const char **reason)
@@ -360,7 +322,7 @@ bool pkg_reindex(handle_t packages, uint64_t number,
 }
 
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, const struct pkg_projection *projection, const struct pkg_sdk *sdk,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk,
     bool *uncertain, const char **reason)
 {
   *uncertain = false;
@@ -397,11 +359,6 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
   snprintf(name, sizeof(name), "%llu.lua", (unsigned long long)number);
   ok = ok && pkg_write_text(sets, name, bytes, used, reason);
   free(bytes);
-  char predecessor[96];
-  int length = snprintf(predecessor, sizeof(predecessor),
-      "return { previous = %llu }\n", (unsigned long long)previous);
-  snprintf(name, sizeof(name), "%llu.previous", (unsigned long long)number);
-  ok = ok && pkg_write_text(sets, name, predecessor, length, reason);
   ok = ok && write_indexes(sets, number, true, true, projection, sdk, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
     *reason = "cannot synchronize immutable set names";
@@ -417,7 +374,7 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
     return false;
   }
   char pointer[96];
-  length = snprintf(pointer, sizeof(pointer), "return { set = %llu }\n",
+  int length = snprintf(pointer, sizeof(pointer), "return { set = %llu }\n",
       (unsigned long long)number);
   if (!pkg_write_text(packages, "current.new", pointer, length, reason) ||
       directory_sync(packages) != CALL_OK) {

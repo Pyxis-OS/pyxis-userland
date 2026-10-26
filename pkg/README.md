@@ -10,7 +10,6 @@ pkg list [--available]
 pkg check [REPO/]ID[@VERSION]
 pkg [--timeout SECONDS] [--yes] install [REPO/]ID[@VERSION]...
 pkg remove ID...
-pkg rollback [SET]
 pkg verify
 pkg reindex
 pkg unlock
@@ -42,8 +41,8 @@ Program and toolchain packages record the ABI they were
 built for; `pkg` reads what the running system provides from
 `boot://os-release` (its release ABI list and its build revision) and offers, installs
 and keeps only packages whose ABI it provides. Builds for other systems are
-hidden and counted per ID. Stale stored builds refuse install, remove,
-rollback and verify once, before any tree is hashed: one message lists every
+hidden and counted per ID. Stale stored builds refuse install, remove and
+verify once, before any tree is hashed: one message lists every
 stale package with its ABI and gives one `pkg install` and one `pkg remove`
 command that clear them all.
 
@@ -53,13 +52,13 @@ hash, identity/size check and publication sync remains required. The backing
 must support bulk READ (native RAM/archive/npfs or a completed httpfs snapshot);
 a refusal is reported without silently retrying ordinary READ.
 
-Install, remove and rollback hash only the packages they add or change; members
+Install and remove hash only the packages they add or change; members
 carried over unchanged are checked by their stored manifest, since stored trees
 are immutable and were verified when installed. pkg verify hashes everything.
 
 Changes review the proposed set before its one atomic current switch. Running
-programs retain their views; new launches see the new set. Rollback needs no
-network. A damaged current requires an explicit verified set choice.
+programs retain their views; new launches see the new set. A damaged current
+requires repair or reinstall through rescue.
 
 Install shows each package's phases: fetch, archive verification and extraction.
 On a console every phase is one line redrawn in place and kept when it ends: fetch
@@ -75,16 +74,16 @@ clears only the abandoned lock and retains incomplete attempts. Never use it to
 cancel a live writer. Ctrl+C during download or preparation uses ordinary
 foreground interruption and can leave this lock; cancel at Review releases it.
 The confirmed switch is guarded until its actual result is known. Boot cleanup
-removes unused versions before consumers start, retaining the active and previous
-sets. No archive scripts execute.
+removes unused versions before consumers start, retaining only the active set.
+No archive scripts execute.
 
 `pkg upgrade [VERSION]` reads only the signed `releases` repository and selects
 the named release or its last published release, refusing the one already
 running. It needs an installed system booted from its own boot entry and a space
 with `package_upgrade = true`; live media and rescue boots refuse. Review shows
 the release and installed packages whose ABI it does not provide. After archive
-verification, the shared boot publisher stages a fresh attempt and retains the
-running attempt as `Pyxis OS (previous)`. Success requires reboot to run the new
+verification, the shared boot publisher stages a fresh attempt. Success requires
+reboot to run the new
 release; ordinary packages upgrade separately. Boot admission is single-use per
 boot, so a failure from admission onward needs a reboot before retrying.
 
@@ -95,7 +94,7 @@ be unique across the selected set, with at most 256 total. Paths cannot traverse
 another .pxb directory: its launch policy must remain attached to its commands.
 Packages without commands export nothing.
 
-Install, remove and rollback validate every declared target and publish the
+Install and remove validate every declared target and publish the
 sorted immutable sets/N.commands index before switching current. Plain targets
 must be native P1F files. Bundle targets retain the complete manifest policy;
 the selected alias and all executable entries are checked. Actual launch still
@@ -104,7 +103,7 @@ files, targets and the exact command index.
 
 For a pre-index installation, pkg reindex verifies the active package trees and
 creates only its missing command index under the writer lock. It leaves current
-and predecessor retention unchanged and requires no repository access. It refuses
+unchanged and requires no repository access. It refuses
 an existing index, including damaged or partial content; it never repairs one
 silently. An empty selection with no current needs no index. New command views
 refuse missing or damaged indexes for a nonzero active set.

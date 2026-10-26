@@ -1065,29 +1065,6 @@ static bool review(const struct pkg_selection *before, const struct pkg_selectio
   return true;
 }
 
-static void show_sets(void)
-{
-  handle_t sets;
-  const char *reason = NULL;
-  if (!pkg_directory(client.packages, "sets", false, PKG_READ_RIGHTS, &sets, &reason)) {
-    return;
-  }
-  puts("Available set records (verified on explicit rollback):");
-  struct directory_cursor cursor = {0};
-  for (;;) {
-    char name[256];
-    struct directory_enumerate_reply reply;
-    if (directory_enumerate(sets, &cursor, name, sizeof(name), &reply) != CALL_OK ||
-        reply.outcome != DIRECTORY_ENTRY) break;
-    cursor = reply.cursor;
-    size_t length = strlen(name);
-    if (length > 4 && !strcmp(name + length - 4, ".lua")) {
-      printf("  %.*s\n", (int)(length - 4), name);
-    }
-  }
-  handle_close(sets);
-}
-
 static bool unlock(void)
 {
   puts("pkg unlock: recovery only; the previous writer must already have stopped.");
@@ -1158,22 +1135,9 @@ static bool mutate(const char *command, int argc, char **argv)
   }
   bool uncertain = false;
   struct pkg_selection before = {0}, after = {0};
-  bool current_valid = pkg_selection_load(client.packages, true, 0, &before, &client.reason);
-  bool metadata_valid = current_valid;
+  bool current_valid = pkg_selection_load(client.packages, &before, &client.reason);
   bool reindex = !strcmp(command, "reindex");
-  if (metadata_valid && before.number && strcmp(command, "rollback") && !reindex) {
-    uint64_t predecessor = 0;
-    metadata_valid = pkg_predecessor(client.packages, before.number,
-        &predecessor, &client.reason);
-    if (metadata_valid && predecessor) {
-      struct pkg_selection retained = {0};
-      metadata_valid = pkg_selection_load(client.packages, false, predecessor,
-          &retained, &client.reason);
-      pkg_selection_free(&retained);
-    }
-  }
-  bool ok = metadata_valid;
-  uint64_t previous = before.number;
+  bool ok = current_valid;
   struct pkg_projection projection = {0};
   struct pkg_sdk sdk = {0};
   if (reindex) {
@@ -1182,32 +1146,8 @@ static bool mutate(const char *command, int argc, char **argv)
         pkg_sdk_build(client.packages, &before, &sdk, &client.reason) &&
         pkg_reindex(client.packages, before.number, &projection, &sdk, &client.reason);
     if (ok) puts("pkg: active indexes bootstrapped; selection unchanged");
-  } else if (!strcmp(command, "rollback")) {
-    uint64_t target = 0;
-    if (argc) {
-      for (const char *p = argv[0]; *p; ++p) {
-        if (*p < '0' || *p > '9' || target > ((uint64_t)INT64_MAX - (*p - '0')) / 10) {
-          target = 0;
-          break;
-        }
-        target = target * 10 + *p - '0';
-      }
-      ok = target > 0;
-      if (!ok) client.reason = "invalid explicit set number";
-    } else {
-      ok = current_valid && before.number &&
-          pkg_predecessor(client.packages, before.number, &target, &client.reason);
-      if (!ok) client.reason = "rollback needs explicit SET when the active predecessor is unavailable";
-    }
-    ok = ok && pkg_selection_load(client.packages, false, target, &after, &client.reason) &&
-        stale_check(&after, NULL, 0, "rollback", 0, NULL) &&
-        verify_selection(&after, current_valid ? &before : NULL);
-    if (ok && !current_valid) {
-      previous = target;
-      puts("pkg: prior selection is unreadable; recovery target is retained as predecessor");
-    }
   } else if (ok) {
-    ok = pkg_selection_load(client.packages, true, 0, &after, &client.reason);
+    ok = pkg_selection_load(client.packages, &after, &client.reason);
     if (ok && !strcmp(command, "install")) {
       ok = prepare_install(&after, argc, argv);
     } else if (ok) {
@@ -1226,7 +1166,7 @@ static bool mutate(const char *command, int argc, char **argv)
     ok = fail("cannot guard the confirmed set switch");
   }
   if (ok && !reindex) {
-    ok = pkg_publish(client.packages, &after, previous, &projection, &sdk, &uncertain,
+    ok = pkg_publish(client.packages, &after, &projection, &sdk, &uncertain,
         &client.reason);
   }
   /* Root records are the set's packages with files. Say where a newly
@@ -1239,7 +1179,6 @@ static bool mutate(const char *command, int argc, char **argv)
   }
   free(projection.records);
   free(sdk.bytes);
-  if (!ok && (!metadata_valid || !strcmp(command, "rollback"))) show_sets();
   pkg_selection_free(&after);
   pkg_selection_free(&before);
   handle_close(lock);
@@ -1391,7 +1330,7 @@ static bool repository_command(const char *command, const char *name, const char
 static void list_uncovered(const struct pkg_entry *release)
 {
   struct pkg_selection current = {0};
-  if (!pkg_selection_load(client.packages, true, 0, &current, &client.reason)) {
+  if (!pkg_selection_load(client.packages, &current, &client.reason)) {
     puts("    (the active package set cannot be read)");
     client.reason = NULL;
     return;
@@ -1672,7 +1611,7 @@ static bool upgrade(const char *version)
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | rollback [SET] | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | remove ID... | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -1718,9 +1657,8 @@ int main(int argc, char **argv)
     return usage();
   }
   bool mutation = !strcmp(command, "install") || !strcmp(command, "remove") ||
-      !strcmp(command, "rollback") || !strcmp(command, "reindex") || !strcmp(command, "unlock");
+      !strcmp(command, "reindex") || !strcmp(command, "unlock");
   if (!repository && ((!strcmp(command, "install") || !strcmp(command, "remove")) ? count < 1 :
-      !strcmp(command, "rollback") ? count > 1 :
       !strcmp(command, "check") ? count != 1 :
       !strcmp(command, "upgrade") ? count > 1 :
       !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {
@@ -1759,7 +1697,7 @@ int main(int argc, char **argv)
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
     struct pkg_selection selection = {0};
     ok = package_volume(client.packages, false) &&
-        pkg_selection_load(client.packages, true, 0, &selection, &client.reason);
+        pkg_selection_load(client.packages, &selection, &client.reason);
     if (ok) {
       print_selection(&selection);
       if (!strcmp(command, "verify")) {
@@ -1775,8 +1713,6 @@ int main(int argc, char **argv)
         free(sdk.bytes);
         if (ok) puts("pkg: selected package files and indexes verified");
       }
-    } else {
-      show_sets();
     }
     pkg_selection_free(&selection);
   } else {

@@ -23,11 +23,9 @@ bool pkg_text(handle_t parent, const char *name, size_t limit, char **bytes,
     size_t *size, const char **reason);
 bool pkg_write_text(handle_t parent, const char *name, const void *bytes, size_t size,
     const char **reason);
-bool pkg_selection_load(handle_t packages, bool current, uint64_t number,
+bool pkg_selection_load(handle_t packages,
     struct pkg_selection *selection, const char **reason);
 void pkg_selection_free(struct pkg_selection *selection);
-bool pkg_predecessor(handle_t packages, uint64_t number, uint64_t *previous,
-    const char **reason);
 /* A set's command projection: commands command records followed by roots
  * root records, one per package with files. */
 struct pkg_projection {
@@ -43,7 +41,7 @@ struct pkg_sdk {
 };
 
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
-    uint64_t previous, const struct pkg_projection *projection, const struct pkg_sdk *sdk,
+    const struct pkg_projection *projection, const struct pkg_sdk *sdk,
     bool *uncertain, const char **reason);
 /* Both of set NUMBER's indexes equal the ones built from its selection. */
 bool pkg_indexes_verify(handle_t packages, uint64_t number,

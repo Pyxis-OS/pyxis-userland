@@ -188,7 +188,7 @@ static bool record_number(const char *name, uint64_t *number)
 }
 
 static bool collect_records(struct maintenance *work, handle_t packages,
-    uint64_t current, uint64_t previous)
+    uint64_t current)
 {
   handle_t sets;
   if (!open_directory(work, packages, "sets", &sets)) {
@@ -212,7 +212,10 @@ static bool collect_records(struct maintenance *work, handle_t packages,
       ok = false;
       break;
     }
-    if (number != current && number != previous) {
+    size_t length = strlen(name);
+    bool legacy_sidecar = length >= sizeof(".previous") - 1 &&
+        !strcmp(name + length - (sizeof(".previous") - 1), ".previous");
+    if (number != current || legacy_sidecar) {
       if (!remove_entry(work, sets, name, reply.kind, 0)) {
         ok = false;
         break;
@@ -236,7 +239,7 @@ static bool retained(const struct pkg_selection *selection, const char *id, cons
 }
 
 static bool collect_versions(struct maintenance *work, handle_t id_directory,
-    const char *id, const struct pkg_selection *current, const struct pkg_selection *previous)
+    const char *id, const struct pkg_selection *current)
 {
   struct directory_cursor cursor = {0};
   for (;;) {
@@ -252,7 +255,7 @@ static bool collect_versions(struct maintenance *work, handle_t id_directory,
       work->reason = "package store version is not a directory";
       return false;
     }
-    if (!retained(current, id, version) && !retained(previous, id, version)) {
+    if (!retained(current, id, version)) {
       if (!remove_entry(work, id_directory, version, reply.kind, 0)) {
         return false;
       }
@@ -262,7 +265,7 @@ static bool collect_versions(struct maintenance *work, handle_t id_directory,
 }
 
 static bool collect_store(struct maintenance *work, handle_t packages,
-    const struct pkg_selection *current, const struct pkg_selection *previous)
+    const struct pkg_selection *current)
 {
   handle_t store;
   if (!open_directory(work, packages, "store", &store)) {
@@ -290,7 +293,7 @@ static bool collect_store(struct maintenance *work, handle_t packages,
       ok = false;
       break;
     }
-    ok = collect_versions(work, id_directory, id, current, previous);
+    ok = collect_versions(work, id_directory, id, current);
     handle_close(id_directory);
     if (!ok) {
       break;
@@ -305,27 +308,16 @@ static bool collect_packages(struct maintenance *work, handle_t packages)
   if (!native_object(work, packages, PROTOCOL_DIRECTORY)) {
     return false;
   }
-  struct pkg_selection current = {0}, previous = {0};
-  uint64_t previous_number = 0;
+  struct pkg_selection current = {0};
   bool ok = within_budget(work) &&
-      pkg_selection_load(packages, true, 0, &current, &work->reason);
+      pkg_selection_load(packages, &current, &work->reason);
   if (ok && !current.number) {
     work->reason = "no current set; retention evidence unavailable";
     ok = false;
   }
   if (ok) {
-    ok = within_budget(work) &&
-        pkg_predecessor(packages, current.number, &previous_number, &work->reason);
-  }
-  if (ok && previous_number) {
-    ok = within_budget(work) &&
-        pkg_selection_load(packages, false, previous_number, &previous, &work->reason);
-  }
-  /* Only these two records establish retention. The predecessor's own sidecar
-   * stays with it, but must not extend retention recursively. */
-  if (ok) {
-    ok = collect_records(work, packages, current.number, previous_number) &&
-        collect_store(work, packages, &current, &previous);
+    ok = collect_records(work, packages, current.number) &&
+        collect_store(work, packages, &current);
   }
   if (ok) {
     handle_t staging;
@@ -335,7 +327,6 @@ static bool collect_packages(struct maintenance *work, handle_t packages)
       handle_close(staging);
     }
   }
-  pkg_selection_free(&previous);
   pkg_selection_free(&current);
   return ok;
 }

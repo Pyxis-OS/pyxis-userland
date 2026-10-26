@@ -459,7 +459,7 @@ static struct mounted_volume *find_mount(struct mounts *mounts, const char *name
 }
 
 /* A damaged current or set record never stops boot: report it once, and
- * every package lookup then fails with that reason until pkg rollback. */
+ * every package lookup then fails with that reason until repaired. */
 static void check_packages(struct mounts *mounts)
 {
   struct mounted_volume *mounted = find_mount(mounts, BOOT_PACKAGES_VOLUME);
@@ -470,7 +470,7 @@ static void check_packages(struct mounts *mounts)
   const char *reason;
   enum call_status status = package_set_load(mounted->root, &set, &reason);
   if (status != CALL_OK) {
-    printf("boot-init: packages: %s (status %u); package lookups fail until pkg rollback\n",
+    printf("boot-init: packages: %s (status %u); package lookups fail until repair\n",
         reason, status);
   }
   package_set_free(set);
