@@ -399,34 +399,58 @@ struct accepted_index {
 #define ACCEPTED_DIRECTORY "repositories"
 #define ACCEPTED_MAX_BYTES (PKG_BASE_URL_MAX + 128)
 
-static bool accepted_read(const struct pkg_repository *repository, struct accepted_index *accepted)
+enum accepted_state { ACCEPTED_MISSING, ACCEPTED_VALID, ACCEPTED_ERROR };
+
+static enum accepted_state accepted_read(const struct pkg_repository *repository,
+    struct accepted_index *accepted)
 {
   *accepted = (struct accepted_index){0};
-  handle_t directory;
+  if (client.packages == HANDLE_INVALID) {
+    return ACCEPTED_MISSING;
+  }
+  handle_t directory = HANDLE_INVALID;
   const char *reason = NULL;
-  if (client.packages == HANDLE_INVALID ||
-      directory_lookup(client.packages, ACCEPTED_DIRECTORY, DIRECTORY_KIND_DIRECTORY,
-          PKG_READ_RIGHTS, &directory) != CALL_OK) {
-    return false;
+  enum call_status status = directory_lookup(client.packages, ACCEPTED_DIRECTORY,
+      DIRECTORY_KIND_DIRECTORY, PKG_READ_RIGHTS, &directory);
+  if (status != CALL_OK) {
+    return status == CALL_NOT_FOUND ? ACCEPTED_MISSING : ACCEPTED_ERROR;
+  }
+  handle_t record = HANDLE_INVALID;
+  status = directory_lookup(directory, repository->name, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_READ, &record);
+  if (record != HANDLE_INVALID) handle_close(record);
+  if (status != CALL_OK) {
+    handle_close(directory);
+    return status == CALL_NOT_FOUND ? ACCEPTED_MISSING : ACCEPTED_ERROR;
   }
   char *bytes = NULL;
   size_t size = 0;
   bool read = pkg_text(directory, repository->name, ACCEPTED_MAX_BYTES, &bytes, &size, &reason);
   handle_close(directory);
   if (!read) {
-    return false;
+    return ACCEPTED_ERROR;
   }
   char serial[24];
   bool ok = sscanf(bytes, "%2048[^\n]\n%23[0-9]\n%20[0-9TZ:-]\n%64[0-9a-f]\n", accepted->url,
       serial, accepted->signed_at, accepted->sha256) == 4 &&
-      !strcmp(accepted->url, repository->url) && pkg_time_valid(accepted->signed_at) &&
-      strlen(accepted->sha256) == 64;
+      pkg_time_valid(accepted->signed_at) && strlen(accepted->sha256) == 64;
   accepted->serial = ok ? strtoull(serial, NULL, 10) : 0;
+  char canonical[ACCEPTED_MAX_BYTES];
+  int length = ok ? snprintf(canonical, sizeof(canonical), "%s\n%llu\n%s\n%s\n",
+      accepted->url, (unsigned long long)accepted->serial,
+      accepted->signed_at, accepted->sha256) : -1;
+  ok = ok && accepted->serial && accepted->serial <= PKG_SERIAL_MAX &&
+      length >= 0 && (size_t)length == size && !memcmp(canonical, bytes, size);
   free(bytes);
   if (!ok) {
     *accepted = (struct accepted_index){0};
+    return ACCEPTED_ERROR;
   }
-  return ok;
+  if (strcmp(accepted->url, repository->url)) {
+    *accepted = (struct accepted_index){0};
+    return ACCEPTED_MISSING;
+  }
+  return ACCEPTED_VALID;
 }
 
 /* Only a writer under the lock records what it accepted. */
@@ -527,10 +551,13 @@ static bool read_repository(const struct pkg_repository *repository,
     latest.serial = header.serial;
     strcpy(latest.signed_at, header.signed_at);
     const struct package_provided_abi *provided = provided_abi();
-    bool known = accepted_read(repository, &accepted);
+    enum accepted_state state = accepted_read(repository, &accepted);
+    bool known = state == ACCEPTED_VALID;
     const struct pkg_repository_floor *floor =
         pkg_repository_floor_find(&client.floors, repository);
-    if (known && header.serial < accepted.serial) {
+    if (state == ACCEPTED_ERROR) {
+      ok = fail("the packages volume's accepted-index record is unreadable or malformed");
+    } else if (known && header.serial < accepted.serial) {
       snprintf(client.message, sizeof(client.message),
           "index serial %llu is older than the accepted %llu; refusing a rollback",
           (unsigned long long)header.serial, (unsigned long long)accepted.serial);
