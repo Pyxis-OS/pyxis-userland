@@ -298,7 +298,9 @@ static bool select_version(struct pkg_selection *selection,
     selection->origins = origins;
     selection->capacity = capacity;
   }
-  selection->entries[selection->count++] = *identity;
+  selection->entries[selection->count] = *identity;
+  selection->origins[selection->count] = (struct pkg_origin){0};
+  ++selection->count;
   return true;
 }
 
@@ -307,7 +309,9 @@ static void print_selection(const struct pkg_selection *selection)
   printf("set %llu: %zu packages\n", (unsigned long long)selection->number,
       selection->count);
   for (size_t i = 0; i < selection->count; ++i) {
-    printf("  %s@%s\n", selection->entries[i].id, selection->entries[i].version);
+    printf("  %s@%s (origin: %s)\n", selection->entries[i].id,
+        selection->entries[i].version,
+        selection->origins[i].name[0] ? selection->origins[i].name : "unknown");
   }
 }
 
@@ -1136,41 +1140,54 @@ static bool update_sources(struct pkg_selection *selection, struct update_work *
       work->choices[i] = mask;
     }
   }
+  for (size_t r = 0; r < client.repositories.count; ++r) {
+    size_t cursor = 0;
+    while (cursor < selection->count) {
+      size_t batch[32], count = 0;
+      while (cursor < selection->count && count < 32) {
+        if (work->choices[cursor] & (UINT16_C(1) << r)) batch[count++] = cursor;
+        ++cursor;
+      }
+      if (!count) continue;
+      if (client.yes || client.terminal.input == HANDLE_INVALID ||
+          client.terminal.output == HANDLE_INVALID) {
+        return fail("ambiguous or changed package origins need an interactive source choice; --yes cannot choose");
+      }
+      printf("pkg: assign packages to %s (%s):\n", client.repositories.entries[r].name,
+          client.repositories.entries[r].url);
+      for (size_t n = 0; n < count; ++n) {
+        printf("  %zu  %s\n", n + 1, selection->entries[batch[n]].id);
+      }
+      char line[256];
+      struct term_line_result result = term_read_line(&client.terminal,
+          "Enter all, item numbers, or - to skip: ", line, sizeof(line));
+      if (result.status != TERM_LINE_OK || result.limit_reached || !line[0]) {
+        return fail("origin choice cancelled; active set unchanged");
+      }
+      if (!strcmp(line, "all")) {
+        for (size_t n = 0; n < count; ++n) {
+          work->source[batch[n]] = r;
+          work->choices[batch[n]] = 0;
+        }
+        continue;
+      }
+      if (!strcmp(line, "-")) continue;
+      for (char *next = line; *next;) {
+        char *end;
+        unsigned long item = strtoul(next, &end, 10);
+        if (end == next || item < 1 || item > count ||
+            (*end && *end != ',' && *end != ' ')) {
+          return fail("invalid origin item list; active set unchanged");
+        }
+        work->source[batch[item - 1]] = r;
+        work->choices[batch[item - 1]] = 0;
+        next = end;
+        while (*next == ',' || *next == ' ') ++next;
+      }
+    }
+  }
   for (size_t i = 0; i < selection->count; ++i) {
-    uint16_t mask = work->choices[i];
-    if (!mask) continue;
-    if (client.yes || client.terminal.input == HANDLE_INVALID ||
-        client.terminal.output == HANDLE_INVALID) {
-      return fail("ambiguous or changed package origins need an interactive source choice; --yes cannot choose");
-    }
-    printf("pkg: choose one repository for this origin group:");
-    for (size_t j = i; j < selection->count; ++j) {
-      if (work->choices[j] == mask) printf(" %s", selection->entries[j].id);
-    }
-    putchar('\n');
-    for (size_t r = 0; r < client.repositories.count; ++r) {
-      if (mask & (UINT16_C(1) << r)) {
-        printf("  %zu  %s (%s)\n", r + 1, client.repositories.entries[r].name,
-            client.repositories.entries[r].url);
-      }
-    }
-    char line[16], prompt[48];
-    snprintf(prompt, sizeof(prompt), "Choose repository 1-%zu [none]: ",
-        client.repositories.count);
-    struct term_line_result result = term_read_line(&client.terminal, prompt, line, sizeof(line));
-    char *end = line;
-    unsigned long choice = result.status == TERM_LINE_OK && !result.limit_reached ?
-        strtoul(line, &end, 10) : 0;
-    if (end == line || *end || choice < 1 || choice > client.repositories.count ||
-        !(mask & (UINT16_C(1) << (choice - 1)))) {
-      return fail("origin choice cancelled; active set unchanged");
-    }
-    for (size_t j = i; j < selection->count; ++j) {
-      if (work->choices[j] == mask) {
-        work->source[j] = choice - 1;
-        work->choices[j] = 0;
-      }
-    }
+    if (work->choices[i]) return fail("an ambiguous origin was not assigned; active set unchanged");
   }
   return true;
 }
