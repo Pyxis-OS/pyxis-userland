@@ -136,6 +136,8 @@ enum walk_target {
   WALK_DIRECTORY,
   WALK_PARENT,
   WALK_REMOVE,
+  WALK_CREATE_DIRECTORY,
+  WALK_CREATE_DIRECTORIES,
 };
 
 static enum call_status walk(const struct path_context *context, const char *path,
@@ -159,7 +161,9 @@ static enum call_status walk(const struct path_context *context, const char *pat
     }
     struct handle_info binding;
     status = handle_query(provider, &binding);
-    if (status == CALL_OK && native_only && binding.kind != HANDLE_KIND_NATIVE) {
+    if (status == CALL_OK && native_only &&
+        (binding.kind != HANDLE_KIND_NATIVE || binding.transport ||
+        binding.protocol == PROTOCOL_PROVIDER)) {
       status = CALL_BAD_OPERATION;
     }
     if (status == CALL_OK && target == WALK_REMOVE) {
@@ -208,12 +212,30 @@ static enum call_status walk(const struct path_context *context, const char *pat
   }
 
   for (;;) {
+    handle_t current = workspace->directories[*count - 1];
+    if (native_only) {
+      struct handle_info info;
+      status = handle_query(current, &info);
+      if (status != CALL_OK) {
+        return status;
+      }
+      if (info.protocol != PROTOCOL_DIRECTORY || info.kind != HANDLE_KIND_NATIVE ||
+          info.transport) {
+        return CALL_BAD_OPERATION;
+      }
+    }
     while (*path == '/') {
       ++path;
     }
     if (!*path) {
       if (target == WALK_PARENT || target == WALK_REMOVE) {
         return CALL_BAD_REQUEST;
+      }
+      if (target == WALK_CREATE_DIRECTORY || target == WALK_CREATE_DIRECTORIES) {
+        struct file_info_reply info;
+        status = directory_info(current, &info);
+        return status == CALL_OK && target == WALK_CREATE_DIRECTORY ?
+            CALL_ALREADY_EXISTS : status;
       }
       return target == WALK_DIRECTORY ? CALL_OK : CALL_WRONG_TYPE;
     }
@@ -249,6 +271,15 @@ static enum call_status walk(const struct path_context *context, const char *pat
       return status;
     }
     handle_t parent = workspace->directories[*count - 1];
+    if (!*path && target == WALK_CREATE_DIRECTORY) {
+      handle_t created;
+      status = directory_create(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
+          0, &created);
+      if (status == CALL_OK && handle_close(created) != 0) {
+        status = CALL_IO;
+      }
+      return status;
+    }
     if (!*path && (target == WALK_PARENT || target == WALK_REMOVE)) {
       return CALL_OK;
     }
@@ -266,11 +297,62 @@ static enum call_status walk(const struct path_context *context, const char *pat
     }
     status = directory_lookup(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
         directory_rights, &workspace->directories[*count]);
+    if (status == CALL_NOT_FOUND && target == WALK_CREATE_DIRECTORIES) {
+      status = directory_create(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
+          directory_rights, &workspace->directories[*count]);
+      if (status == CALL_ALREADY_EXISTS) {
+        /* A competing creator is checked once; uncertain mutations are final. */
+        status = directory_lookup(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
+            directory_rights, &workspace->directories[*count]);
+      }
+    }
     if (status != CALL_OK) {
       return status;
     }
     ++*count;
   }
+}
+
+enum call_status path_open_directory_native(const struct path_context *context, const char *path,
+    uint64_t required_rights, struct path_workspace *workspace, handle_t *handle)
+{
+  if (!handle || (required_rights & ~DIRECTORY_RIGHTS)) {
+    return CALL_BAD_REQUEST;
+  }
+  *handle = HANDLE_INVALID;
+  size_t count = 0;
+  handle_t unused;
+  enum call_status status = walk(context, path, WALK_DIRECTORY, 0, 0, true,
+      workspace, &count, &unused, NULL, true);
+  if (status == CALL_OK) {
+    uint64_t rights;
+    status = handle_rights(workspace->directories[count - 1], &rights, NULL);
+    if (status == CALL_OK && (rights & required_rights) != required_rights) {
+      status = CALL_DENIED;
+    }
+    if (status == CALL_OK) {
+      *handle = workspace->directories[--count];
+      workspace->directories[count] = HANDLE_INVALID;
+    }
+  }
+  if (count) {
+    close_chain(workspace->directories, count);
+  }
+  return status;
+}
+
+enum call_status path_create_directory_native(const struct path_context *context, const char *path,
+    bool recursive, struct path_workspace *workspace)
+{
+  size_t count = 0;
+  handle_t unused;
+  enum call_status status = walk(context, path,
+      recursive ? WALK_CREATE_DIRECTORIES : WALK_CREATE_DIRECTORY,
+      0, 0, true, workspace, &count, &unused, NULL, true);
+  if (count) {
+    close_chain(workspace->directories, count);
+  }
+  return status;
 }
 
 static enum call_status resolve(const struct path_context *context, const char *path,
@@ -401,8 +483,8 @@ enum call_status path_create_file(const struct path_context *context, const char
   return status;
 }
 
-enum call_status path_remove(const struct path_context *context, const char *path,
-    uint64_t kind, struct path_workspace *workspace)
+static enum call_status remove_path(const struct path_context *context, const char *path,
+    uint64_t kind, struct path_workspace *workspace, bool native_only)
 {
   if (!path || !*path || (kind != DIRECTORY_KIND_ANY && kind != DIRECTORY_KIND_FILE &&
       kind != DIRECTORY_KIND_DIRECTORY)) {
@@ -418,8 +500,8 @@ enum call_status path_remove(const struct path_context *context, const char *pat
   bool provider_route = false;
   enum walk_target target = kind == DIRECTORY_KIND_DIRECTORY ? WALK_PARENT : WALK_REMOVE;
   enum call_status status = walk(context, path, target, 0,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, false, workspace, &count,
-      &unused, &provider_route, false);
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, native_only, workspace, &count,
+      &unused, &provider_route, native_only);
   if (status == CALL_OK && !provider_route) {
     if (trailing_separator && kind == DIRECTORY_KIND_FILE) {
       status = CALL_WRONG_TYPE;
@@ -432,6 +514,18 @@ enum call_status path_remove(const struct path_context *context, const char *pat
     close_chain(workspace->directories, count);
   }
   return status;
+}
+
+enum call_status path_remove(const struct path_context *context, const char *path,
+    uint64_t kind, struct path_workspace *workspace)
+{
+  return remove_path(context, path, kind, workspace, false);
+}
+
+enum call_status path_remove_native(const struct path_context *context, const char *path,
+    uint64_t kind, struct path_workspace *workspace)
+{
+  return remove_path(context, path, kind, workspace, true);
 }
 
 enum call_status path_create_directory(const struct path_context *context, const char *path,
@@ -475,13 +569,13 @@ enum call_status path_create_directory(const struct path_context *context, const
 /* Leave the leaf name in component and transfer the last chain handle out.
  * Ancestors are closed; no directory entry or child handle is looked up. */
 static enum call_status mutation_parent(const struct path_context *context, const char *path,
-    uint64_t rights, struct path_workspace *workspace, handle_t *parent)
+    uint64_t rights, struct path_workspace *workspace, handle_t *parent, bool native_only)
 {
   *parent = HANDLE_INVALID;
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0,
-      DIRECTORY_RIGHT_LOOKUP | rights, false, workspace, &count, &unused, NULL, false);
+      DIRECTORY_RIGHT_LOOKUP | rights, native_only, workspace, &count, &unused, NULL, native_only);
   if (status == CALL_OK) {
     *parent = workspace->directories[--count];
     workspace->directories[count] = HANDLE_INVALID;
@@ -492,16 +586,16 @@ static enum call_status mutation_parent(const struct path_context *context, cons
   return status;
 }
 
-enum call_status path_rename(const struct path_context *context, const char *source,
+static enum call_status rename_path(const struct path_context *context, const char *source,
     const char *destination, uint64_t policy, struct path_workspace *source_workspace,
-    struct path_workspace *destination_workspace)
+    struct path_workspace *destination_workspace, bool native_only)
 {
   if (policy != DIRECTORY_RENAME_NO_REPLACE && policy != DIRECTORY_RENAME_REPLACE) {
     return CALL_BAD_REQUEST;
   }
   handle_t source_parent, destination_parent;
   enum call_status status = mutation_parent(context, source, DIRECTORY_RIGHT_REMOVE,
-      source_workspace, &source_parent);
+      source_workspace, &source_parent, native_only);
   if (status != CALL_OK) {
     return status;
   }
@@ -509,12 +603,13 @@ enum call_status path_rename(const struct path_context *context, const char *sou
   if (policy == DIRECTORY_RENAME_REPLACE) {
     rights |= DIRECTORY_RIGHT_REMOVE;
   }
-  status = mutation_parent(context, destination, rights, destination_workspace, &destination_parent);
-  if (status == CALL_DENIED && policy == DIRECTORY_RENAME_REPLACE) {
+  status = mutation_parent(context, destination, rights, destination_workspace,
+      &destination_parent, native_only);
+  if (!native_only && status == CALL_DENIED && policy == DIRECTORY_RENAME_REPLACE) {
     /* CREATE alone suffices for an absent destination. Do not probe its name
      * in userspace: the kernel checks replacement authority at publication. */
     status = mutation_parent(context, destination, DIRECTORY_RIGHT_CREATE,
-        destination_workspace, &destination_parent);
+        destination_workspace, &destination_parent, false);
   }
   if (status == CALL_OK) {
     uint64_t kind = source[strlen(source) - 1] == '/' ||
@@ -528,18 +623,34 @@ enum call_status path_rename(const struct path_context *context, const char *sou
   return status;
 }
 
+enum call_status path_rename(const struct path_context *context, const char *source,
+    const char *destination, uint64_t policy, struct path_workspace *source_workspace,
+    struct path_workspace *destination_workspace)
+{
+  return rename_path(context, source, destination, policy, source_workspace,
+      destination_workspace, false);
+}
+
+enum call_status path_rename_native(const struct path_context *context, const char *source,
+    const char *destination, uint64_t policy, struct path_workspace *source_workspace,
+    struct path_workspace *destination_workspace)
+{
+  return rename_path(context, source, destination, policy, source_workspace,
+      destination_workspace, true);
+}
+
 enum call_status path_link(const struct path_context *context, const char *source,
     const char *destination, struct path_workspace *source_workspace,
     struct path_workspace *destination_workspace)
 {
   handle_t source_parent, destination_parent;
   enum call_status status = mutation_parent(context, source, DIRECTORY_LINK_SOURCE_RIGHTS,
-      source_workspace, &source_parent);
+      source_workspace, &source_parent, false);
   if (status != CALL_OK) {
     return status;
   }
   status = mutation_parent(context, destination, DIRECTORY_RIGHT_CREATE,
-      destination_workspace, &destination_parent);
+      destination_workspace, &destination_parent, false);
   if (status == CALL_OK) {
     if (source[strlen(source) - 1] == '/' || destination[strlen(destination) - 1] == '/') {
       status = CALL_WRONG_TYPE;

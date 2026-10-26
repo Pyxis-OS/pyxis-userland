@@ -76,6 +76,9 @@ int descriptor_resize(int descriptor, uint64_t size);
 int descriptor_sync(int descriptor);
 /* Type, size and available optional metadata, without changing the cursor. */
 int descriptor_stat(int descriptor, struct stat *result);
+/* Shared native INFO conversion, preserving optional validity and size range. */
+enum call_status libc_stat_result(const struct file_info_reply *info, mode_t mode,
+    struct stat *result);
 /* Shared held-FILE conversion for stat and descriptor_stat. */
 enum call_status libc_file_stat(handle_t file, struct stat *result);
 /* 1 for a console stream, the only terminal; files and pipes fail with ENOTTY. */
@@ -107,6 +110,8 @@ enum call_status file_create_path(const char *path, uint64_t rights, handle_t *h
 enum call_status file_temporary_name(char *suffix);
 /* Return one owned directory handle with exactly rights, resolved like a file. */
 enum call_status directory_open_path(const char *path, uint64_t rights, handle_t *handle);
+/* Native admission retaining all actual directory rights and requiring ENUMERATE. */
+enum call_status libc_directory_open_native(const char *path, handle_t *handle);
 
 struct descriptor_object;
 /* Hold storage only. Final alias CLOSE never waits for this reference. */

@@ -74,6 +74,13 @@ Launching the inner `.pxe` directly does not apply the bundle's package grant.
 controller viewer. It uses the existing `fonts` package and declares gamepad
 input authority in its bundle.
 
+[pyxis/directory.h](libc/include/pyxis/directory.h) provides native directory
+iteration that retains actual parent rights, retained-parent entry metadata and
+a zero-right type lookup. Callers keep the DIR owner alive for entry queries.
+Its native mutations include checked recursive creation; provider routes and
+exported directories are refused before invocation. Recursive creation follows
+original components and can leave a completed prefix on failure.
+
 `tree` uses UTF-8 box-drawing branches for terminal, pipe and file output.
 Use `tree --ascii` for byte-oriented consumers such as `less`, whose line wrapping
 can split a UTF-8 branch. `--ascii` selects ASCII branches and continuation

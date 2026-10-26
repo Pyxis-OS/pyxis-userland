@@ -74,6 +74,24 @@ enum call_status path_resolve(const struct path_context *context, const char *pa
 enum call_status path_resolve_native(const struct path_context *context, const char *path,
     uint64_t kind, uint64_t rights, struct path_workspace *workspace, handle_t *handle);
 
+/* Native DIRECTORY admission retaining its actual rights. Only required_rights
+ * are required on the result; traversal still needs held LOOKUP authority.
+ * Exported directories and provider routes are refused before invocation. */
+enum call_status path_open_directory_native(const struct path_context *context, const char *path,
+    uint64_t required_rights, struct path_workspace *workspace, handle_t *handle);
+
+/* Native mutation companions. Each walk captures the named root once and
+ * retains actual directory grants. Recursive creation follows original ordered
+ * components, checks existing directories and may leave a completed prefix.
+ * No provider invocation, mutation replay, rollback or implicit sync. */
+enum call_status path_create_directory_native(const struct path_context *context, const char *path,
+    bool recursive, struct path_workspace *workspace);
+enum call_status path_remove_native(const struct path_context *context, const char *path,
+    uint64_t kind, struct path_workspace *workspace);
+enum call_status path_rename_native(const struct path_context *context, const char *source,
+    const char *destination, uint64_t policy, struct path_workspace *source_workspace,
+    struct path_workspace *destination_workspace);
+
 /* Shared file open/create route for libc and shell redirects. Provider opens
  * never fall back to directory creation, including after provider NOT_FOUND.
  * Native creation occurs only after an absent file lookup, with CREATE on the

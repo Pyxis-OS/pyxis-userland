@@ -12,7 +12,7 @@
 #include "errors.h"
 #include "working_path_internal.h"
 
-static enum call_status stat_result(const struct file_info_reply *info, mode_t mode,
+enum call_status libc_stat_result(const struct file_info_reply *info, mode_t mode,
     struct stat *result)
 {
   if (mode == S_IFREG && info->size > LONG_MAX) {
@@ -49,7 +49,7 @@ enum call_status libc_file_stat(handle_t file, struct stat *result)
       info.valid |= FILE_INFO_SIZE_VALID;
     }
   }
-  return status == CALL_OK ? stat_result(&info, S_IFREG, result) : status;
+  return status == CALL_OK ? libc_stat_result(&info, S_IFREG, result) : status;
 }
 
 /* INFO accepts READ or WRITE, so either file grant can report metadata. */
@@ -81,7 +81,7 @@ int stat(const char *restrict path, struct stat *restrict result)
       status = directory_info(directory, &info);
       handle_close(directory);
       if (status == CALL_OK) {
-        status = stat_result(&info, S_IFDIR, result);
+        status = libc_stat_result(&info, S_IFDIR, result);
       }
     } else if (file_status == CALL_DENIED) {
       status = file_status;
@@ -130,7 +130,7 @@ int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *right
       struct file_info_reply info;
       status = directory_info(opened.resource, &info);
       if (status == CALL_OK) {
-        status = stat_result(&info, S_IFDIR, &value);
+        status = libc_stat_result(&info, S_IFDIR, &value);
       }
     } else {
       status = CALL_BAD_OPERATION;
