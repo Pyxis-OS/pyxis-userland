@@ -1,6 +1,6 @@
 # Pyxis userland
 
-Freestanding C runtime, native and terminal libraries, applications and boot
+C runtime, native and terminal libraries, applications and boot
 scripts for Pyxis OS. Requires GNU Make, the prebuilt
 `x86_64-unknown-pyxis-` compiler and a selected Pyxis SDK. The session launcher
 also needs the Lua development files exported by the ports build; the HTTP
@@ -17,6 +17,10 @@ make install SDK=/path/to/sdk LUA_PREFIX=/path/to/ports-dev/lua PICOHTTPPARSER_P
 make clean
 make -f runtime.mk clean
 ```
+
+Applications and reusable libraries use hosted GNU C23. Libc, its musl/TLSF
+closure, crt0 and pre-TLS startup retain freestanding mode in `runtime.mk`;
+explicit no-builtin/rounding controls and the no-red-zone convention remain.
 
 `SDK` defaults to `build/sdk`; `BUILD` overrides the output directory for either
 phase. `LUA_PREFIX` defaults to `build/ports-dev/lua` and supplies `include` and

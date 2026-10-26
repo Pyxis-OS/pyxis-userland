@@ -169,6 +169,10 @@ MUSL_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(MUSL_SOURCES))
 LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
                 $(BUILD)/libc/tlsf.o $(BUILD)/libc/setjmp.o $(BUILD)/libc/thread_entry.o $(MUSL_OBJECTS)
 
+# Do not let builtin recognition rewrite libc implementations into calls to
+# themselves, or introduce library calls before startup establishes the runtime.
+$(LIBC_OBJECTS) $(START_OBJECT) $(BUILD)/lib/startup.o: private CFLAGS += -ffreestanding
+
 .PHONY: all libpyxis libterm libfont libsha256 libc clean FORCE
 all: $(START_OBJECT) libpyxis libterm libfont libsha256 libc
 libpyxis: $(LIBPYXIS)

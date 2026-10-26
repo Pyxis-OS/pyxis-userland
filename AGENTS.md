@@ -1,7 +1,7 @@
 # Pyxis userland development
 
-- Use freestanding GNU C23, snake_case, two spaces, K&R control braces and
-  function braces on their own line. Preserve upstream vendor formatting.
+- Use GNU C23 (hosted outside libc and pre-TLS startup), snake_case, two spaces,
+  K&R control braces and function braces on their own line. Preserve upstream vendor formatting.
 - Build against an explicitly selected Pyxis SDK and prebuilt target compiler.
   Public ABI/format headers and the shared shebang parser are owned by Pyxis;
   consume them through the SDK, not parent-checkout paths or manual copies.
