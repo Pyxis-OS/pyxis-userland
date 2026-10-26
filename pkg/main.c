@@ -461,10 +461,10 @@ static bool read_repository(const struct pkg_repository *repository,
   *entries = NULL;
   *count = 0;
   if (!repository->unsigned_index && !client.floors_loaded) {
-    client.floors_loaded = true;
     if (!pkg_repository_floors_load(&client.floors, &client.reason)) {
       return false;
     }
+    client.floors_loaded = true;
   }
   char *current = NULL, *bytes = NULL, *signature = NULL, *signer = NULL, *anchor = NULL;
   size_t current_size = 0, size = 0, signature_size = 0, signer_size = 0;
