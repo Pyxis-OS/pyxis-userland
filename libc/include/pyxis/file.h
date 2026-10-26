@@ -15,9 +15,9 @@ extern "C" {
  * O_APPEND retains libc's non-atomic SIZE/WRITE policy. */
 int pyxis_file_open(const char *path, int flags, mode_t mode);
 
-/* Sample metadata and actual grant rights from one admitted FILE descriptor,
+/* Sample metadata and actual grant rights from one admitted FILE, PIPE or CONSOLE descriptor,
  * retaining its open object and operation exclusion throughout both queries.
- * Does not change the cursor or upgrade the grant. Non-FILE descriptors fail
+ * Does not change the cursor or upgrade the grant. Unreported response-stream metadata fails
  * with ENOTSUP. Failure sets errno and preserves both outputs. */
 int pyxis_file_metadata(int descriptor, struct stat *metadata, uint64_t *rights);
 

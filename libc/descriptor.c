@@ -2165,8 +2165,7 @@ int pyxis_file_metadata(int descriptor, struct stat *metadata, uint64_t *rights)
   }
   struct stat value;
   struct handle_info info;
-  int result = object->kind != DESCRIPTOR_FILE ? fail(ENOTSUP) :
-      stat_locked(object, &value);
+  int result = stat_locked(object, &value);
   if (!result) {
     enum call_status status = handle_query(object->handle, &info);
     if (status != CALL_OK) {
