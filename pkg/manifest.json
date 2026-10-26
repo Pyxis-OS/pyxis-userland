@@ -123,7 +123,6 @@
     {
       "name": "power",
       "resource": "power",
-      "source": "power",
       "rights": [
         "restart"
       ],
