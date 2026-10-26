@@ -233,6 +233,7 @@ int pyxis_file_copy(const char *source, const char *destination, uint64_t *copie
   struct resource_result from = {0}, to = {0};
   bool created = false;
   bool unexpected_eof = false;
+  bool same_file = false;
   struct file_info_reply info = {0};
   if (status == CALL_OK) {
     status = open_operand(&working.context, source, false, &from, &created);
@@ -255,6 +256,7 @@ int pyxis_file_copy(const char *source, const char *destination, uint64_t *copie
     status = file_info(to.resource, &destination_info);
     if (status == CALL_OK) {
       status = prove_distinct(&info, &destination_info);
+      same_file = status == CALL_BAD_REQUEST;
     }
   }
   /* Finish releasing path authority before the first existing-object resize. */
@@ -297,7 +299,7 @@ int pyxis_file_copy(const char *source, const char *destination, uint64_t *copie
     status = closed;
   }
   if (status != CALL_OK) {
-    errno = libc_path_errno(status, source, destination);
+    errno = same_file ? EINVAL : libc_path_errno(status, source, destination);
     return unexpected_eof ? PYXIS_COPY_UNEXPECTED_EOF : -1;
   }
   *copied = info.size;
