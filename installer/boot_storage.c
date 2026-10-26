@@ -450,7 +450,6 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
   }
   struct config_record *record = &report->record;
   record->boot = boot->binding;
-  record->previous_boot = previous.boot;
   strcpy(record->transaction, transaction);
   /* A replaced menu keeps its previous bytes as recovery and retires the copy
    * before it; an unchanged menu carries its last recovery forward. */
@@ -581,9 +580,11 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
         report->boot_activated = true;
         report->boot_activation_pending = false;
         report->phase = CONFIG_PHASE_CLEANUP;
-        install_progress_begin("Verifying recorded older boot payloads", INSTALL_PROGRESS_WORK, NULL);
+        install_progress_begin("Verifying and removing unreferenced Pyxis boot attempts",
+            INSTALL_PROGRESS_WORK, NULL);
         ok = current_view(view, facts, true, interval.id, report) &&
-            install_publication_cleanup(boot, &previous.previous_boot, view, facts, interval.id, report);
+            install_publication_cleanup_orphans(boot, &record->boot,
+                view, facts, interval.id, report);
       }
     }
   }
@@ -705,13 +706,9 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   report->record = plan->record;
   report->committed = true;
   report->boot_activation_pending = plan->menu_changed;
-  struct install_esp_payloads *inherited = NULL;
   struct mount_interval_reply interval = {0};
   bool ok = pending_snapshot(request, plan, 0, report) &&
       pending_payload_open(request, &plan->record.boot, &boot.payloads, report);
-  if (ok && plan->record.previous_boot.present) {
-    ok = pending_payload_open(request, &plan->record.previous_boot, &inherited, report);
-  }
   char staged[CONFIG_ARTIFACT_NAME_BYTES];
   config_record_artifact_name(plan->record.transaction, CONFIG_MENU_NAME, "new", staged);
   if (ok && plan->menu_changed) {
@@ -742,13 +739,6 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
   for (unsigned pass = 0; ok && pass < 2; ++pass) {
     ok = pending_snapshot(request, plan, interval.id, report) &&
         install_publication_verify(&boot, report);
-    if (ok && inherited) {
-      struct install_esp_payload_report readback;
-      ok = install_esp_payload_verify(inherited, &readback);
-      if (!ok) {
-        failed(report, readback.status);
-      }
-    }
     if (ok) {
       ok = current_view(view, &request->facts, true, interval.id, report);
     }
@@ -813,8 +803,7 @@ bool config_storage_complete_pending(const struct install_pending_request *reque
       ok = failed(report, status);
     }
   }
-  bool closed = install_esp_payload_close(inherited);
-  closed = install_esp_payload_close(boot.payloads) && closed;
+  bool closed = install_esp_payload_close(boot.payloads);
   if (ok && !closed) {
     ok = failed(report, CALL_BAD_HANDLE);
   }

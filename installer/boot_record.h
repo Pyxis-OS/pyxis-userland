@@ -36,13 +36,15 @@ struct config_boot_binding {
   struct config_boot_payload kernel, archive, revision;
 };
 
-/* The ESP's boot record: the current attempt, the one before it, and the
- * owned menu's recovery copies. The transaction is the current attempt. */
+/* The ESP's boot record: the current attempt and the owned menu's recovery
+ * copies. The transaction is the current attempt. The legacy field is read
+ * only to verify and remove a 0.0.9 previous menu entry during Update. */
 struct config_record {
   bool committed;
+  bool legacy_format;
   char transaction[33];
   struct config_boot_binding boot;
-  struct config_boot_binding previous_boot;
+  struct config_boot_binding legacy_previous_boot;
   struct config_recovery_file previous_menu;
   /* Recovery from the preceding committed record. Deletion requires a fresh
    * content match after this record has committed; names alone grant nothing. */

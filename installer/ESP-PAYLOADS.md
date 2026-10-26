@@ -110,14 +110,12 @@ payload transport is shared. Normal Classic publication uses the immutable
 attempts and boot bindings described in [owned ESP publication](PUBLICATION.md).
 
 
-`boot_entry.h` shares the pure planner for the owned normal, previous and rescue
-entries with the coexistence caller. The planner accepts frozen menu bytes, the
-caller-certified inherited menu (a normal pair and an optional previous pair, or
-none when no committed boot record describes the menu), the next menu and the
-disk GUID. Only exact owned entries backed by those bindings, or a previous
-entry in a digest-proven inherited menu, can change; an absent previous entry is
-added after the normal one. Missing or ambiguous menus stay untouched and report
-activation pending; outside bytes are preserved.
+`boot_entry.h` shares the pure planner for the owned normal and rescue entries
+with the coexistence caller. It accepts frozen menu bytes, the caller-certified
+inherited menu and the next menu. A legacy previous entry can be removed only
+when its old binding or the entire previous menu's digest proves it. Missing or
+ambiguous menus stay untouched and report activation pending; outside bytes
+are preserved.
 
 The pure manual renderer emits unmarked normal/rescue entries only. An optional
 reviewed ESP GUID selects `guid(ESP_GUID):/`; otherwise it uses `boot():/`, per

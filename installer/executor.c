@@ -358,22 +358,26 @@ static bool stage_esp(struct install_plan *plan)
   return status == CALL_OK;
 }
 
-/* Removes program copies that no retained boot entry binds (installer.h). */
+/* Removes program copies after a confirmed Update (installer.h). */
 static void cleanup_programs(struct install_plan *plan)
 {
   bool updating = plan->record.updating;
   const char *previous = updating ? plan->record.previous : NULL;
 #if INSTALLER_PUBLICATION_SCRATCH
-  if (install_plan_publication(plan)) {
-    const struct config_boot_binding *retained = &plan->publication_report.record.previous_boot;
-    bool unknown_previous = updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION);
-    bool retained_conflict = retained->present && previous && !unknown_previous &&
-        strcmp(previous, retained->program_revision);
-    if (retained_conflict) {
-      fputs("Older program directories kept: recorded previous programs and retained boot programs differ.\n", stderr);
+  if (install_plan_publication(plan) && updating) {
+    if (!plan->publication_report.boot_activated) {
+      fputs("Older program directories kept: boot activation is pending.\n", stderr);
       return;
     }
-    if (retained->present && !unknown_previous) previous = retained->program_revision;
+    struct config_record outgoing = {0};
+    const struct config_blob *record = &plan->installed.record;
+    if (record->digest.present &&
+        (!config_record_parse(record->bytes, record->size, &outgoing) ||
+         (strcmp(previous, INSTALL_UNKNOWN_REVISION) &&
+          strcmp(previous, outgoing.boot.program_revision)))) {
+      fputs("Older program directories kept: installed and boot revisions differ.\n", stderr);
+      return;
+    }
   }
 #endif
   if (updating && !strcmp(previous, INSTALL_UNKNOWN_REVISION)) {

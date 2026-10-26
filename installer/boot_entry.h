@@ -10,14 +10,13 @@ struct install_boot_entry_paths {
   const char *kernel, *archive;
 };
 
-/* A menu's owned Pyxis entries: NORMAL boots the normal and rescue entries,
- * PREVIOUS, when not NULL, the "Pyxis OS (previous)" entry. For an inherited
- * menu, PREVIOUS_PROVEN instead owns a marked previous entry whatever it names:
- * the caller proved the whole menu equal to a digest-recorded menu this
- * publisher wrote (chronium, 2026-10-21). */
+/* A menu's owned Pyxis entries. LEGACY_PREVIOUS describes a previous entry
+ * found in a 0.0.9 menu; new menus never create one. ENTIRE_PROVEN allows
+ * recovery to replace marked entries after proving the whole menu equal to
+ * the committed record's digest-recorded previous menu. */
 struct install_boot_menu {
-  const struct install_boot_entry_paths *normal, *previous;
-  bool previous_proven;
+  const struct install_boot_entry_paths *normal, *legacy_previous;
+  bool entire_proven;
 };
 
 /* Pure planning over borrowed frozen bytes. Paths must be validated relative
@@ -28,10 +27,9 @@ struct install_boot_menu {
  * reviewed target. These inputs confer no I/O authority or boot readiness.
  *
  * Only exact inherited Pyxis entries are replaceable: normal and rescue must
- * match INHERITED's normal pair, and a present previous entry its previous pair
- * unless PREVIOUS_PROVEN. A missing previous entry, as in menus written before
- * it existed, is added after the normal entry when NEXT has one; NEXT without
- * one removes it. Markers alone do not establish ownership. An ambiguous menu is retained
+ * match INHERITED's normal pair, and a legacy previous entry its recorded pair,
+ * unless ENTIRE_PROVEN rests on a digest-recorded whole menu. A legacy previous
+ * entry is removed; markers alone do not establish ownership. An ambiguous menu is retained
  * byte-for-byte, with PENDING true. Inputs remain frozen and distinct from
  * caller-owned SELECTED, initialized as a config_blob. Keep the shared hash
  * context ready. Missing current input clears SELECTED and remains pending.
@@ -41,9 +39,8 @@ bool install_boot_entry_plan(const struct config_blob *current,
     uint64_t pool_partition, const struct install_boot_menu *next,
     struct config_blob *selected, bool *pending);
 
-/* Whether CURRENT is exactly the menu COMMITTED publishes, or that menu
- * without its previous entry, as written before the previous entry existed.
- * Same inputs and hash context as install_boot_entry_plan. */
+/* Whether CURRENT is exactly the menu COMMITTED publishes. Same inputs and
+ * hash context as install_boot_entry_plan. */
 bool install_boot_entry_current(const struct config_blob *current,
     const struct install_boot_menu *committed, const uint8_t disk_guid[16],
     uint64_t pool_partition, bool *is_current);

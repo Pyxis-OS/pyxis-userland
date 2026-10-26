@@ -139,9 +139,10 @@ bool config_record_valid(const struct config_record *record)
 {
   return record && config_transaction_valid(record->transaction) &&
       record->boot.present && config_boot_binding_valid(&record->boot) &&
-      config_boot_binding_valid(&record->previous_boot) &&
-      !(record->previous_boot.present &&
-          !strcmp(record->previous_boot.kernel.path, record->boot.kernel.path)) &&
+      config_boot_binding_valid(&record->legacy_previous_boot) &&
+      (!record->legacy_previous_boot.present || record->legacy_format) &&
+      !(record->legacy_previous_boot.present &&
+          !strcmp(record->legacy_previous_boot.kernel.path, record->boot.kernel.path)) &&
       recovery_valid(&record->previous_menu) && recovery_valid(&record->obsolete_menu) &&
       !(record->previous_menu.digest.present && record->obsolete_menu.digest.present &&
           !strcmp(record->previous_menu.name, record->obsolete_menu.name));
@@ -185,7 +186,8 @@ bool config_record_render(const struct config_record *record, char **bytes, size
   }
   *bytes = NULL;
   *size = 0;
-  if (!config_record_valid(record)) {
+  if (!config_record_valid(record) || record->legacy_format ||
+      record->legacy_previous_boot.present) {
     return false;
   }
   char *text = malloc(CONFIG_RECORD_MAX_BYTES + 1);
@@ -196,8 +198,7 @@ bool config_record_render(const struct config_record *record, char **bytes, size
       "PYXIS-CONFIG 1\nstate %s\ntransaction %s\n",
       record->committed ? "committed" : "prepared", record->transaction);
   size_t used = count > 0 ? (size_t)count : CONFIG_RECORD_MAX_BYTES + 1;
-  if (!render_binding("boot", &record->boot, text, &used) ||
-      !render_binding("previous-boot", &record->previous_boot, text, &used)) {
+  if (!render_binding("boot", &record->boot, text, &used)) {
     free(text);
     return false;
   }
@@ -343,8 +344,11 @@ bool config_record_parse(const void *bytes, size_t size, struct config_record *r
   if (ok) {
     strcpy(parsed.transaction, id);
   }
-  ok = ok && parse_binding(&cursor, "boot", &parsed.boot) &&
-      parse_binding(&cursor, "previous-boot", &parsed.previous_boot);
+  ok = ok && parse_binding(&cursor, "boot", &parsed.boot);
+  if (ok && !strncmp(cursor, "previous-boot ", sizeof("previous-boot ") - 1)) {
+    parsed.legacy_format = true;
+    ok = parse_binding(&cursor, "previous-boot", &parsed.legacy_previous_boot);
+  }
   for (unsigned group = 0; ok && group < 2; ++group) {
     struct config_recovery_file *file = group ? &parsed.obsolete_menu : &parsed.previous_menu;
     ok = word(&cursor, group ? "obsolete" : "previous", ' ') &&

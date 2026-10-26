@@ -39,10 +39,10 @@ bool install_pending_inspect(const struct config_blob *record,
   const struct config_record *history = &plan->record;
   const struct install_boot_entry_paths active = {
     history->boot.kernel.path, history->boot.archive.path};
-  const struct install_boot_entry_paths inherited = {
-    history->previous_boot.kernel.path, history->previous_boot.archive.path};
+  const struct install_boot_entry_paths legacy = {
+    history->legacy_previous_boot.kernel.path, history->legacy_previous_boot.archive.path};
   const struct install_boot_menu committed = {&active,
-    history->previous_boot.present ? &inherited : NULL, false};
+    history->legacy_previous_boot.present ? &legacy : NULL, false};
   bool pending = true, is_current = false;
   if (!install_boot_entry_current(current_menu, &committed, disk_guid, pool_partition,
       &is_current)) {
@@ -56,18 +56,20 @@ bool install_pending_inspect(const struct config_blob *record,
     plan->available = true;
     return true;
   }
+  /* An interrupted 0.0.9 publication would select its previous entry.
+   * Leave its old-format record for explicit recovery instead of publishing
+   * a menu with a retired boot role. */
+  if (history->legacy_format) {
+    return true;
+  }
   const struct config_recovery_file *old = &history->previous_menu;
   if (!old->digest.present || !config_blob_equal(previous_limine, current_menu) ||
       !digest_equal(&old->digest, &previous_limine->digest)) {
     return true;
   }
-  /* Every Update records the attempt it replaced; without one there is no
-   * proven earlier menu to complete. */
-  if (!history->previous_boot.present) {
-    return true;
-  }
-  /* The digest proof above owns its previous entry, whatever attempt it names. */
-  const struct install_boot_menu replaced = {&inherited, NULL, true};
+  /* The recorded digest proves the exact old menu, including any marked
+   * legacy entry, without retaining an outgoing boot binding. */
+  const struct install_boot_menu replaced = {NULL, NULL, true};
   if (!install_boot_entry_plan(current_menu, &replaced, disk_guid, pool_partition, &committed,
       &plan->menu, &pending)) {
     return false;

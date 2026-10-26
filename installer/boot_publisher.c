@@ -116,12 +116,11 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
           &publication->next_menu);
     } else {
       const struct install_boot_entry_paths old = {previous.boot.kernel.path, previous.boot.archive.path};
-      const struct install_boot_entry_paths old_previous = {previous.previous_boot.kernel.path,
-        previous.previous_boot.archive.path};
+      const struct install_boot_entry_paths old_previous = {previous.legacy_previous_boot.kernel.path,
+        previous.legacy_previous_boot.archive.path};
       const struct install_boot_menu inherited = {&old,
-        previous.previous_boot.present ? &old_previous : NULL, false};
-      /* The outgoing attempt becomes the previous entry, as it becomes previous_boot. */
-      const struct install_boot_menu target = {&next, recorded ? &old : NULL, false};
+        previous.legacy_previous_boot.present ? &old_previous : NULL, false};
+      const struct install_boot_menu target = {&next, NULL, false};
       ok = install_boot_entry_plan(&publication->menu, recorded ? &inherited : NULL,
           input->disk_guid, input->pool_partition, &target,
           &publication->next_menu, &publication->activation_pending);
@@ -204,13 +203,6 @@ void boot_publication_report(const struct boot_publication *publication,
       (unsigned long long)publication->required_bytes, (unsigned long long)publication->available_bytes);
   fputs(publication->recovery.present ? "Verified static recovery is retained.\n" :
       "Provision the reviewed immutable recovery pair and fallback before menu activation.\n", output);
-  struct config_record history = {0};
-  const struct config_blob *record = &publication->record;
-  if (record->digest.present && config_record_parse(record->bytes, record->size, &history)) {
-    fprintf(output, "Retain previous boot kernel %s (%s) and archive %s (%s) as the previous menu entry.\n",
-        history.boot.kernel.path, history.boot.kernel.digest.sha256,
-        history.boot.archive.path, history.boot.archive.digest.sha256);
-  }
   if (publication->activation_pending) {
     fputs("Existing menu remains; boot activation will be pending.\n", output);
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,

@@ -38,8 +38,10 @@ bool install_publication_publish(const struct install_publication_request *reque
     struct config_storage_report *report);
 bool install_publication_verify(const struct install_staged_boot *boot,
     struct config_storage_report *report);
-bool install_publication_cleanup(const struct install_staged_boot *boot,
-    const struct config_boot_binding *obsolete, const struct config_storage_view *view,
+/* Under the publication interval, remove only fully proven, unreferenced
+ * Pyxis attempts. An ambiguous directory refuses without guessing. */
+bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
+    const struct config_boot_binding *current, const struct config_storage_view *view,
     const struct config_target_facts *facts, uint64_t interval,
     struct config_storage_report *report);
 

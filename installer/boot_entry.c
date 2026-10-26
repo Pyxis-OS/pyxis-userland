@@ -48,17 +48,11 @@ static char *entry(const char *name, bool rescue, const char *kernel, const char
   return text;
 }
 
-enum boot_entry_role { ENTRY_NORMAL, ENTRY_PREVIOUS, ENTRY_RESCUE, ENTRY_ROLES };
-static const char *const role_ids[ENTRY_ROLES] = {"boot.normal", "boot.previous", "boot.rescue"};
+enum boot_entry_role { ENTRY_NORMAL, ENTRY_RESCUE, ENTRY_ROLES };
+static const char *const role_ids[ENTRY_ROLES] = {"boot.normal", "boot.rescue"};
 static const char *const role_names[ENTRY_ROLES] = {
-  "Pyxis OS (Caelum)", "Pyxis OS (previous)", "Pyxis OS (rescue)"
+  "Pyxis OS (Caelum)", "Pyxis OS (rescue)"
 };
-
-static const struct install_boot_entry_paths *role_paths(const struct install_boot_menu *menu,
-    enum boot_entry_role role)
-{
-  return role == ENTRY_PREVIOUS ? menu->previous : menu->normal;
-}
 
 /* The owned, marked form of one entry, optionally preceded by a blank line. */
 static char *owned_block(enum boot_entry_role role, const struct install_boot_entry_paths *paths,
@@ -105,65 +99,60 @@ bool install_boot_entry_plan(const struct config_blob *current,
   if (!config_owned_scan_limine("installed boot entries", (char *)current->bytes, current->size, &owned)) {
     return true;
   }
-  struct menu_edit edits[ENTRY_ROLES] = {0};
+  struct menu_edit edits[ENTRY_ROLES + 1] = {0};
   struct literal_span spans[ENTRY_ROLES] = {0};
   unsigned count = 0;
   bool recognized = true, ok = true;
-  /* Normal and rescue first: a new previous entry is inserted after normal. */
-  static const enum boot_entry_role order[ENTRY_ROLES] = {ENTRY_NORMAL, ENTRY_RESCUE, ENTRY_PREVIOUS};
   for (unsigned i = 0; i < ENTRY_ROLES && recognized && ok; ++i) {
-    enum boot_entry_role role = order[i];
+    enum boot_entry_role role = (enum boot_entry_role)i;
     const struct config_owned_span *marked = config_owned_find(owned, role_ids[role]);
-    const struct install_boot_entry_paths *wanted = role_paths(next, role);
-    if (role == ENTRY_PREVIOUS && !marked) {
-      /* An absent previous entry, as in menus from before it existed, is added. */
-      if (wanted) {
-        edits[count] = (struct menu_edit){.start = spans[ENTRY_NORMAL].end,
-          .end = spans[ENTRY_NORMAL].end};
-        edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, true, &edits[count].size);
-        ok = edits[count++].text != NULL;
-      }
-      break;
-    }
-    if (role == ENTRY_PREVIOUS && inherited && inherited->previous_proven) {
-      spans[role] = marked->span;
-      edits[count] = (struct menu_edit){.start = spans[role].start, .end = spans[role].end};
-      if (wanted) {
-        edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, false, &edits[count].size);
-        ok = edits[count].text != NULL;
-      }
-      ++count;
-      break;
-    }
-    const struct install_boot_entry_paths *old = inherited ? role_paths(inherited, role) : NULL;
-    if (!old) {
+    const struct install_boot_entry_paths *wanted = next->normal;
+    const struct install_boot_entry_paths *old = inherited ? inherited->normal : NULL;
+    if (!marked || (!old && !(inherited && inherited->entire_proven))) {
       recognized = false;
       break;
     }
-    size_t expected_size;
-    char *expected = entry(role_names[role], role == ENTRY_RESCUE, old->kernel, old->archive,
-        disk_guid, pool_partition, NULL, &expected_size);
-    if (!expected) {
-      ok = false;
-      break;
-    }
-    if (marked) {
+    if (!inherited->entire_proven) {
+      size_t expected_size;
+      char *expected = entry(role_names[role], role == ENTRY_RESCUE, old->kernel, old->archive,
+          disk_guid, pool_partition, NULL, &expected_size);
+      if (!expected) {
+        ok = false;
+        break;
+      }
       recognized = marked->content.end - marked->content.start == expected_size &&
           !memcmp(current->bytes + marked->content.start, expected, expected_size);
-      spans[role] = marked->span;
-    } else {
-      recognized = false;
+      free(expected);
     }
-    free(expected);
     if (!recognized) {
       break;
     }
+    spans[role] = marked->span;
     edits[count] = (struct menu_edit){.start = spans[role].start, .end = spans[role].end};
     if (wanted) {
       edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, false, &edits[count].size);
       ok = edits[count].text != NULL;
     }
     ++count;
+  }
+  const struct config_owned_span *legacy = config_owned_find(owned, "boot.previous");
+  if (recognized && ok && legacy) {
+    const struct install_boot_entry_paths *old = inherited ? inherited->legacy_previous : NULL;
+    recognized = inherited && (inherited->entire_proven || old);
+    if (recognized && !inherited->entire_proven) {
+      size_t expected_size;
+      char *expected = entry("Pyxis OS (previous)", false, old->kernel, old->archive,
+          disk_guid, pool_partition, NULL, &expected_size);
+      ok = expected != NULL;
+      if (ok) {
+        recognized = legacy->content.end - legacy->content.start == expected_size &&
+            !memcmp(current->bytes + legacy->content.start, expected, expected_size);
+      }
+      free(expected);
+    }
+    if (recognized && ok && !next->legacy_previous) {
+      edits[count++] = (struct menu_edit){.start = legacy->span.start, .end = legacy->span.end};
+    }
   }
   if (recognized && ok && spans[ENTRY_NORMAL].end <= spans[ENTRY_RESCUE].start) {
     for (unsigned i = 1; i < count; ++i) {
@@ -205,7 +194,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
       free(bytes);
     }
   }
-  for (unsigned i = 0; i < ENTRY_ROLES; ++i) {
+  for (unsigned i = 0; i < count; ++i) {
     free(edits[i].text);
   }
   config_owned_free(owned);
@@ -216,20 +205,16 @@ bool install_boot_entry_current(const struct config_blob *current,
     const struct install_boot_menu *committed, const uint8_t disk_guid[16],
     uint64_t pool_partition, bool *is_current)
 {
-  const struct install_boot_menu bare = {committed->normal, NULL, false};
-  const struct install_boot_menu *forms[] = {committed, &bare};
   *is_current = false;
-  for (unsigned i = 0; i < 2 && !*is_current; ++i) {
-    struct config_blob menu = {0};
-    bool pending = true;
-    if (!install_boot_entry_plan(current, forms[i], disk_guid, pool_partition, forms[i],
-        &menu, &pending)) {
-      config_blob_destroy(&menu);
-      return false;
-    }
-    *is_current = !pending && config_blob_equal(&menu, current);
+  struct config_blob menu = {0};
+  bool pending = true;
+  if (!install_boot_entry_plan(current, committed, disk_guid, pool_partition, committed,
+      &menu, &pending)) {
     config_blob_destroy(&menu);
+    return false;
   }
+  *is_current = !pending && config_blob_equal(&menu, current);
+  config_blob_destroy(&menu);
   return true;
 }
 

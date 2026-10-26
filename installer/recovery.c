@@ -573,10 +573,10 @@ static bool committed_menu(handle_t root, const struct config_record *record,
   bool ok = snapshot_file(root, "boot/limine/limine.conf", CONFIG_FILE_MAX_BYTES, &current) == CALL_OK;
   const struct install_boot_entry_paths active = {
     record->boot.kernel.path, record->boot.archive.path};
-  const struct install_boot_entry_paths inherited = {
-    record->previous_boot.kernel.path, record->previous_boot.archive.path};
+  const struct install_boot_entry_paths legacy = {
+    record->legacy_previous_boot.kernel.path, record->legacy_previous_boot.archive.path};
   const struct install_boot_menu committed = {&active,
-    record->previous_boot.present ? &inherited : NULL, false};
+    record->legacy_previous_boot.present ? &legacy : NULL, false};
   bool pending = true, is_current = false;
   if (ok) {
     ok = install_boot_entry_current(&current, &committed, disk_guid, pool_partition,
@@ -586,11 +586,10 @@ static bool committed_menu(handle_t root, const struct config_record *record,
     ok = config_blob_set(menu, current.bytes, current.size);
     pending = !ok;
   } else if (ok) {
-    ok = record->previous_boot.present &&
+    ok = !record->legacy_format &&
         recorded_menu_read(root, &record->previous_menu, &previous) &&
         config_blob_equal(&current, &previous);
-    /* The digest proof owns its previous entry, whatever attempt it names. */
-    const struct install_boot_menu replaced = {&inherited, NULL, true};
+    const struct install_boot_menu replaced = {NULL, NULL, true};
     if (ok) {
       ok = install_boot_entry_plan(&current, &replaced, disk_guid, pool_partition, &committed,
           menu, &pending);

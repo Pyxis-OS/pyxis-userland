@@ -41,7 +41,6 @@ struct config_storage_report {
   bool committed;
   bool boot_activated;
   bool boot_activation_pending;
-  bool boot_cleanup_skipped;
 };
 
 struct install_staged_boot;
