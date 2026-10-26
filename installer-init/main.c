@@ -431,7 +431,7 @@ int main(int argc, char **argv)
   bool snapshot_created = false, child_retired = false;
   static struct network network;
   struct providers providers = {.httpfs = HANDLE_INVALID};
-  bool fetch = false; /* Install, or a Replay of one: runs pkg. */
+  bool fetch = false; /* Every Install and Classic Update runs pkg. */
   struct pyxis_stdio_binding output = bootstrap_stdio(ENVIRONMENT_STDOUT);
   struct pyxis_stdio_binding error = bootstrap_stdio(ENVIRONMENT_STDERR);
   if (argc > 1) {
@@ -525,6 +525,7 @@ choose:
         continue;
       }
       coexist = update_choice.coexist;
+      fetch = !coexist;
       char guid[37];
       install_guid_text(update_choice.layout.disk_guid, guid);
       snprintf(selected_target, sizeof(selected_target), "--selected-target=%llu",
@@ -540,7 +541,7 @@ choose:
           &replay_updating, &inspection_clean)) {
         continue;
       }
-      fetch = !replay_updating;
+      fetch = !replay_updating || !coexist;
     } else {
       fetch = true;
     }
@@ -549,7 +550,7 @@ choose:
         prepare_fetch(&providers, sources[DIAGNOSTICS]);
       }
       if (providers.missing[0]) {
-        printf("Install fetches the base package and needs the network: %s.\n", providers.missing);
+        printf("Package staging needs the network: %s.\n", providers.missing);
         fetch = false;
         if (sources[REPLAY] != HANDLE_INVALID) {
           handle_close(sources[REPLAY]);
@@ -630,7 +631,7 @@ choose:
   struct launch_environment_entry entries[sizeof(resources) / sizeof(*resources) + 4];
   size_t entry_count = sizeof(resources) / sizeof(*resources);
   memcpy(entries, resources, sizeof(resources));
-  /* Only an install runs pkg, so only it gets a launcher and the providers. */
+  /* Only actions that stage packages get a launcher and GET-only providers. */
   const unsigned optional[] = {POWER, LAUNCHER, HTTP, HTTPS};
   for (size_t i = 0; i < sizeof(optional) / sizeof(*optional); ++i) {
     if (sources[optional[i]] != HANDLE_INVALID && (optional[i] == POWER || fetch)) {
