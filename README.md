@@ -19,7 +19,8 @@ make -f runtime.mk clean
 ```
 
 Applications and reusable libraries use hosted GNU C23. Libc, its musl/TLSF
-closure, crt0 and pre-TLS startup retain freestanding mode in `runtime.mk`;
+closure, crt0 and pre-TLS startup retain freestanding mode in `runtime.mk`
+(including its native environment/handle/memory/thread helper units);
 explicit no-builtin/rounding controls and the no-red-zone convention remain.
 
 `SDK` defaults to `build/sdk`; `BUILD` overrides the output directory for either

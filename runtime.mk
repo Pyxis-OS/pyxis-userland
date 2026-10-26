@@ -171,7 +171,8 @@ LIBC_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(LIBC_SOURCES)) \
 
 # Do not let builtin recognition rewrite libc implementations into calls to
 # themselves, or introduce library calls before startup establishes the runtime.
-$(LIBC_OBJECTS) $(START_OBJECT) $(BUILD)/lib/startup.o: private CFLAGS += -ffreestanding
+STARTUP_NATIVE_OBJECTS := $(addprefix $(BUILD)/lib/,startup.o environment.o handle.o memory.o thread.o)
+$(LIBC_OBJECTS) $(START_OBJECT) $(STARTUP_NATIVE_OBJECTS): private CFLAGS += -ffreestanding
 
 .PHONY: all libpyxis libterm libfont libsha256 libc clean FORCE
 all: $(START_OBJECT) libpyxis libterm libfont libsha256 libc
