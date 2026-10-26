@@ -23,14 +23,17 @@ mutation. Stale plans refuse without amendment.
 
 The menu offers Install, Update or replay of a printed plan. After read-only
 preparation, Review offers Apply (Enter), Print or Dry-run. Install retains its
-Proceed / Read the room, marker vetoes and journal choice. Update retains healthy
-installer-layout GPT, compatible pool opening metadata and an empty journal;
+Blank or marked disks / Any disk (may erase data) consent paths, marker vetoes
+and journal choice. A readable pool with no regular wipe markers vetoes both
+paths. Update retains healthy installer-layout GPT, compatible pool opening
+metadata and an empty journal;
 committed journals require an installed boot for recovery first.
 
 `--plan` stops at printing; `--dry-run` stops without applying. `--apply` reads
 one framed plan on standard input, reconstructs the same choices and displays
-Review. `--apply --confirm=wipe` or `--apply --confirm=update` supplies explicit
-non-interactive consent and skips the interactive restart offer. It grants no
+Review. `--apply --confirm=wipe`, `--apply --confirm=append` or
+`--apply --confirm=update` supplies explicit non-interactive consent and skips
+the interactive restart offer. It grants no
 rights. Human reports/progress use stderr; stdout is the canonical printed plan.
 A caller can save these bytes using its own grants; the installer does not
 create a plan file or acquire writable namespace authority.
@@ -72,12 +75,14 @@ physical-media/power-loss claim. Installs from before the core archive kept
 programs in `bin/REVISION`; after publication, `bin_cleanup.c` removes those
 except the known previous revision's, and an unknown previous skips it.
 
-The shared whole-ESP writer generates exactly the installed normal and rescue
-menu entries, with a three-second timeout and the selected disk binding. Live
-installer and FAT32 tool entries are never imported. Update regenerates the menu
-even for the same revision, removing extra entries from older installations.
-This task provides no FAT mount or config editor. Failed writes are not retried
-or rolled back. Failures direct the owner to live-media recovery.
+Normal builds use the [owned ESP publisher](PUBLICATION.md) for Classic
+Install/Update. Fresh Install establishes the installed normal/rescue menu with
+a three-second timeout and the selected disk binding; live installer and FAT32
+tool entries are never imported. Update changes only proven Pyxis-owned spans,
+preserving unowned content and the boot manager. Ambiguous ownership leaves the
+menu unchanged and reports staged payloads with boot activation pending. Exact
+recognized pending states need a fresh completion Review and `complete` consent.
+Failed writes are not retried or rolled back; reported artifacts remain for recovery.
 Mounted verification retains the pool until reboot. Restart is offered only after
 successful interactive apply, with the existing remove-medium reminder.
 
@@ -99,14 +104,17 @@ there is no host libc, formatter, firmware updater or compiler-container change.
 
 ## Classic and coexistence ESP paths
 
-Classic keeps its fixed EFI loader and `boot/{caelum.elf,initrd.cpio,revision}`
-paths, plus the allowlisted `boot/limine/limine.conf`. Healthy ESPs are written
-through native FAT files without formatting; a damaged/missing classic ESP
-requires its separately reviewed one-use rebuild grant. A readable but unclean
-ESP also requires that recovery route; read-only admission does not establish
-writable health, and any readable foreign menu binding still refuses it. Program sync and
-verification precede boot-payload publication. No classic attempt directories
-are created until installer task 5 adds committed boot-binding evidence.
+`INSTALLER_PUBLICATION_SCRATCH=1` is the default. Classic stages immutable
+`EFI/pyxis/REVISION/ATTEMPT/` payloads and commits their current/previous bindings
+in `EFI/pyxis/config/config.record` before the owned menu switch. Its loader
+remains at `EFI/BOOT/BOOTX64.EFI`, with the primary menu at
+`boot/limine/limine.conf` and a separate pinned rescue pair and fallback menu.
+Normal Update preserves a healthy ESP without formatting; a damaged or missing
+Classic ESP requires a separately reviewed one-use rebuild grant. Read-only
+admission does not establish writable health. Program sync and verification
+precede boot publication. Explicit `INSTALLER_PUBLICATION_SCRATCH=0` retains the
+legacy development path with fixed `boot/{caelum.elf,initrd.cpio,revision}`
+payloads and whole-menu replacement.
 
 The explicit coexistence profile receives APPEND rather than ERASE or ESP
 rebuild authority. `--coexist` selects that behaviour without adding grants.
@@ -115,6 +123,9 @@ existing selected pool. Every volume operation uses that actual GPT entry.
 Coexistence stages only immutable `EFI/pyxis/REVISION/ATTEMPT/` payloads through
 the shared stager and prints their saved manual entry after verified sync.
 It edits no existing boot menu or firmware and never reports activation.
+New Coexist owned-record/menu publication remains gated on separate full
+qualification and an activation record; existing committed pending records can
+use the publisher's explicitly reviewed completion route.
 Review requires a supported clean FAT32 ESP; FAT12/FAT16 refuse without a
 rebuild. Checked free clusters must cover the fresh attempt's independently
 rounded payloads, ownership record and conservative directory allowance before
@@ -123,7 +134,7 @@ The final read-only observation is fingerprinted and revalidated before effects;
 it is not a space reservation. Existing attempts are never credited or deleted.
 
 Copies run outside the final publication interval. BEGIN is followed immediately
-by CHECK; final held-object/hash verification and classic menu/revision changes
+by CHECK; final held-object/hash verification and boot-record/menu publication
 use the original non-extending 30-second lease. All staged references close
 before root drainage, RETIRE and control close; END names the returned interval. Failure reports partial
 effects without automatic retry, deletion or rollback.

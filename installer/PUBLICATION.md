@@ -23,8 +23,8 @@ layout refuses without fallback to Coexist or a legacy-adoption option.
 ## Shared publisher library
 
 `boot_publisher.h` is the publisher's front-end interface, built with the modules
-it uses into `libpublisher.a`. The installer links it, and `pkg upgrade` is to link
-the same archive. The caller selects and admits the ESP, retires its planning
+it uses into `libpublisher.a`. The installer and `pkg upgrade` link the same
+archive. The caller selects and admits the ESP, retires its planning
 view, supplies the reviewed target facts, kernel and filtered archive sources,
 revision, attempt and private RAM parent, and owns consent. The library prepares
 the frozen review state, revalidates it inside the checked admission interval and

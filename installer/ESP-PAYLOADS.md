@@ -96,16 +96,18 @@ selects an active boot source or activates installed Update. Coexistence can
 retain entry.txt as the exact printed entry; it is not installed automatically.
 
 `esp_transfer.h` shares these same workspace, bounded transport and hashing
-routines with the classic fixed-path adapter. Classic keeps its existing
-UINT32_MAX file bound; coexistence keeps its 1 GiB bound. Both use at most
+routines with the legacy Classic fixed-path adapter, selected by the explicit
+`INSTALLER_PUBLICATION_SCRATCH=0` development build. That adapter keeps its
+UINT32_MAX file bound; immutable-attempt staging keeps its 1 GiB bound. Both use at most
 `FILE_TRANSFER_MAX_BYTES` per native transfer, with no fallback or error retry.
 The already delegated private RAM parent is required by both frontends. Each
 stage result owns its immediately unlinked RAM FILE until close, including on
 partial failure. The parent is borrowed only during stage and is never closed
-by either helper. Classic retains its fixed paths, canonical object checks,
+by either helper. The legacy adapter retains its fixed paths, canonical object checks,
 post-copy truncation and sync, stage-before-BEGIN/CHECK ordering, verification
 inside the unchanged interval and small revision/menu activation. Only its
-payload transport is shared; no attempt layout or activation policy changes.
+payload transport is shared. Normal Classic publication uses the immutable
+attempts and boot bindings described in [owned ESP publication](PUBLICATION.md).
 
 
 `boot_entry.h` shares the pure planner for the owned normal, previous and rescue

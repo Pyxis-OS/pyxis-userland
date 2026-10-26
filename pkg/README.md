@@ -4,6 +4,7 @@ Manage immutable data, toolchain and command packages on the installed npfs pack
 Named repositories are literal data in system://config/packages.lua. Installation
 uses the space's declared package management grant and GET-only HTTP providers.
 
+```text
 pkg status
 pkg list [--available]
 pkg check [REPO/]ID[@VERSION]
@@ -13,14 +14,23 @@ pkg rollback [SET]
 pkg verify
 pkg reindex
 pkg unlock
+pkg upgrade [VERSION]
 pkg repository list
-pkg repository add NAME URL
+pkg repository add [--unsigned] NAME URL
 pkg repository remove NAME
+```
 
 Repository names follow the package ID rules. `REPO/ID` installs from one
 repository; a plain ID offered by several gives a numbered choice on a console
 and is refused elsewhere, listing the `REPO/ID` spellings. The review shows
 which repository each fetched package comes from.
+
+Repository reads fetch `current`, then its immutable `index/N.lua`. Signed
+repositories also fetch the index signature and signer certificate, verified
+against the pinned Pyxis Software Signing CA. Signed-index repository-name, accepted
+serial/time/hash and first-contact signing-floor checks refuse stale or altered
+indexes. There is no unsigned fallback: an unsigned development repository needs
+`signed = false`; `pkg repository add --unsigned NAME URL` records that choice.
 
 `pkg check` reads only the repository indexes and needs no packages volume. It
 prints the build of ID that this system can install, or fails saying whether
@@ -68,6 +78,16 @@ The confirmed switch is guarded until its actual result is known. Boot cleanup
 removes unused versions before consumers start, retaining the active and previous
 sets. No archive scripts execute.
 
+`pkg upgrade [VERSION]` reads only the signed `releases` repository and selects
+the named release or its last published release, refusing the one already
+running. It needs an installed system booted from its own boot entry and a space
+with `package_upgrade = true`; live media and rescue boots refuse. Review shows
+the release and installed packages whose ABI it does not provide. After archive
+verification, the shared boot publisher stages a fresh attempt and retains the
+running attempt as `Pyxis OS (previous)`. Success requires reboot to run the new
+release; ordinary packages upgrade separately. Boot admission is single-use per
+boot, so a failure from admission onward needs a reboot before retrying.
+
 A package declares its command exports in package.lua. A plain export names a
 .pxe path within tree; a bundle export names a .pxb directory and one declared
 bundle command alias. Undeclared files are never discovered. Export names must
@@ -91,13 +111,14 @@ refuse missing or damaged indexes for a nonzero active set.
 
 Repository edits need package management and the separately declared confined
 config writer. List needs only config read authority. URLs are exact distinct
-HTTP/HTTPS bases without credentials, query or fragment; add/remove accept URLs
-with or without a final / and append it before storing or comparing. Duplicate
-adds refuse without changing configuration; remove matches either spelling. At most
-eight bases of 2048 bytes each including the stored final /. Removing an absent
-URL reports not found. Missing configuration is empty; malformed
-configuration refuses editing. Add fetches index.lua and requires the existing strict index validation before
-saving. An unreachable host, HTTP failure or invalid index refuses without
+HTTP/HTTPS bases without credentials, query or fragment; add accepts URLs
+with or without a final / and appends it before storing or comparing. Duplicate
+names or URLs refuse without changing configuration. At most eight bases of
+2048 bytes each including the stored final /. Remove selects the repository by
+name; an absent name reports not found. Missing configuration is empty; malformed
+configuration refuses editing. Add uses the same published-index validation and
+signature policy as later reads before saving. An unreachable host, HTTP failure
+or invalid index refuses without
 changing configuration; add it once reachable. Remove needs no network request.
 Fetch failures name the full request
 URL and retain the provider detail, including the HTTP status when available.
