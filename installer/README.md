@@ -127,12 +127,11 @@ or another loader's configuration. A firmware registration failure is an
 incomplete install, with no blind retry.
 New Install appends the reviewed native-pool slot first; Update opens its
 existing selected pool. Every volume operation uses that actual GPT entry.
-Coexistence stages only immutable `EFI/pyxis/REVISION/ATTEMPT/` payloads through
-the shared stager and prints their saved manual entry after verified sync.
-It edits no existing boot menu or firmware and never reports activation.
-New Coexist owned-record/menu publication remains gated on separate full
-qualification and an activation record; existing committed pending records can
-use the publisher's explicitly reviewed completion route.
+Coexistence stages immutable `EFI/pyxis/REVISION/ATTEMPT/` payloads through
+the shared stager, then publishes the owned record and normal/rescue menu.
+Unrecorded Coexist installations use Update to obtain that record and the
+owned UEFI option. Existing committed pending records use the publisher's
+explicitly reviewed completion route.
 Review requires a supported clean FAT32 ESP; FAT12/FAT16 refuse without a
 rebuild. Checked free clusters must cover the fresh attempt's independently
 rounded payloads, ownership record and conservative directory allowance before

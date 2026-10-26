@@ -2,7 +2,7 @@
 
 Normal builds enable the integrated Classic and Coexist Install/Update publisher.
 `INSTALLER_PUBLICATION_SCRATCH=1` is the default build setting; explicit `=0`
-retains the legacy development build. Coexist uses the same record, normal and
+retains a legacy development build, not the delivered Coexist workflow. Coexist uses the same record, normal and
 rescue menu, and owned-attempt retention. It additionally freezes and verifies
 the fixed `EFI/pyxis/BOOTX64.EFI` loader before publication. An existing loader
 must match the reviewed source exactly. The installer requests the structured
@@ -92,8 +92,7 @@ Update. Choose Update and the pending target to open a fresh completion Review,
 select completion, then type `complete`. Exact recognized pending states reuse
 the attempt, record and current menu without a new retention generation.
 Existing committed pending Coexist records use the same reachable explicit
-completion and full proofs under their confined authority, without enabling new
-Coexist publication. Edited or ambiguous menus, mismatching payloads and
+completion and full proofs under their confined authority. Edited or ambiguous menus, mismatching payloads and
 unrecognized artifacts refuse. A power cut can leave FAT marked dirty; writable
 admission then refuses even a recognized pending record. Completion requires a
 clean ESP, after separately authorized external repair where necessary. The
@@ -127,6 +126,8 @@ separates QEMU source/functional/cut evidence from the owner-reported 2026-10-20
 native gate on vela. The native gate covered Classic clean Install, installed loading,
 same-revision Update and rescue through the prior UI. New action/completion UI
 checks are recorded separately, including the dirty-FAT refusal and completion
-after external repair on disposable QEMU copies. Coexist activation is not qualified.
+after external repair on disposable QEMU copies. Owned Coexist Install and Update
+passed disposable 4-vCPU KVM/OVMF checks at pyxis-os `223556b2` and userland
+`b6fbf16`; native firmware-variable and power-cut behavior remain unqualified.
 Foreign-file preservation was not checked on
 that freshly wiped medium, and no native power-cut qualification is claimed.
