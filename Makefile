@@ -101,7 +101,7 @@ INSTALL_SELECTOR_SOURCES := installer-init/update.c installer/io.c installer/gpt
 INSTALL_SELECTOR_OBJECTS := $(addprefix $(BUILD)/installer-init/inspect/,$(INSTALL_SELECTOR_SOURCES:.c=.o))
 BOOT_INIT_OBJECTS += $(BUILD)/boot-init/handoff.o $(BUILD)/installer/boot_record.o $(BUILD)/installer/digest.o
 BOOT_INIT_LIBRARIES := $(SHA256_LIBRARY)
-PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o store.o commands.o sdk.o progress.o signature.o upgrade.o)
+PKG_OBJECTS := $(addprefix $(BUILD)/pkg/,main.o archive.o metadata.o fetch.o floor.o store.o commands.o sdk.o progress.o signature.o upgrade.o)
 DNS_LOOKUP_OBJECT := $(BUILD)/common/dns_lookup.o
 DNS_OBJECTS := $(BUILD)/common/dns_message.o $(BUILD)/common/dns_query.o
 UDP_OBJECT := $(BUILD)/common/udp.o

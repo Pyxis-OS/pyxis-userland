@@ -2,6 +2,7 @@
 #include "commands.h"
 #include "sdk.h"
 #include "fetch.h"
+#include "floor.h"
 #include "progress.h"
 #include "signature.h"
 #include "store.h"
@@ -59,6 +60,8 @@ struct client {
   handle_t passthrough;
   struct pkg_fetch_authority fetch;
   struct pkg_repositories repositories;
+  struct pkg_repository_floors floors;
+  bool floors_loaded;
   /* Non-NULL only while resolving a set for a future release. */
   const struct pkg_entry *target_release;
   struct offered_package *offered;
@@ -450,18 +453,19 @@ static bool accepted_write(const struct pkg_repository *repository,
   return ok || fail("cannot record the accepted repository index");
 }
 
-/* Reads REPOSITORY's published index (docs/wip/pkg-upgrade.md, decisions 71
- * and 72): current, the index/N.lua it names and, unless the entry says
- * signed = false, that index's signature and signer, checked against the pinned
- * CA. A signed index with a lower serial or an earlier signed time than the one
- * this packages volume last accepted, or signed before this image's
- * signed_floor, is refused; a writer records the one it accepts. Success owns
- * *entries. */
+/* A signed index must pass the archive's reviewed floor and the packages
+ * volume's accepted-index record. Neither source can replace the other. */
 static bool read_repository(const struct pkg_repository *repository,
     struct pkg_entry **entries, size_t *count)
 {
   *entries = NULL;
   *count = 0;
+  if (!repository->unsigned_index && !client.floors_loaded) {
+    client.floors_loaded = true;
+    if (!pkg_repository_floors_load(&client.floors, &client.reason)) {
+      return false;
+    }
+  }
   char *current = NULL, *bytes = NULL, *signature = NULL, *signer = NULL, *anchor = NULL;
   size_t current_size = 0, size = 0, signature_size = 0, signer_size = 0;
   struct pkg_index_header header;
@@ -524,6 +528,8 @@ static bool read_repository(const struct pkg_repository *repository,
     strcpy(latest.signed_at, header.signed_at);
     const struct package_provided_abi *provided = provided_abi();
     bool known = accepted_read(repository, &accepted);
+    const struct pkg_repository_floor *floor =
+        pkg_repository_floor_find(&client.floors, repository);
     if (known && header.serial < accepted.serial) {
       snprintf(client.message, sizeof(client.message),
           "index serial %llu is older than the accepted %llu; refusing a rollback",
@@ -533,9 +539,19 @@ static bool read_repository(const struct pkg_repository *repository,
       ok = fail("the index differs from the accepted one with the same serial");
     } else if (known && strcmp(header.signed_at, accepted.signed_at) < 0) {
       ok = fail("the index was signed before the accepted one; refusing it");
-    } else if (!known && !client.provided_readable) {
+    } else if (floor && header.serial < floor->serial) {
+      ok = fail("the index serial is below this image's reviewed repository floor");
+    } else if (floor && header.serial == floor->serial &&
+        strcmp(latest.sha256, floor->sha256)) {
+      ok = fail("the index differs from this image's reviewed repository floor");
+    } else if (floor && strcmp(header.signed_at, floor->signed_at) < 0) {
+      ok = fail("the index was signed before this image's reviewed repository floor");
+    } else if (!floor && !known &&
+        (!strcmp(repository->name, "public") || !strcmp(repository->name, "releases"))) {
+      ok = fail("this image has no reviewed floor for this signed stock repository");
+    } else if (!floor && !known && !client.provided_readable) {
       ok = fail("cannot read boot://os-release for the first-contact signing floor");
-    } else if (!known && provided->signed_floor[0] &&
+    } else if (!floor && !known && provided->signed_floor[0] &&
         strcmp(header.signed_at, provided->signed_floor) < 0) {
       ok = fail("the index was signed before this system was built; refusing it");
     }
