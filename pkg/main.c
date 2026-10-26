@@ -246,6 +246,7 @@ static bool source_set(struct pkg_selection *selection, size_t index, size_t rep
 {
   struct pkg_origin *origin = &selection->origins[index];
   strcpy(origin->name, client.repositories.entries[repository].name);
+  origin->only_source = false;
   return source_fingerprint(&client.repositories.entries[repository], origin->fingerprint) ||
       fail("cannot fingerprint repository identity");
 }
@@ -1099,6 +1100,7 @@ struct update_work {
   bool selected[PKG_SELECTION_MAX];
   bool named[PKG_SELECTION_MAX];
   bool removed[PKG_SELECTION_MAX];
+  bool only_source[PKG_SELECTION_MAX];
   size_t source[PKG_SELECTION_MAX];
   uint16_t choices[PKG_SELECTION_MAX];
 };
@@ -1134,7 +1136,7 @@ static bool update_sources(struct pkg_selection *selection, struct update_work *
       for (size_t r = 0; r < client.repositories.count; ++r) {
         if (mask & (UINT16_C(1) << r)) {
           work->source[i] = r;
-          selection->origins[i].only_source = true;
+          work->only_source[i] = true;
         }
       }
     } else {
@@ -1289,6 +1291,7 @@ static bool prepare_update(struct pkg_selection *selection, int argc, char **arg
     if (offer) {
       selection->entries[i] = offer->entry.identity;
       ok = source_set(selection, i, offer->repository);
+      if (ok) selection->origins[i].only_source = work->only_source[i];
     }
     if (!ok) break;
     if (offer && (strcmp(old.version, selection->entries[i].version) ||
