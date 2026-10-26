@@ -72,8 +72,8 @@ payloads. Its staging reserve credits no cleanup; it is not a guarantee against
 all allocation limits. EFI verification syncs and reopens native FAT files,
 compares held-object identity and hashes all bytes, without a cache-bypass or
 physical-media/power-loss claim. Installs from before the core archive kept
-programs in `bin/REVISION`; after publication, `bin_cleanup.c` removes those
-except the known previous revision's, and an unknown previous skips it.
+programs in `bin/REVISION`; after confirmed publication, `bin_cleanup.c`
+removes the outgoing revision's copies. An unknown outgoing revision skips it.
 
 Normal builds use the [owned ESP publisher](PUBLICATION.md) for Classic
 Install/Update. Fresh Install establishes the installed normal/rescue menu with
