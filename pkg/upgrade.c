@@ -179,6 +179,7 @@ bool pkg_upgrade_publish(const struct pkg_upgrade_publish *request, const char *
     .revision = request->revision, .attempt = attempt, .revision_record = revision_record,
     .disk_guid = boot.disk_guid, .pool_partition = request->evidence->pool, .target = facts};
   struct boot_publication publication = {0};
+  bool pending_written = false, publication_started = false;
   if (ok && !boot_publication_prepare(&publication, &input, view.root, view.control)) {
     ok = false;
     *reason = "the boot ESP cannot take this release (see above); nothing was written";
@@ -206,6 +207,8 @@ bool pkg_upgrade_publish(const struct pkg_upgrade_publish *request, const char *
     if (status != CALL_OK) {
       ok = false;
       *reason = "cannot durably record the pending package set; no ESP payload was written";
+    } else {
+      pending_written = true;
     }
   }
   if (ok) {
@@ -217,9 +220,14 @@ bool pkg_upgrade_publish(const struct pkg_upgrade_publish *request, const char *
     *reason = "the boot ESP changed during review; nothing was written";
   }
   struct config_storage_report report = {0};
+  if (ok) publication_started = true;
   if (ok && !boot_publication_publish(&publication, &input, &view, &report)) {
     ok = false;
     *reason = "publishing the release failed (see above); inspect boot selection before reboot";
+  }
+  if (!ok && pending_written && !publication_started &&
+      package_transition_remove(request->packages) != CALL_OK) {
+    *reason = "no ESP payload was written, but pending package proof could not be cleared";
   }
   boot_publication_destroy(&publication);
   uint64_t now = 0;

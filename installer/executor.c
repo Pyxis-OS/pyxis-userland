@@ -504,10 +504,11 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
     goto done;
   }
   if (install_plan_publication(plan)) {
-    if (updating ? !install_packages_update_stage(plan) :
-        (!install_packages_base(disk->handle, plan->target.pool.partition) ||
-         !install_packages_boot_mark(plan))) {
-      goto done;
+    if (updating) {
+      if (!install_packages_update_stage(plan)) goto done;
+    } else {
+      if (!install_packages_base(disk->handle, plan->target.pool.partition) ||
+          !install_packages_boot_mark(plan)) goto done;
     }
   } else if (!updating &&
       !install_packages_base(disk->handle, plan->target.pool.partition)) {

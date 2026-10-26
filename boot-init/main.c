@@ -166,6 +166,7 @@ struct authority {
   handle_t boot_evidence; /* READ-only; granted only to package_upgrade spaces. */
   enum boot_record_state boot_record;
   struct package_boot_identity boot_identity;
+  bool package_maintenance_blocked; /* Preserve evidence on an ambiguous boot. */
   /* Granted only to spaces that set screenshot. */
   handle_t screen_capture;
   /* The read-only ACPI table root, bound as acpi only for spaces that set acpi_tables. */
@@ -1826,7 +1827,7 @@ static struct boot_volume pool_http_work = {
 static void maintain_packages(const struct authority *authority, struct mounts *mounts)
 {
   static bool maintained;
-  if (maintained) {
+  if (maintained || authority->package_maintenance_blocked) {
     return;
   }
   maintained = true;
@@ -2215,6 +2216,7 @@ int main(int argc, char **argv)
         !package_boot_gate(&authority, &mounts, &defer_maintenance,
           rescue, sizeof(rescue))) {
       configured = false;
+      authority.package_maintenance_blocked = true;
     }
     if (configured) {
       bind_bin(&authority, &mounts, pool_configured);
