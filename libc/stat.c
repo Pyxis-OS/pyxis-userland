@@ -71,6 +71,10 @@ static enum call_status file_metadata(const char *path, struct stat *result)
 
 int stat(const char *restrict path, struct stat *restrict result)
 {
+  if (path && !*path) {
+    errno = ENOENT;
+    return -1;
+  }
   enum call_status status = file_metadata(path, result);
   if (status == CALL_WRONG_TYPE || status == CALL_DENIED) {
     /* A directory needs no rights of its own to be identified. */

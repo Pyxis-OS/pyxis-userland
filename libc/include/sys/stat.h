@@ -51,6 +51,7 @@ struct stat {
  * them). A provider URI is opened as a file, which for HTTP(S) performs
  * the request. Sizes above the off_t range fail with EOVERFLOW. Unsupported
  * metadata leaves its validity bits clear without hiding other query errors.
+ * An empty path returns ENOENT.
  * Path stat does not retain a reference after return; use open/fstat when
  * identity comparison needs to keep the underlying object alive. */
 int stat(const char *__restrict path, struct stat *__restrict result);
