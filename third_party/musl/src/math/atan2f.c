@@ -24,7 +24,7 @@ float atan2f(float y, float x)
 	float z;
 	uint32_t m,ix,iy;
 
-	if (__builtin_isnan(x) || __builtin_isnan(y))
+	if (isnan(x) || isnan(y))
 		return x+y;
 	GET_FLOAT_WORD(ix, x);
 	GET_FLOAT_WORD(iy, y);

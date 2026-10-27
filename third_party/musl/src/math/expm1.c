@@ -127,7 +127,7 @@ double expm1(double x)
 
 	/* filter out huge and non-finite argument */
 	if (hx >= 0x4043687A) {  /* if |x|>=56*ln2 */
-		if (__builtin_isnan(x))
+		if (isnan(x))
 			return x;
 		if (sign)
 			return -1;

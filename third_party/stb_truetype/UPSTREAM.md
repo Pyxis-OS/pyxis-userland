@@ -14,10 +14,11 @@ The archive was obtained through the owner's download mirror, with SHA-256:
 
 The header retains upstream formatting. Local changes are limited to:
 
-- Check CFF shape allocation before writing vertices; free it if the output
-  charstring pass fails.
+- Check CFF shape allocation before writing vertices. The native scratch
+  adapter sweeps retained allocations after a failed output pass.
 - Return when the version 2 rasterizer's heap scanline allocation fails.
-- Remove active-edge allocation assertions; retain the existing null returns.
+- Remove the selected version 2 active-edge allocation assertion; retain its
+  existing null return. Version 1 remains unmodified at that site.
 - Return an unsupported result for composite matching-point placement through
   the private `STBTT_unsupported` hook, freeing accumulated vertices.
 - Check composite vertex-count addition before signed overflow. Saturate CFF

@@ -9,7 +9,7 @@ special cases:
 
 double logb(double x)
 {
-	if (!__builtin_isfinite(x))
+	if (!isfinite(x))
 		return x * x;
 	if (x == 0)
 		return -1/(x*x);

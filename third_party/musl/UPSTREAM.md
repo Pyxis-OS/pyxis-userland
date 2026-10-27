@@ -50,8 +50,7 @@ The Lua core prerequisites add the following unmodified files from the same pin:
 - `src/math/__math_xflow.c`, `src/math/__math_uflow.c`,
   `src/math/__math_oflow.c`, `src/math/__math_invalid.c`
 
-`src/math/fmod.c` replaces only `isnan` with the compiler's `__builtin_isnan`,
-as used elsewhere in this subset. It does not add a public classification API.
+`src/math/fmod.c` is copied unmodified from the same pin.
 `src/math/exp_data.h` and `src/math/pow_data.h` omit musl's `features.h` include
 and internal `hidden` visibility marker; Pyxis links these libraries statically.
 The coefficient tables and numerical algorithms are unchanged.
@@ -126,13 +125,11 @@ The EDuke32 port's prerequisites add these files from the same pin:
 - `src/math/sinf.c`, `cosf.c`, `tanf.c`, `__sindf.c`, `__cosdf.c`, `__tandf.c`
   and `__rem_pio2f.c`, unmodified; large arguments use the existing
   `__rem_pio2_large`;
-- `src/math/acosf.c`, unmodified, and `atanf.c` and `atan2f.c`, which replace
-  only `isnan` with `__builtin_isnan` as `atan2.c` does;
+- `src/math/acosf.c`, `atanf.c` and `atan2f.c`, unmodified;
 - `src/math/expf.c`, unmodified, using the existing `exp2f_data`;
 - `src/math/logf.c`, `logf_data.c` and `log10f.c`, unmodified, and
   `logf_data.h`, omitting `features.h` and the `hidden` marker;
-- `src/math/floorf.c`, `fabsf.c` and `rintf.c`, unmodified, and `fmodf.c`,
-  which replaces only `isnan` with `__builtin_isnan`;
+- `src/math/floorf.c`, `fabsf.c`, `rintf.c` and `fmodf.c`, unmodified;
 - `src/math/x86_64/lrint.c`, `lrintf.c` and `llrintf.c`, unmodified, using
   SSE `cvtsd2si` and `cvtss2si` in the current rounding mode;
 - `src/math/__math_divzerof.c`, unmodified, which `logf` uses for zero.
@@ -143,8 +140,8 @@ and declares `__rem_pio2f`, `__sindf`, `__cosdf`, `__tandf` and
 `M_*` constants with musl's values. Errors raise FP exception flags; errno is
 unchanged.
 
-`src/math/atan.c` and `src/math/atan2.c` replace only `isnan` with
-`__builtin_isnan`, as in `fmod.c`. `src/internal/libm.h` adds upstream's
+`src/math/atan.c` and `src/math/atan2.c` are copied unmodified from the pin.
+`src/internal/libm.h` adds upstream's
 `EXTRACT_WORDS`, `GET_HIGH_WORD`, `INSERT_WORDS` and `SET_LOW_WORD` macros and
 the `__rem_pio2*`, `__sin`, `__cos` and `__tan` declarations without `hidden`.
 Trigonometric arguments of any magnitude use musl's exact reduction modulo pi/2.
@@ -193,8 +190,8 @@ local-time arithmetic is described below; locale is not imported.
 `src/stdio/format_float.c` extracts `fmt_u` and `fmt_fp` from that pin's
 `src/stdio/vfprintf.c`, retaining the numerical algorithm and upstream formatting.
 Local adaptations replace FILE output/padding with libc's bounded buffer helpers,
-retain the digit table terminator, map named formatting flags, use compiler builtins for FP classification, and
-widen precision/rounding-position arithmetic to int64_t so extreme requested
+retain the digit table terminator, map named formatting flags, and widen
+precision/rounding-position arithmetic to int64_t so extreme requested
 precisions cannot overflow before the output-length checks. The entry point is
 renamed `format_float`; unrelated stream, integer and wide formatting is omitted.
 The source uses the same two warning exceptions as floatscan for upstream idioms.
@@ -211,9 +208,9 @@ Local-time conversion adds `src/time/__year_to_secs.c` and
 `src/time/rule_to_secs.c` extracts rule-to-calendar and UTC-year calculations from that
 pin's `src/time/__tz.c`, retaining upstream formatting. Local adaptations use
 named rule fields, a long-long year for neighboring years at tm_year's limits,
-an explicit month-length table, normalize negative weekdays before 1970, and
-bound the year estimate before arithmetic while allowing neighboring UTC years
-at the local calendar limits. Exact New Year belongs to the new rule year.
+an explicit month-length table, and bound the year estimate before arithmetic
+while allowing neighboring UTC years at the local calendar limits. Weekday
+arithmetic and the rule-year boundary comparison retain the pinned expressions.
 
 Pyxis's `libc/timezone.c` owns checked TZif parsing, capability-path file loading,
 cache lifetime and error propagation. It evaluates adjacent rule years to handle
@@ -257,9 +254,8 @@ Lua 5.1's math library adds these files from the same pin:
 - `src/math/exp.c`, unmodified, using the existing `exp_data` tables and error
   helpers;
 - `src/math/sinh.c`, `cosh.c` and `tanh.c`, unmodified, with
-  `src/math/__expo2.c`, unmodified, and `src/math/expm1.c`, which they use for
-  large and small arguments; `expm1.c` replaces only `isnan` with
-  `__builtin_isnan`, as in `fmod.c`.
+  `src/math/__expo2.c`, unmodified, and `src/math/expm1.c`, also unmodified,
+  which they use for large and small arguments.
 
 `src/internal/libm.h` adds upstream's `GET_LOW_WORD` macro and declares
 `__expo2` without `hidden`; the public `math.h` also declares `expm1`. Out-of-domain arguments return NaN with invalid,
@@ -272,8 +268,7 @@ existing local source cache at `pyxis-regex/build/upstream-musl` (Git HEAD
 - `src/math/log2.c`, `log2_data.c`, `log2f.c` and `log2f_data.c`, unmodified;
 - `src/math/log2_data.h` and `log2f_data.h`, omitting `features.h` and `hidden`
   like the other static coefficient tables;
-- `src/math/logb.c`, replacing only `isfinite` with `__builtin_isfinite`, and
-  its `src/math/ilogb.c` dependency, unmodified;
+- `src/math/logb.c` and its `src/math/ilogb.c` dependency, unmodified;
 - `src/math/log1p.c` and `erf.c`, unmodified; `erf.c` also implements `erfc`;
 - `src/math/exp2.c`, unmodified, reusing `exp_data` and existing error helpers;
 - `src/math/lround.c`, unmodified, reusing `round`.

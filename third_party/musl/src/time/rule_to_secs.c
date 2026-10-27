@@ -24,8 +24,7 @@ long long __tz_rule_to_secs(const struct tz_rule *rule, long long year)
 		n = rule->week;
 		d = rule->weekday;
 		t += __month_to_secs(m-1, is_leap);
-		int wday = (int)((t / 86400 + 4) % 7);
-		if (wday < 0) wday += 7;
+		int wday = (int)((t + 4*86400) % (7*86400)) / 86400;
 		int days = d - wday;
 		if (days < 0) days += 7;
 		if (n == 5 && days+28 >= days_in_month(m, is_leap)) n = 4;
@@ -43,7 +42,7 @@ int __tz_year_for_secs(long long t, long long *year)
 	long long y = t / 31556952 + 70;
 	if (y < (long long)INT_MIN-2 || y > (long long)INT_MAX+2) return -1;
 	while (__year_to_secs(y, 0) > t) y--;
-	while (__year_to_secs(y+1, 0) <= t) y++;
+	while (__year_to_secs(y+1, 0) < t) y++;
 	*year = y;
 	return 0;
 }

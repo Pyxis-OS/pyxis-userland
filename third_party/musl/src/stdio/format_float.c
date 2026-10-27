@@ -57,7 +57,7 @@ int format_float(struct output *f, long double y, int w, int precision, unsigned
 	char ebuf0[3*sizeof(int)], *ebuf=&ebuf0[3*sizeof(int)], *estr;
 
 	pl=1;
-	if (__builtin_signbitl(y)) {
+	if (signbit(y)) {
 		y=-y;
 	} else if (fl & MARK_POS) {
 		prefix+=3;
@@ -65,7 +65,7 @@ int format_float(struct output *f, long double y, int w, int precision, unsigned
 		prefix+=6;
 	} else prefix++, pl=0;
 
-	if (!__builtin_isfinite(y)) {
+	if (!isfinite(y)) {
 		char *s = (t&32)?"inf":"INF";
 		if (y!=y) s=(t&32)?"nan":"NAN";
 		pad(f, ' ', w, 3+pl, fl&~ZERO_PAD);

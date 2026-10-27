@@ -10,7 +10,7 @@ float fmodf(float x, float y)
 	uint32_t i;
 	uint32_t uxi = ux.i;
 
-	if (uy.i<<1 == 0 || __builtin_isnan(y) || ex == 0xff)
+	if (uy.i<<1 == 0 || isnan(y) || ex == 0xff)
 		return (x*y)/(x*y);
 	if (uxi<<1 <= uy.i<<1) {
 		if (uxi<<1 == uy.i<<1)

@@ -70,7 +70,7 @@ double atan(double x)
 	sign = ix >> 31;
 	ix &= 0x7fffffff;
 	if (ix >= 0x44100000) {   /* if |x| >= 2^66 */
-		if (__builtin_isnan(x))
+		if (isnan(x))
 			return x;
 		z = atanhi[3] + 0x1p-120f;
 		return sign ? -z : z;

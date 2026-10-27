@@ -48,7 +48,7 @@ double atan2(double y, double x)
 	double z;
 	uint32_t m,lx,ly,ix,iy;
 
-	if (__builtin_isnan(x) || __builtin_isnan(y))
+	if (isnan(x) || isnan(y))
 		return x+y;
 	EXTRACT_WORDS(ix, lx, x);
 	EXTRACT_WORDS(iy, ly, y);
