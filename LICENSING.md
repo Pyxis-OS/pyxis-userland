@@ -29,6 +29,8 @@ applied: MPL's standard secondary-license provisions remain available.
 - `libc/include/math.h` includes musl-derived infinity/NaN definitions. Those
   portions retain musl's terms; the original Pyxis portions follow MPL. Preserve
   musl's notice when redistributing this header.
+- `libc/include/fnmatch.h` is imported from the pinned musl release and retains
+  its MIT terms in [COPYRIGHT](third_party/musl/COPYRIGHT).
 - `third_party/stb_truetype/`: pinned font rasterizer and local allocation-failure
   adaptations use the MIT option in [LICENSE](third_party/stb_truetype/LICENSE);
   source, cache checksum and changes are recorded in

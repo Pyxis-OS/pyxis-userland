@@ -2,6 +2,16 @@ musl 1.2.5, pinned to commit
 `0784374d561435f7c787a555aeab8ede699ed298`:
 https://git.musl-libc.org/cgit/musl/commit/?id=0784374d561435f7c787a555aeab8ede699ed298
 
+The BusyBox upstream tar prerequisites add `src/regex/fnmatch.c` from this
+same pin. `libc/include/fnmatch.h` copies the upstream header, stripping
+trailing whitespace only. These files retain musl's formatting and license
+under `COPYRIGHT`.
+
+`fnmatch.c` drops only the unused private `locale_impl.h` include. It uses the
+existing stateless UTF-8 conversion and ASCII-only wide classification/folding;
+there is no new locale state or Unicode table. The POSIX flags, leading-directory
+and case-fold flags retain upstream behavior. Matching does not access files.
+
 `COPYRIGHT` retains the complete upstream MIT license, contributor list and
 third-party notices. The math/formatting subset falls under the MIT terms described
 there; the pow implementation and coefficient tables also retain their Arm

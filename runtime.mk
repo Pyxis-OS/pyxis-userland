@@ -32,6 +32,7 @@ SHA256_OBJECTS := $(BUILD)/libsha256/sha256.o $(BUILD)/third_party/tf_psa_sha256
 LIBC := $(BUILD)/libc.a
 LIBC_SOURCES := $(wildcard libc/*.c)
 MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
+                third_party/musl/src/regex/fnmatch.c \
                 third_party/musl/src/regex/regcomp.c \
                 third_party/musl/src/regex/regexec.c \
                 third_party/musl/src/regex/regerror.c \
