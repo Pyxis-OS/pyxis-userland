@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "org.pyxis.jit-min",
+  "entry": "bin/jit-min.pxe",
+  "commands": {"jit-min": "bin/jit-min.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "jit", "resource": "jit", "rights": ["manage"], "required": true}
+  ]
+}
