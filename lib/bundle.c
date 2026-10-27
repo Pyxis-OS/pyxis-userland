@@ -13,6 +13,7 @@
 #include <abi/echo.h>
 #include <abi/launcher.h>
 #include <abi/memory.h>
+#include <abi/jit.h>
 #include <abi/pipe.h>
 #include <abi/thread.h>
 #include <abi/keyboard.h>
@@ -82,6 +83,7 @@ static const struct grant_right grant_rights[] = {
   {"service", "create", PROTOCOL_ENDPOINT_SERVICE, ENDPOINT_SERVICE_RIGHT_CREATE},
   {"publication", "call", PROTOCOL_ENDPOINT, 0},
   {"memory", "manage", PROTOCOL_MEMORY, MEMORY_RIGHT_MANAGE},
+  {"jit", "manage", PROTOCOL_JIT, JIT_RIGHT_MANAGE},
   {"threads", "manage", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE},
   {"keyboard", "input", PROTOCOL_KEYBOARD, KEYBOARD_RIGHT_INPUT},
   {"gamepad", "input", PROTOCOL_GAMEPAD, GAMEPAD_RIGHT_INPUT},

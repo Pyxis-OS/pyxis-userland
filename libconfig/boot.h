@@ -93,6 +93,7 @@ struct boot_space {
   bool fat32_mount, fat32_mount_write; /* Explicit mount-only factory delegation. */
   char *start; /* A root name; NULL means BOOT_HOME_ROOT. */
   bool network;
+  bool jit; /* Private source for explicitly declared bundle JIT/manage. */
   bool tcp_listen; /* Private source for explicitly declared bundle LISTEN. */
   bool focus; /* One boot-only selection request after successful startup. */
   bool launch;

@@ -45,7 +45,8 @@ static const struct {
   const char *name;
   uint64_t rights;
 } remote_allowed[] = {
-  {"memory", MEMORY_RIGHT_MANAGE}, {"threads", THREAD_RIGHT_MANAGE},
+  {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
+  {"threads", THREAD_RIGHT_MANAGE},
   {"clock", CLOCK_RIGHTS},
   {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
   {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
@@ -217,10 +218,18 @@ static enum call_status context_init(struct remote_context *context, bool multip
         goto done;
       }
     }
+    if (!strcmp(remote_allowed[i].name, "jit")) {
+      struct launch_grant checked;
+      status = profile_jit_grant(value->handle, &checked);
+      if (status != CALL_OK) {
+        goto done;
+      }
+    }
     size_t index;
     status = context_add(context, remote_allowed[i].name, value->handle,
         value->rights & remote_allowed[i].rights, 0,
-        wifi_control || !strcmp(remote_allowed[i].name, "service") ||
+        wifi_control || !strcmp(remote_allowed[i].name, "jit") ||
+            !strcmp(remote_allowed[i].name, "service") ||
             !strcmp(remote_allowed[i].name, "interpreter_root") ||
             !strcmp(remote_allowed[i].name, BUNDLE_TCP_LISTEN_SOURCE) ? 0 : ENVIRONMENT_EXPORTED, &index);
     if (status != CALL_OK) {

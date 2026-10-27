@@ -102,7 +102,7 @@ static int launch_session(const struct session_config *config, struct network_co
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 38 };
+  enum { OPTIONAL_RESOURCE_COUNT = 39 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -224,6 +224,19 @@ static int launch_session(const struct session_config *config, struct network_co
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"threads", grant_count);
     assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){threads, THREAD_RIGHT_MANAGE, 0};
+  }
+  handle_t jit = bootstrap_capability("jit");
+  if (jit != HANDLE_INVALID) {
+    if (resource_count == grant_capacity || grant_count == grant_capacity) {
+      status = CALL_LIMIT;
+      goto done;
+    }
+    status = profile_jit_grant(jit, &grants[grant_count]);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("jit", grant_count++);
   }
   handle_t tcp_listen = bootstrap_capability(BUNDLE_TCP_LISTEN_SOURCE);
   if (tcp_listen != HANDLE_INVALID) {

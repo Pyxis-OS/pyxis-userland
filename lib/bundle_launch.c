@@ -1,5 +1,6 @@
 #include <abi/directory.h>
 #include <abi/file.h>
+#include <abi/jit.h>
 #include <abi/clock.h>
 #include <abi/launcher.h>
 #include <abi/pipe.h>
@@ -230,6 +231,9 @@ static enum call_status prepare_context(struct context_grants *context,
         if (!(entry->flags & ENVIRONMENT_EXPORTED)) {
           continue;
         }
+      }
+      if (info.protocol == PROTOCOL_JIT) {
+        continue; /* Only an explicit manifest request delegates executable memory. */
       }
       /* Filter by actual protocol, so another name for the same provider
        * cannot retain the original, broader grant. */
@@ -572,7 +576,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     if (info.protocol != requests[i].protocol ||
         (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED) ||
-        (requests[i].interface && (info.kind != HANDLE_KIND_NATIVE || info.transport))) {
+        ((requests[i].interface || requests[i].protocol == PROTOCOL_JIT) &&
+          (info.kind != HANDLE_KIND_NATIVE || info.transport))) {
       if (requests[i].required) {
         return CALL_WRONG_TYPE;
       }
@@ -607,9 +612,10 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     size_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
-    /* Constructors and listening authority are private runtime roles, selected
-     * again explicitly when preparing another declared bundle grant. */
-    bool private_role = requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ||
+    /* Constructors, JIT and listening authority are private runtime roles,
+     * selected again explicitly when preparing another declared bundle grant. */
+    bool private_role = requests[i].protocol == PROTOCOL_JIT ||
+        requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ||
         (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
          (requests[i].rights & TCP_SERVICE_RIGHT_LISTEN));
     uint64_t flags = private_role ? 0 : ENVIRONMENT_EXPORTED;

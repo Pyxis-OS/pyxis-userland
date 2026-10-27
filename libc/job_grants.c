@@ -17,6 +17,7 @@
 #include <abi/gamepad.h>
 #include <abi/log.h>
 #include <abi/memory.h>
+#include <abi/jit.h>
 #include <abi/mount.h>
 #include <abi/net_config.h>
 #include <abi/pipe.h>
@@ -56,6 +57,12 @@ static enum call_status validate_authority(const struct handle_info *info,
     break;
   case PROTOCOL_MEMORY:
     allowed_rights = MEMORY_RIGHT_MANAGE;
+    break;
+  case PROTOCOL_JIT:
+    if (info->kind != HANDLE_KIND_NATIVE || info->transport) {
+      return CALL_WRONG_TYPE;
+    }
+    allowed_rights = JIT_RIGHT_MANAGE;
     break;
   case PROTOCOL_PROCESS:
     allowed_rights = PROCESS_RIGHT_WAIT;

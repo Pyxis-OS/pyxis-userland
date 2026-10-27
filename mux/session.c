@@ -112,7 +112,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 31 };
+  enum { OPTIONAL_RESOURCE_COUNT = 32 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -263,7 +263,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     const char *name;
     uint64_t rights;
   } allowed[] = {
-    {"memory", MEMORY_RIGHT_MANAGE}, {"threads", THREAD_RIGHT_MANAGE},
+    {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
+    {"threads", THREAD_RIGHT_MANAGE},
     {"clock", CLOCK_RIGHTS},
     {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
     {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
@@ -308,7 +309,13 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
         goto done;
       }
     }
-    status = copy_grant(source, &grants[grant_count]);
+    if (grant_count == grant_capacity || entry_count == entry_capacity) {
+      status = CALL_LIMIT;
+      goto done;
+    }
+    status = !strcmp(allowed[i].name, "jit") ?
+        profile_jit_grant(source, &grants[grant_count]) :
+        copy_grant(source, &grants[grant_count]);
     if (status != CALL_OK) {
       goto done;
     }
@@ -316,7 +323,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
-      .flags = wifi_control || !strcmp(allowed[i].name, "service") ||
+      .flags = wifi_control || !strcmp(allowed[i].name, "jit") ||
+          !strcmp(allowed[i].name, "service") ||
           !strcmp(allowed[i].name, "retention_account") ?
           0 : ENVIRONMENT_EXPORTED,
       .value = grant_count++,

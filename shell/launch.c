@@ -76,7 +76,7 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[48 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[49 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
   uint64_t wifi_private_identity[2];
   char *source_names[BUNDLE_SOURCE_LIMIT];
@@ -728,6 +728,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_tcp_listen = session && shell->tcp_listen != HANDLE_INVALID;
   handle_t threads = session ? shell->threads : HANDLE_INVALID;
   bool has_threads = threads != HANDLE_INVALID;
+  handle_t jit = bootstrap_capability("jit");
+  bool pass_jit = session && jit != HANDLE_INVALID;
   bool delegate = mode == SHELL_FOREGROUND &&
       child_launcher != HANDLE_INVALID;
   bool pass_child_launcher = session && child_launcher != HANDLE_INVALID;
@@ -880,7 +882,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t clipboard_local_index = audio_index + (has_audio ? 1 : 0);
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
-  size_t job_provisioner_index = threads_index + (has_threads ? 1 : 0);
+  size_t jit_index = threads_index + (has_threads ? 1 : 0);
+  size_t job_provisioner_index = jit_index + (pass_jit ? 1 : 0);
   size_t tcp_listen_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
   size_t retention_factory_index = tcp_listen_index + (has_tcp_listen ? 1 : 0);
   size_t retention_account_index = retention_factory_index + (has_retention_factory ? 1 : 0);
@@ -921,6 +924,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[output_index] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   }
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
+  if (pass_jit) {
+    enum call_status status = profile_jit_grant(jit, &grants[jit_index]);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
   for (size_t i = 0; i < root_count; ++i) {
     grants[CHILD_ROOT + i] = (struct launch_grant){selected_roots[i].handle, 0, 0};
     prepared->roots[i] = (struct launch_environment_entry)
@@ -1110,6 +1119,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t resource_capacity = sizeof(prepared->resources) / sizeof(*resources);
   resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
   size_t resource_count = 1;
+  if (pass_jit) {
+    if (resource_count == resource_capacity) {
+      return CALL_LIMIT;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("jit", jit_index);
+  }
   if (has_output) {
     assert(resource_count < resource_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"output", output_index);
@@ -1653,6 +1669,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       {"input", shell->terminal.input, PROTOCOL_CONSOLE},
       {"output", shell->terminal.output, PROTOCOL_CONSOLE},
       {"memory", shell->memory, PROTOCOL_MEMORY},
+      {"jit", jit, PROTOCOL_JIT},
       {"threads", shell->threads, PROTOCOL_THREAD_SERVICE},
       {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID, PROTOCOL_KEYBOARD},
       {"gamepad", has_gamepad ? shell->gamepad : HANDLE_INVALID, PROTOCOL_GAMEPAD},

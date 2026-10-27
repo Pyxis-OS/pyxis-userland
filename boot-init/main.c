@@ -1596,7 +1596,8 @@ static struct space_definition space_definition_of(const struct boot_space *spac
     .flags = (space->multiplexer ? SPACE_CREATE_TERMINAL_CONTROL : 0) |
         (space->clipboard_local ? SPACE_CREATE_CLIPBOARD_LOCAL : 0) |
         (space->clipboard_shared ? SPACE_CREATE_CLIPBOARD_SHARED : 0) |
-        (space->screenshot ? SPACE_CREATE_SCREENSHOT_SAVER : 0),
+        (space->screenshot ? SPACE_CREATE_SCREENSHOT_SAVER : 0) |
+        (space->jit ? SPACE_CREATE_JIT : 0),
   };
 }
 

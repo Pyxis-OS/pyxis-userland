@@ -117,7 +117,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 27 };
+  enum { OPTIONAL_COUNT = 28 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -194,6 +194,19 @@ int launch_remote_server(const struct session_config *config,
   struct pyxis_environment_snapshot inherited = {0};
   struct network_environment refreshed_environment = {0};
   int result = EXIT_FAILURE;
+  handle_t jit = bootstrap_capability("jit");
+  if (jit != HANDLE_INVALID) {
+    if (resource_count == grant_capacity || grant_count == grant_capacity) {
+      status = CALL_LIMIT;
+      goto done;
+    }
+    status = profile_jit_grant(jit, &grants[grant_count]);
+    if (status != CALL_OK) {
+      goto done;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("jit", grant_count++);
+  }
   handle_t wifi = bootstrap_capability("wifi");
   if (wifi != HANDLE_INVALID) {
     struct launch_grant radio = {.source = wifi};

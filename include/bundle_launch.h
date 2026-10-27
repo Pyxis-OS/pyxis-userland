@@ -53,6 +53,8 @@ enum call_status bundle_sources_forward_capture(const struct environment_capture
  * A bundle declaring provider grants receives only those provider roots,
  * selected by source name from held exported PROVIDER entries and attenuated
  * to the declared rights. Other bundles keep existing provider inheritance.
+ * Declared jit/manage receives a private native JIT role; ordinary children
+ * never inherit it. Trusted session successors retain their separate source.
  * Required requests fail as a whole; unavailable optional requests are absent.
  * Both program and source storage remain borrowed until launch is closed.
  * Failure clears *prepared and preserves all source capabilities. */

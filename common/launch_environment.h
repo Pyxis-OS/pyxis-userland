@@ -2,6 +2,7 @@
 #define USERSPACE_LAUNCH_ENVIRONMENT_H
 
 #include <abi/launcher.h>
+#include <abi/jit.h>
 #include <environment.h>
 #include <bundle_launch.h>
 #include <command_search.h>
@@ -25,6 +26,22 @@ static inline struct launch_environment_entry profile_stdio_entry(
   const char *name = index == ENVIRONMENT_STDIN ? "stdin" :
       index == ENVIRONMENT_STDOUT ? "stdout" : "stderr";
   return (struct launch_environment_entry)PROFILE_CAP(name, grant);
+}
+
+/* Trusted successor handoff only. Ordinary programs obtain this role solely
+ * through explicit bundle declarations, never generic environment inheritance. */
+static inline enum call_status profile_jit_grant(handle_t source, struct launch_grant *grant)
+{
+  struct handle_info info;
+  enum call_status status = handle_query(source, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_JIT || info.transport) {
+    return CALL_WRONG_TYPE;
+  }
+  *grant = (struct launch_grant){source, info.rights & JIT_RIGHT_MANAGE, 0};
+  return CALL_OK;
 }
 
 /* Launch-profile selection only. These handles and names borrow an owned
@@ -117,6 +134,9 @@ static inline enum call_status profile_inherit_services(
     enum call_status status = handle_query(value->handle, &info);
     if (status != CALL_OK) {
       return status;
+    }
+    if (info.protocol == PROTOCOL_JIT) {
+      continue;
     }
     size_t length = strlen(value->name);
     bool controller = trusted && !(value->flags & ENVIRONMENT_EXPORTED) &&
