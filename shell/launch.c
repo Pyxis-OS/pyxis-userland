@@ -2665,8 +2665,24 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       bool input = redirect->stream == ENVIRONMENT_STDIN;
       {
         struct resource_result opened = {0};
+        struct shell_redirect_target *target = &prepared[i].output_targets[j];
+        if (!input && !redirect->staging_output && target->file == HANDLE_INVALID) {
+          bool matched = false;
+          for (size_t previous = 0; previous <= i && !matched; ++previous) {
+            size_t limit = previous == i ? j : stages[previous].redirection_count;
+            for (size_t prior = 0; prior < limit && !matched; ++prior) {
+              const struct shell_redirection *earlier = &stages[previous].redirections[prior];
+              status = shell_lookup_created_redirect(target,
+                  &prepared[previous].output_targets[prior],
+                  prepared[previous].redirected[earlier->stream], &matched);
+              if (status != CALL_OK) {
+                goto failed;
+              }
+            }
+          }
+        }
         status = !input && !redirect->staging_output ?
-            shell_publish_output_redirect(redirect, &prepared[i].output_targets[j], &opened) :
+            shell_publish_output_redirect(redirect, target, &opened) :
             shell_open_redirect_value(shell, redirect, &opened);
         if (status == CALL_OK) {
           status = resource_outcome_status(opened.info.description.outcome);

@@ -62,10 +62,12 @@ struct shell_redirection {
 };
 
 /* Retains either an existing FILE or the exact native parent and absent name.
- * Preparation has no namespace or content effects; publication never relooks up. */
+ * Preparation has no namespace or content effects. A prior CREATE in this
+ * command permits one lookup through this target's own matching parent. */
 struct shell_redirect_target {
   handle_t file, parent;
   char *component;
+  bool created;
 };
 
 struct shell_stage {
@@ -232,6 +234,8 @@ enum call_status shell_prepare_output_redirect(struct shell *shell,
     struct shell_redirection *redirect, struct shell_redirect_target *target);
 enum call_status shell_publish_output_redirect(const struct shell_redirection *redirect,
     struct shell_redirect_target *target, struct resource_result *result);
+enum call_status shell_lookup_created_redirect(struct shell_redirect_target *target,
+    const struct shell_redirect_target *earlier, handle_t earlier_file, bool *matched);
 enum command_result shell_error(struct shell *shell, const char *format, ...);
 enum command_result shell_resource_detail(struct shell *shell,
     const struct resource_description *description);

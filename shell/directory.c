@@ -376,6 +376,58 @@ done:
   return status;
 }
 
+static bool same_file_identity(const struct file_info_reply *first,
+    const struct file_info_reply *second)
+{
+  uint64_t identity = FILE_INFO_DOMAIN_VALID | FILE_INFO_OBJECT_VALID;
+  return (first->valid & identity) == identity && (second->valid & identity) == identity &&
+      first->domain == second->domain && first->object == second->object;
+}
+
+enum call_status shell_lookup_created_redirect(struct shell_redirect_target *target,
+    const struct shell_redirect_target *earlier, handle_t earlier_file, bool *matched)
+{
+  *matched = false;
+  if (!earlier->created || strcmp(target->component, earlier->component)) {
+    return CALL_OK;
+  }
+  struct file_info_reply parent, earlier_parent;
+  enum call_status status = directory_info(target->parent, &parent);
+  if (status != CALL_OK) {
+    return status;
+  }
+  status = directory_info(earlier->parent, &earlier_parent);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (!same_file_identity(&parent, &earlier_parent)) {
+    return CALL_OK;
+  }
+  *matched = true;
+  /* Obtain this redirect's own grant and lineage. A replacement or removal is
+   * final; neither the earlier FILE's authority nor CREATE is substituted. */
+  handle_t file = HANDLE_INVALID;
+  status = directory_lookup(target->parent, target->component,
+      DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, &file);
+  if (status != CALL_OK) {
+    return status;
+  }
+  struct file_info_reply current, created;
+  status = file_info(file, &current);
+  if (status == CALL_OK) {
+    status = file_info(earlier_file, &created);
+  }
+  if (status == CALL_OK && !same_file_identity(&current, &created)) {
+    status = CALL_ALREADY_EXISTS;
+  }
+  if (status == CALL_OK) {
+    target->file = file;
+  } else if (handle_close(file)) {
+    status = CALL_BAD_HANDLE;
+  }
+  return status;
+}
+
 enum call_status shell_publish_output_redirect(const struct shell_redirection *redirect,
     struct shell_redirect_target *target, struct resource_result *result)
 {
@@ -387,6 +439,7 @@ enum call_status shell_publish_output_redirect(const struct shell_redirection *r
     if (status != CALL_OK) {
       return status;
     }
+    target->created = true;
   }
   enum call_status status = resource_result_adopt(target->file, result);
   if (status == CALL_OK) {
