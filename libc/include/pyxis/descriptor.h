@@ -43,7 +43,8 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access);
  * No fill/retry loop, stdio indicators or descriptor mode changes. FILE descriptors
  * fail with ENOTSUP before I/O; use read/write or pread/pwrite for files. Return
  * the transferred count, zero for EOF/zero length, or -1 with errno; live stream
- * unavailability is EAGAIN. Access and SSIZE_MAX are checked even at zero length. */
+ * unavailability is EAGAIN. Terminal MIN/TIME does not delay these try calls.
+ * Access and SSIZE_MAX are checked even at zero length. */
 ssize_t pyxis_descriptor_try_read(int descriptor, void *buffer, size_t count);
 ssize_t pyxis_descriptor_try_write(int descriptor, const void *buffer, size_t count);
 

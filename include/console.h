@@ -39,6 +39,14 @@ enum call_status console_read_timeout(handle_t input, void *bytes, size_t capaci
  * Cleared on failure. Local geometry can change independently of input. */
 enum call_status console_size(handle_t console, struct console_size_reply *size);
 
+/* Fence queued output through successful attachment copies (not presentation
+ * or network delivery). READ or WRITE; bounded to 30 seconds, zero polls.
+ * Timeout discards no output; absent/closed attachment is ENDPOINT_CLOSED. */
+enum call_status console_drain(handle_t console, uint32_t timeout_ms);
+/* READ; discard queued ordinary input without waiting. EOF, raw/interrupt
+ * state and clipboard framing survive. An active reader can return BUSY. */
+enum call_status console_flush_input(handle_t input);
+
 /* WRITE authority. Advance only when not already at column zero; also discard
  * an incomplete output escape sequence. Does not clear text or reset colors. */
 enum call_status console_fresh_line(handle_t output);

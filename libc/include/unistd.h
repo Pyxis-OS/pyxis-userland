@@ -58,7 +58,13 @@ int rmdir(const char *path);
  * EINVAL. Zero count touches no buffer or backend. A regular file returns the
  * full count unless the file ends first, repeating its native transfers (each
  * under 4 KiB); an error after some bytes returns those bytes and recurs on the
- * next call. A pipe or console returns one transfer, including short progress.
+ * next call. A pipe returns one transfer, including short progress. Console
+ * reads use the open object's noncanonical MIN/TIME (initially MIN1/TIME0).
+ * MIN0/TIME0 polls; MIN0/TIME>0 bounds the first byte; MIN>0/TIME0 waits for
+ * min(MIN,count); MIN>0/TIME>0 starts/reset an inter-byte timer after input.
+ * A timeout returns zero or positive progress, not a native EOF indication.
+ * Stdio also uses these timings: a zero result sets its ordinary EOF indicator
+ * until clearerr; changing modes does not clear it. Timed modes need a clock.
  * Independent of FILE indicators. A read first returns bytes the associated FILE
  * read ahead, without a backend call; read itself never reads ahead. */
 ssize_t read(int descriptor, void *buffer, size_t count);

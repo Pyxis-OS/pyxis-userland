@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syscall.h>
+#include <termios.h>
 #include <unistd.h>
 #include "descriptor.h"
 #include "errors.h"
@@ -55,9 +56,12 @@ struct descriptor_object {
   size_t storage; /* Aliases and admitted operations; no native grant copies. */
   bool closed;
   struct libc_mutex read_guard, write_guard;
-  struct libc_mutex terminal_guard; /* Mode owner only; never held by waits. */
+  struct libc_mutex terminal_guard; /* Mode owner; drain holds it for at most 30s. */
   handle_t terminal_raw;
   int terminal_error; /* Uncertain mode ownership is never replayed. */
+  uint64_t terminal_identity; /* Copyable snapshots never retain storage. */
+  cc_t terminal_min, terminal_time;
+  enum call_status terminal_read_status; /* Deferred error after partial input. */
   bool allocated;
   enum descriptor_kind kind;
   handle_t handle;
@@ -89,6 +93,7 @@ static struct descriptor_entry startup_entries[ENVIRONMENT_STREAM_COUNT];
 static struct descriptor_entry *entries = startup_entries;
 static size_t capacity = ENVIRONMENT_STREAM_COUNT;
 static struct libc_lock table_guard;
+static uint64_t terminal_identity;
 
 static int commit_locked(struct descriptor_object *object);
 
@@ -268,6 +273,7 @@ void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream
   struct descriptor_object *object = &startup_objects[index];
   *object = (struct descriptor_object){
     .terminal_guard = LIBC_MUTEX_INITIALIZER,
+    .terminal_min = 1,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1,
@@ -489,6 +495,7 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
   handle_t handle = transactional ? transaction->body : opened.resource;
   *object = (struct descriptor_object){
     .terminal_guard = LIBC_MUTEX_INITIALIZER,
+    .terminal_min = 1,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = handle,
@@ -564,6 +571,7 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
   }
   *object = (struct descriptor_object){
     .terminal_guard = LIBC_MUTEX_INITIALIZER,
+    .terminal_min = 1,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
@@ -633,6 +641,7 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
 struct pyxis_terminal_state {
   struct descriptor_object *object;
   bool raw;
+  cc_t minimum, time;
 };
 
 static int terminal_check(struct descriptor_object *object)
@@ -743,9 +752,15 @@ static int terminal_snapshot(int descriptor, struct pyxis_terminal_state **state
       } else {
         *saved = (struct pyxis_terminal_state){
           .object = object, .raw = object->terminal_raw != HANDLE_INVALID,
+          .minimum = object->terminal_min, .time = object->terminal_time,
         };
-        if (raw && terminal_set_raw(object, true) < 0) {
-          error = errno;
+        if (raw) {
+          if (terminal_set_raw(object, true) < 0) {
+            error = errno;
+          } else {
+            object->terminal_min = 1;
+            object->terminal_time = 0;
+          }
         }
       }
       unlock_object(&object->terminal_guard);
@@ -805,6 +820,9 @@ int pyxis_terminal_restore(int descriptor, const struct pyxis_terminal_state *st
       error = EBADF;
     } else if (terminal_set_raw(object, state->raw) < 0) {
       error = errno;
+    } else {
+      object->terminal_min = state->minimum;
+      object->terminal_time = state->time;
     }
     unlock_object(&object->terminal_guard);
   }
@@ -818,6 +836,178 @@ void pyxis_terminal_state_free(struct pyxis_terminal_state *state)
     descriptor_drop(state->object);
     free(state);
   }
+}
+
+static int terminal_assign_identity(struct descriptor_object *object)
+{
+  if (object->terminal_identity) {
+    return 0;
+  }
+  uint64_t previous = __atomic_load_n(&terminal_identity, __ATOMIC_RELAXED);
+  do {
+    if (previous == UINT64_MAX) {
+      return fail(EOVERFLOW);
+    }
+  } while (!__atomic_compare_exchange_n(&terminal_identity, &previous, previous + 1,
+      false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+  object->terminal_identity = previous + 1;
+  return 0;
+}
+
+static struct termios terminal_attributes(struct descriptor_object *object)
+{
+  struct termios result = {
+    .c_cflag = CS8,
+    .c_lflag = object->terminal_raw == HANDLE_INVALID ? ISIG : 0,
+    .__pyxis_identity = object->terminal_identity,
+  };
+  result.c_cc[VINTR] = 3;
+  result.c_cc[VEOF] = 4;
+  result.c_cc[VMIN] = object->terminal_min;
+  result.c_cc[VTIME] = object->terminal_time;
+  return result;
+}
+
+static int terminal_validate_attributes(struct descriptor_object *object,
+    const struct termios *attributes)
+{
+  if (!attributes->__pyxis_identity ||
+      attributes->__pyxis_identity != object->terminal_identity) {
+    return fail(EBADF);
+  }
+  if (attributes->c_iflag || attributes->c_oflag || attributes->c_cflag != CS8 ||
+      (attributes->c_lflag & ~ISIG)) {
+    return fail(ENOTSUP);
+  }
+  struct termios current = terminal_attributes(object);
+  for (size_t i = 0; i < NCCS; i++) {
+    if (i != VMIN && i != VTIME && attributes->c_cc[i] != current.c_cc[i]) {
+      return fail(ENOTSUP);
+    }
+  }
+  if (!(attributes->c_lflag & ISIG) && !object->readable) {
+    return fail(EACCES);
+  }
+  if (attributes->c_cc[VTIME]) {
+    uint64_t now;
+    enum call_status status = clock_now(libc_thread_clock(), &now);
+    if (status != CALL_OK) {
+      return fail(libc_call_errno(status));
+    }
+  }
+  return 0;
+}
+
+int tcgetattr(int descriptor, struct termios *attributes)
+{
+  if (!attributes) {
+    return fail(EINVAL);
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int error = 0;
+  if (terminal_check(object) < 0) {
+    error = errno;
+  } else {
+    error = libc_mutex_lock(&object->terminal_guard);
+    if (!error) {
+      if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+        error = EBADF;
+      } else if (object->terminal_error) {
+        error = object->terminal_error;
+      } else if (terminal_assign_identity(object) < 0) {
+        error = errno;
+      } else {
+        *attributes = terminal_attributes(object);
+      }
+      unlock_object(&object->terminal_guard);
+    }
+  }
+  descriptor_drop(object);
+  return error ? fail(error) : 0;
+}
+
+int tcsetattr(int descriptor, int action, const struct termios *attributes)
+{
+  if (!attributes || (action != TCSANOW && action != TCSADRAIN && action != TCSAFLUSH)) {
+    return fail(EINVAL);
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int error = 0;
+  if (terminal_check(object) < 0) {
+    error = errno;
+  } else {
+    /* Flush cannot race local consumption. Do not wait behind an indefinitely
+     * blocked reader; lock order is read then mode, as for timing snapshots. */
+    error = libc_mutex_trylock(&object->read_guard);
+    if (!error) {
+      error = libc_mutex_lock(&object->terminal_guard);
+      if (!error) {
+        if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+          error = EBADF;
+        } else if (object->terminal_error) {
+          error = object->terminal_error;
+        } else if (terminal_validate_attributes(object, attributes) < 0) {
+          error = errno;
+        } else if (action == TCSAFLUSH && !object->readable) {
+          error = EACCES;
+        } else {
+          enum call_status status = CALL_OK;
+          if (action != TCSANOW) {
+            status = console_drain(object->handle, CONSOLE_DRAIN_TIMEOUT_MAX_MS);
+          }
+          if (status == CALL_OK && action == TCSAFLUSH) {
+            status = console_flush_input(object->handle);
+            if (status == CALL_OK) {
+              object->ahead_start = object->ahead_count = 0;
+              if (object->terminal_read_status == CALL_INPUT_LOST) {
+                object->terminal_read_status = CALL_OK;
+              }
+            }
+          }
+          if (status != CALL_OK) {
+            error = libc_call_errno(status);
+          } else if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+            error = EBADF;
+          } else if (terminal_set_raw(object, !(attributes->c_lflag & ISIG)) < 0) {
+            error = errno;
+          } else {
+            object->terminal_min = attributes->c_cc[VMIN];
+            object->terminal_time = attributes->c_cc[VTIME];
+          }
+        }
+        unlock_object(&object->terminal_guard);
+      }
+      unlock_object(&object->read_guard);
+    }
+  }
+  descriptor_drop(object);
+  return error ? fail(error) : 0;
+}
+
+int tcdrain(int descriptor)
+{
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  int error = 0;
+  if (terminal_check(object) < 0) {
+    error = errno;
+  } else {
+    error = libc_mutex_lock(&object->terminal_guard);
+    if (!error) {
+      if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+        error = EBADF;
+      } else {
+        enum call_status status = console_drain(object->handle, CONSOLE_DRAIN_TIMEOUT_MAX_MS);
+        if (status != CALL_OK) {
+          error = libc_call_errno(status);
+        } else if (!terminal_matches(descriptor, object) || terminal_check(object) < 0) {
+          error = EBADF;
+        }
+      }
+      unlock_object(&object->terminal_guard);
+    }
+  }
+  descriptor_drop(object);
+  return error ? fail(error) : 0;
 }
 
 /* Closing/reusing the native handle after validation can misdirect this bounded
@@ -935,6 +1125,7 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
   }
   *object = (struct descriptor_object){
     .terminal_guard = LIBC_MUTEX_INITIALIZER,
+    .terminal_min = 1,
     .read_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = *handle,
@@ -1056,7 +1247,8 @@ static int release_alias(struct descriptor_object *object, bool final, bool aban
       first_error = __atomic_load_n(&object->transaction->failure, __ATOMIC_ACQUIRE);
     }
     /* Snapshots retain storage, never descriptor authority or the raw hold.
-     * Synchronize an admitted mode call, but never wait for byte I/O/readiness. */
+     * Synchronize an admitted mode call, including its bounded drain. Never
+     * acquire read exclusion or wait for an indefinitely blocked byte reader. */
     handle_t raw = HANDLE_INVALID;
     if (object->kind == DESCRIPTOR_CONSOLE) {
       if (libc_mutex_lock(&object->terminal_guard)) {
@@ -1382,6 +1574,84 @@ static int pipe_segment_read(struct descriptor_object *entry, void *buffer,
   }
 }
 
+/* Caller holds read exclusion. Modes can change during an admitted read;
+ * this read keeps the timing snapshot with which it started. */
+static enum call_status terminal_read(struct descriptor_object *object, void *buffer,
+    size_t size, size_t *read)
+{
+  *read = 0;
+  int error = libc_mutex_lock(&object->terminal_guard);
+  if (error) {
+    return CALL_BUSY;
+  }
+  cc_t minimum = object->terminal_min, time = object->terminal_time;
+  unlock_object(&object->terminal_guard);
+  if (!size) {
+    return CALL_OK;
+  }
+  if (object->terminal_read_status != CALL_OK) {
+    enum call_status status = object->terminal_read_status;
+    object->terminal_read_status = CALL_OK;
+    return status;
+  }
+  if (minimum == 1 && !time) {
+    return console_read(object->handle, buffer, size, read);
+  }
+  if (!minimum && !time) {
+    enum call_status status = console_read_timeout(object->handle, buffer, size, 0, read);
+    return status == CALL_TIMED_OUT ? CALL_OK : status;
+  }
+  handle_t clock = libc_thread_clock();
+  uint64_t now = 0, deadline = 0;
+  uint64_t interval = (uint64_t)time * UINT64_C(100000000);
+  if (time) {
+    enum call_status status = clock_now(clock, &now);
+    if (status != CALL_OK) {
+      return status;
+    }
+    deadline = now > UINT64_MAX - interval ? UINT64_MAX : now + interval;
+  }
+  size_t threshold = minimum < size ? minimum : size;
+  for (;;) {
+    uint64_t timeout = CONSOLE_WAIT_FOREVER;
+    if (time && (!minimum || *read)) {
+      enum call_status status = clock_now(clock, &now);
+      if (status != CALL_OK) {
+        return *read ? CALL_OK : status;
+      }
+      uint64_t remaining = deadline > now ? deadline - now : 0;
+      /* Ceiling to milliseconds: never expire before the requested interval. */
+      timeout = remaining / UINT64_C(1000000) + (remaining % UINT64_C(1000000) != 0);
+    }
+    size_t more;
+    enum call_status status = timeout == CONSOLE_WAIT_FOREVER ?
+        console_read(object->handle, (char *)buffer + *read, size - *read, &more) :
+        console_read_timeout(object->handle, (char *)buffer + *read, size - *read,
+            (uint32_t)timeout, &more);
+    if (status == CALL_TIMED_OUT && time) {
+      return CALL_OK;
+    }
+    if (status != CALL_OK) {
+      if (*read) {
+        object->terminal_read_status = status;
+        return CALL_OK;
+      }
+      return status;
+    }
+    *read += more;
+    if (!more || !minimum || *read >= threshold) {
+      return CALL_OK;
+    }
+    if (time) {
+      status = clock_now(clock, &now);
+      if (status != CALL_OK) {
+        return CALL_OK; /* Committed bytes remain the successful result. */
+      }
+      deadline = now > UINT64_MAX - interval ? UINT64_MAX : now + interval;
+    }
+  }
+}
+
 /* One backend transfer following any read-ahead; does not move the position. */
 static int backend_read(struct descriptor_object *entry, void *buffer, size_t size,
     size_t *read)
@@ -1428,7 +1698,7 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     }
     status = CALL_OK;
   } else {
-    status = console_read(entry->handle, buffer, size, read);
+    status = terminal_read(entry, buffer, size, read);
   }
   if (status != CALL_OK) {
     *read = 0;
@@ -1494,6 +1764,11 @@ static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, si
       return fail(error);
     }
   } else {
+    if (entry->terminal_read_status != CALL_OK) {
+      enum call_status status = entry->terminal_read_status;
+      entry->terminal_read_status = CALL_OK;
+      return fail(libc_call_errno(status));
+    }
     enum call_status status = console_read_timeout(entry->handle, buffer, count, 0, &read);
     if (status != CALL_OK) {
       return fail(status == CALL_TIMED_OUT ? EAGAIN : libc_call_errno(status));

@@ -132,6 +132,28 @@ enum call_status console_fresh_line(handle_t output)
          (enum call_status)result.status : CALL_BAD_REQUEST;
 }
 
+enum call_status console_drain(handle_t console, uint32_t timeout_ms)
+{
+  if (timeout_ms > CONSOLE_DRAIN_TIMEOUT_MAX_MS) {
+    return CALL_BAD_REQUEST;
+  }
+  struct console_message message = {
+    .header = {PROTOCOL_CONSOLE, CONSOLE_DRAIN},
+    .body.drain = {.timeout_ms = timeout_ms},
+  };
+  struct syscall_result result = syscall_call(console, &message, sizeof(message), NULL, 0);
+  return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+         (enum call_status)result.status : CALL_OUTCOME_UNKNOWN;
+}
+
+enum call_status console_flush_input(handle_t input)
+{
+  struct console_message message = {.header = {PROTOCOL_CONSOLE, CONSOLE_FLUSH_INPUT}};
+  struct syscall_result result = syscall_call(input, &message, sizeof(message), NULL, 0);
+  return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+         (enum call_status)result.status : CALL_OUTCOME_UNKNOWN;
+}
+
 enum call_status console_set_tab_width(handle_t output, size_t columns)
 {
   struct console_message message = {

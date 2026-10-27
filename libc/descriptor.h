@@ -48,8 +48,8 @@ int descriptor_finish(void);
  * write is an error. Failure sets errno.
  *
  * Reads first return bytes already read ahead, without a backend call. The
- * exact read then performs one backend transfer of at most capacity bytes, as
- * read() and fread_some require. The buffered read, used only by fread and the
+ * exact read then requests at most capacity bytes. Console MIN/TIME can combine
+ * native reads to meet its threshold; pipes keep one short transfer. The buffered read, used only by fread and the
  * functions built on it, may instead fetch up to BUFSIZ bytes from a file or
  * pipe in one transfer and keep the excess. Consoles are never read ahead.
  * Read-ahead is private to this process and never accompanies a delegated
@@ -59,7 +59,8 @@ int descriptor_read_buffered(int descriptor, void *buffer, size_t capacity, size
 /* read() semantics: as descriptor_read, but a regular file keeps transferring
  * until capacity bytes arrive or the file ends, since each native transfer is
  * under 4 KiB. A failure after progress returns the bytes already read; the
- * error recurs on the next call. Pipes and consoles keep one short transfer. */
+ * error recurs on the next call. Pipes keep one short transfer; consoles apply
+ * their shared noncanonical MIN/TIME request. */
 int descriptor_read_complete(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written);
 /* File-only explicit offsets, without changing the private position. Read

@@ -21,8 +21,9 @@ int pyxis_terminal_is_terminal(int descriptor);
 int pyxis_terminal_get_size(int descriptor, struct console_size_reply *size);
 
 /* Each open object has one private mode owner, shared by dup aliases. A state
- * snapshots whether that owner holds PASSTHROUGH, not global terminal modes or
- * another owner's grant. GetState acquires no raw grant and needs no READ.
+ * snapshots that owner's PASSTHROUGH and MIN/TIME request, shared with termios,
+ * not global terminal modes or another owner's grant. GetState acquires no raw
+ * grant and needs no READ.
  * Success allocates a state; failure sets *state to NULL. */
 int pyxis_terminal_get_state(int descriptor, struct pyxis_terminal_state **state);
 
@@ -33,15 +34,16 @@ int pyxis_terminal_get_state(int descriptor, struct pyxis_terminal_state **state
 int pyxis_terminal_state_validate(int descriptor,
     const struct pyxis_terminal_state *state);
 
-/* Snapshot the preceding state and ensure this owner holds one PASSTHROUGH
- * grant. Requires input READ even when already raw. CONSOLE reads already
- * return unechoed bytes; continue using read/stdio/descriptor input so libc
+/* Snapshot the full preceding state, select MIN1/TIME0 and ensure this owner
+ * holds one PASSTHROUGH grant. Requires input READ even when already raw.
+ * CONSOLE reads already return unechoed bytes; continue using libc input so its
  * read-ahead remains visible. Ctrl+C is data while any raw grant exists.
  * A failed acquisition returns no snapshot and never retries uncertainty. */
 int pyxis_terminal_make_raw(int descriptor, struct pyxis_terminal_state **previous);
 
-/* Set this owner's raw hold to the snapshot. Repeated calls are idempotent;
- * nested saves restore in reverse order, out-of-order calls apply the selected
+/* Restore this owner's raw hold and MIN/TIME from the snapshot. Repeated calls
+ * are idempotent; nested saves restore in reverse order, out-of-order calls
+ * apply the selected
  * snapshot (last call wins). Does not consume state. The fd must still name
  * the saved open object; aliases qualify, replacements fail with EBADF and
  * have no effects. Restoring raw requires READ. Native CLOSE is attempted once;
