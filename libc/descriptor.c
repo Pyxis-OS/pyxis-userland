@@ -70,6 +70,7 @@ struct descriptor_object {
   int final_error;
   uint64_t position;
   bool readable, writable, append;
+  bool write_uncertain; /* Shared aliases cannot replay an uncertain FILE mutation. */
   bool input_consumed; /* Any successful read, including explicit-offset reads. */
   bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
   unsigned char *ahead; /* Owned, BUFSIZ bytes, allocated on first fill. */
@@ -240,6 +241,9 @@ static int object_ready(struct descriptor_object *object, bool writing)
       (writing ? !__atomic_load_n(&object->writable, __ATOMIC_ACQUIRE) :
       !__atomic_load_n(&object->readable, __ATOMIC_ACQUIRE))) {
     return fail(EBADF);
+  }
+  if (writing && __atomic_load_n(&object->write_uncertain, __ATOMIC_ACQUIRE)) {
+    return fail(EIO);
   }
   if (!writing && object->transaction) {
     int error = __atomic_load_n(&object->transaction->failure, __ATOMIC_ACQUIRE);
@@ -1955,6 +1959,9 @@ static int write_locked(struct descriptor_object *entry, const void *buffer, siz
     status = console_write(entry->handle, buffer, size, written);
   }
   if (status != CALL_OK) {
+    if (entry->kind == DESCRIPTOR_FILE && status == CALL_OUTCOME_UNKNOWN) {
+      __atomic_store_n(&entry->write_uncertain, true, __ATOMIC_RELEASE);
+    }
     if (entry->transaction) {
       entry->transaction->producer_failed = true;
     }
@@ -2026,6 +2033,9 @@ static int pwrite_locked(struct descriptor_object *entry, const void *buffer, si
   handle_t handle = entry->handle;
   enum call_status status = file_write(handle, offset, buffer, size, written);
   if (status != CALL_OK) {
+    if (status == CALL_OUTCOME_UNKNOWN) {
+      __atomic_store_n(&entry->write_uncertain, true, __ATOMIC_RELEASE);
+    }
     if (entry->transaction) {
       entry->transaction->producer_failed = true;
     }
