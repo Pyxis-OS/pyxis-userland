@@ -173,6 +173,23 @@ int ftruncate(int descriptor, off_t length)
   return descriptor_object_resize(object, (uint64_t)length);
 }
 
+int truncate(const char *path, off_t length)
+{
+  if (length < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  int descriptor = open(path, O_WRONLY);
+  if (descriptor < 0) {
+    return -1;
+  }
+  int result = ftruncate(descriptor, length);
+  int saved = errno;
+  close(descriptor);
+  errno = saved;
+  return result;
+}
+
 off_t lseek(int descriptor, off_t offset, int origin)
 {
   return descriptor_seek_position(descriptor, offset, origin);

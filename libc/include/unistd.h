@@ -82,6 +82,9 @@ int close(int descriptor);
  * lengths and consoles or pipes fail with EINVAL. An uncertain backend outcome
  * is EIO; the size must then be treated as unknown. */
 int ftruncate(int descriptor, off_t length);
+/* Open an existing path for writing and apply the same native RESIZE contract.
+ * Does not create a missing file. */
+int truncate(const char *path, off_t length);
 /* Files only; consoles and pipes fail with ESPIPE. Returns the new position.
  * Seeking past the end is allowed; a later write fills the gap with zeros. */
 off_t lseek(int descriptor, off_t offset, int origin);
