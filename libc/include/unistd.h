@@ -108,6 +108,17 @@ int isatty(int descriptor);
  * after the whole interval, or the requested seconds with errno on failure. */
 unsigned int sleep(unsigned int seconds);
 
+/* POSIX option parsing from musl, over the caller's argv: optind indexes the
+ * next argument (set it to 0 to restart) and opterr, if nonzero, prints
+ * diagnostics to stderr prefixed by argv[0]. A leading ":" in OPTSTRING reports
+ * a missing argument as ":" and silences diagnostics; "+" stops at the first
+ * operand, and "-" returns operands as option 1. Unknown options and missing
+ * arguments return "?" with optopt set. The parser keeps one process-wide
+ * state, so it is not thread-safe. See <getopt.h> for the long forms. */
+int getopt(int argc, char *const argv[], const char *optstring);
+extern char *optarg;
+extern int optind, opterr, optopt;
+
 #ifdef __cplusplus
 }
 #endif

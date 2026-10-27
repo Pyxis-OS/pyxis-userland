@@ -82,6 +82,8 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/x86_64/sqrt.c \
                 third_party/musl/src/math/x86_64/sqrtf.c \
                 third_party/musl/src/string/wcslen.c \
+                third_party/musl/src/misc/getopt.c \
+                third_party/musl/src/misc/getopt_long.c \
                 third_party/musl/src/math/sin.c \
                 third_party/musl/src/math/cos.c \
                 third_party/musl/src/math/tan.c \

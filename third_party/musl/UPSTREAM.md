@@ -362,3 +362,28 @@ closure. `fmaf.c` retains David Schultz's BSD-2-Clause notice; its floating-poin
 exception/rounding operations use the real libc fenv implementation. Other
 files retain the upstream musl notices, including Arm's MIT notice in exp2f.
 No port-local numerical approximations or errno changes are introduced.
+
+The `getopt`, `getopt_long` and `getopt_long_only` functions come from the same
+1.2.5 pin: `src/misc/getopt.c` and `src/misc/getopt_long.c`, from a local copy of the
+release tarball (SHA-256 of `musl-1.2.5.tar.gz`
+`a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4`), whose
+`COPYRIGHT` equals the one here and whose other files already imported match
+byte for byte. Only the private-header plumbing changes, each marked `Pyxis:`
+in the source:
+
+- `getopt.c` replaces musl's `locale_impl.h` and `stdio_impl.h` with `stdio.h`
+  and defines `weak_alias` as musl's `features.h` does, for the BSD
+  `optreset`. It drops the `__lctrans_cur` message translation, `FLOCK` and
+  `FUNLOCK` (libc has no locale catalogs, and FILE synchronizes itself) and the
+  internal `__posix_getopt` alias.
+- `getopt_long.c` drops `stdio_impl.h`, declares `__getopt_msg` itself, and
+  calls `mbtowc(0, ...)` where musl calls `mblen`, which libc does not provide;
+  C defines the two to be equivalent.
+
+Diagnostics go to `stderr` with `argv[0]` as the prefix, as in musl, in four
+separate writes without musl's stream lock. All state is process-wide:
+`optarg`, `optind`, `opterr`, `optopt` and the internal position are not
+per-thread, so concurrent parsing needs the caller's own exclusion. Pyxis
+supplies `getopt.h` and the `unistd.h` declarations; musl's `getopt.h` is not
+copied. Multibyte option characters decode through the stateless UTF-8
+`mbtowc`; an invalid byte reports as U+FFFD.

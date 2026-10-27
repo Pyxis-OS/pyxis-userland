@@ -22,8 +22,8 @@ applied: MPL's standard secondary-license provisions remain available.
 - `third_party/tlsf/`: imported allocator sources and their local adaptations
   retain the BSD terms in [tlsf.h](third_party/tlsf/tlsf.h), with provenance in
   [UPSTREAM.md](third_party/tlsf/UPSTREAM.md).
-- `third_party/musl/`: imported and adapted math, conversion, formatting, sorting
-  and time routines retain their upstream notices and
+- `third_party/musl/`: imported and adapted math, conversion, formatting, sorting,
+  option-parsing and time routines retain their upstream notices and
   [COPYRIGHT](third_party/musl/COPYRIGHT). The precise source selection and local
   changes are recorded in [UPSTREAM.md](third_party/musl/UPSTREAM.md).
 - `libc/include/math.h` includes musl-derived infinity/NaN definitions. Those
