@@ -17,6 +17,12 @@ void *memset_explicit(void *dest, int value, size_t count)
   return result;
 }
 
+void *mempcpy(void *restrict dest, const void *restrict src, size_t count)
+{
+  memcpy(dest, src, count);
+  return (unsigned char *)dest + count;
+}
+
 void *memcpy(void *restrict dest, const void *restrict src, size_t count)
 {
   unsigned char *dest_bytes = dest;
