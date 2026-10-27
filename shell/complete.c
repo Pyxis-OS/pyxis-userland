@@ -177,8 +177,9 @@ bool shell_complete(void *context, const char *line, size_t cursor,
   if (!completion_scan(line, cursor, &word)) {
     return false;
   }
-  bool found = word.command ? complete_command(shell, &word, result)
-                            : shell_complete_path(shell, &word, result);
+  bool path = !word.command || strchr(word.value, '/') || strchr(word.value, ':');
+  bool found = path ? shell_complete_path(shell, &word, result)
+                    : complete_command(shell, &word, result);
   free(word.value);
   return found;
 }
