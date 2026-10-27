@@ -22,6 +22,14 @@ extern "C" {
 #define W_OK 2
 #define R_OK 4
 
+#define _SC_NPROCESSORS_ONLN 1
+#define _SC_NPROCESSORS_CONF 2
+
+/* Both CPU selectors describe the process's boot-fixed usable CPU population
+ * at startup, not global inventory. No authority is required. Unknown names
+ * return -1/EINVAL. */
+long sysconf(int name);
+
 /* Reads the boot-selected name through the system_info startup grant. The
  * whole name and NUL must fit, else ENAMETOOLONG; failure preserves NAME. */
 int gethostname(char *name, size_t size);

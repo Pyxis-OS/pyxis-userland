@@ -30,7 +30,7 @@ static bool valid_startup(const struct startup_info *info)
       info->read_only_size < sizeof(*info) || info->read_only_size >= info->size ||
       (uintptr_t)info > UINTPTR_MAX - info->size || info->thread_fs == HANDLE_INVALID ||
       info->environment_handle == HANDLE_INVALID ||
-      info->thread_fs == info->environment_handle) {
+      info->thread_fs == info->environment_handle || !info->usable_cpu_count) {
     return false;
   }
   if (info->working_directory_count > info->read_only_size / sizeof(handle_t) ||
@@ -85,6 +85,11 @@ bool startup_init(const struct startup_info *info)
 handle_t startup_environment_handle(void)
 {
   return startup->environment_handle;
+}
+
+size_t startup_usable_cpu_count(void)
+{
+  return startup->usable_cpu_count;
 }
 
 const handle_t *startup_working_directories(void)

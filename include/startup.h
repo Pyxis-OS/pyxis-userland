@@ -12,6 +12,10 @@ bool startup_init(const struct startup_info *info);
 /* Borrow the process-owned caller-bound environment service. */
 handle_t startup_environment_handle(void);
 
+/* Kernel-prepared logical CPU allowance at process startup, always nonzero.
+ * No capability/query; this is neither global inventory nor a live affinity API. */
+size_t startup_usable_cpu_count(void);
+
 /* The chain runs from the permitted parent-navigation boundary to the current
  * directory. Out-of-range indexes return HANDLE_INVALID. The optional display
  * path describes the initial context only; changing directory does not update it.
