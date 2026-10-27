@@ -97,8 +97,8 @@ same-store rename. Index locks span read/modify/publication; branch publication 
 observed reference. Ref and index locks use exclusive creation. This is data-before-name
 publication, without a directory-sync or whole-clone crash-atomicity claim.
 Forced termination can leave partial files and locks; neither is stolen or
-automatically retried. Unavailable timestamps force hashing; incomplete content
-or ignore scans fail instead of reporting a clean tree.
+automatically retried. Unavailable timestamps force hashing. Content and ignore
+scan errors follow upstream handling, which can use partial or no ignore patterns.
 
 ```sh
 ./git/build.sh /absolute/pyxis-go-prefix /absolute/fresh/git-build

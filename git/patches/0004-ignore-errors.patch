@@ -1,134 +1,16 @@
-diff --git a/vendor/github.com/go-git/go-git/v5/plumbing/format/gitignore/dir.go b/vendor/github.com/go-git/go-git/v5/plumbing/format/gitignore/dir.go
-index 92df5a3..3c3e01f 100644
---- a/vendor/github.com/go-git/go-git/v5/plumbing/format/gitignore/dir.go
-+++ b/vendor/github.com/go-git/go-git/v5/plumbing/format/gitignore/dir.go
-@@ -3,6 +3,7 @@ package gitignore
- import (
- 	"bufio"
- 	"bytes"
-+	"errors"
- 	"io"
- 	"os"
- 	"strings"
-@@ -26,34 +27,49 @@ const (
- 
- // readIgnoreFile reads a specific git ignore file.
- func readIgnoreFile(fs billy.Filesystem, path []string, ignoreFile string) (ps []Pattern, err error) {
--
--	ignoreFile, _ = path_util.ReplaceTildeWithHome(ignoreFile)
--
-+	ignoreFile, err = path_util.ReplaceTildeWithHome(ignoreFile)
-+	if err != nil {
-+		return nil, err
-+	}
- 	f, err := fs.Open(fs.Join(append(path, ignoreFile)...))
--	if err == nil {
--		defer f.Close()
--
--		scanner := bufio.NewScanner(f)
--		for scanner.Scan() {
--			s := scanner.Text()
--			if !strings.HasPrefix(s, commentPrefix) && len(strings.TrimSpace(s)) > 0 {
--				ps = append(ps, ParsePattern(s, path))
--			}
-+	if err != nil {
-+		if os.IsNotExist(err) {
-+			return nil, nil
- 		}
--	} else if !os.IsNotExist(err) {
- 		return nil, err
- 	}
--
--	return
-+	defer func() {
-+		err = errors.Join(err, f.Close())
-+		if err != nil {
-+			ps = nil
-+		}
-+	}()
-+	scanner := bufio.NewScanner(f)
-+	for scanner.Scan() {
-+		s := scanner.Text()
-+		if !strings.HasPrefix(s, commentPrefix) && len(strings.TrimSpace(s)) > 0 {
-+			ps = append(ps, ParsePattern(s, path))
-+		}
-+	}
-+	return ps, scanner.Err()
- }
- 
- // ReadPatterns reads the .git/info/exclude and then the gitignore patterns
- // recursively traversing through the directory structure. The result is in
- // the ascending order of priority (last higher).
- func ReadPatterns(fs billy.Filesystem, path []string) (ps []Pattern, err error) {
--	ps, _ = readIgnoreFile(fs, path, infoExcludeFile)
-+	// info/exclude belongs to this repository, not to each worktree directory.
-+	if len(path) == 0 {
-+		ps, err = readIgnoreFile(fs, path, infoExcludeFile)
-+		if err != nil {
-+			return nil, err
-+		}
-+	}
- 
--	subps, _ := readIgnoreFile(fs, path, gitignoreFile)
-+	subps, err := readIgnoreFile(fs, path, gitignoreFile)
-+	if err != nil {
-+		return nil, err
-+	}
- 	ps = append(ps, subps...)
- 
- 	var fis []os.FileInfo
 diff --git a/vendor/github.com/go-git/go-git/v5/worktree_fs.go b/vendor/github.com/go-git/go-git/v5/worktree_fs.go
-index cf16de7..c53da08 100644
+index cf16de7..22e6f9d 100644
 --- a/vendor/github.com/go-git/go-git/v5/worktree_fs.go
 +++ b/vendor/github.com/go-git/go-git/v5/worktree_fs.go
 @@ -189,6 +189,11 @@ func (sfs *worktreeFilesystem) validReadPath(p string) error {
  	if p == "" || p == "." || p == "/" {
  		return nil
  	}
-+	// The ignore reader consumes this repository-local metadata file once at
-+	// the root. Permit only this exact read; writes still use validWritePath.
++	// Permit only this repository-local ignore metadata read; writes still
++	// use validWritePath.
 +	if filepath.ToSlash(p) == ".git/info/exclude" {
 +		return sfs.validNoLeadingSymlink(p)
 +	}
  	if err := sfs.validPath(p); err != nil {
  		return err
  	}
-diff --git a/vendor/github.com/go-git/go-git/v5/worktree_status.go b/vendor/github.com/go-git/go-git/v5/worktree_status.go
-index 35b6306..cb40e6d 100644
---- a/vendor/github.com/go-git/go-git/v5/worktree_status.go
-+++ b/vendor/github.com/go-git/go-git/v5/worktree_status.go
-@@ -156,21 +156,21 @@ func (w *Worktree) diffStagingWithWorktree(reverse, excludeIgnoredChanges bool)
- 	}
- 
- 	if excludeIgnoredChanges {
--		return w.excludeIgnoredChanges(c), nil
-+		return w.excludeIgnoredChanges(c)
- 	}
- 	return c, nil
- }
- 
--func (w *Worktree) excludeIgnoredChanges(changes merkletrie.Changes) merkletrie.Changes {
-+func (w *Worktree) excludeIgnoredChanges(changes merkletrie.Changes) (merkletrie.Changes, error) {
- 	patterns, err := gitignore.ReadPatterns(w.Filesystem, nil)
- 	if err != nil {
--		return changes
-+		return nil, err
- 	}
- 
- 	patterns = append(patterns, w.Excludes...)
- 
- 	if len(patterns) == 0 {
--		return changes
-+		return changes, nil
- 	}
- 
- 	m := gitignore.NewMatcher(patterns)
-@@ -196,7 +196,7 @@ func (w *Worktree) excludeIgnoredChanges(changes merkletrie.Changes) merkletrie.
- 		}
- 		res = append(res, ch)
- 	}
--	return res
-+	return res, nil
- }
- 
- func (w *Worktree) getSubmodulesStatus() (map[string]plumbing.Hash, error) {

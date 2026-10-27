@@ -178,53 +178,39 @@ index 0000000..17742fa
 +// The frontend also enforces HTTPS on URLs and redirects on both hosts.
 +var Protocols = map[string]transport.Transport{"https": http.DefaultClient}
 diff --git a/vendor/github.com/go-git/go-git/v5/repository.go b/vendor/github.com/go-git/go-git/v5/repository.go
-index 7a144fa..7fc7bc3 100644
+index 7a144fa..394c9ca 100644
 --- a/vendor/github.com/go-git/go-git/v5/repository.go
 +++ b/vendor/github.com/go-git/go-git/v5/repository.go
-@@ -1533,16 +1533,22 @@ func (r *Repository) Worktree() (*Worktree, error) {
+@@ -1533,6 +1533,7 @@ func (r *Repository) Worktree() (*Worktree, error) {
  
  	protectNTFS := defaultProtectNTFS()
  	protectHFS := defaultProtectHFS()
--	if cfg, err := r.Config(); err == nil {
--		if cfg.Core.ProtectNTFS.IsSet() {
--			protectNTFS = cfg.Core.ProtectNTFS.IsTrue()
--		}
--		if cfg.Core.ProtectHFS.IsSet() {
--			protectHFS = cfg.Core.ProtectHFS.IsTrue()
--		}
-+	cfg, err := r.Config()
-+	if err != nil {
-+		return nil, err
-+	}
-+	if cfg.Core.ProtectNTFS.IsSet() {
-+		protectNTFS = cfg.Core.ProtectNTFS.IsTrue()
-+	}
-+	if cfg.Core.ProtectHFS.IsSet() {
-+		protectHFS = cfg.Core.ProtectHFS.IsTrue()
++	disableSymlinks, ignoreFileMode := false, false
+ 	if cfg, err := r.Config(); err == nil {
+ 		if cfg.Core.ProtectNTFS.IsSet() {
+ 			protectNTFS = cfg.Core.ProtectNTFS.IsTrue()
+@@ -1540,9 +1541,15 @@ func (r *Repository) Worktree() (*Worktree, error) {
+ 		if cfg.Core.ProtectHFS.IsSet() {
+ 			protectHFS = cfg.Core.ProtectHFS.IsTrue()
+ 		}
++		disableSymlinks = cfg.Core.Symlinks == config.OptBoolFalse
++		ignoreFileMode = cfg.Core.FileMode == config.OptBoolFalse
  	}
  
 -	return &Worktree{r: r, Filesystem: newWorktreeFilesystem(r.wt, protectNTFS, protectHFS)}, nil
 +	return &Worktree{
 +		r: r, Filesystem: newWorktreeFilesystem(r.wt, protectNTFS, protectHFS),
-+		disableSymlinks: cfg.Core.Symlinks == config.OptBoolFalse,
-+		ignoreFileMode:  cfg.Core.FileMode == config.OptBoolFalse,
++		disableSymlinks: disableSymlinks,
++		ignoreFileMode:  ignoreFileMode,
 +	}, nil
  }
  
  func expand_ref(s storer.ReferenceStorer, ref plumbing.ReferenceName) (*plumbing.Reference, error) {
 diff --git a/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go b/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go
-index 83df4dd..891d62e 100644
+index 83df4dd..ab4afd8 100644
 --- a/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go
 +++ b/vendor/github.com/go-git/go-git/v5/utils/merkletrie/filesystem/node.go
-@@ -1,6 +1,7 @@
- package filesystem
- 
- import (
-+	"fmt"
- 	"io"
- 	"os"
- 	"path"
-@@ -24,6 +25,11 @@ type Options struct {
+@@ -24,6 +24,11 @@ type Options struct {
  	// correctly handling the "racy git" condition. If no index is provided,
  	// the function works without the optimization.
  	Index *index.Index
@@ -236,7 +222,7 @@ index 83df4dd..891d62e 100644
  }
  
  // The node represents a file or a directory in a billy.Filesystem. It
-@@ -32,10 +38,12 @@ type Options struct {
+@@ -32,10 +37,12 @@ type Options struct {
  // This implementation implements a "standard" hash method being able to be
  // compared with any other noder.Noder implementation inside of go-git.
  type node struct {
@@ -253,7 +239,7 @@ index 83df4dd..891d62e 100644
  
  	path     string
  	hash     []byte
-@@ -84,11 +92,13 @@ func NewRootNodeWithOptions(
+@@ -84,11 +91,13 @@ func NewRootNodeWithOptions(
  	}
  
  	return &node{
@@ -272,7 +258,7 @@ index 83df4dd..891d62e 100644
  	}
  }
  
-@@ -178,10 +188,12 @@ func (n *node) newChildNode(file os.FileInfo) (*node, error) {
+@@ -178,10 +187,12 @@ func (n *node) newChildNode(file os.FileInfo) (*node, error) {
  	path := path.Join(n.path, file.Name())
  
  	node := &node{
@@ -289,66 +275,19 @@ index 83df4dd..891d62e 100644
  
  		path:    path,
  		isDir:   file.IsDir(),
-@@ -194,40 +206,69 @@ func (n *node) newChildNode(file os.FileInfo) (*node, error) {
- 		node.isDir = false
- 	}
- 
-+	// Noder.Hash cannot return an error. Compute leaf hashes here, where the
-+	// traversal can still propagate failed content reads instead of reporting
-+	// a fabricated hash or a clean status after an incomplete scan.
-+	if !node.isDir {
-+		if err := node.calculateHash(); err != nil {
-+			return nil, err
-+		}
-+	}
- 	return node, nil
- }
- 
--func (n *node) calculateHash() {
-+func (n *node) calculateHash() error {
- 	if n.isDir {
+@@ -202,7 +213,7 @@ func (n *node) calculateHash() {
  		n.hash = make([]byte, 24)
--		return
-+		return nil
+ 		return
  	}
 -	mode, err := filemode.NewFromOSFileMode(n.mode)
 +	mode, err := n.gitMode()
  	if err != nil {
--		n.hash = plumbing.ZeroHash[:]
--		return
-+		return err
- 	}
- 	if submoduleHash, isSubmodule := n.submodules[n.path]; isSubmodule {
- 		n.hash = append(submoduleHash[:], filemode.Submodule.Bytes()...)
--		return
-+		return nil
- 	}
- 
- 	if n.idxMap != nil {
- 		if entry, ok := n.idxMap[n.path]; ok {
- 			if n.metadataMatches(entry) {
- 				n.hash = append(entry.Hash[:], mode.Bytes()...)
--				return
-+				return nil
- 			}
- 		}
- 	}
- 
- 	var hash plumbing.Hash
- 	if n.mode&os.ModeSymlink != 0 {
--		hash = n.doCalculateHashForSymlink()
-+		hash, err = n.doCalculateHashForSymlink()
- 	} else {
--		hash = n.doCalculateHashForRegular()
-+		hash, err = n.doCalculateHashForRegular()
-+	}
-+	if err != nil {
-+		return fmt.Errorf("hash %s: %w", n.path, err)
- 	}
+ 		n.hash = plumbing.ZeroHash[:]
+ 		return
+@@ -230,6 +241,24 @@ func (n *node) calculateHash() {
  	n.hash = append(hash[:], mode.Bytes()...)
-+	return nil
-+}
-+
+ }
+ 
 +// Only a regular file may stand in for a tracked link or executable file.
 +// A directory, real symlink or other changed native type remains a change.
 +func (n *node) gitMode() (filemode.FileMode, error) {
@@ -365,10 +304,12 @@ index 83df4dd..891d62e 100644
 +		}
 +	}
 +	return mode, nil
- }
- 
++}
++
  func (n *node) metadataMatches(entry *index.Entry) bool {
-@@ -239,11 +280,11 @@ func (n *node) metadataMatches(entry *index.Entry) bool {
+ 	if entry == nil {
+ 		return false
+@@ -239,11 +268,11 @@ func (n *node) metadataMatches(entry *index.Entry) bool {
  		return false
  	}
  
@@ -382,55 +323,6 @@ index 83df4dd..891d62e 100644
  	if err != nil {
  		return false
  	}
-@@ -268,34 +309,33 @@ func (n *node) metadataMatches(entry *index.Entry) bool {
- 	return true
- }
- 
--func (n *node) doCalculateHashForRegular() plumbing.Hash {
-+func (n *node) doCalculateHashForRegular() (hash plumbing.Hash, err error) {
- 	f, err := n.fs.Open(n.path)
- 	if err != nil {
--		return plumbing.ZeroHash
-+		return hash, err
- 	}
--
--	defer f.Close()
--
-+	defer func() {
-+		if closeErr := f.Close(); err == nil {
-+			err = closeErr
-+		}
-+	}()
- 	h := plumbing.NewHasher(plumbing.BlobObject, n.size)
--	if _, err := io.Copy(h, f); err != nil {
--		return plumbing.ZeroHash
-+	if _, err = io.Copy(h, f); err != nil {
-+		return hash, err
- 	}
--
--	return h.Sum()
-+	return h.Sum(), nil
- }
- 
--func (n *node) doCalculateHashForSymlink() plumbing.Hash {
-+func (n *node) doCalculateHashForSymlink() (plumbing.Hash, error) {
- 	target, err := n.fs.Readlink(n.path)
- 	if err != nil {
--		return plumbing.ZeroHash
-+		return plumbing.ZeroHash, err
- 	}
--
- 	h := plumbing.NewHasher(plumbing.BlobObject, n.size)
- 	if _, err := h.Write([]byte(target)); err != nil {
--		return plumbing.ZeroHash
-+		return plumbing.ZeroHash, err
- 	}
--
--	return h.Sum()
-+	return h.Sum(), nil
- }
- 
- func (n *node) String() string {
 diff --git a/vendor/github.com/go-git/go-git/v5/worktree.go b/vendor/github.com/go-git/go-git/v5/worktree.go
 index b935c6b..f8472ba 100644
 --- a/vendor/github.com/go-git/go-git/v5/worktree.go
