@@ -162,6 +162,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/lgamma_r.c \
                 third_party/musl/src/math/nearbyint.c \
                 third_party/musl/src/math/nextafter.c \
+                third_party/musl/src/math/nextafterf.c \
                 third_party/musl/src/math/nexttoward.c \
                 third_party/musl/src/math/remainder.c \
                 third_party/musl/src/math/remquo.c \

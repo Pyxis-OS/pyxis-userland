@@ -19,6 +19,8 @@ copyright and MIT SPDX notices.
 
 The following files are copied without changes, including upstream formatting:
 
+- `src/math/nextafterf.c` (llvmpipe's single-precision adjacent-value operation)
+
 - `src/math/scalbn.c`
 - `src/math/scalbnl.c`
 - `src/math/ldexpl.c`

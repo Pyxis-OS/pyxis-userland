@@ -186,6 +186,7 @@ double atanh(double value);
 double nearbyint(double value);
 float nearbyintf(float value);
 double nextafter(double from, double toward);
+float nextafterf(float from, float toward);
 double nexttoward(double from, long double toward);
 double remainder(double x, double y);
 /* Stores the low bits (at least three) of the integer quotient with the sign
