@@ -5,10 +5,9 @@
 #include <getopt.h>
 #include <stdio.h>
 #include <string.h>
+#include "stdio_impl.h"
 
 extern int __optpos, __optreset;
-/* Pyxis: musl declares this in its private stdio_impl.h, omitted here. */
-void __getopt_msg(const char *, const char *, const char *, size_t);
 
 static void permute(char *const *argv, int dest, int src)
 {
@@ -76,7 +75,7 @@ static int __getopt_long_core(int argc, char *const *argv, const char *optstring
 			}
 			cnt++;
 		}
-		if (cnt==1 && longonly && arg-start == mbtowc(0, start, MB_LEN_MAX)) {
+		if (cnt==1 && longonly && arg-start == mblen(start, MB_LEN_MAX)) {
 			int l = arg-start;
 			for (i=0; optstring[i]; i++) {
 				int j;

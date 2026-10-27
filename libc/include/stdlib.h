@@ -31,6 +31,9 @@ typedef struct {
  * zero); NUL returns zero and stores L'\0'. Invalid or incomplete input returns
  * -1 with EILSEQ and leaves output unchanged. output may be NULL. */
 int mbtowc(wchar_t *__restrict output, const char *__restrict text, size_t size);
+/* The byte length of the scalar at text, as mbtowc with no output: zero for
+ * NUL, and zero for NULL text since the encoding has no shift state. */
+int mblen(const char *text, size_t size);
 /* UTF-8 strings with a fresh conversion state per call. Counts exclude NUL;
  * NULL output counts the whole string, ignoring capacity. An output limit
  * never splits an encoded scalar. Invalid input returns (size_t)-1/EILSEQ. */

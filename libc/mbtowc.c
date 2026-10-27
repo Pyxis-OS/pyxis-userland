@@ -16,3 +16,8 @@ int mbtowc(wchar_t *restrict output, const char *restrict text, size_t size)
   }
   return count == (size_t)-1 ? -1 : (int)count;
 }
+
+int mblen(const char *text, size_t size)
+{
+  return mbtowc(NULL, text, size);
+}

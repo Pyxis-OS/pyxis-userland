@@ -364,21 +364,18 @@ files retain the upstream musl notices, including Arm's MIT notice in exp2f.
 No port-local numerical approximations or errno changes are introduced.
 
 The `getopt`, `getopt_long` and `getopt_long_only` functions come from the same
-1.2.5 pin: `src/misc/getopt.c` and `src/misc/getopt_long.c`, from a local copy of the
-release tarball (SHA-256 of `musl-1.2.5.tar.gz`
+1.2.5 pin: `src/misc/getopt.c` and `src/misc/getopt_long.c`, unmodified, from a
+local copy of the release tarball (SHA-256 of `musl-1.2.5.tar.gz`
 `a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4`), whose
 `COPYRIGHT` equals the one here and whose other files already imported match
-byte for byte. Only the private-header plumbing changes, each marked `Pyxis:`
-in the source:
+byte for byte. They include musl's private `locale_impl.h` and `stdio_impl.h`,
+which Pyxis replaces with minimal local headers in `src/internal`:
 
-- `getopt.c` replaces musl's `locale_impl.h` and `stdio_impl.h` with `stdio.h`
-  and defines `weak_alias` as musl's `features.h` does, for the BSD
-  `optreset`. It drops the `__lctrans_cur` message translation, `FLOCK` and
-  `FUNLOCK` (libc has no locale catalogs, and FILE synchronizes itself) and the
-  internal `__posix_getopt` alias.
-- `getopt_long.c` drops `stdio_impl.h`, declares `__getopt_msg` itself, and
-  calls `mbtowc(0, ...)` where musl calls `mblen`, which libc does not provide;
-  C defines the two to be equivalent.
+- `locale_impl.h` defines `__lctrans_cur` as the identity, since libc has no
+  message catalogs, and musl's `weak_alias`, used for the BSD `optreset` and an
+  unused `__posix_getopt` alias.
+- `stdio_impl.h` includes `stdio.h`, defines `FLOCK` and `FUNLOCK` as nothing,
+  because libc's FILE synchronizes itself, and declares `__getopt_msg`.
 
 Diagnostics go to `stderr` with `argv[0]` as the prefix, as in musl, in four
 separate writes without musl's stream lock. All state is process-wide:
@@ -386,4 +383,5 @@ separate writes without musl's stream lock. All state is process-wide:
 per-thread, so concurrent parsing needs the caller's own exclusion. Pyxis
 supplies `getopt.h` and the `unistd.h` declarations; musl's `getopt.h` is not
 copied. Multibyte option characters decode through the stateless UTF-8
-`mbtowc`; an invalid byte reports as U+FFFD.
+`mbtowc`, and `getopt_long_only` measures them with libc's `mblen`; an invalid
+byte reports as U+FFFD.
