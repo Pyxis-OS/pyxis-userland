@@ -35,6 +35,7 @@ struct removal_walk {
   char *buffer;
   size_t capacity;
   unsigned restarts;
+  uintmax_t removed;
 };
 
 static void close_owned(handle_t *handle, enum call_status *status)
@@ -201,13 +202,18 @@ static struct removal_frame *close_frame(struct removal_frame *frame, enum call_
   return parent;
 }
 
-static void confirmed_removal(struct removal_walk *walk, struct removal_frame *frame)
+static enum call_status confirmed_removal(struct removal_walk *walk, struct removal_frame *frame)
 {
+  if (walk->removed == UINTMAX_MAX) {
+    return CALL_LIMIT;
+  }
+  ++walk->removed;
   walk->restarts = 0;
   if (frame) {
     frame->cursor = (struct directory_cursor){0};
     frame->end = false;
   }
+  return CALL_OK;
 }
 
 static enum call_status collect_entries(struct removal_walk *walk, struct removal_frame *frame)
@@ -327,7 +333,7 @@ static enum call_status remove_tree(struct removal_walk *walk, handle_t parent,
         handle_t owner = frame->parent ? frame->parent->directory : parent;
         status = directory_remove(owner, frame->name, DIRECTORY_KIND_DIRECTORY);
         if (status == CALL_OK) {
-          confirmed_removal(walk, frame->parent);
+          status = confirmed_removal(walk, frame->parent);
         } else if (status == CALL_NOT_FOUND) {
           status = CALL_OK;
         }
@@ -363,7 +369,7 @@ static enum call_status remove_tree(struct removal_walk *walk, handle_t parent,
     } else if (status == CALL_OK) {
       status = directory_remove(frame->directory, entry->name, kind);
       if (status == CALL_OK) {
-        confirmed_removal(walk, frame);
+        status = confirmed_removal(walk, frame);
       } else if (status == CALL_NOT_FOUND) {
         status = CALL_OK;
       }
@@ -378,8 +384,12 @@ static enum call_status remove_tree(struct removal_walk *walk, handle_t parent,
   return status;
 }
 
-int pyxis_directory_remove_all(const char *path)
+int pyxis_directory_remove_all_count(const char *path, uintmax_t *removed)
 {
+  if (!removed) {
+    errno = EINVAL;
+    return -1;
+  }
   struct removal_walk walk = {0};
   struct removal_frame *frame = NULL;
   char *leaf;
@@ -397,6 +407,9 @@ int pyxis_directory_remove_all(const char *path)
   status = directory_lookup_typed(parent, leaf, 0, REMOVE_DIRECTORY_RIGHTS, &root);
   if (status == CALL_LINK_NOT_FOLLOWED && !trailing) {
     status = directory_remove(parent, leaf, DIRECTORY_KIND_SYMLINK);
+    if (status == CALL_OK) {
+      status = confirmed_removal(&walk, NULL);
+    }
     if (status == CALL_NOT_FOUND) {
       status = CALL_OK;
     }
@@ -444,5 +457,12 @@ done:
     errno = not_directory ? ENOTDIR : libc_path_errno(status, path, NULL);
     return -1;
   }
+  *removed = walk.removed;
   return 0;
+}
+
+int pyxis_directory_remove_all(const char *path)
+{
+  uintmax_t removed;
+  return pyxis_directory_remove_all_count(path, &removed);
 }

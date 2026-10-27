@@ -47,6 +47,10 @@ int pyxis_file_metadata(int descriptor, struct stat *metadata, uint64_t *rights)
  * Failure sets errno and preserves both outputs. No reference survives return. */
 int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *rights);
 
+/* Metadata from one captured native FILE or DIRECTORY. Provider/exported
+ * routes fail before OPEN, so status and traversal cannot trigger a request. */
+int pyxis_path_metadata_native(const char *path, struct stat *metadata, uint64_t *rights);
+
 #ifdef __cplusplus
 }
 #endif

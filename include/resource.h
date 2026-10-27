@@ -67,6 +67,11 @@ enum call_status resource_open_native_file_path(const struct path_context *conte
 enum call_status resource_open_metadata_path(const struct path_context *context,
     const char *path, struct resource_result *result);
 
+/* The metadata route above, confined to native FILE and DIRECTORY grants.
+ * Provider/exported targets are refused before OPEN or any network I/O. */
+enum call_status resource_open_native_metadata_path(const struct path_context *context,
+    const char *path, struct resource_result *result);
+
 #ifdef __cplusplus
 }
 #endif

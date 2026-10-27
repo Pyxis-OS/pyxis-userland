@@ -232,7 +232,7 @@ static enum call_status finish_file(handle_t resource, uint64_t intent, uint64_t
   return CALL_OK;
 }
 
-enum open_route { OPEN_RESOURCE, OPEN_NATIVE_FILE, OPEN_METADATA };
+enum open_route { OPEN_RESOURCE, OPEN_NATIVE_FILE, OPEN_METADATA, OPEN_NATIVE_METADATA };
 
 static enum call_status open_directory(const handle_t *initial, size_t initial_count,
     const char *remainder,
@@ -331,7 +331,7 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
       break;
     }
     struct directory_typed_lookup_reply child = {0};
-    if (route == OPEN_METADATA) {
+    if (route == OPEN_METADATA || route == OPEN_NATIVE_METADATA) {
       file_rights = ((parent_info.rights & DIRECTORY_RIGHT_READ_FILES) ? FILE_RIGHT_READ : 0) |
           ((parent_info.rights & DIRECTORY_RIGHT_WRITE_FILES) ? FILE_RIGHT_WRITE : 0);
     }
@@ -359,9 +359,10 @@ static enum call_status open_directory(const handle_t *initial, size_t initial_c
         handle_close(child.handle);
         status = CALL_WRONG_TYPE;
       } else {
-        status = route == OPEN_METADATA ? resource_result_adopt(child.handle, result) :
+        status = route == OPEN_METADATA || route == OPEN_NATIVE_METADATA ?
+            resource_result_adopt(child.handle, result) :
             finish_file(child.handle, intent, flags, deadline_ns, result);
-        if (route == OPEN_METADATA && status != CALL_OK) {
+        if ((route == OPEN_METADATA || route == OPEN_NATIVE_METADATA) && status != CALL_OK) {
           handle_close(child.handle);
         }
       }
@@ -526,9 +527,10 @@ static enum call_status open_path(const struct path_context *context, const char
     status = (info.rights & PROVIDER_RIGHT_OPEN_WRITE) ? CALL_BAD_OPERATION :
         provider_open_typed(target, end + 3, PROVIDER_INTENT_READ, 0, 0, result);
   } else if (status == CALL_OK && info.protocol == PROTOCOL_FILE && !end[3]) {
-    if (route == OPEN_NATIVE_FILE && (info.kind != HANDLE_KIND_NATIVE || info.transport)) {
+    if ((route == OPEN_NATIVE_FILE || route == OPEN_NATIVE_METADATA) &&
+        (info.kind != HANDLE_KIND_NATIVE || info.transport)) {
       status = CALL_BAD_OPERATION;
-    } else if (route == OPEN_METADATA) {
+    } else if (route == OPEN_METADATA || route == OPEN_NATIVE_METADATA) {
       status = resource_result_adopt(target, result);
       if (status == CALL_OK) {
         target = HANDLE_INVALID;
@@ -564,4 +566,10 @@ enum call_status resource_open_metadata_path(const struct path_context *context,
     const char *path, struct resource_result *result)
 {
   return open_path(context, path, PROVIDER_INTENT_READ, 0, 0, OPEN_METADATA, result);
+}
+
+enum call_status resource_open_native_metadata_path(const struct path_context *context,
+    const char *path, struct resource_result *result)
+{
+  return open_path(context, path, PROVIDER_INTENT_READ, 0, 0, OPEN_NATIVE_METADATA, result);
 }

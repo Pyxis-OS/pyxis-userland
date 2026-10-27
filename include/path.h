@@ -86,6 +86,10 @@ enum call_status path_open_directory_native(const struct path_context *context, 
  * No provider invocation, mutation replay, rollback or implicit sync. */
 enum call_status path_create_directory_native(const struct path_context *context, const char *path,
     bool recursive, struct path_workspace *workspace);
+/* Report the number of directory_create calls confirmed in the same retained
+ * walk. Output is unchanged on failure even if a prefix was created. */
+enum call_status path_create_directory_native_count(const struct path_context *context, const char *path,
+    bool recursive, struct path_workspace *workspace, uintmax_t *created);
 enum call_status path_remove_native(const struct path_context *context, const char *path,
     uint64_t kind, struct path_workspace *workspace);
 enum call_status path_rename_native(const struct path_context *context, const char *source,

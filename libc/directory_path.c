@@ -63,9 +63,12 @@ enum call_status libc_directory_open_native(const char *path, handle_t *handle)
   return status;
 }
 
-static int create_directory(const char *path, bool recursive)
+static int create_directory(const char *path, bool recursive, uintmax_t *created)
 {
   if (recursive && path && !*path) {
+    if (created) {
+      *created = 0;
+    }
     return 0;
   }
   struct pyxis_working_snapshot working;
@@ -75,7 +78,8 @@ static int create_directory(const char *path, bool recursive)
     status = workspace_init(&working.context, path, &workspace);
   }
   if (status == CALL_OK) {
-    status = path_create_directory_native(&working.context, path, recursive, &workspace);
+    status = path_create_directory_native_count(&working.context, path, recursive,
+        &workspace, created);
   }
   workspace_close(&workspace);
   pyxis_working_snapshot_close(&working);
@@ -88,12 +92,21 @@ static int create_directory(const char *path, bool recursive)
 
 int pyxis_directory_create(const char *path)
 {
-  return create_directory(path, false);
+  return create_directory(path, false, NULL);
 }
 
 int pyxis_directory_create_all(const char *path)
 {
-  return create_directory(path, true);
+  return create_directory(path, true, NULL);
+}
+
+int pyxis_directory_create_all_count(const char *path, uintmax_t *created)
+{
+  if (!created) {
+    errno = EINVAL;
+    return -1;
+  }
+  return create_directory(path, true, created);
 }
 
 static int remove_entry(const char *path, uint64_t kind)
@@ -125,6 +138,11 @@ int pyxis_directory_unlink(const char *path)
 int pyxis_directory_remove(const char *path)
 {
   return remove_entry(path, DIRECTORY_KIND_DIRECTORY);
+}
+
+int pyxis_directory_remove_any(const char *path)
+{
+  return remove_entry(path, DIRECTORY_KIND_ANY);
 }
 
 int pyxis_directory_rename(const char *source, const char *destination)

@@ -143,7 +143,7 @@ enum walk_target {
 static enum call_status walk(const struct path_context *context, const char *path,
     enum walk_target target, uint64_t rights, uint64_t directory_rights,
     bool preserve_directory_rights, struct path_workspace *workspace, size_t *count,
-    handle_t *file, bool *provider_route, bool native_only)
+    handle_t *file, bool *provider_route, bool native_only, uintmax_t *created)
 {
   if (!path || !path[0] || path[0] == '/' || !workspace ||
       (workspace->directory_capacity && !workspace->directories) ||
@@ -300,6 +300,9 @@ static enum call_status walk(const struct path_context *context, const char *pat
     if (status == CALL_NOT_FOUND && target == WALK_CREATE_DIRECTORIES) {
       status = directory_create(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
           directory_rights, &workspace->directories[*count]);
+      if (status == CALL_OK && created) {
+        ++*created;
+      }
       if (status == CALL_ALREADY_EXISTS) {
         /* A competing creator is checked once; uncertain mutations are final. */
         status = directory_lookup(parent, workspace->component, DIRECTORY_KIND_DIRECTORY,
@@ -323,7 +326,7 @@ enum call_status path_open_directory_native(const struct path_context *context, 
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_DIRECTORY, 0, 0, true,
-      workspace, &count, &unused, NULL, true);
+      workspace, &count, &unused, NULL, true, NULL);
   if (status == CALL_OK) {
     uint64_t rights;
     status = handle_rights(workspace->directories[count - 1], &rights, NULL);
@@ -344,13 +347,23 @@ enum call_status path_open_directory_native(const struct path_context *context, 
 enum call_status path_create_directory_native(const struct path_context *context, const char *path,
     bool recursive, struct path_workspace *workspace)
 {
+  return path_create_directory_native_count(context, path, recursive, workspace, NULL);
+}
+
+enum call_status path_create_directory_native_count(const struct path_context *context, const char *path,
+    bool recursive, struct path_workspace *workspace, uintmax_t *created)
+{
   size_t count = 0;
   handle_t unused;
+  uintmax_t created_count = 0;
   enum call_status status = walk(context, path,
       recursive ? WALK_CREATE_DIRECTORIES : WALK_CREATE_DIRECTORY,
-      0, 0, true, workspace, &count, &unused, NULL, true);
+      0, 0, true, workspace, &count, &unused, NULL, true, &created_count);
   if (count) {
     close_chain(workspace->directories, count);
+  }
+  if (status == CALL_OK && created) {
+    *created = recursive ? created_count : 1;
   }
   return status;
 }
@@ -386,7 +399,7 @@ static enum call_status resolve(const struct path_context *context, const char *
   size_t count = 0;
   enum walk_target target = kind == DIRECTORY_KIND_FILE ? WALK_FILE : WALK_DIRECTORY;
   enum call_status status = walk(context, path, target, rights, directory_rights,
-      false, workspace, &count, handle, provider_route, native_only);
+      false, workspace, &count, handle, provider_route, native_only, NULL);
   if (status == CALL_OK && kind == DIRECTORY_KIND_DIRECTORY) {
     status = handle_copy_restricted(workspace->directories[count - 1], rights, 0, handle);
   }
@@ -432,7 +445,7 @@ enum call_status path_open_file(const struct path_context *context, const char *
   size_t count = 0;
   handle_t unused;
   status = walk(context, path, WALK_PARENT, 0, directory_rights, false,
-      workspace, &count, &unused, NULL, false);
+      workspace, &count, &unused, NULL, false, NULL);
   if (status == CALL_OK) {
     handle_t parent = workspace->directories[count - 1];
     status = directory_create(parent, workspace->component, DIRECTORY_KIND_FILE,
@@ -472,7 +485,7 @@ enum call_status path_create_file(const struct path_context *context, const char
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0, directory_rights,
-      false, workspace, &count, &unused, NULL, false);
+      false, workspace, &count, &unused, NULL, false, NULL);
   if (status == CALL_OK) {
     status = directory_create(workspace->directories[count - 1], workspace->component,
         DIRECTORY_KIND_FILE, rights, handle);
@@ -501,7 +514,7 @@ static enum call_status remove_path(const struct path_context *context, const ch
   enum walk_target target = kind == DIRECTORY_KIND_DIRECTORY ? WALK_PARENT : WALK_REMOVE;
   enum call_status status = walk(context, path, target, 0,
       DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_REMOVE, native_only, workspace, &count,
-      &unused, &provider_route, native_only);
+      &unused, &provider_route, native_only, NULL);
   if (status == CALL_OK && !provider_route) {
     if (trailing_separator && kind == DIRECTORY_KIND_FILE) {
       status = CALL_WRONG_TYPE;
@@ -537,7 +550,7 @@ enum call_status path_create_directory(const struct path_context *context, const
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE, false, workspace, &count, &unused, NULL, false);
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE, false, workspace, &count, &unused, NULL, false, NULL);
   if (status == CALL_BAD_REQUEST) {
     /* A root or a final . or .. has no parent entry to create, but names an
      * existing directory when it resolves; malformed paths still fail. The
@@ -575,7 +588,7 @@ static enum call_status mutation_parent(const struct path_context *context, cons
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_PARENT, 0,
-      DIRECTORY_RIGHT_LOOKUP | rights, native_only, workspace, &count, &unused, NULL, native_only);
+      DIRECTORY_RIGHT_LOOKUP | rights, native_only, workspace, &count, &unused, NULL, native_only, NULL);
   if (status == CALL_OK) {
     *parent = workspace->directories[--count];
     workspace->directories[count] = HANDLE_INVALID;
@@ -673,7 +686,7 @@ enum call_status path_change(struct path_context *context, const char *path,
   size_t count = 0;
   handle_t unused;
   enum call_status status = walk(context, path, WALK_DIRECTORY,
-      0, 0, true, workspace, &count, &unused, NULL, false);
+      0, 0, true, workspace, &count, &unused, NULL, false, NULL);
   if (status == CALL_OK) {
     uint64_t rights;
     status = handle_rights(workspace->directories[count - 1], &rights, NULL);

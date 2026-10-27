@@ -7,6 +7,7 @@
 #include <pyxis/file.h>
 #include <pyxis/working_path.h>
 #include <resource.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include "descriptor.h"
 #include "errors.h"
@@ -104,7 +105,8 @@ int fstat(int descriptor, struct stat *result)
   return descriptor_stat(descriptor, result);
 }
 
-int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *rights)
+static int path_metadata(const char *path, struct stat *metadata, uint64_t *rights,
+    bool native_only)
 {
   if (!path || !*path || !metadata || !rights) {
     errno = EINVAL;
@@ -115,7 +117,9 @@ int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *right
       pyxis_working_snapshot_init(&working, NULL);
   struct resource_result opened = {0};
   if (status == CALL_OK) {
-    status = resource_open_metadata_path(&working.context, path, &opened);
+    status = native_only ?
+        resource_open_native_metadata_path(&working.context, path, &opened) :
+        resource_open_metadata_path(&working.context, path, &opened);
   }
   pyxis_working_snapshot_close(&working);
   if (status == CALL_OK) {
@@ -148,4 +152,14 @@ int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *right
   *metadata = value;
   *rights = actual_rights;
   return 0;
+}
+
+int pyxis_path_metadata(const char *path, struct stat *metadata, uint64_t *rights)
+{
+  return path_metadata(path, metadata, rights, false);
+}
+
+int pyxis_path_metadata_native(const char *path, struct stat *metadata, uint64_t *rights)
+{
+  return path_metadata(path, metadata, rights, true);
 }

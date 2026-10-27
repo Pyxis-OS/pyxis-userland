@@ -41,6 +41,9 @@ int pyxis_directory_entry_type(DIR *directory, const char *component, unsigned c
 int pyxis_directory_create(const char *path);
 int pyxis_directory_unlink(const char *path);
 int pyxis_directory_remove(const char *path);
+/* Remove the named file or empty directory through the parent's REMOVE right,
+ * without first looking up or opening the target. */
+int pyxis_directory_remove_any(const char *path);
 int pyxis_directory_rename(const char *source, const char *destination);
 
 /* Empty input succeeds without lookup. Otherwise create/check each original
@@ -48,6 +51,10 @@ int pyxis_directory_rename(const char *source, const char *destination);
  * including roots/final . or .., undergo real fallible checks; concurrent
  * creators are checked once. Failure can leave a completed creation prefix. */
 int pyxis_directory_create_all(const char *path);
+
+/* Report the exact number of directories created in the same ordered walk.
+ * Output is unchanged on failure even if an earlier component was created. */
+int pyxis_directory_create_all_count(const char *path, uintmax_t *created);
 
 /* Remove a native directory tree or a symlink operand, without following links.
  * Regular-file operands fail with ENOTDIR; other special entries are unsupported.
@@ -63,6 +70,10 @@ int pyxis_directory_create_all(const char *path);
  * being emptied elsewhere; final removal selects its original name. There is
  * no cwd-ancestor or host mount guard, and final NOT_EMPTY/BUSY is returned. */
 int pyxis_directory_remove_all(const char *path);
+
+/* The same one-pass retained tree removal with an exact successful-removal
+ * count. The output is unchanged on failure; effects may still be partial. */
+int pyxis_directory_remove_all_count(const char *path, uintmax_t *removed);
 
 #ifdef __cplusplus
 }
