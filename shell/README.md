@@ -65,8 +65,12 @@ scheme bindings cannot replace it.
 
 Interactive shells started by session, mux and Remote apply
 `home://.config/shell/startup.lua` from a private `shell_settings` READ FILE
-(`settings.c`): strict literal TEXT settings only, validated in full before
-one SET batch. See the shell reference's startup settings section.
+(`settings.c`): literal text settings and literal argument-array aliases,
+validated and prepared before the environment SET batch. Aliases stay private
+and replace one plain command word once, including builtin names; quoting or
+an explicit path bypasses them. Configured arguments are never parsed as code.
+Tab offers aliases and completes explicit command paths with the existing path
+completer. See the shell reference's startup settings section.
 
 Trusted startup uses the separately packaged `boot://init-shell.pxe` with a
 pre-granted script input. This bundle neither grants root launch authority nor

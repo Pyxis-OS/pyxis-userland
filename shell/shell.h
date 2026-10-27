@@ -98,8 +98,17 @@ struct shell_initial_entry {
   uint64_t identity;
 };
 
+struct shell_alias {
+  char *name;
+  char **arguments;
+  size_t count;
+};
+
 struct shell {
   struct bundle_jobs jobs;
+  /* Owned startup aliases; never entered in the environment or inherited. */
+  struct shell_alias *aliases;
+  size_t alias_count;
   /* Why the last shell_open_image refused a package command; empty otherwise.
    * Error reports print it in place of the bare status. */
   char refusal[COMMAND_REFUSAL_MAX];
@@ -203,9 +212,9 @@ enum call_status shell_list_directory(struct shell *shell, const char *path, siz
     struct shell_listing *listing);
 const char *shell_listing_name(const struct shell_listing *listing, size_t index);
 void shell_listing_close(struct shell_listing *listing);
-/* Tab completion. The word under the cursor is a command name (the first word
- * of a pipeline stage: builtins and names from the held command list) or a
- * path (any argument or redirection target: see complete_path.c). */
+/* Tab completion. The first word of a pipeline stage completes builtin, alias
+ * and held command names. An explicitly path-shaped first word, argument or
+ * redirection target completes a path: see complete_path.c. */
 bool shell_complete(void *context, const char *line, size_t cursor,
     struct term_candidates *result);
 /* The word ending at the cursor, read with parse_line's quoting rules. value is
@@ -248,6 +257,9 @@ void shell_history_load(struct shell *shell);
 /* Validates and applies the trusted launcher's private settings FILE, then
  * closes it. A refused file reports its reason and applies nothing. */
 void shell_settings_load(struct shell *shell, handle_t file);
+/* Borrowed until shell_aliases_close; only bare command names are stored. */
+const struct shell_alias *shell_alias_find(const struct shell *shell, const char *name);
+void shell_aliases_close(struct shell *shell);
 void shell_history_save(struct shell *shell, const char *line);
 enum command_result shell_command(struct shell *shell, char *line,
     struct shell_outcome *outcome);

@@ -283,7 +283,7 @@ enum call_status shell_capture_evaluate(struct shell *shell, const char *source,
     return CALL_DENIED;
   }
   struct shell_syntax syntax = {0};
-  const char *diagnostic = shell_syntax_parse(source, &syntax);
+  const char *diagnostic = shell_syntax_parse(shell, source, &syntax);
   if (diagnostic) {
     return CALL_BAD_REQUEST;
   }

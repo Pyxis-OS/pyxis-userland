@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The settings file is strict literal data that never reaches the evaluator,
- * so a writer of it gains no shell authority: only TEXT values can change. */
+/* The settings file is strict literal data that never reaches the evaluator.
+ * Alias arguments remain literal strings when a command uses them. */
 #define SETTINGS_FILE_MAX (64 * 1024)
 /* One SET batch applies the whole file, so this stays within the kernel's
  * current batch admission (ENVIRONMENT_MUTATIONS_LIMIT, a tunable policy rather
@@ -22,6 +22,35 @@ struct setting {
   const struct literal_value *value;
   bool exported;
 };
+
+const struct shell_alias *shell_alias_find(const struct shell *shell, const char *name)
+{
+  for (size_t i = 0; i < shell->alias_count; ++i) {
+    if (!strcmp(shell->aliases[i].name, name)) {
+      return &shell->aliases[i];
+    }
+  }
+  return NULL;
+}
+
+static void aliases_free(struct shell_alias *aliases, size_t count)
+{
+  for (size_t i = 0; i < count; ++i) {
+    free(aliases[i].name);
+    for (size_t j = 0; aliases[i].arguments && j < aliases[i].count; ++j) {
+      free(aliases[i].arguments[j]);
+    }
+    free(aliases[i].arguments);
+  }
+  free(aliases);
+}
+
+void shell_aliases_close(struct shell *shell)
+{
+  aliases_free(shell->aliases, shell->alias_count);
+  shell->aliases = NULL;
+  shell->alias_count = 0;
+}
 
 /* Names the shell's own startup or launch path supplies. */
 static const char *const supplied_names[] = {
@@ -110,8 +139,82 @@ static const char *collect(const struct literal_value *table, bool exported,
   return NULL;
 }
 
+static bool alias_name(const struct literal_value *key)
+{
+  if (key->kind != LITERAL_STRING || !key->as.string.size) {
+    return false;
+  }
+  for (size_t i = 0; i < key->as.string.size; ++i) {
+    char byte = key->as.string.bytes[i];
+    if (!((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+        (byte >= '0' && byte <= '9') || byte == '.' || byte == '_' ||
+        byte == '+' || byte == '-')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static const char *collect_aliases(const struct literal_value *table,
+    struct shell_alias **aliases, size_t *count)
+{
+  if (table->kind != LITERAL_TABLE) {
+    return "aliases must be a table";
+  }
+  if (!table->as.table.count) {
+    return NULL;
+  }
+  *aliases = calloc(table->as.table.count, sizeof(**aliases));
+  if (!*aliases) {
+    return "cannot allocate aliases";
+  }
+  for (const struct literal_entry *entry = table->as.table.entries; entry; entry = entry->next) {
+    if (entry->implicit || !alias_name(entry->key)) {
+      return "an alias name must be a bare command name";
+    }
+    for (size_t i = 0; i < *count; ++i) {
+      if (!strcmp((*aliases)[i].name, entry->key->as.string.bytes)) {
+        return "an alias name appears more than once";
+      }
+    }
+    const struct literal_value *value = entry->value;
+    if (value->kind != LITERAL_TABLE || !value->as.table.count) {
+      return "an alias must be a nonempty string array";
+    }
+    struct shell_alias *alias = &(*aliases)[(*count)++];
+    alias->name = strdup(entry->key->as.string.bytes);
+    alias->count = value->as.table.count;
+    alias->arguments = calloc(alias->count, sizeof(*alias->arguments));
+    if (!alias->name || !alias->arguments) {
+      return "cannot allocate alias arguments";
+    }
+    for (const struct literal_entry *argument = value->as.table.entries; argument;
+        argument = argument->next) {
+      const struct literal_value *text = argument->value;
+      if (argument->key->kind != LITERAL_INTEGER || argument->key->as.integer < 1 ||
+          (uint64_t)argument->key->as.integer > alias->count ||
+          text->kind != LITERAL_STRING) {
+        return "an alias must be a contiguous string array";
+      }
+      if (strlen(text->as.string.bytes) != text->as.string.size ||
+          text->as.string.size > SETTINGS_TEXT_MAX) {
+        return "an alias argument contains NUL or exceeds 4096 bytes";
+      }
+      size_t index = (size_t)argument->key->as.integer - 1;
+      if (!index && !text->as.string.size) {
+        return "an alias command must not be empty";
+      }
+      alias->arguments[index] = strdup(text->as.string.bytes);
+      if (!alias->arguments[index]) {
+        return "cannot allocate alias arguments";
+      }
+    }
+  }
+  return NULL;
+}
+
 static const char *validate(const struct literal *document, struct setting *settings,
-    size_t *count)
+    size_t *count, struct shell_alias **aliases, size_t *alias_count)
 {
   const struct literal_value *root = document->root;
   if (root->kind != LITERAL_TABLE) {
@@ -122,21 +225,26 @@ static const char *validate(const struct literal *document, struct setting *sett
     if (entry->implicit || key->kind != LITERAL_STRING ||
         strlen(key->as.string.bytes) != key->as.string.size ||
         (strcmp(key->as.string.bytes, "variables") &&
-         strcmp(key->as.string.bytes, "exported"))) {
-      return "only variables and exported tables are allowed";
+         strcmp(key->as.string.bytes, "exported") &&
+         strcmp(key->as.string.bytes, "aliases"))) {
+      return "only variables, exported and aliases tables are allowed";
     }
   }
   const struct literal_value *variables = literal_field(root, "variables");
   const struct literal_value *exported = literal_field(root, "exported");
+  const struct literal_value *alias_table = literal_field(root, "aliases");
   const char *reason = variables ? collect(variables, false, settings, count) : NULL;
   if (!reason && exported) {
     reason = collect(exported, true, settings, count);
+  }
+  if (!reason && alias_table) {
+    reason = collect_aliases(alias_table, aliases, alias_count);
   }
   return reason;
 }
 
 /* Every check precedes one SET batch, so a refused file applies nothing. */
-static void apply(struct shell *shell, const struct setting *settings, size_t count)
+static bool apply(struct shell *shell, const struct setting *settings, size_t count)
 {
   struct environment_capture current = {0};
   enum call_status status = environment_capture_init(shell->environment,
@@ -144,7 +252,7 @@ static void apply(struct shell *shell, const struct setting *settings, size_t co
   if (status != CALL_OK) {
     fprintf(stderr, "shell: %s: cannot read the environment (status %u); none applied\n",
         SHELL_SETTINGS_PATH, status);
-    return;
+    return false;
   }
   struct environment_set_entry entries[SETTINGS_MAX];
   for (size_t i = 0; i < count; ++i) {
@@ -154,7 +262,7 @@ static void apply(struct shell *shell, const struct setting *settings, size_t co
           settings[i].name, held && held->kind == ENVIRONMENT_CAP ?
           "holds a capability" : "is supplied by the shell");
       environment_capture_close(&current);
-      return;
+      return false;
     }
     entries[i] = (struct environment_set_entry){
       .kind = ENVIRONMENT_TEXT,
@@ -170,6 +278,7 @@ static void apply(struct shell *shell, const struct setting *settings, size_t co
     fprintf(stderr, "shell: %s: cannot apply settings (status %u); none applied\n",
         SHELL_SETTINGS_PATH, status);
   }
+  return status == CALL_OK;
 }
 
 void shell_settings_load(struct shell *shell, handle_t file)
@@ -194,11 +303,18 @@ void shell_settings_load(struct shell *shell, handle_t file)
   free(bytes);
   struct setting settings[SETTINGS_MAX];
   size_t count = 0;
-  const char *reason = validate(document, settings, &count);
+  struct shell_alias *aliases = NULL;
+  size_t alias_count = 0;
+  const char *reason = validate(document, settings, &count, &aliases, &alias_count);
   if (reason) {
     fprintf(stderr, "shell: %s: %s; none applied\n", SHELL_SETTINGS_PATH, reason);
-  } else {
-    apply(shell, settings, count);
+  } else if (apply(shell, settings, count)) {
+    shell_aliases_close(shell);
+    shell->aliases = aliases;
+    shell->alias_count = alias_count;
+    aliases = NULL;
+    alias_count = 0;
   }
+  aliases_free(aliases, alias_count);
   literal_free(document);
 }

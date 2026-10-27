@@ -427,6 +427,31 @@ static bool exit_status(const char *text, int *status)
   return true;
 }
 
+static enum command_result describe_alias(const struct shell_alias *alias)
+{
+  if (printf("%s: alias", alias->name) < 0) {
+    return COMMAND_FATAL;
+  }
+  for (size_t i = 0; i < alias->count; ++i) {
+    if (fputs(" '", stdout) == EOF) {
+      return COMMAND_FATAL;
+    }
+    for (const char *read = alias->arguments[i]; *read; ++read) {
+      if (*read == '\'') {
+        if (fputs("'\\''", stdout) == EOF) {
+          return COMMAND_FATAL;
+        }
+      } else if (fputc(*read, stdout) == EOF) {
+        return COMMAND_FATAL;
+      }
+    }
+    if (fputc('\'', stdout) == EOF) {
+      return COMMAND_FATAL;
+    }
+  }
+  return fputc('\n', stdout) == EOF ? COMMAND_FATAL : COMMAND_OK;
+}
+
 static enum command_result builtin_command(struct shell *shell,
     const struct shell_expansion *expansion)
 {
@@ -447,6 +472,10 @@ static enum command_result builtin_command(struct shell *shell,
   }
   if (strcmp(arguments[0], "which") == 0) {
     if (count != 2) return shell_error(shell, "usage: which NAME\n");
+    const struct shell_alias *alias = shell_alias_find(shell, arguments[1]);
+    if (alias) {
+      return describe_alias(alias);
+    }
     struct command_selection *selection = NULL;
     enum call_status status = shell_open_image(shell, arguments[1], &selection);
     if (status == CALL_DENIED && shell->refusal[0]) {
@@ -621,7 +650,7 @@ enum command_result shell_command(struct shell *shell, char *line,
 {
   *outcome = (struct shell_outcome){TERMINAL_COMPLETION_REJECTED, 0, false};
   struct shell_syntax syntax = {0};
-  const char *error = shell_syntax_parse(line, &syntax);
+  const char *error = shell_syntax_parse(shell, line, &syntax);
   if (error) {
     return shell_error(shell, "shell: %s\n", error);
   }

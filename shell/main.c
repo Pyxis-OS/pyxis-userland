@@ -449,6 +449,7 @@ done:
   pane_cwd_provider_close(&cwd_service.provider);
   shell_fat_close(&shell);
   shell_directory_close(&shell);
+  shell_aliases_close(&shell);
   term_history_free(&shell.history);
   free(line);
   /* Cleanup reports failure, but cannot replace an explicitly requested nonzero

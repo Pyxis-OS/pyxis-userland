@@ -107,7 +107,8 @@ struct shell_expansion {
 /* Parse the whole submitted line before expansion or command side effects.
  * Substitutions are recursively validated; paired management producers require
  * a named whole-word destination. Errors leave output empty; diagnostics are static. */
-const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax);
+const char *shell_syntax_parse(const struct shell *shell, const char *line,
+    struct shell_syntax *syntax);
 void shell_syntax_close(struct shell_syntax *syntax);
 bool shell_condition_selected(enum shell_condition condition, enum command_result result);
 /* Environment calls report their CALL status; cleanup failure reports

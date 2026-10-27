@@ -128,6 +128,13 @@ static bool complete_command(struct shell *shell, const struct completion_word *
       ok = add_name(&names, builtins[i], length);
     }
   }
+  for (size_t i = 0; ok && i < shell->alias_count; ++i) {
+    const char *name = shell->aliases[i].name;
+    size_t length = strlen(name);
+    if (length >= prefix_length && !memcmp(name, prefix, prefix_length)) {
+      ok = add_name(&names, name, length);
+    }
+  }
   struct command_search_capture search = {0};
   enum call_status status = command_search_capture_init(shell->environment, &search);
   if (status != CALL_OK && status != CALL_NOT_FOUND) ok = false;

@@ -120,8 +120,8 @@ static const char *add_piece(struct shell_word *word, enum shell_piece_kind kind
   return NULL;
 }
 
-static const char *parse_sequence(const char **cursor, bool nested,
-    struct shell_syntax *syntax);
+static const char *parse_sequence(const struct shell *shell, const char **cursor,
+    bool nested, struct shell_syntax *syntax);
 static bool word_is(const struct shell_word *word, const char *text);
 
 static const char *capture_source(const struct shell_syntax *syntax, bool *management)
@@ -151,7 +151,8 @@ static const char *capture_source(const struct shell_syntax *syntax, bool *manag
   return NULL;
 }
 
-static const char *parse_word(const char **cursor, struct shell_word **result)
+static const char *parse_word(const struct shell *shell, const char **cursor,
+    struct shell_word **result)
 {
   struct shell_word *word = calloc(1, sizeof(*word));
   if (!word) {
@@ -196,7 +197,7 @@ static const char *parse_word(const char **cursor, struct shell_word **result)
         ++read;
         const char *start = read;
         struct shell_syntax nested = {0};
-        error = parse_sequence(&read, true, &nested);
+        error = parse_sequence(shell, &read, true, &nested);
         bool management = false;
         if (!error) {
           error = capture_source(&nested, &management);
@@ -430,8 +431,20 @@ bool shell_condition_selected(enum shell_condition condition, enum command_resul
       (condition == SHELL_ON_FAILURE && result == COMMAND_FAILED);
 }
 
-static const char *parse_sequence(const char **cursor, bool nested,
-    struct shell_syntax *syntax)
+static const char *append_word(struct shell_syntax_stage *stage, struct shell_word *word)
+{
+  struct shell_word **words = realloc(stage->words,
+      (stage->count + 1) * sizeof(*words));
+  if (!words) {
+    return "Out of memory";
+  }
+  stage->words = words;
+  stage->words[stage->count++] = word;
+  return NULL;
+}
+
+static const char *parse_sequence(const struct shell *shell, const char **cursor,
+    bool nested, struct shell_syntax *syntax)
 {
   enum shell_condition condition = SHELL_ALWAYS;
   const char *read = *cursor;
@@ -580,7 +593,7 @@ static const char *parse_sequence(const char **cursor, bool nested,
       continue;
     }
     struct shell_word *word = NULL;
-    const char *error = parse_word(&read, &word);
+    const char *error = parse_word(shell, &read, &word);
     if (error) {
       close_word(word);
       return error;
@@ -599,23 +612,42 @@ static const char *parse_sequence(const char **cursor, bool nested,
       pending->word = word;
       pending = NULL;
     } else {
-      struct shell_word **words = realloc(stage->words,
-          (stage->count + 1) * sizeof(*words));
-      if (!words) {
+      const struct shell_alias *alias = !stage->count && word->plain &&
+          !word->assignment_name && word->count == 1 &&
+          word->pieces[0].kind == SHELL_LITERAL ?
+          shell_alias_find(shell, word->pieces[0].text) : NULL;
+      if (alias) {
+        /* Match the source word once; inserted arguments stay literal. */
         close_word(word);
-        return "Out of memory";
+        for (size_t i = 0; i < alias->count; ++i) {
+          word = calloc(1, sizeof(*word));
+          error = word ? add_piece(word, SHELL_LITERAL, alias->arguments[i],
+              strlen(alias->arguments[i]), false) : "Out of memory";
+          if (!error) {
+            error = append_word(stage, word);
+          }
+          if (error) {
+            close_word(word);
+            return error;
+          }
+        }
+      } else {
+        error = append_word(stage, word);
+        if (error) {
+          close_word(word);
+          return error;
+        }
       }
-      stage->words = words;
-      stage->words[stage->count++] = word;
     }
   }
 }
 
-const char *shell_syntax_parse(const char *line, struct shell_syntax *syntax)
+const char *shell_syntax_parse(const struct shell *shell, const char *line,
+    struct shell_syntax *syntax)
 {
   *syntax = (struct shell_syntax){0};
   const char *cursor = line;
-  const char *error = parse_sequence(&cursor, false, syntax);
+  const char *error = parse_sequence(shell, &cursor, false, syntax);
   if (error) {
     shell_syntax_close(syntax);
   }
