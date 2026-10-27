@@ -42,7 +42,7 @@ FILE *fopen(const char *__restrict path, const char *__restrict mode);
  * access must fit the descriptor, and FILE operations obey that selection.
  * Position/read-ahead are retained; w never creates/truncates and x refuses
  * with EINVAL. a enables shared
- * non-atomic append policy without moving the cursor. A second association
+ * native APPEND policy after a zero support probe, without moving the cursor. A second association
  * fails with EBUSY; malformed modes use EINVAL, unavailable access EBADF. */
 FILE *fdopen(int descriptor, const char *mode);
 /* Open an exclusive read/write file under tmp:// and remove its name before

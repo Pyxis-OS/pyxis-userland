@@ -24,8 +24,9 @@ extern "C" {
  * as native creation policy, not Unix permissions. Other modes fail with
  * ENOTSUP before lookup even if the file exists. Authority always comes from
  * the caller's grants. O_APPEND moves each write() to the current end of the
- * file, as fopen's "a" does: a native SIZE then WRITE, which is not atomic
- * against other writers. pwrite keeps its explicit offset. O_NOFOLLOW is
+ * file, as fopen's "a" does: native APPEND, atomic per call of at most
+ * 4,080 bytes.
+ * Larger writes may interleave. pwrite keeps its explicit offset. O_NOFOLLOW is
  * accepted and changes nothing: lookup never follows a symbolic link, so any
  * component that is one fails with ELOOP, with or without the flag. */
 int open(const char *path, int flags, ...);

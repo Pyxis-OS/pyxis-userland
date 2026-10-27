@@ -12,7 +12,8 @@ extern "C" {
  * FILE routes. Actual exported/provider/transaction targets fail with ENOTSUP
  * before OPEN, STAGE, creation or truncation. Read-only opens retain open()'s
  * routes. Creation accepts only 0666; mode is ignored without O_CREAT.
- * O_APPEND retains libc's non-atomic SIZE/WRITE policy. */
+ * O_APPEND uses native APPEND, atomic per operation of at most 4,080 bytes;
+ * larger writes may interleave. Unsupported backings refuse before effects. */
 int pyxis_file_open(const char *path, int flags, mode_t mode);
 
 #define PYXIS_COPY_UNEXPECTED_EOF 1
