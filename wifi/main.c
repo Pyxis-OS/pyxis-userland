@@ -87,7 +87,7 @@ static int print_result(handle_t file)
   return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-static int scan(void)
+static int scan(uint32_t channels)
 {
   handle_t radio = bootstrap_capability("wifi_scan");
   if (radio == HANDLE_INVALID) {
@@ -100,7 +100,7 @@ static int scan(void)
     return failure("clock", status == CALL_OK ? CALL_BAD_REQUEST : status);
   }
   uint64_t deadline = now + WIFI_SCAN_MAX_NS;
-  status = wifi_scan_start(radio, 0, deadline, &operation);
+  status = wifi_scan_start(radio, channels, deadline, &operation);
   if (status != CALL_OK) {
     return failure("scan start", status);
   }
@@ -421,6 +421,16 @@ static void print_phy_facts(const struct wifi_status_full_reply *status)
 
 int main(int argc, char **argv)
 {
+  if (argc == 4 && !strcmp(argv[1], "scan") && !strcmp(argv[2], "--channel")) {
+    char *end;
+    unsigned long channel = strtoul(argv[3], &end, 10);
+    if (argv[3][0] < '0' || argv[3][0] > '9' || *end ||
+        channel < 1 || channel > WIFI_CHANNEL_24_COUNT) {
+      fputs("wifi: channel must be a decimal number from 1 to 14\n", stderr);
+      return EXIT_FAILURE;
+    }
+    return scan(UINT32_C(1) << (channel - 1));
+  }
   if (argc == 4 && !strcmp(argv[1], "connect") && !strcmp(argv[2], "--profile")) {
     return connect_profile(argv[3]);
   }
@@ -428,10 +438,10 @@ int main(int argc, char **argv)
     return link_command(argv[1], argv[2]);
   }
   if (argc != 2 || (strcmp(argv[1], "status") && strcmp(argv[1], "scan"))) {
-    fputs("usage: wifi status [LINK] | scan | connect --profile FILE | disconnect LINK\n", stderr);
+    fputs("usage: wifi status [LINK] | scan [--channel N] | connect --profile FILE | disconnect LINK\n", stderr);
     return EXIT_FAILURE;
   }
-  if (!strcmp(argv[1], "scan")) return scan();
+  if (!strcmp(argv[1], "scan")) return scan(0);
   handle_t radio = bootstrap_capability("wifi");
   if (!radio) return failure("READ authority", CALL_DENIED);
   struct wifi_status_full_reply full;

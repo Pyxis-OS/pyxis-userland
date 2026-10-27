@@ -3,6 +3,10 @@
 `wifi status` observes the declared controller READ grant. `wifi scan` uses the
 separate SCAN grant and prints one complete passive result. Neither can associate.
 
+Use `wifi scan --channel 1` to request one channel. The argument is a decimal
+number from 1 to 14; controller support and installed policy still restrict the
+request. Plain `wifi scan` retains the controller's default channel selection.
+
 Status appends `boot valid=... state=...` hexadecimal masks for known boot facts
 and completed actions. Only valid groups print reset, cut, security, firmware or
 board lines; unknown groups remain absent. Board country bytes print as four
