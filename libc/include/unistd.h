@@ -74,9 +74,11 @@ int rmdir(const char *path);
  * an admitted operation. Cooperative signals are delivered only after operation
  * locks/references are released. Before progress a blocking stream transfer can
  * fail EINTR; positive progress and real NONBLOCK results are preserved. Only
- * known-uncommitted byte-PIPE/console reads may honor SA_RESTART, retaining their
- * original descriptor identity and terminal timing deadline. Writes never
- * restart; FILE/provider operations finish without signal-driven replay. */
+ * read() of known-uncommitted byte-PIPE/console input may honor SA_RESTART,
+ * retaining its original descriptor identity and terminal timing deadline.
+ * Stdio preserves ferror/EINTR without automatic replay, even with SA_RESTART.
+ * Writes never restart; FILE/provider operations finish without signal-driven
+ * replay. */
 ssize_t read(int descriptor, void *buffer, size_t count);
 ssize_t write(int descriptor, const void *buffer, size_t count);
 /* Files only; use offset without changing the private descriptor position.

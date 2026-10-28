@@ -90,8 +90,11 @@ ssize_t read(int descriptor, void *buffer, size_t count)
   }
   struct descriptor_read_state state = {0};
   for (;;) {
+    libc_signal_enter();
     struct descriptor_object *object = descriptor_hold_ticket(&ticket);
     if (!object) {
+      libc_signal_leave();
+      libc_signal_checkpoint();
       return -1;
     }
     size_t transferred = 0;
@@ -99,6 +102,7 @@ ssize_t read(int descriptor, void *buffer, size_t count)
         descriptor_object_read_signal(object, buffer, count, &transferred, &state);
     int error = errno;
     descriptor_drop(object);
+    libc_signal_leave();
     struct libc_signal_delivery delivery = libc_signal_checkpoint();
     if (result < 0 && error == EINTR && state.restartable && delivery.caught && delivery.restart) {
       continue; /* hold_ticket rejects a handler's close/replacement. */
@@ -110,20 +114,19 @@ ssize_t read(int descriptor, void *buffer, size_t count)
 
 ssize_t write(int descriptor, const void *buffer, size_t count)
 {
+  libc_signal_enter();
   struct descriptor_object *object = descriptor_hold(descriptor);
   if (!object) {
-    return -1;
-  }
-  if (!transfer_ready(object, count, true)) {
-    int error = errno;
-    descriptor_drop(object);
-    errno = error;
+    libc_signal_leave();
+    libc_signal_checkpoint();
     return -1;
   }
   size_t transferred = 0;
-  int result = descriptor_object_write(object, buffer, count, &transferred);
+  int result = !transfer_ready(object, count, true) ? -1 :
+      descriptor_object_write(object, buffer, count, &transferred);
   int error = errno;
   descriptor_drop(object);
+  libc_signal_leave();
   libc_signal_checkpoint();
   errno = error;
   return result < 0 ? -1 : (ssize_t)transferred;

@@ -2143,12 +2143,15 @@ static int signal_stream_wait(struct descriptor_object *entry, bool writing,
   return 0;
 }
 
-/* One means the ordinary blocking path is sufficient: no compatibility source
- * is enrolled. Zero/error are the actual transfer result. */
+/* One selects ordinary blocking I/O: the caller has no audited cleanup boundary
+ * or no compatibility source is enrolled. Zero/error are the transfer result. */
 static int signal_read_locked(struct descriptor_object *entry, void *buffer, size_t size,
     size_t *read, struct descriptor_read_state *state)
 {
   *read = 0;
+  if (!libc_signal_admitted()) {
+    return 1;
+  }
   struct libc_signal_wait signals;
   if (libc_signal_prepare(&signals) < 0) {
     return -1;
@@ -2244,6 +2247,9 @@ static int signal_read_locked(struct descriptor_object *entry, void *buffer, siz
 static int signal_write_locked(struct descriptor_object *entry, const void *buffer, size_t size,
     size_t *written)
 {
+  if (!libc_signal_admitted()) {
+    return 1;
+  }
   struct libc_signal_wait signals;
   if (libc_signal_prepare(&signals) < 0) {
     return -1;

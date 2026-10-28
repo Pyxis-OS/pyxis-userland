@@ -43,8 +43,9 @@ extern FILE *stderr;
  * fread/fwrite retain completed elements and consumed/staged partial data;
  * fgets can return NULL after consuming a prefix, which is never replayed.
  * Handlers run after the whole outer FILE/format/scan cleanup, not an inner
- * character transfer. This profile does not automatically restart stdio or
- * clear its indicators. FILE/provider backing operations still finish first. */
+ * character transfer. SA_RESTART does not automatically restart stdio or clear
+ * its indicators; its read() whitelist is separate. FILE/provider backing
+ * operations still finish first. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested
