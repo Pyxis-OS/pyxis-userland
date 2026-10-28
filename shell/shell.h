@@ -184,6 +184,9 @@ enum call_status shell_change_directory(struct shell *shell, const char *path);
 /* Owned handle to a directory reached through the shell's own roots. */
 enum call_status shell_open_directory(struct shell *shell, const char *path, uint64_t rights,
     handle_t *directory);
+/* Preserve held native directory rights; never invoke a provider. */
+enum call_status shell_open_native_directory(struct shell *shell, const char *path,
+    uint64_t required, handle_t *directory);
 enum call_status shell_reserve_root(struct shell *shell, const char *name,
     size_t length, char **reserved);
 /* Consumes name and root on every path. */

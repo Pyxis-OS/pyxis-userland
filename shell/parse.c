@@ -64,6 +64,10 @@ static void close_word(struct shell_word *word)
     free(word->pieces[i].text);
   }
   free(word->pieces);
+  for (size_t i = 0; i < word->member_count; ++i) {
+    close_word(word->members[i]);
+  }
+  free(word->members);
   free(word->assignment_name);
   free(word);
 }
@@ -174,6 +178,52 @@ static const char *parse_word(const struct shell *shell, const char **cursor,
       return "Out of memory";
     }
     read = name_end + 1;
+  }
+  if (word->assignment_name && *read == '(') {
+    word->list = true;
+    word->plain = false;
+    ++read;
+    for (;;) {
+      while (separator(*read)) {
+        ++read;
+      }
+      if (*read == ')') {
+        ++read;
+        if (!word_end(read)) {
+          return "A directory list must occupy the whole value";
+        }
+        *cursor = read;
+        return NULL;
+      }
+      if (!*read) {
+        return "Unfinished directory list";
+      }
+      if (word_end(read) || *read == '(') {
+        return "A directory list contains path or CAP values";
+      }
+      struct shell_word *member = NULL;
+      const char *error = parse_word(shell, &read, &member);
+      if (!error && (member->assignment_name || member->list)) {
+        error = "A directory list member cannot be an assignment";
+      }
+      for (size_t i = 0; !error && i < member->count; ++i) {
+        if (member->pieces[i].management) {
+          error = "Management capture requires a named whole-word assignment";
+        }
+      }
+      if (error) {
+        close_word(member);
+        return error;
+      }
+      struct shell_word **members = realloc(word->members,
+          (word->member_count + 1) * sizeof(*members));
+      if (!members) {
+        close_word(member);
+        return "Out of memory";
+      }
+      word->members = members;
+      members[word->member_count++] = member;
+    }
   }
   const char *start_of_word = read;
   char quote = 0;
@@ -301,6 +351,9 @@ static const char *restore_assignment(struct shell_word *word)
 {
   if (!word->assignment_name) {
     return NULL;
+  }
+  if (word->list) {
+    return "A directory list requires an assignment or export";
   }
   size_t length = strlen(word->assignment_name);
   char prefix[ENVIRONMENT_NAME_MAX + 2];

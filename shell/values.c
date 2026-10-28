@@ -1,5 +1,6 @@
 #include "values.h"
 #include <clock.h>
+#include <command_search.h>
 #include <forwarder.h>
 #include <handle.h>
 #include <resource.h>
@@ -13,6 +14,13 @@ static enum call_status set_entry(struct environment_set_entry *entry,
   *entry = (struct environment_set_entry){0};
   if (!environment_name(entry->name, name)) {
     return CALL_BAD_REQUEST;
+  }
+  if (!strcmp(name, "path")) {
+    enum call_status status = value->kind == ENVIRONMENT_CAP ?
+        command_list_validate(value->handle) : CALL_WRONG_TYPE;
+    if (status != CALL_OK) {
+      return status;
+    }
   }
   entry->kind = value->kind;
   entry->flags = exported ? ENVIRONMENT_EXPORTED : 0;

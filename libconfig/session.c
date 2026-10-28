@@ -110,8 +110,8 @@ static void read_path(lua_State *state, struct session_config *config)
     }
     size_t length;
     const char *path = lua_tolstring(state, -1, &length);
-    if (strlen(path) != length) {
-      luaL_error(state, "path entries cannot contain a NUL byte");
+    if (!length || strlen(path) != length) {
+      luaL_error(state, "path entries must be nonempty and cannot contain a NUL byte");
     }
     ++keys;
     lua_pop(state, 1);

@@ -38,7 +38,7 @@ runtime headers, exported Pyxis ABI/format headers, build settings and the
 SDK's shared shebang, US key layout, terminal style and UTF-8 text sources. TLSF is vendored locally with its license and pin.
 
 Shell, Lua jobs and libuv share owned `program_open` selections from
-[program.h](include/program.h). Bare names search only the inherited `commands`
+[program.h](include/program.h). Bare names search only the inherited `path`
 capability list. Trusted startup supplies read-only system roots, then the live
 package-command view. No list means no bare lookup; bin, boot, catalog, home and
 cwd are never recovered implicitly. Explicit `bin://NAME.pxe`, `.pxb` paths and

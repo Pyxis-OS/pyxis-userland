@@ -28,6 +28,10 @@ struct shell_word {
   /* An unquoted `*` appears: the expanded word may be a pattern. */
   bool glob;
   char *assignment_name;
+  /* A whole assignment value: ordered directory paths or CAP-list members. */
+  bool list;
+  struct shell_word **members;
+  size_t member_count;
 };
 
 struct shell_syntax_redirection {
@@ -120,5 +124,9 @@ const char *shell_syntax_expand(struct shell *shell,
 /* Release each owned reference once and always free all storage. False reports
  * at least one failed CAP close; callers must stop input and must not retry. */
 bool shell_expansion_close(struct shell_expansion *expansion);
+
+/* Borrow member values through construction; output owns one READ list. */
+enum call_status shell_list_create(struct shell *shell,
+    const struct environment_value *members, size_t count, handle_t *list);
 
 #endif

@@ -458,3 +458,15 @@ enum call_status shell_open_directory(struct shell *shell, const char *path, uin
   }
   return status;
 }
+
+enum call_status shell_open_native_directory(struct shell *shell, const char *path,
+    uint64_t required, handle_t *directory)
+{
+  *directory = HANDLE_INVALID;
+  enum call_status status = prepare_workspace(shell, strlen(path));
+  if (status == CALL_OK) {
+    status = path_open_directory_native(shell->directory, path, required,
+        &shell->workspace, directory);
+  }
+  return status;
+}

@@ -1,5 +1,6 @@
 #include "syntax.h"
 #include <handle.h>
+#include <command_search.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -127,12 +128,72 @@ const char *shell_positional_argument(const struct shell *shell, const char *dig
 
 static const char *expand_word(struct shell *shell, handle_t snapshot,
     const struct shell_word *word, struct environment_value *value,
+    struct shell_capture_result *capture, char **argument, enum call_status *status);
+
+static const char *expand_list(struct shell *shell, handle_t snapshot,
+    const struct shell_word *word, struct environment_value *value,
+    struct shell_capture_result *capture, enum call_status *status)
+{
+  struct shell_expansion members = {.value_count = word->member_count,
+    .argument_count = word->member_count};
+  if (word->member_count) {
+    members.values = calloc(word->member_count, sizeof(*members.values));
+    members.captures = calloc(word->member_count, sizeof(*members.captures));
+    members.arguments = calloc(word->member_count, sizeof(*members.arguments));
+    if (!members.values || !members.captures || !members.arguments) {
+      *status = CALL_NO_MEMORY;
+      return expansion_error(&members, status, "Out of memory preparing directory list");
+    }
+  }
+  const char *error = NULL;
+  for (size_t i = 0; !error && i < word->member_count; ++i) {
+    error = expand_word(shell, snapshot, word->members[i], &members.values[i],
+        &members.captures[i], &members.arguments[i], status);
+  }
+  handle_t list = HANDLE_INVALID;
+  if (!error) {
+    *status = shell_list_create(shell, members.values, word->member_count, &list);
+    if (*status != CALL_OK) {
+      error = "Could not construct directory list";
+    }
+  }
+  for (size_t i = 0; i < word->member_count; ++i) {
+    struct shell_outcome outcome = members.captures[i].outcome;
+    if (outcome.kind == TERMINAL_COMPLETION_TERMINATED ||
+        outcome.kind == TERMINAL_COMPLETION_FAULTED) {
+      capture->outcome = outcome;
+      break;
+    }
+  }
+  if (!shell_expansion_close(&members)) {
+    *status = CALL_OUTCOME_UNKNOWN;
+    error = "Could not release directory list members";
+  }
+  if (error) {
+    if (list != HANDLE_INVALID && handle_close(list)) {
+      *status = CALL_OUTCOME_UNKNOWN;
+    }
+    return error;
+  }
+  *value = (struct environment_value){.kind = ENVIRONMENT_CAP, .handle = list,
+    .rights = COMMAND_LIST_RIGHT_READ};
+  memcpy(value->name, word->assignment_name, strlen(word->assignment_name) + 1);
+  return NULL;
+}
+
+static const char *expand_word(struct shell *shell, handle_t snapshot,
+    const struct shell_word *word, struct environment_value *value,
     struct shell_capture_result *capture, char **argument, enum call_status *status)
 {
   char *text = NULL;
   size_t length = 0;
   bool capability = false;
-  const char *error = NULL;
+  const char *error = word->list ?
+      expand_list(shell, snapshot, word, value, capture, status) : NULL;
+  if (error) {
+    return error;
+  }
+  capability = word->list;
   for (size_t i = 0; i < word->count; ++i) {
     const struct shell_piece *piece = &word->pieces[i];
     if (piece->kind == SHELL_LITERAL || piece->kind == SHELL_POSITIONAL ||
@@ -325,6 +386,10 @@ static const char *expand_command(struct shell *shell,
     for (size_t j = 0; j < total && !needs_environment; ++j) {
       const struct shell_word *word = j < stage->count ? stage->words[j] :
           stage->redirections[j - stage->count].word;
+      if (word && word->list) {
+        needs_environment = true;
+        break;
+      }
       for (size_t k = 0; word && k < word->count; ++k) {
         if (word->pieces[k].kind == SHELL_VARIABLE) {
           needs_environment = true;
