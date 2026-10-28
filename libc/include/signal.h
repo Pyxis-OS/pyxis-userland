@@ -9,6 +9,9 @@ extern "C" {
  * one. The header exists so ISO C programs compile; signal and raise report
  * failure. Programs that depend on delivery fail at run time, not silently. */
 typedef int sig_atomic_t;
+/* Opaque value storage for wait signatures. No mask operations or delivery
+ * exist; ppoll/pselect accept but never inspect a supplied mask. */
+typedef struct { unsigned long __opaque; } sigset_t;
 
 #define SIG_DFL ((void (*)(int))0)
 #define SIG_IGN ((void (*)(int))1)

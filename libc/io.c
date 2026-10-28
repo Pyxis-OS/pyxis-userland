@@ -9,7 +9,7 @@
 static int open_mode(int flags, struct descriptor_mode *mode)
 {
   int access = flags & (O_WRONLY | O_RDWR);
-  if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL | O_APPEND | O_NOFOLLOW)) ||
+  if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_EXCL | O_APPEND | O_NOFOLLOW | O_NONBLOCK)) ||
       access == (O_WRONLY | O_RDWR) ||
       (access == O_RDONLY && (flags & (O_CREAT | O_TRUNC))) ||
       ((flags & O_EXCL) && !(flags & O_CREAT))) {
@@ -20,6 +20,7 @@ static int open_mode(int flags, struct descriptor_mode *mode)
     .readable = access != O_WRONLY, .writable = access != O_RDONLY,
     .create = flags & O_CREAT, .truncate = flags & O_TRUNC,
     .exclusive = flags & O_EXCL, .append = flags & O_APPEND,
+    .nonblock = flags & O_NONBLOCK,
   };
   return 0;
 }

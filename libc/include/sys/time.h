@@ -7,8 +7,8 @@
 extern "C" {
 #endif
 
-/* Only the structure. gettimeofday, select and the interval timers are not
- * provided; use timespec_get or clock_gettime. */
+/* gettimeofday and interval timers are not provided; use clock_gettime.
+ * select is declared in sys/select.h. */
 struct timeval {
   time_t tv_sec;
   long tv_usec; /* Microseconds, 0..999999. */

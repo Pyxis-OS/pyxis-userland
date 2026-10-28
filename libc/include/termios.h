@@ -67,6 +67,8 @@ typedef unsigned char cc_t;
  * withdraws this owner's PASSTHROUGH; it neither arms input nor delivers a
  * signal. Other owners can keep PASSTHROUGH active. Attributes belong to one
  * libc open object, shared by dup aliases, not a global terminal mode.
+ * O_NONBLOCK supersedes MIN/TIME for transfers without changing the stored
+ * timings; mode snapshots/restoration never capture or change NONBLOCK.
  *
  * Values are copyable snapshots with no allocation to release. Preserve the
  * private identity when modifying/restoring a tcgetattr result: a replaced or

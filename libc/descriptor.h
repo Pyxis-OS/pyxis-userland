@@ -15,8 +15,22 @@
 struct descriptor_object;
 
 struct descriptor_mode {
-  bool readable, writable, append, create, truncate, exclusive;
+  bool readable, writable, append, create, truncate, exclusive, nonblock;
 };
+
+struct descriptor_poll {
+  struct descriptor_object *object;
+  uint64_t generation;
+  handle_t handle;
+  uint64_t interests;
+  short requested, immediate;
+};
+
+/* Retain storage and exact slot identity, never a native grant. No descriptor
+ * locks survive admission. Caller excludes conflicting same-object I/O/close. */
+int descriptor_poll_begin(int descriptor, short events, struct descriptor_poll *snapshot);
+short descriptor_poll_result(int descriptor, const struct descriptor_poll *snapshot,
+    uint64_t events, enum call_status status);
 
 /* Entries reference an open object owning handle, access, cursor and read-ahead.
  * A FILE association owns neither; close invalidates it before slot reuse.
@@ -60,7 +74,8 @@ int descriptor_read_buffered(int descriptor, void *buffer, size_t capacity, size
  * until capacity bytes arrive or the file ends, since each native transfer is
  * under 4 KiB. A failure after progress returns the bytes already read; the
  * error recurs on the next call. Pipes keep one short transfer; consoles apply
- * their shared noncanonical MIN/TIME request. */
+ * their shared noncanonical MIN/TIME request, unless NONBLOCK selects an
+ * immediate stream queue transfer. FILE/value backing I/O can still wait. */
 int descriptor_read_complete(int descriptor, void *buffer, size_t capacity, size_t *read);
 int descriptor_write(int descriptor, const void *buffer, size_t size, size_t *written);
 /* File-only explicit offsets, without changing the private position. Read

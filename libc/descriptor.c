@@ -11,18 +11,21 @@
 #include <stream.h>
 #include <directory.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <file.h>
 #include <handle.h>
 #include <limits.h>
 #include <pipe.h>
 #include <output.h>
 #include <path.h>
+#include <poll.h>
 #include <pyxis/descriptor.h>
 #include <pyxis/file.h>
 #include <pyxis/terminal.h>
 #include <wait.h>
 #include <startup.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syscall.h>
@@ -69,7 +72,8 @@ struct descriptor_object {
   bool final_checked;
   int final_error;
   uint64_t position;
-  bool readable, writable, append;
+  bool readable, writable;
+  int flags; /* Original access and shared APPEND/NONBLOCK status. */
   bool write_uncertain; /* Shared aliases cannot replay an uncertain FILE mutation. */
   bool input_consumed; /* Any successful read, including explicit-offset reads. */
   bool unbuffered; /* Read-ahead allocation failed; stay exact until close. */
@@ -97,6 +101,7 @@ static struct libc_lock table_guard;
 static uint64_t terminal_identity;
 
 static int commit_locked(struct descriptor_object *object);
+static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, size_t count);
 
 static int fail(int error)
 {
@@ -286,7 +291,9 @@ void descriptor_adopt_standard(enum environment_stream_index index, FILE *stream
             binding.protocol == PROTOCOL_STREAM ? DESCRIPTOR_RESPONSE : DESCRIPTOR_CONSOLE,
     .handle = binding.handle,
     .readable = index == ENVIRONMENT_STDIN,
-    .writable = index != ENVIRONMENT_STDIN, .append = binding.append,
+    .writable = index != ENVIRONMENT_STDIN,
+    .flags = (index == ENVIRONMENT_STDIN ? O_RDONLY : O_WRONLY) |
+        (binding.append ? O_APPEND : 0),
   };
   entries[index] = (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
@@ -390,7 +397,8 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
           (mode->truncate ? PROVIDER_OPEN_TRUNCATE : 0) |
           (mode->append ? PROVIDER_OPEN_APPEND : 0) |
           (mode->exclusive ? PROVIDER_OPEN_EXCLUSIVE : 0);
-      status = native_file ?
+      /* NONBLOCK cannot admit a provider transaction just to reject its kind. */
+      status = native_file || mode->nonblock ?
           resource_open_native_file_path(&working.context, path, intent, flags, &opened) :
           open_typed_path(&working.context, path, intent, flags, &opened);
     }
@@ -505,7 +513,8 @@ static int open_common(const char *path, const struct descriptor_mode *mode, FIL
     .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = handle,
     .transaction = transactional ? transaction : NULL,
     .position = position, .readable = mode->readable, .writable = mode->writable,
-    .append = mode->append,
+    .flags = (mode->readable ? mode->writable ? O_RDWR : O_RDONLY : O_WRONLY) |
+        (mode->append ? O_APPEND : 0) | (mode->nonblock ? O_NONBLOCK : 0),
   };
   opened.resource = HANDLE_INVALID;
   resource_result_close(&opened);
@@ -580,6 +589,7 @@ int descriptor_tmpfile(FILE *stream, handle_t parent)
     .write_guard = LIBC_RECURSIVE_MUTEX_INITIALIZER,
     .references = 1, .storage = 1, .allocated = true, .kind = DESCRIPTOR_FILE, .handle = handle,
     .readable = true, .writable = true,
+    .flags = O_RDWR,
   };
   publish(descriptor, (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object, .stream = stream,
@@ -600,7 +610,7 @@ int descriptor_stream(FILE *stream, struct pyxis_stdio_binding *binding)
           object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
       .handle = object->handle,
-      .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
+      .append = (__atomic_load_n(&object->flags, __ATOMIC_ACQUIRE) & O_APPEND) != 0,
     };
   }
   libc_lock_release(&table_guard);
@@ -628,7 +638,7 @@ int pyxis_descriptor_borrow(int descriptor, struct pyxis_descriptor_binding *bin
         (object->writable ? PYXIS_DESCRIPTOR_WRITE : 0),
     /* A value being read through is available without waiting on the pipe. */
     .buffered_read = object->ahead_count + (object->value != HANDLE_INVALID),
-    .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
+    .append = (__atomic_load_n(&object->flags, __ATOMIC_ACQUIRE) & O_APPEND) != 0,
   };
   unlock_object(&object->read_guard);
   enum call_status status = handle_query(result.handle, &result.info);
@@ -1135,12 +1145,173 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
     .references = 1, .storage = 1, .allocated = true, .kind = kind, .handle = *handle,
     .readable = access & PYXIS_DESCRIPTOR_READ,
     .writable = access & PYXIS_DESCRIPTOR_WRITE,
+    .flags = access & PYXIS_DESCRIPTOR_READ ?
+        access & PYXIS_DESCRIPTOR_WRITE ? O_RDWR : O_RDONLY : O_WRONLY,
   };
   publish(descriptor, (struct descriptor_entry){
     .state = DESCRIPTOR_OPEN, .object = object,
   });
   *handle = HANDLE_INVALID;
   return descriptor;
+}
+
+int fcntl(int descriptor, int command, ...)
+{
+  if (command != F_GETFL && command != F_SETFL) {
+    return fail(EINVAL);
+  }
+  int flags = 0;
+  if (command == F_SETFL) {
+    va_list arguments;
+    va_start(arguments, command);
+    flags = va_arg(arguments, int);
+    va_end(arguments);
+    if (flags & ~(O_ACCMODE | O_CREAT | O_TRUNC | O_EXCL | O_APPEND | O_NOFOLLOW | O_NONBLOCK)) {
+      return fail(EINVAL);
+    }
+  }
+  struct descriptor_object *object = descriptor_hold(descriptor);
+  if (!object) {
+    return -1;
+  }
+  libc_lock_acquire(&table_guard);
+  bool matches = lookup(descriptor) == object;
+  uint64_t generation = matches ? entries[descriptor].generation : 0;
+  libc_lock_release(&table_guard);
+  int error = matches ? 0 : EBADF;
+  if (!error && command == F_SETFL) {
+    if ((flags & O_NONBLOCK) && (object->transaction || object->kind == DESCRIPTOR_RESPONSE)) {
+      error = ENOTSUP;
+    } else if (flags & O_APPEND) {
+      if (object->kind != DESCRIPTOR_FILE || object->transaction) {
+        error = ENOTSUP;
+      } else {
+        uint64_t offset;
+        size_t written;
+        enum call_status status = file_append(object->handle, NULL, 0, &offset, &written);
+        if (status != CALL_OK) {
+          error = libc_call_errno(status);
+        }
+      }
+    }
+  }
+  libc_lock_acquire(&table_guard);
+  if (!error && (lookup(descriptor) != object || entries[descriptor].generation != generation)) {
+    error = EBADF;
+  }
+  int result = -1;
+  if (!error) {
+    int previous = __atomic_load_n(&object->flags, __ATOMIC_ACQUIRE);
+    if (command == F_GETFL) {
+      result = previous;
+    } else {
+      __atomic_store_n(&object->flags,
+          (previous & O_ACCMODE) | (flags & (O_APPEND | O_NONBLOCK)), __ATOMIC_RELEASE);
+      result = 0;
+    }
+  }
+  libc_lock_release(&table_guard);
+  descriptor_drop(object);
+  return error ? fail(error) : result;
+}
+
+int descriptor_poll_begin(int descriptor, short events, struct descriptor_poll *snapshot)
+{
+  *snapshot = (struct descriptor_poll){.requested = events};
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(descriptor);
+  if (!object) {
+    snapshot->immediate = POLLNVAL;
+    libc_lock_release(&table_guard);
+    return 0;
+  }
+  if (!retain_storage(object)) {
+    libc_lock_release(&table_guard);
+    return fail(EMFILE);
+  }
+  snapshot->object = object;
+  snapshot->generation = entries[descriptor].generation;
+  snapshot->handle = object->handle;
+  libc_lock_release(&table_guard);
+  if (object->transaction || object->kind == DESCRIPTOR_RESPONSE) {
+    return fail(ENOTSUP);
+  }
+  short reading = events & (POLLIN | POLLRDNORM);
+  short writing = events & (POLLOUT | POLLWRNORM);
+  if ((reading && !object->readable) || (writing && !object->writable)) {
+    snapshot->immediate |= POLLERR;
+  }
+  if (object->kind == DESCRIPTOR_FILE) {
+    if (object->readable) {
+      snapshot->immediate |= reading;
+    }
+    if (__atomic_load_n(&object->write_uncertain, __ATOMIC_ACQUIRE)) {
+      snapshot->immediate |= POLLERR;
+    } else if (object->writable) {
+      snapshot->immediate |= writing;
+    }
+    return 0;
+  }
+  if (object->readable) {
+    snapshot->interests |= WAIT_READ_STATUS;
+    if (reading) {
+      snapshot->interests |= WAIT_READABLE;
+    }
+    int error = libc_mutex_trylock(&object->read_guard);
+    if (error) {
+      return fail(error);
+    }
+    if (object->ahead_count || object->value) {
+      snapshot->immediate |= reading;
+    }
+    if (object->terminal_read_status != CALL_OK) {
+      snapshot->immediate |= POLLERR;
+    }
+    unlock_object(&object->read_guard);
+  }
+  if (object->writable) {
+    snapshot->interests |= WAIT_WRITE_STATUS;
+    if (writing) {
+      snapshot->interests |= WAIT_WRITABLE;
+    }
+  }
+  return 0;
+}
+
+short descriptor_poll_result(int descriptor, const struct descriptor_poll *snapshot,
+    uint64_t events, enum call_status status)
+{
+  struct descriptor_object *object = snapshot->object;
+  if (!object) {
+    return snapshot->immediate;
+  }
+  libc_lock_acquire(&table_guard);
+  bool matches = lookup(descriptor) == object &&
+      entries[descriptor].generation == snapshot->generation;
+  libc_lock_release(&table_guard);
+  if (!matches) {
+    return POLLNVAL;
+  }
+  short result = snapshot->immediate;
+  if (status != CALL_OK || (events & (WAIT_ERROR | WAIT_CLOSED))) {
+    result |= POLLERR;
+  }
+  if (events & WAIT_PEER_FIN) {
+    result |= POLLHUP;
+  }
+  if (events & WAIT_WRITE_CLOSED) {
+    result |= POLLERR;
+    if (object->kind == DESCRIPTOR_CONSOLE) {
+      result |= POLLHUP;
+    }
+  }
+  if (events & (WAIT_READABLE | WAIT_PEER_FIN)) {
+    result |= snapshot->requested & (POLLIN | POLLRDNORM);
+  }
+  if ((events & WAIT_WRITABLE) && !(events & (WAIT_WRITE_CLOSED | WAIT_CLOSED))) {
+    result |= snapshot->requested & (POLLOUT | POLLWRNORM);
+  }
+  return result;
 }
 
 bool descriptor_ready(int descriptor, bool writing)
@@ -1191,7 +1362,7 @@ int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FIL
   }
   if (!error) {
     if (mode->append) {
-      __atomic_store_n(&object->append, true, __ATOMIC_RELEASE);
+      __atomic_fetch_or(&object->flags, O_APPEND, __ATOMIC_RELEASE);
     }
     entries[descriptor].stream = stream;
     ++entries[descriptor].generation;
@@ -1660,6 +1831,18 @@ static enum call_status terminal_read(struct descriptor_object *object, void *bu
 static int backend_read(struct descriptor_object *entry, void *buffer, size_t size,
     size_t *read)
 {
+  if ((entry->kind == DESCRIPTOR_PIPE || entry->kind == DESCRIPTOR_CONSOLE) &&
+      (__atomic_load_n(&entry->flags, __ATOMIC_ACQUIRE) & O_NONBLOCK)) {
+    ssize_t count = try_read_locked(entry, buffer, size);
+    if (count < 0) {
+      return -1;
+    }
+    *read = (size_t)count;
+    if (*read) {
+      entry->input_consumed = true;
+    }
+    return 0;
+  }
   enum call_status status;
   if (entry->transaction && !entry->transaction->committed && entry->readable) {
     return fail(EBUSY);
@@ -1937,6 +2120,16 @@ static int write_locked(struct descriptor_object *entry, const void *buffer, siz
   if (!size) {
     return 0;
   }
+  int flags = __atomic_load_n(&entry->flags, __ATOMIC_ACQUIRE);
+  if ((entry->kind == DESCRIPTOR_PIPE || entry->kind == DESCRIPTOR_CONSOLE) &&
+      (flags & O_NONBLOCK)) {
+    ssize_t count = try_write_locked(entry, buffer, size);
+    if (count < 0) {
+      return -1;
+    }
+    *written = (size_t)count;
+    return 0;
+  }
   /* Files can refetch speculative bytes at the shared logical position.
    * Pipe bytes already consumed from the backend must remain available. */
   if (entry->kind == DESCRIPTOR_FILE) {
@@ -1945,7 +2138,7 @@ static int write_locked(struct descriptor_object *entry, const void *buffer, siz
   uint64_t position = entry->position;
   enum call_status status;
   if (entry->kind == DESCRIPTOR_FILE) {
-    if (__atomic_load_n(&entry->append, __ATOMIC_ACQUIRE)) {
+    if (flags & O_APPEND) {
       status = file_append(entry->handle, buffer, size, &position, written);
     } else {
       if (size > UINT64_MAX - position) {
@@ -2162,7 +2355,7 @@ static long tell_output_locked(struct descriptor_object *entry, size_t pending)
     return fail(ESPIPE);
   }
   uint64_t position = entry->position;
-  if (pending && __atomic_load_n(&entry->append, __ATOMIC_ACQUIRE)) {
+  if (pending && (__atomic_load_n(&entry->flags, __ATOMIC_ACQUIRE) & O_APPEND)) {
     handle_t handle = entry->handle;
     enum call_status status = file_size(handle, &position);
     if (status != CALL_OK) {
@@ -2226,7 +2419,7 @@ int descriptor_object_stream(struct descriptor_object *object, struct pyxis_stdi
         object->kind == DESCRIPTOR_PIPE ? PROTOCOL_PIPE :
           object->kind == DESCRIPTOR_RESPONSE ? PROTOCOL_STREAM : PROTOCOL_CONSOLE,
     .handle = object->handle,
-    .append = __atomic_load_n(&object->append, __ATOMIC_ACQUIRE),
+    .append = (__atomic_load_n(&object->flags, __ATOMIC_ACQUIRE) & O_APPEND) != 0,
   };
   return 0;
 }

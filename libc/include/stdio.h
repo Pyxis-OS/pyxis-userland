@@ -35,7 +35,10 @@ extern FILE *stderr;
  * successful fseek or a write drops it, a failed seek keeps it. Standard
  * descriptors adopt exclusive startup handles once. No freopen. Byte/wide
  * orientation is selected by the first I/O operation (or fwide), remains until
- * close and rejects mixing with EINVAL. Zero-sized transfers do not orient. */
+ * close and rejects mixing with EINVAL. Zero-sized transfers do not orient.
+ * Descriptor O_NONBLOCK applies to backend stream transfers, including these
+ * input paths; EAGAIN sets the ordinary error indicator, not EOF. FILE pushback,
+ * existing EOF/errors and queued output remain independent of poll readiness. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested

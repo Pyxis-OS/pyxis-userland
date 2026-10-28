@@ -22,7 +22,8 @@ int pyxis_terminal_get_size(int descriptor, struct console_size_reply *size);
 
 /* Each open object has one private mode owner, shared by dup aliases. A state
  * snapshots that owner's PASSTHROUGH and MIN/TIME request, shared with termios,
- * not global terminal modes or another owner's grant. GetState acquires no raw
+ * not global terminal modes or another owner's grant. O_NONBLOCK is separate
+ * shared descriptor status and is never saved/restored here. GetState acquires no raw
  * grant and needs no READ.
  * Success allocates a state; failure sets *state to NULL. */
 int pyxis_terminal_get_state(int descriptor, struct pyxis_terminal_state **state);

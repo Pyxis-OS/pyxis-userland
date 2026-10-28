@@ -66,7 +66,12 @@ int rmdir(const char *path);
  * Stdio also uses these timings: a zero result sets its ordinary EOF indicator
  * until clearerr; changing modes does not clear it. Timed modes need a clock.
  * Independent of FILE indicators. A read first returns bytes the associated FILE
- * read ahead, without a backend call; read itself never reads ahead. */
+ * read ahead, without a backend call; read itself never reads ahead.
+ * Shared O_NONBLOCK overrides console MIN/TIME and selects immediate PIPE/console
+ * queue transfers: live empty/full is EAGAIN, EOF is zero and progress can be
+ * short. PIPE FILE-value backing I/O, regular FILE I/O and internal exclusion
+ * can still wait. F_SETFL affects subsequent transfers, never cancellation of
+ * an admitted operation. */
 ssize_t read(int descriptor, void *buffer, size_t count);
 ssize_t write(int descriptor, const void *buffer, size_t count);
 /* Files only; use offset without changing the private descriptor position.
@@ -78,7 +83,7 @@ ssize_t write(int descriptor, const void *buffer, size_t count);
  * FILE indicators or pushback. Zero count touches no buffer or backend. */
 ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset);
 ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset);
-/* Lowest free descriptor sharing the open handle, access, append policy,
+/* Lowest free descriptor sharing the open handle, access, APPEND/NONBLOCK,
  * cursor and read-ahead; the new slot has no FILE association. Closing either
  * slot leaves the other valid; only final close releases the native handle. */
 int dup(int descriptor);
