@@ -24,13 +24,13 @@ enum call_status program_open_search(const struct path_context *context,
 enum call_status program_open_search_reason(const struct path_context *context,
     const struct command_search_capture *search, const char *command,
     struct path_workspace *workspace, struct command_selection **selection, char *refusal);
-/* Capture the caller's current commands entry once for a bare name. No default
+/* Capture the caller's current path entry once for a bare name. No default
  * entry is added; malformed/revoked lists fail. Explicit paths need no list. */
 enum call_status program_open(const struct path_context *context, const char *command,
     struct path_workspace *workspace, struct command_selection **selection);
 enum call_status program_open_reason(const struct path_context *context, const char *command,
     struct path_workspace *workspace, struct command_selection **selection, char *refusal);
-/* The plain native image a bare NAME resolves to through the caller's commands
+/* The plain native image a bare NAME resolves to through the caller's path
  * entry, for a launcher that starts it with grants of its own. A bundle is
  * WRONG_TYPE. Success owns *IMAGE. */
 enum call_status program_image(const char *name, handle_t *image);

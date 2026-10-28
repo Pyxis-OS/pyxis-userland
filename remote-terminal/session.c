@@ -402,8 +402,9 @@ static enum call_status broker_launch(struct remote_context *context,
   }
   bool mux = broker_caller != HANDLE_INVALID;
   if (mux) {
-    /* mux is a package; the core archive keeps the rescue shell. */
-    status = program_image("mux", &image);
+    handle_t selected = bootstrap_capability("remote_mux_image");
+    status = selected == HANDLE_INVALID ? CALL_NOT_FOUND :
+        handle_copy_restricted(selected, FILE_RIGHT_READ, 0, &image);
   } else {
     handle_t boot = HANDLE_INVALID;
     for (size_t i = 0; i < context->entry_count; ++i) {

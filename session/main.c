@@ -103,7 +103,8 @@ static bool configure_path(const struct session_config *config)
 static int launch_session(const struct session_config *config, struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
     bool start_services, bool start_remote_services, const char *services_script,
-    handle_t retention_account, struct network_wifi_supplicant *supplicant)
+    handle_t retention_account, struct network_wifi_supplicant *supplicant,
+    handle_t mux_image)
 {
   struct terminal terminal = {bootstrap_capability("input"), bootstrap_capability("output")};
   handle_t launcher = bootstrap_capability("launcher");
@@ -137,7 +138,7 @@ static int launch_session(const struct session_config *config, struct network_co
   const char *image_uri = script ? services_script : multiplex ? "mux" : "boot://init-shell.pxe";
   handle_t image;
   enum call_status status = script ? resolve_file(services_script, FILE_RIGHT_READ, &image) :
-      multiplex ? program_image("mux", &image) :
+      multiplex ? handle_copy_restricted(mux_image, FILE_RIGHT_READ, 0, &image) :
       directory_lookup(boot, "init-shell.pxe", DIRECTORY_KIND_FILE, FILE_RIGHT_READ, &image);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot open %s (status %u)\n", image_uri, status);
@@ -976,10 +977,6 @@ int main(int argc, char **argv)
   if (!session_config_read(&config)) {
     return EXIT_FAILURE;
   }
-  if (!configure_path(&config)) {
-    session_config_free(&config);
-    return EXIT_FAILURE;
-  }
   handle_t retention_account;
   enum call_status retention = session_retention_init(&config, &retention_account);
   if (retention != CALL_OK) {
@@ -995,14 +992,45 @@ int main(int argc, char **argv)
   }
   struct network_runtime runtime = {0};
   int result = EXIT_FAILURE;
-  if (remote_server) {
-    if (!configure_network || (network_config_apply(&network, &runtime) &&
-        network_config_wait_address(&network, &runtime))) {
-      result = launch_remote_server(&config, &network, (uint16_t)port, retention_account);
+  handle_t mux_image = HANDLE_INVALID, remote_image = HANDLE_INVALID;
+  bool script = start_services || start_remote_services;
+  enum call_status programs = CALL_OK;
+  /* Bootstrap successors are selected before the user's program locations.
+   * Service-script handoff preserves that original selection until this point. */
+  if (!script) {
+    if (remote_server) {
+      programs = program_image("remote-terminal", &remote_image);
     }
-  } else {
-    result = launch_session(&config, &network, &runtime, configure_network,
-        start_services, start_remote_services, services_script, retention_account, &supplicant);
+    bool mux = bootstrap_capability(remote_server ? "remote_mux_terminal" : "mux_terminal") !=
+        HANDLE_INVALID;
+    if (programs == CALL_OK && mux) {
+      programs = program_image("mux", &mux_image);
+      if (remote_server && programs != CALL_OK) {
+        fprintf(stderr, "session: remote mux unavailable (status %u)\n", programs);
+        programs = CALL_OK;
+      }
+    }
+  }
+  if (programs != CALL_OK) {
+    fprintf(stderr, "session: cannot select startup program (status %u)\n", programs);
+  } else if (script || configure_path(&config)) {
+    if (remote_server) {
+      if (!configure_network || (network_config_apply(&network, &runtime) &&
+          network_config_wait_address(&network, &runtime))) {
+        result = launch_remote_server(&config, &network, (uint16_t)port,
+            retention_account, remote_image, mux_image);
+      }
+    } else {
+      result = launch_session(&config, &network, &runtime, configure_network,
+          start_services, start_remote_services, services_script, retention_account,
+          &supplicant, mux_image);
+    }
+  }
+  if (mux_image != HANDLE_INVALID && handle_close(mux_image)) {
+    result = EXIT_FAILURE;
+  }
+  if (remote_image != HANDLE_INVALID && handle_close(remote_image)) {
+    result = EXIT_FAILURE;
   }
   if (handle_close(retention_account) != 0) {
     result = EXIT_FAILURE;
