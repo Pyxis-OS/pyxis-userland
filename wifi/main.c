@@ -50,6 +50,8 @@ static int print_result(handle_t file)
   }
   if (header.count > WIFI_SCAN_RECORDS || header.record_bytes != sizeof(struct wifi_bss_record) ||
       header.reserved || (header.channels & ~WIFI_SCAN_CHANNELS) ||
+      (header.flags & ~WIFI_SCAN_FILE_TRUNCATED) ||
+      (!!(header.flags & WIFI_SCAN_FILE_TRUNCATED) != !!header.dropped_records) ||
       size != sizeof(header) + (uint64_t)header.count * header.record_bytes) {
     return failure("result format", CALL_BAD_REQUEST);
   }
@@ -66,7 +68,12 @@ static int print_result(handle_t file)
       return failure("result record", CALL_BAD_REQUEST);
     }
   }
-  printf("wifi: passive scan complete; %u records\n", header.count);
+  printf("wifi: passive scan complete; %u records", header.count);
+  if (header.flags & WIFI_SCAN_FILE_TRUNCATED) {
+    printf("; TRUNCATED; dropped%s%u candidate records",
+        header.dropped_records == UINT32_MAX ? ">=" : "=", header.dropped_records);
+  }
+  putchar('\n');
   for (size_t i = 0; i < header.count; ++i) {
     const struct wifi_bss_record *record = &records[i];
     printf("ch=%u signal=%d BSSID=", record->channel, record->signal_dbm);
@@ -419,8 +426,30 @@ static void print_phy_facts(const struct wifi_status_full_reply *status)
   putchar('\n');
 }
 
+static bool scan_channels(const char *text, uint32_t *channels)
+{
+  *channels = 0;
+  for (;;) {
+    if (*text < '0' || *text > '9') return false;
+    char *end;
+    unsigned long channel = strtoul(text, &end, 10);
+    if (channel < 1 || channel > WIFI_CHANNEL_24_COUNT || (*end && *end != ',')) return false;
+    *channels |= UINT32_C(1) << (channel - 1);
+    if (!*end) return true;
+    text = end + 1;
+  }
+}
+
 int main(int argc, char **argv)
 {
+  if (argc == 4 && !strcmp(argv[1], "scan") && !strcmp(argv[2], "--channels")) {
+    uint32_t channels;
+    if (!scan_channels(argv[3], &channels)) {
+      fputs("wifi: channels must be comma-separated decimal numbers from 1 to 14\n", stderr);
+      return EXIT_FAILURE;
+    }
+    return scan(channels);
+  }
   if (argc == 4 && !strcmp(argv[1], "scan") && !strcmp(argv[2], "--channel")) {
     char *end;
     unsigned long channel = strtoul(argv[3], &end, 10);
@@ -438,7 +467,7 @@ int main(int argc, char **argv)
     return link_command(argv[1], argv[2]);
   }
   if (argc != 2 || (strcmp(argv[1], "status") && strcmp(argv[1], "scan"))) {
-    fputs("usage: wifi status [LINK] | scan [--channel N] | connect --profile FILE | disconnect LINK\n", stderr);
+    fputs("usage: wifi status [LINK] | scan [--channel N | --channels N,N] | connect --profile FILE | disconnect LINK\n", stderr);
     return EXIT_FAILURE;
   }
   if (!strcmp(argv[1], "scan")) return scan(0);

@@ -1,11 +1,15 @@
 # Wi-Fi controller
 
 `wifi status` observes the declared controller READ grant. `wifi scan` uses the
-separate SCAN grant and prints one complete passive result. Neither can associate.
+separate SCAN grant and prints a completed passive result. Capacity-limited
+results retain what fits and visibly report TRUNCATED with the dropped-candidate
+count (a saturated count is a lower bound). Neither command can associate.
 
 Use `wifi scan --channel 1` to request one channel. The argument is a decimal
 number from 1 to 14; controller support and installed policy still restrict the
-request. Plain `wifi scan` retains the controller's default channel selection.
+request. `wifi scan --channels 1,6` requests the explicit two-channel sweep.
+Plain `wifi scan` retains the controller's default selection; the current
+RTL8922AE profile requires an explicit channel or the 1+6 mask.
 
 Status appends `boot valid=... state=...` hexadecimal masks for known boot facts
 and completed actions. Only valid groups print reset, cut, security, firmware or
@@ -53,18 +57,23 @@ Omitted country selects world `00`; a configured country selects its rules withi
 the host mask. Table `valid` means decoded metadata, and `default-power=1`
 identifies the accepted reference RFE-0 selection. Neither that state nor a
 matching rule means RFK is qualified or that RF transmission is admitted.
-Missing, malformed and failed platform reads remain distinct. RTL scan/connect
-remain unavailable in this preparation cut. An explicit `wifi scan` can own
-one-PHY initialization/calibration and checked stop, but completes UNAVAILABLE
-without a result FILE; status/READ alone never starts it.
+Missing, malformed and failed platform reads remain distinct. RTL8922AE uses
+two initialized PHY contexts, returning an immutable FILE only after firmware
+scan completion and RX retirement. Its 1+6 sweep derives frame channels from
+matched PPDU metadata; unattributable observations are omitted. Initialization
+and calibration stay inside the requested mask under fixed limits. Healthy
+context is retained for another exact-mask request; changing the mask requires
+a fresh boot in this slice. RTL association remains unavailable. Status/READ
+alone never starts the radio.
 
 RTL PHY status records the historical preparation phase, state mask, selected
 channel/region, power-image readback count and path SAR bounds in quarter-dBm.
 It prints attempted rfkill-check counts and observation validity, completed RFK
 steps, any valid report state/version and the thermal-default path mask. Stop is reported as confirmed,
 uncertain or unobserved; last status is meaningful only after completion.
-These facts describe the preparation attempt, not live radiated power or scan
-readiness. Successful calibration and confirmed stop still yield no scan FILE.
+These are historical programming observations, not measured radiated power.
+A hopping sweep also verifies the common power image after RX collection closes;
+that endpoint check is not a measurement of uninterrupted enforcement.
 
 TAS stays disabled. Its diagnostic identifies query-0, function-5 or alias
 rejection, with the observed object type and any known length/support mask.
