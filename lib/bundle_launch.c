@@ -206,6 +206,8 @@ static enum call_status prepare_context(struct context_grants *context,
       continue;
     }
     struct launch_environment_entry binding = *entry;
+    bool interpreter = !strcmp(name, "interpreter.shell") ||
+        !strcmp(name, "interpreter.lua") || !strcmp(name, "interpreter.lua51");
     bool path = !strcmp(name, "path");
     if (path && entry->kind != ENVIRONMENT_CAP) {
       return CALL_WRONG_TYPE;
@@ -218,6 +220,11 @@ static enum call_status prepare_context(struct context_grants *context,
       enum call_status status = handle_query(context->source[entry->value].source, &info);
       if (status != CALL_OK) {
         return status;
+      }
+      if (interpreter && (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_FILE ||
+          context->source[entry->value].rights != FILE_RIGHT_READ ||
+          context->source[entry->value].transport || (entry->flags & ENVIRONMENT_EXPORTED))) {
+        return CALL_DENIED;
       }
       if (path) {
         status = command_list_validate(context->source[entry->value].source);
@@ -244,7 +251,7 @@ static enum call_status prepare_context(struct context_grants *context,
           !strcmp(name, "stdout") || !strcmp(name, "stderr");
       bool directory = info.protocol == PROTOCOL_DIRECTORY && (entry->flags & ENVIRONMENT_EXPORTED);
       bool provider = info.kind == HANDLE_KIND_EXPORTED && (entry->flags & ENVIRONMENT_EXPORTED);
-      if (!stream && !directory && !provider && !path) {
+      if (!stream && !directory && !provider && !path && !interpreter) {
         continue;
       }
       status = retain_grant(context, entry->value, &binding.value);

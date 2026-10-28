@@ -49,6 +49,7 @@
 #include <output.h>
 #include <retention.h>
 #include <launcher.h>
+#include <script_scope.h>
 #include <environment.h>
 #include <forwarder.h>
 #include <network_environment.h>
@@ -632,14 +633,9 @@ static enum call_status validate_scope(const struct launch_request *request,
 static handle_t delegated_launcher(const struct shell *shell, enum shell_launch_mode mode,
     const struct launch_scope *scope)
 {
-  if (scope && scope->owned && shell->child_launcher != HANDLE_INVALID) {
-    return scope->group.launcher;
-  }
-  if ((mode == SHELL_FOREGROUND || shell->positional_script) &&
-      shell->script_group.launcher != HANDLE_INVALID) {
-    return shell->script_group.launcher;
-  }
-  return shell->child_launcher;
+  return script_scope_child_launcher(shell->positional_script, mode == SHELL_FOREGROUND,
+      shell->child_launcher, &shell->script_group,
+      scope && scope->owned ? scope->group.launcher : HANDLE_INVALID);
 }
 
 /* Code and inherited search use the same captured publication, even if the
@@ -779,51 +775,29 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   }
   /* Explicit SESSION keeps its separate successor/ownership handoff. */
   bool reentry = prepared->shell_reentry && !prepared->bundle && !session;
-  const struct bundle_authority ordinary[] = {
-    {"input", prepared->shell_reentry && !named_input ? HANDLE_INVALID : shell->terminal.input, PROTOCOL_CONSOLE},
-    {"output", shell->terminal.output, PROTOCOL_CONSOLE},
-    {"memory", shell->memory, PROTOCOL_MEMORY},
-    {"jit", jit, PROTOCOL_JIT},
-    {"threads", shell->threads, PROTOCOL_THREAD_SERVICE},
-    {"keyboard", has_keyboard ? shell->keyboard : HANDLE_INVALID, PROTOCOL_KEYBOARD},
-    {"gamepad", has_gamepad ? shell->gamepad : HANDLE_INVALID, PROTOCOL_GAMEPAD},
-    {"pointer", has_pointer ? shell->pointer : HANDLE_INVALID, PROTOCOL_POINTER},
-    {"clock", shell->clock, PROTOCOL_CLOCK},
-    {"display", shell->display, PROTOCOL_DISPLAY},
-    {"audio", shell->audio, PROTOCOL_AUDIO},
-    {"screen_capture", shell->screen_capture, PROTOCOL_SCREEN_CAPTURE},
-    {"wifi", prepared->bundle || reentry ? bootstrap_capability("wifi") : HANDLE_INVALID, PROTOCOL_WIFI},
-    {"clipboard_local", clipboard_local, PROTOCOL_CLIPBOARD},
-    {"clipboard_shared", clipboard_shared, PROTOCOL_CLIPBOARD},
-    {"system_info", shell->system_info, PROTOCOL_SYSTEM_INFO},
-    {"echo", shell->echo, PROTOCOL_ECHO},
-    /* Offered only to a bundle that declares it. The declared request is READ
-     * alone, so the shell's own rights never reach the bundle. Plain programs
-     * receive net_registry only through a session handoff. */
-    {"net_registry", shell->net_registry, PROTOCOL_NET_REGISTRY},
-    {"udp", shell->udp, PROTOCOL_UDP_SERVICE},
-    {"dns_udp", environment->dns_udp, PROTOCOL_UDP_SERVICE},
-    {"tcp", shell->tcp, PROTOCOL_TCP_SERVICE},
-    {BUNDLE_TCP_LISTEN_SOURCE, shell->tcp_listen, PROTOCOL_TCP_SERVICE},
-    {"pipe", mode == SHELL_FOREGROUND || session || prepared->shell_reentry ? shell->pipe : HANDLE_INVALID,
-      PROTOCOL_PIPE_SERVICE},
-    {"retention_account", shell->retention_account, PROTOCOL_RETENTION_ACCOUNT},
-    {"random", shell->random, PROTOCOL_RANDOM},
-    {"profile", shell->profile, PROTOCOL_PROFILE},
-    {"launcher", child_launcher, PROTOCOL_LAUNCHER},
-    {"service", shell->service, PROTOCOL_ENDPOINT_SERVICE},
-    {"publication", provider ? publication : HANDLE_INVALID, PROTOCOL_ENDPOINT},
-    {"child_launcher", reentry ? child_launcher : HANDLE_INVALID, PROTOCOL_LAUNCHER},
-    {"interpreter_root", reentry ? shell->interpreter_root : HANDLE_INVALID, PROTOCOL_DIRECTORY},
-    {"interpreter_image", reentry ? shell->interpreter_image : HANDLE_INVALID, PROTOCOL_FILE},
-    {"power", reentry ? shell->power : HANDLE_INVALID, PROTOCOL_POWER},
-    {"host_mount", reentry ? shell->host_mount : HANDLE_INVALID, PROTOCOL_MOUNT},
-    {"native_mount", reentry ? shell->native_mount : HANDLE_INVALID, PROTOCOL_MOUNT},
-    {"space", reentry ? shell->space : HANDLE_INVALID, PROTOCOL_SPACE},
-  };
-  size_t ordinary_count = sizeof(ordinary) / sizeof(*ordinary);
-  struct bundle_authority authority[sizeof(ordinary) / sizeof(*ordinary) + BUNDLE_SOURCE_LIMIT];
-  memcpy(authority, ordinary, sizeof(ordinary));
+  size_t ordinary_count = shell->sources.ordinary_count;
+  struct bundle_authority authority[ordinary_count + BUNDLE_SOURCE_LIMIT + 1];
+  memcpy(authority, shell->sources.authority, ordinary_count * sizeof(*authority));
+  for (size_t i = 0; i < ordinary_count; ++i) {
+    const char *name = authority[i].resource;
+    if (!strcmp(name, "launcher") || !strcmp(name, "child_launcher")) {
+      authority[i].source = !strcmp(name, "launcher") || reentry ? child_launcher : HANDLE_INVALID;
+    } else if (!strcmp(name, "input")) {
+      authority[i].source = prepared->shell_reentry && !named_input ? HANDLE_INVALID : shell->terminal.input;
+    } else if ((!strcmp(name, "keyboard") && !has_keyboard) ||
+        (!strcmp(name, "pointer") && !has_pointer) ||
+        (!strcmp(name, "gamepad") && !has_gamepad)) {
+      authority[i].source = HANDLE_INVALID;
+    } else if (!strcmp(name, "dns_udp")) {
+      authority[i].source = environment->dns_udp;
+    } else if (!strcmp(name, "pipe") && mode != SHELL_FOREGROUND && !session && !prepared->shell_reentry) {
+      authority[i].source = HANDLE_INVALID;
+    }
+  }
+  if (provider) {
+    authority[ordinary_count++] = (struct bundle_authority){
+      "publication", publication, PROTOCOL_ENDPOINT};
+  }
   size_t source_count = 0;
   if (prepared->bundle || reentry) {
     captured = bundle_sources_from_capture(&prepared->captured, authority + ordinary_count,
@@ -896,7 +870,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_output = shell->terminal.output != HANDLE_INVALID;
   size_t output_index = network_config_index + (has_network_config ? 1 : 0);
   size_t grant_count = output_index + (has_output ? 1 : 0);
-  size_t extra_grants = ENVIRONMENT_STREAM_COUNT + 3 + BUNDLE_SOURCE_LIMIT + ordinary_count;
+  size_t extra_grants = ENVIRONMENT_STREAM_COUNT + 6 + BUNDLE_SOURCE_LIMIT + ordinary_count;
   size_t max_grants = SIZE_MAX / sizeof(struct launch_grant);
   if (grant_count > max_grants - extra_grants ||
       prepared->captured.count > max_grants - extra_grants - grant_count) {
@@ -1469,7 +1443,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool wait_session = mode == SHELL_FOREGROUND && scope && scope->owned &&
       prepared->shell_execution;
   size_t entry_capacity = resource_count + root_count + environment->count +
-      prepared->captured.count + 2 * ENVIRONMENT_STREAM_COUNT + ordinary_count + BUNDLE_SOURCE_LIMIT + 2 + wait_session;
+      prepared->captured.count + 2 * ENVIRONMENT_STREAM_COUNT + ordinary_count + BUNDLE_SOURCE_LIMIT + 5 + wait_session;
   prepared->entries = calloc(entry_capacity, sizeof(*prepared->entries));
   if (!prepared->entries) {
     return CALL_NO_MEMORY;
@@ -1699,6 +1673,11 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         authority[i].source = prepared->staging_leaf;
       }
     }
+    if (prepared->shell_reentry) {
+      status = program_interpreters_stage(&shell->interpreters, request, prepared->grants,
+          grant_capacity, prepared->entries, entry_capacity);
+      if (status != CALL_OK) return status;
+    }
     if (prepared->bundle) {
       status = bundle_launch_prepare_jobs(prepared->bundle, request, authority,
           ordinary_count + source_count, shell->job_provisioner,
@@ -1714,46 +1693,22 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
        * a growing interpreter exception list. */
       for (size_t i = 0; i < ordinary_count; ++i) {
         const struct bundle_authority *source = &authority[i];
-        if (source->source == HANDLE_INVALID) {
-          continue;
-        }
+        if (source->source == HANDLE_INVALID) continue;
         const struct environment_value *origin =
             environment_capture_find(&prepared->captured, source->resource);
         if (origin && !shell_environment_initial(shell, origin)) {
           prepared->conflict = source->resource;
           return CALL_ALREADY_EXISTS;
         }
-        struct handle_info info;
-        status = handle_query(source->source, &info);
-        if (status != CALL_OK) {
-          return status;
+      }
+      status = program_sources_stage(authority, ordinary_count, request, prepared->grants,
+          grant_capacity, prepared->entries, entry_capacity);
+      if (status != CALL_OK) return status;
+      for (size_t i = 0; i < request->entry_count; ++i) {
+        if (prepared->entries[i].kind == ENVIRONMENT_CAP &&
+            !strcmp((const char *)(uintptr_t)prepared->entries[i].name, "input")) {
+          prepared->grants[prepared->entries[i].value].rights &= CONSOLE_RIGHT_READ;
         }
-        if (info.protocol != source->protocol) {
-          return CALL_WRONG_TYPE;
-        }
-        size_t entry = 0;
-        while (entry < request->entry_count && strcmp(source->resource,
-            (const char *)(uintptr_t)prepared->entries[entry].name)) {
-          ++entry;
-        }
-        size_t grant;
-        if (entry < request->entry_count) {
-          if (prepared->entries[entry].kind != ENVIRONMENT_CAP) {
-            return CALL_ALREADY_EXISTS;
-          }
-          grant = prepared->entries[entry].value;
-        } else {
-          if (request->entry_count == entry_capacity || request->grant_count == grant_capacity) {
-            return CALL_LIMIT;
-          }
-          grant = request->grant_count++;
-          prepared->entries[request->entry_count++] =
-              (struct launch_environment_entry)PROFILE_PRIVATE_CAP(source->resource, grant);
-        }
-        if (!strcmp(source->resource, "input")) {
-          info.rights &= CONSOLE_RIGHT_READ;
-        }
-        prepared->grants[grant] = (struct launch_grant){source->source, info.rights, info.transport};
       }
       status = bundle_sources_forward_capture(&prepared->captured,
           prepared->grants, grant_capacity, &request->grant_count,
@@ -2308,7 +2263,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       goto failed;
     }
     const char *interpreter = program_image_interpreter(prepared[i].input);
-    prepared[i].shell_reentry = same_native_image(prepared[i].image, shell->interpreter_image);
+    prepared[i].shell_reentry = program_interpreters_match(&shell->interpreters,
+        prepared[i].image) != PROGRAM_INTERPRETER_NONE;
     /* The startup command pin is only a containment hint. It cannot identify
      * interpreter code or authorize source inheritance. */
     prepared[i].shell_execution = prepared[i].shell_reentry ||
@@ -2330,7 +2286,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       }
       if (status == CALL_OK) {
         status = program_image_select_interpreter(prepared[i].input, image);
-        prepared[i].shell_reentry = same_native_image(image, shell->interpreter_image);
+        prepared[i].shell_reentry = program_interpreters_match(&shell->interpreters,
+            image) != PROGRAM_INTERPRETER_NONE;
         prepared[i].shell_execution = prepared[i].shell_reentry ||
             same_native_image(image, shell->command_shell_image);
       }
@@ -2880,10 +2837,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (report_scope) {
     report_scope->evaluated = true;
   }
-  handle_t launcher = scope && scope->owned ? scope->group.launcher :
-      (mode == SHELL_FOREGROUND || shell->positional_script) &&
-      shell->script_group.launcher != HANDLE_INVALID ?
-      shell->script_group.launcher : shell->launcher;
+  handle_t launcher = script_scope_launch_launcher(shell->positional_script,
+      mode == SHELL_FOREGROUND, shell->launcher, &shell->script_group,
+      scope && scope->owned ? scope->group.launcher : HANDLE_INVALID);
   const struct program_image *inputs[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < stage_count; ++i) {
     inputs[i] = prepared[i].input;
@@ -3734,13 +3690,10 @@ enum command_result shell_launch_service_value(struct shell *shell,
 
 enum call_status shell_script_group_open(struct shell *shell)
 {
-  /* Without a child_launcher nothing is delegated, so there is nothing to contain. */
-  handle_t launcher = shell->positional_script ? shell->launcher : shell->child_launcher;
-  if (launcher == HANDLE_INVALID) {
-    return shell->positional_script ? CALL_DENIED : CALL_OK;
-  }
-  enum call_status status = launcher_create_group(launcher, &shell->script_group);
-  if (status != CALL_OK) {
+  enum call_status status = script_scope_open(shell->positional_script,
+      shell->launcher, shell->child_launcher, &shell->script_group);
+  handle_t selected = shell->positional_script ? shell->launcher : shell->child_launcher;
+  if (status != CALL_OK && selected != HANDLE_INVALID) {
     shell_directory_error(shell, "shell", "script group", status);
   }
   return status;
@@ -3748,21 +3701,12 @@ enum call_status shell_script_group_open(struct shell *shell)
 
 bool shell_script_group_close(struct shell *shell)
 {
-  struct execution_group_create_reply *group = &shell->script_group;
-  if (group->supervision == HANDLE_INVALID) {
-    return true;
-  }
-  enum call_status status = execution_group_terminate(group->supervision);
-  if (status == CALL_OK) {
-    status = execution_group_wait(group->supervision);
-  }
-  bool closed = close_handle(&group->launcher);
-  closed = close_handle(&group->supervision) && closed;
-  if (status != CALL_OK) {
-    shell_directory_error(shell, "shell", "script subtree cleanup", status);
+  struct script_scope_close_result result = script_scope_close(&shell->script_group);
+  if (result.status != CALL_OK) {
+    shell_directory_error(shell, "shell", "script subtree cleanup", result.status);
     return false;
   }
-  if (!closed) {
+  if (result.close_failed) {
     shell_directory_error(shell, "shell", "close script group", CALL_BAD_HANDLE);
     return false;
   }

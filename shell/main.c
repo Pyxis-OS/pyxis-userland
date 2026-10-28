@@ -135,7 +135,8 @@ static void retain_interpreter_image(struct shell *shell)
         FILE_RIGHT_READ, &shell->interpreter_image);
     return;
   }
-  handle_t inherited = bootstrap_capability("interpreter_image");
+  handle_t inherited = bootstrap_capability("interpreter.shell");
+  if (inherited == HANDLE_INVALID) inherited = bootstrap_capability("interpreter_image");
   if (inherited != HANDLE_INVALID) {
     struct handle_info info;
     if (handle_query(inherited, &info) == CALL_OK &&
@@ -284,7 +285,16 @@ int main(int argc, char **argv)
     goto done;
   }
   retain_interpreter_image(&shell);
-  enum call_status status = shell_environment_init(&shell);
+  enum call_status status = program_sources_capture(shell.environment, &shell.sources);
+  if (status == CALL_OK) {
+    status = program_interpreters_capture(shell.environment, shell.interpreter_root,
+        shell.interpreter_root != HANDLE_INVALID ? bootstrap_capability("pkg") : HANDLE_INVALID,
+        shell.interpreter_image != HANDLE_INVALID ? PROGRAM_INTERPRETER_SHELL : PROGRAM_INTERPRETER_NONE,
+        shell.interpreter_image, &shell.interpreters);
+  }
+  if (status == CALL_OK) {
+    status = shell_environment_init(&shell);
+  }
   if (status != CALL_OK) {
     shell_directory_error(&shell, "shell", "initial environment", status);
     goto done;
@@ -441,6 +451,8 @@ done:
     shell_directory_error(&shell, "shell: cleanup", "script input", CALL_BAD_HANDLE);
     result = EXIT_FAILURE;
   }
+  program_interpreters_close(&shell.interpreters);
+  program_sources_close(&shell.sources);
   shell_environment_close(&shell);
   enum call_status jobs_closed = bundle_jobs_close(&shell.jobs);
   if (jobs_closed != CALL_OK) {

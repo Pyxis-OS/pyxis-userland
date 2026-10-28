@@ -41,8 +41,8 @@
 #define BUNDLE_JSON_MAX_SIZE (64 * 1024)
 #define BUNDLE_COMMAND_LIMIT 32
 #define BUNDLE_RESOURCE_LIMIT 8
-/* Separate resolver authority preserves existing UDP delivery with one more request. */
-#define BUNDLE_GRANT_LIMIT 20
+/* Includes the standalone interpreter source declarations. */
+#define BUNDLE_GRANT_LIMIT 32
 #define BUNDLE_COMPONENT_LIMIT 255
 #define BUNDLE_PATH_LIMIT 1024
 #define BUNDLE_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
@@ -145,6 +145,19 @@ static const struct grant_right grant_rights[] = {
   {"profile", "memory", PROTOCOL_PROFILE, PROFILE_RIGHT_MEMORY},
   {"profile", "host", PROTOCOL_PROFILE, PROFILE_RIGHT_HOST},
 };
+
+uint64_t bundle_resource_protocol(const char *resource)
+{
+  if (!resource) {
+    return 0;
+  }
+  for (size_t i = 0; i < sizeof(grant_rights) / sizeof(*grant_rights); ++i) {
+    if (!strcmp(resource, grant_rights[i].resource)) {
+      return grant_rights[i].protocol;
+    }
+  }
+  return 0;
+}
 
 static bool valid_name(const char *name)
 {

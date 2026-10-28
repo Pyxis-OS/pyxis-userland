@@ -753,6 +753,17 @@ insufficient required authority refuses before launch. Endpoint creation adds
 neither publication authority nor a descendant launcher. Trusted raw session
 and provider handoffs retain their explicit selections.
 
+[program_sources.h](include/program_sources.h) selects the shared canonical
+launch-source inventory without retaining unrelated environment owners.
+[program_interpreters.h](include/program_interpreters.h) keeps code-only native
+READ FILE identities. Exact interpreter continuations may stage those sources;
+ordinary programs and bundles retain their profile/declaration rules.
+[script_scope.h](include/script_scope.h) shares Shell's handed/positional routing
+and owned cleanup. [program_runtime.h](include/program_runtime.h) is an explicit
+standalone CLI context, initialized before user code and finished on return or
+`os.exit`; linking an embedding initializes nothing. See the parent
+[script authority reference](../docs/userland/script-authority.md).
+
 [pyxis/job.h](libc/include/pyxis/job.h) owns a single direct native child through
 the caller's existing launcher. It uses explicit resource/stream selections and
 owned cwd/environment snapshots, checks every final grant, and retains a

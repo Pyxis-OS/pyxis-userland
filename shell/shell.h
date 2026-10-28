@@ -10,6 +10,8 @@
 #include "../common/launch_environment.h"
 #include <bundle_launch.h>
 #include <command_selection.h>
+#include <program_sources.h>
+#include <program_interpreters.h>
 #include <resource.h>
 #include "../common/provider_setup.h"
 
@@ -155,6 +157,8 @@ struct shell {
   /* Owned READ-only code selection for rootless script re-entry. Never a root
    * or proof of trust; nested scripts receive a private source-lineage copy. */
   handle_t interpreter_image;
+  struct program_interpreters interpreters;
+  struct program_sources sources;
   /* Startup-selected shell bundle code, retained only for containment matching. */
   handle_t command_shell_image;
   handle_t job_provisioner;

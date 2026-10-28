@@ -6,6 +6,10 @@
 
 struct bundle_program;
 
+/* Canonical manifest resource vocabulary, shared by launch-source consumers.
+ * Zero means the resource is not in the manifest grant schema. */
+uint64_t bundle_resource_protocol(const char *resource);
+
 /* The roots a manifest's "packages" list and "sdk": true grant
  * (docs/wip/sdk-view.md, decision 48). A bundle never inherits its launcher's
  * roots of these names. */
