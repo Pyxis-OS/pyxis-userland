@@ -1202,7 +1202,7 @@ static enum call_status build_commands(const struct authority *authority,
   if (status != CALL_OK) {
     return status;
   }
-  launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)PROFILE_CAP("commands", 0),
+  launch_add(launch, LAUNCH_RESOURCES, (struct launch_environment_entry)PROFILE_CAP("path", 0),
       &(struct launch_grant){launch->commands, COMMAND_LIST_RIGHT_READ, 0});
   return CALL_OK;
 }

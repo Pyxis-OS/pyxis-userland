@@ -93,7 +93,7 @@ static inline bool profile_stdio_name(const char *name)
   return false;
 }
 
-/* Named FILE/controller values and commands preserve explicit export. Other
+/* Named FILE/controller values and path preserve explicit export. Other
  * native roles require the caller's fixed selection and masks. Private
  * controllers remain explicit trusted successor copies. */
 static inline enum call_status profile_inherit_services(
@@ -103,8 +103,8 @@ static inline enum call_status profile_inherit_services(
 {
   for (size_t i = 0; i < capture->count; ++i) {
     const struct environment_value *value = &capture->values[i];
-    bool commands = !strcmp(value->name, "commands") && (value->flags & ENVIRONMENT_EXPORTED);
-    if (commands) {
+    bool path = !strcmp(value->name, "path") && (value->flags & ENVIRONMENT_EXPORTED);
+    if (path) {
       if (value->kind != ENVIRONMENT_CAP) {
         return CALL_WRONG_TYPE;
       }
@@ -144,7 +144,7 @@ static inline enum call_status profile_inherit_services(
         !strcmp(value->name + length - (sizeof(".control") - 1), ".control") &&
         info.protocol == PROTOCOL_FORWARDER;
     bool named_value = info.kind == HANDLE_KIND_NATIVE &&
-        (info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || commands);
+        (info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || path);
     if (!controller && (!(value->flags & ENVIRONMENT_EXPORTED) ||
         (info.kind != HANDLE_KIND_EXPORTED && !named_value))) {
       continue;

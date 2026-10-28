@@ -493,7 +493,7 @@ static enum call_status capture_selection(const struct shell *shell,
     if (value->kind == ENVIRONMENT_CAP && (value->flags & ENVIRONMENT_EXPORTED) &&
         strcmp(value->name, "wifi_session_control") &&
         strcmp(value->name, "wifi_auth_setup") &&
-        !(prepared->program && prepared->program->commands && !strcmp(value->name, "commands")) &&
+        !(prepared->program && prepared->program->commands && !strcmp(value->name, "path")) &&
         !shell_environment_initial(shell, value)) {
       prepared->selection[prepared->selection_count++] = value;
     }
@@ -651,7 +651,7 @@ static enum call_status retain_selected_commands(struct prepared_stage *prepared
   struct environment_capture *capture = &prepared->captured;
   struct environment_value *entry = NULL;
   for (size_t i = 0; i < capture->count; ++i) {
-    if (!strcmp(capture->values[i].name, "commands")) entry = &capture->values[i];
+    if (!strcmp(capture->values[i].name, "path")) entry = &capture->values[i];
   }
   handle_t held;
   enum call_status status = handle_copy_restricted(program->commands,
@@ -681,7 +681,7 @@ static enum call_status retain_selected_commands(struct prepared_stage *prepared
     .flags = program->commands_exported ? ENVIRONMENT_EXPORTED : 0,
     .handle = held, .rights = COMMAND_LIST_RIGHT_READ,
     .identity = program->commands_identity};
-  strcpy(entry->name, "commands");
+  strcpy(entry->name, "path");
   return CALL_OK;
 }
 
@@ -1543,7 +1543,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           (const char *)(uintptr_t)prepared->entries[j].name);
     }
     if (!stream_policy && !supplied && !(prepared->program && prepared->program->commands &&
-        !strcmp((const char *)(uintptr_t)entry->name, "commands"))) {
+        !strcmp((const char *)(uintptr_t)entry->name, "path"))) {
       assert(entry_count < entry_capacity);
       prepared->entries[entry_count++] = *entry;
     }
@@ -1557,8 +1557,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   if (!provider) {
     for (size_t i = 0; i < prepared->captured.count; ++i) {
       const struct environment_value *entry = &prepared->captured.values[i];
-      bool commands = !strcmp(entry->name, "commands") && (entry->flags & ENVIRONMENT_EXPORTED);
-      if (commands) {
+      bool path = !strcmp(entry->name, "path") && (entry->flags & ENVIRONMENT_EXPORTED);
+      if (path) {
         if (entry->kind != ENVIRONMENT_CAP) {
           return CALL_WRONG_TYPE;
         }
@@ -1601,7 +1601,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         return status;
       }
       controller = controller && info.protocol == PROTOCOL_FORWARDER;
-      bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || commands;
+      bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || path;
       if (!controller && (!(entry->flags & ENVIRONMENT_EXPORTED) ||
           (info.kind != HANDLE_KIND_EXPORTED && !value))) {
         continue;

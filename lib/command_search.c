@@ -103,7 +103,7 @@ enum call_status command_list_create(handle_t environment,
 enum call_status command_list_publish(handle_t environment, handle_t list, bool exported)
 {
   enum call_status status = command_list_validate(list);
-  return status == CALL_OK ? environment_set_capability(environment, "commands", list,
+  return status == CALL_OK ? environment_set_capability(environment, "path", list,
       COMMAND_LIST_RIGHT_READ, 0, exported ? ENVIRONMENT_EXPORTED : 0) : status;
 }
 
@@ -160,7 +160,7 @@ enum call_status command_search_capture_init(handle_t environment,
   }
   *capture = (struct command_search_capture){0};
   struct environment_entry_reply entry;
-  enum call_status status = environment_lookup(environment, "commands", &entry, NULL, 0);
+  enum call_status status = environment_lookup(environment, "path", &entry, NULL, 0);
   if (status == CALL_BUFFER_TOO_SMALL || (status == CALL_OK && entry.kind != ENVIRONMENT_CAP)) {
     return CALL_WRONG_TYPE;
   }
@@ -203,12 +203,12 @@ enum call_status command_search_stage(const struct command_search_capture *captu
     return CALL_LIMIT;
   }
   for (size_t i = 0; i < *entry_count; ++i) {
-    if (!strcmp((const char *)(uintptr_t)entries[i].name, "commands")) {
+    if (!strcmp((const char *)(uintptr_t)entries[i].name, "path")) {
       return CALL_ALREADY_EXISTS;
     }
   }
   entries[(*entry_count)++] = (struct launch_environment_entry){
-    .name = (uintptr_t)"commands", .kind = ENVIRONMENT_CAP,
+    .name = (uintptr_t)"path", .kind = ENVIRONMENT_CAP,
     .flags = ENVIRONMENT_EXPORTED, .value = *grant_count,
   };
   grants[(*grant_count)++] = (struct launch_grant){capture->list, COMMAND_LIST_RIGHT_READ, 0};
