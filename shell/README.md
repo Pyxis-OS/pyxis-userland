@@ -78,3 +78,9 @@ creates retention accounts.
 
 A Ctrl+C-cancelled foreground job ends its command list, even if an opted-in
 process exits gracefully. Its actual completion kind and status are preserved.
+
+The native `path` environment entry is an ordered directory CAP list. Runtime
+`path=(home://tools $path)` and `export path=(...)` use ordinary assignment and
+inheritance rules, creating one immutable read-only list without a builtin or
+textual PATH conversion. Existing held lists splice in order; an empty list
+searches nothing. Failed construction preserves the old publication.
