@@ -54,14 +54,14 @@ keep typed handoff. A captured transaction response requires an empty collector;
 `$(cmd 2>&1 >$api)` is refused before redirect OPEN because stderr bytes would
 conflict with response handoff.
 
-Nested scripts with the exact `#!boot://init-shell.pxe` interpreter use the
-bundle's held `app/bin/shell.pxe` image and forward only held pipe creation,
-subgroup-bound child launch and optional threads. When explicitly available,
-foreground launch preparation also creates a fresh private job provisioning subtree for
-the selected interpreter. Ordinary programs receive no implicit job context.
-The image stays private and
-carries no interpreter trust; unavailable images refuse re-entry. Mutable
-scheme bindings cannot replace it.
+Scripts selecting the exact held Pyxis shell inherit its launch-source inventory,
+including JIT when held, in foreground, pipelines, background and captures. Child
+bundles still select declared grants; explicit reduced shell bundle/native launches
+stay reduced. Script sources are not a sandbox: use a restricted space when one
+is needed. Streams, scoped launchers and job-directory cleanup retain their own
+lifetimes. The script helper adds only the script READ FILE and argv, not a list
+of runtime extras. Held interpreter identity is independent of mutable scheme
+bindings; rootless shells retain their own image without gaining a trusted root.
 
 Interactive shells started by session, mux and Remote apply
 `home://.config/shell/startup.lua` from a private `shell_settings` READ FILE

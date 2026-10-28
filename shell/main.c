@@ -201,6 +201,7 @@ int main(int argc, char **argv)
     .terminal_service = bootstrap_capability("terminal"),
     .memory = bootstrap_capability("memory"),
     .threads = bootstrap_capability("threads"),
+    .jit = bootstrap_capability("jit"),
     .display = bootstrap_capability("display"),
     .clock = bootstrap_capability("clock"),
     .system_info = bootstrap_capability("system_info"),

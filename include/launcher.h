@@ -6,7 +6,6 @@
 #include <abi/launcher.h>
 #include <abi/syscall.h>
 
-struct job_work;
 struct program_image;
 struct path_context;
 struct space_definition;
@@ -72,6 +71,11 @@ enum call_status launcher_launch_batch(handle_t launcher, const struct launch_re
  * bytes: neither preparation nor later launch snapshots mutable contents. */
 enum call_status program_image_prepare(handle_t image, struct program_image **prepared);
 const char *program_image_interpreter(const struct program_image *prepared);
+/* Select code for a prepared script by retaining READ on a native FILE. The
+ * selection owns its reference until close or successful replacement; failure
+ * preserves the previous selection. Launch uses only this held selection and
+ * never substitutes a URI lookup. This adds no child authority. */
+enum call_status program_image_select_interpreter(struct program_image *prepared, handle_t image);
 void program_image_close(struct program_image *prepared);
 
 /* Launch native PXE or a single-level shebang script from request->image.
@@ -83,61 +87,18 @@ void program_image_close(struct program_image *prepared);
  * Script launches require argv[0] as a diagnostic script name and no existing
  * resource named "script". Append a READ grant for the original image and use
  * interpreter URI, original argv[0], then original arguments as the child argv.
- * No other authority is added, except extras offered through program_launch_extras
- * to one named interpreter. Native requests pass through unchanged.
+ * No other authority is added. Native requests pass through unchanged.
  * On failure no child is returned; request and source grants are preserved.
  * Reads do not snapshot mutable files; the interpreter receives the same file. */
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
     const struct path_context *interpreter_context, handle_t *child);
 
-/* Grants a caller offers only to one exact parsed interpreter. ROOT selection
- * opens PATH beneath the held ROOT when grants are offered, preserving the
- * trusted interpreter chain. IMAGE selection uses only a READ-restricted copy
- * of the held native file IMAGE, even when no grants are offered. An absent or
- * unusable IMAGE refuses launch; no scheme lookup substitutes for it. IMAGE
- * selects code, not trust, and never creates a trusted root. Each offered grant
- * is appended after the script grant with its name, flags and masks. Native
- * images and scripts naming any other interpreter receive none and resolve
- * normally. A request that already has an entry of one of these names is
- * rejected with CALL_ALREADY_EXISTS. Everything is borrowed until return. */
-struct program_script_grant {
-  const char *name;
-  handle_t source;
-  uint64_t rights, transport;
-  uint64_t flags; /* Entry flags: ENVIRONMENT_EXPORTED, or 0 for a private entry. */
-};
-
-enum program_interpreter_selection {
-  PROGRAM_INTERPRETER_ROOT,
-  PROGRAM_INTERPRETER_IMAGE,
-};
-
-struct program_script_extras {
-  /* Optional borrowed preparation, kept live through admission. Its held FILE
-   * replaces request->image for native admission and the original script grant;
-   * adaptation uses its parsed interpreter without reading the prefix again. */
-  const struct program_image *prepared_image;
-  enum program_interpreter_selection selection;
-  const char *interpreter;
-  handle_t root;
-  const char *path;
-  handle_t image;
-  const struct program_script_grant *grants;
-  size_t count;
-  /* Explicit delegation for this exact held interpreter only. Preparation
-   * creates a private child subtree, never forwards the ancestor. Optional
-   * when absent/unavailable; successful or unknown admission retains the
-   * subtree for enclosing-owner cleanup or reboot, not PROCESS retirement. */
-  handle_t job_provisioner, job_clock;
-  /* Optional owned result, initialized to NULL. Successful/unknown admission
-   * transfers the delegation to the caller, which may remove it only after
-   * confirmed retirement of the enclosing scope, not merely the interpreter. */
-  struct job_work **job_delegation;
-};
-
-/* As program_launch, with optional extras (NULL for none). */
-enum call_status program_launch_extras(handle_t launcher, const struct launch_request *request,
-    const struct path_context *interpreter_context, const struct program_script_extras *extras,
+/* As program_launch, using a previously prepared input when non-NULL. The
+ * preparation and any selected interpreter are borrowed until return. Its held
+ * FILE replaces request->image; its prefix is not parsed again. NULL prepares
+ * request->image normally. */
+enum call_status program_launch_prepared(handle_t launcher, const struct launch_request *request,
+    const struct program_image *input, const struct path_context *interpreter_context,
     handle_t *child);
 
 /* As program_launch, but the child becomes the first process of a new space
@@ -154,10 +115,12 @@ enum call_status program_launch_batch(handle_t launcher, const struct launch_req
     size_t count, const struct path_context *interpreter_context,
     handle_t *children, uint64_t *failed_index);
 
-/* As program_launch_batch; extras is NULL or an array with one entry per request. */
-enum call_status program_launch_batch_extras(handle_t launcher,
+/* As program_launch_batch, using inputs[i] when non-NULL. The optional array
+ * has one entry per request; its preparations and selected interpreters are
+ * borrowed until return. NULL entries prepare their request images normally. */
+enum call_status program_launch_batch_prepared(handle_t launcher,
     const struct launch_request *requests, size_t count,
-    const struct path_context *interpreter_context, const struct program_script_extras *extras,
+    const struct program_image *const *inputs, const struct path_context *interpreter_context,
     handle_t *children, uint64_t *failed_index);
 
 #endif

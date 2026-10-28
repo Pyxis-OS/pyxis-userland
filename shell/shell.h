@@ -149,8 +149,8 @@ struct shell {
   struct execution_group_create_reply script_group;
   /* Archive root that opens the trusted script interpreter, supplied by the
    * trusted launch chain (boot init, session, remote and multiplexer launchers,
-   * or a shell's own extras). Never taken from the mutable boot binding, which a
-   * script can rebind and export. Only this root extends interpreter trust. */
+   * or inherited shell context). Never taken from the mutable boot binding,
+   * which a script can rebind and export. Only this root extends interpreter trust. */
   handle_t interpreter_root;
   /* Owned READ-only code selection for rootless script re-entry. Never a root
    * or proof of trust; nested scripts receive a private source-lineage copy. */
@@ -163,7 +163,7 @@ struct shell {
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_registry,
       keyboard, gamepad, pointer, terminal_service,
-      boot, tmp, host_mount, native_mount, power, screen_capture, audio, retention_account;
+      boot, tmp, host_mount, native_mount, power, screen_capture, audio, retention_account, jit;
   const struct path_context *directory;
   /* Own the original startup chain after libc retains its independent cwd.
    * Clear released slots so handle-number reuse cannot revive stale owners. */

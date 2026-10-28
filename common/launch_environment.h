@@ -28,8 +28,8 @@ static inline struct launch_environment_entry profile_stdio_entry(
   return (struct launch_environment_entry)PROFILE_CAP(name, grant);
 }
 
-/* Trusted successor handoff only. Ordinary programs obtain this role solely
- * through explicit bundle declarations, never generic environment inheritance. */
+/* Held shell contexts and trusted successors retain the source. Ordinary
+ * programs obtain it only through explicit bundle declarations. */
 static inline enum call_status profile_jit_grant(handle_t source, struct launch_grant *grant)
 {
   struct handle_info info;
