@@ -22,10 +22,12 @@ struct libc_signal_delivery {
  * Worker calls return an empty observation. Failure sets errno. */
 int libc_signal_prepare(struct libc_signal_wait *wait);
 
-/* Inhibit nested operations only. Leave never dispatches: outer owners must
- * release all references, locks and registrations before checkpoint. */
+/* Enter admits signal observation while inhibiting dispatch. Only audited
+ * outer operations with a clean return checkpoint may enter. Leave never
+ * dispatches: release all references, locks and registrations first. */
 void libc_signal_enter(void);
 void libc_signal_leave(void);
+bool libc_signal_admitted(void);
 
 /* At depth zero collect and dispatch one bounded pending snapshot, preserving
  * errno. Restart is true only when at least one handler ran and every caught

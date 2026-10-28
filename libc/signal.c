@@ -193,6 +193,11 @@ void libc_signal_leave(void)
   }
 }
 
+bool libc_signal_admitted(void)
+{
+  return signal_owner() && inhibition != 0;
+}
+
 static void reset_action(int number)
 {
   actions[number] = (struct sigaction){0};
