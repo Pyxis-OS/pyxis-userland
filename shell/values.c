@@ -44,9 +44,17 @@ static enum call_status append_value(struct environment_set_entry *entries, size
     const struct shell_expanded_word *word, const char *name, bool exported)
 {
   enum call_status status = set_entry(&entries[(*count)++], name, word->value, exported);
-  struct shell_capture_result *capture = word->capture;
-  if (status != CALL_OK || !capture) {
+  if (status != CALL_OK) {
     return status;
+  }
+  if (!strcmp(name, "path")) {
+    entries[(*count)++] = (struct environment_set_entry){.name = "path.skipped",
+      .kind = ENVIRONMENT_TEXT, .flags = exported ? ENVIRONMENT_EXPORTED : 0,
+      .text_address = (uintptr_t)"", .text_length = 0};
+  }
+  struct shell_capture_result *capture = word->capture;
+  if (!capture) {
+    return CALL_OK;
   }
   const struct environment_value *companions[] = {&capture->observation, &capture->control};
   for (size_t i = 0; i < sizeof(companions) / sizeof(*companions); ++i) {

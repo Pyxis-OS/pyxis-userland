@@ -103,8 +103,17 @@ enum call_status command_list_create(handle_t environment,
 enum call_status command_list_publish(handle_t environment, handle_t list, bool exported)
 {
   enum call_status status = command_list_validate(list);
-  return status == CALL_OK ? environment_set_capability(environment, "path", list,
-      COMMAND_LIST_RIGHT_READ, 0, exported ? ENVIRONMENT_EXPORTED : 0) : status;
+  if (status != CALL_OK) {
+    return status;
+  }
+  uint64_t flags = exported ? ENVIRONMENT_EXPORTED : 0;
+  struct environment_set_entry entries[] = {
+    {.name = "path", .kind = ENVIRONMENT_CAP, .flags = flags,
+      .handle = list, .rights = COMMAND_LIST_RIGHT_READ},
+    {.name = "path.skipped", .kind = ENVIRONMENT_TEXT, .flags = flags,
+      .text_address = (uintptr_t)"", .text_length = 0},
+  };
+  return environment_set_batch(environment, entries, sizeof(entries) / sizeof(*entries));
 }
 
 void command_search_capture_close(struct command_search_capture *capture)

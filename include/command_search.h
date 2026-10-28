@@ -22,7 +22,7 @@ enum call_status command_list_get(handle_t list, size_t index,
  * members by supplying their handles and exact rights in the desired order. */
 enum call_status command_list_create(handle_t environment,
     const struct command_list_create_entry *entries, size_t count, handle_t *list);
-/* Atomically replace this environment's path CAP, retaining the list. */
+/* Atomically replace path and clear its startup-skip diagnostics. */
 enum call_status command_list_publish(handle_t environment, handle_t list, bool exported);
 
 struct command_search_capture {

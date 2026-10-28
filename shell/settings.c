@@ -54,7 +54,7 @@ void shell_aliases_close(struct shell *shell)
 
 /* Names the shell's own startup or launch path supplies. */
 static const char *const supplied_names[] = {
-  "home", "path", "DNS_SERVER", "stdin.append", "stdout.append", "stderr.append",
+  "home", "path", "path.skipped", "DNS_SERVER", "stdin.append", "stdout.append", "stderr.append",
 };
 
 static bool shell_supplied(const char *name)

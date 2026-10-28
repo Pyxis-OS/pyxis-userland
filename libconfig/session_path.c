@@ -63,7 +63,8 @@ bool session_path_skip_status(enum call_status status)
   return status == CALL_NOT_FOUND || status == CALL_DENIED || status == CALL_WRONG_TYPE ||
       status == CALL_BAD_OPERATION || status == CALL_UNAVAILABLE ||
       status == CALL_ENDPOINT_CLOSED || status == CALL_LINK_NOT_FOLLOWED ||
-      status == CALL_NAME_TOO_LONG;
+      status == CALL_NAME_TOO_LONG || status == CALL_IO || status == CALL_BUSY ||
+      status == CALL_TIMED_OUT;
 }
 
 void session_path_warning(const char *path, enum call_status status,

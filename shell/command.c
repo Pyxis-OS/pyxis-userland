@@ -6,6 +6,7 @@
 #include <mount.h>
 #include <command_selection.h>
 #include <environment.h>
+#include <file.h>
 #include <power.h>
 #include <handle.h>
 #include <space.h>
@@ -427,6 +428,38 @@ static bool exit_status(const char *text, int *status)
   return true;
 }
 
+static enum command_result report_path_skips(struct shell *shell)
+{
+  handle_t warnings = HANDLE_INVALID;
+  enum call_status status = environment_lookup_file(shell->environment,
+      "path.skipped", &warnings);
+  if (status == CALL_NOT_FOUND) {
+    return COMMAND_OK;
+  }
+  if (status != CALL_OK) {
+    return shell_directory_error(shell, "which", "path warnings", status);
+  }
+  uint64_t offset = 0;
+  for (;;) {
+    char bytes[256];
+    size_t size = 0;
+    status = file_read(warnings, offset, bytes, sizeof(bytes), &size);
+    if (status != CALL_OK || !size) {
+      break;
+    }
+    if (fwrite(bytes, 1, size, stderr) != size) {
+      status = CALL_UNAVAILABLE;
+      break;
+    }
+    offset += size;
+  }
+  if (handle_close(warnings)) {
+    return COMMAND_FATAL;
+  }
+  return status == CALL_OK ? COMMAND_OK :
+      shell_directory_error(shell, "which", "path warnings", status);
+}
+
 static enum command_result describe_alias(const struct shell_alias *alias)
 {
   if (printf("%s: alias", alias->name) < 0) {
@@ -475,6 +508,12 @@ static enum command_result builtin_command(struct shell *shell,
     const struct shell_alias *alias = shell_alias_find(shell, arguments[1]);
     if (alias) {
       return describe_alias(alias);
+    }
+    if (!strchr(arguments[1], '/') && !strchr(arguments[1], ':')) {
+      enum command_result warnings = report_path_skips(shell);
+      if (warnings != COMMAND_OK) {
+        return warnings;
+      }
     }
     struct command_selection *selection = NULL;
     enum call_status status = shell_open_image(shell, arguments[1], &selection);
