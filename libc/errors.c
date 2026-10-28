@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "errors.h"
+#include "signal_scope.h"
 
 int libc_call_errno(enum call_status status)
 {
@@ -133,6 +134,8 @@ char *strerror(int error)
 
 void perror(const char *prefix)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   int saved = errno;
   if (prefix && *prefix) {
     if (fputs(prefix, stderr) == EOF || fputs(": ", stderr) == EOF) {

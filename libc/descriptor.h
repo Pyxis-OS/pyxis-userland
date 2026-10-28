@@ -14,9 +14,44 @@
 
 struct descriptor_object;
 
+struct descriptor_ticket {
+  int descriptor;
+  uint64_t generation;
+};
+
+int descriptor_ticket_capture(int descriptor, struct descriptor_ticket *ticket);
+bool descriptor_ticket_valid(const struct descriptor_ticket *ticket);
+struct descriptor_object *descriptor_hold_ticket(const struct descriptor_ticket *ticket);
+
+/* Storage-only binding. Closing/replacing its selected slot ends observation;
+ * it never copies a native grant or follows a replacement descriptor. */
+struct descriptor_signal_terminal {
+  struct descriptor_object *object;
+  int descriptor;
+  uint64_t generation;
+  handle_t handle;
+  uint64_t observed_generation;
+};
+
+int descriptor_signal_terminal_capture(int descriptor, struct descriptor_signal_terminal *terminal);
+bool descriptor_signal_terminal_valid(const struct descriptor_signal_terminal *terminal);
+void descriptor_signal_terminal_release(struct descriptor_signal_terminal *terminal);
+
 struct descriptor_mode {
   bool readable, writable, append, create, truncate, exclusive, nonblock;
 };
+
+/* A zero-progress read retry keeps its original timing snapshot/deadline.
+ * Receiving a PIPE FILE value excludes the byte-read restart whitelist. */
+struct descriptor_read_state {
+  bool initialized, restartable;
+  unsigned char minimum, time;
+  bool timed;
+  uint64_t deadline;
+};
+
+int descriptor_object_read_signal(struct descriptor_object *object, void *buffer,
+    size_t size, size_t *read, struct descriptor_read_state *state);
 
 struct descriptor_poll {
   struct descriptor_object *object;

@@ -37,6 +37,8 @@
 #include "thread_sync.h"
 #include "thread_private.h"
 #include "thread_platform.h"
+#include "signal_internal.h"
+#include "signal_scope.h"
 
 enum descriptor_state { DESCRIPTOR_FREE, DESCRIPTOR_RESERVED, DESCRIPTOR_OPEN };
 enum descriptor_kind { DESCRIPTOR_CONSOLE, DESCRIPTOR_FILE, DESCRIPTOR_PIPE, DESCRIPTOR_RESPONSE };
@@ -102,6 +104,10 @@ static uint64_t terminal_identity;
 
 static int commit_locked(struct descriptor_object *object);
 static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, size_t count);
+static int signal_read_locked(struct descriptor_object *entry, void *buffer, size_t size,
+    size_t *read, struct descriptor_read_state *state);
+static int signal_write_locked(struct descriptor_object *entry, const void *buffer, size_t size,
+    size_t *written);
 
 static int fail(int error)
 {
@@ -238,6 +244,89 @@ void descriptor_drop(struct descriptor_object *object)
   if (object->allocated) {
     free(object);
   }
+}
+
+int descriptor_ticket_capture(int descriptor, struct descriptor_ticket *ticket)
+{
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(descriptor);
+  if (object) {
+    *ticket = (struct descriptor_ticket){descriptor, entries[descriptor].generation};
+  }
+  libc_lock_release(&table_guard);
+  return object ? 0 : -1;
+}
+
+bool descriptor_ticket_valid(const struct descriptor_ticket *ticket)
+{
+  libc_lock_acquire(&table_guard);
+  bool valid = lookup(ticket->descriptor) != NULL &&
+      entries[ticket->descriptor].generation == ticket->generation;
+  libc_lock_release(&table_guard);
+  return valid;
+}
+
+struct descriptor_object *descriptor_hold_ticket(const struct descriptor_ticket *ticket)
+{
+  libc_lock_acquire(&table_guard);
+  struct descriptor_object *object = lookup(ticket->descriptor);
+  if (object && entries[ticket->descriptor].generation != ticket->generation) {
+    object = NULL;
+    errno = EBADF;
+  }
+  if (object && !retain_storage(object)) {
+    object = NULL;
+    errno = EMFILE;
+  }
+  libc_lock_release(&table_guard);
+  return object;
+}
+
+int descriptor_signal_terminal_capture(int descriptor, struct descriptor_signal_terminal *terminal)
+{
+  *terminal = (struct descriptor_signal_terminal){0};
+  struct descriptor_ticket ticket;
+  if (descriptor_ticket_capture(descriptor, &ticket) < 0) {
+    return -1;
+  }
+  struct descriptor_object *object = descriptor_hold_ticket(&ticket);
+  if (!object) {
+    return -1;
+  }
+  if (object->kind != DESCRIPTOR_CONSOLE) {
+    descriptor_drop(object);
+    return fail(ENOTTY);
+  }
+  struct console_size_reply size;
+  enum call_status status = console_size(object->handle, &size);
+  if (status != CALL_OK || !descriptor_ticket_valid(&ticket)) {
+    int error = status == CALL_OK ? EBADF : libc_call_errno(status);
+    descriptor_drop(object);
+    return fail(error);
+  }
+  *terminal = (struct descriptor_signal_terminal){
+    .object = object, .descriptor = descriptor, .generation = ticket.generation,
+    .handle = object->handle, .observed_generation = size.generation,
+  };
+  return 0;
+}
+
+bool descriptor_signal_terminal_valid(const struct descriptor_signal_terminal *terminal)
+{
+  if (!terminal->object) {
+    return false;
+  }
+  libc_lock_acquire(&table_guard);
+  bool valid = lookup(terminal->descriptor) == terminal->object &&
+      entries[terminal->descriptor].generation == terminal->generation;
+  libc_lock_release(&table_guard);
+  return valid;
+}
+
+void descriptor_signal_terminal_release(struct descriptor_signal_terminal *terminal)
+{
+  descriptor_drop(terminal->object);
+  *terminal = (struct descriptor_signal_terminal){0};
 }
 
 static int object_ready(struct descriptor_object *object, bool writing)
@@ -914,6 +1003,8 @@ static int terminal_validate_attributes(struct descriptor_object *object,
 
 int tcgetattr(int descriptor, struct termios *attributes)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!attributes) {
     return fail(EINVAL);
   }
@@ -942,6 +1033,8 @@ int tcgetattr(int descriptor, struct termios *attributes)
 
 int tcsetattr(int descriptor, int action, const struct termios *attributes)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!attributes || (action != TCSANOW && action != TCSADRAIN && action != TCSAFLUSH)) {
     return fail(EINVAL);
   }
@@ -1000,6 +1093,8 @@ int tcsetattr(int descriptor, int action, const struct termios *attributes)
 
 int tcdrain(int descriptor)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_object *object = descriptor_hold(descriptor);
   int error = 0;
   if (terminal_check(object) < 0) {
@@ -1157,6 +1252,8 @@ int pyxis_descriptor_adopt(handle_t *handle, unsigned int access)
 
 int fcntl(int descriptor, int command, ...)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (command != F_GETFL && command != F_SETFL) {
     return fail(EINVAL);
   }
@@ -1378,6 +1475,8 @@ int descriptor_associate(int descriptor, const struct descriptor_mode *mode, FIL
 
 int dup(int descriptor)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_object *held = descriptor_hold(descriptor);
   if (!held) {
     return -1;
@@ -1546,6 +1645,8 @@ int descriptor_close_stream_abandon(FILE *stream, struct descriptor_object *obje
 
 int dup2(int source, int target)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (target < 0) {
     return fail(EBADF);
   }
@@ -1704,11 +1805,14 @@ int descriptor_finish(void)
  * The try form waits for nothing on the pipe; reading a value can still wait
  * for its file's own I/O. Returns zero or an errno. */
 static int pipe_segment_read(struct descriptor_object *entry, void *buffer,
-    size_t size, size_t *read, bool try)
+    size_t size, size_t *read, bool try, bool *restartable)
 {
   for (;;) {
     enum call_status status;
     if (entry->value) {
+      if (restartable) {
+        *restartable = false;
+      }
       status = file_read(entry->value, entry->value_offset, buffer, size, read);
       if (status == CALL_ENDPOINT_CLOSED || status == CALL_TIMED_OUT) {
         /* A provider that exited or stalled is an I/O error, never EPIPE or
@@ -1846,6 +1950,13 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     }
     return 0;
   }
+  if (entry->kind == DESCRIPTOR_PIPE || entry->kind == DESCRIPTOR_CONSOLE) {
+    struct descriptor_read_state state = {0};
+    int result = signal_read_locked(entry, buffer, size, read, &state);
+    if (result != 1) {
+      return result;
+    }
+  }
   enum call_status status;
   if (entry->transaction && !entry->transaction->committed && entry->readable) {
     return fail(EBUSY);
@@ -1881,7 +1992,7 @@ static int backend_read(struct descriptor_object *entry, void *buffer, size_t si
     }
     status = file_read(entry->handle, offset, buffer, size, read);
   } else if (entry->kind == DESCRIPTOR_PIPE) {
-    int error = pipe_segment_read(entry, buffer, size, read, false);
+    int error = pipe_segment_read(entry, buffer, size, read, false, NULL);
     if (error) {
       *read = 0;
       return fail(error);
@@ -1949,7 +2060,7 @@ static ssize_t try_read_locked(struct descriptor_object *entry, void *buffer, si
   }
   size_t read;
   if (entry->kind == DESCRIPTOR_PIPE) {
-    int error = pipe_segment_read(entry, buffer, count, &read, true);
+    int error = pipe_segment_read(entry, buffer, count, &read, true, NULL);
     if (error) {
       return fail(error);
     }
@@ -1990,6 +2101,173 @@ static ssize_t try_write_locked(struct descriptor_object *entry, const void *buf
     return fail(EIO);
   }
   return (ssize_t)written;
+}
+
+static int signal_clock(uint64_t *now)
+{
+  enum call_status status = clock_now(libc_thread_clock(), now);
+  return status == CALL_OK ? 0 : fail(libc_call_errno(status));
+}
+
+/* The direction guard can remain held while observing native levels. These
+ * helpers only latch signals; callbacks belong to the outer cleaned boundary. */
+static int signal_stream_wait(struct descriptor_object *entry, bool writing,
+    const struct libc_signal_wait *signals, bool timed, uint64_t deadline)
+{
+  uint64_t now;
+  if (signal_clock(&now) < 0) {
+    return -1;
+  }
+  uint64_t until = now > UINT64_MAX - WAIT_MAX_WAIT_NS ? UINT64_MAX : now + WAIT_MAX_WAIT_NS;
+  if (timed) {
+    if (now >= deadline) {
+      struct libc_signal_wait current;
+      if (libc_signal_prepare(&current) < 0) {
+        return -1;
+      }
+      return current.pending ? fail(EINTR) : 1;
+    }
+    if (deadline < until) {
+      until = deadline;
+    }
+  }
+  struct wait_interest interests[3] = {
+    {.handle = entry->handle, .events = writing ? WAIT_WRITABLE : WAIT_READABLE},
+  };
+  memcpy(interests + 1, signals->interests, signals->count * sizeof(*interests));
+  uint64_t events[3] = {0};
+  enum call_status status = wait_many(interests, signals->count + 1, until, events);
+  if (status != CALL_OK && status != CALL_TIMED_OUT) {
+    return fail(libc_call_errno(status));
+  }
+  return 0;
+}
+
+/* One means the ordinary blocking path is sufficient: no compatibility source
+ * is enrolled. Zero/error are the actual transfer result. */
+static int signal_read_locked(struct descriptor_object *entry, void *buffer, size_t size,
+    size_t *read, struct descriptor_read_state *state)
+{
+  *read = 0;
+  struct libc_signal_wait signals;
+  if (libc_signal_prepare(&signals) < 0) {
+    return -1;
+  }
+  if (!state->initialized && !signals.count && !signals.pending) {
+    return 1;
+  }
+  if (!state->initialized) {
+    state->minimum = 1;
+    if (entry->kind == DESCRIPTOR_CONSOLE) {
+      int error = libc_mutex_lock(&entry->terminal_guard);
+      if (error) {
+        return fail(error);
+      }
+      state->minimum = entry->terminal_min;
+      state->time = entry->terminal_time;
+      unlock_object(&entry->terminal_guard);
+    }
+    state->initialized = true;
+    state->restartable = true;
+    state->timed = !state->minimum && state->time;
+    if (state->timed) {
+      uint64_t now;
+      if (signal_clock(&now) < 0) {
+        return -1;
+      }
+      uint64_t span = (uint64_t)state->time * UINT64_C(100000000);
+      state->deadline = now > UINT64_MAX - span ? UINT64_MAX : now + span;
+    }
+  }
+  size_t threshold = state->minimum < size ? state->minimum : size;
+  for (;;) {
+    if (signals.pending) {
+      return *read ? 0 : fail(EINTR);
+    }
+    size_t more = 0;
+    int error = 0;
+    if (entry->kind == DESCRIPTOR_PIPE) {
+      error = pipe_segment_read(entry, (char *)buffer + *read, size - *read,
+          &more, true, &state->restartable);
+    } else {
+      enum call_status status = entry->terminal_read_status;
+      entry->terminal_read_status = CALL_OK;
+      if (status == CALL_OK) {
+        status = console_read_timeout(entry->handle, (char *)buffer + *read,
+            size - *read, 0, &more);
+      }
+      error = status == CALL_TIMED_OUT ? EAGAIN : libc_call_errno(status);
+      if (error && error != EAGAIN && *read) {
+        entry->terminal_read_status = status;
+        return 0;
+      }
+    }
+    if (!error) {
+      if (more > size - *read) {
+        return *read ? 0 : fail(EIO);
+      }
+      *read += more;
+      if (more) {
+        entry->input_consumed = true;
+      }
+      if (!more || entry->kind == DESCRIPTOR_PIPE || !state->minimum || *read >= threshold) {
+        return 0;
+      }
+      if (state->time) {
+        uint64_t now;
+        if (signal_clock(&now) < 0) {
+          return 0;
+        }
+        uint64_t span = (uint64_t)state->time * UINT64_C(100000000);
+        state->deadline = now > UINT64_MAX - span ? UINT64_MAX : now + span;
+        state->timed = true;
+      }
+    } else if (error != EAGAIN) {
+      return *read ? 0 : fail(error);
+    } else if (!state->minimum && !state->time) {
+      return 0;
+    } else {
+      int waited = signal_stream_wait(entry, false, &signals, state->timed, state->deadline);
+      if (waited) {
+        if (waited > 0 || *read) {
+          return 0;
+        }
+        return -1;
+      }
+    }
+    if (libc_signal_prepare(&signals) < 0) {
+      return *read ? 0 : -1;
+    }
+  }
+}
+
+static int signal_write_locked(struct descriptor_object *entry, const void *buffer, size_t size,
+    size_t *written)
+{
+  struct libc_signal_wait signals;
+  if (libc_signal_prepare(&signals) < 0) {
+    return -1;
+  }
+  if (!signals.count && !signals.pending) {
+    return 1;
+  }
+  for (;;) {
+    if (signals.pending) {
+      return fail(EINTR);
+    }
+    ssize_t count = try_write_locked(entry, buffer, size);
+    if (count >= 0) {
+      *written = (size_t)count;
+      return 0;
+    }
+    if (errno != EAGAIN) {
+      return -1;
+    }
+    if (signal_stream_wait(entry, true, &signals, false, 0) < 0 ||
+        libc_signal_prepare(&signals) < 0) {
+      return -1;
+    }
+  }
 }
 
 static void discard_ahead(struct descriptor_object *entry)
@@ -2132,6 +2410,12 @@ static int write_locked(struct descriptor_object *entry, const void *buffer, siz
     }
     *written = (size_t)count;
     return 0;
+  }
+  if (entry->kind == DESCRIPTOR_PIPE || entry->kind == DESCRIPTOR_CONSOLE) {
+    int result = signal_write_locked(entry, buffer, size, written);
+    if (result != 1) {
+      return result;
+    }
   }
   /* Files can refetch speculative bytes at the shared logical position.
    * Pipe bytes already consumed from the backend must remain available. */
@@ -2487,6 +2771,31 @@ int descriptor_object_read_complete(struct descriptor_object *object, void *buff
     return -1;
   }
   int result = read_complete_locked(object, buffer, size, read);
+  unlock_object(object_guard(object, false));
+  return result;
+}
+
+int descriptor_object_read_signal(struct descriptor_object *object, void *buffer,
+    size_t size, size_t *read, struct descriptor_read_state *state)
+{
+  *read = 0;
+  if (object_enter(object, false) < 0) {
+    return -1;
+  }
+  int result;
+  if (object_ready(object, false) < 0) {
+    result = -1;
+  } else if (!size) {
+    result = 0;
+  } else if ((object->kind == DESCRIPTOR_PIPE || object->kind == DESCRIPTOR_CONSOLE) &&
+      !object->ahead_count && !(__atomic_load_n(&object->flags, __ATOMIC_ACQUIRE) & O_NONBLOCK)) {
+    result = signal_read_locked(object, buffer, size, read, state);
+    if (result == 1) {
+      result = read_complete_locked(object, buffer, size, read);
+    }
+  } else {
+    result = read_complete_locked(object, buffer, size, read);
+  }
   unlock_object(object_guard(object, false));
   return result;
 }

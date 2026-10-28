@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include "descriptor.h"
+#include "signal_internal.h"
+#include "signal_scope.h"
 
 static int open_mode(int flags, struct descriptor_mode *mode)
 {
@@ -38,6 +40,8 @@ static int validate_creation_mode(int flags, mode_t mode)
 
 int open(const char *path, int flags, ...)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_mode mode;
   if (open_mode(flags, &mode) < 0) {
     return -1;
@@ -56,6 +60,8 @@ int open(const char *path, int flags, ...)
 
 int pyxis_file_open(const char *path, int flags, mode_t creation)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_mode mode;
   if (open_mode(flags, &mode) < 0 || validate_creation_mode(flags, creation) < 0) {
     return -1;
@@ -78,40 +84,55 @@ static bool transfer_ready(struct descriptor_object *object, size_t count, bool 
 
 ssize_t read(int descriptor, void *buffer, size_t count)
 {
-  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
-      descriptor_hold(descriptor);
-  if (!object) {
+  struct descriptor_ticket ticket;
+  if (descriptor_ticket_capture(descriptor, &ticket) < 0) {
     return -1;
   }
-  if (!transfer_ready(object, count, false)) {
-    return -1;
+  struct descriptor_read_state state = {0};
+  for (;;) {
+    struct descriptor_object *object = descriptor_hold_ticket(&ticket);
+    if (!object) {
+      return -1;
+    }
+    size_t transferred = 0;
+    int result = !transfer_ready(object, count, false) ? -1 :
+        descriptor_object_read_signal(object, buffer, count, &transferred, &state);
+    int error = errno;
+    descriptor_drop(object);
+    struct libc_signal_delivery delivery = libc_signal_checkpoint();
+    if (result < 0 && error == EINTR && state.restartable && delivery.caught && delivery.restart) {
+      continue; /* hold_ticket rejects a handler's close/replacement. */
+    }
+    errno = error;
+    return result < 0 ? -1 : (ssize_t)transferred;
   }
-  size_t transferred;
-  if (descriptor_object_read_complete(object, buffer, count, &transferred) < 0) {
-    return -1;
-  }
-  return (ssize_t)transferred;
 }
 
 ssize_t write(int descriptor, const void *buffer, size_t count)
 {
-  struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
-      descriptor_hold(descriptor);
+  struct descriptor_object *object = descriptor_hold(descriptor);
   if (!object) {
     return -1;
   }
   if (!transfer_ready(object, count, true)) {
+    int error = errno;
+    descriptor_drop(object);
+    errno = error;
     return -1;
   }
-  size_t transferred;
-  if (descriptor_object_write(object, buffer, count, &transferred) < 0) {
-    return -1;
-  }
-  return (ssize_t)transferred;
+  size_t transferred = 0;
+  int result = descriptor_object_write(object, buffer, count, &transferred);
+  int error = errno;
+  descriptor_drop(object);
+  libc_signal_checkpoint();
+  errno = error;
+  return result < 0 ? -1 : (ssize_t)transferred;
 }
 
 ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
       descriptor_hold(descriptor);
   if (!object) {
@@ -133,6 +154,8 @@ ssize_t pread(int descriptor, void *buffer, size_t count, off_t offset)
 
 ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
       descriptor_hold(descriptor);
   if (!object) {
@@ -154,11 +177,15 @@ ssize_t pwrite(int descriptor, const void *buffer, size_t count, off_t offset)
 
 int close(int descriptor)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return descriptor_close(descriptor);
 }
 
 int ftruncate(int descriptor, off_t length)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
       descriptor_hold(descriptor);
   if (!object) {
@@ -176,6 +203,8 @@ int ftruncate(int descriptor, off_t length)
 
 int truncate(const char *path, off_t length)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (length < 0) {
     errno = EINVAL;
     return -1;
@@ -193,11 +222,15 @@ int truncate(const char *path, off_t length)
 
 off_t lseek(int descriptor, off_t offset, int origin)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return descriptor_seek_position(descriptor, offset, origin);
 }
 
 int fsync(int descriptor)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_object *object __attribute__((cleanup(descriptor_scope_end))) =
       descriptor_hold(descriptor);
   if (!object) {
@@ -211,5 +244,7 @@ int fsync(int descriptor)
 
 int isatty(int descriptor)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return descriptor_terminal(descriptor);
 }

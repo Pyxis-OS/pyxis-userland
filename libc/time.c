@@ -8,6 +8,9 @@
 #include "timezone.h"
 #include "thread_private.h"
 #include "thread_platform.h"
+#include "signal_internal.h"
+#include "signal_scope.h"
+#include <wait.h>
 
 #define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
 
@@ -82,7 +85,6 @@ int clock_gettime(clockid_t clock, struct timespec *result)
 
 int nanosleep(const struct timespec *duration, struct timespec *remaining)
 {
-  (void)remaining;
   if (!duration || duration->tv_sec < 0 || duration->tv_nsec < 0 ||
       duration->tv_nsec >= (long)NANOSECONDS_PER_SECOND) {
     errno = EINVAL;
@@ -104,21 +106,81 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining)
       deadline = now + span + (uint64_t)duration->tv_nsec;
     }
   }
-  status = clock_sleep_until(libc_thread_sleep_clock(), deadline);
-  if (status != CALL_OK) {
-    errno = libc_call_errno(status);
+  struct libc_signal_wait signals;
+  if (libc_signal_prepare(&signals) < 0) {
     return -1;
   }
-  return 0;
+  int error = 0;
+  if ((!signals.count && !signals.pending) || now >= deadline) {
+    status = clock_sleep_until(libc_thread_sleep_clock(), deadline);
+    error = status == CALL_OK ? 0 : libc_call_errno(status);
+  } else {
+    /* Preserve sleep authority before using readiness for an interruptible
+     * deadline. A past native sleep validates SLEEP without parking. */
+    status = clock_sleep_until(libc_thread_sleep_clock(), now);
+    error = status == CALL_OK ? 0 : libc_call_errno(status);
+    while (!error) {
+      if (signals.pending) {
+        error = EINTR;
+        break;
+      }
+      if (!signals.count) {
+        status = clock_sleep_until(libc_thread_sleep_clock(), deadline);
+        error = status == CALL_OK ? 0 : libc_call_errno(status);
+        break;
+      }
+      status = clock_now(clock, &now);
+      if (status != CALL_OK) {
+        error = libc_call_errno(status);
+        break;
+      }
+      if (now >= deadline) {
+        break;
+      }
+      uint64_t until = now > UINT64_MAX - WAIT_MAX_WAIT_NS ? UINT64_MAX : now + WAIT_MAX_WAIT_NS;
+      if (until > deadline) {
+        until = deadline;
+      }
+      uint64_t events[2] = {0};
+      status = wait_many(signals.interests, signals.count, until, events);
+      if (status != CALL_OK && status != CALL_TIMED_OUT) {
+        error = libc_call_errno(status);
+        break;
+      }
+      if (libc_signal_prepare(&signals) < 0) {
+        error = errno;
+        break;
+      }
+    }
+  }
+  if (error == EINTR && remaining) {
+    status = clock_now(clock, &now);
+    if (status != CALL_OK) {
+      error = libc_call_errno(status);
+    } else {
+      uint64_t left = deadline > now ? deadline - now : 0;
+      *remaining = (struct timespec){left / NANOSECONDS_PER_SECOND, left % NANOSECONDS_PER_SECOND};
+    }
+  }
+  libc_signal_checkpoint();
+  if (error) {
+    errno = error;
+  }
+  return error ? -1 : 0;
 }
 
 unsigned int sleep(unsigned int seconds)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!seconds) {
     return 0;
   }
-  struct timespec duration = {.tv_sec = seconds};
-  return nanosleep(&duration, NULL) == 0 ? 0 : seconds;
+  struct timespec duration = {.tv_sec = seconds}, remaining = duration;
+  if (nanosleep(&duration, &remaining) == 0) {
+    return 0;
+  }
+  return (unsigned int)remaining.tv_sec + (remaining.tv_nsec != 0);
 }
 
 time_t time(time_t *result)
@@ -196,6 +258,8 @@ static struct tm *localtime_snapshot(const struct timezone_snapshot *zone,
 
 struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!timer || !result) {
     errno = EINVAL;
     return NULL;
@@ -214,6 +278,8 @@ struct tm *localtime_r(const time_t *restrict timer, struct tm *restrict result)
 
 struct tm *localtime(const time_t *timer)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return localtime_r(timer, &libc_thread_record()->local_result);
 }
 
@@ -298,6 +364,8 @@ static time_t make_time(const struct timezone_snapshot *zone, struct tm *calenda
 
 time_t mktime(struct tm *calendar)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!calendar) {
     errno = EINVAL;
     return -1;

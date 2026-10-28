@@ -19,6 +19,7 @@
 #include "stream.h"
 #include "thread_sync.h"
 #include "thread_platform.h"
+#include "signal_scope.h"
 
 static FILE standard_input, standard_output, standard_error;
 FILE *stdin = &standard_input;
@@ -295,6 +296,8 @@ static bool parse_mode(const char *text, struct descriptor_mode *mode)
 
 FILE *pyxis_fopen(const char *path, const char *mode, struct pyxis_open_result *result)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (result) {
     if (result->available || result->resource.resource != HANDLE_INVALID ||
         result->resource.info.error_body != HANDLE_INVALID) {
@@ -326,11 +329,15 @@ FILE *pyxis_fopen(const char *path, const char *mode, struct pyxis_open_result *
 
 FILE *fopen(const char *restrict path, const char *restrict mode)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return pyxis_fopen(path, mode, NULL);
 }
 
 FILE *open_memstream(char **buffer, size_t *size)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!buffer || !size) {
     errno = EINVAL;
     return NULL;
@@ -358,6 +365,8 @@ FILE *open_memstream(char **buffer, size_t *size)
 
 int pyxis_open_result_close(struct pyxis_open_result *result)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!result) {
     errno = EINVAL;
     return -1;
@@ -396,6 +405,8 @@ static FILE *open_error_body(handle_t body)
 
 FILE *pyxis_open_error_body(const struct pyxis_open_result *result)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!result) {
     errno = EINVAL;
     return NULL;
@@ -416,6 +427,8 @@ FILE *pyxis_open_error_body(const struct pyxis_open_result *result)
 
 int pyxis_describe(FILE *stream, struct describe_reply *description)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!description) {
     errno = EINVAL;
     return -1;
@@ -430,6 +443,8 @@ int pyxis_describe(FILE *stream, struct describe_reply *description)
 
 FILE *pyxis_error_body(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return NULL;
   }
@@ -444,6 +459,8 @@ FILE *pyxis_error_body(FILE *stream)
 
 FILE *fdopen(int descriptor, const char *mode)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   struct descriptor_mode options;
   if (!parse_mode(mode, &options) || options.exclusive) {
     errno = EINVAL;
@@ -469,6 +486,8 @@ FILE *fdopen(int descriptor, const char *mode)
 
 FILE *tmpfile(void)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   int saved_errno = errno;
   FILE *stream = malloc(sizeof(*stream));
   if (!stream) {
@@ -502,6 +521,8 @@ FILE *tmpfile(void)
 
 int pyxis_stdio_stream(FILE *stream, struct pyxis_stdio_binding *binding)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!binding) {
     errno = EINVAL;
     return -1;
@@ -581,6 +602,8 @@ static enum call_status handoff_to(const struct handoff_target *target,
 enum call_status pyxis_stdio_handoff_owned(FILE *destination,
     struct output_handoff_request *owned)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!destination || !owned) {
     return CALL_BAD_REQUEST;
   }
@@ -595,6 +618,8 @@ enum call_status pyxis_stdio_handoff_owned(FILE *destination,
 
 enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!destination || !source || source == destination) {
     return CALL_BAD_REQUEST;
   }
@@ -636,6 +661,8 @@ enum call_status pyxis_stdio_handoff(FILE *destination, FILE *source)
 
 int pyxis_input_take(FILE *stream, handle_t *value)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!value) {
     errno = EINVAL;
     return -1;
@@ -846,6 +873,8 @@ int libc_stdio_close_descriptor(int descriptor, struct descriptor_object *expect
 
 int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }
@@ -887,6 +916,8 @@ int setvbuf(FILE *restrict stream, char *restrict buffer, int mode, size_t size)
 
 void setbuf(FILE *restrict stream, char *restrict buffer)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return;
   }
@@ -946,6 +977,8 @@ static int flush_all(void)
 
 int fflush(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (stream && !stream_acquire(stream)) {
     return EOF;
   }
@@ -1080,11 +1113,15 @@ static int close_stream(FILE *stream, bool abandon)
 
 int fclose(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return close_stream(stream, false);
 }
 
 int pyxis_fclose_abandon(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return close_stream(stream, true);
 }
 
@@ -1170,6 +1207,8 @@ static bool take_pushback(unsigned char *byte, FILE *stream)
 
 size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!capacity) {
     return 0;
   }
@@ -1194,6 +1233,8 @@ size_t fread_some(void *restrict buffer, size_t capacity, FILE *restrict stream)
 
 size_t fread(void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!size || !count) {
     return 0;
   }
@@ -1293,6 +1334,8 @@ static size_t write_bytes(const void *buffer, size_t bytes, FILE *stream)
 
 size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *restrict stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!size || !count) {
     return 0;
   }
@@ -1315,6 +1358,8 @@ size_t fwrite(const void *restrict buffer, size_t size, size_t count, FILE *rest
 
 int fgetc(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -1325,6 +1370,8 @@ int fgetc(FILE *stream)
 
 int getc(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -1334,6 +1381,8 @@ int getc(FILE *stream)
 
 int getchar(void)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stdin)) {
     return EOF;
   }
@@ -1343,6 +1392,8 @@ int getchar(void)
 
 char *fgets(char *restrict buffer, int capacity, FILE *restrict stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return NULL;
   }
@@ -1395,6 +1446,8 @@ static bool grow_line(char **line, size_t *capacity, size_t required)
 
 ssize_t getline(char **restrict line, size_t *restrict capacity, FILE *restrict stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }
@@ -1453,6 +1506,8 @@ static bool pushback_ready(FILE *stream)
 
 int ungetc(int character, FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -1472,6 +1527,8 @@ int ungetc(int character, FILE *stream)
 
 int fwide(FILE *stream, int mode)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return 0;
   }
@@ -1492,6 +1549,8 @@ int fwide(FILE *stream, int mode)
 
 wint_t fgetwc(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return WEOF;
   }
@@ -1530,6 +1589,8 @@ wint_t fgetwc(FILE *stream)
 
 wint_t getwc(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return WEOF;
   }
@@ -1539,6 +1600,8 @@ wint_t getwc(FILE *stream)
 
 wint_t ungetwc(wint_t character, FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return WEOF;
   }
@@ -1565,6 +1628,8 @@ wint_t ungetwc(wint_t character, FILE *stream)
 
 wint_t fputwc(wchar_t character, FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return WEOF;
   }
@@ -1585,6 +1650,8 @@ wint_t fputwc(wchar_t character, FILE *stream)
 
 wint_t putwc(wchar_t character, FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return WEOF;
   }
@@ -1594,6 +1661,8 @@ wint_t putwc(wchar_t character, FILE *stream)
 
 int fputc(int character, FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -1604,6 +1673,8 @@ int fputc(int character, FILE *stream)
 
 int putc(int character, FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -1613,6 +1684,8 @@ int putc(int character, FILE *stream)
 
 int putchar(int character)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stdout)) {
     return EOF;
   }
@@ -1622,6 +1695,8 @@ int putchar(int character)
 
 int fputs(const char *restrict text, FILE *restrict stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -1635,6 +1710,8 @@ int fputs(const char *restrict text, FILE *restrict stream)
 
 int puts(const char *text)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stdout)) {
     return EOF;
   }
@@ -1644,6 +1721,8 @@ int puts(const char *text)
 
 int feof(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return 0;
   }
@@ -1653,6 +1732,8 @@ int feof(FILE *stream)
 
 int ferror(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return 0;
   }
@@ -1662,6 +1743,8 @@ int ferror(FILE *stream)
 
 void clearerr(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return;
   }
@@ -1672,6 +1755,8 @@ void clearerr(FILE *stream)
 
 int fseek(FILE *stream, long offset, int origin)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }
@@ -1725,6 +1810,8 @@ int fseek(FILE *stream, long offset, int origin)
 
 long ftell(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }
@@ -1755,6 +1842,8 @@ long ftell(FILE *stream)
 
 void rewind(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return;
   }
@@ -1767,6 +1856,8 @@ static_assert(sizeof(off_t) == sizeof(long), "fseeko and ftello forward to fseek
 
 int fseeko(FILE *stream, off_t offset, int origin)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }
@@ -1776,6 +1867,8 @@ int fseeko(FILE *stream, off_t offset, int origin)
 
 off_t ftello(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }
@@ -1785,6 +1878,8 @@ off_t ftello(FILE *stream)
 
 int fileno(FILE *stream)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return -1;
   }

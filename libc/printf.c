@@ -2,9 +2,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "stream.h"
+#include "signal_scope.h"
 
 int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -40,6 +43,8 @@ int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
 
 int fprintf(FILE *restrict stream, const char *restrict format, ...)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   va_list args;
   va_start(args, format);
   int result = vfprintf(stream, format, args);
@@ -49,11 +54,15 @@ int fprintf(FILE *restrict stream, const char *restrict format, ...)
 
 int vprintf(const char *restrict format, va_list args)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return vfprintf(stdout, format, args);
 }
 
 int printf(const char *restrict format, ...)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   va_list args;
   va_start(args, format);
   int result = vfprintf(stdout, format, args);

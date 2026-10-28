@@ -57,10 +57,12 @@ typedef int clockid_t;
  * explicit *_COARSE IDs need READ only and use the interrupt cache. Each quality
  * is monotonic separately; coarse may trail precise. Other IDs fail with EINVAL. */
 int clock_gettime(clockid_t clock, struct timespec *result);
-/* Sleep on the startup clock, which needs READ|PRECISE|SLEEP authority, until the duration
- * has passed. Pyxis has no signals, so it never returns early with EINTR and
- * never writes remaining. A tv_nsec outside 0..999999999 or a negative tv_sec
- * fails with EINVAL; a duration past the clock's range sleeps until its end. */
+/* Sleep on the startup clock, requiring READ|PRECISE|SLEEP. Cooperative caught
+ * events interrupt an opted-in initial thread with EINTR and actual remaining
+ * duration; other failures preserve remaining. SA_RESTART does not restart
+ * sleep. A tv_nsec outside 0..999999999 or negative tv_sec fails EINVAL; a
+ * duration past the clock's range sleeps until its end. Workers retain ordinary
+ * noninterruptible sleep. */
 int nanosleep(const struct timespec *duration, struct timespec *remaining);
 
 /* English C-locale standard C/POSIX conversions, with E/O alternatives equal

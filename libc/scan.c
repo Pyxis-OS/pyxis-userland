@@ -7,6 +7,7 @@
 #include "stream.h"
 #include <stdlib.h>
 #include <string.h>
+#include "signal_scope.h"
 
 /* Numeric fields end at this many characters, as if limited by a width. */
 #define SCAN_TOKEN_CAPACITY 512
@@ -494,6 +495,8 @@ static int scan_format(struct scan_input *input, const char *format, va_list arg
 
 int vfscanf(FILE *restrict stream, const char *restrict format, va_list args)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   if (!stream_acquire(stream)) {
     return EOF;
   }
@@ -508,6 +511,8 @@ int vfscanf(FILE *restrict stream, const char *restrict format, va_list args)
 
 int fscanf(FILE *restrict stream, const char *restrict format, ...)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   va_list args;
   va_start(args, format);
   int result = vfscanf(stream, format, args);
@@ -517,11 +522,15 @@ int fscanf(FILE *restrict stream, const char *restrict format, ...)
 
 int vscanf(const char *restrict format, va_list args)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   return vfscanf(stdin, format, args);
 }
 
 int scanf(const char *restrict format, ...)
 {
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
   va_list args;
   va_start(args, format);
   int result = vfscanf(stdin, format, args);

@@ -38,7 +38,13 @@ extern FILE *stderr;
  * close and rejects mixing with EINVAL. Zero-sized transfers do not orient.
  * Descriptor O_NONBLOCK applies to backend stream transfers, including these
  * input paths; EAGAIN sets the ordinary error indicator, not EOF. FILE pushback,
- * existing EOF/errors and queued output remain independent of poll readiness. */
+ * existing EOF/errors and queued output remain independent of poll readiness.
+ * Cooperative stream interruption sets ferror/EINTR without setting feof.
+ * fread/fwrite retain completed elements and consumed/staged partial data;
+ * fgets can return NULL after consuming a prefix, which is never replayed.
+ * Handlers run after the whole outer FILE/format/scan cleanup, not an inner
+ * character transfer. This profile does not automatically restart stdio or
+ * clear its indicators. FILE/provider backing operations still finish first. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested

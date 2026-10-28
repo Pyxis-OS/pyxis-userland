@@ -71,7 +71,12 @@ int rmdir(const char *path);
  * queue transfers: live empty/full is EAGAIN, EOF is zero and progress can be
  * short. PIPE FILE-value backing I/O, regular FILE I/O and internal exclusion
  * can still wait. F_SETFL affects subsequent transfers, never cancellation of
- * an admitted operation. */
+ * an admitted operation. Cooperative signals are delivered only after operation
+ * locks/references are released. Before progress a blocking stream transfer can
+ * fail EINTR; positive progress and real NONBLOCK results are preserved. Only
+ * known-uncommitted byte-PIPE/console reads may honor SA_RESTART, retaining their
+ * original descriptor identity and terminal timing deadline. Writes never
+ * restart; FILE/provider operations finish without signal-driven replay. */
 ssize_t read(int descriptor, void *buffer, size_t count);
 ssize_t write(int descriptor, const void *buffer, size_t count);
 /* Files only; use offset without changing the private descriptor position.
