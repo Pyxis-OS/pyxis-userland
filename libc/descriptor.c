@@ -1296,6 +1296,9 @@ short descriptor_poll_result(int descriptor, const struct descriptor_poll *snaps
   if (status != CALL_OK || (events & (WAIT_ERROR | WAIT_CLOSED))) {
     result |= POLLERR;
   }
+  if (status == CALL_ENDPOINT_CLOSED && object->kind == DESCRIPTOR_CONSOLE) {
+    result |= POLLHUP;
+  }
   if (events & WAIT_PEER_FIN) {
     result |= POLLHUP;
   }
