@@ -13,6 +13,7 @@ handle_t libc_thread_service(void);
 handle_t libc_thread_clock(void);
 handle_t libc_thread_sleep_clock(void);
 uint64_t libc_thread_self(void);
+bool libc_thread_is_initial(void);
 void libc_thread_runtime_init(void);
 bool libc_thread_shutdown_ready(void);
 

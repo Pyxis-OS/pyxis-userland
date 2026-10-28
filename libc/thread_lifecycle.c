@@ -126,6 +126,12 @@ uint64_t libc_thread_self(void)
   return libc_thread_record()->thread_identity;
 }
 
+bool libc_thread_is_initial(void)
+{
+  return records[0].state == THREAD_INITIAL &&
+      libc_thread_self() == identity(&records[0]);
+}
+
 struct libc_once_frame *libc_thread_once_head(void)
 {
   return libc_thread_record()->once_frames;

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <thread.h>
 #include "thread_private.h"
+#include "signal_internal.h"
 #include "thread_sync.h"
 
 struct thread_key_entry {
@@ -176,6 +177,7 @@ static void run_language_destructors(struct libc_thread_record *record)
 
 void libc_thread_destructors(void)
 {
+  libc_signal_retire();
   struct libc_thread_record *record = libc_thread_record();
   run_language_destructors(record);
   for (size_t pass = 0; pass < LIBC_THREAD_DESTRUCTOR_PASSES; pass++) {
