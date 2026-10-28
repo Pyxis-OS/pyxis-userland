@@ -7,7 +7,7 @@
 
 bool session_variable_reserved(const char *name)
 {
-  return !strcmp(name, "TZ") || !strcmp(name, "DNS_SERVER");
+  return !strcmp(name, "TZ") || !strcmp(name, "DNS_SERVER") || !strcmp(name, "path");
 }
 
 static bool valid_variable_name(const char *name, size_t length)
@@ -50,7 +50,7 @@ static void read_environment(lua_State *state, struct session_config *config)
       luaL_error(state, "environment.%s is reserved for the remote.beacon boot option", name);
     }
     if (session_variable_reserved(name)) {
-      luaL_error(state, "environment.%s is reserved for the timezone and network settings", name);
+      luaL_error(state, "environment.%s is reserved for typed session settings", name);
     }
     if (lua_type(state, -1) != LUA_TSTRING) {
       luaL_error(state, "environment.%s must be a string", name);
@@ -82,6 +82,58 @@ static void read_environment(lua_State *state, struct session_config *config)
     variable->value = strdup(lua_tostring(state, -1));
     if (!variable->name || !variable->value) {
       luaL_error(state, "cannot allocate environment");
+    }
+    lua_pop(state, 1);
+  }
+  lua_pop(state, 1);
+}
+
+static void read_path(lua_State *state, struct session_config *config)
+{
+  config_field(state, 1, "path");
+  if (lua_isnil(state, 2)) {
+    lua_pop(state, 1);
+    return;
+  }
+  if (lua_type(state, 2) != LUA_TTABLE) {
+    luaL_error(state, "path must be an ordered list of strings");
+  }
+  size_t count = lua_rawlen(state, 2), keys = 0;
+  lua_pushnil(state);
+  while (lua_next(state, 2)) {
+    if (!lua_isinteger(state, -2) || lua_tointeger(state, -2) < 1 ||
+        (lua_Unsigned)lua_tointeger(state, -2) > count) {
+      luaL_error(state, "path must be a list without other keys");
+    }
+    if (lua_type(state, -1) != LUA_TSTRING) {
+      luaL_error(state, "path entries must be strings");
+    }
+    size_t length;
+    const char *path = lua_tolstring(state, -1, &length);
+    if (strlen(path) != length) {
+      luaL_error(state, "path entries cannot contain a NUL byte");
+    }
+    ++keys;
+    lua_pop(state, 1);
+  }
+  if (keys != count) {
+    luaL_error(state, "path must be a list without gaps");
+  }
+  if (count > SIZE_MAX / sizeof(*config->path)) {
+    luaL_error(state, "path is too large");
+  }
+  config->path_configured = true;
+  if (count) {
+    config->path = calloc(count, sizeof(*config->path));
+    if (!config->path) {
+      luaL_error(state, "cannot allocate path");
+    }
+  }
+  for (size_t i = 0; i < count; ++i) {
+    lua_rawgeti(state, 2, (lua_Integer)i + 1);
+    config->path[config->path_count++] = strdup(lua_tostring(state, -1));
+    if (!config->path[i]) {
+      luaL_error(state, "cannot allocate path");
     }
     lua_pop(state, 1);
   }
@@ -152,9 +204,10 @@ static int decode_config(lua_State *state)
 {
   struct session_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"timezone", "terminal", "environment", "retention"};
+  const char *keys[] = {"timezone", "terminal", "environment", "retention", "path"};
   config_keys(state, 1, keys, sizeof(keys) / sizeof(keys[0]));
   read_environment(state, config);
+  read_path(state, config);
   read_retention(state, config);
 
   config_field(state, 1, "terminal");
@@ -236,6 +289,10 @@ enum config_result session_config_read_literal_bytes(const char *name, const cha
 
 void session_config_free(struct session_config *config)
 {
+  for (size_t i = 0; i < config->path_count; ++i) {
+    free(config->path[i]);
+  }
+  free(config->path);
   for (size_t i = 0; i < config->environment_count; ++i) {
     free(config->environment[i].name);
     free(config->environment[i].value);

@@ -4,6 +4,8 @@
 #include <abi/console.h>
 #include <handle.h>
 #include <environment.h>
+#include <path.h>
+#include <pyxis/working_path.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +42,87 @@ static bool check_timezone(const char *name)
   bool valid = fread(magic, 1, sizeof(magic), file) == sizeof(magic) &&
       !memcmp(magic, "TZif", sizeof(magic));
   return fclose(file) == 0 && valid;
+}
+
+static enum call_status resolve_path_entry(const char *path,
+    struct command_list_create_entry *entry)
+{
+  *entry = (struct command_list_create_entry){0};
+  const struct path_context *context;
+  enum call_status status = pyxis_working_context(&context);
+  if (status != CALL_OK) {
+    return status;
+  }
+  size_t length = strlen(path), depth = context->count;
+  if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
+      depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
+    return CALL_LIMIT;
+  }
+  size_t slots = depth + length + 1;
+  handle_t *directories = malloc(slots * sizeof(*directories));
+  char *component = malloc(length + 1);
+  if (!directories || !component) {
+    free(component);
+    free(directories);
+    return CALL_NO_MEMORY;
+  }
+  struct path_workspace workspace = {
+    .directories = directories, .directory_capacity = slots,
+    .component = component, .component_capacity = length + 1,
+  };
+  status = path_open_directory_native(context, path,
+      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &workspace, &entry->handle);
+  free(component);
+  free(directories);
+  if (status == CALL_OK) {
+    status = handle_rights(entry->handle, &entry->rights, NULL);
+    if (status == CALL_OK) {
+      entry->rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
+          DIRECTORY_RIGHT_READ_FILES;
+      /* The label describes the grant; truncation never changes resolution. */
+      size_t label_length = length < COMMAND_LIST_LABEL_MAX ? length : COMMAND_LIST_LABEL_MAX;
+      memcpy(entry->label, path, label_length);
+    } else {
+      handle_close(entry->handle);
+      *entry = (struct command_list_create_entry){0};
+    }
+  }
+  return status;
+}
+
+enum call_status session_path_create(const struct session_config *config,
+    handle_t *list, size_t *failed_entry)
+{
+  *list = HANDLE_INVALID;
+  *failed_entry = SIZE_MAX;
+  if (!config->path_configured) {
+    return CALL_NOT_FOUND;
+  }
+  if (config->path_count > SIZE_MAX / sizeof(struct command_list_create_entry)) {
+    return CALL_LIMIT;
+  }
+  struct command_list_create_entry *entries = config->path_count ?
+      calloc(config->path_count, sizeof(*entries)) : NULL;
+  if (config->path_count && !entries) {
+    return CALL_NO_MEMORY;
+  }
+  enum call_status status = CALL_OK;
+  size_t resolved = 0;
+  for (; resolved < config->path_count; ++resolved) {
+    status = resolve_path_entry(config->path[resolved], &entries[resolved]);
+    if (status != CALL_OK) {
+      *failed_entry = resolved;
+      break;
+    }
+  }
+  if (status == CALL_OK) {
+    status = command_list_create(startup_environment_handle(), entries, resolved, list);
+  }
+  for (size_t i = 0; i < resolved; ++i) {
+    handle_close(entries[i].handle);
+  }
+  free(entries);
+  return status;
 }
 
 bool session_config_read(struct session_config *config)
