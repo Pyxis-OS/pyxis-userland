@@ -13,10 +13,12 @@ bool session_config_read(struct session_config *config);
 
 /* Resolve the configured path from held native roots/cwd and create an owned
  * read-only list. No publication or launch side effects. An absent setting
- * returns NOT_FOUND. Failure leaves list invalid; failed_entry identifies a
- * resolution failure, or SIZE_MAX for list construction/allocation failures. */
+ * returns NOT_FOUND. Unavailable entries warn and are skipped in order. Success
+ * also owns a bounded newline-delimited diagnostic receipt (empty if no skips).
+ * Failure leaves list invalid and skipped NULL; failed_entry identifies a
+ * resolution failure, or SIZE_MAX for list construction/allocation/cleanup. */
 enum call_status session_path_create(const struct session_config *config,
-    handle_t *list, size_t *failed_entry);
+    handle_t *list, char **skipped, size_t *failed_entry);
 
 /* The successor's environment: inherited variables, then configured ones,
  * then TZ. DNS remains an inherited startup snapshot until trusted network

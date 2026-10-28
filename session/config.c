@@ -4,8 +4,7 @@
 #include <abi/console.h>
 #include <handle.h>
 #include <environment.h>
-#include <path.h>
-#include <pyxis/working_path.h>
+#include <command_search.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,56 +43,11 @@ static bool check_timezone(const char *name)
   return fclose(file) == 0 && valid;
 }
 
-static enum call_status resolve_path_entry(const char *path,
-    struct command_list_create_entry *entry)
-{
-  *entry = (struct command_list_create_entry){0};
-  const struct path_context *context;
-  enum call_status status = pyxis_working_context(&context);
-  if (status != CALL_OK) {
-    return status;
-  }
-  size_t length = strlen(path), depth = context->count;
-  if (length == SIZE_MAX || depth > SIZE_MAX - length - 1 ||
-      depth + length + 1 > SIZE_MAX / sizeof(handle_t)) {
-    return CALL_LIMIT;
-  }
-  size_t slots = depth + length + 1;
-  handle_t *directories = malloc(slots * sizeof(*directories));
-  char *component = malloc(length + 1);
-  if (!directories || !component) {
-    free(component);
-    free(directories);
-    return CALL_NO_MEMORY;
-  }
-  struct path_workspace workspace = {
-    .directories = directories, .directory_capacity = slots,
-    .component = component, .component_capacity = length + 1,
-  };
-  status = path_open_directory_native(context, path,
-      DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &workspace, &entry->handle);
-  free(component);
-  free(directories);
-  if (status == CALL_OK) {
-    status = handle_rights(entry->handle, &entry->rights, NULL);
-    if (status == CALL_OK) {
-      entry->rights &= DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE |
-          DIRECTORY_RIGHT_READ_FILES;
-      /* The label describes the grant; truncation never changes resolution. */
-      size_t label_length = length < COMMAND_LIST_LABEL_MAX ? length : COMMAND_LIST_LABEL_MAX;
-      memcpy(entry->label, path, label_length);
-    } else {
-      handle_close(entry->handle);
-      *entry = (struct command_list_create_entry){0};
-    }
-  }
-  return status;
-}
-
 enum call_status session_path_create(const struct session_config *config,
-    handle_t *list, size_t *failed_entry)
+    handle_t *list, char **skipped, size_t *failed_entry)
 {
   *list = HANDLE_INVALID;
+  *skipped = NULL;
   *failed_entry = SIZE_MAX;
   if (!config->path_configured) {
     return CALL_NOT_FOUND;
@@ -103,25 +57,62 @@ enum call_status session_path_create(const struct session_config *config,
   }
   struct command_list_create_entry *entries = config->path_count ?
       calloc(config->path_count, sizeof(*entries)) : NULL;
-  if (config->path_count && !entries) {
+  enum { RECEIPT_CAPACITY = 2048 };
+  char *receipt = calloc(RECEIPT_CAPACITY, 1);
+  if ((config->path_count && !entries) || !receipt) {
+    free(entries);
+    free(receipt);
     return CALL_NO_MEMORY;
   }
+  const char truncated[] = "path: additional skipped-location diagnostics truncated\n";
+  size_t used = 0, resolved = 0;
+  bool receipt_full = false;
   enum call_status status = CALL_OK;
-  size_t resolved = 0;
-  for (; resolved < config->path_count; ++resolved) {
-    status = resolve_path_entry(config->path[resolved], &entries[resolved]);
-    if (status != CALL_OK) {
-      *failed_entry = resolved;
+  for (size_t i = 0; i < config->path_count; ++i) {
+    status = session_path_resolve(config->path[i], &entries[resolved]);
+    if (status == CALL_OK) {
+      ++resolved;
+      continue;
+    }
+    if (!session_path_skip_status(status)) {
+      *failed_entry = i;
       break;
     }
+    struct config_failure warning;
+    session_path_warning(config->path[i], status, &warning);
+    fprintf(stderr, "%s\n", warning.text);
+    size_t length = strlen(warning.text);
+    if (!receipt_full && length + 1 <= RECEIPT_CAPACITY - used - sizeof(truncated)) {
+      memcpy(receipt + used, warning.text, length);
+      used += length;
+      receipt[used++] = '\n';
+      receipt[used] = '\0';
+    } else if (!receipt_full) {
+      memcpy(receipt + used, truncated, sizeof(truncated));
+      receipt_full = true;
+    }
+    status = CALL_OK;
   }
   if (status == CALL_OK) {
     status = command_list_create(startup_environment_handle(), entries, resolved, list);
   }
   for (size_t i = 0; i < resolved; ++i) {
-    handle_close(entries[i].handle);
+    if (handle_close(entries[i].handle) != CALL_OK) {
+      status = CALL_OUTCOME_UNKNOWN;
+    }
   }
   free(entries);
+  if (status == CALL_OK) {
+    *skipped = receipt;
+  } else {
+    free(receipt);
+    if (*list != HANDLE_INVALID) {
+      if (handle_close(*list) != CALL_OK) {
+        status = CALL_OUTCOME_UNKNOWN;
+      }
+      *list = HANDLE_INVALID;
+    }
+  }
   return status;
 }
 

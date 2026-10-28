@@ -106,10 +106,15 @@ static bool validate_session(void)
   bool ok = session_config_read_literal_bytes(POOL_SESSION_PATH, bytes, size,
       &config) == CONFIG_OK;
   free(bytes);
-  if (ok) {
-    session_config_free(&config);
-  }
   fprintf(stderr, "config: %s is %s\n", POOL_SESSION_PATH, ok ? "valid" : "invalid");
+  if (ok) {
+    enum call_status status = session_path_check(&config);
+    session_config_free(&config);
+    if (status != CALL_OK) {
+      fprintf(stderr, "config: path availability check failed (status %u)\n", status);
+      return false;
+    }
+  }
   return ok;
 }
 
@@ -144,6 +149,6 @@ int main(int argc, char **argv)
   fputs("config: mounted volumes, packaged timezone data and live network availability: not checked\n",
       stderr);
   fputs(ok ? "config: boot applies this configuration\n" :
-      "config: boot rejects this configuration and starts the rescue space\n", stderr);
+      "config: validation failed; resolve the reported errors before boot\n", stderr);
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

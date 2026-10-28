@@ -1,5 +1,6 @@
 #include "session.h"
 #include <abi/console.h>
+#include <abi/environment.h>
 #include <lauxlib.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,6 +89,32 @@ static void read_environment(lua_State *state, struct session_config *config)
   lua_pop(state, 1);
 }
 
+bool session_path_valid(const char *path)
+{
+  if (!path || !*path || *path == '/') {
+    return false;
+  }
+  const char *end = path;
+  while (*end && *end != '/' && *end != ':') {
+    ++end;
+  }
+  if (*end != ':' || end[1] != '/' || end[2] != '/') {
+    return true;
+  }
+  size_t length = end - path;
+  if (!length || length > ENVIRONMENT_NAME_MAX) {
+    return false;
+  }
+  for (const char *byte = path; byte < end; ++byte) {
+    char c = *byte;
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '_' || c == '+' || c == '-' || c == '.')) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static void read_path(lua_State *state, struct session_config *config)
 {
   config_field(state, 1, "path");
@@ -112,6 +139,9 @@ static void read_path(lua_State *state, struct session_config *config)
     const char *path = lua_tolstring(state, -1, &length);
     if (!length || strlen(path) != length) {
       luaL_error(state, "path entries must be nonempty and cannot contain a NUL byte");
+    }
+    if (!session_path_valid(path)) {
+      luaL_error(state, "path entries must be native relative paths or name:// locations");
     }
     ++keys;
     lua_pop(state, 1);

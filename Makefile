@@ -83,7 +83,7 @@ TLS_LIBRARY := $(BUILD)/libtls.a
 TLS_OBJECT := $(BUILD)/libtls/tls.o
 TLS_EXPORT_IDENTITY := $(abspath $(BUILD)/.mbedtls-export)
 CONFIG_LIBRARY := $(BUILD)/libconfig.a
-CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o network.o handoff.o)
+CONFIG_OBJECT := $(addprefix $(BUILD)/libconfig/,config.o boot.o session.o session_path.o network.o handoff.o)
 CONFIG_EDITOR_OBJECTS := $(BUILD)/config-editor/main.o
 INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/installer/,publication_frontend.o installed_publication.o installed_probe.o)
 # The shared boot publisher (installer/boot_publisher.h). The installer links

@@ -46,6 +46,19 @@ relative `./NAME.pxe` retain their own held authority. Bundle selections preserv
 manifest, stack, grants and versioned resources through admission. `which NAME`
 reports that same resolver's selected entry and package provenance without launch.
 
+`config/session.lua` accepts an ordered `path` list, for example
+`path = { "home://tools", "bin://", "boot://" }`. Installed boots use
+`system://config/session.lua`; live boots use `boot://config/session.lua`.
+Omitting `path` preserves startup defaults; `path = {}` explicitly disables bare
+program lookup. Startup resolves entries through held native directory authority,
+prints a warning for each missing or inaccessible location, and publishes the
+remaining read-only entries in the configured order. `config validate` checks the
+same syntax and reports locations that would be skipped using its current held
+authority; those warnings leave the configuration valid. Startup also exports
+`path.skipped` as diagnostic text for `which`; changing the runtime path clears
+that receipt. Configuration changes apply at the next session startup, while
+ordinary panes and children inherit the selected list.
+
 [examples/pointer-min](examples/pointer-min/main.c) is a minimal commented pointer
 program for people writing their own. It is built as the `pointer-min` program, and
 the image ships its source as `boot://share/examples/pointer-min.c` to build with

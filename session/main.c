@@ -41,6 +41,7 @@
 #include <abi/terminal_pointer.h>
 #include <abi/clipboard.h>
 #include <directory.h>
+#include <environment.h>
 #include <bundle_launch.h>
 #include <handle.h>
 #include <launcher.h>
@@ -56,6 +57,48 @@
 #include <stdlib.h>
 #include <string.h>
 #include <term.h>
+
+static bool configure_path(const struct session_config *config)
+{
+  if (!config->path_configured) {
+    return true;
+  }
+  handle_t list;
+  char *skipped;
+  size_t failed_entry;
+  enum call_status status = session_path_create(config, &list, &skipped, &failed_entry);
+  if (status != CALL_OK) {
+    if (failed_entry < config->path_count) {
+      struct config_failure failure;
+      config_failure_format(&failure, "path: %.180s cannot resolve (status %u)",
+          config->path[failed_entry], status);
+      fprintf(stderr, "session: %s\n", failure.text);
+    } else {
+      fprintf(stderr, "session: cannot construct configured path (status %u)\n", status);
+    }
+    return false;
+  }
+  const struct environment_set_entry entries[] = {
+    {
+      .name = "path", .kind = ENVIRONMENT_CAP, .flags = ENVIRONMENT_EXPORTED,
+      .handle = list, .rights = COMMAND_LIST_RIGHT_READ,
+    },
+    {
+      .name = "path.skipped", .kind = ENVIRONMENT_TEXT, .flags = ENVIRONMENT_EXPORTED,
+      .text_address = (uintptr_t)skipped, .text_length = strlen(skipped),
+    },
+  };
+  status = environment_set_batch(startup_environment_handle(), entries,
+      sizeof(entries) / sizeof(*entries));
+  free(skipped);
+  bool closed = handle_close(list) == CALL_OK;
+  if (status != CALL_OK || !closed) {
+    fprintf(stderr, "session: cannot publish configured path (status %u, closed %u)\n",
+        status, (unsigned)closed);
+    return false;
+  }
+  return true;
+}
 
 static int launch_session(const struct session_config *config, struct network_config *network,
     struct network_runtime *runtime, bool configure_network,
@@ -931,6 +974,10 @@ int main(int argc, char **argv)
   }
   struct session_config config;
   if (!session_config_read(&config)) {
+    return EXIT_FAILURE;
+  }
+  if (!configure_path(&config)) {
+    session_config_free(&config);
     return EXIT_FAILURE;
   }
   handle_t retention_account;
