@@ -10,6 +10,7 @@
 #include <syscall.h>
 #include "descriptor.h"
 #include "errors.h"
+#include "signal_internal.h"
 #include "thread_platform.h"
 
 #define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
@@ -25,6 +26,11 @@ struct poll_row {
 struct poll_duration {
   uint64_t nanoseconds;
   bool infinite;
+};
+
+struct poll_signal_source {
+  struct readiness_set_registration registration;
+  bool registered;
 };
 
 static int fail(int error)
@@ -43,11 +49,13 @@ static enum call_status reply_status(struct syscall_result result, size_t size)
 }
 
 static enum call_status set_register(handle_t set, handle_t target, uint64_t interests,
-    size_t index, struct readiness_set_registration *registration)
+    uint64_t observed_generation, size_t index,
+    struct readiness_set_registration *registration)
 {
   struct readiness_set_register_request request = {
     .header = {PROTOCOL_READINESS_SET, READINESS_SET_REGISTER},
     .target = target, .allowed_events = interests, .active_events = interests, .tag = index,
+    .observed_generation = observed_generation,
   };
   return reply_status(syscall_call(set, &request, sizeof(request), registration,
       sizeof(*registration)), sizeof(*registration));
@@ -82,7 +90,37 @@ static int read_clock(uint64_t *now)
   return status == CALL_OK ? 0 : fail(libc_call_errno(status));
 }
 
-static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_duration duration)
+static int signal_sources_refresh(handle_t set, size_t tag_base,
+    struct poll_signal_source sources[2], bool *pending)
+{
+  for (size_t index = 0; index < 2; ++index) {
+    if (sources[index].registered) {
+      enum call_status status = set_remove(set, sources[index].registration);
+      if (status != CALL_OK) {
+        return fail(libc_call_errno(status));
+      }
+      sources[index].registered = false;
+    }
+  }
+  struct libc_signal_wait wait;
+  if (libc_signal_prepare(&wait) < 0) {
+    return -1;
+  }
+  *pending = wait.pending;
+  for (size_t index = 0; index < wait.count; ++index) {
+    struct wait_interest *interest = &wait.interests[index];
+    enum call_status status = set_register(set, interest->handle, interest->events,
+        interest->observed_generation, tag_base + index, &sources[index].registration);
+    if (status != CALL_OK) {
+      return fail(libc_call_errno(status));
+    }
+    sources[index].registered = true;
+  }
+  return 0;
+}
+
+static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_duration duration,
+    const sigset_t *temporary_mask, bool selecting)
 {
   if (count > INT_MAX) {
     return fail(EINVAL);
@@ -111,6 +149,9 @@ static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_durat
   }
   int error = 0;
   bool immediate = false;
+  bool signal_scope = false;
+  sigset_t previous_mask;
+  struct poll_signal_source signal_sources[2] = {0};
   handle_t set = HANDLE_INVALID;
   for (size_t index = 0; index < count; ++index) {
     if (descriptors[index].fd < 0) {
@@ -131,7 +172,18 @@ static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_durat
       error = errno;
       break;
     }
+    if (selecting && (rows[index].descriptor.immediate & POLLNVAL)) {
+      error = EBADF;
+      break;
+    }
     immediate |= rows[index].descriptor.immediate != 0;
+  }
+  if (!error) {
+    if (libc_signal_mask_install(temporary_mask, &previous_mask) < 0) {
+      error = errno;
+    } else {
+      signal_scope = true;
+    }
   }
   if (!error) {
     struct readiness_set_create_reply reply = {0};
@@ -149,11 +201,19 @@ static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_durat
       continue;
     }
     enum call_status status = set_register(set, descriptor->handle, descriptor->interests,
-        index, &rows[index].registration);
+        0, index, &rows[index].registration);
     if (status != CALL_OK) {
       error = libc_call_errno(status);
     } else {
       rows[index].registered = true;
+    }
+  }
+  if (!error) {
+    bool pending;
+    if (signal_sources_refresh(set, count, signal_sources, &pending) < 0) {
+      error = errno;
+    } else {
+      immediate |= pending;
     }
   }
   /* All sources attach before waiting. Remove returned registrations so a
@@ -193,12 +253,23 @@ static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_durat
       }
       continue;
     }
-    immediate = true;
+    bool refresh_signals = false;
     for (size_t index = 0; index < reply.count; ++index) {
       struct readiness_set_event *event = &events[index];
-      if (event->tag >= count || event->status >= CALL_STATUS_COUNT) {
+      if (event->status >= CALL_STATUS_COUNT) {
         error = EIO;
         break;
+      }
+      if (event->tag >= count) {
+        size_t source_index = event->tag - count;
+        if (source_index >= 2 || !signal_sources[source_index].registered ||
+            event->registration.identity != signal_sources[source_index].registration.identity ||
+            event->registration.generation != signal_sources[source_index].registration.generation) {
+          error = EIO;
+          break;
+        }
+        refresh_signals = true;
+        continue;
       }
       struct poll_row *row = &rows[event->tag];
       if (!row->registered || event->registration.identity != row->registration.identity ||
@@ -214,6 +285,15 @@ static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_durat
         break;
       }
       row->registered = false;
+      immediate = true;
+    }
+    if (!error && refresh_signals) {
+      bool pending;
+      if (signal_sources_refresh(set, count, signal_sources, &pending) < 0) {
+        error = errno;
+      } else {
+        immediate |= pending;
+      }
     }
   }
   if (set != HANDLE_INVALID && descriptor_release_handle(set) < 0 && !error) {
@@ -232,6 +312,18 @@ static int poll_wait(struct pollfd *descriptors, nfds_t count, struct poll_durat
   }
   for (size_t index = 0; index < count; ++index) {
     descriptor_drop(rows[index].descriptor.object);
+  }
+  /* Only scalar staged results remain. No set, descriptor or FILE operation
+   * survives a handler; returning handlers may close or replace those fds. */
+  if (signal_scope) {
+    struct libc_signal_delivery delivery = libc_signal_checkpoint();
+    if (!error && delivery.caught) {
+      error = EINTR;
+    }
+    libc_signal_mask_restore(&previous_mask);
+    /* Delivery made eligible only by restoring the caller's mask follows the
+     * completed wait result, rather than retroactively interrupting it. */
+    libc_signal_checkpoint();
   }
   if (!error) {
     for (size_t index = 0; index < count; ++index) {
@@ -266,19 +358,19 @@ int poll(struct pollfd *descriptors, nfds_t count, int timeout)
     .infinite = timeout < 0,
     .nanoseconds = timeout < 0 ? 0 : (uint64_t)timeout * UINT64_C(1000000),
   };
-  return poll_wait(descriptors, count, duration);
+  return poll_wait(descriptors, count, duration, NULL, false);
 }
 
 int ppoll(struct pollfd *descriptors, nfds_t count, const struct timespec *timeout,
     const sigset_t *sigmask)
 {
-  (void)sigmask;
   struct poll_duration duration;
-  return timespec_duration(timeout, &duration) < 0 ? -1 : poll_wait(descriptors, count, duration);
+  return timespec_duration(timeout, &duration) < 0 ? -1 :
+      poll_wait(descriptors, count, duration, sigmask, false);
 }
 
 static int select_wait(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
-    struct poll_duration duration)
+    struct poll_duration duration, const sigset_t *temporary_mask)
 {
   if (nfds < 0 || nfds > FD_SETSIZE) {
     return fail(EINVAL);
@@ -295,7 +387,7 @@ static int select_wait(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exce
       descriptors[count++] = (struct pollfd){.fd = descriptor, .events = events};
     }
   }
-  if (poll_wait(descriptors, count, duration) < 0) {
+  if (poll_wait(descriptors, count, duration, temporary_mask, true) < 0) {
     return -1;
   }
   fd_set reading = {0}, writing = {0};
@@ -339,14 +431,13 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
       return -1;
     }
   }
-  return select_wait(nfds, readfds, writefds, exceptfds, duration);
+  return select_wait(nfds, readfds, writefds, exceptfds, duration, NULL);
 }
 
 int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
     const struct timespec *timeout, const sigset_t *sigmask)
 {
-  (void)sigmask;
   struct poll_duration duration;
   return timespec_duration(timeout, &duration) < 0 ? -1 :
-      select_wait(nfds, readfds, writefds, exceptfds, duration);
+      select_wait(nfds, readfds, writefds, exceptfds, duration, sigmask);
 }

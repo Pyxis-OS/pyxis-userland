@@ -50,7 +50,9 @@ extern "C" {
  * and returns their total across sets. Timeout is never modified. */
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
     struct timeval *timeout);
-/* As ppoll, sigmask is an unread no-op while signals are absent. */
+/* As ppoll, sigmask is a real temporary initial-thread mask, restored on all
+ * return paths. Worker non-NULL masks fail ENOTSUP. Caught wait signals return
+ * EINTR regardless of SA_RESTART, preserving the caller's sets. */
 int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
     const struct timespec *timeout, const sigset_t *sigmask);
 

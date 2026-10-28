@@ -38,11 +38,16 @@ extern "C" {
  * Timeout is milliseconds, negative infinite, zero immediate. Calls that can
  * park need clock READ|PRECISE, not SLEEP. The row bound is INT_MAX plus checked
  * memory/native admission limits; FD_SETSIZE is not a poll bound.
- * Failure leaves every revents unchanged; success returns ready row count. */
+ * Caught cooperative signals return EINTR regardless of SA_RESTART, after
+ * releasing the native set and descriptor references. Failure leaves every
+ * revents unchanged; success returns ready row count. */
 int poll(struct pollfd *descriptors, nfds_t count, int timeout);
-/* Nanosecond timeout, unchanged on return; NULL means infinite. Signals are
- * absent: sigmask is accepted as a no-op, including non-NULL, and never read.
- * This provides no atomic signal-mask transition or signal-driven EINTR. */
+/* Nanosecond timeout, unchanged on return; NULL means infinite. Non-NULL
+ * sigmask installs a real temporary initial-thread mask for the pending
+ * check/wait/dispatch, then restores the caller's mask on every return path.
+ * Worker calls with non-NULL masks fail ENOTSUP; NULL keeps the current mask.
+ * Pending delivery made eligible only by restoration preserves a wait result
+ * already selected under the temporary mask. */
 int ppoll(struct pollfd *descriptors, nfds_t count, const struct timespec *timeout,
     const sigset_t *sigmask);
 
