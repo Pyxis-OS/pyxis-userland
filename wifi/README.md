@@ -59,9 +59,15 @@ identifies the accepted reference RFE-0 selection. Neither that state nor a
 matching rule means RFK is qualified or that RF transmission is admitted.
 Missing, malformed and failed platform reads remain distinct. RTL8922AE uses
 two initialized PHY contexts, returning an immutable FILE only after firmware
-scan completion and RX retirement. Its 1+6 sweep derives frame channels from
-matched PPDU metadata; unattributable observations are omitted. Initialization
-and calibration stay inside the requested mask under fixed limits. Healthy
+scan completion and RX retirement. Default scans select the admitted channel
+1–13 set; explicit masks are exact. The firmware period is 232 TU per channel,
+within the existing 15-second operation deadline. World channels 12–13 use
+listen-only firmware entries; calibration stays on the lowest requested channel
+that permits initiation. A first NO_IR-only request refuses before startup,
+without borrowing an unrequested channel. The common image intersects firmware,
+SAR and numeric regdb limits across the whole mask before calibration.
+Frame channels come from matched PPDU metadata; unattributable observations are
+omitted. Results keep what fits and report TRUNCATED when capacity is exhausted. Healthy
 context is retained for another exact-mask request; changing the mask requires
 a fresh boot in this slice. RTL association remains unavailable. Status/READ
 alone never starts the radio.
