@@ -309,7 +309,7 @@ int launch_remote_server(const struct session_config *config,
     assert(resource_count < grant_capacity);
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"log", grant_count);
     assert(grant_count < grant_capacity);
-    grants[grant_count++] = (struct launch_grant){log, LOG_RIGHT_READ, 0};
+    grants[grant_count++] = (struct launch_grant){log, LOG_RIGHT_READ | LOG_RIGHT_WRITE, 0};
   }
   handle_t pipe = bootstrap_capability("pipe");
   if (pipe != HANDLE_INVALID) {

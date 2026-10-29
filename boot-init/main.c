@@ -122,7 +122,7 @@ static const struct {
   [SERVICE_LAUNCHER] = {"launcher", LAUNCHER_RIGHT_LAUNCH, 0},
   [SERVICE_CLOCK] = {"clock", CLOCK_RIGHTS, 0},
   [SERVICE_SYSTEM_INFO] = {"system_info", SYSTEM_INFO_RIGHT_READ, 0},
-  [SERVICE_LOG] = {"log", LOG_RIGHT_READ, 0},
+  [SERVICE_LOG] = {"log", LOG_RIGHT_READ | LOG_RIGHT_WRITE, 0},
   [SERVICE_ECHO] = {"echo", ECHO_RIGHT_SEND, 0},
   [SERVICE_UDP] = {"udp", UDP_SERVICE_RIGHT_OPEN, 0},
   [SERVICE_TCP] = {"tcp", TCP_SERVICE_RIGHTS, 0},

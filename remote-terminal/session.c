@@ -48,7 +48,7 @@ static const struct {
   {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
   {"threads", THREAD_RIGHT_MANAGE},
   {"clock", CLOCK_RIGHTS},
-  {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ},
+  {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ | LOG_RIGHT_WRITE},
   {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
   {"audio", AUDIO_RIGHT_PLAYBACK},
   {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
