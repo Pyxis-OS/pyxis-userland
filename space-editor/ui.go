@@ -19,6 +19,7 @@ var (
 	colorAccent  = tcell.PaletteColor(14)
 	colorHeading = tcell.PaletteColor(11)
 	colorDim     = tcell.PaletteColor(8)
+	colorBorder  = tcell.PaletteColor(7)
 	colorError   = tcell.PaletteColor(9)
 	colorWarning = tcell.PaletteColor(11)
 	colorAdded   = tcell.PaletteColor(10)
@@ -56,9 +57,9 @@ func setTheme() {
 		PrimitiveBackgroundColor:    tcell.ColorDefault,
 		ContrastBackgroundColor:     colorSelect,
 		MoreContrastBackgroundColor: tcell.PaletteColor(6),
-		BorderColor:                 colorDim,
+		BorderColor:                 colorBorder,
 		TitleColor:                  colorHeading,
-		GraphicsColor:               colorDim,
+		GraphicsColor:               colorBorder,
 		PrimaryTextColor:            tcell.ColorDefault,
 		SecondaryTextColor:          colorHeading,
 		TertiaryTextColor:           colorAccent,
