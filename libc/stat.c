@@ -109,6 +109,14 @@ int fstat(int descriptor, struct stat *result)
   return descriptor_stat(descriptor, result);
 }
 
+int chmod(const char *path, mode_t mode)
+{
+  (void)path;
+  (void)mode;
+  errno = ENOTSUP;
+  return -1;
+}
+
 static int path_metadata(const char *path, struct stat *metadata, uint64_t *rights,
     bool native_only)
 {

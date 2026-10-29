@@ -63,6 +63,10 @@ int lstat(const char *__restrict path, struct stat *__restrict result);
  * S_IFCHR and pipes S_IFIFO, both with size zero and optional fields invalid. */
 int fstat(int descriptor, struct stat *result);
 
+/* Native objects have no Unix permission bits or change-mode operation.
+ * Always fails with ENOTSUP, without resolving or modifying path. */
+int chmod(const char *path, mode_t mode);
+
 /* Create one directory, resolving path like fopen: startup roots and the
  * initial working-directory chain. Requires CREATE on the parent. mode has no
  * effect; native directories carry no permission bits. Missing parents are not
