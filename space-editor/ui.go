@@ -136,11 +136,25 @@ func (e *editor) showModal(name string, p tview.Primitive, width, height int) {
 
 func (e *editor) closeModal(name string) {
 	e.pages.RemovePage(name)
+	e.app.SetFocus(e.pages)
+}
+
+// onEnter runs accept after the current key event. A form's own finished
+// handler runs after the field's done handler and would otherwise move focus
+// to a button of the dialog accept has just removed. QueueUpdateDraw waits for
+// the event loop, so it is called from another goroutine. Escape reaches the
+// form's cancel function.
+func (e *editor) onEnter(field *tview.InputField, accept func()) {
+	field.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			go e.app.QueueUpdateDraw(accept)
+		}
+	})
 }
 
 func (e *editor) message(title, text string) {
 	m := tview.NewModal().SetText(text).AddButtons([]string{"OK"}).
-		SetDoneFunc(func(int, string) { e.pages.RemovePage("message") })
+		SetDoneFunc(func(int, string) { e.closeModal("message") })
 	m.SetTitle(" " + title + " ")
 	e.pages.AddPage("message", m, true, true)
 }
@@ -690,13 +704,7 @@ func (e *editor) editText(label, hint, current string, apply func(string)) {
 		e.closeModal("edit")
 		e.changed()
 	}
-	f.GetFormItem(1).(*tview.InputField).SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			done()
-		} else if key == tcell.KeyEscape {
-			e.closeModal("edit")
-		}
-	})
+	e.onEnter(f.GetFormItem(1).(*tview.InputField), done)
 	f.AddButton("OK", done).AddButton("Cancel", func() { e.closeModal("edit") })
 	f.SetCancelFunc(func() { e.closeModal("edit") })
 	f.SetFocus(1)
@@ -858,13 +866,7 @@ func (e *editor) renameSpace(index int) {
 		e.closeModal("rename")
 		e.changed()
 	}
-	f.GetFormItem(0).(*tview.InputField).SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			done()
-		} else if key == tcell.KeyEscape {
-			e.closeModal("rename")
-		}
-	})
+	e.onEnter(f.GetFormItem(0).(*tview.InputField), done)
 	f.AddButton("Rename", done).AddButton("Cancel", func() { e.closeModal("rename") })
 	f.SetCancelFunc(func() { e.closeModal("rename") })
 	e.showModal("rename", f, 60, 8)
@@ -885,13 +887,7 @@ func (e *editor) removeSpace(index int) {
 		e.changed()
 	}
 	f.GetFormItem(0).(*tview.TextView).SetDynamicColors(true)
-	f.GetFormItem(1).(*tview.InputField).SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			remove()
-		} else if key == tcell.KeyEscape {
-			e.closeModal("remove")
-		}
-	})
+	e.onEnter(f.GetFormItem(1).(*tview.InputField), remove)
 	f.AddButton("Remove", remove).AddButton("Cancel", func() { e.closeModal("remove") })
 	f.SetCancelFunc(func() { e.closeModal("remove") })
 	f.SetFocus(1)
@@ -1041,7 +1037,7 @@ func (e *editor) discard() {
 	m := tview.NewModal().SetText("Discard all changes and reload " + e.path + "?").
 		AddButtons([]string{"Discard", "Back"}).
 		SetDoneFunc(func(_ int, label string) {
-			e.pages.RemovePage("discard")
+			e.closeModal("discard")
 			if label == "Discard" {
 				confirm()
 			}
@@ -1054,7 +1050,7 @@ func (e *editor) loadPrevious() {
 	m := tview.NewModal().SetText("Open " + path + " as unsaved changes?\nSaving it makes it the configuration again.").
 		AddButtons([]string{"Load", "Back"}).
 		SetDoneFunc(func(_ int, label string) {
-			e.pages.RemovePage("previous")
+			e.closeModal("previous")
 			if label != "Load" {
 				return
 			}
@@ -1077,7 +1073,7 @@ func (e *editor) quit() {
 	m := tview.NewModal().SetText("The configuration has unsaved changes.").
 		AddButtons([]string{"Save", "Discard", "Back"}).
 		SetDoneFunc(func(_ int, label string) {
-			e.pages.RemovePage("quit")
+			e.closeModal("quit")
 			switch label {
 			case "Save":
 				e.review()
