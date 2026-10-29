@@ -358,8 +358,23 @@ static bool stable_loader_matches(handle_t pyxis,
   return ok;
 }
 
+/* A retained menu can still reach a legacy attempt without a current binding.
+ * A textual reference only prevents deletion; it never establishes ownership. */
+static bool menu_references(const struct config_blob *menu, const char *revision, const char *attempt)
+{
+  if (!menu || !menu->digest.present) return false;
+  char prefix[INSTALL_ESP_PAYLOAD_PATH_BYTES];
+  int length = snprintf(prefix, sizeof(prefix), "EFI/pyxis/%s/%s/", revision, attempt);
+  if (length <= 0 || (size_t)length >= sizeof(prefix) || (size_t)length > menu->size) return false;
+  for (size_t i = 0; i <= menu->size - (size_t)length; ++i) {
+    if (!memcmp(menu->bytes + i, prefix, (size_t)length)) return true;
+  }
+  return false;
+}
+
 bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
-    const struct config_boot_binding *current, const struct config_storage_view *view,
+    const struct config_boot_binding *current, const struct config_blob *previous_menu,
+    const struct config_blob *selected_menu, const struct config_storage_view *view,
     const struct config_target_facts *facts, uint64_t interval,
     struct config_storage_report *report)
 {
@@ -392,7 +407,9 @@ bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
       ok = fail(report, CALL_BAD_REQUEST); break;
     }
     cursor = entry.cursor;
-    if (folded_equal(revision, "config")) continue;
+    if (folded_equal(revision, "config") || folded_equal(revision, "recovery") ||
+        folded_equal(revision, "bootstrap-0.0.8") ||
+        folded_equal(revision, "bootstrap-0.0.8-rescue")) continue;
     snprintf(report->artifact, sizeof(report->artifact), "%s", revision);
     if (!config_revision_valid(revision)) { ok = fail(report, CALL_BAD_REQUEST); break; }
     handle_t revision_dir = HANDLE_INVALID;
@@ -413,16 +430,10 @@ bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
       if (status != CALL_OK) { ok = fail(report, status); break; }
       if (item.outcome == DIRECTORY_END) break;
       snprintf(report->artifact, sizeof(report->artifact), "%s", id);
-      if (item.outcome == DIRECTORY_ENTRY && item.kind == DIRECTORY_KIND_FILE &&
-          folded_equal(revision, "recovery") &&
-          (folded_equal(id, "kernel.elf") || folded_equal(id, "boot.arc") ||
-           folded_equal(id, "ownership.record"))) {
-        attempts = item.cursor;
-        continue;
-      }
       if (item.outcome != DIRECTORY_ENTRY || item.kind != DIRECTORY_KIND_DIRECTORY ||
           !config_transaction_valid(id)) { ok = fail(report, CALL_BAD_REQUEST); break; }
-      if (folded_equal(revision, current->kernel_revision) && !strcmp(id, current->attempt)) {
+      if ((folded_equal(revision, current->kernel_revision) && !strcmp(id, current->attempt)) ||
+          menu_references(previous_menu, revision, id) || menu_references(selected_menu, revision, id)) {
         attempts = item.cursor;
         continue;
       }

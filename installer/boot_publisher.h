@@ -19,7 +19,8 @@ struct boot_publisher_input {
   handle_t boot, loaded_kernel; /* Recovery sources: boot tree, kernel-issued FILE. */
   struct install_source kernel, archive;
   struct install_source loader; /* Coexist's pinned EFI/pyxis/BOOTX64.EFI. */
-  bool coexist;
+  bool coexist, legacy_update;
+  const char *previous_revision;
   const char *revision; /* Kernel and program revision. */
   const char *attempt, *revision_record;
   const uint8_t *disk_guid; /* Menu mount.disk= of the installed pool. */
@@ -31,7 +32,8 @@ struct boot_publisher_input {
  * MENU and RECORD are the consumed ESP bytes; NEXT_MENU is the reviewed menu. */
 struct boot_publication {
   const char *reason;
-  struct config_blob menu, next_menu, record;
+  struct config_blob menu, next_menu, record, legacy_evidence;
+  bool legacy_adopted;
   struct install_recovery recovery;
   struct config_target_facts facts;
   struct config_boot_binding binding;

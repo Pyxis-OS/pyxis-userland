@@ -14,13 +14,32 @@
 
 #define RECOVERY_READ (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES)
 #define RECOVERY_WRITE (RECOVERY_READ | DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
+#define RECOVERY_REPLACE (RECOVERY_WRITE | DIRECTORY_RIGHT_REMOVE)
 #define RECOVERY_FILE_MAX INSTALL_ESP_PAYLOAD_MAX_BYTES
 #define RECOVERY_MANIFEST_MAX 512u
 #define RECOVERY_DIRECTORY "EFI/pyxis/recovery"
 #define RECOVERY_MANIFEST RECOVERY_DIRECTORY "/ownership.record"
 #define RECOVERY_FALLBACK "boot/limine.conf"
+#define RECOVERY_LEGACY_FALLBACK RECOVERY_DIRECTORY "/" INSTALL_RECOVERY_LEGACY_FALLBACK_NAME
+#define RECOVERY_STAGED_FALLBACK "fallback.new"
+#define RECOVERY_STAGED_FALLBACK_PATH RECOVERY_DIRECTORY "/" RECOVERY_STAGED_FALLBACK
+#define RECOVERY_LEGACY_DIRECTORY "EFI/pyxis/bootstrap-0.0.8-rescue"
+#define RECOVERY_REQUIRED_FILES 3u
 
-static const char *const recovery_names[] = {"kernel.elf", "boot.arc", "ownership.record"};
+static const char *const recovery_names[] = {
+  "kernel.elf", "boot.arc", "ownership.record", INSTALL_RECOVERY_LEGACY_FALLBACK_NAME
+};
+
+/* The released 0.0.8 bootstrap rescue pair retained in the owner's ESP backup.
+ * A matching label or path never substitutes for these complete hashes. */
+static const struct config_file_digest legacy_kernel = {
+  .present = true, .size = UINT64_C(7990328),
+  .sha256 = "2a83a89aaf53f31a7fa1654777e19f7bb5eee74195c718277da8251c6bc5bc03"
+};
+static const struct config_file_digest legacy_archive = {
+  .present = true, .size = UINT64_C(27693056),
+  .sha256 = "a653887f851f4bede8c8d604486d5e6b6bf5bffe37ef836dc451f19d3b9730e9"
+};
 
 static bool root_bound(handle_t root, const struct config_target_facts *facts)
 {
@@ -269,6 +288,21 @@ static bool fallback_render(const struct install_recovery *recovery, struct conf
   return size > 0 && (size_t)size < sizeof(text) && config_blob_set(output, text, (size_t)size);
 }
 
+static bool legacy_fallback_valid(const struct install_recovery *recovery,
+    const struct config_blob *fallback)
+{
+  char esp[37], text[768];
+  install_guid_text(recovery->facts.partition_guid, esp);
+  int size = snprintf(text, sizeof(text), "timeout: 0\nserial: yes\n\n"
+      "/Pyxis 0.0.8 bootstrap rescue\n  protocol: limine\n"
+      "  path: guid(%s):/" RECOVERY_LEGACY_DIRECTORY "/kernel.elf\n"
+      "  module_path: guid(%s):/" RECOVERY_LEGACY_DIRECTORY "/boot.arc\n"
+      "  paging_mode: 4level\n  kaslr: no\n"
+      "  cmdline: init=boot://boot-init.pxe boot.default_config=1\n", esp, esp);
+  return size > 0 && (size_t)size < sizeof(text) && fallback->digest.present &&
+      fallback->size == (size_t)size && !memcmp(fallback->bytes, text, (size_t)size);
+}
+
 static bool frozen_evidence_valid(const struct install_recovery *recovery)
 {
   struct config_blob manifest = {0}, fallback = {0};
@@ -277,14 +311,19 @@ static bool frozen_evidence_valid(const struct install_recovery *recovery)
       recovery->kernel.size <= RECOVERY_FILE_MAX && recovery->archive.size <= RECOVERY_FILE_MAX &&
       config_payload_digest_valid(&recovery->kernel) && config_payload_digest_valid(&recovery->archive) &&
       manifest_render(recovery, &manifest) && config_blob_equal(&manifest, &recovery->manifest) &&
-      fallback_render(recovery, &fallback) && config_blob_equal(&fallback, &recovery->fallback);
+      fallback_render(recovery, &fallback) && config_blob_equal(&fallback, &recovery->fallback) &&
+      (!recovery->legacy_fallback.digest.present ||
+       legacy_fallback_valid(recovery, &recovery->legacy_fallback)) &&
+      (!recovery->legacy_migration ||
+       (!recovery->present && recovery->legacy_fallback.digest.present));
   config_blob_destroy(&manifest);
   config_blob_destroy(&fallback);
   return ok;
 }
 
-static bool recovery_contents(handle_t parent)
+static bool recovery_contents(handle_t parent, bool *legacy_saved)
 {
+  *legacy_saved = false;
   unsigned count = sizeof(recovery_names) / sizeof(*recovery_names);
   unsigned seen = 0;
   struct directory_cursor cursor = {0};
@@ -295,7 +334,9 @@ static bool recovery_contents(handle_t parent)
       return false;
     }
     if (entry.outcome == DIRECTORY_END) {
-      return seen == ((1u << count) - 1);
+      *legacy_saved = (seen & (1u << RECOVERY_REQUIRED_FILES)) != 0;
+      unsigned required = (1u << RECOVERY_REQUIRED_FILES) - 1;
+      return (seen & required) == required;
     }
     if (entry.outcome != DIRECTORY_ENTRY || entry.kind != DIRECTORY_KIND_FILE) {
       return false;
@@ -339,6 +380,30 @@ static bool verify_pair(handle_t parent, handle_t ram, const struct install_reco
     }
   }
   return true;
+}
+
+static bool legacy_pair_verify(handle_t root, handle_t ram,
+    const struct install_recovery *recovery)
+{
+  handle_t parent = HANDLE_INVALID;
+  if (parent_open(root, RECOVERY_LEGACY_DIRECTORY, RECOVERY_READ, false, &parent) != CALL_OK) {
+    return false;
+  }
+  struct file_info_reply info;
+  const struct install_recovery legacy = {.kernel = legacy_kernel, .archive = legacy_archive};
+  bool ok = directory_info(parent, &info) == CALL_OK &&
+      (info.valid & FILE_INFO_DOMAIN_VALID) && info.domain == recovery->facts.domain &&
+      verify_pair(parent, ram, &legacy);
+  return handle_close(parent) == CALL_OK && ok;
+}
+
+static bool retained_legacy_verify(handle_t root, handle_t ram,
+    struct install_recovery *recovery)
+{
+  return snapshot_file(root, RECOVERY_LEGACY_FALLBACK, CONFIG_FILE_MAX_BYTES,
+      &recovery->legacy_fallback) == CALL_OK &&
+      legacy_fallback_valid(recovery, &recovery->legacy_fallback) &&
+      legacy_pair_verify(root, ram, recovery);
 }
 
 static bool prepare_sources(handle_t boot, handle_t loaded_kernel, struct install_recovery *recovery)
@@ -388,7 +453,8 @@ bool install_recovery_prepare_fresh(handle_t boot, handle_t loaded_kernel,
 }
 
 bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kernel,
-    handle_t workspace, const struct config_target_facts *facts, struct install_recovery *recovery)
+    handle_t workspace, const struct config_target_facts *facts, bool allow_legacy,
+    struct install_recovery *recovery)
 {
   if (!recovery) {
     return false;
@@ -414,20 +480,37 @@ bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kern
     recovery->reason = fallback_status == CALL_OK ?
         "boot/limine.conf exists without EFI/pyxis/recovery ownership evidence; the existing rescue fallback is preserved" :
         "cannot establish whether boot/limine.conf is absent before provisioning recovery";
-    config_blob_destroy(&fallback);
     ok = fallback_status == CALL_NOT_FOUND;
+    if (fallback_status == CALL_OK && allow_legacy) {
+      recovery->reason = "the existing fallback is not the exact GUID-bound 0.0.8 bootstrap rescue or its payload hashes differ";
+      handle_t ram = HANDLE_INVALID;
+      ok = legacy_fallback_valid(recovery, &fallback) &&
+          install_esp_transfer_workspace(workspace, &ram) == CALL_OK &&
+          legacy_pair_verify(root, ram, recovery);
+      if (ram != HANDLE_INVALID) {
+        ok = handle_close(ram) == CALL_OK && ok;
+      }
+      if (ok) {
+        recovery->legacy_fallback = fallback;
+        fallback = (struct config_blob){0};
+        recovery->legacy_migration = true;
+      }
+    }
+    config_blob_destroy(&fallback);
     if (ok) {
       recovery->reason = "cannot hash the independent rescue kernel or recovery archive sources";
       ok = prepare_sources(boot, loaded_kernel, recovery);
     }
   } else if (status == CALL_OK) {
     handle_t ram = HANDLE_INVALID;
+    bool legacy_saved;
     recovery->present = true;
     recovery->reason = "the existing recovery directory, ownership manifest or payload hashes do not match the reviewed ESP";
-    ok = recovery_contents(parent) &&
+    ok = recovery_contents(parent, &legacy_saved) &&
         snapshot_file(root, RECOVERY_MANIFEST, RECOVERY_MANIFEST_MAX, &recovery->manifest) == CALL_OK &&
         manifest_parse(recovery) && install_esp_transfer_workspace(workspace, &ram) == CALL_OK &&
-        verify_pair(parent, ram, recovery);
+        verify_pair(parent, ram, recovery) &&
+        (!legacy_saved || retained_legacy_verify(root, ram, recovery));
     if (ram != HANDLE_INVALID) {
       ok = handle_close(ram) == CALL_OK && ok;
     }
@@ -467,8 +550,57 @@ static bool file_new(handle_t parent, const char *name, const struct config_blob
   return ok;
 }
 
+static bool legacy_fallback_replace(handle_t root, handle_t parent, handle_t boot,
+    handle_t control, handle_t clock, handle_t ram, const struct install_recovery *recovery)
+{
+  bool ok = file_new(parent, INSTALL_RECOVERY_LEGACY_FALLBACK_NAME,
+      &recovery->legacy_fallback) &&
+      file_new(parent, RECOVERY_STAGED_FALLBACK, &recovery->fallback) &&
+      directory_sync(parent) == CALL_OK && mount_sync(control) == CALL_OK &&
+      snapshot_matches(root, RECOVERY_LEGACY_FALLBACK, CONFIG_FILE_MAX_BYTES,
+          &recovery->legacy_fallback) &&
+      snapshot_matches(root, RECOVERY_STAGED_FALLBACK_PATH, CONFIG_FILE_MAX_BYTES,
+          &recovery->fallback);
+  struct mount_interval_reply interval = {0};
+  struct config_storage_report report = {0};
+  /* The shared guard checks retained parent rights/domains and the original
+   * interval deadline; neither name here changes its pathname authority. */
+  const struct config_storage_view view = {.config_parent = parent, .limine_parent = boot,
+    .control = control, .clock = clock};
+  if (ok) {
+    ok = mount_begin(control, &interval) == CALL_OK && mount_check(control) == CALL_OK;
+  }
+  if (ok) {
+    ok = config_storage_guard(&view, &recovery->facts, interval.id, &report) &&
+        no_efi_shadow(root) &&
+        snapshot_matches(root, RECOVERY_FALLBACK, CONFIG_FILE_MAX_BYTES,
+            &recovery->legacy_fallback) &&
+        legacy_pair_verify(root, ram, recovery) &&
+        config_storage_guard(&view, &recovery->facts, interval.id, &report) &&
+        verify_pair(parent, ram, recovery) &&
+        snapshot_matches(root, RECOVERY_MANIFEST, RECOVERY_MANIFEST_MAX, &recovery->manifest) &&
+        snapshot_matches(root, RECOVERY_LEGACY_FALLBACK, CONFIG_FILE_MAX_BYTES,
+            &recovery->legacy_fallback) &&
+        snapshot_matches(root, RECOVERY_STAGED_FALLBACK_PATH, CONFIG_FILE_MAX_BYTES,
+            &recovery->fallback) &&
+        config_storage_guard(&view, &recovery->facts, interval.id, &report);
+  }
+  if (ok) {
+    ok = directory_rename(parent, RECOVERY_STAGED_FALLBACK, boot, "limine.conf",
+        DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE) == CALL_OK &&
+        directory_sync(parent) == CALL_OK && directory_sync(boot) == CALL_OK &&
+        mount_sync(control) == CALL_OK &&
+        snapshot_matches(root, RECOVERY_FALLBACK, CONFIG_FILE_MAX_BYTES, &recovery->fallback) &&
+        config_storage_guard(&view, &recovery->facts, interval.id, &report);
+  }
+  if (interval.id) {
+    ok = mount_end(control, interval.id) == CALL_OK && ok;
+  }
+  return ok;
+}
+
 bool install_recovery_provision(handle_t root, handle_t control, handle_t workspace,
-    const struct install_recovery *recovery)
+    handle_t clock, const struct install_recovery *recovery)
 {
   struct config_target_facts facts;
   if (!recovery || !install_snapshot_facts(control, &facts) ||
@@ -479,16 +611,26 @@ bool install_recovery_provision(handle_t root, handle_t control, handle_t worksp
   handle_t parent = HANDLE_INVALID, ancestor = HANDLE_INVALID, boot = HANDLE_INVALID, ram = HANDLE_INVALID;
   bool ok = install_esp_transfer_workspace(workspace, &ram) == CALL_OK;
   if (ok && recovery->present) {
+    bool legacy_saved;
     ok = parent_open(root, RECOVERY_DIRECTORY, RECOVERY_READ, false, &parent) == CALL_OK &&
-        recovery_contents(parent) && snapshot_matches(root, RECOVERY_MANIFEST,
+        recovery_contents(parent, &legacy_saved) &&
+        legacy_saved == recovery->legacy_fallback.digest.present &&
+        (!legacy_saved || (snapshot_matches(root, RECOVERY_LEGACY_FALLBACK,
+            CONFIG_FILE_MAX_BYTES, &recovery->legacy_fallback) && legacy_pair_verify(root, ram, recovery))) &&
+        snapshot_matches(root, RECOVERY_MANIFEST,
             RECOVERY_MANIFEST_MAX, &recovery->manifest) && verify_pair(parent, ram, recovery) &&
         snapshot_matches(root, RECOVERY_FALLBACK, CONFIG_FILE_MAX_BYTES, &recovery->fallback);
   } else if (ok) {
     enum call_status status = parent_open(root, RECOVERY_DIRECTORY, RECOVERY_READ, false, &parent);
-    ok = status == CALL_NOT_FOUND && fallback_absent(root);
+    ok = status == CALL_NOT_FOUND &&
+        (recovery->legacy_migration ?
+         snapshot_matches(root, RECOVERY_FALLBACK, CONFIG_FILE_MAX_BYTES,
+             &recovery->legacy_fallback) && legacy_pair_verify(root, ram, recovery) :
+         fallback_absent(root));
     if (ok) {
       ok = parent_open(root, "EFI/pyxis", RECOVERY_WRITE, true, &ancestor) == CALL_OK &&
-          directory_create(ancestor, "recovery", DIRECTORY_KIND_DIRECTORY, RECOVERY_WRITE, &parent) == CALL_OK &&
+          directory_create(ancestor, "recovery", DIRECTORY_KIND_DIRECTORY,
+              recovery->legacy_migration ? RECOVERY_REPLACE : RECOVERY_WRITE, &parent) == CALL_OK &&
           directory_sync(ancestor) == CALL_OK;
     }
     const struct config_file_digest *digests[] = {&recovery->kernel, &recovery->archive};
@@ -514,10 +656,15 @@ bool install_recovery_provision(handle_t root, handle_t control, handle_t worksp
           snapshot_matches(root, RECOVERY_MANIFEST, RECOVERY_MANIFEST_MAX, &recovery->manifest);
     }
     if (ok) {
-      ok = parent_open(root, "boot", RECOVERY_WRITE, true, &boot) == CALL_OK &&
-          file_new(boot, "limine.conf", &recovery->fallback) && directory_sync(boot) == CALL_OK &&
-          mount_sync(control) == CALL_OK && snapshot_matches(root, RECOVERY_FALLBACK,
-              CONFIG_FILE_MAX_BYTES, &recovery->fallback);
+      ok = parent_open(root, "boot", recovery->legacy_migration ? RECOVERY_REPLACE : RECOVERY_WRITE,
+          true, &boot) == CALL_OK;
+      if (ok && recovery->legacy_migration) {
+        ok = legacy_fallback_replace(root, parent, boot, control, clock, ram, recovery);
+      } else if (ok) {
+        ok = file_new(boot, "limine.conf", &recovery->fallback) && directory_sync(boot) == CALL_OK &&
+            mount_sync(control) == CALL_OK && snapshot_matches(root, RECOVERY_FALLBACK,
+                CONFIG_FILE_MAX_BYTES, &recovery->fallback);
+      }
     }
   }
   if (ram != HANDLE_INVALID) {
@@ -543,9 +690,10 @@ uint64_t install_recovery_space(const struct install_recovery *recovery, uint64_
   if (recovery->present) {
     return 0;
   }
-  uint64_t sizes[] = {recovery->kernel.size, recovery->archive.size, recovery->manifest.size, recovery->fallback.size};
+  uint64_t sizes[] = {recovery->kernel.size, recovery->archive.size, recovery->manifest.size,
+    recovery->fallback.size, recovery->legacy_fallback.size};
   uint64_t total = 8 * cluster;
-  for (unsigned i = 0; i < 4; ++i) {
+  for (unsigned i = 0; i < sizeof(sizes) / sizeof(*sizes); ++i) {
     uint64_t blocks = sizes[i] / cluster + (sizes[i] % cluster != 0);
     if (blocks > (UINT64_MAX - total) / cluster) {
       return UINT64_MAX;
@@ -565,6 +713,7 @@ void install_recovery_destroy(struct install_recovery *recovery)
   }
   config_blob_destroy(&recovery->manifest);
   config_blob_destroy(&recovery->fallback);
+  config_blob_destroy(&recovery->legacy_fallback);
   *recovery = (struct install_recovery){0};
 }
 

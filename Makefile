@@ -89,7 +89,7 @@ INSTALLER_CONFIG_OBJECTS := $(addprefix $(BUILD)/installer/,publication_frontend
 # The shared boot publisher (installer/boot_publisher.h). The installer links
 # this archive; front ends add their own target admission and consent.
 PUBLISHER_LIBRARY := $(BUILD)/libpublisher.a
-PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o publication.o publication_snapshot.o pending.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o digest.o progress.o io.o) \
+PUBLISHER_OBJECTS := $(addprefix $(BUILD)/installer/,boot_publisher.o legacy_menu.o publication.o publication_snapshot.o pending.o recovery.o esp_payload.o esp_transfer.o esp_directory.o esp_view.o boot_entry.o digest.o progress.o io.o) \
     $(addprefix $(BUILD)/installer/,menu_ownership.o boot_storage.o boot_record.o)
 # Discovery borrows the installer validators. Separate sectioned objects let
 # the selector retain only read-only inspection from the mixed private modules.

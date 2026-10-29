@@ -1,5 +1,6 @@
 #include "boot_publisher.h"
 #include "boot_entry.h"
+#include "legacy_menu.h"
 #include "publication_snapshot.h"
 #include "esp_directory.h"
 #include "esp_transfer.h"
@@ -83,6 +84,7 @@ void boot_publication_destroy(struct boot_publication *publication)
   config_blob_destroy(&publication->menu);
   config_blob_destroy(&publication->next_menu);
   config_blob_destroy(&publication->record);
+  config_blob_destroy(&publication->legacy_evidence);
   install_recovery_destroy(&publication->recovery);
   *publication = (struct boot_publication){0};
 }
@@ -141,7 +143,8 @@ static uint64_t required_space(const struct boot_publication *publication, uint6
 /* Binding, menu and capacity from the frozen snapshots in PUBLICATION. A
  * present record has already passed install_recovery_resolved, which refuses
  * a prepared or malformed one; it is never treated as absent. */
-static bool prepare_plan(struct boot_publication *publication, const struct boot_publisher_input *input)
+static bool prepare_plan(struct boot_publication *publication, const struct boot_publisher_input *input,
+    handle_t root)
 {
   const struct config_blob *record = &publication->record;
   struct config_record previous = {0};
@@ -160,6 +163,12 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
     if (publication->fresh || (!recorded && !publication->menu.digest.present)) {
       ok = install_boot_entry_render_owned(&next, input->disk_guid, input->pool_partition,
           &publication->next_menu);
+    } else if (input->legacy_update && !recorded) {
+      ok = install_legacy_menu_plan(root, input->workspace, &publication->facts,
+          input->pool_partition, &publication->menu, input->previous_revision, &next,
+          &publication->next_menu, &publication->legacy_evidence,
+          &publication->legacy_adopted, &publication->reason) && publication->legacy_adopted;
+      if (!ok && !publication->reason) publication->reason = "no verified legacy Pyxis menu was found";
     } else {
       const struct install_boot_entry_paths old = {previous.boot.kernel.path, previous.boot.archive.path};
       const struct install_boot_entry_paths old_previous = {previous.legacy_previous_boot.kernel.path,
@@ -214,7 +223,8 @@ bool boot_publication_prepare(struct boot_publication *publication,
   if (ok) {
     publication->reason = "the immutable rescue pair or fallback menu cannot be safely reused or provisioned";
     ok = install_recovery_prepare(root, input->boot, input->loaded_kernel, input->workspace,
-        &publication->facts, &publication->recovery);
+        &publication->facts, input->legacy_update && !record->digest.present,
+        &publication->recovery);
     if (!ok && publication->recovery.reason) publication->reason = publication->recovery.reason;
   }
   if (ok && input->coexist) {
@@ -233,7 +243,7 @@ bool boot_publication_prepare(struct boot_publication *publication,
       publication->available_bytes = state.free_clusters * state.cluster_bytes;
     }
   }
-  ok = ok && prepare_plan(publication, input);
+  ok = ok && prepare_plan(publication, input, root);
   publication->prepared = ok;
   return ok;
 }
@@ -251,7 +261,7 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
   bool ok = config_blob_set(&publication->menu, limine, limine_bytes) &&
       install_recovery_prepare_fresh(input->boot, input->loaded_kernel,
           &publication->facts, &publication->recovery) &&
-      prepare_plan(publication, input);
+      prepare_plan(publication, input, HANDLE_INVALID);
   publication->prepared = ok;
   return ok;
 }
@@ -260,13 +270,15 @@ bool boot_publication_hash(const struct boot_publication *publication, struct in
 {
   static const char domain[] = "pyxis-installed-publication-2";
   unsigned char choices[] = {publication->activation_pending, publication->fresh,
-    publication->loader_present};
+    publication->loader_present, publication->legacy_adopted, publication->recovery.legacy_migration};
   uint8_t loader_size[8];
   npfs_put_u64(loader_size, publication->loader_digest.size);
   bool ok = publication->prepared && install_digest_update(digest, domain, sizeof(domain)) &&
       install_digest_update(digest, choices, sizeof(choices)) &&
       blob_hash(digest, &publication->menu) && blob_hash(digest, &publication->next_menu) &&
       blob_hash(digest, &publication->record) &&
+      blob_hash(digest, &publication->legacy_evidence) &&
+      blob_hash(digest, &publication->recovery.legacy_fallback) &&
       install_digest_update(digest, loader_size, sizeof(loader_size)) &&
       install_digest_update(digest, publication->loader_digest.sha256,
           sizeof(publication->loader_digest.sha256)) &&
@@ -283,6 +295,12 @@ void boot_publication_report(const struct boot_publication *publication,
       (unsigned long long)publication->required_bytes, (unsigned long long)publication->available_bytes);
   fputs(publication->recovery.present ? "Verified static recovery is retained.\n" :
       "Provision the reviewed immutable recovery pair and fallback before menu activation.\n", output);
+  if (publication->legacy_adopted) {
+    fputs("Adopt the verified legacy Pyxis normal/rescue entries; all foreign menu bytes are retained.\n", output);
+  }
+  if (publication->recovery.legacy_migration) {
+    fputs("Replace the verified legacy Pyxis rescue fallback with canonical recovery; retain its old bytes and pair.\n", output);
+  }
   if (publication->activation_pending) {
     fputs("Existing menu remains; boot activation will be pending.\n", output);
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
@@ -393,11 +411,26 @@ bool boot_publication_admit(struct boot_publication *publication,
     struct install_recovery current_recovery = {0};
     ok = install_recovery_menu_review(view->root, &record, &facts, input->pool_partition) &&
         install_recovery_prepare(view->root, input->boot, input->loaded_kernel,
-            input->workspace, &facts, &current_recovery) &&
+            input->workspace, &facts, input->legacy_update && !record.digest.present, &current_recovery) &&
         current_recovery.present == publication->recovery.present &&
+        current_recovery.legacy_migration == publication->recovery.legacy_migration &&
+        config_blob_equal(&current_recovery.legacy_fallback, &publication->recovery.legacy_fallback) &&
         config_blob_equal(&current_recovery.manifest, &publication->recovery.manifest) &&
         config_blob_equal(&current_recovery.fallback, &publication->recovery.fallback);
     install_recovery_destroy(&current_recovery);
+  }
+  if (ok && publication->legacy_adopted) {
+    struct config_blob selected = {0}, evidence = {0};
+    const struct install_boot_entry_paths next = {publication->binding.kernel.path,
+      publication->binding.archive.path};
+    bool adopted = false;
+    const char *reason = NULL;
+    ok = install_legacy_menu_plan(view->root, input->workspace, &facts, input->pool_partition,
+        &menu, input->previous_revision, &next, &selected, &evidence, &adopted, &reason) && adopted &&
+        config_blob_equal(&selected, &publication->next_menu) &&
+        config_blob_equal(&evidence, &publication->legacy_evidence);
+    config_blob_destroy(&selected);
+    config_blob_destroy(&evidence);
   }
   struct config_record history = {0};
   struct install_esp_payloads *held = NULL;
@@ -436,7 +469,7 @@ bool boot_publication_publish(struct boot_publication *publication,
     struct config_storage_report *report)
 {
   bool ok = loader_publish(publication, input, view) &&
-      install_recovery_provision(view->root, view->control, input->workspace, &publication->recovery);
+      install_recovery_provision(view->root, view->control, input->workspace, input->clock, &publication->recovery);
   if (!ok) {
     fprintf(stderr, "%s: static recovery verification/provision failed; no menu activation attempted; artifacts retained\n",
         input->name);

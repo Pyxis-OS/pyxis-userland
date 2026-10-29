@@ -583,7 +583,7 @@ bool config_storage_publish_boot(const struct config_storage_view *view,
         install_progress_begin("Verifying and removing unreferenced Pyxis boot attempts",
             INSTALL_PROGRESS_WORK, NULL);
         ok = current_view(view, facts, true, interval.id, report) &&
-            install_publication_cleanup_orphans(boot, &record->boot,
+            install_publication_cleanup_orphans(boot, &record->boot, expected, selected,
                 view, facts, interval.id, report);
       }
     }

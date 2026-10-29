@@ -43,7 +43,8 @@ bool install_publication_verify(const struct install_staged_boot *boot,
 /* Under the publication interval, remove only fully proven, unreferenced
  * Pyxis attempts. An ambiguous directory refuses without guessing. */
 bool install_publication_cleanup_orphans(const struct install_staged_boot *boot,
-    const struct config_boot_binding *current, const struct config_storage_view *view,
+    const struct config_boot_binding *current, const struct config_blob *previous_menu,
+    const struct config_blob *selected_menu, const struct config_storage_view *view,
     const struct config_target_facts *facts, uint64_t interval,
     struct config_storage_report *report);
 

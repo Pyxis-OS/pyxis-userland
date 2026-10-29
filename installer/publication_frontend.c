@@ -235,7 +235,7 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
   }
   if (!install_recovery_menu_review(mount.root, &record, &planned_facts, pool_partition) ||
       !install_recovery_prepare(mount.root, boot, bootstrap_capability("boot_kernel"),
-          workspace, &planned_facts, &recovery)) {
+          workspace, &planned_facts, false, &recovery)) {
     fputs("Static recovery or menu ownership is unrecognized; nothing written.\n", stderr);
     goto done;
   }
@@ -352,7 +352,7 @@ static int pending_frontend(struct terminal *terminal, bool verbose,
     goto done;
   }
   if (!install_recovery_menu_review(mount.root, &record, &request.facts, pool_partition) ||
-      !install_recovery_provision(mount.root, mount.control, workspace, &recovery)) {
+      !install_recovery_provision(mount.root, mount.control, workspace, clock, &recovery)) {
     fputs("Static fallback not verified; no menu publication.\n", stderr);
     goto done;
   }
