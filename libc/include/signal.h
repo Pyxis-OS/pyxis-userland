@@ -119,6 +119,10 @@ int sigaddset(sigset_t *set, int number);
 int sigdelset(sigset_t *set, int number);
 int sigismember(const sigset_t *set, int number);
 int sigprocmask(int how, const sigset_t *__restrict set, sigset_t *__restrict previous);
+/* Same initial-thread mask ownership; returns an error number directly and
+ * preserves errno, including ENOTSUP for a worker. */
+int pthread_sigmask(int how, const sigset_t *__restrict set,
+    sigset_t *__restrict previous);
 int sigpending(sigset_t *set);
 int sigsuspend(const sigset_t *mask);
 

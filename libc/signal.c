@@ -561,6 +561,15 @@ int sigprocmask(int how, const sigset_t *restrict set, sigset_t *restrict previo
   return 0;
 }
 
+int pthread_sigmask(int how, const sigset_t *restrict set,
+    sigset_t *restrict previous)
+{
+  int saved = errno;
+  int error = sigprocmask(how, set, previous) < 0 ? errno : 0;
+  errno = saved;
+  return error;
+}
+
 int sigpending(sigset_t *set)
 {
   if (!set) {
