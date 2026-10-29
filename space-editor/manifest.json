@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "org.pyxis.spaces",
+  "entry": "bin/spaces.pxe",
+  "commands": {"spaces": "bin/spaces.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "threads", "resource": "threads", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "precise", "sleep"], "required": true},
+    {"name": "random", "resource": "random", "rights": ["read"], "required": true}
+  ]
+}

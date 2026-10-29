@@ -19,6 +19,12 @@ applied: MPL's standard secondary-license provisions remain available.
   their Apache-2.0 terms. The fixed module graph and checksums are in
   `git/go.mod` and `git/go.sum`; the optional build stages the complete notices
   for every compiled dependency. The first-party CLI remains MPL-2.0.
+- `space-editor/patches/`: additions to tcell v2.13.10 (the `pyxis` terminal
+  profile and Pyxis terminal backend) retain its Apache-2.0 terms. The fixed
+  module graph and checksums, including tview v0.42.0 (MIT), are in
+  `space-editor/go.mod` and `space-editor/go.sum`; the optional build stages the
+  complete notices for every compiled dependency. The first-party editor remains
+  MPL-2.0.
 - `third_party/tlsf/`: imported allocator sources and their local adaptations
   retain the BSD terms in [tlsf.h](third_party/tlsf/tlsf.h), with provenance in
   [UPSTREAM.md](third_party/tlsf/UPSTREAM.md).

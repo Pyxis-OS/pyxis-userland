@@ -1,0 +1,48 @@
+--- a/vendor/github.com/gdamore/tcell/v2/pyxisterm.go
++++ b/vendor/github.com/gdamore/tcell/v2/pyxisterm.go
+@@ -0,0 +1,45 @@
++// Copyright 2026 PyxisOS contributors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use file except in compliance with the License.
++// You may obtain a copy of the license at
++//
++//    http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package tcell
++
++import "github.com/gdamore/tcell/v2/terminfo"
++
++// The Pyxis terminal profile, TERM=pyxis: exactly the controls in Pyxis's
++// docs/userland/terminal.md, as in ports/ncursesw/pyxis.ti. It has no mouse
++// and is not XTerm-like, so tcell sends no queries or extended modes. It is
++// registered on every platform so a host build can render with the profile.
++func init() {
++	terminfo.AddTerminfo(&terminfo.Terminfo{
++		Name:       "pyxis",
++		Columns:    80,
++		Lines:      24,
++		Colors:     16,
++		Clear:      "\x1b[H\x1b[2J",
++		EnterCA:    "\x1b[?1049h",
++		ExitCA:     "\x1b[?1049l",
++		ShowCursor: "\x1b[?25h",
++		HideCursor: "\x1b[?25l",
++		AttrOff:    "\x1b[0m",
++		Underline:  "\x1b[4m",
++		Bold:       "\x1b[1m",
++		Reverse:    "\x1b[7m",
++		Italic:     "\x1b[3m",
++		SetFg:      "\x1b[%?%p1%{8}%<%t3%p1%d%e9%p1%{8}%-%d%;m",
++		SetBg:      "\x1b[%?%p1%{8}%<%t4%p1%d%e10%p1%{8}%-%d%;m",
++		ResetFgBg:  "\x1b[39;49m",
++		SetCursor:  "\x1b[%i%p1%d;%p2%dH",
++		AutoMargin: true,
++	})
++}
