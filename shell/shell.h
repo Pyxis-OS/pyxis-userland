@@ -280,7 +280,7 @@ enum command_result shell_launch_selected(struct shell *shell,
 enum command_result shell_launch_pipeline(struct shell *shell,
     const struct shell_command_line *command, struct shell_outcome *outcome);
 enum command_result shell_launch_service(struct shell *shell, const char *name,
-    bool replace, bool optional, bool read_only, char **arguments, size_t count,
+    bool replace, bool optional, bool read_only, bool terminal, char **arguments, size_t count,
     const struct environment_capture *operands,
     const struct shell_service_root *additional_roots, size_t additional_count);
 enum command_result shell_launch_capture(struct shell *shell,

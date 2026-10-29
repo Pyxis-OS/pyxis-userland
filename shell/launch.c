@@ -10,6 +10,7 @@
 #include <abi/console.h>
 #include <abi/file.h>
 #include <abi/log.h>
+#include <log.h>
 #include <abi/memory.h>
 #include <abi/thread.h>
 #include <abi/display.h>
@@ -117,6 +118,9 @@ struct launch_scope {
   char root_roles[PROVIDER_SETUP_ROOT_MAX * (PROVIDER_SETUP_ROLE_MAX + 1)];
   bool published;
   struct job_work *delegations[LAUNCH_BATCH_MAX];
+  /* A service's stdout and stderr, when bound to the system log instead of the
+   * space's console. Borrowed: the caller closes them after the launch. */
+  handle_t log_stdout, log_stderr;
 };
 
 static enum call_status publish_service_roots(struct shell *shell,
@@ -926,7 +930,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[system_info_index] = (struct launch_grant){shell->system_info, SYSTEM_INFO_RIGHT_READ, 0};
   }
   if (has_log) {
-    grants[log_index] = (struct launch_grant){shell->log, LOG_RIGHT_READ, 0};
+    /* A session handoff keeps the space's write authority; other children read. */
+    grants[log_index] = (struct launch_grant){shell->log,
+        mode == SHELL_SESSION ? LOG_RIGHT_READ | LOG_RIGHT_WRITE : LOG_RIGHT_READ, 0};
   }
   if (has_echo) {
     grants[echo_index] = (struct launch_grant){shell->echo, ECHO_RIGHT_SEND, 0};
@@ -2340,6 +2346,18 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       streams[i][stream] = prepared[0].default_streams[stream];
     }
   }
+  if (mode == SHELL_SERVICE && scope && user_count == 1) {
+    if (scope->log_stdout != HANDLE_INVALID) {
+      streams[0][ENVIRONMENT_STDOUT] = (struct pyxis_stdio_binding){
+        .protocol = PROTOCOL_CONSOLE, .handle = scope->log_stdout,
+      };
+    }
+    if (scope->log_stderr != HANDLE_INVALID) {
+      streams[0][ENVIRONMENT_STDERR] = (struct pyxis_stdio_binding){
+        .protocol = PROTOCOL_CONSOLE, .handle = scope->log_stderr,
+      };
+    }
+  }
 
   /* Classify retained FILEs or absent native names without creation. Helper
    * admission must finish before any target is published or truncated. */
@@ -3254,13 +3272,30 @@ enum command_result shell_launch_selected(struct shell *shell,
 
 static enum command_result launch_named_service(struct shell *shell,
     const struct shell_stage *stage, const struct shell_service_root *roots,
-    size_t root_count, handle_t replacement_control, bool optional, bool read_only)
+    size_t root_count, handle_t replacement_control, bool optional, bool read_only,
+    bool terminal)
 {
   struct shell_service_value owned = {0};
   struct launch_scope scope = {.service = root_count > 1 ? &owned : NULL,
-    .roots = roots, .root_count = root_count};
+    .roots = roots, .root_count = root_count,
+    .log_stdout = HANDLE_INVALID, .log_stderr = HANDLE_INVALID};
+  /* The service's output goes to the system log unless it asks for the terminal.
+   * A shell without log write authority keeps the console, as before. */
+  if (!terminal && shell->log != HANDLE_INVALID &&
+      (log_open_stream(shell->log, LOG_LEVEL_INFO, &scope.log_stdout) != CALL_OK ||
+       log_open_stream(shell->log, LOG_LEVEL_WARN, &scope.log_stderr) != CALL_OK)) {
+    close_handle(&scope.log_stdout);
+    close_handle(&scope.log_stderr);
+  }
   enum command_result result = launch_stages(shell, stage, 1, SHELL_SERVICE,
       roots[0].name, replacement_control, optional, read_only, NULL, &scope);
+  bool streams_closed = close_handle(&scope.log_stdout);
+  streams_closed = close_handle(&scope.log_stderr) && streams_closed;
+  if (!streams_closed) {
+    shell_directory_error(shell, "service: close log stream", stage->arguments[0],
+        CALL_BAD_HANDLE);
+    return COMMAND_FATAL;
+  }
   if (!scope.published && owned.process != HANDLE_INVALID) {
     enum call_status status = process_terminate(owned.process);
     if (status == CALL_OK) {
@@ -3280,7 +3315,7 @@ static enum command_result launch_named_service(struct shell *shell,
 }
 
 enum command_result shell_launch_service(struct shell *shell, const char *name,
-    bool replace, bool optional, bool read_only, char **arguments, size_t count,
+    bool replace, bool optional, bool read_only, bool terminal, char **arguments, size_t count,
     const struct environment_capture *operands,
     const struct shell_service_root *additional_roots, size_t additional_count)
 {
@@ -3347,7 +3382,8 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
     /* Both grants stay owned through startup and its publication reply. A
      * later environment replacement cannot redirect this management operation. */
     enum command_result result = status == CALL_OK ?
-        launch_named_service(shell, &stage, roots, root_count, held[1], optional, read_only) :
+        launch_named_service(shell, &stage, roots, root_count, held[1], optional, read_only,
+            terminal) :
         shell_directory_error(shell, "service: replace", failed_name, status);
     bool closed = close_handle(&held[0]);
     closed = close_handle(&held[1]) && closed;
@@ -3397,7 +3433,8 @@ enum command_result shell_launch_service(struct shell *shell, const char *name,
       return shell_directory_error(shell, "service", destinations[i], status);
     }
   }
-  return launch_named_service(shell, &stage, roots, root_count, HANDLE_INVALID, optional, read_only);
+  return launch_named_service(shell, &stage, roots, root_count, HANDLE_INVALID, optional,
+      read_only, terminal);
 }
 
 

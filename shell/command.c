@@ -592,6 +592,7 @@ static enum command_result builtin_command(struct shell *shell,
   bool replace = count > 1 && !strcmp(arguments[1], "replace");
   bool optional = false;
   bool read_only = false;
+  bool terminal = false;
   struct shell_service_root roots[PROVIDER_SETUP_ROOT_MAX - 1] = {0};
   size_t root_count = 0;
   size_t index = 2;
@@ -600,6 +601,8 @@ static enum command_result builtin_command(struct shell *shell,
       optional = true;
     } else if (!strcmp(arguments[index], "--read-only") && !read_only) {
       read_only = true;
+    } else if (!strcmp(arguments[index], "--terminal") && !terminal) {
+      terminal = true;
     } else if ((!strcmp(arguments[index], "--root") ||
         !strcmp(arguments[index], "--optional-root") ||
         !strcmp(arguments[index], "--read-only-root") ||
@@ -629,11 +632,11 @@ static enum command_result builtin_command(struct shell *shell,
   if (count < index + 2 || (strcmp(arguments[1], "start") && !replace) ||
       arguments[index][0] == '-') {
     return shell_error(shell,
-        "usage: service start [--optional] [--read-only] [ROOTS...] NAME IMAGE [arguments...]\n"
+        "usage: service start [--optional] [--read-only] [--terminal] [ROOTS...] NAME IMAGE [arguments...]\n"
         "       ROOTS: --root ROLE=NAME | --optional-root ROLE=NAME | --read-only-root ROLE=NAME | --optional-read-only-root ROLE=NAME\n"
-        "       service replace [--read-only] NAME IMAGE [arguments...]\n");
+        "       service replace [--read-only] [--terminal] NAME IMAGE [arguments...]\n");
   }
-  return shell_launch_service(shell, arguments[index], replace, optional, read_only,
+  return shell_launch_service(shell, arguments[index], replace, optional, read_only, terminal,
       arguments + index + 1, count - index - 1, stage->operands, roots, root_count);
 }
 
