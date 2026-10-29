@@ -19,6 +19,7 @@
 #include <abi/screen_capture.h>
 #include <abi/audio.h>
 #include <abi/system_info.h>
+#include <abi/process_view.h>
 #include <abi/terminal.h>
 #include <abi/udp.h>
 #include <clock.h>
@@ -118,7 +119,7 @@ int launch_remote_server(const struct session_config *config,
   }
 
   enum { MEMORY, CLOCK, LAUNCHER, TERMINAL, STDOUT, STDERR, NETWORK_ENDPOINT, FIRST_OPTIONAL };
-  enum { OPTIONAL_COUNT = 29 };
+  enum { OPTIONAL_COUNT = 30 };
   size_t grant_capacity = FIRST_OPTIONAL + OPTIONAL_COUNT + PROFILE_DIRECTORY_LIMIT + captured.count;
   struct launch_grant *grants = calloc(grant_capacity, sizeof(*grants));
   struct launch_environment_entry *entries = NULL;
@@ -288,6 +289,14 @@ int launch_remote_server(const struct session_config *config,
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"system_info", grant_count);
     assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
+  }
+  handle_t process_view = bootstrap_capability("process_view");
+  if (process_view != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("process_view", grant_count);
+    assert(grant_count < grant_capacity);
+    grants[grant_count++] = (struct launch_grant){process_view, PROCESS_VIEW_RIGHT_LIST, 0};
   }
   handle_t audio = bootstrap_capability("audio");
   if (audio != HANDLE_INVALID) {

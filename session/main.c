@@ -13,6 +13,7 @@
 #include "../common/directory.h"
 #include <abi/clock.h>
 #include <abi/system_info.h>
+#include <abi/process_view.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
 #include <abi/tcp.h>
@@ -146,7 +147,7 @@ static int launch_session(const struct session_config *config, struct network_co
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 39 };
+  enum { OPTIONAL_RESOURCE_COUNT = 40 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -383,6 +384,15 @@ static int launch_session(const struct session_config *config, struct network_co
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"system_info", grant_count);
     assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){system_info, SYSTEM_INFO_RIGHT_READ, 0};
+  }
+  /* Private, like jit: only a bundle that requests it receives it. */
+  handle_t process_view = bootstrap_capability("process_view");
+  if (process_view != HANDLE_INVALID) {
+    assert(resource_count < grant_capacity);
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("process_view", grant_count);
+    assert(grant_count < grant_capacity);
+    grants[grant_count++] = (struct launch_grant){process_view, PROCESS_VIEW_RIGHT_LIST, 0};
   }
   handle_t log = bootstrap_capability("log");
   if (log != HANDLE_INVALID) {

@@ -239,8 +239,8 @@ static enum call_status prepare_context(struct context_grants *context,
           continue;
         }
       }
-      if (info.protocol == PROTOCOL_JIT) {
-        continue; /* Only an explicit manifest request delegates executable memory. */
+      if (info.protocol == PROTOCOL_JIT || info.protocol == PROTOCOL_PROCESS_VIEW) {
+        continue; /* Only an explicit manifest request delegates these. */
       }
       /* Filter by actual protocol, so another name for the same provider
        * cannot retain the original, broader grant. */
@@ -619,9 +619,11 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     size_t index = prepared->request.grant_count++;
     prepared->grants[index] = (struct launch_grant){source, requests[i].rights, transport};
-    /* Constructors, JIT and listening authority are private runtime roles,
-     * selected again explicitly when preparing another declared bundle grant. */
+    /* Constructors, JIT, the system process view and listening authority are
+     * private runtime roles, selected again explicitly when preparing another
+     * declared bundle grant. */
     bool private_role = requests[i].protocol == PROTOCOL_JIT ||
+        requests[i].protocol == PROTOCOL_PROCESS_VIEW ||
         requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ||
         (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
          (requests[i].rights & TCP_SERVICE_RIGHT_LISTEN));

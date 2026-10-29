@@ -21,6 +21,7 @@
 #include <abi/screen_capture.h>
 #include <abi/audio.h>
 #include <abi/system_info.h>
+#include <abi/process_view.h>
 #include <abi/tcp.h>
 #include <abi/udp.h>
 #include <console.h>
@@ -48,7 +49,8 @@ static const struct {
   {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
   {"threads", THREAD_RIGHT_MANAGE},
   {"clock", CLOCK_RIGHTS},
-  {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ | LOG_RIGHT_WRITE},
+  {"system_info", SYSTEM_INFO_RIGHT_READ}, {"process_view", PROCESS_VIEW_RIGHT_LIST},
+  {"log", LOG_RIGHT_READ | LOG_RIGHT_WRITE},
   {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
   {"audio", AUDIO_RIGHT_PLAYBACK},
   {"pipe", PIPE_SERVICE_RIGHT_CREATE}, {"service", ENDPOINT_SERVICE_RIGHT_CREATE},
@@ -229,6 +231,7 @@ static enum call_status context_init(struct remote_context *context, bool multip
     status = context_add(context, remote_allowed[i].name, value->handle,
         value->rights & remote_allowed[i].rights, 0,
         wifi_control || !strcmp(remote_allowed[i].name, "jit") ||
+            !strcmp(remote_allowed[i].name, "process_view") ||
             !strcmp(remote_allowed[i].name, "service") ||
             !strcmp(remote_allowed[i].name, "interpreter_root") ||
             !strcmp(remote_allowed[i].name, BUNDLE_TCP_LISTEN_SOURCE) ? 0 : ENVIRONMENT_EXPORTED, &index);

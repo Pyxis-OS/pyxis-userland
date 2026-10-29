@@ -167,7 +167,8 @@ struct shell {
   handle_t profile, space, launcher, child_launcher, memory, display, clock, system_info, log,
       echo, udp, udp_beacons, tcp, pipe, service, environment, random, net_registry,
       keyboard, gamepad, pointer, terminal_service,
-      boot, tmp, host_mount, native_mount, power, screen_capture, audio, retention_account, jit;
+      boot, tmp, host_mount, native_mount, power, screen_capture, audio, retention_account, jit,
+      process_view;
   const struct path_context *directory;
   /* Own the original startup chain after libc retains its independent cwd.
    * Clear released slots so handle-number reuse cannot revive stale owners. */

@@ -28,6 +28,7 @@
 #include <abi/screen_capture.h>
 #include <abi/audio.h>
 #include <abi/system_info.h>
+#include <abi/process_view.h>
 #include <abi/tcp.h>
 #include <abi/udp.h>
 #include <console.h>
@@ -112,7 +113,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
   }
   size_t depth = context->count;
   enum { INPUT, OUTPUT, LAUNCHER, STDIN, STDOUT, STDERR, EVENTS, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 32 };
+  enum { OPTIONAL_RESOURCE_COUNT = 33 };
   struct environment_capture capture = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &capture);
@@ -266,7 +267,8 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
     {"threads", THREAD_RIGHT_MANAGE},
     {"clock", CLOCK_RIGHTS},
-    {"system_info", SYSTEM_INFO_RIGHT_READ}, {"log", LOG_RIGHT_READ | LOG_RIGHT_WRITE},
+    {"system_info", SYSTEM_INFO_RIGHT_READ}, {"process_view", PROCESS_VIEW_RIGHT_LIST},
+    {"log", LOG_RIGHT_READ | LOG_RIGHT_WRITE},
     {"screen_capture", SCREEN_CAPTURE_RIGHT_CAPTURE},
     {"audio", AUDIO_RIGHT_PLAYBACK},
     /* Graphics remain a shared space layer, never a pane surface. */
@@ -324,6 +326,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     entries[entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
       .flags = wifi_control || !strcmp(allowed[i].name, "jit") ||
+          !strcmp(allowed[i].name, "process_view") ||
           !strcmp(allowed[i].name, "service") ||
           !strcmp(allowed[i].name, "retention_account") ?
           0 : ENVIRONMENT_EXPORTED,

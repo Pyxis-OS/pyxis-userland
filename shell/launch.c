@@ -16,6 +16,7 @@
 #include <abi/display.h>
 #include <abi/clock.h>
 #include <abi/system_info.h>
+#include <abi/process_view.h>
 #include <abi/echo.h>
 #include <abi/udp.h>
 #include <abi/tcp.h>
@@ -80,7 +81,7 @@ struct prepared_stage {
   bool transaction_body;
   struct launch_grant *grants;
   uint64_t *directories;
-  struct launch_environment_entry resources[49 + BUNDLE_SOURCE_LIMIT];
+  struct launch_environment_entry resources[50 + BUNDLE_SOURCE_LIMIT];
   uint64_t screenshot_saver_identity;
   uint64_t wifi_private_identity[2];
   char *source_names[BUNDLE_SOURCE_LIMIT];
@@ -724,6 +725,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_threads = threads != HANDLE_INVALID;
   handle_t jit = shell->jit;
   bool pass_jit = session && jit != HANDLE_INVALID;
+  /* Like jit: a session successor holds it; ordinary children get it only
+   * through a bundle manifest request. */
+  bool pass_process_view = session && shell->process_view != HANDLE_INVALID;
   bool delegate = mode == SHELL_FOREGROUND &&
       child_launcher != HANDLE_INVALID;
   bool pass_child_launcher = session && child_launcher != HANDLE_INVALID;
@@ -865,7 +869,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   size_t clipboard_shared_index = clipboard_local_index + (has_clipboard_local ? 1 : 0);
   size_t threads_index = clipboard_shared_index + (has_clipboard_shared ? 1 : 0);
   size_t jit_index = threads_index + (has_threads ? 1 : 0);
-  size_t job_provisioner_index = jit_index + (pass_jit ? 1 : 0);
+  size_t process_view_index = jit_index + (pass_jit ? 1 : 0);
+  size_t job_provisioner_index = process_view_index + (pass_process_view ? 1 : 0);
   size_t tcp_listen_index = job_provisioner_index + (has_job_provisioner ? 1 : 0);
   size_t retention_factory_index = tcp_listen_index + (has_tcp_listen ? 1 : 0);
   size_t retention_account_index = retention_factory_index + (has_retention_factory ? 1 : 0);
@@ -911,6 +916,10 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     if (status != CALL_OK) {
       return status;
     }
+  }
+  if (pass_process_view) {
+    grants[process_view_index] = (struct launch_grant){shell->process_view,
+      PROCESS_VIEW_RIGHT_LIST, 0};
   }
   for (size_t i = 0; i < root_count; ++i) {
     grants[CHILD_ROOT + i] = (struct launch_grant){selected_roots[i].handle, 0, 0};
@@ -1109,6 +1118,13 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     }
     resources[resource_count++] = (struct launch_environment_entry)
         PROFILE_PRIVATE_CAP("jit", jit_index);
+  }
+  if (pass_process_view) {
+    if (resource_count == resource_capacity) {
+      return CALL_LIMIT;
+    }
+    resources[resource_count++] = (struct launch_environment_entry)
+        PROFILE_PRIVATE_CAP("process_view", process_view_index);
   }
   if (has_output) {
     assert(resource_count < resource_capacity);

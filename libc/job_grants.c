@@ -29,6 +29,7 @@
 #include <abi/screen_capture.h>
 #include <abi/space.h>
 #include <abi/system_info.h>
+#include <abi/process_view.h>
 #include <abi/tcp.h>
 #include <abi/thread.h>
 #include <abi/udp.h>
@@ -157,6 +158,9 @@ static enum call_status validate_authority(const struct handle_info *info,
     break;
   case PROTOCOL_SYSTEM_INFO:
     allowed_rights = SYSTEM_INFO_RIGHT_READ;
+    break;
+  case PROTOCOL_PROCESS_VIEW:
+    allowed_rights = PROCESS_VIEW_RIGHT_LIST;
     break;
   case PROTOCOL_LOG:
     allowed_rights = LOG_RIGHT_READ;

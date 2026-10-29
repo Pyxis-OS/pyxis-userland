@@ -135,7 +135,7 @@ static inline enum call_status profile_inherit_services(
     if (status != CALL_OK) {
       return status;
     }
-    if (info.protocol == PROTOCOL_JIT) {
+    if (info.protocol == PROTOCOL_JIT || info.protocol == PROTOCOL_PROCESS_VIEW) {
       continue;
     }
     size_t length = strlen(value->name);

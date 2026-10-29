@@ -203,6 +203,7 @@ int main(int argc, char **argv)
     .memory = bootstrap_capability("memory"),
     .threads = bootstrap_capability("threads"),
     .jit = bootstrap_capability("jit"),
+    .process_view = bootstrap_capability("process_view"),
     .display = bootstrap_capability("display"),
     .clock = bootstrap_capability("clock"),
     .system_info = bootstrap_capability("system_info"),
