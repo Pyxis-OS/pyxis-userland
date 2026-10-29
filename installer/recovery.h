@@ -4,6 +4,7 @@
 #include "publication_snapshot.h"
 
 struct install_recovery {
+  const char *reason;
   struct config_blob manifest, fallback;
   struct config_file_digest kernel, archive;
   struct install_source sources[2];

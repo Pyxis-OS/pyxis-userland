@@ -284,6 +284,7 @@ static bool esp_space_budget(struct install_plan *plan)
 bool install_plan_prepare(struct install_plan *plan, const struct disk_info *target)
 {
   plan->ready = false;
+  plan->reason = "a previous ESP planning view still requires retirement";
 #if INSTALLER_PUBLICATION_SCRATCH
   if (plan->view.root != HANDLE_INVALID || plan->view.control != HANDLE_INVALID) {
     return false;
@@ -291,8 +292,12 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   install_installed_destroy(&plan->installed);
 #endif
   uint64_t deadline;
-  if (!cleanup_deadline(plan->clock, &deadline) ||
-      !install_target_destroy(&plan->target, deadline)) {
+  plan->reason = "cannot establish the target cleanup deadline";
+  if (!cleanup_deadline(plan->clock, &deadline)) {
+    return false;
+  }
+  plan->reason = "previous target inspection cleanup remains incomplete";
+  if (!install_target_destroy(&plan->target, deadline)) {
     return false;
   }
   install_consent_destroy(&plan->consent);
@@ -302,6 +307,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   plan->configuration = NULL;
   plan->configuration_bytes = 0;
   config_blob_destroy(&plan->entry);
+  plan->reason = "selected device geometry differs from the frozen plan or is unsupported";
   if (!target || (target->block_size != 512 && target->block_size != 4096) ||
       target->block_count != plan->record.block_count ||
       target->block_size != plan->record.block_size ||
@@ -313,15 +319,20 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   plan->raw_disk.info = *target;
   plan->raw_disk.bytes = plan->disk.bytes;
   install_progress_begin("Preparing complete target Review read-only", INSTALL_PROGRESS_NONE, NULL);
+  plan->reason = "target Review preparation failed";
   if (!install_target_prepare(&plan->target, plan->disks, plan->clock, target,
       &plan->record, deadline, &plan->consent,
       &plan->available_blocks, plan->record.target_hash)) {
     install_progress_pause();
     fprintf(stderr, "installer: target Review unavailable: %s (status %u)\n",
         plan->target.reason ? plan->target.reason : "inspection failed", plan->target.status);
+    if (plan->target.reason) {
+      plan->reason = plan->target.reason;
+    }
     return false;
   }
   if (!plan->record.updating) {
+    plan->reason = "new pool geometry or journal size cannot form a supported NPFS layout";
     if (npfs_header_layout(plan->record.layout.pool_bytes / NPFS_BLOCK_SIZE,
           plan->record.journal_mib * INSTALL_MIB / NPFS_BLOCK_SIZE,
           plan->record.pool_id, &plan->header) != NPFS_OK) {
@@ -332,6 +343,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
     plan->available_blocks = plan->header.pool_blocks - reserved;
   }
   if (!plan->record.coexist) {
+    plan->reason = "cannot render the Classic boot configuration";
     plan->configuration = boot_configuration(plan->record.layout.disk_guid,
         plan->record.layout.pool_partition, &plan->configuration_bytes);
     if (!plan->configuration) {
@@ -344,23 +356,44 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   plan->revision_record[revision_bytes] = '\0';
 #if INSTALLER_PUBLICATION_SCRATCH
   if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
+    plan->reason = "Classic ESP bootstrap layout or capacity preparation failed";
     plan->esp = install_esp_plan(&plan->raw_disk, &plan->record.layout, &plan->efi,
         NULL, NULL, plan->configuration, plan->configuration_bytes,
         plan->revision_record, revision_bytes, npfs_get_u32(plan->record.layout.esp_guid));
-    if (!plan->esp) return false;
+    if (!plan->esp) {
+      return false;
+    }
   }
+  plan->reason = "boot publication preparation failed (see detail above)";
   if (install_plan_publication(plan) && !install_installed_prepare(plan)) {
     return false;
   }
 #endif
-  if (!payload_plan(plan) || !esp_space_budget(plan) || !source_fingerprint(plan, plan->record.source_hash) ||
-      !space_budget(plan) || !install_plan_record_valid(&plan->record)) {
+  plan->reason = "boot payload paths or digest preparation failed";
+  if (!payload_plan(plan)) {
+    return false;
+  }
+  plan->reason = "ESP capacity is unknown or insufficient for the fresh boot attempt";
+  if (!esp_space_budget(plan)) {
+    return false;
+  }
+  plan->reason = "cannot fingerprint the installation sources and frozen choices";
+  if (!source_fingerprint(plan, plan->record.source_hash)) {
+    return false;
+  }
+  plan->reason = "the native pool has insufficient free space for installation metadata";
+  if (!space_budget(plan)) {
+    return false;
+  }
+  plan->reason = "the prepared plan contains invalid or inconsistent choices";
+  if (!install_plan_record_valid(&plan->record)) {
     return false;
   }
   if (!plan->record.coexist) {
     /* Preserve the complete fixed-tree fit check even though raw initialization
      * writes only the bootstrap tree. Native staging must not discover a known
      * oversized payload after erase or recovery has begun. */
+    plan->reason = "complete Classic boot-tree layout or capacity preparation failed";
     struct install_esp *complete = install_esp_plan(&plan->raw_disk, &plan->record.layout,
         &plan->efi, &plan->kernel, &plan->archive, plan->configuration,
         plan->configuration_bytes, plan->revision_record, revision_bytes,
@@ -374,6 +407,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
   if (!plan->record.coexist && (!plan->record.updating || plan->record.esp_rebuild)) {
     /* Initialization is confined by reviewed erase/ESP-rebuild authority.
      * Kernel/archive are subsequently written through the native FAT view. */
+    plan->reason = "Classic ESP bootstrap layout or capacity preparation failed";
     plan->esp = install_esp_plan(&plan->raw_disk, &plan->record.layout, &plan->efi,
         NULL, NULL, plan->configuration, plan->configuration_bytes,
         plan->revision_record, revision_bytes, npfs_get_u32(plan->record.layout.esp_guid));
@@ -382,6 +416,7 @@ bool install_plan_prepare(struct install_plan *plan, const struct disk_info *tar
     }
   }
 #endif
+  plan->reason = NULL;
   plan->ready = true;
   install_progress_finish();
   return true;

@@ -40,6 +40,7 @@ static bool close_planning(struct install_plan *plan)
   if (clock_now(plan->clock, &now) != CALL_OK || now > UINT64_MAX - UINT64_C(30000000000) ||
       install_esp_view_close_and_retire(&plan->view, plan->clock,
           now + UINT64_C(30000000000)) != CALL_OK) {
+    plan->reason = "configuration planning view retirement remains pending";
     fputs("installer: configuration planning view retirement remains pending\n", stderr);
     return false;
   }
@@ -61,6 +62,7 @@ bool install_installed_prepare(struct install_plan *plan)
   bool ok;
   if (fresh) {
     uint64_t cluster_bytes = 0, available_bytes = 0;
+    plan->reason = "cannot determine the freshly planned ESP capacity";
     ok = install_esp_capacity(plan->esp, &cluster_bytes, &available_bytes) &&
         boot_publication_prepare_fresh(publication, &input, plan->configuration,
             plan->configuration_bytes, cluster_bytes, available_bytes);
@@ -70,10 +72,16 @@ bool install_installed_prepare(struct install_plan *plan)
         MOUNT_ACCESS_READ_ONLY, INSTALLED_READ, &mounted);
     plan->view.root = mounted.root;
     plan->view.control = mounted.control;
+    if (status != CALL_OK) {
+      fprintf(stderr, "installer: cannot open the reviewed ESP read-only (status %u)\n", status);
+      plan->reason = "cannot open the reviewed ESP read-only";
+    }
     ok = status == CALL_OK &&
         boot_publication_prepare(publication, &input, mounted.root, mounted.control);
+    if (!ok && publication->reason) plan->reason = publication->reason;
     ok = close_planning(plan) && ok;
   }
+  if (fresh && !ok && publication->reason) plan->reason = publication->reason;
   publication->prepared = ok;
   return ok;
 }

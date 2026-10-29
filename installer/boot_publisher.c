@@ -146,12 +146,17 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
   const struct config_blob *record = &publication->record;
   struct config_record previous = {0};
   bool recorded = record->digest.present;
+  publication->reason = "the installed boot record is invalid or not committed";
   bool ok = !recorded || (config_record_parse(record->bytes, record->size, &previous) &&
       previous.committed);
-  if (ok) ok = binding_prepare(publication, input);
+  if (ok) {
+    publication->reason = "cannot hash or bind the new boot payloads";
+    ok = binding_prepare(publication, input);
+  }
   if (ok) {
     const struct install_boot_entry_paths next = {publication->binding.kernel.path,
       publication->binding.archive.path};
+    publication->reason = "the installed boot menu cannot be safely activated from its ownership evidence";
     if (publication->fresh || (!recorded && !publication->menu.digest.present)) {
       ok = install_boot_entry_render_owned(&next, input->disk_guid, input->pool_partition,
           &publication->next_menu);
@@ -174,8 +179,15 @@ static bool prepare_plan(struct boot_publication *publication, const struct boot
   }
   if (ok) {
     publication->required_bytes = required_space(publication, publication->cluster_bytes);
+    publication->reason = "insufficient checked ESP free space for the new boot publication";
     ok = publication->required_bytes <= publication->available_bytes;
+    if (!ok) {
+      fprintf(stderr, "%s: insufficient ESP space: need %llu bytes, checked free %llu bytes; nothing written\n",
+          input->name, (unsigned long long)publication->required_bytes,
+          (unsigned long long)publication->available_bytes);
+    }
   }
+  if (ok) publication->reason = NULL;
   return ok;
 }
 
@@ -184,19 +196,35 @@ bool boot_publication_prepare(struct boot_publication *publication,
 {
   boot_publication_destroy(publication);
   const struct config_blob *record = &publication->record;
+  publication->reason = "the mounted ESP identity differs from the reviewed target";
   bool ok = install_snapshot_facts(control, &publication->facts) &&
-      facts_match(&input->target, &publication->facts) &&
-      read_current(root, &publication->menu, &publication->record) &&
-      install_recovery_resolved(root, record) &&
-      install_recovery_menu_review(root, record, &publication->facts, input->pool_partition) &&
-      install_recovery_prepare(root, input->boot, input->loaded_kernel, input->workspace,
-          &publication->facts, &publication->recovery);
+      facts_match(&input->target, &publication->facts);
+  if (ok) {
+    publication->reason = "cannot snapshot the installed boot menu or ownership record";
+    ok = read_current(root, &publication->menu, &publication->record);
+  }
+  if (ok) {
+    publication->reason = "an incomplete or unresolved boot publication requires recovery";
+    ok = install_recovery_resolved(root, record);
+  }
+  if (ok) {
+    publication->reason = "unrecognized files or stale recovery artifacts exist in boot/limine";
+    ok = install_recovery_menu_review(root, record, &publication->facts, input->pool_partition);
+  }
+  if (ok) {
+    publication->reason = "the immutable rescue pair or fallback menu cannot be safely reused or provisioned";
+    ok = install_recovery_prepare(root, input->boot, input->loaded_kernel, input->workspace,
+        &publication->facts, &publication->recovery);
+    if (!ok && publication->recovery.reason) publication->reason = publication->recovery.reason;
+  }
   if (ok && input->coexist) {
+    publication->reason = "the existing EFI/pyxis/BOOTX64.EFI differs from the installer loader or cannot be verified";
     ok = install_boot_payload_digest(&input->loader, &publication->loader_digest) &&
         loader_inspect(root, &publication->loader_digest, &publication->loader_present);
   }
   if (ok) {
     struct mount_state_reply state;
+    publication->reason = "checked ESP free-space capacity is unavailable or invalid";
     ok = mount_observe(control, &state) == CALL_OK &&
         (state.flags & MOUNT_STATE_CAPACITY_VALID) && state.cluster_bytes &&
         state.free_clusters <= UINT64_MAX / state.cluster_bytes;
@@ -219,6 +247,7 @@ bool boot_publication_prepare_fresh(struct boot_publication *publication,
   publication->facts = input->target;
   publication->cluster_bytes = cluster_bytes;
   publication->available_bytes = available_bytes;
+  publication->reason = "cannot prepare the fresh boot menu or independent rescue sources";
   bool ok = config_blob_set(&publication->menu, limine, limine_bytes) &&
       install_recovery_prepare_fresh(input->boot, input->loaded_kernel,
           &publication->facts, &publication->recovery) &&

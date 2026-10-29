@@ -394,21 +394,36 @@ bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kern
     return false;
   }
   *recovery = (struct install_recovery){0};
+  recovery->reason = "the recovery ESP identity or native root binding is invalid";
   if (!facts || !config_target_valid(facts) || !root_bound(root, facts)) {
     return false;
   }
   recovery->facts = *facts;
+  recovery->reason = "an EFI/BOOT/limine.conf or EFI/pyxis/limine.conf shadows the reviewed boot menu";
   if (!no_efi_shadow(root)) {
     return false;
   }
   handle_t parent = HANDLE_INVALID;
+  recovery->reason = "cannot inspect EFI/pyxis/recovery";
   enum call_status status = parent_open(root, RECOVERY_DIRECTORY, RECOVERY_READ, false, &parent);
   bool ok;
   if (status == CALL_NOT_FOUND) {
-    ok = fallback_absent(root) && prepare_sources(boot, loaded_kernel, recovery);
+    struct config_blob fallback = {0};
+    enum call_status fallback_status = snapshot_file(root, RECOVERY_FALLBACK,
+        CONFIG_FILE_MAX_BYTES, &fallback);
+    recovery->reason = fallback_status == CALL_OK ?
+        "boot/limine.conf exists without EFI/pyxis/recovery ownership evidence; the existing rescue fallback is preserved" :
+        "cannot establish whether boot/limine.conf is absent before provisioning recovery";
+    config_blob_destroy(&fallback);
+    ok = fallback_status == CALL_NOT_FOUND;
+    if (ok) {
+      recovery->reason = "cannot hash the independent rescue kernel or recovery archive sources";
+      ok = prepare_sources(boot, loaded_kernel, recovery);
+    }
   } else if (status == CALL_OK) {
     handle_t ram = HANDLE_INVALID;
     recovery->present = true;
+    recovery->reason = "the existing recovery directory, ownership manifest or payload hashes do not match the reviewed ESP";
     ok = recovery_contents(parent) &&
         snapshot_file(root, RECOVERY_MANIFEST, RECOVERY_MANIFEST_MAX, &recovery->manifest) == CALL_OK &&
         manifest_parse(recovery) && install_esp_transfer_workspace(workspace, &ram) == CALL_OK &&
@@ -421,10 +436,12 @@ bool install_recovery_prepare(handle_t root, handle_t boot, handle_t loaded_kern
     return false;
   }
   if (ok) {
+    recovery->reason = "boot/limine.conf does not exactly match the immutable recovery pair";
     ok = fallback_render(recovery, &recovery->fallback) &&
         (!recovery->present || snapshot_matches(root, RECOVERY_FALLBACK,
             CONFIG_FILE_MAX_BYTES, &recovery->fallback));
   }
+  if (ok) recovery->reason = NULL;
   return ok;
 }
 

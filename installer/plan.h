@@ -15,6 +15,7 @@
 /* Owned preparation, immutable after Review. Native source handles and BOOT
  * are borrowed except EFI; no target mount or write occurs here. */
 struct install_plan {
+  const char *reason;
   struct install_plan_record record;
   struct install_disk disk, raw_disk;
   struct install_target target;

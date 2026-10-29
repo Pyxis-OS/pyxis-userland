@@ -764,9 +764,16 @@ int main(int argc, char **argv)
       }
     }
   }
-  if (!prepared || (replay && !record_matches(&expected, &plan.record))) {
+  if (!prepared) {
     install_progress_pause();
-    fputs("installer: plan cannot be prepared, no longer matches, or exceeds capacity;\n"
+    fprintf(stderr, "installer: plan preparation failed: %s;\n"
+        "nothing was written. Build and review a new plan.\n",
+        plan.reason ? plan.reason : "preparation detail unavailable");
+    goto done;
+  }
+  if (replay && !record_matches(&expected, &plan.record)) {
+    install_progress_pause();
+    fputs("installer: the prepared plan no longer matches the replayed plan;\n"
         "nothing was written. Build and review a new plan.\n", stderr);
     goto done;
   }

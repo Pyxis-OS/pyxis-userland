@@ -30,6 +30,7 @@ struct boot_publisher_input {
 /* Frozen review state. All snapshots and choices are fixed once prepared.
  * MENU and RECORD are the consumed ESP bytes; NEXT_MENU is the reviewed menu. */
 struct boot_publication {
+  const char *reason;
   struct config_blob menu, next_menu, record;
   struct install_recovery recovery;
   struct config_target_facts facts;
