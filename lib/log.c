@@ -85,8 +85,7 @@ enum call_status log_read(handle_t log, struct log_cursor cursor,
       memcpy(&record, response.bytes + offset, sizeof(record));
       offset += sizeof(record);
       if (!record.length || record.length > response.header.size - offset ||
-          record.level < LOG_LEVEL_ERROR || record.level > LOG_LEVEL_TRACE ||
-          record.reserved) {
+          record.level < LOG_LEVEL_ERROR || record.level > LOG_LEVEL_TRACE) {
         return CALL_BAD_REQUEST;
       }
       const unsigned char *text = response.bytes + offset;
@@ -133,4 +132,42 @@ bool log_next_record(const void *bytes, size_t size, size_t *offset,
   *text = position + sizeof(*record);
   *offset += sizeof(*record) + record->length;
   return true;
+}
+
+enum call_status log_write(handle_t log, enum log_level level, const char *text)
+{
+  size_t length = text ? strlen(text) : 0;
+  if (!text || length > LOG_WRITE_MAX) {
+    return CALL_BAD_REQUEST;
+  }
+  struct log_write_request request = {
+    .header = {PROTOCOL_LOG, LOG_WRITE}, .level = level,
+    .address = (uintptr_t)text, .length = length,
+  };
+  struct syscall_result result = syscall_call(log, &request, sizeof(request), NULL, 0);
+  return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+         (enum call_status)result.status : CALL_BAD_REQUEST;
+}
+
+enum call_status log_open_stream(handle_t log, enum log_level level, handle_t *stream)
+{
+  if (!stream) {
+    return CALL_BAD_REQUEST;
+  }
+  *stream = HANDLE_INVALID;
+  struct log_stream_request request = {
+    .header = {PROTOCOL_LOG, LOG_STREAM}, .level = level,
+  };
+  struct log_stream_reply reply;
+  struct syscall_result result = syscall_call(log, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (result.status != CALL_OK) {
+    return result.status < CALL_STATUS_COUNT && !result.reply_size ?
+           (enum call_status)result.status : CALL_BAD_REQUEST;
+  }
+  if (result.reply_size != sizeof(reply) || reply.handle == HANDLE_INVALID) {
+    return CALL_BAD_REQUEST;
+  }
+  *stream = reply.handle;
+  return CALL_OK;
 }
