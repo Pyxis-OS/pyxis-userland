@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1000,7 +1001,8 @@ func (e *editor) write(text string) {
 	e.refresh()
 	result := "Saved " + e.path + ". It applies at the next boot.\nPrevious: " + previousPath(e.path)
 	if durability != nil {
-		result += "\n\nSyncing the directory failed (" + durability.Error() + "); the file is in place but may not survive a crash until it is synced."
+		result += "\n\nSyncing the directory failed (" + durability.Error() + "). The file is in place; run sync " +
+			filepath.Dir(e.path) + " to make the new name durable before a crash or power loss."
 	}
 	e.message("Saved", tview.Escape(result))
 }

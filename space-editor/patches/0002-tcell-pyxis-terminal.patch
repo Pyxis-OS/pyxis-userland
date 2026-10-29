@@ -1,0 +1,171 @@
+--- a/vendor/github.com/gdamore/tcell/v2/tscreen_pyxis.go
++++ b/vendor/github.com/gdamore/tcell/v2/tscreen_pyxis.go
+@@ -0,0 +1,26 @@
++// Copyright 2026 PyxisOS contributors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use file except in compliance with the License.
++// You may obtain a copy of the license at
++//
++//    http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//go:build pyxis
++
++package tcell
++
++// initialize uses the caller's terminal: Pyxis has no /dev/tty, so the
++// supplied standard streams are the terminal (docs/wip/terminal-ui.md).
++func (t *tScreen) initialize() error {
++	if t.tty == nil {
++		t.tty = &pyxisTty{}
++	}
++	return nil
++}
+--- a/vendor/github.com/gdamore/tcell/v2/tty_pyxis.go
++++ b/vendor/github.com/gdamore/tcell/v2/tty_pyxis.go
+@@ -0,0 +1,139 @@
++// Copyright 2026 PyxisOS contributors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use file except in compliance with the License.
++// You may obtain a copy of the license at
++//
++//    http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//go:build pyxis
++
++package tcell
++
++import (
++	"errors"
++	"os"
++	"sync"
++	"syscall"
++	"time"
++)
++
++// pyxisTty is the Pyxis terminal on the supplied stdin and stdout, using the
++// native raw-mode, size and resize-wait interfaces instead of termios and
++// SIGWINCH.
++//
++// A resize wait ends only when its file closes, and stdin stays open, so the
++// waiter started by the first Start lives until process exit. Stop and Start
++// only switch whether it delivers the resize callback.
++type pyxisTty struct {
++	in, out *os.File
++	fd      int
++	saved   *syscall.TerminalState
++	cb      func()
++	active  bool
++	waiting bool
++	l       sync.Mutex
++}
++
++// The Pyxis keyboard sends LF for Enter (lib/key_layout.c) where tcell
++// expects a raw terminal's CR; Ctrl+J is the same byte there.
++func (tty *pyxisTty) Read(b []byte) (int, error) {
++	n, err := tty.in.Read(b)
++	for i := range b[:n] {
++		if b[i] == '\n' {
++			b[i] = '\r'
++		}
++	}
++	return n, err
++}
++
++func (tty *pyxisTty) Write(b []byte) (int, error) {
++	return tty.out.Write(b)
++}
++
++func (tty *pyxisTty) Close() error {
++	return nil
++}
++
++func (tty *pyxisTty) Start() error {
++	tty.l.Lock()
++	defer tty.l.Unlock()
++	tty.in, tty.out = os.Stdin, os.Stdout
++	tty.fd = int(tty.in.Fd())
++	if !syscall.TerminalIsTerminal(tty.fd) {
++		return errors.New("device is not a terminal")
++	}
++	_ = tty.in.SetReadDeadline(time.Time{})
++	saved, err := syscall.TerminalMakeRaw(tty.fd)
++	if err != nil {
++		return err
++	}
++	tty.saved = saved
++	tty.active = true
++	if !tty.waiting {
++		_, _, generation, err := syscall.TerminalSize(tty.fd)
++		if err != nil {
++			return err
++		}
++		tty.waiting = true
++		go tty.waitResized(generation)
++	}
++	return nil
++}
++
++// waitResized re-queries the size after each change, because changes
++// coalesce, and waits for the next one with the new generation.
++func (tty *pyxisTty) waitResized(generation uint64) {
++	for tty.in.WaitTerminalResized(generation) == nil {
++		_, _, next, err := syscall.TerminalSize(tty.fd)
++		if err != nil {
++			return
++		}
++		generation = next
++		tty.l.Lock()
++		cb := tty.cb
++		if !tty.active {
++			cb = nil
++		}
++		tty.l.Unlock()
++		if cb != nil {
++			cb()
++		}
++	}
++}
++
++func (tty *pyxisTty) Drain() error {
++	_ = tty.in.SetReadDeadline(time.Now())
++	return nil
++}
++
++func (tty *pyxisTty) Stop() error {
++	tty.l.Lock()
++	defer tty.l.Unlock()
++	tty.active = false
++	if err := syscall.TerminalRestore(tty.fd, tty.saved); err != nil {
++		return err
++	}
++	_ = tty.in.SetReadDeadline(time.Now())
++	return nil
++}
++
++func (tty *pyxisTty) WindowSize() (WindowSize, error) {
++	columns, rows, _, err := syscall.TerminalSize(tty.fd)
++	if err != nil {
++		return WindowSize{}, err
++	}
++	return WindowSize{Width: columns, Height: rows}, nil
++}
++
++func (tty *pyxisTty) NotifyResize(cb func()) {
++	tty.l.Lock()
++	tty.cb = cb
++	tty.l.Unlock()
++}
