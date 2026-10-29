@@ -58,7 +58,7 @@ struct transaction {
   struct http_stream *engine;
   struct http_wait wait;
   handle_t snapshot;
-  uint64_t snapshot_size, snapshot_charge, body_charge, navigation_size;
+  uint64_t snapshot_size, navigation_size;
   unsigned char *error_body;
   size_t error_size, redirects;
   bool removing, creating_snapshot, redirecting, mutation_queued;
@@ -85,7 +85,7 @@ struct transaction {
 struct loop {
   handle_t service, receiver, staging;
   handle_t roots[HTTPFS_ROOT_COUNT];
-  uint64_t body_cap, storage_cap, reserved;
+  uint64_t body_cap;
   struct transaction *storage_owner;
   struct http_client client;
   struct exported exports[EXPORT_SLOTS];
@@ -304,36 +304,13 @@ static void cut_exports(struct loop *loop, struct transaction *transaction)
 }
 
 
-static bool storage_reserve(struct loop *loop, uint64_t *charge, uint64_t length)
-{
-  if (!loop->storage_cap || length <= *charge) {
-    return true;
-  }
-  uint64_t growth = length - *charge;
-  if (loop->reserved > loop->storage_cap || growth > loop->storage_cap - loop->reserved) {
-    return false;
-  }
-  loop->reserved += growth;
-  *charge = length;
-  return true;
-}
-
-static void storage_release(struct loop *loop, uint64_t *charge, uint64_t length)
-{
-  if (loop->storage_cap && length < *charge) {
-    loop->reserved -= *charge - length;
-    *charge = length;
-  }
-}
-
-static void close_backing(struct loop *loop, handle_t *handle, uint64_t *charge)
+static void close_backing(struct loop *loop, handle_t *handle)
 {
   if (*handle && handle_close(*handle)) {
     loop->fatal = CALL_BAD_HANDLE;
     return;
   }
   *handle = HANDLE_INVALID;
-  storage_release(loop, charge, 0);
 }
 static void destroy_if_retired(struct loop *loop, struct transaction *transaction)
 {
@@ -354,8 +331,8 @@ static void destroy_if_retired(struct loop *loop, struct transaction *transactio
   if (loop->active == transaction) {
     loop->active = NULL;
   }
-  close_backing(loop, &transaction->backing, &transaction->body_charge);
-  close_backing(loop, &transaction->snapshot, &transaction->snapshot_charge);
+  close_backing(loop, &transaction->backing);
+  close_backing(loop, &transaction->snapshot);
   release_read_bulk(transaction);
   if (transaction->error_body) {
     erase(transaction->error_body, transaction->error_size);
@@ -410,6 +387,10 @@ static void abort_transaction(struct loop *loop, struct transaction *transaction
     } else if (!transaction->detail[0] && transaction->response.error == HTTP_TLS_ERROR) {
       tls_result_detail(&transaction->response.tls_failure, transaction->detail,
           sizeof(transaction->detail));
+    } else if (!transaction->detail[0] && (failure == CALL_NO_MEMORY || failure == CALL_NO_SPACE)) {
+      snprintf(transaction->detail, sizeof(transaction->detail), "%s (native status %u)",
+          failure == CALL_NO_MEMORY ? "Memory allocation failed" : "Backing storage is full",
+          (unsigned)failure);
     }
     transaction->phase = failure == CALL_ABANDONED ? HTTP_TRANSACTION_ABORTED : HTTP_TRANSACTION_FAILED;
   }
@@ -1057,11 +1038,6 @@ static void body_request(struct loop *loop, struct transaction *transaction,
     reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
     return;
   }
-  if (!storage_reserve(loop, &transaction->body_charge, admitted_size)) {
-    transaction->mutation_failure = CALL_FILE_TOO_LARGE;
-    reply(loop, packet, CALL_FILE_TOO_LARGE, NULL, 0, NULL, 0);
-    return;
-  }
   transaction->staging_operation = kind;
   transaction->mutation_queued = true;
   transaction->work->mutation = *packet;
@@ -1143,8 +1119,6 @@ static void write_completed(struct loop *loop, struct transaction *transaction,
   if (kind == STAGING_WRITE) {
     if (status != CALL_OK) {
       transaction->mutation_failure = status;
-    } else {
-      storage_release(loop, &transaction->body_charge, transaction->body_length);
     }
     struct file_write_reply response = {written};
     if (transaction->work->mutation.receipt &&
@@ -1191,7 +1165,6 @@ static void staging_completion(struct loop *loop, struct transaction *transactio
   } else if (kind == STAGING_RESIZE) {
     if (status == CALL_OK && !packet->size && !packet->grant_count) {
       transaction->body_length = transaction->mutation_size;
-      storage_release(loop, &transaction->body_charge, transaction->body_length);
     } else {
       status = status == CALL_OK ? CALL_OUTCOME_UNKNOWN : status;
       transaction->mutation_failure = status;
@@ -1513,9 +1486,9 @@ static void settle(struct loop *loop, struct transaction *transaction)
     }
     transaction->cleanup = status;
   }
-  close_backing(loop, &transaction->backing, &transaction->body_charge);
+  close_backing(loop, &transaction->backing);
   if (transaction->failure != CALL_OK) {
-    close_backing(loop, &transaction->snapshot, &transaction->snapshot_charge);
+    close_backing(loop, &transaction->snapshot);
   }
   if (transaction->work->preparation.receipt) {
     publish_snapshot(loop, transaction, &transaction->work->preparation);
@@ -1548,7 +1521,7 @@ static void settle(struct loop *loop, struct transaction *transaction)
     transaction->queue = NULL;
   }
   if (!has_facet(loop, transaction, FACET_SNAPSHOT)) {
-    close_backing(loop, &transaction->snapshot, &transaction->snapshot_charge);
+    close_backing(loop, &transaction->snapshot);
   }
   if (transaction->failure == CALL_OK && transaction->error_body) {
     erase(transaction->error_body, transaction->error_size);
@@ -1562,7 +1535,7 @@ static void settle(struct loop *loop, struct transaction *transaction)
   destroy_if_retired(loop, transaction);
 }
 
-static enum call_status navigation_prefix(struct loop *loop, struct transaction *transaction)
+static enum call_status navigation_prefix(struct transaction *transaction)
 {
   if (!(transaction->response_flags & HTTP_ENDPOINT_NAVIGATION)) {
     return CALL_OK;
@@ -1578,9 +1551,6 @@ static enum call_status navigation_prefix(struct loop *loop, struct transaction 
   }
   if (transaction->response.length_present &&
       transaction->response.length > UINT64_MAX - size) {
-    return CALL_FILE_TOO_LARGE;
-  }
-  if (!storage_reserve(loop, &transaction->snapshot_charge, size)) {
     return CALL_FILE_TOO_LARGE;
   }
   transaction->navigation_size = size;
@@ -1719,14 +1689,7 @@ static bool progress(struct loop *loop)
     if (redirect_status(transaction->response.status)) {
       status = redirect_prepare(loop, transaction);
     } else {
-      status = navigation_prefix(loop, transaction);
-      if (status == CALL_OK && !transaction->removing &&
-          final_http_status(transaction->response.status) == CALL_OK &&
-          transaction->response.length_present &&
-          !storage_reserve(loop, &transaction->snapshot_charge,
-          transaction->response.length + transaction->navigation_size)) {
-        status = CALL_FILE_TOO_LARGE;
-      }
+      status = navigation_prefix(transaction);
       if (status == CALL_OK) {
         transaction->phase = HTTP_TRANSACTION_READING;
       }
@@ -1747,19 +1710,13 @@ static bool progress(struct loop *loop)
         if (keep > count) {
           keep = count;
         }
-        if ((transaction->response_flags & HTTP_ENDPOINT_NAVIGATION) &&
-            !storage_reserve(loop, &transaction->snapshot_charge, transaction->error_size + keep)) {
-          abort_transaction(loop, transaction, CALL_FILE_TOO_LARGE);
-        } else {
-          memcpy(transaction->error_body + transaction->error_size, transaction->queue, keep);
-          transaction->error_size += keep;
-        }
+        memcpy(transaction->error_body + transaction->error_size, transaction->queue, keep);
+        transaction->error_size += keep;
       }
     }
     if (!transaction->aborting && !transaction->removing &&
         final_http_status(transaction->response.status) == CALL_OK) {
-      if (count > UINT64_MAX - transaction->snapshot_size ||
-          !storage_reserve(loop, &transaction->snapshot_charge, transaction->snapshot_size + count)) {
+      if (count > UINT64_MAX - transaction->snapshot_size) {
         abort_transaction(loop, transaction, CALL_FILE_TOO_LARGE);
       } else {
         transaction->queued = count;
@@ -2055,12 +2012,11 @@ static bool alive(const struct loop *loop)
 
 enum call_status httpfs_serve(handle_t service, handle_t receiver,
     handle_t root_controllers[HTTPFS_ROOT_COUNT], const struct http_client *client,
-    bool custom_trust, handle_t staging, bool ram_backing, uint64_t body_cap,
-    uint64_t storage_cap)
+    bool custom_trust, handle_t staging, bool ram_backing, uint64_t body_cap)
 {
   struct loop loop = {.service = service, .receiver = receiver,
     .client = *client, .next_id = 1, .staging = staging, .body_cap = body_cap,
-    .storage_cap = storage_cap, .custom_trust = custom_trust, .ram_backing = ram_backing};
+    .custom_trust = custom_trust, .ram_backing = ram_backing};
   for (size_t i = 0; i < HTTPFS_ROOT_COUNT; ++i) {
     loop.roots[i] = root_controllers[i];
     root_controllers[i] = HANDLE_INVALID;

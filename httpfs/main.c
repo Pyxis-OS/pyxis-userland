@@ -12,7 +12,6 @@
 #include <string.h>
 
 #define DEFAULT_STAGING_CAP (UINT64_C(16) * 1024 * 1024)
-#define DEFAULT_STORAGE_CAP (UINT64_C(64) * 1024 * 1024)
 
 static bool parse_staging_cap(const char *text, uint64_t *cap)
 {
@@ -120,9 +119,8 @@ int main(int argc, char **argv)
   size_t root_count = 0;
   enum call_status status = CALL_OK, cleanup = CALL_OK;
   bool publication_attempted = false;
-  bool https_selected = false, cap_selected = false, storage_selected = false;
+  bool https_selected = false, cap_selected = false;
   uint64_t body_cap = DEFAULT_STAGING_CAP, staging_type = 0;
-  uint64_t storage_cap = DEFAULT_STORAGE_CAP;
   const char *custom_bundle = NULL;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--https") && !https_selected) {
@@ -136,17 +134,13 @@ int main(int argc, char **argv)
         i + 1 < argc && parse_staging_cap(argv[i + 1], &body_cap)) {
       cap_selected = true;
       ++i;
-    } else if (!strcmp(argv[i], "--storage-cap") && !storage_selected &&
-        i + 1 < argc && parse_staging_cap(argv[i + 1], &storage_cap)) {
-      storage_selected = true;
-      ++i;
     } else {
       status = CALL_BAD_REQUEST;
       break;
     }
   }
   if (status != CALL_OK) {
-    fputs("usage: httpfs [--https] [--ca-bundle URI] [--staging-cap BYTES] [--storage-cap BYTES]\n", stderr);
+    fputs("usage: httpfs [--https] [--ca-bundle URI] [--staging-cap BYTES]\n", stderr);
     status = CALL_BAD_REQUEST;
     goto done;
   }
@@ -174,7 +168,6 @@ int main(int argc, char **argv)
   }
   if (staging_type != FILESYSTEM_TYPE_RAM) {
     body_cap = 0;
-    storage_cap = 0;
   }
   {
     /* Public TLS is optional for an HTTP-primary instance. */
@@ -249,7 +242,7 @@ int main(int argc, char **argv)
     memset(controllers, 0, sizeof(controllers));
     status = httpfs_serve(service, endpoint.receiver, owned_controllers, &client,
         custom_bundle != NULL, staging, staging_type == FILESYSTEM_TYPE_RAM,
-        body_cap, storage_cap);
+        body_cap);
   }
 
 done:
