@@ -373,6 +373,24 @@ static void destroy_if_retired(struct loop *loop, struct transaction *transactio
   free(transaction);
 }
 
+static const char *network_failure_name(enum call_status status)
+{
+  switch (status) {
+  case CALL_CONNECTION_REFUSED: return "Connection refused";
+  case CALL_CONNECTION_RESET: return "Connection reset";
+  case CALL_NO_ROUTE: return "No route to host";
+  case CALL_TIMED_OUT: return "Connection timed out";
+  case CALL_UNAVAILABLE: return "Network unavailable";
+  case CALL_ENDPOINT_CLOSED: return "Network endpoint closed";
+  case CALL_NO_MEMORY: return "Network memory exhausted";
+  case CALL_QUEUE_FULL: return "Network queue full";
+  case CALL_BUSY: return "Network operation busy";
+  case CALL_LIMIT: return "Network operation limit reached";
+  case CALL_DENIED: return "Network operation denied";
+  default: return "Network transport failed";
+  }
+}
+
 static void abort_transaction(struct loop *loop, struct transaction *transaction,
     enum call_status failure)
 {
@@ -383,18 +401,15 @@ static void abort_transaction(struct loop *loop, struct transaction *transaction
     release_body_source(loop, transaction);
     transaction->aborting = true;
     transaction->failure = failure;
-    if (!transaction->detail[0] && failure == CALL_TIMED_OUT) {
-      snprintf(transaction->detail, sizeof(transaction->detail), "Connection timed out");
-    } else if (!transaction->detail[0] && failure == CALL_CONNECTION_RESET) {
-      snprintf(transaction->detail, sizeof(transaction->detail), "Connection reset");
+    if (!transaction->detail[0] && (failure == CALL_TIMED_OUT || failure == CALL_CONNECTION_RESET ||
+        transaction->response.error == HTTP_NETWORK_ERROR)) {
+      enum call_status status = transaction->response.error == HTTP_NETWORK_ERROR ?
+          transaction->response.network_status : failure;
+      snprintf(transaction->detail, sizeof(transaction->detail), "%s (native status %u)",
+          network_failure_name(status), (unsigned)status);
     } else if (!transaction->detail[0] && transaction->response.error == HTTP_TLS_ERROR) {
       tls_result_detail(&transaction->response.tls_failure, transaction->detail,
           sizeof(transaction->detail));
-    } else if (!transaction->detail[0] && transaction->response.error == HTTP_NETWORK_ERROR) {
-      const char *reason = transaction->response.network_status == CALL_TIMED_OUT ?
-          "Connection timed out" : transaction->response.network_status == CALL_CONNECTION_RESET ?
-          "Connection reset" : "Network transport failed";
-      snprintf(transaction->detail, sizeof(transaction->detail), "%s", reason);
     }
     transaction->phase = failure == CALL_ABANDONED ? HTTP_TRANSACTION_ABORTED : HTTP_TRANSACTION_FAILED;
   }

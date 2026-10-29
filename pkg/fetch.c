@@ -385,6 +385,9 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
     set_detail(detail, "HTTP GET failed");
     status = resource_open_held(configured.resource, "", PROVIDER_INTENT_READ, 0,
         now + duration, &result);
+    if (status == CALL_TIMED_OUT) {
+      set_detail(detail, "HTTP GET timed out");
+    }
     if (status == CALL_OK) {
       status = result_status(&result, detail);
     }
