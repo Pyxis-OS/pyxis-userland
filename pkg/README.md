@@ -59,7 +59,8 @@ Program and toolchain packages record the ABI they were
 built for; `pkg` reads what the running system provides from
 `boot://os-release` (its release ABI list and its build revision) and offers, installs
 and keeps only packages whose ABI it provides. Builds for other systems are
-hidden and counted per ID. Stale stored builds refuse install, remove and
+hidden; `list --available` does not mention them, and a refused `install` counts them
+per ID. Stale stored builds refuse install, remove and
 verify once, before any tree is hashed: one message lists every
 stale package with its ABI and gives one `pkg install` and one `pkg remove`
 command that clear them all.

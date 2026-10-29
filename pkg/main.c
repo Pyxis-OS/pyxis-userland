@@ -2177,9 +2177,8 @@ int main(int argc, char **argv)
           entry->kind, entry->abi[0] ? " abi " : "", entry->abi,
           (unsigned long long)entry->size);
     }
-    if (ok && client.hidden_count) {
-      printf(client.provided_readable ? "%zu builds for other systems hidden\n" :
-          "%zu builds hidden: this system's ABI is unreadable (" PACKAGE_OS_RELEASE ")\n",
+    if (ok && client.hidden_count && !client.provided_readable) {
+      printf("%zu builds hidden: this system's ABI is unreadable (" PACKAGE_OS_RELEASE ")\n",
           client.hidden_count);
     }
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
