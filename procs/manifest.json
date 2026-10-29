@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "org.pyxis.procs",
+  "entry": "bin/procs.pxe",
+  "commands": {"procs": "bin/procs.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read", "precise", "sleep"], "required": true},
+    {"name": "process_view", "resource": "process_view", "rights": ["list"], "required": false}
+  ]
+}

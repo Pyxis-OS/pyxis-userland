@@ -41,7 +41,7 @@ THREADPROBE_CXXFLAGS := $(PYXIS_CXXFLAGS) -fno-exceptions -fno-rtti -ftls-model=
 export CXX THREADPROBE_CXX_CPPFLAGS THREADPROBE_CXXFLAGS
 export LUA_PREFIX PICOHTTPPARSER_PREFIX MBEDTLS_PREFIX ZLIB_PREFIX LIBPNG_PREFIX SDK CC CPPFLAGS CFLAGS LDFLAGS LDLIBS PYXIS_COMPILER_ID
 
-PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/cpuclock/main.o $(BUILD)/threadprobe/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
+PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-terminal/main.o $(BUILD)/httpfs/main.o $(BUILD)/allocbench/main.o $(BUILD)/iobench/main.o $(BUILD)/ipcbench/main.o $(BUILD)/cpuclock/main.o $(BUILD)/procs/main.o $(BUILD)/threadprobe/main.o $(BUILD)/hello/main.o $(BUILD)/client/main.o \
                    $(BUILD)/server/main.o $(BUILD)/counter/main.o $(BUILD)/textfs/main.o $(BUILD)/cat/main.o $(BUILD)/cp/main.o $(BUILD)/echo/main.o $(BUILD)/head/main.o $(BUILD)/log/main.o $(BUILD)/hostname/main.o $(BUILD)/lspci/main.o $(BUILD)/lsusb/main.o $(BUILD)/acpidump/main.o \
                    $(BUILD)/ls/main.o $(BUILD)/mkdir/main.o \
                    $(BUILD)/rm/main.o $(BUILD)/rmdir/main.o \
@@ -111,9 +111,9 @@ SCREENSHOT_OBJECTS := $(BUILD)/screenshot/main.o $(BUILD)/screenshot/png.o
 SCREENSHOT_SAVER_OBJECTS := $(BUILD)/screenshot/saver.o $(BUILD)/screenshot/png.o
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
-.PHONY: cpuclock mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest gamepadtest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
+.PHONY: cpuclock procs mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest gamepadtest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
 .PHONY: fat32ctl net wifi config pkg jit-min
-all: $(INSTALL_PROGRAMS) cpuclock font-min gamepadtest fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+all: $(INSTALL_PROGRAMS) cpuclock procs font-min gamepadtest fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Lua scripts for hand-run native checks, installed as boot://share/checks/.
 CHECK_SCRIPTS := console-burst.lua console-flood.lua cpu-busy.lua exit-latency.lua
@@ -131,7 +131,7 @@ install: all
 	    if [ "$$program" = shell ]; then name=init-shell; fi; \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/$$name.pxe"; \
 	  done; \
-	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/wifi.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$(BUILD)/font-min.pxb" "$(BUILD)/gamepadtest.pxb" "$(BUILD)/cpuclock.pxb" "$$staging/"; \
+	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/wifi.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$(BUILD)/font-min.pxb" "$(BUILD)/gamepadtest.pxb" "$(BUILD)/cpuclock.pxb" "$(BUILD)/procs.pxb" "$$staging/"; \
 	  install -m 644 init/development.pxs "$$staging/init"; \
 	  install -m 644 init/readonly.pxs "$$staging/init-readonly"; \
 	  install -m 644 init/services.pxs "$$staging/init-services"; \
@@ -173,6 +173,7 @@ allocbench: $(BUILD)/allocbench.pxe
 iobench: $(BUILD)/iobench.pxe $(BUILD)/share/iobench.bin $(BUILD)/share/iobench-small.bin
 ipcbench: $(BUILD)/ipcbench.pxe
 cpuclock: $(BUILD)/cpuclock.pxb/manifest.json
+procs: $(BUILD)/procs.pxb/manifest.json
 
 threadprobe: $(BUILD)/threadprobe.pxe
 
@@ -340,6 +341,12 @@ $(BUILD)/cpuclock.pxb/manifest.json: $(BUILD)/cpuclock.pxe cpuclock/manifest.jso
 	install -m 644 $(BUILD)/cpuclock.pxe "$(@D)/app/bin/"
 	install -m 644 cpuclock/README.md LICENSE "$(@D)/app/"
 	install -m 644 cpuclock/manifest.json "$@"
+
+$(BUILD)/procs.pxb/manifest.json: $(BUILD)/procs.pxe procs/manifest.json procs/README.md LICENSE
+	@mkdir -p "$(@D)/app/bin"
+	install -m 644 $(BUILD)/procs.pxe "$(@D)/app/bin/"
+	install -m 644 procs/README.md LICENSE "$(@D)/app/"
+	install -m 644 procs/manifest.json "$@"
 
 $(BUILD)/shell.pxb/manifest.json: $(BUILD)/shell.pxe shell/manifest.json shell/README.md
 	@rm -rf "$(@D)"

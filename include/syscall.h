@@ -130,6 +130,18 @@ static inline struct syscall_result syscall_process_interrupt_create(
   return (struct syscall_result){status, reply_size};
 }
 
+/* REPLY receives an abi/process_view.h listing of the caller's own space. */
+static inline struct syscall_result syscall_space_processes(void *reply, size_t capacity)
+{
+  uint64_t status = SYSCALL_SPACE_PROCESSES;
+  uint64_t reply_size;
+  __asm__ volatile("syscall"
+                   : "+a"(status), "=d"(reply_size)
+                   : "D"(reply), "S"(capacity)
+                   : "rcx", "r11", "cc", "memory");
+  return (struct syscall_result){status, reply_size};
+}
+
 static inline struct syscall_result syscall_readiness_set_create(
     struct readiness_set_create_reply *reply, size_t capacity)
 {
