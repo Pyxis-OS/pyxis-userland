@@ -47,6 +47,9 @@ struct pkg_sdk {
   size_t size;
 };
 
+/* Caller holds the writer lock. Carry an existing boot proof forward through
+ * a durable pending transition; unmarked installer/legacy volumes stay unmarked.
+ * UNCERTAIN retains the lock and recovery evidence after publication may begin. */
 bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
     const struct pkg_projection *projection, const struct pkg_sdk *sdk,
     bool *uncertain, const char **reason);

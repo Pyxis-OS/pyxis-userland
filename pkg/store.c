@@ -421,11 +421,32 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
     bool *uncertain, const char **reason)
 {
   *uncertain = false;
+  bool marked = false, pending = false;
+  uint64_t marked_set = 0;
+  struct package_boot_identity identity;
+  struct package_transition transition;
+  enum call_status status = package_transition_load(packages, &pending, &transition);
+  if (status == CALL_OK && !pending) {
+    status = package_boot_load(packages, &marked, &marked_set, &identity);
+  }
+  if (status != CALL_OK || pending || (marked && marked_set != selection->number)) {
+    *reason = "package boot selection evidence disagrees with current; use rescue";
+    return false;
+  }
   uint64_t number;
   if (!pkg_stage(packages, selection, projection, sdk, &number, reason)) return false;
   *uncertain = true;
-  if (package_set_activate(packages, number) != CALL_OK) {
-    *reason = "activation uncertain; retain evidence until recovery";
+  if (marked) {
+    /* Durable intent lets boot-init finish either side of the pointer switch. */
+    transition = (struct package_transition){.from_set = selection->number,
+      .to_set = number, .target = identity};
+    status = package_transition_publish(packages, &transition);
+  }
+  if (status == CALL_OK) status = package_set_activate(packages, number);
+  if (status == CALL_OK && marked) status = package_boot_publish(packages, number, &identity);
+  if (status == CALL_OK && marked) status = package_transition_remove(packages);
+  if (status != CALL_OK) {
+    *reason = "activation uncertain; retain lock and boot evidence until recovery";
     return false;
   }
   *uncertain = false;

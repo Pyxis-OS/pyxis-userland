@@ -1534,7 +1534,7 @@ static bool transition_clear_for_mutation(void)
   struct package_transition transition;
   enum call_status status = package_transition_load(client.packages, &pending, &transition);
   if (status != CALL_OK) return fail("package transition evidence is damaged; use rescue");
-  if (pending) return fail("a release transition is pending; reboot before changing packages");
+  if (pending) return fail("a package transition is pending; reboot before changing packages");
   return true;
 }
 
@@ -1553,7 +1553,8 @@ static bool mutate(const char *command, int argc, char **argv)
   }
   bool uncertain = false;
   struct pkg_selection before = {0}, after = {0};
-  bool current_valid = pkg_selection_load(client.packages, &before, &client.reason);
+  bool current_valid = transition_clear_for_mutation() &&
+      pkg_selection_load(client.packages, &before, &client.reason);
   bool reindex = !strcmp(command, "reindex");
   bool updating = !strcmp(command, "update");
   bool noop = false;
@@ -1677,7 +1678,8 @@ static bool repository_command(const char *command, const char *name, const char
   }
   /* Under the lock, add records the index it accepted, like any writer. */
   bool uncertain = false;
-  bool ok = pkg_repositories_load(client.config_write, &client.repositories,
+  bool ok = transition_clear_for_mutation() &&
+      pkg_repositories_load(client.config_write, &client.repositories,
       &client.reason) == CALL_OK;
   struct pkg_repositories *repositories = &client.repositories;
   size_t index = 0;
@@ -1943,7 +1945,8 @@ static bool upgrade(const char *version)
         DIRECTORY_RIGHT_ENUMERATE, &lock) != CALL_OK) {
     return fail("writer lock unavailable; use pkg unlock only after the prior client has stopped");
   }
-  bool ok = pkg_repositories_load(client.config, &client.repositories, &client.reason) == CALL_OK;
+  bool ok = transition_clear_for_mutation() &&
+      pkg_repositories_load(client.config, &client.repositories, &client.reason) == CALL_OK;
   const struct pkg_repository *source = NULL;
   for (size_t r = 0; ok && r < client.repositories.count; ++r) {
     if (!strcmp(client.repositories.entries[r].name, RELEASES_REPOSITORY)) {
@@ -2062,7 +2065,8 @@ static bool installer_stage(int argc, char **argv)
   struct pkg_selection before = {0}, after = {0};
   struct pkg_projection projection = {0};
   struct pkg_sdk sdk = {0};
-  bool ok = pkg_selection_load(client.packages, &before, &client.reason) &&
+  bool ok = transition_clear_for_mutation() &&
+      pkg_selection_load(client.packages, &before, &client.reason) &&
       pkg_selection_load(client.packages, &after, &client.reason) &&
       prepare_update(&after, 0, NULL, NULL) &&
       pkg_commands_build(client.packages, &after, &projection, &client.reason) &&

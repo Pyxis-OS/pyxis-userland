@@ -33,7 +33,8 @@ enum call_status package_transition_load(handle_t packages, bool *present,
     struct package_transition *transition);
 
 /* Both records are native, synchronized files. A pending record is created
- * once before any ESP publication; an existing one always refuses. */
+ * once before any ESP publication or a confirmed ordinary set switch; an
+ * existing one always refuses. Ordinary switches retain the current identity. */
 enum call_status package_boot_publish(handle_t packages, uint64_t set,
     const struct package_boot_identity *identity);
 enum call_status package_transition_publish(handle_t packages,
