@@ -209,10 +209,12 @@ static void read_policy_name(lua_State *state, int table, const char *field,
     for (size_t i = 0; i < config->count; ++i) {
       found |= !strcmp(config->interfaces[i].name, name);
     }
-    bool automatic = config->wired_auto && !strncmp(name, "eth", 3) && name[3] &&
-        !(name[3] == '0' && name[4]);
+    size_t prefix = config->wired_auto && !strncmp(name, "eth", 3) ? 3 :
+        config->wifi_auto && !strncmp(name, "wlan", 4) ? 4 : 0;
+    bool automatic = prefix && name[prefix] &&
+        !(name[prefix] == '0' && name[prefix + 1]);
     unsigned number = 0;
-    for (size_t i = 3; automatic && name[i]; ++i) {
+    for (size_t i = prefix; automatic && name[i]; ++i) {
       unsigned digit = (unsigned char)name[i] - '0';
       automatic = digit <= 9 && number <= (NETWORK_INTERFACE_LIMIT - 1 - digit) / 10;
       if (automatic) {
@@ -230,8 +232,8 @@ static int decode_network(lua_State *state)
 {
   struct network_config *config = lua_touserdata(state, 2);
   lua_settop(state, 1);
-  const char *keys[] = {"interfaces", "wired", "routing", "dns", "management"};
-  config_keys(state, 1, keys, 5);
+  const char *keys[] = {"interfaces", "wired", "wifi", "routing", "dns", "management"};
+  config_keys(state, 1, keys, sizeof(keys) / sizeof(*keys));
   config_field(state, 1, "wired");
   if (!lua_isnil(state, 2)) {
     const char *fields[] = {"auto", "exclude"};
@@ -255,6 +257,35 @@ static int decode_network(lua_State *state)
         for (size_t j = 0; j < i; ++j) {
           if (!memcmp(config->excluded_macs[i], config->excluded_macs[j], 6)) {
             return luaL_error(state, "duplicate wired.exclude entry");
+          }
+        }
+      }
+    }
+  }
+  lua_settop(state, 1);
+  config_field(state, 1, "wifi");
+  if (!lua_isnil(state, 2)) {
+    const char *fields[] = {"auto", "exclude"};
+    config_keys(state, 2, fields, 2);
+    config->wifi_auto = read_boolean(state, 2, "auto");
+    config_field(state, 2, "exclude");
+    if (!lua_isnil(state, 3)) {
+      size_t count = array_count(state, 3, "wifi.exclude");
+      if (count > SIZE_MAX / sizeof(*config->wifi_excluded_macs)) {
+        return luaL_error(state, "wifi.exclude is too large");
+      }
+      config->wifi_excluded_macs = calloc(count, sizeof(*config->wifi_excluded_macs));
+      if (count && !config->wifi_excluded_macs) {
+        return luaL_error(state, "cannot allocate wifi.exclude");
+      }
+      config->wifi_exclusion_count = count;
+      for (size_t i = 0; i < count; ++i) {
+        lua_rawgeti(state, 3, (lua_Integer)i + 1);
+        read_mac(state, 4, config->wifi_excluded_macs[i], "wifi.exclude entry");
+        lua_pop(state, 1);
+        for (size_t j = 0; j < i; ++j) {
+          if (!memcmp(config->wifi_excluded_macs[i], config->wifi_excluded_macs[j], 6)) {
+            return luaL_error(state, "duplicate wifi.exclude entry");
           }
         }
       }
@@ -424,6 +455,7 @@ void network_config_free(struct network_config *config)
   }
   free(config->interfaces);
   free(config->excluded_macs);
+  free(config->wifi_excluded_macs);
   *config = (struct network_config){0};
 }
 

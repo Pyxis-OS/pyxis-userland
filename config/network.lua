@@ -1,5 +1,6 @@
 return {
   wired = { auto = true, exclude = {} },
+  wifi = { auto = true, exclude = {} },
   interfaces = {},
   routing = { auto = true },
   dns = { server = "1.1.1.1" },

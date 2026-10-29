@@ -25,9 +25,11 @@ struct network_interface_config {
 struct network_config {
   struct network_interface_config *interfaces;
   size_t count;
-  bool wired_auto, routing_auto;
+  bool wired_auto, wifi_auto, routing_auto;
   uint8_t (*excluded_macs)[6];
   size_t exclusion_count;
+  uint8_t (*wifi_excluded_macs)[6];
+  size_t wifi_exclusion_count;
   char default_interface[16], dns_interface[16];
   char remote_interface[16], log_interface[16], debug_interface[16];
   bool dns_explicit;
