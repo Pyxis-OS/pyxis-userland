@@ -402,6 +402,14 @@ static void print_phy_facts(const struct wifi_status_full_reply *status)
     if (phy->state & WIFI_PHY_POWER_VERIFIED) printf(" region=%u", phy->region);
   }
   fputs("; not scan readiness\n", stdout);
+  if (phy->state & WIFI_PHY_STARTUP_OBSERVED) {
+    printf("wifi: startup MAC=%s power-cycle=%s; historical\n",
+        phy->state & WIFI_PHY_STARTUP_ACTIVE ? "active" : "non-active",
+        phy->state & WIFI_PHY_STARTUP_CYCLE_COMPLETED ? "completed" :
+        phy->state & WIFI_PHY_STARTUP_CYCLE_ATTEMPTED ? "incomplete" : "not-needed");
+  } else {
+    fputs("wifi: startup MAC=unobserved; historical\n", stdout);
+  }
   if (phy->state & WIFI_PHY_POWER_VERIFIED) {
     printf("wifi: PHY power-readbacks=%u SAR-quarter-dBm=%d/%d; historical limits\n",
         phy->power_verifications, phy->sar_quarter_dbm[0], phy->sar_quarter_dbm[1]);

@@ -72,6 +72,13 @@ It prints attempted rfkill-check counts and observation validity, completed RFK
 steps, any valid report state/version and the thermal-default path mask. Stop is reported as confirmed,
 uncertain or unobserved; last status is meaningful only after completion.
 These are historical programming observations, not measured radiated power.
+Startup status separately reports the initial WLMAC state observation and any
+inherited-active power cycle. `completed` requires successful power-off and
+fresh power-on; firmware readiness or later terminal shutdown is not that proof.
+`non-active` is the sampled state, not a physical RF-off claim. Facts remain
+available after failure, and `unobserved` remains distinct from not needing a
+cycle. The released status prefix and full reply sizes stay unchanged; the
+matching SDK reader validates the new state flags together.
 A hopping sweep also verifies the common power image after RX collection closes;
 that endpoint check is not a measurement of uninterrupted enforcement.
 

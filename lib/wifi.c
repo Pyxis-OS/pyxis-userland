@@ -136,6 +136,14 @@ static bool phy_facts_valid(const struct wifi_phy_facts *phy, uint32_t radio_kin
       (phy->rfk_state || phy->rfk_version || phy->rfk_completed)) {
     return false;
   }
+  if (((phy->state & WIFI_PHY_STARTUP_ACTIVE) &&
+       !(phy->state & WIFI_PHY_STARTUP_OBSERVED)) ||
+      ((phy->state & WIFI_PHY_STARTUP_CYCLE_ATTEMPTED) &&
+       !(phy->state & WIFI_PHY_STARTUP_ACTIVE)) ||
+      ((phy->state & WIFI_PHY_STARTUP_CYCLE_COMPLETED) &&
+       !(phy->state & WIFI_PHY_STARTUP_CYCLE_ATTEMPTED))) {
+    return false;
+  }
   if (phy->phase != WIFI_PHY_COMPLETE && phy->last_status) {
     return false;
   }
