@@ -6,7 +6,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +23,8 @@ var (
 	colorWarning = tcell.PaletteColor(11)
 	colorAdded   = tcell.PaletteColor(10)
 	colorSelect  = tcell.PaletteColor(4)
+	colorField   = tcell.PaletteColor(0)
+	colorText    = tcell.PaletteColor(15)
 )
 
 var tabNames = []string{"General", "Settings", "Roots", "Grants"}
@@ -61,7 +62,7 @@ func setTheme() {
 		PrimaryTextColor:            tcell.ColorDefault,
 		SecondaryTextColor:          colorHeading,
 		TertiaryTextColor:           colorAccent,
-		InverseTextColor:            tcell.PaletteColor(15),
+		InverseTextColor:            colorText,
 		ContrastSecondaryTextColor:  colorHeading,
 	}
 }
@@ -89,7 +90,7 @@ func textLine() *tview.TextView {
 func tableBox(title string) *tview.Table {
 	t := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
 	t.SetBorder(true).SetTitle(" " + title + " ").SetTitleAlign(tview.AlignLeft)
-	t.SetSelectedStyle(tcell.StyleDefault.Background(colorSelect).Foreground(tcell.PaletteColor(15)))
+	t.SetSelectedStyle(tcell.StyleDefault.Background(colorSelect).Foreground(colorText))
 	return t
 }
 
@@ -164,10 +165,27 @@ func modalForm(title string) *tview.Form {
 	f := tview.NewForm()
 	f.SetBorder(true).SetTitle(" " + title + " ").SetTitleAlign(tview.AlignLeft)
 	f.SetItemPadding(0)
-	f.SetFieldBackgroundColor(colorSelect).SetFieldTextColor(tcell.PaletteColor(15)).
-		SetButtonBackgroundColor(colorSelect).SetButtonTextColor(tcell.PaletteColor(15)).
+	f.SetFieldBackgroundColor(colorField).SetFieldTextColor(colorText).
+		SetButtonBackgroundColor(colorSelect).SetButtonTextColor(colorText).
 		SetLabelColor(colorHeading)
 	return f
+}
+
+// alignFields gives a dialog's text fields and drop-downs one width, marks a
+// focused drop-down like a selected row and draws checkboxes like the Settings
+// tab.
+func alignFields(f *tview.Form, width int) {
+	for i := range f.GetFormItemCount() {
+		switch item := f.GetFormItem(i).(type) {
+		case *tview.InputField:
+			item.SetFieldWidth(width)
+		case *tview.DropDown:
+			item.SetFieldWidth(width).
+				SetFocusedStyle(tcell.StyleDefault.Foreground(colorText).Background(colorSelect))
+		case *tview.Checkbox:
+			item.SetCheckedString(tview.Escape("[x]")).SetUncheckedString(tview.Escape("[ ]"))
+		}
+	}
 }
 
 func (e *editor) topModal() bool {
@@ -774,6 +792,7 @@ func (e *editor) editRoot(s *space, r *root) {
 	})
 	f.AddButton("Cancel", func() { e.closeModal("root") })
 	f.SetCancelFunc(func() { e.closeModal("root") })
+	alignFields(f, 32)
 	e.showModal("root", f, 64, 11)
 }
 
@@ -821,6 +840,7 @@ func (e *editor) editGrant(s *space, g *grant) {
 	})
 	f.AddButton("Cancel", func() { e.closeModal("grant") })
 	f.SetCancelFunc(func() { e.closeModal("grant") })
+	alignFields(f, 40)
 	e.showModal("grant", f, 66, 14)
 }
 
@@ -854,6 +874,7 @@ func (e *editor) addSpace(from int) {
 	})
 	f.AddButton("Cancel", func() { e.closeModal("add") })
 	f.SetCancelFunc(func() { e.closeModal("add") })
+	alignFields(f, 44)
 	e.showModal("add", f, 66, 11)
 }
 
@@ -1001,8 +1022,7 @@ func (e *editor) write(text string) {
 	e.refresh()
 	result := "Saved " + e.path + ". It applies at the next boot.\nPrevious: " + previousPath(e.path)
 	if durability != nil {
-		result += "\n\nSyncing the directory failed (" + durability.Error() + "). The file is in place; run sync " +
-			filepath.Dir(e.path) + " to make the new name durable before a crash or power loss."
+		result += "\n\nSyncing the directory failed (" + durability.Error() + "); the new file may not survive a crash or power loss."
 	}
 	e.message("Saved", tview.Escape(result))
 }

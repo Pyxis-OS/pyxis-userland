@@ -17,9 +17,10 @@ are listed as warnings. The file is rewritten in a fixed form without comments.
 Saving checks a copy of the `boot.c` space rules, shows a diff, refuses if the
 file changed since it was loaded, then keeps the loaded file as
 `PATH.previous` and replaces `PATH`. Each staged file is synced before its
-replacing rename, and the directory afterwards. Go on Pyxis cannot sync a
-directory yet (its directory handles drop CREATE and REMOVE), so the saved
-message names the `sync` command that does. The rule copy exists only
+replacing rename, and the directory afterwards; a failed directory sync is
+reported with the saved message. The directory sync needs pyxis-go b646fa3953
+or later, where an opened directory keeps its CREATE and REMOVE rights. The
+rule copy exists only
 because Go on Pyxis cannot launch `config validate`; boot remains the
 authority. A new space key changes `boot.c` and `validate.go`/`config.go`
 together.
