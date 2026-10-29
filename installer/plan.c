@@ -453,8 +453,12 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
       (unsigned long long)plan->record.layout.esp_partition,
       (unsigned long long)plan->record.layout.pool_partition);
   if (plan->record.coexist) {
-    fprintf(output, "Firmware Pyxis OS entry: %s in BootOrder (foreign order retained).\n",
-        plan->record.boot_first ? "move first" : "append");
+    if (install_plan_preserve_firmware(plan)) {
+      fputs("Existing firmware entries and BootOrder are retained without writes.\n", output);
+    } else {
+      fprintf(output, "Firmware Pyxis OS entry: %s in BootOrder (foreign order retained).\n",
+          plan->record.boot_first ? "move first" : "append");
+    }
   }
   if (verbose) {
     fprintf(output, "ESP: byte %llu, length %llu; pool: byte %llu, length %llu.\n",

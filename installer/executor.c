@@ -535,7 +535,7 @@ bool install_plan_execute(struct install_plan *plan, const char *consent)
   if (!stage_esp(plan)) {
     goto done;
   }
-  if (coexist) {
+  if (coexist && !install_plan_preserve_firmware(plan)) {
     const struct disk_partition_selection *esp = &plan->target.esp;
     if (esp->partition > UINT32_MAX) {
       fputs("installer: reviewed ESP partition number exceeds UEFI device-path capacity\n", stderr);
@@ -573,8 +573,12 @@ done:
 #if INSTALLER_PUBLICATION_SCRATCH
   if (install_plan_publication(plan)) {
     fputs(updating ? "updated\n" : "installed\n", stderr);
-    fputs(coexist ? "Boot record, owned menu and Pyxis OS firmware entry verified.\n" :
-        "Boot record and owned menu activation verified.\n", stderr);
+    if (install_plan_preserve_firmware(plan)) {
+      fputs("Boot record and owned menu verified; existing firmware boot selection retained.\n", stderr);
+    } else {
+      fputs(coexist ? "Boot record, owned menu and Pyxis OS firmware entry verified.\n" :
+          "Boot record and owned menu activation verified.\n", stderr);
+    }
   } else
 #endif
   {
