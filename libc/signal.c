@@ -262,6 +262,44 @@ struct libc_signal_delivery libc_signal_checkpoint(void)
   return delivered;
 }
 
+int pyxis_signal_wait_prepare(struct pyxis_signal_wait *wait)
+{
+  if (!signal_owner()) {
+    return fail(ENOTSUP);
+  }
+  if (!wait) {
+    return fail(EINVAL);
+  }
+  struct libc_signal_wait observation;
+  if (libc_signal_prepare(&observation) < 0) {
+    return -1;
+  }
+  *wait = (struct pyxis_signal_wait){
+    .interests = {observation.interests[0], observation.interests[1]},
+    .count = observation.count,
+    .pending = observation.pending,
+  };
+  return 0;
+}
+
+int pyxis_signal_checkpoint(void)
+{
+  if (!signal_owner()) {
+    return fail(ENOTSUP);
+  }
+  if (inhibition) {
+    return fail(EBUSY);
+  }
+  /* Unlike a completed libc operation, this explicit observation can report
+   * source failures before entering the existing bounded dispatcher. */
+  struct libc_signal_wait observation;
+  if (libc_signal_prepare(&observation) < 0) {
+    return -1;
+  }
+  libc_signal_checkpoint();
+  return 0;
+}
+
 int libc_signal_mask_install(const sigset_t *temporary, sigset_t *previous)
 {
   if (!previous) {
