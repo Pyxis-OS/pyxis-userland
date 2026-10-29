@@ -5,7 +5,9 @@
 
 /* Read-only adoption of the owner's exact 0.0.9 GUID-bound menu form, with
  * its optional 0.0.8 previous entry. EXPECTED_REVISION comes from the selected
- * installed pool, never the new installer revision. Every referenced attempt
+ * installed pool, never the new installer revision. An unrecorded pool reports
+ * unknown; only full legacy manifest/payload proof can then supply the revision.
+ * Every referenced attempt
  * needs its canonical five-file namespace, complete four-payload manifest,
  * full hashes and exact GUID-bound entry.txt/revision.txt contents.
  *

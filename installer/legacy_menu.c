@@ -1,4 +1,5 @@
 #include "legacy_menu.h"
+#include "installer.h"
 #include "esp_directory.h"
 #include "esp_payload.h"
 #include "esp_transfer.h"
@@ -318,10 +319,18 @@ bool install_legacy_menu_plan(handle_t root, handle_t workspace,
   bool ok = config_owned_scan_limine("legacy primary menu", (char *)current->bytes, current->size, &markers);
   ok = ok && !config_owned_find(markers, "boot.normal") &&
       !config_owned_find(markers, "boot.rescue") && !config_owned_find(markers, "boot.previous");
+  for (size_t i = 0; ok && markers && i < markers->count; ++i) {
+    for (unsigned role = 0; ok && role < LEGACY_ROLES; ++role) {
+      if (spans[role].end && markers->spans[i].span.start < spans[role].end &&
+          spans[role].start < markers->spans[i].span.end) ok = false;
+    }
+  }
   config_owned_free(markers);
   struct legacy_attempt attempts[2] = {0};
   ok = ok && attempt_from_menu(current, spans[LEGACY_NORMAL], LEGACY_NORMAL,
-      facts->partition_guid, &attempts[0]) && !strcmp(attempts[0].revision, expected_revision) &&
+      facts->partition_guid, &attempts[0]) &&
+      (!strcmp(expected_revision, INSTALL_UNKNOWN_REVISION) ||
+       !strcmp(attempts[0].revision, expected_revision)) &&
       legacy_entry_matches(current, &spans[LEGACY_NORMAL], LEGACY_NORMAL, &attempts[0], facts, pool_partition) &&
       legacy_entry_matches(current, &spans[LEGACY_RESCUE], LEGACY_RESCUE, &attempts[0], facts, pool_partition);
   unsigned count = spans[LEGACY_PREVIOUS].end ? 2 : 1;
@@ -360,6 +369,12 @@ bool install_legacy_menu_plan(handle_t root, handle_t workspace,
     *reason = "cannot render the adopted primary menu";
     ok = install_boot_entry_render_owned(next, facts->disk_guid, pool_partition, &owned) &&
         menu_replace(current, spans, &owned, selected);
+  }
+  if (ok) {
+    struct config_owned_set *combined = NULL;
+    ok = config_owned_scan_limine("adopted primary menu", (char *)selected->bytes,
+        selected->size, &combined);
+    config_owned_free(combined);
   }
   config_blob_destroy(&owned);
   for (unsigned i = 0; i < 2; ++i) config_blob_destroy(&attempts[i].manifest);
