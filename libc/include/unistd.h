@@ -129,6 +129,9 @@ int unlink(const char *path);
  * symbolic links or copy fallback. Uncertain submission is EIO; never retry
  * it automatically. */
 int link(const char *source, const char *destination);
+/* No native filesystem operation creates symbolic links, including on HOST.
+ * Fails ENOTSUP without resolving or creating a name; no hard-link fallback. */
+int symlink(const char *target, const char *path);
 /* 1 when the descriptor is a console stream, a startup binding to the space's
  * terminal. Files and pipes return 0 with ENOTTY; invalid descriptors return 0
  * with EBADF. */

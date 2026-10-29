@@ -429,3 +429,11 @@ done:
   }
   return 0;
 }
+
+int symlink(const char *target, const char *path)
+{
+  (void)target;
+  (void)path;
+  errno = ENOTSUP;
+  return -1;
+}
