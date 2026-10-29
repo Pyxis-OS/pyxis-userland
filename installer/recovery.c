@@ -628,7 +628,8 @@ bool install_recovery_provision(handle_t root, handle_t control, handle_t worksp
              &recovery->legacy_fallback) && legacy_pair_verify(root, ram, recovery) :
          fallback_absent(root));
     if (ok) {
-      ok = parent_open(root, "EFI/pyxis", RECOVERY_WRITE, true, &ancestor) == CALL_OK &&
+      ok = parent_open(root, "EFI/pyxis",
+          recovery->legacy_migration ? RECOVERY_REPLACE : RECOVERY_WRITE, true, &ancestor) == CALL_OK &&
           directory_create(ancestor, "recovery", DIRECTORY_KIND_DIRECTORY,
               recovery->legacy_migration ? RECOVERY_REPLACE : RECOVERY_WRITE, &parent) == CALL_OK &&
           directory_sync(ancestor) == CALL_OK;

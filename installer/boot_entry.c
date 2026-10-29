@@ -22,7 +22,8 @@ void install_guid_text(const uint8_t guid[16], char text[37])
 }
 
 static char *entry(const char *name, bool rescue, const char *kernel, const char *archive,
-    const uint8_t disk_guid[16], uint64_t pool_partition, const uint8_t esp_guid[16], size_t *size)
+    const uint8_t disk_guid[16], uint64_t pool_partition, const uint8_t esp_guid[16],
+    bool nvme_write, size_t *size)
 {
   char disk[37], location[43] = "boot()";
   install_guid_text(disk_guid, disk);
@@ -38,8 +39,9 @@ static char *entry(const char *name, bool rescue, const char *kernel, const char
   int count = snprintf(text, 1024,
       "/%s\n  protocol: limine\n  path: %s:/%s\n  module_path: %s:/%s\n"
       "  paging_mode: 4level\n  kaslr: no\n  cmdline: " INSTALL_BOOT_INIT_OPTION
-      " mount.disk=%s mount.pool=%llu%s\n", name, location, kernel, location, archive,
-      disk, (unsigned long long)pool_partition, rescue ? " " INSTALL_RESCUE_OPTION : "");
+      " mount.disk=%s mount.pool=%llu%s%s\n", name, location, kernel, location, archive,
+      disk, (unsigned long long)pool_partition, nvme_write ? " nvme.write=1" : "",
+      rescue ? " " INSTALL_RESCUE_OPTION : "");
   if (count <= 0 || count >= 1024) {
     free(text);
     return NULL;
@@ -56,11 +58,12 @@ static const char *const role_names[ENTRY_ROLES] = {
 
 /* The owned, marked form of one entry, optionally preceded by a blank line. */
 static char *owned_block(enum boot_entry_role role, const struct install_boot_entry_paths *paths,
-    const uint8_t disk_guid[16], uint64_t pool_partition, bool separated, size_t *size)
+    const uint8_t disk_guid[16], uint64_t pool_partition, bool nvme_write,
+    bool separated, size_t *size)
 {
   size_t entry_size = 0;
   char *text = entry(role_names[role], role == ENTRY_RESCUE, paths->kernel, paths->archive,
-      disk_guid, pool_partition, NULL, &entry_size);
+      disk_guid, pool_partition, NULL, nvme_write, &entry_size);
   char *block = text ? malloc(entry_size + 128) : NULL;
   int count = block ? snprintf(block, entry_size + 128, "%s# pyxis:begin %s\n%s# pyxis:end %s\n",
       separated ? "\n" : "", role_ids[role], text, role_ids[role]) : -1;
@@ -112,10 +115,11 @@ bool install_boot_entry_plan(const struct config_blob *current,
       recognized = false;
       break;
     }
+    bool old_nvme_write = role == ENTRY_NORMAL;
     if (!inherited->entire_proven) {
       size_t expected_size;
       char *expected = entry(role_names[role], role == ENTRY_RESCUE, old->kernel, old->archive,
-          disk_guid, pool_partition, NULL, &expected_size);
+          disk_guid, pool_partition, NULL, old_nvme_write, &expected_size);
       if (!expected) {
         ok = false;
         break;
@@ -123,6 +127,17 @@ bool install_boot_entry_plan(const struct config_blob *current,
       recognized = marked->content.end - marked->content.start == expected_size &&
           !memcmp(current->bytes + marked->content.start, expected, expected_size);
       free(expected);
+      /* Released menus omitted the NVMe write opt-in. Recognize that exact
+       * form too; a new installed normal entry must permit its pool writes. */
+      if (!recognized && old_nvme_write) {
+        old_nvme_write = false;
+        expected = entry(role_names[role], false, old->kernel, old->archive,
+            disk_guid, pool_partition, NULL, false, &expected_size);
+        ok = expected != NULL;
+        recognized = ok && marked->content.end - marked->content.start == expected_size &&
+            !memcmp(current->bytes + marked->content.start, expected, expected_size);
+        free(expected);
+      }
     }
     if (!recognized) {
       break;
@@ -130,7 +145,11 @@ bool install_boot_entry_plan(const struct config_blob *current,
     spans[role] = marked->span;
     edits[count] = (struct menu_edit){.start = spans[role].start, .end = spans[role].end};
     if (wanted) {
-      edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, false, &edits[count].size);
+      bool same_pair = old && !strcmp(old->kernel, wanted->kernel) &&
+          !strcmp(old->archive, wanted->archive);
+      bool nvme_write = role == ENTRY_NORMAL && (!same_pair || old_nvme_write);
+      edits[count].text = owned_block(role, wanted, disk_guid, pool_partition, nvme_write,
+          false, &edits[count].size);
       ok = edits[count].text != NULL;
     }
     ++count;
@@ -142,7 +161,7 @@ bool install_boot_entry_plan(const struct config_blob *current,
     if (recognized && !inherited->entire_proven) {
       size_t expected_size;
       char *expected = entry("Pyxis OS (previous)", false, old->kernel, old->archive,
-          disk_guid, pool_partition, NULL, &expected_size);
+          disk_guid, pool_partition, NULL, false, &expected_size);
       ok = expected != NULL;
       if (ok) {
         recognized = legacy->content.end - legacy->content.start == expected_size &&
@@ -228,7 +247,7 @@ bool install_boot_entry_render_owned(const struct install_boot_entry_paths *path
   bool ok = true;
   for (unsigned i = 0; i < 2; ++i) {
     entries[i] = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, pool_partition,
-        NULL, &sizes[i]);
+        NULL, i == 0, &sizes[i]);
     ok &= entries[i] != NULL;
   }
   if (ok) {
@@ -250,9 +269,9 @@ bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
 {
   size_t normal_size = 0, rescue_size = 0;
   char *normal = entry("Pyxis OS (Caelum)", false, paths->kernel, paths->archive,
-      disk_guid, pool_partition, esp_guid, &normal_size);
+      disk_guid, pool_partition, esp_guid, false, &normal_size);
   char *rescue = entry("Pyxis OS (rescue)", true, paths->kernel, paths->archive,
-      disk_guid, pool_partition, esp_guid, &rescue_size);
+      disk_guid, pool_partition, esp_guid, false, &rescue_size);
   bool ok = normal && rescue;
   if (ok) {
     size_t size = normal_size + rescue_size + 2;
@@ -280,7 +299,7 @@ void install_boot_entry_print(const struct install_boot_entry_paths *paths,
   for (unsigned i = 0; i < 2; ++i) {
     size_t size = 0;
     char *text = entry(names[i], i == 1, paths->kernel, paths->archive, disk_guid, pool_partition,
-        NULL, &size);
+        NULL, i == 0, &size);
     if (text) {
       fwrite(text, 1, size, output);
       fputc('\n', output);

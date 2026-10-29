@@ -56,7 +56,8 @@ bool install_boot_entry_render(const struct install_boot_entry_paths *paths,
     const uint8_t disk_guid[16], uint64_t pool_partition, const uint8_t esp_guid[16],
     struct config_blob *pair);
 /* Fresh, exclusively created menu: owned normal/rescue pair plus the authored
- * globals. Uses the same boot-relative spelling recognized by later Review. */
+ * globals. Normal boot opts into NVMe writes; rescue remains read-only. Exact
+ * released entries without that opt-in remain recognizable until replaced. Uses the same boot-relative spelling recognized by later Review. */
 bool install_boot_entry_render_owned(const struct install_boot_entry_paths *paths,
     const uint8_t disk_guid[16], uint64_t pool_partition, struct config_blob *menu);
 void install_boot_entry_print(const struct install_boot_entry_paths *paths,
