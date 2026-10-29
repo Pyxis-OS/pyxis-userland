@@ -48,6 +48,7 @@
 #include <endpoint.h>
 #include <file.h>
 #include <output.h>
+#include <pxe/shebang.h>
 #include <retention.h>
 #include <launcher.h>
 #include <script_scope.h>
@@ -2210,6 +2211,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   const char *operation = "shell: open";
   const char *path = stages[0].arguments[0];
   char conflicting_entry[ENVIRONMENT_NAME_MAX + 1];
+  char interpreter_uri[SHEBANG_PREFIX_SIZE];
   char missing[ENVIRONMENT_NAME_MAX + 1] = "";
   size_t failed_stage = 0;
   enum call_status status = CALL_OK;
@@ -2251,9 +2253,9 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
 
   bool shell_execution = false;
   /* Open and classify held user images once, before redirects or group policy. */
-  operation = "shell: open image";
   for (size_t i = 0; i < user_count; ++i) {
     failed_stage = i;
+    operation = "shell: open image";
     path = stages[i].arguments[0];
     status = shell_open_image(shell, path, &prepared[i].program);
     if (status != CALL_OK) {
@@ -2278,6 +2280,10 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     if (interpreter) {
       struct command_selection *selected = NULL;
       handle_t image;
+      /* The parsed prefix is released with the preparation, before the report. */
+      snprintf(interpreter_uri, sizeof(interpreter_uri), "%s", interpreter);
+      operation = "shell: select interpreter";
+      path = interpreter_uri;
       if (!strcmp(interpreter, SHELL_INTERPRETER)) {
         /* This spelling selects the startup-held code, never the mutable boot
          * binding. A missing image is a refusal, not interpreter rediscovery. */
@@ -2285,13 +2291,18 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         status = image == HANDLE_INVALID ? CALL_NOT_FOUND : CALL_OK;
       } else {
         status = shell_open_image(shell, interpreter, &selected);
-        image = status == CALL_OK && !selected->bundle ? selected->image : HANDLE_INVALID;
-        if (status == CALL_OK && image == HANDLE_INVALID) {
-          status = CALL_WRONG_TYPE;
-        }
+        image = status == CALL_OK ? selected->image : HANDLE_INVALID;
       }
       if (status == CALL_OK) {
-        status = program_image_select_interpreter(prepared[i].input, image);
+        /* A bundle interpreter is launched as its bundle: the preparation takes
+         * the selection and its manifest policy replaces the script's. */
+        bool bundle = selected && selected->bundle;
+        status = bundle ? program_image_select_interpreter_bundle(prepared[i].input, selected) :
+            program_image_select_interpreter(prepared[i].input, image);
+        if (status == CALL_OK && bundle) {
+          prepared[i].bundle = program_image_interpreter_bundle(prepared[i].input);
+          selected = NULL;
+        }
         prepared[i].shell_reentry = program_interpreters_match(&shell->interpreters,
             image) != PROGRAM_INTERPRETER_NONE;
         prepared[i].shell_execution = prepared[i].shell_reentry ||
@@ -2301,6 +2312,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       if (status != CALL_OK) {
         goto failed;
       }
+      operation = "shell: open image";
+      path = stages[i].arguments[0];
     }
     shell_execution |= prepared[i].shell_execution;
   }
