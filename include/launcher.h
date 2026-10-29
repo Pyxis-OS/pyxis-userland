@@ -7,6 +7,8 @@
 #include <abi/syscall.h>
 
 struct program_image;
+struct bundle_program;
+struct command_selection;
 struct path_context;
 struct space_definition;
 
@@ -76,6 +78,20 @@ const char *program_image_interpreter(const struct program_image *prepared);
  * preserves the previous selection. Launch uses only this held selection and
  * never substitutes a URI lookup. This adds no child authority. */
 enum call_status program_image_select_interpreter(struct program_image *prepared, handle_t image);
+/* As program_image_select_interpreter, for an interpreter resolved as a bundle:
+ * the code is the bundle's entry FILE. Success transfers SELECTION to PREPARED,
+ * which closes it with the preparation; failure leaves it with the caller. A
+ * manifest entry or grant named "script" refuses with CALL_ALREADY_EXISTS,
+ * because launch hands the script over under that name. The selection adds no
+ * authority: the caller prepares the launch from program_image_interpreter_bundle
+ * with its own held sources, exactly as for an explicit launch of that bundle,
+ * and passes the request to program_launch_prepared. Selecting a native FILE
+ * afterwards drops the bundle. */
+enum call_status program_image_select_interpreter_bundle(struct program_image *prepared,
+    struct command_selection *selection);
+/* The selected interpreter's bundle, borrowed until close, or NULL when the
+ * interpreter is a native FILE or none is selected. */
+struct bundle_program *program_image_interpreter_bundle(const struct program_image *prepared);
 void program_image_close(struct program_image *prepared);
 
 /* Launch native PXE or a single-level shebang script from request->image.

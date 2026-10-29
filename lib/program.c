@@ -1,4 +1,6 @@
 #include <abi/file.h>
+#include <bundle.h>
+#include <command_selection.h>
 #include <file.h>
 #include <handle.h>
 #include <launcher.h>
@@ -11,6 +13,8 @@
 struct program_image {
   handle_t image;
   handle_t selected_interpreter;
+  /* Owns the bundle whose policy applies to the selected interpreter, if any. */
+  struct command_selection *interpreter_bundle;
   char *prefix;
   const char *interpreter;
 };
@@ -51,6 +55,7 @@ void program_image_close(struct program_image *prepared)
     if (prepared->selected_interpreter != HANDLE_INVALID) {
       handle_close(prepared->selected_interpreter);
     }
+    command_selection_close(prepared->interpreter_bundle);
     free(prepared->prefix);
     free(prepared);
   }
@@ -114,7 +119,7 @@ const char *program_image_interpreter(const struct program_image *prepared)
   return prepared ? prepared->interpreter : NULL;
 }
 
-enum call_status program_image_select_interpreter(struct program_image *prepared, handle_t image)
+static enum call_status retain_interpreter(struct program_image *prepared, handle_t image)
 {
   if (!prepared || !prepared->interpreter) {
     return CALL_BAD_REQUEST;
@@ -137,6 +142,59 @@ enum call_status program_image_select_interpreter(struct program_image *prepared
   }
   prepared->selected_interpreter = selected;
   return CALL_OK;
+}
+
+enum call_status program_image_select_interpreter(struct program_image *prepared, handle_t image)
+{
+  enum call_status status = retain_interpreter(prepared, image);
+  if (status == CALL_OK) {
+    command_selection_close(prepared->interpreter_bundle);
+    prepared->interpreter_bundle = NULL;
+  }
+  return status;
+}
+
+static bool names_script(const struct bundle_program *program)
+{
+  size_t count;
+  const struct environment_value *entries = bundle_program_entries(program, &count);
+  for (size_t i = 0; i < count; ++i) {
+    if (!strcmp(entries[i].name, "script")) {
+      return true;
+    }
+  }
+  const struct bundle_grant_request *grants = bundle_program_grants(program, &count);
+  for (size_t i = 0; i < count; ++i) {
+    if (!strcmp(grants[i].name, "script")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+enum call_status program_image_select_interpreter_bundle(struct program_image *prepared,
+    struct command_selection *selection)
+{
+  if (!selection || !selection->bundle) {
+    return CALL_BAD_REQUEST;
+  }
+  /* The script resource is added after manifest preparation, so a declaration
+   * of that name would collide with it only at launch. */
+  if (names_script(selection->bundle)) {
+    return CALL_ALREADY_EXISTS;
+  }
+  enum call_status status = retain_interpreter(prepared, bundle_program_image(selection->bundle));
+  if (status != CALL_OK) {
+    return status;
+  }
+  command_selection_close(prepared->interpreter_bundle);
+  prepared->interpreter_bundle = selection;
+  return CALL_OK;
+}
+
+struct bundle_program *program_image_interpreter_bundle(const struct program_image *prepared)
+{
+  return prepared && prepared->interpreter_bundle ? prepared->interpreter_bundle->bundle : NULL;
 }
 
 static enum call_status open_interpreter(const struct path_context *context,
