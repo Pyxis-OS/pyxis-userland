@@ -2,6 +2,7 @@
 #define LIBC_STDIO_H
 
 #include <stdarg.h>
+#include <limits.h>
 #include <stddef.h>
 #include <sys/types.h>
 
@@ -13,6 +14,7 @@ typedef struct pyxis_file FILE;
 
 #define EOF (-1)
 #define BUFSIZ 8192
+#define FILENAME_MAX PATH_MAX
 #define _IONBF 0
 #define _IOLBF 1
 #define _IOFBF 2
