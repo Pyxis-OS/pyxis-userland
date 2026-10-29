@@ -136,6 +136,10 @@ int isatty(int descriptor);
 /* Native clock sleep, without Unix signals. Zero needs no clock. Returns zero
  * after the whole interval, or the requested seconds with errno on failure. */
 unsigned int sleep(unsigned int seconds);
+/* Microsecond sleep through nanosleep with its clock authority and cooperative
+ * EINTR behavior. Accepts the full useconds_t range; never restarts on EINTR.
+ * Return zero on success, -1 with errno on failure. */
+int usleep(useconds_t microseconds);
 
 /* POSIX option parsing from musl, over the caller's argv: optind indexes the
  * next argument (set it to 0 to restart) and opterr, if nonzero, prints

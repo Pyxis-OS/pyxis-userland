@@ -10,6 +10,8 @@ typedef signed long ssize_t;
 typedef unsigned int mode_t;
 /* Signed file size and offset for POSIX interfaces such as ftruncate. */
 typedef signed long off_t;
+/* Microsecond durations for usleep, including values above one second. */
+typedef unsigned int useconds_t;
 
 /* Native identity components, copied losslessly without host device encoding. */
 typedef uint64_t dev_t;

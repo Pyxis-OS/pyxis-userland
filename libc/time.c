@@ -1,6 +1,7 @@
 #include <clock.h>
 #include <errno.h>
 #include <startup.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include "errors.h"
@@ -13,6 +14,8 @@
 #include <wait.h>
 
 #define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
+#define MICROSECONDS_PER_SECOND UINT64_C(1000000)
+#define NANOSECONDS_PER_MICROSECOND UINT64_C(1000)
 
 static int monotonic_get(struct timespec *result)
 {
@@ -81,6 +84,25 @@ int clock_gettime(clockid_t clock, struct timespec *result)
     return -1;
   }
   return timespec_get(result, base) ? 0 : -1;
+}
+
+int gettimeofday(struct timeval *restrict result, void *restrict timezone)
+{
+  if (!result) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (timezone) {
+    errno = ENOTSUP;
+    return -1;
+  }
+  struct timespec reading;
+  if (clock_gettime(CLOCK_REALTIME, &reading) < 0) {
+    return -1;
+  }
+  *result = (struct timeval){reading.tv_sec,
+      reading.tv_nsec / NANOSECONDS_PER_MICROSECOND};
+  return 0;
 }
 
 int nanosleep(const struct timespec *duration, struct timespec *remaining)
@@ -167,6 +189,17 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining)
     errno = error;
   }
   return error ? -1 : 0;
+}
+
+int usleep(useconds_t microseconds)
+{
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
+  struct timespec duration = {
+    .tv_sec = microseconds / MICROSECONDS_PER_SECOND,
+    .tv_nsec = (microseconds % MICROSECONDS_PER_SECOND) * NANOSECONDS_PER_MICROSECOND,
+  };
+  return nanosleep(&duration, NULL);
 }
 
 unsigned int sleep(unsigned int seconds)
