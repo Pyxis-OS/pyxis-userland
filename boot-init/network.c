@@ -45,13 +45,42 @@ static bool controller_matches(const struct network_interface_config *config,
   }
 }
 
+static bool identity_known(const struct net_controller_reply *controller)
+{
+  return memcmp(controller->mac, (uint8_t[6]){0}, sizeof(controller->mac)) != 0;
+}
+
 static bool excluded(const struct network_config *config, const struct net_controller_reply *controller)
 {
-  if (controller->interface_class != NET_INTERFACE_CLASS_ETHERNET) {
-    return false;
+  const uint8_t (*macs)[6] = controller->interface_class == NET_INTERFACE_CLASS_WIFI ?
+      config->wifi_excluded_macs : config->excluded_macs;
+  size_t count = controller->interface_class == NET_INTERFACE_CLASS_WIFI ?
+      config->wifi_exclusion_count : config->exclusion_count;
+  for (size_t i = 0; i < count; ++i) {
+    if (!memcmp(macs[i], controller->mac, sizeof(controller->mac))) {
+      return true;
+    }
   }
-  for (size_t i = 0; i < config->exclusion_count; ++i) {
-    if (!memcmp(config->excluded_macs[i], controller->mac, sizeof(controller->mac))) {
+  return false;
+}
+
+/* The controller/name set is fixed at boot. Identity policy may resolve later,
+ * after a separately authorized radio operation; it never starts that operation. */
+static bool wifi_automatic_pending(const struct network_config *config,
+    const struct net_controller_reply *controller)
+{
+  bool known = identity_known(controller);
+  if (config->wifi_exclusion_count && !known) {
+    return true;
+  }
+  for (size_t i = 0; i < config->count; ++i) {
+    const struct network_interface_config *role = &config->interfaces[i];
+    if (role->automatic || role->interface_class != NET_INTERFACE_CLASS_WIFI) {
+      continue;
+    }
+    if (role->resolved_controller == controller->controller_id ||
+        (role->selector.kind == NET_SELECT_MAC &&
+         (!known || !memcmp(role->selector.mac, controller->mac, sizeof(controller->mac))))) {
       return true;
     }
   }
@@ -68,7 +97,7 @@ static bool name_used(const struct network_config *config, const char *name)
   return false;
 }
 
-static bool append_automatic(struct network_config *config, const char *name, uint32_t controller)
+static bool append_automatic(struct network_config *config, const char *name, uint32_t controller, uint32_t interface_class)
 {
   if (config->count == NETWORK_INTERFACE_LIMIT) {
     fputs("network: resolved plan exceeds 254 non-loopback interfaces\n", stderr);
@@ -81,7 +110,7 @@ static bool append_automatic(struct network_config *config, const char *name, ui
   }
   config->interfaces = entries;
   struct network_interface_config *entry = &entries[config->count++];
-  *entry = (struct network_interface_config){.interface_class = NET_INTERFACE_CLASS_ETHERNET,
+  *entry = (struct network_interface_config){.interface_class = interface_class,
     .resolved_controller = controller, .optional = true, .dhcp = true, .automatic = true,
     .selector = {.kind = NET_SELECT_CONTROLLER, .controller_id = controller}};
   memcpy(entry->name, name, strlen(name) + 1);
@@ -90,9 +119,10 @@ static bool append_automatic(struct network_config *config, const char *name, ui
 
 /* Discovery, exclusions, explicit reservations and generated names are resolved
  * before DEFINE/BIND or packet scope publication. Carrier does not gate autos. */
-static bool expand_wired(struct network_config *config, handle_t registry)
+static bool expand_automatic(struct network_config *config, handle_t registry)
 {
-  if (!config->wired_auto && !config->exclusion_count) {
+  if (!config->wired_auto && !config->wifi_auto &&
+      !config->exclusion_count && !config->wifi_exclusion_count) {
     return true;
   }
   handle_t clock = bootstrap_capability("clock");
@@ -147,9 +177,14 @@ static bool expand_wired(struct network_config *config, handle_t registry)
     size_t matching = 0;
     bool linked = entry->selector.kind == NET_SELECT_LINKED_CONTROLLER;
     bool permitted_prepared = false;
-    bool reserve_link = config->wired_auto &&
-        entry->interface_class == NET_INTERFACE_CLASS_ETHERNET && linked;
+    bool reserve_link = linked &&
+        ((config->wired_auto && entry->interface_class == NET_INTERFACE_CLASS_ETHERNET) ||
+         (config->wifi_auto && entry->interface_class == NET_INTERFACE_CLASS_WIFI));
+    bool pending_wifi_identity = false;
     for (size_t j = 0; j < count; ++j) {
+      pending_wifi_identity |= entry->interface_class == NET_INTERFACE_CLASS_WIFI &&
+          entry->selector.kind == NET_SELECT_MAC &&
+          controllers[j].interface_class == NET_INTERFACE_CLASS_WIFI && !identity_known(&controllers[j]);
       if (linked) {
         if (excluded(config, &controllers[j])) {
           continue;
@@ -171,7 +206,7 @@ static bool expand_wired(struct network_config *config, handle_t registry)
       }
     }
     if ((matching > 1 && !linked) ||
-        (!selected && !entry->optional && (!linked || !permitted_prepared))) {
+        (!selected && !pending_wifi_identity && !entry->optional && (!linked || !permitted_prepared))) {
       fprintf(stderr, "network: %s explicit controller is absent or ambiguous\n", entry->name);
       free(controllers);
       return false;
@@ -180,7 +215,7 @@ static bool expand_wired(struct network_config *config, handle_t registry)
       continue;
     }
     if (excluded(config, selected)) {
-      fprintf(stderr, "network: %s selects an excluded wired controller\n", entry->name);
+      fprintf(stderr, "network: %s selects an excluded controller\n", entry->name);
       free(controllers);
       return false;
     }
@@ -193,9 +228,12 @@ static bool expand_wired(struct network_config *config, handle_t registry)
     }
     entry->resolved_controller = selected->controller_id;
   }
-  for (size_t i = 0; config->wired_auto && i < count; ++i) {
+  for (size_t i = 0; i < count; ++i) {
     const struct net_controller_reply *controller = &controllers[i];
-    if (controller->interface_class != NET_INTERFACE_CLASS_ETHERNET || excluded(config, controller)) {
+    bool wired = controller->interface_class == NET_INTERFACE_CLASS_ETHERNET && config->wired_auto;
+    bool wifi = controller->interface_class == NET_INTERFACE_CLASS_WIFI && config->wifi_auto &&
+        (controller->flags & NET_CONTROLLER_PREPARED);
+    if ((!wired && !wifi) || excluded(config, controller)) {
       continue;
     }
     bool reserved = false;
@@ -208,9 +246,9 @@ static bool expand_wired(struct network_config *config, handle_t registry)
     char name[16];
     unsigned number = 0;
     do {
-      snprintf(name, sizeof(name), "eth%u", number++);
+      snprintf(name, sizeof(name), "%s%u", wifi ? "wlan" : "eth", number++);
     } while (name_used(config, name));
-    if (!append_automatic(config, name, controller->controller_id)) {
+    if (!append_automatic(config, name, controller->controller_id, controller->interface_class)) {
       free(controllers);
       return false;
     }
@@ -267,24 +305,27 @@ enum call_status boot_network_bind(const struct network_config *config, const ui
       after = controller.controller_id;
       if (entry->interface_class == NET_INTERFACE_CLASS_WIFI &&
           controller.interface_class == NET_INTERFACE_CLASS_WIFI &&
-          entry->selector.kind == NET_SELECT_MAC && controller.driver == NET_DRIVER_AX200 &&
-          !memcmp(controller.mac, (uint8_t[6]){0}, 6)) {
+          entry->selector.kind == NET_SELECT_MAC && !identity_known(&controller)) {
         pending_wifi_identity = true;
       }
       if (!controller_matches(entry, &controller)) {
         continue;
       }
+      if (entry->automatic && controller.interface_class == NET_INTERFACE_CLASS_WIFI &&
+          wifi_automatic_pending(config, &controller)) {
+        continue;
+      }
       if (excluded(config, &controller)) {
-        if (entry->selector.kind == NET_SELECT_LINKED_CONTROLLER) {
+        if (entry->automatic || entry->selector.kind == NET_SELECT_LINKED_CONTROLLER) {
           continue;
         }
-        fprintf(stderr, "network: %s selects an excluded wired controller\n", entry->name);
+        fprintf(stderr, "network: %s selects an excluded controller\n", entry->name);
         free(bindings);
         free(controllers);
         return CALL_BAD_REQUEST;
       }
       if (controller.flags & NET_CONTROLLER_BOUND) {
-        if (entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
+        if (!entry->automatic && entry->selector.kind != NET_SELECT_LINKED_CONTROLLER) {
           fprintf(stderr, "network: %s controller is already bound\n", entry->name);
           free(bindings);
           free(controllers);
@@ -356,7 +397,7 @@ bool boot_network_read(struct network_config *config, handle_t registry,
       network_config_read_literal_bytes("system://config/network.lua", bytes->bytes, bytes->size,
         config) == CONFIG_OK :
       network_config_read(config);
-  if (!read || !expand_wired(config, registry)) {
+  if (!read || !expand_automatic(config, registry)) {
     network_config_free(config);
     return false;
   }

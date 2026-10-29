@@ -16,7 +16,7 @@ struct boot_network {
   handle_t remote_interface, remote_tcp, remote_udp;
 };
 
-/* Reads a profile and resolves its wired controllers, with no effect on the
+/* Reads a profile and resolves its boot controllers, with no effect on the
  * network: BYTES is the pool's network.lua, borrowed, or NULL for
  * boot://config/network.lua. False reports why on stderr and leaves CONFIG empty. */
 bool boot_network_read(struct network_config *config, handle_t registry,

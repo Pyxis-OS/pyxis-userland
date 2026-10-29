@@ -294,9 +294,9 @@ static bool captured_controller(const char *interface, bool required, uint32_t *
 /* Boot-init already chose the immutable initial set. Adopt only definitions
  * backed by this owner's private configuration and DHCP grants, never a fresh
  * controller scan or a name observed through registry READ alone. */
-static bool adopt_wired(struct network_config *config, handle_t registry)
+static bool adopt_automatic(struct network_config *config, handle_t registry)
 {
-  if (!config->wired_auto) {
+  if (!config->wired_auto && !config->wifi_auto) {
     return true;
   }
   for (uint64_t after = 0;;) {
@@ -312,7 +312,9 @@ static bool adopt_wired(struct network_config *config, handle_t registry)
     for (size_t i = 0; i < config->count; ++i) {
       explicit |= !strcmp(config->interfaces[i].name, published.name);
     }
-    if (explicit || published.interface_class != NET_INTERFACE_CLASS_ETHERNET) {
+    bool automatic = (config->wired_auto && published.interface_class == NET_INTERFACE_CLASS_ETHERNET) ||
+        (config->wifi_auto && published.interface_class == NET_INTERFACE_CLASS_WIFI);
+    if (explicit || !automatic) {
       continue;
     }
     char name[32];
@@ -329,7 +331,7 @@ static bool adopt_wired(struct network_config *config, handle_t registry)
         authority == HANDLE_INVALID || udp == HANDLE_INVALID ||
         net_interface_query(authority, &owned) != CALL_OK ||
         owned.interface_id != published.interface_id || strcmp(owned.name, published.name) ||
-        owned.interface_class != NET_INTERFACE_CLASS_ETHERNET ||
+        owned.interface_class != published.interface_class ||
         (owned.controller_id && owned.controller_id != controller) ||
         config->count == NETWORK_INTERFACE_LIMIT) {
       fputs("network: invalid declared automatic interface facets\n", stderr);
@@ -342,7 +344,7 @@ static bool adopt_wired(struct network_config *config, handle_t registry)
     }
     config->interfaces = entries;
     struct network_interface_config *entry = &entries[config->count++];
-    *entry = (struct network_interface_config){.interface_class = NET_INTERFACE_CLASS_ETHERNET,
+    *entry = (struct network_interface_config){.interface_class = owned.interface_class,
       .optional = true, .dhcp = true, .automatic = true, .resolved_controller = controller,
       .selector = {.kind = NET_SELECT_CONTROLLER, .controller_id = controller}};
     memcpy(entry->name, owned.name, sizeof(entry->name));
@@ -354,7 +356,7 @@ bool network_config_apply(struct network_config *config, struct network_runtime 
   *runtime = (struct network_runtime){
     .registry = bootstrap_capability("net_registry"), .policy = bootstrap_capability("net_policy"),
     .clock = bootstrap_capability("clock"), .random = bootstrap_capability("random")};
-  if (runtime->registry == HANDLE_INVALID || !adopt_wired(config, runtime->registry)) {
+  if (runtime->registry == HANDLE_INVALID || !adopt_automatic(config, runtime->registry)) {
     return false;
   }
   runtime->count = config->count;
