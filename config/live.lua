@@ -44,6 +44,7 @@ return {
       screenshot = true,
       power = true,
       acpi_tables = true,
+      jit = true,
       clipboard_local = true,
       clipboard_shared = true,
       package_management = true,
@@ -90,6 +91,7 @@ return {
       jobs = true,
       screenshot = true,
       power = true,
+      jit = true,
       multiplexer = true,
       clipboard_local = true,
       clipboard_shared = true,
@@ -178,6 +180,7 @@ return {
       screenshot = true,
       remote_power = true,
       acpi_tables = true,
+      jit = true,
       package_management = true,
       grants = {
         http_staging = {
