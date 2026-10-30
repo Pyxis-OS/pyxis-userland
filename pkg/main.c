@@ -7,6 +7,7 @@
 #include "signature.h"
 #include "store.h"
 #include "upgrade.h"
+#include "release_route.h"
 #include "../common/bootstrap_environment.h"
 #include "../xfer/hash.h"
 #include <clock.h>
@@ -43,7 +44,6 @@ struct package_request {
 /* The configured repository pkg upgrade reads releases from (decision 74);
  * other commands do not read it. */
 #define RELEASES_REPOSITORY "releases"
-#define RELEASE_ID "pyxis"
 #define UPGRADE_STAGING ".upgrade"
 
 struct client {
@@ -1756,7 +1756,7 @@ static bool repository_command(const char *command, const char *name, const char
   return ok;
 }
 
-static void upgrade_review(const struct pkg_entry *release)
+static void upgrade_review(const struct pkg_entry *release, const struct pkg_entry *target)
 {
   const struct package_provided_abi *provided = provided_abi();
   char provides[PKG_PROVIDES_MAX * (PACKAGE_ABI_MAX + 2)] = "";
@@ -1771,6 +1771,12 @@ static void upgrade_review(const struct pkg_entry *release)
   }
   printf("  new: %s@%s, %llu bytes, provides %s\n", release->identity.id,
       release->identity.version, (unsigned long long)release->size, provides);
+  if (release != target) {
+    printf("  requested destination: %s; this hop is a required checkpoint\n",
+        target->identity.version);
+    printf("  after reboot, run pkg upgrade %s to continue; each hop has its own review.\n",
+        target->identity.version);
+  }
   puts("  current packages stay active until the verified new boot; static rescue remains available.");
 }
 
@@ -1916,9 +1922,7 @@ static bool stage_and_publish(const struct pkg_entry *release, const struct pkg_
   return ok;
 }
 
-/* pkg upgrade [VERSION] (docs/wip/pkg-upgrade.md, step 3): the newest release
- * in the signed releases repository, or the one named, staged as the next boot
- * attempt. */
+/* Resolve a route from the signed index, then stage only its next hop. */
 static bool upgrade(const char *version)
 {
   handle_t issuer = bootstrap_capability(PACKAGE_UPGRADE_SOURCE);
@@ -1961,26 +1965,14 @@ static bool upgrade(const char *version)
   struct pkg_entry *entries = NULL;
   size_t count = 0;
   const struct pkg_entry *chosen = NULL;
+  const struct pkg_entry *target = NULL;
   if (ok) {
     printf("pkg: reading repository %s\n", source->name);
     ok = read_repository(source, &entries, &count);
   }
-  for (size_t i = 0; ok && i < count; ++i) {
-    if (pkg_kind_release(entries[i].kind) && !strcmp(entries[i].identity.id, RELEASE_ID) &&
-        (!version || !strcmp(entries[i].identity.version, version))) {
-      chosen = &entries[i];
-    }
-  }
-  if (ok && !chosen) {
-    if (version) {
-      snprintf(client.message, sizeof(client.message),
-          "the releases repository does not offer %s@%s", RELEASE_ID, version);
-    } else {
-      snprintf(client.message, sizeof(client.message),
-          "the releases repository offers no %s release", RELEASE_ID);
-    }
-    ok = fail(client.message);
-  } else if (ok && !strcmp(chosen->identity.version, provided->release)) {
+  ok = ok && pkg_release_route(entries, count, provided->release, version,
+      &chosen, &target, &client.reason);
+  if (ok && !strcmp(chosen->identity.version, provided->release)) {
     snprintf(client.message, sizeof(client.message), "%s is already running",
         chosen->identity.version);
     ok = fail(client.message);
@@ -1995,7 +1987,7 @@ static bool upgrade(const char *version)
       pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
       pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
   if (ok) {
-    upgrade_review(chosen);
+    upgrade_review(chosen, target);
     ok = review(&before, &after, true, true);
   }
   if (ok) {
