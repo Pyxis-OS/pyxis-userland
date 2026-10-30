@@ -97,8 +97,12 @@ removes unused versions before consumers start, retaining only the active set.
 No archive scripts execute.
 
 `pkg upgrade [VERSION]` reads only the signed `releases` repository and selects
-the named release or its last published release, refusing the one already
-running. It needs an installed system booted from its own boot entry and a space
+the first required checkpoint toward the named/latest release, or that release
+when no checkpoint intervenes. The existing signed release IDs declare the
+route in publication order: historical `pyxis` and the permanent 0.0.10
+bootstrap, later `pyxis-checkpoint`, ordinary `pyxis-release`. Each invocation
+reviews one hop; reboot and invoke again to continue. Unknown running releases,
+duplicate route versions and downgrades refuse. It needs an installed system booted from its own boot entry and a space
 with `package_upgrade = true`; live media and rescue boots refuse. Review shows
 the release and the complete target-compatible package selection. It stages
 the verified package set and a durable pending proof before the shared boot
