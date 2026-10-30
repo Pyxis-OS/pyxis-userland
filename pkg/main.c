@@ -1708,7 +1708,8 @@ static bool mutate(const char *command, int argc, char **argv)
   }
   if (ok && !reindex && !noop) {
     ok = pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
-        pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
+        pkg_sdk_build(client.packages, &after, &sdk, &client.reason) &&
+        pkg_indexes_fit(client.packages, &projection, &sdk, &client.reason);
   }
   if (ok && !reindex && !noop) {
     ok = review(&before, &after, updating, false);
@@ -2108,7 +2109,8 @@ static bool upgrade(const char *version)
       pkg_selection_load(client.packages, &after, &client.reason) &&
       prepare_update(&after, 0, NULL, chosen) &&
       pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
-      pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
+      pkg_sdk_build(client.packages, &after, &sdk, &client.reason) &&
+      pkg_indexes_fit(client.packages, &projection, &sdk, &client.reason);
   if (ok) {
     upgrade_review(chosen, target);
     ok = review(&before, &after, true, true);
@@ -2185,7 +2187,8 @@ static bool installer_stage(int argc, char **argv)
       pkg_selection_load(client.packages, &after, &client.reason) &&
       prepare_update(&after, 0, NULL, NULL) &&
       pkg_commands_build(client.packages, &after, &projection, &client.reason) &&
-      pkg_sdk_build(client.packages, &after, &sdk, &client.reason);
+      pkg_sdk_build(client.packages, &after, &sdk, &client.reason) &&
+      pkg_indexes_fit(client.packages, &projection, &sdk, &client.reason);
   if (ok) ok = review(&before, &after, true, true);
   uint64_t staged = 0;
   if (ok) ok = pkg_stage(client.packages, &after, &projection, &sdk, &staged, &client.reason);

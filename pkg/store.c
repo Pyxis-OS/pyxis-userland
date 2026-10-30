@@ -4,6 +4,7 @@
 #include <handle.h>
 #include <literal.h>
 #include <package.h>
+#include <package_commands.h>
 #include <package_transition.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -182,12 +183,12 @@ static void *command_bytes(uint64_t number, const struct pkg_projection *project
     size_t *size, const char **reason)
 {
   size_t count = projection->commands + projection->roots;
-  /* The kernel holds a captured index in memory and refuses one past this
-   * bound, so a set that large is refused here, before it is published. */
-  if (projection->commands > PACKAGE_COMMANDS_LIMIT || projection->roots > UINT32_MAX ||
-      count > (PACKAGE_COMMAND_INDEX_MAX_BYTES - sizeof(struct package_command_index_header)) /
+  /* The record counts are 32-bit fields of the header; the kernel's memory
+   * budget is checked by pkg_indexes_fit before anything is written. */
+  if (projection->commands > UINT32_MAX || projection->roots > UINT32_MAX ||
+      count > (SIZE_MAX - sizeof(struct package_command_index_header)) /
           sizeof(*projection->records)) {
-    *reason = "the set has too many packages or commands for its index bound";
+    *reason = "the set has more packages or commands than the index format counts";
     return NULL;
   }
   *size = sizeof(struct package_command_index_header) + count * sizeof(*projection->records);
@@ -208,14 +209,14 @@ static void *command_bytes(uint64_t number, const struct pkg_projection *project
 }
 
 /* The set file NUMBER followed by SUFFIX must hold exactly EXPECTED. */
-static bool compare_index(handle_t sets, uint64_t number, const char *suffix, uint64_t limit,
+static bool compare_index(handle_t sets, uint64_t number, const char *suffix,
     const void *expected, size_t expected_size, const char **reason)
 {
   char name[48];
   snprintf(name, sizeof(name), "%llu%s", (unsigned long long)number, suffix);
   char *actual = NULL;
   size_t actual_size = 0;
-  bool ok = pkg_text(sets, name, limit, &actual, &actual_size, reason);
+  bool ok = pkg_text(sets, name, expected_size, &actual, &actual_size, reason);
   if (ok && (actual_size != expected_size || memcmp(actual, expected, expected_size))) {
     *reason = !strcmp(suffix, ".sdk") ? "sdk index differs from the selected dev packages" :
         "command index differs from verified selected exports";
@@ -225,13 +226,13 @@ static bool compare_index(handle_t sets, uint64_t number, const char *suffix, ui
   return ok;
 }
 
-static bool write_index(handle_t sets, uint64_t number, const char *suffix, uint64_t limit,
+static bool write_index(handle_t sets, uint64_t number, const char *suffix,
     const void *bytes, size_t size, const char **reason)
 {
   char name[48];
   snprintf(name, sizeof(name), "%llu%s", (unsigned long long)number, suffix);
   return pkg_write_text(sets, name, bytes, size, reason) &&
-      compare_index(sets, number, suffix, limit, bytes, size, reason);
+      compare_index(sets, number, suffix, bytes, size, reason);
 }
 
 /* SDK's bytes with set NUMBER filled in. */
@@ -247,6 +248,50 @@ static void *sdk_bytes(uint64_t number, const struct pkg_sdk *sdk, const char **
   return header;
 }
 
+/* The kernel keeps the command index and the sdk index of the active set in
+ * memory, within its package-view budget (one 512th of installed RAM, at least
+ * 4 MiB); there is no count or file-size constant. A set whose indexes cannot
+ * fit is refused here with the numbers, before the review, never after a
+ * confirmed change. COMMANDS and SDK say which indexes would be written. */
+static bool indexes_fit(handle_t packages, const struct pkg_projection *projection,
+    const struct pkg_sdk *sdk, bool commands, bool sdk_index, const char **reason)
+{
+  uint64_t command_bytes = commands ? sizeof(struct package_command_index_header) +
+      ((uint64_t)projection->commands + projection->roots) * sizeof(*projection->records) : 0;
+  uint64_t sdk_bytes = sdk_index ? sdk->size : 0;
+  if (!command_bytes && !sdk_bytes) {
+    return true;
+  }
+  handle_t live;
+  struct package_command_info info;
+  enum call_status status = package_commands_open(packages, &live);
+  if (status == CALL_OK) {
+    status = package_commands_info(live, &info);
+    handle_close(live);
+  }
+  if (status != CALL_OK) {
+    *reason = "cannot read the kernel's package-view budget";
+    return false;
+  }
+  if (command_bytes + sdk_bytes > info.budget) {
+    static char text[320];
+    snprintf(text, sizeof(text),
+        "command and sdk indexes of the new set: %llu bytes (%zu commands, %zu packages with files, "
+        "%llu sdk bytes) exceed the limit of %llu (kernel package-view memory, one 512th of "
+        "installed RAM)", (unsigned long long)(command_bytes + sdk_bytes), projection->commands,
+        projection->roots, (unsigned long long)sdk_bytes, (unsigned long long)info.budget);
+    *reason = text;
+    return false;
+  }
+  return true;
+}
+
+bool pkg_indexes_fit(handle_t packages, const struct pkg_projection *projection,
+    const struct pkg_sdk *sdk, const char **reason)
+{
+  return indexes_fit(packages, projection, sdk, true, true, reason);
+}
+
 /* Write set NUMBER's command index when COMMANDS and its sdk index when
  * SDK_MISSING, reading each back. */
 static bool write_indexes(handle_t sets, uint64_t number, bool commands, bool sdk_missing,
@@ -254,12 +299,10 @@ static bool write_indexes(handle_t sets, uint64_t number, bool commands, bool sd
 {
   size_t size;
   void *bytes = commands ? command_bytes(number, projection, &size, reason) : NULL;
-  bool ok = !commands || (bytes && write_index(sets, number, ".commands",
-      PACKAGE_COMMAND_INDEX_MAX_BYTES, bytes, size, reason));
+  bool ok = !commands || (bytes && write_index(sets, number, ".commands", bytes, size, reason));
   free(bytes);
   bytes = ok && sdk_missing ? sdk_bytes(number, sdk, reason) : NULL;
-  ok = ok && (!sdk_missing || (bytes && write_index(sets, number, ".sdk",
-      PACKAGE_SDK_INDEX_MAX_BYTES, bytes, sdk->size, reason)));
+  ok = ok && (!sdk_missing || (bytes && write_index(sets, number, ".sdk", bytes, sdk->size, reason)));
   free(bytes);
   return ok;
 }
@@ -276,12 +319,10 @@ bool pkg_indexes_verify(handle_t packages, uint64_t number,
   }
   size_t size;
   void *bytes = command_bytes(number, projection, &size, reason);
-  bool ok = bytes && compare_index(sets, number, ".commands", PACKAGE_COMMAND_INDEX_MAX_BYTES,
-      bytes, size, reason);
+  bool ok = bytes && compare_index(sets, number, ".commands", bytes, size, reason);
   free(bytes);
   bytes = ok ? sdk_bytes(number, sdk, reason) : NULL;
-  ok = ok && bytes && compare_index(sets, number, ".sdk", PACKAGE_SDK_INDEX_MAX_BYTES,
-      bytes, sdk->size, reason);
+  ok = ok && bytes && compare_index(sets, number, ".sdk", bytes, sdk->size, reason);
   free(bytes);
   handle_close(sets);
   return ok;
@@ -321,6 +362,7 @@ bool pkg_reindex(handle_t packages, uint64_t number,
     *reason = "reindex requires a missing active index; existing damage is not repaired";
     ok = false;
   }
+  ok = ok && indexes_fit(packages, projection, sdk, commands, sdk_missing, reason);
   ok = ok && write_indexes(sets, number, commands, sdk_missing, projection, sdk, reason);
   if (ok && directory_sync(sets) != CALL_OK) {
     *reason = "cannot synchronize bootstrapped indexes";
@@ -340,7 +382,8 @@ bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
     return false;
   }
   uint64_t number;
-  bool ok = next_number(sets, &number, reason);
+  bool ok = next_number(sets, &number, reason) &&
+      indexes_fit(packages, projection, sdk, true, true, reason);
   size_t capacity = 64;
   for (size_t i = 0; ok && i < selection->count; ++i) {
     const struct pkg_identity *identity = &selection->entries[i];

@@ -74,6 +74,9 @@ struct transaction {
   bool headers, handed_off, aborting, linked, unlink_attempted;
   bool terminal_description_published;
   uint64_t method, flags, response_flags, deadline, body_length;
+  /* An inactivity window (HTTP_ENDPOINT_IDLE_TIMEOUT): idle is its length, 0
+   * for a total deadline, and ceiling the caller's own absolute deadline. */
+  uint64_t idle, ceiling;
   uint64_t mutation_offset, mutation_size, pending;
   enum staging_operation staging_operation;
   handle_t backing, body_source;
@@ -382,8 +385,14 @@ static void abort_transaction(struct loop *loop, struct transaction *transaction
         transaction->response.error == HTTP_NETWORK_ERROR)) {
       enum call_status status = transaction->response.error == HTTP_NETWORK_ERROR ?
           transaction->response.network_status : failure;
-      snprintf(transaction->detail, sizeof(transaction->detail), "%s (native status %u)",
-          network_failure_name(status), (unsigned)status);
+      if (status == CALL_TIMED_OUT && transaction->idle) {
+        snprintf(transaction->detail, sizeof(transaction->detail),
+            "No data for %llu s (idle timeout) (native status %u)",
+            (unsigned long long)(transaction->idle / 1000000000), (unsigned)status);
+      } else {
+        snprintf(transaction->detail, sizeof(transaction->detail), "%s (native status %u)",
+            network_failure_name(status), (unsigned)status);
+      }
     } else if (!transaction->detail[0] && transaction->response.error == HTTP_TLS_ERROR) {
       tls_result_detail(&transaction->response.tls_failure, transaction->detail,
           sizeof(transaction->detail));
@@ -446,6 +455,19 @@ static enum call_status reserve(struct loop *loop, size_t count,
   return CALL_OK;
 }
 
+/* The deadline of TRANSACTION at NOW. For an inactivity window it is where the
+ * HTTP engine has moved it, to the last data received plus the window. */
+static uint64_t transaction_deadline(struct transaction *transaction, uint64_t now)
+{
+  if (transaction->idle && transaction->engine) {
+    uint64_t moved = http_stream_deadline(transaction->engine, now);
+    if (moved > transaction->deadline) {
+      transaction->deadline = moved;
+    }
+  }
+  return transaction->deadline;
+}
+
 static uint64_t native_deadline(struct loop *loop, struct transaction *transaction,
     bool cleanup)
 {
@@ -455,8 +477,17 @@ static uint64_t native_deadline(struct loop *loop, struct transaction *transacti
     transaction->cleanup = status == CALL_OK ? CALL_LIMIT : status;
     return 0;
   }
+  if (transaction->idle && !transaction->engine && !cleanup) {
+    /* The response is in; each storage step that follows is progress. */
+    uint64_t window = now > UINT64_MAX - transaction->idle ? UINT64_MAX : now + transaction->idle;
+    window = window < transaction->ceiling ? window : transaction->ceiling;
+    if (window > transaction->deadline) {
+      transaction->deadline = window;
+    }
+  }
   uint64_t maximum = now + WAIT_MAX_WAIT_NS;
-  return !cleanup && transaction->deadline < maximum ? transaction->deadline : maximum;
+  uint64_t deadline = transaction_deadline(transaction, now);
+  return !cleanup && deadline < maximum ? deadline : maximum;
 }
 
 static enum call_status submit(struct loop *loop, struct transaction *transaction,
@@ -884,6 +915,10 @@ static void open_resource(struct loop *loop, size_t root,
         status = CALL_LIMIT;
       } else {
         uint64_t limit = now + config->timeout;
+        if (config->response_flags & HTTP_ENDPOINT_IDLE_TIMEOUT) {
+          transaction->idle = config->timeout;
+          transaction->ceiling = request.deadline_ns ? request.deadline_ns : UINT64_MAX;
+        }
         status = default_deadline(loop, request.deadline_ns && request.deadline_ns < limit ?
             request.deadline_ns : limit, &transaction->deadline);
       }
@@ -1232,9 +1267,11 @@ static void start_engine(struct loop *loop, struct transaction *transaction)
     transaction->prepare_context.remaining.header_bytes,
     transaction->prepare_context.remaining.fields,
     transaction->prepare_context.remaining.informational,
+    transaction->idle,
   };
   transaction->engine = http_request_start(&client, transaction->work->uri, &request,
-      transaction->deadline, &limits, loop->receiver, &loop->next_id, &transaction->response);
+      transaction->idle ? transaction->ceiling : transaction->deadline, &limits,
+      loop->receiver, &loop->next_id, &transaction->response);
   if (!transaction->engine) {
     abort_transaction(loop, transaction, response_status(&transaction->response));
   }
@@ -1580,7 +1617,7 @@ static bool progress(struct loop *loop)
   }
   uint64_t now;
   enum call_status status = clock_now(loop->client.authority.clock, &now);
-  if (status != CALL_OK || (now >= transaction->deadline && !transaction->aborting)) {
+  if (status != CALL_OK || (now >= transaction_deadline(transaction, now) && !transaction->aborting)) {
     abort_transaction(loop, transaction, status == CALL_OK ? CALL_TIMED_OUT : status);
   }
   if (transaction->aborting) {
@@ -2052,8 +2089,8 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
       break;
     }
     uint64_t deadline = now + WAIT_MAX_WAIT_NS;
-    if (transaction && !transaction->aborting && transaction->deadline < deadline) {
-      deadline = transaction->deadline;
+    if (transaction && !transaction->aborting && transaction_deadline(transaction, now) < deadline) {
+      deadline = transaction_deadline(transaction, now);
     }
     status = wait_many(interests, count, deadline, events);
     if (status != CALL_OK && status != CALL_TIMED_OUT) {

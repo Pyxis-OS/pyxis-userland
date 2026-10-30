@@ -59,6 +59,10 @@ bool pkg_publish(handle_t packages, const struct pkg_selection *selection,
 bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
     const struct pkg_projection *projection, const struct pkg_sdk *sdk,
     uint64_t *number, const char **reason);
+/* The indexes built for a proposed set fit the kernel's package-view memory
+ * budget; the reason names the sizes and the limit. Called before review. */
+bool pkg_indexes_fit(handle_t packages, const struct pkg_projection *projection,
+    const struct pkg_sdk *sdk, const char **reason);
 /* Both of set NUMBER's indexes equal the ones built from its selection. */
 bool pkg_indexes_verify(handle_t packages, uint64_t number,
     const struct pkg_projection *projection, const struct pkg_sdk *sdk, const char **reason);

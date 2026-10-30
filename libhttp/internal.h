@@ -35,6 +35,10 @@ struct http_stream {
   handle_t stream;
   struct tls_connection *tls;
   uint64_t deadline, remaining;
+  /* An inactivity window (idle, ceiling): deadline is the earlier of ceiling
+   * and the last progress plus idle; progressed notes data received since. */
+  uint64_t idle, ceiling;
+  bool progressed;
   struct http_response_limits limit;
   size_t header_receive_max, header_previous, buffered, header_bytes, fields;
   enum body_stage stage;

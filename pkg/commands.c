@@ -109,20 +109,21 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     struct pkg_projection *projection, const char **reason)
 {
   *projection = (struct pkg_projection){0};
-  /* Commands fill the front; root records, at most one per selected package,
-   * are gathered after the command limit and moved down behind the commands
-   * once both are sorted. */
-  if (selection->count > SIZE_MAX / sizeof(struct package_command_record) - PACKAGE_COMMANDS_LIMIT) {
+  /* Commands grow with the packages' manifests, which are read one by one;
+   * root records are at most one per selected package. Neither has a constant
+   * bound: the kernel's package-view budget is checked when the index is
+   * written (pkg_indexes_fit). */
+  if (selection->count > SIZE_MAX / sizeof(struct package_command_record)) {
     return fail(reason, "selected set is too large to index");
   }
-  struct package_command_record *output =
-      calloc(PACKAGE_COMMANDS_LIMIT + selection->count, sizeof(*output));
-  if (!output) {
+  struct package_command_record *output = NULL;
+  struct package_command_record *roots =
+      calloc(selection->count ? selection->count : 1, sizeof(*roots));
+  if (!roots) {
     return fail(reason, "cannot allocate command projection");
   }
-  struct package_command_record *roots = output + PACKAGE_COMMANDS_LIMIT;
   bool ok = true;
-  size_t used = 0, root_count = 0;
+  size_t used = 0, capacity = 0, root_count = 0;
   for (size_t i = 0; ok && i < selection->count; ++i) {
     handle_t revision = HANDLE_INVALID, tree = HANDLE_INVALID;
     char *bytes = NULL;
@@ -137,8 +138,19 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
         strcmp(manifest.identity.version, identity->version))) {
       ok = fail(reason, "command manifest differs from its selected package");
     }
-    if (ok && manifest.command_count > PACKAGE_COMMANDS_LIMIT - used) {
-      ok = fail(reason, "selected commands exceed projection limit");
+    if (ok && manifest.command_count > capacity - used) {
+      size_t wanted = used + manifest.command_count;
+      size_t grown = capacity ? capacity * 2 : 64;
+      if (grown < wanted) grown = wanted;
+      struct package_command_record *larger = grown > SIZE_MAX / sizeof(*output) ? NULL :
+          realloc(output, grown * sizeof(*output));
+      if (larger) {
+        memset(larger + capacity, 0, (grown - capacity) * sizeof(*larger));
+        output = larger;
+        capacity = grown;
+      } else {
+        ok = fail(reason, "cannot allocate command projection");
+      }
     }
     if (ok && manifest.command_count) {
       ok = pkg_directory(revision, "tree", false, PKG_READ_RIGHTS, &tree, reason);
@@ -171,7 +183,7 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
     if (revision != HANDLE_INVALID) handle_close(revision);
   }
   if (ok) {
-    qsort(output, used, sizeof(*output), compare_records);
+    if (used) qsort(output, used, sizeof(*output), compare_records);
     for (size_t i = 1; i < used; ++i) {
       if (!strcmp(output[i - 1].name, output[i].name)) {
         ok = fail(reason, "selected packages export the same command name");
@@ -181,10 +193,19 @@ bool pkg_commands_build(handle_t packages, const struct pkg_selection *selection
   }
   if (!ok) {
     free(output);
+    free(roots);
     return false;
   }
   qsort(roots, root_count, sizeof(*roots), compare_records);
-  memmove(output + used, roots, root_count * sizeof(*roots));
-  *projection = (struct pkg_projection){output, used, root_count};
+  struct package_command_record *joined = realloc(output,
+      (used + root_count ? used + root_count : 1) * sizeof(*joined));
+  if (!joined) {
+    free(output);
+    free(roots);
+    return fail(reason, "cannot allocate command projection");
+  }
+  memcpy(joined + used, roots, root_count * sizeof(*roots));
+  free(roots);
+  *projection = (struct pkg_projection){joined, used, root_count};
   return true;
 }

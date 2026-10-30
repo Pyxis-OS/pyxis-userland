@@ -33,23 +33,50 @@ static bool network(struct http_stream *fetch, enum call_status status)
   return fail(fetch, HTTP_NETWORK_ERROR);
 }
 
+uint64_t http_stream_deadline(struct http_stream *fetch, uint64_t now)
+{
+  if (fetch->idle && fetch->progressed) {
+    fetch->progressed = false;
+    uint64_t window = now > UINT64_MAX - fetch->idle ? UINT64_MAX : now + fetch->idle;
+    window = window < fetch->ceiling ? window : fetch->ceiling;
+    if (window > fetch->deadline) {
+      fetch->deadline = window;
+    }
+  }
+  return fetch->deadline;
+}
+
+/* Starts the inactivity window, if one was asked for, at NOW. */
+static void idle_start(struct http_stream *fetch, uint64_t now, uint64_t ceiling, uint64_t idle)
+{
+  fetch->idle = idle;
+  fetch->ceiling = ceiling;
+  if (idle) {
+    uint64_t window = now > UINT64_MAX - idle ? UINT64_MAX : now + idle;
+    fetch->deadline = window < ceiling ? window : ceiling;
+  }
+}
+
 static bool check_deadline(struct http_stream *fetch)
 {
   uint64_t now;
   if (!network(fetch, clock_now(fetch->authority.clock, &now))) {
     return false;
   }
-  return network(fetch, now >= fetch->deadline ? CALL_TIMED_OUT : CALL_OK);
+  return network(fetch, now >= http_stream_deadline(fetch, now) ? CALL_TIMED_OUT : CALL_OK);
 }
 
 bool http_deadline(struct http_stream *fetch, uint64_t maximum, uint64_t *deadline)
 {
   uint64_t now;
-  if (!network(fetch, clock_now(fetch->authority.clock, &now)) ||
-      !network(fetch, now < fetch->deadline ? CALL_OK : CALL_TIMED_OUT)) {
+  if (!network(fetch, clock_now(fetch->authority.clock, &now))) {
     return false;
   }
-  *deadline = fetch->deadline - now > maximum ? now + maximum : fetch->deadline;
+  uint64_t limit = http_stream_deadline(fetch, now);
+  if (!network(fetch, now < limit ? CALL_OK : CALL_TIMED_OUT)) {
+    return false;
+  }
+  *deadline = limit - now > maximum ? now + maximum : limit;
   return true;
 }
 
@@ -139,6 +166,7 @@ static bool receive(struct http_stream *fetch, size_t capacity, bool *eof)
     *eof = length == 0;
   }
   fetch->buffered += length;
+  fetch->progressed |= length != 0;
   return true;
 }
 
@@ -627,6 +655,7 @@ static struct http_stream *request_open(const struct http_client *client,
   fetch->result = result;
   fetch->stream = HANDLE_INVALID;
   fetch->deadline = deadline;
+  idle_start(fetch, now, deadline, limit.idle_ns);
   fetch->limit = limit;
   fetch->header_receive_max = header_receive_max;
   uint32_t address;
@@ -1071,6 +1100,7 @@ struct http_stream *http_request_start(const struct http_client *client, const c
   stream->receiver = receiver;
   stream->next_id = next_id;
   stream->deadline = deadline_ns;
+  idle_start(stream, now, deadline_ns, limit.idle_ns);
   stream->limit = limit;
   stream->header_receive_max = HTTP_HEADERS_MAX;
   stream->cooperative = true;

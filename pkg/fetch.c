@@ -11,10 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A fetch fails when no data has arrived for this long, not after a total
+ * time derived from its size (docs/interfaces/limits.md). */
 #define FETCH_DEFAULT_SECONDS UINT64_C(30)
-#define FETCH_MAX_SECONDS UINT64_C(86400)
-#define FETCH_BYTES_PER_SECOND UINT64_C(262144)
 #define NS_PER_SECOND UINT64_C(1000000000)
+/* No total ceiling: far past any transfer, and short of overflowing a clock. */
+#define FETCH_CEILING_NS (UINT64_C(1) << 62)
 
 static void set_detail(char detail[RESOURCE_DETAIL_MAX_BYTES + 1], const char *text)
 {
@@ -261,13 +263,10 @@ enum call_status pkg_timeout_parse(const char *text, uint64_t *seconds)
   }
   uint64_t value = 0;
   for (const char *byte = text; *byte; ++byte) {
-    if (*byte < '0' || *byte > '9' || value > FETCH_MAX_SECONDS / 10) {
+    if (*byte < '0' || *byte > '9' || value > (UINT64_MAX / NS_PER_SECOND - 9) / 10) {
       return CALL_BAD_REQUEST;
     }
     value = value * 10 + (unsigned)(*byte - '0');
-    if (value > FETCH_MAX_SECONDS) {
-      return CALL_BAD_REQUEST;
-    }
   }
   if (!value) {
     return CALL_BAD_REQUEST;
@@ -276,22 +275,14 @@ enum call_status pkg_timeout_parse(const char *text, uint64_t *seconds)
   return CALL_OK;
 }
 
-static enum call_status fetch_duration(bool index, uint64_t size,
-    uint64_t override, uint64_t *duration)
+/* The inactivity window in nanoseconds: --timeout SECONDS, else 30 s. */
+static enum call_status fetch_idle(uint64_t override, uint64_t *idle)
 {
-  uint64_t seconds = override;
-  if (!seconds) {
-    uint64_t chunks = index ? 0 : size / FETCH_BYTES_PER_SECOND +
-        (size % FETCH_BYTES_PER_SECOND != 0);
-    if (chunks > FETCH_MAX_SECONDS - FETCH_DEFAULT_SECONDS) {
-      return CALL_LIMIT;
-    }
-    seconds = FETCH_DEFAULT_SECONDS + chunks;
-  }
-  if (seconds > FETCH_MAX_SECONDS) {
+  uint64_t seconds = override ? override : FETCH_DEFAULT_SECONDS;
+  if (seconds > UINT64_MAX / NS_PER_SECOND) {
     return CALL_BAD_REQUEST;
   }
-  *duration = seconds * NS_PER_SECOND;
+  *idle = seconds * NS_PER_SECOND;
   return CALL_OK;
 }
 
@@ -348,10 +339,10 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
   if (status != CALL_OK) {
     return status;
   }
-  uint64_t duration = 0;
-  status = fetch_duration(index, size, timeout_seconds, &duration);
+  uint64_t idle = 0;
+  status = fetch_idle(timeout_seconds, &idle);
   if (status != CALL_OK) {
-    set_detail(detail, "fetch timeout exceeds the 86400 second bound; specify --timeout 1..86400");
+    set_detail(detail, "the --timeout window is too long to express in nanoseconds");
     return status;
   }
   handle_t root = HANDLE_INVALID;
@@ -363,8 +354,8 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
   }
   uint64_t now = 0;
   status = clock_now(authority->clock, &now);
-  if (status == CALL_OK && (now > UINT64_MAX - duration ||
-      now > UINT64_MAX - FETCH_DEFAULT_SECONDS * NS_PER_SECOND)) {
+  if (status == CALL_OK && (now > UINT64_MAX - FETCH_CEILING_NS ||
+      now > UINT64_MAX - idle || now > UINT64_MAX - FETCH_DEFAULT_SECONDS * NS_PER_SECOND)) {
     status = CALL_LIMIT;
   }
   set_detail(detail, "cannot establish fetch deadline");
@@ -372,8 +363,9 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
   if (status == CALL_OK) {
     const char *target = strstr(url, "://") + 3;
     set_detail(detail, "HTTP GET endpoint preparation failed");
-    status = http_prepare_endpoint(root, HTTP_ENDPOINT_GET, 0, target, strlen(target),
-        NULL, 0, duration, now + duration, &configured, NULL);
+    status = http_prepare_endpoint(root, HTTP_ENDPOINT_GET, HTTP_ENDPOINT_IDLE_TIMEOUT, target,
+        strlen(target), NULL, 0, idle, now + FETCH_DEFAULT_SECONDS * NS_PER_SECOND, &configured,
+        NULL);
     if (status == CALL_OK) {
       status = result_status(&configured, detail);
     }
@@ -384,9 +376,12 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
   if (status == CALL_OK) {
     set_detail(detail, "HTTP GET failed");
     status = resource_open_held(configured.resource, "", PROVIDER_INTENT_READ, 0,
-        now + duration, &result);
+        now + FETCH_CEILING_NS, &result);
     if (status == CALL_TIMED_OUT) {
-      set_detail(detail, "HTTP GET timed out");
+      char text[RESOURCE_DETAIL_MAX_BYTES + 1];
+      snprintf(text, sizeof(text), "no data for %llu s (idle timeout)",
+          (unsigned long long)(idle / NS_PER_SECOND));
+      set_detail(detail, text);
     }
     if (status == CALL_OK) {
       status = result_status(&result, detail);

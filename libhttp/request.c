@@ -254,6 +254,7 @@ static bool receive_headers_step(struct http_stream *stream, uint64_t *wanted)
     return fail(stream->result, HTTP_BAD_RESPONSE);
   }
   stream->buffered += count;
+  stream->progressed |= count != 0;
   *wanted = 0;
   return true;
 }

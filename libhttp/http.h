@@ -55,8 +55,14 @@ enum http_response_state {
   HTTP_RESPONSE_FAILED,
 };
 
+/* idle_ns, when nonzero, makes the request's deadline an inactivity window:
+ * the deadline passed to the request then bounds the whole transfer (the
+ * ceiling), and the transfer also fails when no data has arrived for idle_ns.
+ * Data that arrives moves the window forward, so a slow transfer that stays
+ * alive has no time limit except the ceiling. */
 struct http_response_limits {
   uint64_t header_bytes, fields, informational;
+  uint64_t idle_ns;
 };
 
 /* Counts describe consumed framing and delivered bytes, never an allowance.
@@ -79,6 +85,9 @@ struct http_response {
 };
 
 struct http_stream;
+/* The current deadline of STREAM at time NOW, after any inactivity window has
+ * moved forward for data received since the last call. */
+uint64_t http_stream_deadline(struct http_stream *stream, uint64_t now);
 
 enum http_method {
   HTTP_METHOD_GET = 0,

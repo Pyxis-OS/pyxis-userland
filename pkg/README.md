@@ -144,7 +144,7 @@ onward needs a reboot before retrying.
 A package declares its command exports in package.lua. A plain export names a
 .pxe path within tree; a bundle export names a .pxb directory and one declared
 bundle command alias. Undeclared files are never discovered. Export names must
-be unique across the selected set, with at most 256 total. Paths cannot traverse
+be unique across the selected set; their number is limited only by the kernel's package-view memory. Paths cannot traverse
 another .pxb directory: its launch policy must remain attached to its commands.
 Packages without commands export nothing.
 

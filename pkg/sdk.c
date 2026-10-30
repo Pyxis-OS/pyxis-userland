@@ -170,10 +170,13 @@ static bool serialize(const struct sdk_build *build, struct pkg_sdk *sdk, const 
   uint64_t size = sizeof(struct package_sdk_index_header) +
       (uint64_t)build->package_count * sizeof(struct package_sdk_package) +
       (uint64_t)build->file_count * sizeof(struct package_sdk_file) + strings;
-  /* The kernel holds a captured index in memory and refuses one past this
-   * bound, so a set that large is refused here, before it is published. */
-  if (size > PACKAGE_SDK_INDEX_MAX_BYTES) {
-    return fail(reason, "the set's dev packages have too many files for the sdk index bound");
+  /* Only the format's own fields bound the index: a file's position is a
+   * 24-bit field of the kernel's directory identity, a package or path count
+   * and the string bytes are 32-bit header fields. The kernel's memory budget
+   * is checked by pkg_indexes_fit. */
+  if (build->file_count > (UINT32_C(1) << 24) || build->package_count > UINT32_MAX ||
+      strings > UINT32_MAX || size > SIZE_MAX) {
+    return fail(reason, "the set's dev packages have more files than the sdk index format counts");
   }
   uint8_t *bytes = calloc(1, (size_t)size);
   if (!bytes) {
