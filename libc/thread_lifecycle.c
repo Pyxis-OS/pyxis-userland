@@ -17,19 +17,14 @@
 #include "thread_private.h"
 #include "thread_sync.h"
 
-/* Implementation limits, not a public ABI. The initial record occupies slot 0. */
-#ifndef LIBC_THREAD_LIMIT
-#define LIBC_THREAD_LIMIT 64
-#endif
 #define LIBC_THREAD_STACK_DEFAULT (1024 * 1024)
-#define LIBC_THREAD_STACK_MIN (1024 * 1024)
-#define LIBC_THREAD_STACK_MAX (8 * 1024 * 1024)
 
 enum lifecycle_state { THREAD_FREE, THREAD_INITIAL, THREAD_PREPARING,
   THREAD_ACTIVE, THREAD_QUARANTINED };
 enum entry_kind { ENTRY_PTHREAD, ENTRY_C11 };
 
 struct lifecycle_record {
+  uint32_t slot;
   uint32_t generation;
   enum lifecycle_state state;
   bool joining;
@@ -46,22 +41,37 @@ struct lifecycle_record {
   handle_t completion;
 };
 
-static struct lifecycle_record records[LIBC_THREAD_LIMIT];
+/* Published blocks and their slot assignments live until process teardown.
+ * The child argument and published wait word borrow a record, so neither the
+ * records nor their backing may move, including while native CREATE runs. */
+struct lifecycle_block {
+  struct lifecycle_block *next;
+  uint32_t first_slot;
+  size_t count;
+  struct lifecycle_record records[];
+};
+
+#define RECORDS_PER_BLOCK \
+  ((MEMORY_PAGE_SIZE - offsetof(struct lifecycle_block, records)) / \
+   sizeof(struct lifecycle_record))
+
+static struct lifecycle_record initial_record;
+static struct lifecycle_block *record_blocks;
+static uint32_t last_slot = 1;
 static struct libc_lock registry_lock;
 static handle_t service, clock_read, clock_sleep, memory;
 /* Records marked detached and not yet collected; lets the collection scan skip
  * the common case of none. Guarded by registry_lock. */
 static size_t detached_live;
 
-_Static_assert(LIBC_THREAD_LIMIT > 0 && LIBC_THREAD_LIMIT <= UINT32_MAX,
-    "thread registry identity capacity");
+_Static_assert(RECORDS_PER_BLOCK > 0, "thread records fit native page");
 
 extern void libc_thread_entry(void);
 [[noreturn]] void libc_thread_run(void *argument);
 
 static uint64_t identity(struct lifecycle_record *record)
 {
-  return ((uint64_t)record->generation << 32) | (uint32_t)(record - records + 1);
+  return ((uint64_t)record->generation << 32) | record->slot;
 }
 
 static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rights,
@@ -95,10 +105,11 @@ static handle_t retain_startup(const char *name, uint64_t protocol, uint64_t rig
 
 void libc_thread_runtime_init(void)
 {
-  records[0].generation = 1;
-  records[0].state = THREAD_INITIAL;
+  initial_record.slot = 1;
+  initial_record.generation = 1;
+  initial_record.state = THREAD_INITIAL;
   struct libc_thread_record *record = libc_thread_record();
-  record->thread_identity = identity(&records[0]);
+  record->thread_identity = identity(&initial_record);
   memory = record->memory;
   service = retain_startup("threads", PROTOCOL_THREAD_SERVICE, THREAD_RIGHT_MANAGE, 0);
   clock_read = retain_startup("clock", PROTOCOL_CLOCK, CLOCK_RIGHT_READ, CLOCK_RIGHT_PRECISE);
@@ -127,8 +138,8 @@ uint64_t libc_thread_self(void)
 
 bool libc_thread_is_initial(void)
 {
-  return records[0].state == THREAD_INITIAL &&
-      libc_thread_self() == identity(&records[0]);
+  return initial_record.state == THREAD_INITIAL &&
+      libc_thread_self() == identity(&initial_record);
 }
 
 struct libc_once_frame *libc_thread_once_head(void)
@@ -154,34 +165,108 @@ void libc_thread_once_pop(struct libc_once_frame *frame)
 
 static void collect_detached(void);
 
+/* Registry guard held. Blocks are prepended, and next is then immutable. */
 static struct lifecycle_record *find_record(uint64_t value)
 {
   uint32_t slot = value;
   uint32_t generation = value >> 32;
-  if (!slot || slot > LIBC_THREAD_LIMIT || !generation) {
+  if (!slot || !generation) {
     return NULL;
   }
-  struct lifecycle_record *record = &records[slot - 1];
-  return record->state != THREAD_FREE && record->generation == generation ? record : NULL;
-}
-
-static struct lifecycle_record *reserve_record(void)
-{
-  struct lifecycle_record *chosen = NULL;
-  libc_lock_acquire(&registry_lock);
-  for (size_t index = 1; index < LIBC_THREAD_LIMIT; index++) {
-    struct lifecycle_record *record = &records[index];
-    if (record->state == THREAD_FREE && record->generation != UINT32_MAX) {
-      uint32_t generation = record->generation + 1;
-      *record = (struct lifecycle_record){
-        .generation = generation, .state = THREAD_PREPARING,
-      };
-      chosen = record;
-      break;
+  struct lifecycle_record *record = NULL;
+  if (slot == 1) {
+    record = &initial_record;
+  } else {
+    for (struct lifecycle_block *block = record_blocks; block; block = block->next) {
+      if (slot >= block->first_slot && slot - block->first_slot < block->count) {
+        record = &block->records[slot - block->first_slot];
+        break;
+      }
     }
   }
+  return record && record->state != THREAD_FREE && record->generation == generation ?
+      record : NULL;
+}
+
+/* Registry guard held; exhausted generations remain permanently unavailable. */
+static struct lifecycle_record *reserve_available(void)
+{
+  for (struct lifecycle_block *block = record_blocks; block; block = block->next) {
+    for (size_t index = 0; index < block->count; index++) {
+      struct lifecycle_record *record = &block->records[index];
+      if (record->state == THREAD_FREE && record->generation != UINT32_MAX) {
+        uint32_t generation = record->generation + 1;
+        uint32_t slot = record->slot;
+        *record = (struct lifecycle_record){
+          .slot = slot, .generation = generation, .state = THREAD_PREPARING,
+        };
+        return record;
+      }
+    }
+  }
+  return NULL;
+}
+
+static int reserve_record(struct lifecycle_record **chosen)
+{
+  *chosen = NULL;
+  libc_lock_acquire(&registry_lock);
+  *chosen = reserve_available();
+  bool grow = !*chosen && last_slot != UINT32_MAX;
   libc_lock_release(&registry_lock);
-  return chosen;
+  if (*chosen) {
+    return 0;
+  }
+  if (!grow) {
+    return EAGAIN;
+  }
+
+  /* Use the initial context's retained MEMORY, independent of the allocating
+   * worker's TCB and malloc bootstrap. No registry lock spans admission. */
+  struct memory_region region;
+  enum call_status status = libc_memory_allocate(memory, MEMORY_PAGE_SIZE, &region);
+  if (status != CALL_OK) {
+    return status == CALL_LIMIT ? EAGAIN : libc_call_errno(status);
+  }
+  struct lifecycle_block *block = (void *)(uintptr_t)region.address;
+  libc_lock_acquire(&registry_lock);
+  /* Another creator may have grown the registry or a collector freed a slot
+   * during admission. Prefer that slot and release this unpublished candidate. */
+  *chosen = reserve_available();
+  if (!*chosen && last_slot != UINT32_MAX) {
+    size_t count = UINT32_MAX - last_slot;
+    if (count > RECORDS_PER_BLOCK) {
+      count = RECORDS_PER_BLOCK;
+    }
+    block->first_slot = last_slot + 1;
+    block->count = count;
+    for (size_t index = 0; index < count; index++) {
+      block->records[index] = (struct lifecycle_record){
+        .slot = block->first_slot + (uint32_t)index,
+      };
+    }
+    last_slot += (uint32_t)count;
+    block->next = record_blocks;
+    record_blocks = block;
+    *chosen = reserve_available();
+    block = NULL;
+  }
+  libc_lock_release(&registry_lock);
+  if (block) {
+    status = libc_memory_release(memory, region);
+    if (status != CALL_OK) {
+      /* An unpublished candidate has no borrowed pointers. A failed release
+       * leaves its backing to process teardown; do not retry unknown effects. */
+      if (*chosen) {
+        libc_lock_acquire(&registry_lock);
+        (*chosen)->state = THREAD_FREE;
+        libc_lock_release(&registry_lock);
+        *chosen = NULL;
+      }
+      return libc_call_errno(status);
+    }
+  }
+  return *chosen ? 0 : EAGAIN;
 }
 
 static int release_record(struct lifecycle_record *record)
@@ -230,33 +315,37 @@ static void collect_detached(void)
 {
   libc_lock_acquire(&registry_lock);
   bool any = detached_live != 0;
+  struct lifecycle_block *blocks = record_blocks;
   libc_lock_release(&registry_lock);
   if (!any) {
     return;
   }
-  for (size_t index = 1; index < LIBC_THREAD_LIMIT; index++) {
-    struct lifecycle_record *record = &records[index];
-    libc_lock_acquire(&registry_lock);
-    bool claimed = record->state == THREAD_ACTIVE && record->detached && !record->joining;
-    handle_t completion = claimed ? record->completion : HANDLE_INVALID;
-    if (claimed) {
-      record->joining = true;
+  /* A finite snapshot excludes blocks published by concurrent creators. */
+  for (struct lifecycle_block *block = blocks; block; block = block->next) {
+    for (size_t index = 0; index < block->count; index++) {
+      struct lifecycle_record *record = &block->records[index];
+      libc_lock_acquire(&registry_lock);
+      bool claimed = record->state == THREAD_ACTIVE && record->detached && !record->joining;
+      handle_t completion = claimed ? record->completion : HANDLE_INVALID;
+      if (claimed) {
+        record->joining = true;
+      }
+      libc_lock_release(&registry_lock);
+      if (!claimed) {
+        continue;
+      }
+      struct wait_interest interest = {.handle = completion, .events = WAIT_COMPLETE};
+      uint64_t events = 0;
+      struct thread_result result;
+      if (wait_many(&interest, 1, 0, &events) == CALL_OK && (events & WAIT_COMPLETE) &&
+          thread_wait(completion, &result) == CALL_OK) {
+        release_record(record);
+        continue;
+      }
+      libc_lock_acquire(&registry_lock);
+      record->joining = false;
+      libc_lock_release(&registry_lock);
     }
-    libc_lock_release(&registry_lock);
-    if (!claimed) {
-      continue;
-    }
-    struct wait_interest interest = {.handle = completion, .events = WAIT_COMPLETE};
-    uint64_t events = 0;
-    struct thread_result result;
-    if (wait_many(&interest, 1, 0, &events) == CALL_OK && (events & WAIT_COMPLETE) &&
-        thread_wait(completion, &result) == CALL_OK) {
-      release_record(record);
-      continue;
-    }
-    libc_lock_acquire(&registry_lock);
-    record->joining = false;
-    libc_lock_release(&registry_lock);
   }
 }
 
@@ -264,7 +353,7 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
     void *(*pthread_start)(void *), thrd_start_t c11_start, void *argument)
 {
   if (!thread || (!pthread_start && !c11_start) ||
-      stack_size < LIBC_THREAD_STACK_MIN || stack_size > LIBC_THREAD_STACK_MAX ||
+      stack_size < PTHREAD_STACK_MIN ||
       stack_size % MEMORY_PAGE_SIZE) {
     return EINVAL;
   }
@@ -272,9 +361,10 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
     return EPERM;
   }
   collect_detached();
-  struct lifecycle_record *record = reserve_record();
-  if (!record) {
-    return EAGAIN;
+  struct lifecycle_record *record;
+  int error = reserve_record(&record);
+  if (error) {
+    return error;
   }
   record->kind = kind;
   if (kind == ENTRY_PTHREAD) {
@@ -353,7 +443,7 @@ static int join_record(uint64_t value, enum entry_kind kind, uint64_t *result)
     libc_lock_release(&registry_lock);
     return ESRCH;
   }
-  if (record == &records[0] || record->state != THREAD_ACTIVE ||
+  if (record == &initial_record || record->state != THREAD_ACTIVE ||
       record->kind != kind || record->joining || record->detached) {
     libc_lock_release(&registry_lock);
     return EINVAL;
@@ -392,7 +482,7 @@ static int detach_record(uint64_t value, enum entry_kind kind)
     libc_lock_release(&registry_lock);
     return ESRCH;
   }
-  if (record == &records[0] || record->state != THREAD_ACTIVE ||
+  if (record == &initial_record || record->state != THREAD_ACTIVE ||
       record->kind != kind || record->joining || record->detached) {
     libc_lock_release(&registry_lock);
     return EINVAL;
@@ -419,7 +509,7 @@ int pthread_attr_destroy(pthread_attr_t *attributes)
 
 int pthread_attr_setstacksize(pthread_attr_t *attributes, size_t size)
 {
-  if (!attributes || size < LIBC_THREAD_STACK_MIN || size > LIBC_THREAD_STACK_MAX ||
+  if (!attributes || size < PTHREAD_STACK_MIN ||
       size % MEMORY_PAGE_SIZE) {
     return EINVAL;
   }

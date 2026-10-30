@@ -249,7 +249,7 @@ int threadprobe_runtime_time(void)
   return valid ? 0 : 1;
 }
 
-static thrd_t limit_threads[64];
+static thrd_t limit_threads[96];
 static uint32_t limit_release;
 static int limit_worker(void *argument)
 {
@@ -271,9 +271,10 @@ int threadprobe_runtime_limit(void)
       (creation = thrd_create(&limit_threads[count], limit_worker, NULL)) == thrd_success) {
     count++;
   }
-  /* This mode is qualified with 2 GiB: a real allocation failure is separately
-   * exercised by exhaust. The bound is implementation tuning, not an ABI. */
-  bool valid = count == 63 && creation == thrd_error;
+  /* This is a workload size, not a registry limit. Real admission failure is
+   * separately exercised by exhaust; no chosen count ends libc admission. */
+  bool valid = count == sizeof(limit_threads) / sizeof(limit_threads[0]) &&
+      creation == thrd_success;
   __atomic_store_n(&limit_release, 1, __ATOMIC_RELEASE);
   for (unsigned index = 0; index < count; index++) {
     int result;
@@ -284,7 +285,7 @@ int threadprobe_runtime_limit(void)
   valid &= thrd_create(&reused, limit_worker, NULL) == thrd_success;
   valid &= thrd_join(reused, &result) == thrd_success && result == 0;
   threadprobe_runtime_checkpoint();
-  printf("threadprobe: runtime-limit %s; %u siblings, refusal=%d, all collected and generation reused\n",
+  printf("threadprobe: runtime-limit %s; %u siblings, refusal=%d, all collected and generation reused (workload count, not capacity)\n",
       valid ? "passed" : "failed", count, creation);
   return valid ? 0 : 1;
 }

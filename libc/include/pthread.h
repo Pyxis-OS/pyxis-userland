@@ -1,6 +1,7 @@
 #ifndef LIBC_PTHREAD_H
 #define LIBC_PTHREAD_H
 
+#include <abi/memory.h>
 #include <pyxis/sync.h>
 #include <time.h>
 
@@ -30,6 +31,7 @@ typedef struct {
   int process_shared;
 } pthread_rwlockattr_t;
 
+#define PTHREAD_STACK_MIN MEMORY_PAGE_SIZE
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
 #define PTHREAD_PROCESS_PRIVATE 0
@@ -48,13 +50,15 @@ typedef struct {
 extern "C" {
 #endif
 
-/* Joinable libc-created siblings only. The initial thread has an identity but
- * no join observer. Raw native tasks are outside the managed runtime profile.
- * Detach, cancellation, scheduling policies,
- * robust recovery and process-shared synchronization are outside this profile. */
+/* Libc-created siblings support join and detach. The initial thread has an
+ * identity but no join observer. Raw native tasks are outside this managed
+ * profile, as are cancellation, scheduling policies, robust recovery and
+ * process-shared synchronization. */
 int pthread_attr_init(pthread_attr_t *attributes);
 int pthread_attr_destroy(pthread_attr_t *attributes);
-/* Explicit stack sizes are page-aligned and initially limited to 1–8 MiB. */
+/* Eager guarded stacks default to 1 MiB. Explicit sizes are page multiples at
+ * least PTHREAD_STACK_MIN; actual layout/backing admission decides capacity.
+ * The minimum is a legal request, not a promise arbitrary application code fits. */
 int pthread_attr_setstacksize(pthread_attr_t *attributes, size_t size);
 int pthread_attr_getstacksize(const pthread_attr_t *attributes, size_t *size);
 int pthread_attr_setdetachstate(pthread_attr_t *attributes, int state);
