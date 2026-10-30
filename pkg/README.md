@@ -6,7 +6,7 @@ uses the space's declared package management grant and GET-only HTTP providers.
 
 ```text
 pkg status
-pkg list [--available]
+pkg list [--available [--all-versions]]
 pkg check [REPO/]ID[@VERSION]
 pkg [--timeout SECONDS] [--yes] install [REPO/]ID[@VERSION]...
 pkg [--timeout SECONDS] [--yes] update [ID...]
@@ -19,6 +19,12 @@ pkg repository list
 pkg repository add [--unsigned] NAME URL
 pkg repository remove NAME
 ```
+
+`list --available` prints one row per eligible package ID, using the same build
+selection as install. Several sources appear as alternatives on that row;
+listing makes no source choice. `list --available --all-versions` shows every
+eligible published build. `check [REPO/]ID@VERSION` checks a particular older
+build. `list` without flags still shows the installed set.
 
 Repository names follow the package ID rules. `REPO/ID` installs from one
 repository; a plain ID offered by several gives a numbered choice on a console

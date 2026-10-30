@@ -693,6 +693,62 @@ static const struct offered_package *offering(const char *id, const char *versio
   return found;
 }
 
+static void print_offered(const struct offered_package *offered)
+{
+  const struct pkg_entry *entry = &offered->entry;
+  printf("%s/%s@%s %s%s%s %llu bytes",
+      client.repositories.entries[offered->repository].name,
+      entry->identity.id, entry->identity.version,
+      entry->kind, entry->abi[0] ? " abi " : "", entry->abi,
+      (unsigned long long)entry->size);
+}
+
+static bool list_available(bool all_versions)
+{
+  if (!load_repositories()) return false;
+  for (size_t i = 0; i < client.offered_count; ++i) {
+    if (all_versions) {
+      print_offered(&client.offered[i]);
+      putchar('\n');
+      continue;
+    }
+    const char *id = client.offered[i].entry.identity.id;
+    bool seen = false;
+    for (size_t j = 0; j < i; ++j) {
+      if (!strcmp(id, client.offered[j].entry.identity.id)) {
+        seen = true;
+        break;
+      }
+    }
+    if (seen) continue;
+
+    const struct offered_package *candidates[PKG_REPOSITORIES_MAX] = {0};
+    size_t count = 0;
+    for (size_t j = i; j < client.offered_count; ++j) {
+      const struct offered_package *offered = &client.offered[j];
+      size_t r = offered->repository;
+      if (!strcmp(id, offered->entry.identity.id) && !candidates[r]) {
+        candidates[r] = offering(id, NULL, r);
+        ++count;
+      }
+    }
+    if (count > 1) printf("%s: choose source: ", id);
+    bool printed = false;
+    for (size_t r = 0; r < client.repositories.count; ++r) {
+      if (!candidates[r]) continue;
+      if (printed) fputs("; ", stdout);
+      print_offered(candidates[r]);
+      printed = true;
+    }
+    putchar('\n');
+  }
+  if (client.hidden_count && !client.provided_readable) {
+    printf("%zu builds hidden: this system's ABI is unreadable (" PACKAGE_OS_RELEASE ")\n",
+        client.hidden_count);
+  }
+  return true;
+}
+
 static size_t hidden_builds(const char *id, const char *version, size_t repository)
 {
   size_t count = 0;
@@ -2091,7 +2147,7 @@ static bool installer_stage(int argc, char **argv)
 
 static int usage(void)
 {
-  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | update [ID...] | remove ID... | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
+  fputs("usage: pkg [--timeout SECONDS] [--yes] status | list [--available [--all-versions]] | check [REPO/]ID[@VERSION] | install [REPO/]ID[@VERSION]... | update [ID...] | remove ID... | verify | reindex | unlock | upgrade [VERSION] | repository list | repository add [--unsigned] NAME URL | repository remove NAME\nRepository names follow the package ID rules; URLs accept an optional final / (2048 bytes including the stored final /).\n", stderr);
   return EXIT_FAILURE;
 }
 
@@ -2144,7 +2200,8 @@ int main(int argc, char **argv)
       !strcmp(command, "check") ? count != 1 :
       !strcmp(command, "upgrade") ? count > 1 :
       !strcmp(command, "stage-update") ? count != 6 :
-      !strcmp(command, "list") ? count > 1 || (count && strcmp(arguments[0], "--available")) : count != 0)) {
+      !strcmp(command, "list") ? count > 2 || (count && strcmp(arguments[0], "--available")) ||
+          (count == 2 && strcmp(arguments[1], "--all-versions")) : count != 0)) {
     return usage();
   }
   bool needs_hash = (mutation && strcmp(command, "unlock")) ||
@@ -2166,19 +2223,7 @@ int main(int argc, char **argv)
   } else if (!strcmp(command, "check")) {
     ok = check(arguments[0]);
   } else if (!strcmp(command, "list") && count) {
-    ok = load_repositories();
-    for (size_t i = 0; ok && i < client.offered_count; ++i) {
-      const struct pkg_entry *entry = &client.offered[i].entry;
-      printf("%s/%s@%s %s%s%s %llu bytes\n",
-          client.repositories.entries[client.offered[i].repository].name,
-          entry->identity.id, entry->identity.version,
-          entry->kind, entry->abi[0] ? " abi " : "", entry->abi,
-          (unsigned long long)entry->size);
-    }
-    if (ok && client.hidden_count && !client.provided_readable) {
-      printf("%zu builds hidden: this system's ABI is unreadable (" PACKAGE_OS_RELEASE ")\n",
-          client.hidden_count);
-    }
+    ok = list_available(count == 2);
   } else if (!strcmp(command, "status") || !strcmp(command, "list") || !strcmp(command, "verify")) {
     struct pkg_selection selection = {0};
     ok = package_volume(client.packages, false) &&
