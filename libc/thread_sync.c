@@ -310,7 +310,7 @@ int libc_mutex_unlock(struct libc_mutex *mutex)
   }
   __atomic_store_n(&mutex->owner, 0, __ATOMIC_RELAXED);
   uint64_t state = __atomic_fetch_and(&mutex->state, MUTEX_WAITERS, __ATOMIC_RELEASE);
-  if ((state & MUTEX_STATE_MASK) == MUTEX_CONTENDED) {
+  if (state & MUTEX_WAITERS) {
     mutex_notify(mutex);
   }
   return 0;
