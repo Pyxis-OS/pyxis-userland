@@ -106,11 +106,13 @@ enum call_status libc_thread_context_release(handle_t memory,
     return CALL_BAD_REQUEST;
   }
   /* Capture before release. Overflow destructor blocks use separate native
-   * regions; a forced stop may leave them populated, but never runs callbacks. */
+   * regions, as do lazy key values. A forced stop may leave both populated,
+   * but never runs callbacks. */
   struct libc_thread_record *record = (void *)context->fs_base;
   handle_t owned_memory = record->memory;
   struct thread_destructor_block *block = record->destructors;
   struct thread_destructor_block *first = &record->first_destructors;
+  struct memory_region keys = record->key_region;
   enum call_status status = libc_memory_release_reservation(memory, context->reservation.identity);
   if (status != CALL_OK) {
     return status;
@@ -124,6 +126,12 @@ enum call_status libc_thread_context_release(handle_t memory,
       cleanup = released;
     }
     block = previous;
+  }
+  if (keys.size) {
+    enum call_status released = libc_memory_release(owned_memory, keys);
+    if (cleanup == CALL_OK && released != CALL_OK) {
+      cleanup = released;
+    }
   }
   if (handle_close(owned_memory) != 0 && cleanup == CALL_OK) {
     cleanup = CALL_OUTCOME_UNKNOWN;

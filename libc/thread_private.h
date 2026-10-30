@@ -10,15 +10,12 @@
 struct startup_info;
 struct libc_once_frame;
 
-/* Userland implementation tuning, shared by registry and per-thread storage. */
-#ifndef LIBC_THREAD_KEY_LIMIT
-#define LIBC_THREAD_KEY_LIMIT 128
-#endif
 #define LIBC_THREAD_DESTRUCTOR_PASSES 4
 #define LIBC_THREAD_DESTRUCTOR_BLOCK 32
 
 struct thread_key_value {
   uint32_t generation;
+  bool pending;
   void *value;
 };
 
@@ -45,7 +42,9 @@ struct libc_thread_record {
   handle_t memory;
   struct thread_destructor_block *destructors;
   struct thread_destructor_block first_destructors;
-  struct thread_key_value keys[LIBC_THREAD_KEY_LIMIT];
+  struct thread_key_value *keys;
+  struct memory_region key_region;
+  size_t key_capacity;
   uint64_t thread_identity;
   struct libc_once_frame *once_frames;
   void (*cleanup)(void);
@@ -57,8 +56,6 @@ struct libc_thread_record {
 };
 
 _Static_assert(offsetof(struct libc_thread_record, self) == 0, "FS self pointer");
-_Static_assert(LIBC_THREAD_KEY_LIMIT > 0 && LIBC_THREAD_KEY_LIMIT <= UINT32_MAX,
-    "runtime key index capacity");
 
 static inline struct libc_thread_record *libc_thread_record(void)
 {

@@ -30,7 +30,8 @@ enum call_status libc_thread_context_prepare(handle_t memory,
  * sibling violates the precondition: BUSY protects native backing but does not
  * synchronize access to mutable runtime metadata. Once backing release commits,
  * the descriptor is cleared even
- * if separate destructor-block or retained-handle cleanup reports an error. */
+ * if separate destructor-block, key-value or retained-handle cleanup reports an
+ * error. */
 enum call_status libc_thread_context_release(handle_t memory,
     struct libc_thread_context *context);
 
@@ -64,7 +65,12 @@ enum call_status libc_thread_cleanup_register(void (*cleanup)(void));
  * a key neither frees values nor invokes destructors. A captured callback may
  * finish concurrently with deletion. Key callback order is unspecified; each
  * value is cleared before its callback, which may set it for the next pass.
- * No allocation occurs in the registry. These calls return native statuses. */
+ * Each pass snapshots eligible slots before callbacks; values set by callbacks
+ * become eligible on a later pass. The registry grows using retained native
+ * MEMORY independent of the creating TCB. Per-thread values allocate lazily:
+ * unset get and NULL set do not allocate; non-NULL set may fail on allocation or
+ * admission, preserving the previous value. Values release during orderly exit
+ * or confirmed stopped-context collection. These calls return native statuses. */
 enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_key *key);
 enum call_status libc_thread_key_delete(libc_thread_key key);
 enum call_status libc_thread_key_set(libc_thread_key key, void *value);

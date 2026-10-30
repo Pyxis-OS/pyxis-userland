@@ -591,7 +591,8 @@ int pthread_equal(pthread_t left, pthread_t right)
 
 int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
 {
-  return libc_call_errno(libc_thread_key_create(destructor, key));
+  enum call_status status = libc_thread_key_create(destructor, key);
+  return status == CALL_LIMIT ? EAGAIN : libc_call_errno(status);
 }
 
 int pthread_key_delete(pthread_key_t key)
@@ -601,7 +602,8 @@ int pthread_key_delete(pthread_key_t key)
 
 int pthread_setspecific(pthread_key_t key, const void *value)
 {
-  return libc_call_errno(libc_thread_key_set(key, (void *)value));
+  enum call_status status = libc_thread_key_set(key, (void *)value);
+  return status == CALL_LIMIT ? EAGAIN : libc_call_errno(status);
 }
 
 void *pthread_getspecific(pthread_key_t key)
