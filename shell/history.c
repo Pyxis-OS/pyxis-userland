@@ -10,8 +10,8 @@
 #include <string.h>
 
 #define HISTORY_NAME ".history"
-#define HISTORY_SAVE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE | \
-    DIRECTORY_RIGHT_WRITE_FILES)
+#define HISTORY_SAVE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES | \
+    DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES)
 /* Bytes read per call while scanning the file from its end. */
 #define HISTORY_CHUNK 4096
 
@@ -151,32 +151,50 @@ void shell_history_load(struct shell *shell)
 }
 
 /* Opens the history for appending, creating it when it is missing. Another
- * shell may create it first. */
+ * shell may create it first. Reading is for the last byte only. */
 static enum call_status open_for_append(handle_t home, handle_t *file)
 {
   enum call_status status = directory_lookup(home, HISTORY_NAME, DIRECTORY_KIND_FILE,
-      FILE_RIGHT_WRITE, file);
+      FILE_RIGHTS, file);
   if (status == CALL_NOT_FOUND) {
-    status = directory_create(home, HISTORY_NAME, DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, file);
+    status = directory_create(home, HISTORY_NAME, DIRECTORY_KIND_FILE, FILE_RIGHTS, file);
     if (status == CALL_ALREADY_EXISTS) {
-      status = directory_lookup(home, HISTORY_NAME, DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, file);
+      status = directory_lookup(home, HISTORY_NAME, DIRECTORY_KIND_FILE, FILE_RIGHTS, file);
     }
   }
   return status;
 }
 
+/* True when the file ends inside a line, which only a failed save leaves. */
+static enum call_status ends_inside_line(handle_t file, bool *inside)
+{
+  uint64_t size;
+  char last = '\n';
+  enum call_status status = file_size(file, &size);
+  if (status == CALL_OK && size) {
+    status = read_exact(file, size - 1, &last, 1);
+  }
+  *inside = status == CALL_OK && last != '\n';
+  return status;
+}
+
 /* One FILE_APPEND selects the end of file and writes the line in a single
  * mutation of the file, so lines from concurrent shells never overwrite or
- * split each other: a record is at most SHELL_LINE_CAPACITY bytes, well inside
- * the 4080 bytes one append carries. The file only grows; nothing is read,
- * trimmed or replaced. A short write (a full volume) is finished once and
- * otherwise reported, and the unterminated tail it may leave is ignored when
- * the history is loaded. */
+ * split each other: a record is at most SHELL_LINE_CAPACITY bytes plus its
+ * two LFs, well inside the 4080 bytes one append carries. The file only grows;
+ * nothing is trimmed or replaced. A short write (a full volume) is finished
+ * once and otherwise reported. It, or a crash, can leave the file ending
+ * inside a line; the next save sees that from the last byte and starts its
+ * record with an LF, so two entries never merge. The torn line stays in the
+ * file as an entry of its own. */
 static enum call_status save_line(struct shell *shell, const char *line)
 {
-  char record[SHELL_LINE_CAPACITY + 1];
-  size_t size = strlen(line);
-  memcpy(record, line, size);
+  char record[SHELL_LINE_CAPACITY + 2];
+  size_t size = 1;
+  size_t length = strlen(line);
+  memcpy(record + size, line, length);
+  size += length;
+  record[0] = '\n';
   record[size++] = '\n';
 
   handle_t file;
@@ -184,7 +202,11 @@ static enum call_status save_line(struct shell *shell, const char *line)
   if (status != CALL_OK) {
     return status;
   }
-  for (size_t done = 0; status == CALL_OK && done < size;) {
+  bool inside;
+  status = ends_inside_line(file, &inside);
+  /* The leading LF is written only when the file ends inside a line. */
+  size_t done = inside ? 0 : 1;
+  while (status == CALL_OK && done < size) {
     uint64_t offset;
     size_t written;
     status = file_append(file, record + done, size - done, &offset, &written);
