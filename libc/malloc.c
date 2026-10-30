@@ -8,12 +8,12 @@
 #include <string.h>
 #include <tlsf.h>
 #include "runtime.h"
+#include "errors.h"
 #include "tlsf_user.h"
 #include "thread_sync.h"
 #include "memory_operations.h"
 
 #define HEAP_ALIGNMENT 16
-#define HEAP_ALIGNMENT_MAX MEMORY_PAGE_SIZE
 #define HEAP_CONTROL_BYTES (16 * 1024)
 #define HEAP_POOL_BYTES (64 * 1024)
 #define HEAP_POOL_PREFIX_BYTES HEAP_ALIGNMENT
@@ -47,16 +47,12 @@ void malloc_init(void)
   }
 }
 
-static enum call_status allocate_pool(size_t request, struct memory_region *region)
+static enum call_status allocate_pool(size_t pool_bytes, struct memory_region *region)
 {
-  size_t overhead = tlsf_pool_overhead() + HEAP_POOL_PREFIX_BYTES;
-  /* Leave space for memalign's leading split and TLSF size-class rounding. */
-  size_t slack = request / 16;
-  if (request > SIZE_MAX - slack ||
-      request + slack > SIZE_MAX - MEMORY_PAGE_SIZE - overhead) {
+  if (pool_bytes > SIZE_MAX - HEAP_POOL_PREFIX_BYTES) {
     return CALL_NO_MEMORY;
   }
-  size_t bytes = request + slack + MEMORY_PAGE_SIZE + overhead;
+  size_t bytes = pool_bytes + HEAP_POOL_PREFIX_BYTES;
   if (bytes < HEAP_POOL_BYTES) {
     bytes = HEAP_POOL_BYTES;
   }
@@ -64,7 +60,8 @@ static enum call_status allocate_pool(size_t request, struct memory_region *regi
     return CALL_NO_MEMORY;
   }
   bytes = (bytes + MEMORY_PAGE_SIZE - 1) & ~(MEMORY_PAGE_SIZE - 1);
-  if (bytes - overhead >= tlsf_block_size_max()) {
+  if (bytes > PTRDIFF_MAX ||
+      bytes - HEAP_POOL_PREFIX_BYTES - tlsf_pool_overhead() >= tlsf_block_size_max()) {
     return CALL_NO_MEMORY;
   }
 
@@ -73,12 +70,15 @@ static enum call_status allocate_pool(size_t request, struct memory_region *regi
 
 static void *allocate(size_t alignment, size_t size)
 {
-  /* TLSF's internal alignment additions are unchecked. Stay below its top bin,
-   * as the kernel wrapper does, including for arbitrary overflowing requests. */
-  if (!allocator || memory == HANDLE_INVALID || size > tlsf_block_size_max() / 2) {
+  if (!allocator || size > PTRDIFF_MAX) {
     errno = ENOMEM;
     return NULL;
   }
+  if (memory == HANDLE_INVALID) {
+    errno = EACCES;
+    return NULL;
+  }
+  enum call_status status = CALL_BUSY;
   void *pointer = NULL;
   for (unsigned attempt = 0; attempt < LIBC_VM_ATTEMPTS; attempt++) {
     libc_lock_acquire(&heap_guard);
@@ -90,8 +90,13 @@ static void *allocate(size_t alignment, size_t size)
 
     /* Native growth pauses siblings, which may own the heap guard. Recheck
      * existing pools after a BUSY refusal: another grower may have published. */
+    size_t pool_bytes = tlsf_memalign_pool_size(alignment, size);
+    if (!pool_bytes) {
+      status = CALL_NO_MEMORY;
+      break;
+    }
     struct memory_region region;
-    enum call_status status = allocate_pool(size + (alignment - HEAP_ALIGNMENT), &region);
+    status = allocate_pool(pool_bytes, &region);
     if (status == CALL_BUSY) {
       continue;
     }
@@ -111,7 +116,7 @@ static void *allocate(size_t alignment, size_t size)
     break;
   }
   if (!pointer) {
-    errno = ENOMEM;
+    errno = status == CALL_OK ? ENOMEM : libc_call_errno(status);
   }
   return pointer;
 }
@@ -131,7 +136,7 @@ void *malloc(size_t size)
 
 void *aligned_alloc(size_t alignment, size_t size)
 {
-  if (!alignment || (alignment & (alignment - 1)) || alignment > HEAP_ALIGNMENT_MAX) {
+  if (!alignment || (alignment & (alignment - 1))) {
     errno = EINVAL;
     return NULL;
   }

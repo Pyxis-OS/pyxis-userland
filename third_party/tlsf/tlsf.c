@@ -169,11 +169,11 @@ tlsf_decl int tlsf_fls(unsigned int word)
 
 #endif
 
-/* Possibly 64-bit version of tlsf_fls. */
+/* Possibly 64-bit versions of the bit scans. */
 #if defined (TLSF_64BIT)
 tlsf_decl int tlsf_fls_sizet(size_t size)
 {
-	int high = (int)(size >> 32);
+	const unsigned int high = (unsigned int)(size >> 32);
 	int bits = 0;
 	if (high)
 	{
@@ -181,13 +181,21 @@ tlsf_decl int tlsf_fls_sizet(size_t size)
 	}
 	else
 	{
-		bits = tlsf_fls((int)size & 0xffffffff);
+		bits = tlsf_fls((unsigned int)size);
 
 	}
 	return bits;
 }
+
+tlsf_decl int tlsf_ffs_sizet(size_t size)
+{
+	const unsigned int low = (unsigned int)size;
+	const unsigned int high = (unsigned int)(size >> 32);
+	return high && !low ? 32 + tlsf_ffs(high) : tlsf_ffs(low);
+}
 #else
 #define tlsf_fls_sizet tlsf_fls
+#define tlsf_ffs_sizet tlsf_ffs
 #endif
 
 #undef tlsf_decl
@@ -219,7 +227,7 @@ enum tlsf_private
 	ALIGN_SIZE = (1 << ALIGN_SIZE_LOG2),
 
 	/*
-	** We support allocations of sizes up to (1 << FL_INDEX_MAX) bits.
+	** We support block sizes below ((size_t)1 << FL_INDEX_MAX) bytes.
 	** However, because we linearly subdivide the second-level lists, and
 	** our minimum size granularity is 4 bytes, it doesn't make sense to
 	** create first-level lists for sizes smaller than SL_INDEX_COUNT * 4,
@@ -229,15 +237,8 @@ enum tlsf_private
 	** blocks below that size into the 0th first-level list.
 	*/
 
-#if defined (TLSF_64BIT)
-	/*
-	** TODO: We can increase this to support larger sizes, at the expense
-	** of more overhead in the TLSF structure.
-	*/
-	FL_INDEX_MAX = 32,
-#else
-	FL_INDEX_MAX = 30,
-#endif
+	/* Pool offsets must fit in a positive ptrdiff_t. The top is exclusive. */
+	FL_INDEX_MAX = sizeof(ptrdiff_t) * CHAR_BIT - 1,
 	SL_INDEX_COUNT = (1 << SL_INDEX_COUNT_LOG2),
 	FL_INDEX_SHIFT = (SL_INDEX_COUNT_LOG2 + ALIGN_SIZE_LOG2),
 	FL_INDEX_COUNT = (FL_INDEX_MAX - FL_INDEX_SHIFT + 1),
@@ -273,6 +274,8 @@ enum tlsf_private
 tlsf_static_assert(sizeof(int) * CHAR_BIT == 32);
 tlsf_static_assert(sizeof(size_t) * CHAR_BIT >= 32);
 tlsf_static_assert(sizeof(size_t) * CHAR_BIT <= 64);
+tlsf_static_assert(FL_INDEX_MAX < sizeof(size_t) * CHAR_BIT);
+tlsf_static_assert(FL_INDEX_COUNT <= sizeof(size_t) * CHAR_BIT);
 
 /* SL_INDEX_COUNT must be <= number of bits in sl_bitmap's storage type. */
 tlsf_static_assert(sizeof(unsigned int) * CHAR_BIT >= SL_INDEX_COUNT);
@@ -343,7 +346,7 @@ typedef struct control_t
 	block_header_t block_null;
 
 	/* Bitmaps for free lists. */
-	unsigned int fl_bitmap;
+	size_t fl_bitmap;
 	unsigned int sl_bitmap[FL_INDEX_COUNT];
 
 	/* Head of free lists. */
@@ -487,8 +490,8 @@ static size_t align_down(size_t x, size_t align)
 
 static void* align_ptr(const void* ptr, size_t align)
 {
-	const tlsfptr_t aligned =
-		(tlsf_cast(tlsfptr_t, ptr) + (align - 1)) & ~(align - 1);
+	const size_t aligned =
+		(tlsf_cast(size_t, ptr) + (align - 1)) & ~(align - 1);
 	tlsf_assert(0 == (align & (align - 1)) && "must align to a power of two");
 	return tlsf_cast(void*, aligned);
 }
@@ -500,7 +503,8 @@ static void* align_ptr(const void* ptr, size_t align)
 static size_t adjust_request_size(size_t size, size_t align)
 {
 	size_t adjust = 0;
-	if (size)
+	if (size && align && !(align & (align - 1)) &&
+		size <= (size_t)-1 - (align - 1))
 	{
 		const size_t aligned = align_up(size, align);
 
@@ -537,15 +541,49 @@ static void mapping_insert(size_t size, int* fli, int* sli)
 	*sli = sl;
 }
 
-/* This version rounds up to the next block size (for allocations) */
-static void mapping_search(size_t size, int* fli, int* sli)
+/* Smallest block size in the search class, or zero at the exclusive top. */
+static size_t search_request_size(size_t size)
 {
+	if (!size || size >= block_size_max)
+	{
+		return 0;
+	}
 	if (size >= SMALL_BLOCK_SIZE)
 	{
-		const size_t round = (1 << (tlsf_fls_sizet(size) - SL_INDEX_COUNT_LOG2)) - 1;
-		size += round;
+		const size_t step = tlsf_cast(size_t, 1) <<
+			(tlsf_fls_sizet(size) - SL_INDEX_COUNT_LOG2);
+		size = align_up(size, step);
 	}
-	mapping_insert(size, fli, sli);
+	return size < block_size_max ? size : 0;
+}
+
+/*
+** A nonzero alignment gap must hold a complete leading free block. Since
+** gaps are multiples of ALIGN_SIZE, its largest value is header + align -
+** ALIGN_SIZE, after advancing past any gap too small to split.
+*/
+static size_t memalign_request_size(size_t align, size_t size)
+{
+	const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
+	if (!align || (align & (align - 1)) || !adjust)
+	{
+		return 0;
+	}
+	if (align > ALIGN_SIZE)
+	{
+		const size_t gap_minimum = sizeof(block_header_t);
+		if (align - ALIGN_SIZE > block_size_max - gap_minimum)
+		{
+			return 0;
+		}
+		const size_t gap = gap_minimum + align - ALIGN_SIZE;
+		if (adjust >= block_size_max - gap)
+		{
+			return 0;
+		}
+		return adjust + gap;
+	}
+	return adjust;
 }
 
 static block_header_t* search_suitable_block(control_t* control, int* fli, int* sli)
@@ -561,14 +599,15 @@ static block_header_t* search_suitable_block(control_t* control, int* fli, int* 
 	if (!sl_map)
 	{
 		/* No block exists. Search in the next largest first-level list. */
-		const unsigned int fl_map = control->fl_bitmap & (~0U << (fl + 1));
+		const size_t fl_map = fl + 1 < FL_INDEX_COUNT ?
+			control->fl_bitmap & (~tlsf_cast(size_t, 0) << (fl + 1)) : 0;
 		if (!fl_map)
 		{
 			/* No free blocks available, memory has been exhausted. */
 			return 0;
 		}
 
-		fl = tlsf_ffs(fl_map);
+		fl = tlsf_ffs_sizet(fl_map);
 		*fli = fl;
 		sl_map = control->sl_bitmap[fl];
 	}
@@ -603,7 +642,7 @@ static void remove_free_block(control_t* control, block_header_t* block, int fl,
 			/* If the second bitmap is now empty, clear the fl bitmap. */
 			if (!control->sl_bitmap[fl])
 			{
-				control->fl_bitmap &= ~(1U << fl);
+				control->fl_bitmap &= ~(tlsf_cast(size_t, 1) << fl);
 			}
 		}
 	}
@@ -626,7 +665,7 @@ static void insert_free_block(control_t* control, block_header_t* block, int fl,
 	** and second-level bitmaps appropriately.
 	*/
 	control->blocks[fl][sl] = block;
-	control->fl_bitmap |= (1U << fl);
+	control->fl_bitmap |= (tlsf_cast(size_t, 1) << fl);
 	control->sl_bitmap[fl] |= (1U << sl);
 }
 
@@ -763,20 +802,11 @@ static block_header_t* block_locate_free(control_t* control, size_t size)
 	int fl = 0, sl = 0;
 	block_header_t* block = 0;
 
-	if (size)
+	const size_t search = search_request_size(size);
+	if (search)
 	{
-		mapping_search(size, &fl, &sl);
-		
-		/*
-		** mapping_search can futz with the size, so for excessively large sizes it can sometimes wind up 
-		** with indices that are off the end of the block array.
-		** So, we protect against that here, since this is the only callsite of mapping_search.
-		** Note that we don't need to check sl, since it comes from a modulo operation that guarantees it's always in range.
-		*/
-		if (fl < FL_INDEX_COUNT)
-		{
-			block = search_suitable_block(control, &fl, &sl);
-		}
+		mapping_insert(search, &fl, &sl);
+		block = search_suitable_block(control, &fl, &sl);
 	}
 
 	if (block)
@@ -861,7 +891,7 @@ int tlsf_check(tlsf_t tlsf)
 	{
 		for (j = 0; j < SL_INDEX_COUNT; ++j)
 		{
-			const int fl_map = control->fl_bitmap & (1U << i);
+			const size_t fl_map = control->fl_bitmap & (tlsf_cast(size_t, 1) << i);
 			const int sl_list = control->sl_bitmap[i];
 			const int sl_map = sl_list & (1U << j);
 			const block_header_t* block = control->blocks[i][j];
@@ -991,7 +1021,8 @@ pool_t tlsf_add_pool(tlsf_t tlsf, void* mem, size_t bytes)
 	block_header_t* next;
 
 	const size_t pool_overhead = tlsf_pool_overhead();
-	const size_t pool_bytes = align_down(bytes - pool_overhead, ALIGN_SIZE);
+	const size_t pool_bytes = bytes >= pool_overhead ?
+		align_down(bytes - pool_overhead, ALIGN_SIZE) : 0;
 
 	if (((ptrdiff_t)mem % ALIGN_SIZE) != 0)
 	{
@@ -1000,17 +1031,10 @@ pool_t tlsf_add_pool(tlsf_t tlsf, void* mem, size_t bytes)
 		return 0;
 	}
 
-	if (pool_bytes < block_size_min || pool_bytes > block_size_max)
+	if (pool_bytes < block_size_min || pool_bytes >= block_size_max)
 	{
-#if defined (TLSF_64BIT)
-		printf("tlsf_add_pool: Memory size must be between 0x%x and 0x%x00 bytes.\n", 
-			(unsigned int)(pool_overhead + block_size_min),
-			(unsigned int)((pool_overhead + block_size_max) / 256));
-#else
-		printf("tlsf_add_pool: Memory size must be between %u and %u bytes.\n", 
-			(unsigned int)(pool_overhead + block_size_min),
-			(unsigned int)(pool_overhead + block_size_max));
-#endif
+		printf("tlsf_add_pool: Memory size must be in [0x%zx, 0x%zx) bytes.\n",
+			pool_overhead + block_size_min, pool_overhead + block_size_max);
 		return 0;
 	}
 
@@ -1128,27 +1152,19 @@ void* tlsf_malloc(tlsf_t tlsf, size_t size)
 	return block_prepare_used(control, block, adjust);
 }
 
+size_t tlsf_memalign_pool_size(size_t align, size_t size)
+{
+	const size_t request = memalign_request_size(align, size);
+	const size_t search = search_request_size(request);
+	return search ? search + tlsf_pool_overhead() : 0;
+}
+
 void* tlsf_memalign(tlsf_t tlsf, size_t align, size_t size)
 {
 	control_t* control = tlsf_cast(control_t*, tlsf);
 	const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
-
-	/*
-	** We must allocate an additional minimum block size bytes so that if
-	** our free block will leave an alignment gap which is smaller, we can
-	** trim a leading free block and release it back to the pool. We must
-	** do this because the previous physical block is in use, therefore
-	** the prev_phys_block field is not valid, and we can't simply adjust
-	** the size of that block.
-	*/
 	const size_t gap_minimum = sizeof(block_header_t);
-	const size_t size_with_gap = adjust_request_size(adjust + align + gap_minimum, align);
-
-	/*
-	** If alignment is less than or equals base alignment, we're done.
-	** If we requested 0 bytes, return null, as tlsf_malloc(0) does.
-	*/
-	const size_t aligned_size = (adjust && align > ALIGN_SIZE) ? size_with_gap : adjust;
+	const size_t aligned_size = memalign_request_size(align, size);
 
 	block_header_t* block = block_locate_free(control, aligned_size);
 
@@ -1160,7 +1176,7 @@ void* tlsf_memalign(tlsf_t tlsf, size_t align, size_t size)
 		void* ptr = block_to_ptr(block);
 		void* aligned = align_ptr(ptr, align);
 		size_t gap = tlsf_cast(size_t,
-			tlsf_cast(tlsfptr_t, aligned) - tlsf_cast(tlsfptr_t, ptr));
+			tlsf_cast(size_t, aligned) - tlsf_cast(size_t, ptr));
 
 		/* If gap size is too small, offset to next aligned boundary. */
 		if (gap && gap < gap_minimum)
@@ -1168,11 +1184,11 @@ void* tlsf_memalign(tlsf_t tlsf, size_t align, size_t size)
 			const size_t gap_remain = gap_minimum - gap;
 			const size_t offset = tlsf_max(gap_remain, align);
 			const void* next_aligned = tlsf_cast(void*,
-				tlsf_cast(tlsfptr_t, aligned) + offset);
+				tlsf_cast(size_t, aligned) + offset);
 
 			aligned = align_ptr(next_aligned, align);
 			gap = tlsf_cast(size_t,
-				tlsf_cast(tlsfptr_t, aligned) - tlsf_cast(tlsfptr_t, ptr));
+				tlsf_cast(size_t, aligned) - tlsf_cast(size_t, ptr));
 		}
 
 		if (gap)
@@ -1236,6 +1252,10 @@ void* tlsf_realloc(tlsf_t tlsf, void* ptr, size_t size)
 		const size_t cursize = block_size(block);
 		const size_t combined = cursize + block_size(next) + block_header_overhead;
 		const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
+		if (!adjust)
+		{
+			return 0;
+		}
 
 		tlsf_assert(!block_is_free(block) && "block already marked as free");
 

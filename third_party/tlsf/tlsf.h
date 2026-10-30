@@ -76,6 +76,11 @@ size_t tlsf_block_size_max(void);
 size_t tlsf_pool_overhead(void);
 size_t tlsf_alloc_overhead(void);
 
+/* Pyxis: minimum add_pool footprint guaranteeing a memalign search succeeds.
+** The pool must be base-aligned. Returns zero for unrepresentable requests.
+*/
+size_t tlsf_memalign_pool_size(size_t align, size_t bytes);
+
 /* Debugging. */
 typedef void (*tlsf_walker)(void* ptr, size_t size, int used, void* user);
 void tlsf_walk_pool(pool_t pool, tlsf_walker walker, void* user);
