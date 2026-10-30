@@ -216,7 +216,10 @@ static int launch_session(const struct session_config *config, struct network_co
   grants[INPUT] = (struct launch_grant){terminal.input,
       input_rights & (CONSOLE_RIGHT_READ | CONSOLE_RIGHT_INTERRUPT), 0};
   grants[OUTPUT] = (struct launch_grant){terminal.output, CONSOLE_RIGHT_WRITE, 0};
-  grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
+  status = profile_memory_grant(memory, &grants[MEMORY]);
+  if (status != CALL_OK) {
+    goto done;
+  }
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   if (start_remote_services || multiplex || (start_services && mux_terminal != HANDLE_INVALID)) {
     uint64_t rights;
@@ -234,6 +237,9 @@ static int launch_session(const struct session_config *config, struct network_co
   resources[0] = (struct launch_environment_entry)PROFILE_CAP("input", INPUT);
   resources[1] = (struct launch_environment_entry)PROFILE_CAP("output", OUTPUT);
   resources[2] = (struct launch_environment_entry)PROFILE_CAP("memory", MEMORY);
+  if (grants[MEMORY].rights & MEMORY_RIGHT_CREATE_SHARED) {
+    resources[2].flags = 0;
+  }
   resources[3] = (struct launch_environment_entry)PROFILE_CAP("launcher", LAUNCHER);
   size_t resource_count = 4, grant_count = FIRST_OPTIONAL;
   assert(resource_count < grant_capacity);

@@ -1,6 +1,7 @@
 #include <abi/directory.h>
 #include <abi/file.h>
 #include <abi/jit.h>
+#include <abi/memory.h>
 #include <abi/clock.h>
 #include <abi/launcher.h>
 #include <abi/pipe.h>
@@ -514,12 +515,19 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     } else {
       const char *selection = requests[i].source ? requests[i].source :
           requests[i].packages || requests[i].sdk ? PACKAGE_SOURCE : requests[i].resource;
-      if (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
+      const char *private_source = NULL;
+      if (requests[i].protocol == PROTOCOL_MEMORY &&
+          (requests[i].rights & MEMORY_RIGHT_CREATE_SHARED)) {
+        private_source = BUNDLE_MEMORY_CREATE_SOURCE;
+      } else if (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
           (requests[i].rights & TCP_SERVICE_RIGHT_LISTEN)) {
+        private_source = BUNDLE_TCP_LISTEN_SOURCE;
+      }
+      if (private_source) {
         for (size_t j = 0; j < authority_count; ++j) {
           if (authority[j].resource &&
-              !strcmp(authority[j].resource, BUNDLE_TCP_LISTEN_SOURCE) &&
-              authority[j].protocol == PROTOCOL_TCP_SERVICE &&
+              !strcmp(authority[j].resource, private_source) &&
+              authority[j].protocol == requests[i].protocol &&
               authority[j].source != HANDLE_INVALID) {
             if (source != HANDLE_INVALID) {
               return CALL_BAD_REQUEST;
@@ -528,10 +536,10 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
           }
         }
       }
-      /* A caller that already holds a declared TCP LISTEN grant may supply it
-       * as ordinary tcp authority for another explicit declaration. */
-      bool private_listen = source != HANDLE_INVALID;
-      for (size_t j = 0; !private_listen && j < authority_count; ++j) {
+      /* A declared constructor may also supply another explicit declaration
+       * through its canonical resource name. Never combine held grants. */
+      bool private_selected = source != HANDLE_INVALID;
+      for (size_t j = 0; !private_selected && j < authority_count; ++j) {
         if (authority[j].resource && !strcmp(selection, authority[j].resource) &&
             authority[j].protocol == requests[i].protocol) {
           if (source != HANDLE_INVALID && authority[j].source != HANDLE_INVALID) {
@@ -583,7 +591,9 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     }
     if (info.protocol != requests[i].protocol ||
         (info.kind != HANDLE_KIND_NATIVE && info.kind != HANDLE_KIND_EXPORTED) ||
-        ((requests[i].interface || requests[i].protocol == PROTOCOL_JIT) &&
+        ((requests[i].interface || requests[i].protocol == PROTOCOL_JIT ||
+          (requests[i].protocol == PROTOCOL_MEMORY &&
+           (requests[i].rights & MEMORY_RIGHT_CREATE_SHARED))) &&
           (info.kind != HANDLE_KIND_NATIVE || info.transport))) {
       if (requests[i].required) {
         return CALL_WRONG_TYPE;
@@ -625,6 +635,8 @@ static enum call_status prepare_resources(struct bundle_launch *prepared,
     bool private_role = requests[i].protocol == PROTOCOL_JIT ||
         requests[i].protocol == PROTOCOL_PROCESS_VIEW ||
         requests[i].protocol == PROTOCOL_ENDPOINT_SERVICE ||
+        (requests[i].protocol == PROTOCOL_MEMORY &&
+         (requests[i].rights & MEMORY_RIGHT_CREATE_SHARED)) ||
         (requests[i].protocol == PROTOCOL_TCP_SERVICE &&
          (requests[i].rights & TCP_SERVICE_RIGHT_LISTEN));
     uint64_t flags = private_role ? 0 : ENVIRONMENT_EXPORTED;

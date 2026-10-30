@@ -1306,10 +1306,18 @@ static const char *build_launch(const struct authority *authority, struct mounts
   for (size_t i = 0; i < SERVICE_COUNT; ++i) {
     uint64_t rights = services[i].rights | (space->network ? services[i].owner_rights : 0);
     launch->grants[i] = (struct launch_grant){authority->services[i], rights, 0};
+    if (i == SERVICE_MEMORY) {
+      enum call_status status = profile_memory_grant(authority->services[i], &launch->grants[i]);
+      if (status != CALL_OK) {
+        snprintf(reason, size, "memory launch source unavailable (status %u)", status);
+        return reason;
+      }
+    }
     launch->resources[i] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)services[i].name, i);
     /* Private: the system process view reaches a program only through its
      * bundle manifest request (chronium, 2026-10-29). */
-    if (i == SERVICE_ENDPOINT || i == SERVICE_RETENTION_FACTORY || i == SERVICE_PROCESS_VIEW) {
+    if (i == SERVICE_ENDPOINT || i == SERVICE_RETENTION_FACTORY || i == SERVICE_PROCESS_VIEW ||
+        (i == SERVICE_MEMORY && (launch->grants[i].rights & MEMORY_RIGHT_CREATE_SHARED))) {
       launch->resources[i].flags = 0;
     }
   }

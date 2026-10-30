@@ -911,6 +911,20 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     grants[output_index] = (struct launch_grant){shell->terminal.output, CONSOLE_RIGHT_WRITE, 0};
   }
   grants[CHILD_MEMORY] = (struct launch_grant){shell->memory, MEMORY_RIGHT_MANAGE, 0};
+  if (session) {
+    /* Bundled shells retain creation separately from their MANAGE runtime role. */
+    handle_t source = shell->memory;
+    for (size_t i = 0; i < ordinary_count; ++i) {
+      if (!strcmp(authority[i].resource, BUNDLE_MEMORY_CREATE_SOURCE)) {
+        source = authority[i].source;
+        break;
+      }
+    }
+    enum call_status status = profile_memory_grant(source, &grants[CHILD_MEMORY]);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
   if (pass_jit) {
     enum call_status status = profile_jit_grant(jit, &grants[jit_index]);
     if (status != CALL_OK) {
@@ -1111,6 +1125,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   struct launch_environment_entry *resources = prepared->resources;
   size_t resource_capacity = sizeof(prepared->resources) / sizeof(*resources);
   resources[0] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"memory", CHILD_MEMORY);
+  if (grants[CHILD_MEMORY].rights & MEMORY_RIGHT_CREATE_SHARED) {
+    resources[0].flags = 0;
+  }
   size_t resource_count = 1;
   if (pass_jit) {
     if (resource_count == resource_capacity) {

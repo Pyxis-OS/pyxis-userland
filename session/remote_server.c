@@ -128,7 +128,12 @@ int launch_remote_server(const struct session_config *config,
     environment_capture_close(&captured);
     return EXIT_FAILURE;
   }
-  grants[MEMORY] = (struct launch_grant){memory, MEMORY_RIGHT_MANAGE, 0};
+  status = profile_memory_grant(memory, &grants[MEMORY]);
+  if (status != CALL_OK) {
+    free(grants);
+    environment_capture_close(&captured);
+    return EXIT_FAILURE;
+  }
   grants[CLOCK] = (struct launch_grant){clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE | CLOCK_RIGHT_SLEEP, 0};
   grants[LAUNCHER] = (struct launch_grant){launcher, LAUNCHER_RIGHT_LAUNCH, 0};
   grants[TERMINAL] = (struct launch_grant){terminal, TERMINAL_SERVICE_RIGHT_CREATE, 0};
@@ -141,6 +146,9 @@ int launch_remote_server(const struct session_config *config,
     return EXIT_FAILURE;
   }
   resources[0] = (struct launch_environment_entry)PROFILE_CAP("memory", MEMORY);
+  if (grants[MEMORY].rights & MEMORY_RIGHT_CREATE_SHARED) {
+    resources[0].flags = 0;
+  }
   resources[1] = (struct launch_environment_entry)PROFILE_CAP("clock", CLOCK);
   resources[2] = (struct launch_environment_entry)PROFILE_CAP("launcher", LAUNCHER);
   resources[3] = (struct launch_environment_entry)PROFILE_CAP("terminal", TERMINAL);

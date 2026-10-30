@@ -3,6 +3,7 @@
 
 #include <abi/launcher.h>
 #include <abi/jit.h>
+#include <abi/memory.h>
 #include <environment.h>
 #include <bundle_launch.h>
 #include <command_search.h>
@@ -41,6 +42,22 @@ static inline enum call_status profile_jit_grant(handle_t source, struct launch_
     return CALL_WRONG_TYPE;
   }
   *grant = (struct launch_grant){source, info.rights & JIT_RIGHT_MANAGE, 0};
+  return CALL_OK;
+}
+
+/* Trusted successors retain the held constructor; ordinary children use MANAGE. */
+static inline enum call_status profile_memory_grant(handle_t source, struct launch_grant *grant)
+{
+  struct handle_info info;
+  enum call_status status = handle_query(source, &info);
+  if (status != CALL_OK) {
+    return status;
+  }
+  if (info.kind != HANDLE_KIND_NATIVE || info.protocol != PROTOCOL_MEMORY || info.transport) {
+    return CALL_WRONG_TYPE;
+  }
+  *grant = (struct launch_grant){source,
+    info.rights & (MEMORY_RIGHT_MANAGE | MEMORY_RIGHT_CREATE_SHARED), 0};
   return CALL_OK;
 }
 
@@ -135,7 +152,8 @@ static inline enum call_status profile_inherit_services(
     if (status != CALL_OK) {
       return status;
     }
-    if (info.protocol == PROTOCOL_JIT || info.protocol == PROTOCOL_PROCESS_VIEW) {
+    if (info.protocol == PROTOCOL_JIT || info.protocol == PROTOCOL_PROCESS_VIEW ||
+        (info.protocol == PROTOCOL_MEMORY && (info.rights & MEMORY_RIGHT_CREATE_SHARED))) {
       continue;
     }
     size_t length = strlen(value->name);

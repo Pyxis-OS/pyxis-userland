@@ -1,4 +1,5 @@
 #include <program_sources.h>
+#include <abi/memory.h>
 #include <handle.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@ static uint64_t source_protocol(const char *name)
     {"native_mount", PROTOCOL_MOUNT},
     {"space", PROTOCOL_SPACE},
     {BUNDLE_TCP_LISTEN_SOURCE, PROTOCOL_TCP_SERVICE},
+    {BUNDLE_MEMORY_CREATE_SOURCE, PROTOCOL_MEMORY},
     {"log", PROTOCOL_LOG},
   };
   /* These resource classes are per-command ownership, not launch sources.
@@ -206,6 +208,9 @@ enum call_status program_sources_stage(const struct bundle_authority *authority,
       };
     }
     grants[grant] = (struct launch_grant){source->source, info.rights, info.transport};
+    if (info.protocol == PROTOCOL_MEMORY && (info.rights & MEMORY_RIGHT_CREATE_SHARED)) {
+      entries[entry].flags = 0;
+    }
   }
   return CALL_OK;
 }

@@ -55,8 +55,10 @@ enum call_status bundle_sources_forward_capture(const struct environment_capture
  * to the declared rights. Other bundles keep existing provider inheritance.
  * Declared jit/manage receives a private native JIT role, and declared
  * process_view/list a private system process view; ordinary children never
- * inherit either. Exact held shell/Lua contexts and trusted session successors
- * retain their source for later declared child launches.
+ * inherit either. MEMORY create_shared selects the held private
+ * BUNDLE_MEMORY_CREATE_SOURCE, falling back to a held canonical MEMORY grant.
+ * Creation-bearing results stay private. Exact held shell/Lua contexts and
+ * trusted session successors retain their source for later declared child launches.
  * Required requests fail as a whole; unavailable optional requests are absent.
  * Both program and source storage remain borrowed until launch is closed.
  * Failure clears *prepared and preserves all source capabilities. */

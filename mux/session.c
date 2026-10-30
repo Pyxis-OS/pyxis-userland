@@ -264,7 +264,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     const char *name;
     uint64_t rights;
   } allowed[] = {
-    {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
+    {"memory", MEMORY_RIGHT_MANAGE | MEMORY_RIGHT_CREATE_SHARED}, {"jit", JIT_RIGHT_MANAGE},
     {"threads", THREAD_RIGHT_MANAGE},
     {"clock", CLOCK_RIGHTS},
     {"system_info", SYSTEM_INFO_RIGHT_READ}, {"process_view", PROCESS_VIEW_RIGHT_LIST},
@@ -315,17 +315,24 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
       status = CALL_LIMIT;
       goto done;
     }
-    status = !strcmp(allowed[i].name, "jit") ?
-        profile_jit_grant(source, &grants[grant_count]) :
-        copy_grant(source, &grants[grant_count]);
+    if (!strcmp(allowed[i].name, "memory")) {
+      status = profile_memory_grant(source, &grants[grant_count]);
+    } else if (!strcmp(allowed[i].name, "jit")) {
+      status = profile_jit_grant(source, &grants[grant_count]);
+    } else {
+      status = copy_grant(source, &grants[grant_count]);
+    }
     if (status != CALL_OK) {
       goto done;
     }
     grants[grant_count].rights &= allowed[i].rights;
+    bool private_memory = !strcmp(allowed[i].name, "memory") &&
+        (grants[grant_count].rights & MEMORY_RIGHT_CREATE_SHARED);
     assert(entry_count < entry_capacity);
     entries[entry_count++] = (struct launch_environment_entry){
       .name = (uintptr_t)allowed[i].name, .kind = ENVIRONMENT_CAP,
       .flags = wifi_control || !strcmp(allowed[i].name, "jit") ||
+          private_memory ||
           !strcmp(allowed[i].name, "process_view") ||
           !strcmp(allowed[i].name, "service") ||
           !strcmp(allowed[i].name, "retention_account") ?

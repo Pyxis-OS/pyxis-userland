@@ -6,6 +6,7 @@
   "resource_dirs": {},
   "grants": [
     {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "memory_create_shared", "resource": "memory", "rights": ["manage", "create_shared"], "required": false},
     {"name": "clock", "resource": "clock", "rights": ["read", "precise", "sleep"], "required": true},
     {"name": "jit", "resource": "jit", "rights": ["manage"], "required": false},
     {"name": "process_view", "resource": "process_view", "rights": ["list"], "required": false},

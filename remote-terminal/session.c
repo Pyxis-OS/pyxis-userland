@@ -46,7 +46,7 @@ static const struct {
   const char *name;
   uint64_t rights;
 } remote_allowed[] = {
-  {"memory", MEMORY_RIGHT_MANAGE}, {"jit", JIT_RIGHT_MANAGE},
+  {"memory", MEMORY_RIGHT_MANAGE | MEMORY_RIGHT_CREATE_SHARED}, {"jit", JIT_RIGHT_MANAGE},
   {"threads", THREAD_RIGHT_MANAGE},
   {"clock", CLOCK_RIGHTS},
   {"system_info", SYSTEM_INFO_RIGHT_READ}, {"process_view", PROCESS_VIEW_RIGHT_LIST},
@@ -220,9 +220,11 @@ static enum call_status context_init(struct remote_context *context, bool multip
         goto done;
       }
     }
-    if (!strcmp(remote_allowed[i].name, "jit")) {
+    if (!strcmp(remote_allowed[i].name, "jit") || !strcmp(remote_allowed[i].name, "memory")) {
       struct launch_grant checked;
-      status = profile_jit_grant(value->handle, &checked);
+      status = !strcmp(remote_allowed[i].name, "memory") ?
+          profile_memory_grant(value->handle, &checked) :
+          profile_jit_grant(value->handle, &checked);
       if (status != CALL_OK) {
         goto done;
       }
@@ -231,6 +233,8 @@ static enum call_status context_init(struct remote_context *context, bool multip
     status = context_add(context, remote_allowed[i].name, value->handle,
         value->rights & remote_allowed[i].rights, 0,
         wifi_control || !strcmp(remote_allowed[i].name, "jit") ||
+            (!strcmp(remote_allowed[i].name, "memory") &&
+             (value->rights & MEMORY_RIGHT_CREATE_SHARED)) ||
             !strcmp(remote_allowed[i].name, "process_view") ||
             !strcmp(remote_allowed[i].name, "service") ||
             !strcmp(remote_allowed[i].name, "interpreter_root") ||
