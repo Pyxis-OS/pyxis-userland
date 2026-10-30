@@ -57,7 +57,7 @@ bool package_abi_valid(const char *abi)
   }
   for (size_t i = 0; i < length; ++i) {
     bool lower = (abi[i] >= 'a' && abi[i] <= 'z') || (abi[i] >= '0' && abi[i] <= '9');
-    if (!lower && (!i || (abi[i] != '.' && abi[i] != '-'))) {
+    if (!lower && (!i || (abi[i] != '.' && abi[i] != '-' && abi[i] != '+'))) {
       return false;
     }
   }
@@ -115,7 +115,7 @@ static bool abi_string(const struct literal_value *value)
       package_abi_valid(value->as.string.bytes);
 }
 
-/* os-release and its readers ship in one archive, so any other field is an error. */
+/* Recognize the release and development metadata shapes explicitly. */
 static bool os_release_fields(const struct literal_value *root)
 {
   if (root->kind != LITERAL_TABLE) {
@@ -124,7 +124,8 @@ static bool os_release_fields(const struct literal_value *root)
   for (const struct literal_entry *entry = root->as.table.entries; entry; entry = entry->next) {
     const struct literal_value *key = entry->key;
     if (entry->implicit || key->kind != LITERAL_STRING ||
-        (strcmp(key->as.string.bytes, "release") && strcmp(key->as.string.bytes, "revision") &&
+        (strcmp(key->as.string.bytes, "release") && strcmp(key->as.string.bytes, "version") &&
+         strcmp(key->as.string.bytes, "upgrade_from") && strcmp(key->as.string.bytes, "revision") &&
          strcmp(key->as.string.bytes, "abi") && strcmp(key->as.string.bytes, "signed_floor"))) {
       return false;
     }
@@ -196,18 +197,25 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
   const struct literal_value *list = literal_field(document->root, "abi");
   const struct literal_value *revision = literal_field(document->root, "revision");
   const struct literal_value *release = literal_field(document->root, "release");
+  const struct literal_value *version = literal_field(document->root, "version");
+  const struct literal_value *anchor = literal_field(document->root, "upgrade_from");
   const struct literal_value *floor = literal_field(document->root, "signed_floor");
   status = os_release_fields(document->root) && list && list->kind == LITERAL_TABLE &&
       revision && revision->kind == LITERAL_STRING &&
-      (!revision->as.string.size || abi_string(revision)) && (!release || abi_string(release)) ?
+      (!revision->as.string.size || abi_string(revision)) &&
+      ((abi_string(release) && !strchr(release->as.string.bytes, '+') && !version && !anchor) ||
+       (!release && abi_string(version) && strchr(version->as.string.bytes, '+') &&
+        abi_string(anchor) && !strchr(anchor->as.string.bytes, '+'))) ?
       CALL_OK : CALL_BAD_REQUEST;
-  size_t count = status == CALL_OK ? list->as.table.count + 1 : 0;
-  if (status == CALL_OK && !(provided->names = calloc(count, sizeof(*provided->names)))) {
+  size_t count = status == CALL_OK ? list->as.table.count : 0;
+  if (status == CALL_OK && count &&
+      !(provided->names = calloc(count, sizeof(*provided->names)))) {
     status = CALL_NO_MEMORY;
   }
   for (const struct literal_entry *entry = status == CALL_OK ? list->as.table.entries : NULL;
       entry && status == CALL_OK; entry = entry->next) {
-    if (!entry->implicit || !abi_string(entry->value)) {
+    if (!entry->implicit || !abi_string(entry->value) ||
+        package_abi_provided(provided, entry->value->as.string.bytes)) {
       status = CALL_BAD_REQUEST;
     } else if (!provide(provided, entry->value->as.string.bytes)) {
       status = CALL_NO_MEMORY;
@@ -216,17 +224,19 @@ enum call_status package_provided_abi(struct package_provided_abi *provided)
   if (status == CALL_OK && release) {
     memcpy(provided->release, release->as.string.bytes, release->as.string.size + 1);
   }
+  if (status == CALL_OK) {
+    const struct literal_value *identity = release ? release : version;
+    memcpy(provided->version, identity->as.string.bytes, identity->as.string.size + 1);
+    if (anchor) {
+      memcpy(provided->upgrade_from, anchor->as.string.bytes, anchor->as.string.size + 1);
+    }
+  }
   if (status == CALL_OK && floor) {
     if (floor->kind != LITERAL_STRING || !time_text(floor->as.string.bytes, floor->as.string.size)) {
       status = CALL_BAD_REQUEST;
     } else {
       memcpy(provided->signed_floor, floor->as.string.bytes, floor->as.string.size + 1);
     }
-  }
-  /* A build without Git has an empty revision and provides only the list. */
-  if (status == CALL_OK && revision->as.string.size &&
-      !provide(provided, revision->as.string.bytes)) {
-    status = CALL_NO_MEMORY;
   }
   if (status == CALL_OK && !provided_text(provided)) {
     status = CALL_NO_MEMORY;

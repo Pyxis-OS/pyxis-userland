@@ -25,6 +25,15 @@ repository; a plain ID offered by several gives a numbered choice on a console
 and is refused elsewhere, listing the `REPO/ID` spellings. The review shows
 which repository each fetched package comes from.
 
+Within that chosen repository, an unspecified version prefers the rightmost
+supported ABI in the system's ordered list, then the last published build for
+that ABI. An explicit eligible version selects that version. Data packages keep
+last-published selection without an ABI rank. A separately configured development
+repository can be sparse, containing only a few selected test packages. It has
+no preference over other repositories: use the chooser or `REPO/ID`, after which
+updates retain that recorded origin. ABI preference does not change an installed
+package's origin.
+
 `pkg update` selects the current build of every installed package from its
 recorded source. `pkg update ID...` selects only those installed IDs and any
 dependencies their new manifests require; the whole resulting set is checked.
@@ -57,13 +66,21 @@ run pkg without a console; it does not answer a repository choice.
 
 Program and toolchain packages record the ABI they were
 built for; `pkg` reads what the running system provides from
-`boot://os-release` (its release ABI list and its build revision) and offers, installs
+`boot://os-release` (only its explicit ordered ABI list) and offers, installs
 and keeps only packages whose ABI it provides. Builds for other systems are
 hidden; `list --available` does not mention them, and a refused `install` counts them
 per ID. Stale stored builds refuse install, remove and
 verify once, before any tree is hashed: one message lists every
 stale package with its ABI and gives one `pkg install` and one `pkg remove`
 command that clear them all.
+
+Tagged builds name their real `release`. Development builds instead record a
+display `version`, such as `0.0.11+abcdef012345`, and an `upgrade_from` release
+ancestor. The raw revision is provenance and never an implicit provided ABI.
+Development packages require that full version; another revision is not eligible.
+A dirty build's displayed version ends in `-dirty` and advertises no exact dev
+ABI; its provided list can be empty. Released fallback starts with the actual
+0.0.11 reader baseline; pre-tag development builds provide only their exact ABI.
 
 Archive, member and installed-tree verification explicitly use positioned bulk
 FILE reads with a heap buffer of at most 1 MiB. Every archive/inventory/member
@@ -99,12 +116,18 @@ No archive scripts execute.
 `pkg upgrade [VERSION]` reads only the signed `releases` repository and selects
 the first required checkpoint toward the named/latest release, or that release
 when no checkpoint intervenes. The existing signed release IDs declare the
-route in publication order: historical `pyxis` and the permanent 0.0.10
+route in publication order: historical `pyxis` and the permanent 0.0.11
 bootstrap, later `pyxis-checkpoint`, ordinary `pyxis-release`. Each invocation
-reviews one hop; reboot and invoke again to continue. Unknown running releases,
+reviews one hop; reboot and invoke again to continue. A development build sits
+immediately after its actual `upgrade_from` release in this route, so that anchor
+and earlier releases cannot be destinations. Every later required checkpoint
+still applies, including the permanent bootstrap. A missing or ambiguous anchor
+refuses; with no later release, there is no newer released destination. Development
+versions cannot appear in the stock release route. Unknown running releases,
 duplicate route versions and downgrades refuse. It needs an installed system booted from its own boot entry and a space
 with `package_upgrade = true`; live media and rescue boots refuse. Review shows
-the release and the complete target-compatible package selection. It stages
+the release and the complete target-compatible package selection, with eligibility
+and ABI preference taken from this hop's `provides` list. It stages
 the verified package set and a durable pending proof before the shared boot
 publisher writes a fresh attempt. The running system keeps its old set; the
 verified first boot switches current before package consumers start. Success

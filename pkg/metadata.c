@@ -99,7 +99,7 @@ static bool kind(const struct literal_value *table, char output[10])
 static bool array(const struct literal_value *value);
 
 /* provides is required on release entries and refused on others: a non-empty
- * list of distinct ABI names. */
+ * list of distinct ABI names ordered from fallback to preferred. */
 static bool provides(const struct literal_value *table, struct pkg_entry *entry)
 {
   const struct literal_value *list = literal_field(table, "provides");

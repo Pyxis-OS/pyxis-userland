@@ -109,6 +109,24 @@ static const struct package_provided_abi *provided_abi(void)
   return &client.provided;
 }
 
+/* List order declares preference; zero means unsupported. During an upgrade
+ * the chosen hop supplies the list, rather than the still-running system. */
+static size_t abi_preference(const char *abi)
+{
+  size_t rank = 0;
+  if (client.target_release) {
+    for (size_t i = 0; i < client.target_release->provides_count; ++i) {
+      if (!strcmp(abi, client.target_release->provides[i])) rank = i + 1;
+    }
+  } else {
+    const struct package_provided_abi *provided = provided_abi();
+    for (size_t i = 0; client.provided_readable && i < provided->count; ++i) {
+      if (!strcmp(abi, provided->names[i])) rank = i + 1;
+    }
+  }
+  return rank;
+}
+
 /* A program, toolchain or dev package is usable only on a system that provides its
  * ABI. Refusals name both sides; INSTALLED adds the way out for a stored one. */
 static bool abi_check(const char *id, const char *version, const char *kind,
@@ -118,14 +136,7 @@ static bool abi_check(const char *id, const char *version, const char *kind,
     return true;
   }
   const struct package_provided_abi *provided = provided_abi();
-  bool supported = false;
-  if (client.target_release) {
-    for (size_t i = 0; i < client.target_release->provides_count; ++i) {
-      supported |= !strcmp(abi, client.target_release->provides[i]);
-    }
-  } else {
-    supported = client.provided_readable && package_abi_provided(provided, abi);
-  }
+  bool supported = abi_preference(abi) != 0;
   char remedy[2 * PACKAGE_ID_MAX + 80] = "";
   if (installed) {
     snprintf(remedy, sizeof(remedy),
@@ -627,21 +638,12 @@ static bool load_repositories(void)
       }
       return false;
     }
-    const struct package_provided_abi *provided = provided_abi();
     size_t usable = 0;
     for (size_t i = 0; i < count; ++i) {
       if (pkg_kind_release(entries[i].kind)) {
         continue;
       }
-      bool supported = false;
-      if (client.target_release) {
-        for (size_t p = 0; p < client.target_release->provides_count; ++p) {
-          supported |= !strcmp(entries[i].abi, client.target_release->provides[p]);
-        }
-      } else {
-        supported = client.provided_readable && package_abi_provided(provided, entries[i].abi);
-      }
-      if (pkg_kind_bound(entries[i].kind) && !supported) {
+      if (pkg_kind_bound(entries[i].kind) && !abi_preference(entries[i].abi)) {
         struct hidden_build *hidden = realloc(client.hidden,
             (client.hidden_count + 1) * sizeof(*hidden));
         if (!hidden) {
@@ -671,8 +673,8 @@ static bool load_repositories(void)
   return true;
 }
 
-/* The build of ID, at VERSION when given, that repository R offers for this
- * system: the last one its index lists. */
+/* Only rank within repository R. Equal ABIs and data packages retain the last
+ * published build; an explicit eligible version bypasses ABI preference. */
 static const struct offered_package *offering(const char *id, const char *version, size_t r)
 {
   const struct offered_package *found = NULL;
@@ -680,7 +682,12 @@ static const struct offered_package *offering(const char *id, const char *versio
     const struct pkg_identity *identity = &client.offered[i].entry.identity;
     if (client.offered[i].repository == r && !strcmp(identity->id, id) &&
         (!version || !strcmp(identity->version, version))) {
-      found = &client.offered[i];
+      const struct offered_package *candidate = &client.offered[i];
+      if (!found || version || !pkg_kind_bound(candidate->entry.kind) ||
+          !pkg_kind_bound(found->entry.kind) ||
+          abi_preference(candidate->entry.abi) >= abi_preference(found->entry.abi)) {
+        found = candidate;
+      }
     }
   }
   return found;
@@ -1764,10 +1771,9 @@ static void upgrade_review(const struct pkg_entry *release, const struct pkg_ent
     append(provides, sizeof(provides), ", ", release->provides[i]);
   }
   puts("Release upgrade (takes effect at the next boot):");
-  if (provided->release[0]) {
-    printf("  running: %s\n", provided->release);
-  } else {
-    printf("  running: a development build (%s)\n", provided->text);
+  printf("  running: %s\n", provided->version);
+  if (provided->upgrade_from[0]) {
+    printf("  release ancestry: immediately after %s\n", provided->upgrade_from);
   }
   printf("  new: %s@%s, %llu bytes, provides %s\n", release->identity.id,
       release->identity.version, (unsigned long long)release->size, provides);
@@ -1970,7 +1976,7 @@ static bool upgrade(const char *version)
     printf("pkg: reading repository %s\n", source->name);
     ok = read_repository(source, &entries, &count);
   }
-  ok = ok && pkg_release_route(entries, count, provided->release, version,
+  ok = ok && pkg_release_route(entries, count, provided->release, provided->upgrade_from, version,
       &chosen, &target, &client.reason);
   if (ok && !strcmp(chosen->identity.version, provided->release)) {
     snprintf(client.message, sizeof(client.message), "%s is already running",

@@ -16,7 +16,7 @@
                              DIRECTORY_RIGHT_READ_FILES)
 
 /* The ABI a program or toolchain package requires: a release name such as
- * 0.0.8, or the 12-hex revision of the development build it came from
+ * 0.0.11, or the full development version, such as 0.0.11+abcdef012345
  * (docs/interfaces/abi.md). Readers check only this grammar and compare names
  * exactly. */
 #define PACKAGE_ABI_MAX 64
@@ -34,15 +34,19 @@ struct package_provided_abi {
   char signed_floor[21];
   /* The release tag of a tagged build; empty for a development build. */
   char release[PACKAGE_ABI_MAX + 1];
+  /* Display identity: the release tag or full development version. */
+  char version[PACKAGE_ABI_MAX + 1];
+  /* Actual release ancestor of a development build, never an ABI claim. */
+  char upgrade_from[PACKAGE_ABI_MAX + 1];
 };
 
 bool package_id_valid(const char *id);
 bool package_abi_valid(const char *abi);
-/* Read the ABIs the running system provides from boot://os-release: its
- * release ABI list and its own build revision, which development packages
- * name. A build without a revision provides only the list. CALL_NOT_FOUND when
- * the file cannot be opened, CALL_BAD_REQUEST when it is malformed. The caller
- * frees a successful result with package_provided_abi_free. */
+/* Read the explicitly provided ABIs from boot://os-release, ordered from
+ * fallback to preferred. The revision is provenance, never an implicit ABI.
+ * An empty list is valid (for example, an incompatible dirty build).
+ * CALL_NOT_FOUND when the file cannot be opened, CALL_BAD_REQUEST when it is
+ * malformed. The caller frees a successful result with package_provided_abi_free. */
 enum call_status package_provided_abi(struct package_provided_abi *provided);
 void package_provided_abi_free(struct package_provided_abi *provided);
 bool package_abi_provided(const struct package_provided_abi *provided, const char *abi);
