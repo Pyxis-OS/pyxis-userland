@@ -224,8 +224,12 @@ int threadprobe_runtime_time(void)
   pthread_attr_t thread_attributes;
   valid &= pthread_attr_init(&thread_attributes) == 0;
   valid &= pthread_attr_setstacksize(&thread_attributes, 1024 * 1024 + 1) == EINVAL;
-  valid &= pthread_attr_setdetachstate(&thread_attributes, PTHREAD_CREATE_DETACHED) == ENOTSUP;
-  valid &= pthread_detach(pthread_self()) == ENOTSUP;
+  valid &= pthread_attr_setdetachstate(&thread_attributes, PTHREAD_CREATE_DETACHED) == 0;
+  int detach_state;
+  valid &= pthread_attr_getdetachstate(&thread_attributes, &detach_state) == 0 &&
+      detach_state == PTHREAD_CREATE_DETACHED;
+  valid &= pthread_attr_setdetachstate(&thread_attributes, PTHREAD_CREATE_JOINABLE) == 0;
+  valid &= pthread_detach(pthread_self()) == EINVAL;
   valid &= pthread_join(pthread_self(), NULL) == EDEADLK;
   valid &= pthread_join(UINT64_MAX, NULL) == ESRCH;
   sem_t semaphore;
@@ -240,7 +244,7 @@ int threadprobe_runtime_time(void)
   }
   valid &= sem_timedwait(&semaphore, &deadline) == -1 && errno == ETIMEDOUT;
   valid &= sem_destroy(&semaphore) == 0;
-  printf("threadprobe: runtime-time %s; UTC mutex/semaphore, monotonic condition reacquire, recursive and unsupported profiles\n",
+  printf("threadprobe: runtime-time %s; UTC mutex/semaphore, monotonic condition reacquire, recursive, detach and unsupported profiles\n",
       valid ? "passed" : "failed");
   return valid ? 0 : 1;
 }
