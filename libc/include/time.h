@@ -64,6 +64,13 @@ int clock_gettime(clockid_t clock, struct timespec *result);
  * duration past the clock's range sleeps until its end. Workers retain ordinary
  * noninterruptible sleep. */
 int nanosleep(const struct timespec *duration, struct timespec *remaining);
+/* nanosleep on CLOCK_MONOTONIC or CLOCK_REALTIME, returning an error number
+ * instead of setting errno. TIMER_ABSTIME sleeps until an absolute time of that
+ * clock; a past time returns at once. Absolute sleeps never store remaining
+ * time. The coarse clocks fail with ENOTSUP and other IDs or flags with EINVAL. */
+#define TIMER_ABSTIME 1
+int clock_nanosleep(clockid_t clock, int flags, const struct timespec *request,
+    struct timespec *remaining);
 
 /* English C-locale standard C/POSIX conversions, with E/O alternatives equal
  * to their ordinary forms. No locale selection or extended flags/widths.

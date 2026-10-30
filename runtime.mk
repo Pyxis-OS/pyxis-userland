@@ -82,6 +82,7 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/ceilf.c \
                 third_party/musl/src/math/x86_64/sqrt.c \
                 third_party/musl/src/math/x86_64/sqrtf.c \
+                third_party/musl/src/math/x86_64/sqrtl.c \
                 third_party/musl/src/string/wcslen.c \
                 third_party/musl/src/misc/getopt.c \
                 third_party/musl/src/misc/getopt_long.c \
@@ -93,6 +94,12 @@ MUSL_SOURCES := third_party/musl/src/stdio/format_float.c \
                 third_party/musl/src/math/__tan.c \
                 third_party/musl/src/math/__rem_pio2.c \
                 third_party/musl/src/math/__rem_pio2_large.c \
+                third_party/musl/src/math/sinl.c \
+                third_party/musl/src/math/tanl.c \
+                third_party/musl/src/math/__sinl.c \
+                third_party/musl/src/math/__cosl.c \
+                third_party/musl/src/math/__tanl.c \
+                third_party/musl/src/math/__rem_pio2l.c \
                 third_party/musl/src/math/atan.c \
                 third_party/musl/src/math/atan2.c \
                 third_party/musl/src/math/log.c \

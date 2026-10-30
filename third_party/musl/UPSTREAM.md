@@ -392,3 +392,15 @@ supplies `getopt.h` and the `unistd.h` declarations; musl's `getopt.h` is not
 copied. Multibyte option characters decode through the stateless UTF-8
 `mbtowc`, and `getopt_long_only` measures them with libc's `mblen`; an invalid
 byte reports as U+FFFD.
+
+A private game port's prerequisites add these unmodified files from the same pin:
+
+- `src/math/sinl.c`, `tanl.c`, `__sinl.c`, `__cosl.c`, `__tanl.c` and
+  `__rem_pio2l.c`, the 80-bit long double forms; large arguments use the
+  existing `__rem_pio2_large`;
+- `src/math/x86_64/sqrtl.c`, using x87 `fsqrt`.
+
+`src/internal/libm.h` declares `__rem_pio2l`, `__sinl`, `__cosl` and `__tanl`
+without `hidden`. The files were taken from the pinned commit's archive through
+the `raw-github` proxy of a GitHub mirror of musl; the 129 previously vendored
+files that carry no local adaptation are byte-identical to that archive.

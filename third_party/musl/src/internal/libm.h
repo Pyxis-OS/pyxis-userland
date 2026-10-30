@@ -171,6 +171,10 @@ do {                                              \
   INSERT_WORDS(d, asuint64(d)>>32, lo)
 
 int    __rem_pio2_large(double*,double*,int,int,int);
+int    __rem_pio2l(long double, long double *);
+long double __sinl(long double, long double, int);
+long double __cosl(long double, long double);
+long double __tanl(long double, long double, int);
 int    __rem_pio2(double,double*);
 double __sin(double,double,int);
 double __cos(double,double);

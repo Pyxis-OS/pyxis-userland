@@ -106,13 +106,16 @@ double fabs(double value);
 float fabsf(float value);
 double ceil(double value);
 float ceilf(float value);
-/* Correctly rounded, using SSE2 sqrtsd and sqrtss. */
+/* Correctly rounded, using SSE2 sqrtsd and sqrtss, and x87 fsqrt for sqrtl. */
 double sqrt(double value);
 float sqrtf(float value);
+long double sqrtl(long double value);
 /* Radians. Large arguments use full-precision reduction modulo pi/2. */
 double sin(double value);
 double cos(double value);
 double tan(double value);
+long double sinl(long double value);
+long double tanl(long double value);
 double asin(double value);
 double acos(double value);
 double atan(double value);

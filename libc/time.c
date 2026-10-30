@@ -105,32 +105,28 @@ int gettimeofday(struct timeval *restrict result, void *restrict timezone)
   return 0;
 }
 
-int nanosleep(const struct timespec *duration, struct timespec *remaining)
+/* Saturate: a deadline past the clock's range sleeps until its end. */
+static uint64_t deadline_after(uint64_t now, const struct timespec *duration)
 {
-  if (!duration || duration->tv_sec < 0 || duration->tv_nsec < 0 ||
-      duration->tv_nsec >= (long)NANOSECONDS_PER_SECOND) {
-    errno = EINVAL;
-    return -1;
-  }
-  handle_t clock = libc_thread_clock();
-  uint64_t now;
-  enum call_status status = clock_now(clock, &now);
-  if (status != CALL_OK) {
-    errno = libc_call_errno(status);
-    return -1;
-  }
-  /* Saturate: a deadline past the clock's range sleeps until its end. */
   uint64_t seconds = (uint64_t)duration->tv_sec;
-  uint64_t deadline = UINT64_MAX;
   if (seconds <= (UINT64_MAX - now) / NANOSECONDS_PER_SECOND) {
     uint64_t span = seconds * NANOSECONDS_PER_SECOND;
     if ((uint64_t)duration->tv_nsec <= UINT64_MAX - now - span) {
-      deadline = now + span + (uint64_t)duration->tv_nsec;
+      return now + span + (uint64_t)duration->tv_nsec;
     }
   }
+  return UINT64_MAX;
+}
+
+/* Sleep on the startup clock until a monotonic deadline; returns an error
+ * number. An interruption stores the actual remaining time when requested. */
+static int sleep_until(handle_t clock, uint64_t now, uint64_t deadline,
+    struct timespec *remaining)
+{
+  enum call_status status;
   struct libc_signal_wait signals;
   if (libc_signal_prepare(&signals) < 0) {
-    return -1;
+    return errno;
   }
   int error = 0;
   if ((!signals.count && !signals.pending) || now >= deadline) {
@@ -185,10 +181,79 @@ int nanosleep(const struct timespec *duration, struct timespec *remaining)
     }
   }
   libc_signal_checkpoint();
+  return error;
+}
+
+static bool valid_duration(const struct timespec *duration)
+{
+  return duration && duration->tv_sec >= 0 && duration->tv_nsec >= 0 &&
+      duration->tv_nsec < (long)NANOSECONDS_PER_SECOND;
+}
+
+int nanosleep(const struct timespec *duration, struct timespec *remaining)
+{
+  if (!valid_duration(duration)) {
+    errno = EINVAL;
+    return -1;
+  }
+  handle_t clock = libc_thread_clock();
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK) {
+    errno = libc_call_errno(status);
+    return -1;
+  }
+  int error = sleep_until(clock, now, deadline_after(now, duration), remaining);
   if (error) {
     errno = error;
   }
   return error ? -1 : 0;
+}
+
+int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *request,
+    struct timespec *remaining)
+{
+  if (clock_id == CLOCK_REALTIME_COARSE || clock_id == CLOCK_MONOTONIC_COARSE) {
+    return ENOTSUP;
+  }
+  if ((clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC) ||
+      (flags & ~TIMER_ABSTIME) || !valid_duration(request)) {
+    return EINVAL;
+  }
+  handle_t clock = libc_thread_clock();
+  uint64_t now;
+  enum call_status status = clock_now(clock, &now);
+  if (status != CALL_OK) {
+    return libc_call_errno(status);
+  }
+  if (!(flags & TIMER_ABSTIME)) {
+    return sleep_until(clock, now, deadline_after(now, request), remaining);
+  }
+  if (clock_id == CLOCK_MONOTONIC) {
+    uint64_t seconds = (uint64_t)request->tv_sec;
+    uint64_t deadline = seconds > UINT64_MAX / NANOSECONDS_PER_SECOND ? UINT64_MAX :
+        seconds * NANOSECONDS_PER_SECOND;
+    deadline = deadline > UINT64_MAX - (uint64_t)request->tv_nsec ? UINT64_MAX :
+        deadline + (uint64_t)request->tv_nsec;
+    return sleep_until(clock, now, deadline, NULL);
+  }
+  /* The wall clock is never resynchronized, so a realtime deadline is a fixed
+   * offset from the monotonic clock. */
+  struct clock_wall_reading wall;
+  status = clock_wall_now(clock, &wall);
+  if (status != CALL_OK) {
+    return libc_call_errno(status);
+  }
+  struct timespec left = {request->tv_sec - wall.seconds,
+      request->tv_nsec - (long)wall.nanoseconds};
+  if (left.tv_nsec < 0) {
+    left.tv_nsec += (long)NANOSECONDS_PER_SECOND;
+    --left.tv_sec;
+  }
+  if (left.tv_sec < 0) {
+    left = (struct timespec){0, 0};
+  }
+  return sleep_until(clock, now, deadline_after(now, &left), NULL);
 }
 
 int usleep(useconds_t microseconds)
