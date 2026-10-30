@@ -1,34 +1,57 @@
 #include "literal.h"
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define ITEM_LIMIT 8192
 #define DEPTH_LIMIT 32
-#define WORK_LIMIT (16 * 1024 * 1024)
+/* Work is proportional to the source: a legitimate document costs a small
+ * multiple of its size, so this only stops a bug or a hostile input that a
+ * linear parser should never need. */
+#define WORK_PER_BYTE 64
+#define WORK_BASE (1024 * 1024)
+/* literal_equal compares two parsed documents under a fixed bound. */
+#define EQUAL_WORK_LIMIT (16 * 1024 * 1024)
+/* A table with at most this many entries checks duplicate keys by scanning. */
+#define SCAN_ENTRIES 8
 
 struct parser {
   struct literal *document;
-  size_t position, values, entries, work, comment_capacity;
+  size_t position, work, work_limit, comment_capacity;
   struct literal_diagnostic *diagnostic;
   bool failed;
 };
 
-static bool fail(struct parser *parser, const char *reason)
+/* FOUND and LIMIT name the number that overflowed and the limit it met. */
+static bool fail_limit(struct parser *parser, const char *reason, size_t found, size_t limit)
 {
   if (!parser->failed && parser->diagnostic) {
     parser->diagnostic->offset = parser->position;
     parser->diagnostic->reason = reason;
+    parser->diagnostic->found = found;
+    parser->diagnostic->limit = limit;
   }
   parser->failed = true;
   return false;
 }
 
+static bool fail(struct parser *parser, const char *reason)
+{
+  return fail_limit(parser, reason, 0, 0);
+}
+
+/* Memory ran out: the source size says how large the document was. */
+static bool fail_memory(struct parser *parser, const char *reason)
+{
+  return fail_limit(parser, reason, parser->document->size, 0);
+}
+
 static bool spend(struct parser *parser, size_t count)
 {
-  if (count > WORK_LIMIT - parser->work) {
-    return fail(parser, "literal parsing work limit exceeded");
+  if (count > parser->work_limit - parser->work) {
+    return fail_limit(parser, "literal parsing work exceeds its bound for this source",
+        parser->work + count, parser->work_limit);
   }
   parser->work += count;
   return true;
@@ -104,11 +127,10 @@ static bool long_body(struct parser *parser, struct literal_span *body)
 static bool comment(struct parser *parser)
 {
   struct literal *document = parser->document;
-  if (document->comment_count == ITEM_LIMIT) return fail(parser, "too many comments");
   if (document->comment_count == parser->comment_capacity) {
     size_t capacity = parser->comment_capacity ? parser->comment_capacity * 2 : 16;
     void *comments = realloc(document->comments, capacity * sizeof(*document->comments));
-    if (!comments) return fail(parser, "cannot allocate comments");
+    if (!comments) return fail_memory(parser, "cannot allocate comments");
     document->comments = comments;
     parser->comment_capacity = capacity;
   }
@@ -147,16 +169,11 @@ static bool skip(struct parser *parser)
 static struct literal_value *new_value(struct parser *parser,
     enum literal_kind kind)
 {
-  if (parser->values == ITEM_LIMIT) {
-    fail(parser, "too many literal values");
-    return NULL;
-  }
   struct literal_value *value = calloc(1, sizeof(*value));
   if (!value) {
-    fail(parser, "cannot allocate literal value");
+    fail_memory(parser, "cannot allocate literal value");
     return NULL;
   }
-  ++parser->values;
   value->kind = kind;
   value->span.start = parser->position;
   return value;
@@ -193,7 +210,7 @@ static bool text_value(struct parser *parser, struct literal_value *value,
     size_t start, size_t end)
 {
   value->as.string.bytes = malloc(end - start + 1);
-  if (!value->as.string.bytes) return fail(parser, "cannot allocate string");
+  if (!value->as.string.bytes) return fail_memory(parser, "cannot allocate string");
   memcpy(value->as.string.bytes, parser->document->source + start, end - start);
   value->as.string.bytes[end - start] = '\0';
   value->as.string.size = end - start;
@@ -471,18 +488,133 @@ static bool reserved(const char *bytes, size_t size)
 
 static struct literal_value *parse_value(struct parser *parser, size_t depth);
 
-static bool table(struct parser *parser, struct literal_value *value, size_t depth)
+/* The keys of one large table, so a duplicate is found without comparing a new
+ * key with every earlier one. Open addressing; transient, freed with the table. */
+struct key_set {
+  struct literal_entry **slots;
+  size_t capacity, count;
+};
+
+static uint64_t finish_hash(uint64_t hash)
 {
-  if (depth == DEPTH_LIMIT) return fail(parser, "literal table depth limit exceeded");
+  hash ^= hash >> 30;
+  hash *= UINT64_C(0xbf58476d1ce4e5b9);
+  hash ^= hash >> 27;
+  hash *= UINT64_C(0x94d049bb133111eb);
+  return hash ^ (hash >> 31);
+}
+
+/* Keys that same_key calls equal hash equal: an integer-valued number hashes
+ * as the integer. */
+static uint64_t key_hash(const struct literal_value *key)
+{
+  switch (key->kind) {
+  case LITERAL_STRING: {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < key->as.string.size; ++i) {
+      hash = (hash ^ (unsigned char)key->as.string.bytes[i]) * UINT64_C(1099511628211);
+    }
+    return finish_hash(hash);
+  }
+  case LITERAL_INTEGER:
+    return finish_hash((uint64_t)key->as.integer);
+  case LITERAL_NUMBER: {
+    double number = key->as.number;
+    if (number >= (double)LLONG_MIN && number < -(double)LLONG_MIN &&
+        (double)(int64_t)number == number) {
+      return finish_hash((uint64_t)(int64_t)number);
+    }
+    uint64_t bits;
+    memcpy(&bits, &number, sizeof(bits));
+    return finish_hash(bits);
+  }
+  default:
+    return finish_hash(key->as.boolean ? 2 : 1);
+  }
+}
+
+static bool keys_equal(const struct literal_value *a, const struct literal_value *b)
+{
+  size_t work = SIZE_MAX;
+  return same_key(a, b, &work);
+}
+
+static size_t key_slot(const struct key_set *set, const struct literal_value *key)
+{
+  size_t mask = set->capacity - 1;
+  size_t slot = (size_t)key_hash(key) & mask;
+  while (set->slots[slot] && !keys_equal(set->slots[slot]->key, key)) {
+    slot = (slot + 1) & mask;
+  }
+  return slot;
+}
+
+/* Adds ENTRY, whose key is not in the set. */
+static bool key_set_add(struct parser *parser, struct key_set *set, struct literal_entry *entry)
+{
+  if ((set->count + 1) * 2 > set->capacity) {
+    size_t capacity = set->capacity ? set->capacity * 2 : 4 * SCAN_ENTRIES;
+    struct literal_entry **slots = calloc(capacity, sizeof(*slots));
+    if (!slots) return fail_memory(parser, "cannot allocate table key set");
+    struct literal_entry **old = set->slots;
+    size_t old_capacity = set->capacity;
+    set->slots = slots;
+    set->capacity = capacity;
+    if (!spend(parser, old_capacity)) {
+      free(old);
+      return false;
+    }
+    for (size_t i = 0; i < old_capacity; ++i) {
+      if (old[i]) set->slots[key_slot(set, old[i]->key)] = old[i];
+    }
+    free(old);
+  }
+  set->slots[key_slot(set, entry->key)] = entry;
+  ++set->count;
+  return true;
+}
+
+/* Rejects ENTRY, the newest of VALUE's entries, when an earlier one has its key. */
+static bool check_duplicate(struct parser *parser, struct literal_value *value,
+    struct literal_entry *entry, struct key_set *set)
+{
+  if (value->as.table.count <= SCAN_ENTRIES) {
+    size_t remaining = parser->work_limit - parser->work;
+    for (struct literal_entry *prior = value->as.table.entries; prior != entry; prior = prior->next) {
+      bool duplicate = same_key(prior->key, entry->key, &remaining);
+      if (!remaining) {
+        return fail_limit(parser, "literal parsing work exceeds its bound for this source",
+            parser->work_limit, parser->work_limit);
+      }
+      if (duplicate) return fail(parser, "duplicate literal table key");
+    }
+    parser->work = parser->work_limit - remaining;
+    return true;
+  }
+  if (!set->slots) {
+    for (struct literal_entry *prior = value->as.table.entries; prior != entry; prior = prior->next) {
+      if (!key_set_add(parser, set, prior)) return false;
+    }
+  }
+  size_t cost = 1 + (entry->key->kind == LITERAL_STRING ? entry->key->as.string.size : 0);
+  if (!spend(parser, cost)) return false;
+  if (set->slots[key_slot(set, entry->key)]) return fail(parser, "duplicate literal table key");
+  return key_set_add(parser, set, entry);
+}
+
+static bool table_entries(struct parser *parser, struct literal_value *value, size_t depth,
+    struct key_set *set)
+{
+  if (depth == DEPTH_LIMIT) {
+    return fail_limit(parser, "literal table depth exceeds its limit", depth + 1, DEPTH_LIMIT);
+  }
   ++parser->position;
   struct literal_entry **tail = &value->as.table.entries;
   int64_t array_index = 0;
   if (!skip(parser)) return false;
   while (peek(parser) != '}') {
-    if (parser->entries == ITEM_LIMIT) return fail(parser, "too many table entries");
     struct literal_entry *entry = calloc(1, sizeof(*entry));
-    if (!entry) return fail(parser, "cannot allocate table entry");
-    ++parser->entries;
+    if (!entry) return fail_memory(parser, "cannot allocate table entry");
     *tail = entry;
     tail = &entry->next;
     ++value->as.table.count;
@@ -520,13 +652,7 @@ static bool table(struct parser *parser, struct literal_value *value, size_t dep
     if (!skip(parser)) return false;
     entry->value = parse_value(parser, depth + 1);
     if (!entry->value) return false;
-    size_t remaining = WORK_LIMIT - parser->work;
-    for (struct literal_entry *prior = value->as.table.entries; prior != entry; prior = prior->next) {
-      bool duplicate = same_key(prior->key, entry->key, &remaining);
-      if (!remaining) return fail(parser, "literal parsing work limit exceeded");
-      if (duplicate) return fail(parser, "duplicate literal table key");
-    }
-    parser->work = WORK_LIMIT - remaining;
+    if (!check_duplicate(parser, value, entry, set)) return false;
     size_t value_end = parser->position;
     if (!skip(parser)) return false;
     if (peek(parser) == ',' || peek(parser) == ';') {
@@ -540,6 +666,14 @@ static bool table(struct parser *parser, struct literal_value *value, size_t dep
   }
   ++parser->position;
   return true;
+}
+
+static bool table(struct parser *parser, struct literal_value *value, size_t depth)
+{
+  struct key_set set = {0};
+  bool valid = table_entries(parser, value, depth, &set);
+  free(set.slots);
+  return valid;
 }
 
 static struct literal_value *parse_value(struct parser *parser, size_t depth)
@@ -573,21 +707,31 @@ static struct literal_value *parse_value(struct parser *parser, size_t depth)
   return value;
 }
 
-bool literal_parse(const char *bytes, size_t size,
+static bool parse_source(const char *bytes, size_t size, bool small,
     struct literal **output, struct literal_diagnostic *diagnostic)
 {
   *output = NULL;
   if (diagnostic) *diagnostic = (struct literal_diagnostic){.line = 1, .column = 1};
   struct parser parser = {.diagnostic = diagnostic};
-  if (size > LITERAL_SOURCE_LIMIT || (!bytes && size)) {
-    return fail(&parser, "literal source exceeds limit or is unavailable");
+  if (small && size > LITERAL_SOURCE_LIMIT) {
+    return fail_limit(&parser, "literal source exceeds the small-document limit", size,
+        LITERAL_SOURCE_LIMIT);
   }
+  if ((!bytes && size) || size == SIZE_MAX) {
+    return fail(&parser, "literal source is unavailable");
+  }
+  parser.work_limit = size > (SIZE_MAX - WORK_BASE) / WORK_PER_BYTE ? SIZE_MAX :
+      size * WORK_PER_BYTE + WORK_BASE;
   parser.document = calloc(1, sizeof(*parser.document));
-  if (!parser.document) return fail(&parser, "cannot allocate literal document");
+  if (!parser.document) {
+    parser.document = &(struct literal){.size = size};
+    return fail_memory(&parser, "cannot allocate literal document");
+  }
   parser.document->source = malloc(size + 1);
   if (!parser.document->source) {
     literal_free(parser.document);
-    return fail(&parser, "cannot allocate literal source");
+    parser.document = &(struct literal){.size = size};
+    return fail_memory(&parser, "cannot allocate literal source");
   }
   if (size) memcpy(parser.document->source, bytes, size);
   parser.document->source[size] = '\0';
@@ -630,6 +774,34 @@ bool literal_parse(const char *bytes, size_t size,
   return true;
 }
 
+bool literal_parse(const char *bytes, size_t size,
+    struct literal **output, struct literal_diagnostic *diagnostic)
+{
+  return parse_source(bytes, size, true, output, diagnostic);
+}
+
+bool literal_parse_sized(const char *bytes, size_t size,
+    struct literal **output, struct literal_diagnostic *diagnostic)
+{
+  return parse_source(bytes, size, false, output, diagnostic);
+}
+
+const char *literal_describe(const struct literal_diagnostic *diagnostic,
+    char *text, size_t capacity)
+{
+  const char *reason = diagnostic->reason ? diagnostic->reason : "invalid literal data";
+  if (diagnostic->limit) {
+    snprintf(text, capacity, "line %zu column %zu: %s (%zu exceeds the limit of %zu)",
+        diagnostic->line, diagnostic->column, reason, diagnostic->found, diagnostic->limit);
+  } else if (diagnostic->found) {
+    snprintf(text, capacity, "%s (source of %zu bytes)", reason, diagnostic->found);
+  } else {
+    snprintf(text, capacity, "line %zu column %zu: %s", diagnostic->line, diagnostic->column,
+        reason);
+  }
+  return text;
+}
+
 const struct literal_value *literal_field(
     const struct literal_value *table_value, const char *key)
 {
@@ -665,7 +837,7 @@ static bool equal(const struct literal_value *a,
 bool literal_equal(const struct literal_value *a,
     const struct literal_value *b)
 {
-  size_t work = WORK_LIMIT;
+  size_t work = EQUAL_WORK_LIMIT;
   return equal(a, b, &work, 0);
 }
 

@@ -7,6 +7,7 @@
 #include <literal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #define BLOCK_SIZE 512
 #define IO_SIZE FILE_READ_BULK_MAX_BYTES
@@ -606,7 +607,10 @@ static bool read_manifest(handle_t file, uint64_t offset, uint64_t size,
     struct pkg_manifest *manifest, const char **reason)
 {
   if (size > LITERAL_SOURCE_LIMIT) {
-    return fail(reason, "package manifest exceeds literal source limit");
+    static char text[128];
+    snprintf(text, sizeof(text), "package manifest: %llu bytes exceeds the limit of %d "
+        "(small-document bound)", (unsigned long long)size, LITERAL_SOURCE_LIMIT);
+    return fail(reason, text);
   }
   char *bytes = malloc(size ? (size_t)size : 1);
   if (!bytes) {

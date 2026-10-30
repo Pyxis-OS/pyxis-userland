@@ -406,11 +406,10 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
     status = file_size(result.resource, &length);
     if (status != CALL_OK) {
       set_detail(detail, "cannot read HTTP snapshot length");
-    } else if (length != result.info.description.length ||
-        (index ? length > LITERAL_SOURCE_LIMIT : length != size)) {
-      set_detail(detail, index ? "repository index exceeds its limit or has inconsistent length" :
+    } else if (length != result.info.description.length || (!index && length != size)) {
+      set_detail(detail, index ? "repository index length differs from its HTTP response" :
           "archive length differs from its repository index");
-      status = CALL_FILE_TOO_LARGE;
+      status = CALL_BAD_REQUEST;
     }
   }
   enum call_status cleanup = resource_result_close(&configured);

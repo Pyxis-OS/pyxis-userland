@@ -79,9 +79,6 @@ struct client {
   enum call_status cleanup_status;
 };
 
-/* The literal parser imposes the stricter eventual set-record bound. */
-#define PKG_SELECTION_MAX 8192
-
 static struct client client;
 
 /* Preparation keeps ordinary foreground interruption and never scans stdin.
@@ -294,12 +291,8 @@ static bool select_version(struct pkg_selection *selection,
     selection->entries[index] = *identity;
     return true;
   }
-  if (selection->count >= PKG_SELECTION_MAX) {
-    return fail("package selection exceeds metadata budget");
-  }
   if (selection->count == selection->capacity) {
     size_t capacity = selection->capacity ? selection->capacity * 2 : 8;
-    if (capacity > PKG_SELECTION_MAX) capacity = PKG_SELECTION_MAX;
     struct pkg_identity *entries = calloc(capacity, sizeof(*entries));
     struct pkg_origin *origins = calloc(capacity, sizeof(*origins));
     if (!entries || !origins) {
@@ -332,18 +325,31 @@ static void print_selection(const struct pkg_selection *selection)
   }
 }
 
-static bool read_snapshot(handle_t file, char **bytes, size_t *size)
+/* Reads the whole of a completed snapshot. LIMIT is a sanity bound for small
+ * files (a serial, a signature, a certificate); the repository index passes
+ * SIZE_MAX and is bounded by memory alone. */
+static bool read_snapshot(handle_t file, size_t limit, const char *what,
+    char **bytes, size_t *size)
 {
   *bytes = NULL;
   *size = 0;
   uint64_t length;
-  if (file_size(file, &length) != CALL_OK || length > LITERAL_SOURCE_LIMIT) {
-    return fail("repository index exceeds its metadata budget");
+  if (file_size(file, &length) != CALL_OK) {
+    snprintf(client.message, sizeof(client.message), "%s: cannot read the snapshot length", what);
+    return fail(client.message);
+  }
+  if (length > limit) {
+    snprintf(client.message, sizeof(client.message),
+        "%s: %llu bytes exceeds the limit of %zu (small-file bound)", what,
+        (unsigned long long)length, limit);
+    return fail(client.message);
   }
   /* NUL-terminated for the PEM parser; size excludes the terminator. */
-  char *buffer = malloc(length + 1);
+  char *buffer = length < SIZE_MAX ? malloc(length + 1) : NULL;
   if (!buffer) {
-    return fail("cannot allocate repository index");
+    snprintf(client.message, sizeof(client.message),
+        "%s: %llu bytes do not fit in memory", what, (unsigned long long)length);
+    return fail(client.message);
   }
   buffer[length] = 0;
   size_t offset = 0;
@@ -352,7 +358,8 @@ static bool read_snapshot(handle_t file, char **bytes, size_t *size)
     if (file_read(file, offset, buffer + offset,
           length - offset, &count) != CALL_OK || !count) {
       free(buffer);
-      return fail("repository index read failed or cancelled");
+      snprintf(client.message, sizeof(client.message), "%s: read failed or cancelled", what);
+      return fail(client.message);
     }
     offset += count;
   }
@@ -386,13 +393,14 @@ static bool ensure_crypto(void)
   return client.crypto_ready || fail("signature crypto initialization unavailable");
 }
 
-static bool fetch_bytes(const char *base, const char *relative, char **bytes, size_t *size)
+static bool fetch_bytes(const char *base, const char *relative, size_t limit, const char *what,
+    char **bytes, size_t *size)
 {
   handle_t file;
   if (!fetch(base, relative, true, 0, NULL, &file)) {
     return false;
   }
-  bool ok = read_snapshot(file, bytes, size);
+  bool ok = read_snapshot(file, limit, what, bytes, size);
   handle_close(file);
   return ok;
 }
@@ -506,7 +514,8 @@ static bool read_repository(const struct pkg_repository *repository,
   struct pkg_index_header header;
   char path[64];
   uint64_t serial = 0;
-  bool ok = fetch_bytes(repository->url, "current", &current, &current_size);
+  bool ok = fetch_bytes(repository->url, "current", LITERAL_SOURCE_LIMIT,
+      "repository current", &current, &current_size);
   if (ok) {
     char *end = NULL;
     serial = current_size && current[0] >= '1' && current[0] <= '9' ?
@@ -516,7 +525,7 @@ static bool read_repository(const struct pkg_repository *repository,
   }
   if (ok) {
     snprintf(path, sizeof(path), "index/%llu.lua", (unsigned long long)serial);
-    ok = fetch_bytes(repository->url, path, &bytes, &size) &&
+    ok = fetch_bytes(repository->url, path, SIZE_MAX, "repository index", &bytes, &size) &&
         pkg_index_parse(bytes, size, &header, entries, count, &client.reason);
   }
   if (ok && header.serial != serial) {
@@ -536,8 +545,10 @@ static bool read_repository(const struct pkg_repository *repository,
   snprintf(signature_path, sizeof(signature_path), "%s.sig", path);
   FILE *pinned = NULL;
   ok = ok && ensure_crypto() &&
-      fetch_bytes(repository->url, signature_path, &signature, &signature_size) &&
-      fetch_bytes(repository->url, header.signer, &signer, &signer_size);
+      fetch_bytes(repository->url, signature_path, LITERAL_SOURCE_LIMIT, "index signature",
+          &signature, &signature_size) &&
+      fetch_bytes(repository->url, header.signer, LITERAL_SOURCE_LIMIT, "signer certificate",
+          &signer, &signer_size);
   if (ok) {
     pinned = fopen(PKG_SIGNING_ANCHOR, "rb");
     anchor = pinned ? malloc(8192) : NULL;
@@ -1200,17 +1211,66 @@ static bool prepare_remove(struct pkg_selection *selection, int argc, char **arg
       verify_selection(selection, selection);
 }
 
+/* One slot per selected package, indexed like the selection; the columns grow
+ * with it, so the number of packages is not limited. */
 struct update_work {
-  const struct offered_package *chosen[PKG_SELECTION_MAX];
-  bool processed[PKG_SELECTION_MAX];
-  bool forced[PKG_SELECTION_MAX];
-  bool selected[PKG_SELECTION_MAX];
-  bool named[PKG_SELECTION_MAX];
-  bool removed[PKG_SELECTION_MAX];
-  bool only_source[PKG_SELECTION_MAX];
-  size_t source[PKG_SELECTION_MAX];
-  uint16_t choices[PKG_SELECTION_MAX];
+  size_t capacity;
+  const struct offered_package **chosen;
+  bool *processed;
+  bool *forced;
+  bool *selected;
+  bool *named;
+  bool *removed;
+  bool *only_source;
+  size_t *source;
+  uint16_t *choices;
 };
+
+/* Makes room for COUNT packages; new slots are zero. */
+static bool update_work_reserve(struct update_work *work, size_t count)
+{
+  if (count <= work->capacity) {
+    return true;
+  }
+  size_t capacity = work->capacity ? work->capacity * 2 : 16;
+  if (capacity < count) capacity = count;
+  struct { void **column; size_t size; } columns[] = {
+    {(void **)&work->chosen, sizeof(*work->chosen)},
+    {(void **)&work->processed, sizeof(*work->processed)},
+    {(void **)&work->forced, sizeof(*work->forced)},
+    {(void **)&work->selected, sizeof(*work->selected)},
+    {(void **)&work->named, sizeof(*work->named)},
+    {(void **)&work->removed, sizeof(*work->removed)},
+    {(void **)&work->only_source, sizeof(*work->only_source)},
+    {(void **)&work->source, sizeof(*work->source)},
+    {(void **)&work->choices, sizeof(*work->choices)},
+  };
+  for (size_t i = 0; i < sizeof(columns) / sizeof(*columns); ++i) {
+    char *grown = realloc(*columns[i].column, capacity * columns[i].size);
+    if (!grown) {
+      return fail("cannot grow the package update plan");
+    }
+    memset(grown + work->capacity * columns[i].size, 0,
+        (capacity - work->capacity) * columns[i].size);
+    *columns[i].column = grown;
+  }
+  work->capacity = capacity;
+  return true;
+}
+
+static void update_work_free(struct update_work *work)
+{
+  free(work->chosen);
+  free(work->processed);
+  free(work->forced);
+  free(work->selected);
+  free(work->named);
+  free(work->removed);
+  free(work->only_source);
+  free(work->source);
+  free(work->choices);
+  free(work);
+}
 
 /* The legacy set has no source. A sole offering can be adopted in the full
  * review; several offerings require an explicit console choice. Entries with
@@ -1344,6 +1404,7 @@ static bool update_dependency(struct pkg_selection *selection, struct update_wor
     client.update_constrained = true;
   }
   if (index == SIZE_MAX) {
+    if (!update_work_reserve(work, selection->count + 1)) return false;
     if (!select_version(selection, &offer->entry.identity, true)) return false;
     index = selection->count - 1;
   } else {
@@ -1368,7 +1429,7 @@ static bool prepare_update(struct pkg_selection *selection, int argc, char **arg
   }
   struct update_work *work = calloc(1, sizeof(*work));
   if (!work) return fail("cannot allocate package update plan");
-  bool ok = load_repositories();
+  bool ok = update_work_reserve(work, selection->count) && load_repositories();
   for (int a = 0; ok && a < argc; ++a) {
     if (!package_id_valid(argv[a])) {
       ok = fail("pkg update accepts installed package IDs only");
@@ -1430,7 +1491,7 @@ static bool prepare_update(struct pkg_selection *selection, int argc, char **arg
     for (size_t i = 0; i < selection->count; ++i) done += work->processed[i];
   }
   ok = ok && verify_selection(selection, NULL);
-  free(work);
+  update_work_free(work);
   client.target_release = NULL;
   return ok;
 }
@@ -1850,7 +1911,7 @@ static bool release_revision(handle_t tree, const char *version, char revision[6
   char *bytes = NULL;
   size_t size = 0;
   bool ok = directory_lookup(tree, "os-release", DIRECTORY_KIND_FILE, FILE_RIGHT_READ,
-      &file) == CALL_OK && read_snapshot(file, &bytes, &size);
+      &file) == CALL_OK && read_snapshot(file, LITERAL_SOURCE_LIMIT, "os-release", &bytes, &size);
   if (file != HANDLE_INVALID) {
     handle_close(file);
   }

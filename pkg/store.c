@@ -347,17 +347,15 @@ bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
     const struct pkg_origin *origin = &selection->origins[i];
     size_t extra = 80 + strlen(identity->id) + strlen(identity->version) +
         strlen(origin->name) + strlen(origin->fingerprint);
-    if (extra > LITERAL_SOURCE_LIMIT - capacity) {
-      ok = false;
-      *reason = "set record exceeds metadata budget";
-    } else {
-      capacity += extra;
-    }
+    capacity += extra;
   }
-  char *bytes = ok && capacity <= LITERAL_SOURCE_LIMIT ? malloc(capacity) : NULL;
+  char *bytes = ok ? malloc(capacity) : NULL;
   if (!bytes) {
     if (ok) {
-      *reason = "set record exceeds metadata budget or available memory";
+      static char text[160];
+      snprintf(text, sizeof(text), "the set record of %zu packages needs %zu bytes: out of memory",
+          selection->count, capacity);
+      *reason = text;
     }
     handle_close(sets);
     return false;
@@ -377,7 +375,7 @@ bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
           selection->entries[i].version);
     }
     if (count < 0 || (size_t)count >= capacity - used) {
-      *reason = "set record exceeds metadata budget";
+      *reason = "internal error: the set record outgrew its computed size";
       free(bytes);
       handle_close(sets);
       return false;
@@ -386,7 +384,7 @@ bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
   }
   int tail = snprintf(bytes + used, capacity - used, "} }\n");
   if (tail < 0 || (size_t)tail >= capacity - used) {
-    *reason = "set record exceeds metadata budget";
+    *reason = "internal error: the set record outgrew its computed size";
     free(bytes);
     handle_close(sets);
     return false;
@@ -394,10 +392,14 @@ bool pkg_stage(handle_t packages, const struct pkg_selection *selection,
   used += (size_t)tail;
   struct literal *document = NULL;
   struct literal_diagnostic diagnostic;
-  ok = literal_parse(bytes, used, &document, &diagnostic);
+  ok = literal_parse_sized(bytes, used, &document, &diagnostic);
   literal_free(document);
   if (!ok) {
-    *reason = "new set exceeds literal parser budget";
+    static char text[256];
+    char described[160];
+    snprintf(text, sizeof(text), "internal error: the new set record does not parse: %s",
+        literal_describe(&diagnostic, described, sizeof(described)));
+    *reason = text;
   }
   char name[48];
   snprintf(name, sizeof(name), "%llu.lua", (unsigned long long)number);

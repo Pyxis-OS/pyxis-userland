@@ -22,21 +22,14 @@ var errChanged = errors.New("The file changed since it was opened. Reload it wit
 
 func previousPath(path string) string { return path + ".previous" }
 
-// load reads the whole file, bounded by the literal source limit.
+// load reads the whole file; its size is not limited.
 func load(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, literalSourceLimit+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > literalSourceLimit {
-		return nil, fmt.Errorf("larger than %d bytes", literalSourceLimit)
-	}
-	return data, nil
+	return io.ReadAll(file)
 }
 
 // writable reports why PATH cannot be replaced, without changing it.

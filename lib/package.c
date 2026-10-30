@@ -9,10 +9,10 @@
 
 #define CURRENT_NAME "current"
 #define SETS_NAME "sets"
-/* current is one small table; a set record lists at most a few thousand
- * packages, well inside the literal parser's own bounds. */
+/* current is one small table. A set record grows with the package count and
+ * has no size limit of its own: it is read whole and parsed by the sized
+ * parser, so memory is the bound. */
 #define CURRENT_LIMIT 256
-#define SET_LIMIT LITERAL_SOURCE_LIMIT
 #define SET_NAME_MAX 32
 
 static bool alphanumeric(char byte)
@@ -327,6 +327,23 @@ static enum call_status parse(const char *bytes, size_t size, struct literal **d
   return literal_parse(bytes, size, document, &diagnostic) ? CALL_OK : CALL_BAD_REQUEST;
 }
 
+/* A set record: reason names the parser's complaint, with the numbers when it
+ * is a limit or memory. */
+static enum call_status parse_record(const char *bytes, size_t size, struct literal **document,
+    const char **reason)
+{
+  static char text[256];
+  static char described[160];
+  struct literal_diagnostic diagnostic;
+  if (literal_parse_sized(bytes, size, document, &diagnostic)) {
+    return CALL_OK;
+  }
+  snprintf(text, sizeof(text), "the current set record is not literal data: %s",
+      literal_describe(&diagnostic, described, sizeof(described)));
+  *reason = text;
+  return diagnostic.found && !diagnostic.limit ? CALL_NO_MEMORY : CALL_BAD_REQUEST;
+}
+
 static bool string_key(const struct literal_entry *entry, const char *key)
 {
   return entry->key->kind == LITERAL_STRING &&
@@ -408,7 +425,7 @@ static enum call_status load_record(handle_t packages, int64_t requested,
   status = directory_lookup(packages, SETS_NAME, DIRECTORY_KIND_DIRECTORY,
       DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES, &sets);
   if (status == CALL_OK) {
-    status = read_file(sets, name, SET_LIMIT, &bytes, &size);
+    status = read_file(sets, name, SIZE_MAX, &bytes, &size);
     handle_close(sets);
   }
   if (status != CALL_OK) {
@@ -416,10 +433,9 @@ static enum call_status load_record(handle_t packages, int64_t requested,
     return status;
   }
   struct literal *record;
-  status = parse(bytes, size, &record);
+  status = parse_record(bytes, size, &record, reason);
   free(bytes);
   if (status != CALL_OK) {
-    *reason = "the current set record is not literal data";
     return status;
   }
 

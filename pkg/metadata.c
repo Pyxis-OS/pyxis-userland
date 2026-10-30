@@ -339,7 +339,13 @@ bool pkg_index_parse(const char *bytes, size_t size, struct pkg_index_header *he
   *reason = "invalid repository index";
   struct literal *document = NULL;
   struct literal_diagnostic diagnostic;
-  if (!literal_parse(bytes, size, &document, &diagnostic)) {
+  /* The index grows with every release and package; only memory bounds it. */
+  if (!literal_parse_sized(bytes, size, &document, &diagnostic)) {
+    static char text[256];
+    char described[160];
+    snprintf(text, sizeof(text), "index: %s",
+        literal_describe(&diagnostic, described, sizeof(described)));
+    *reason = text;
     return false;
   }
   static const char *const root_fields[] = { "repository", "serial", "signed", "packages" };

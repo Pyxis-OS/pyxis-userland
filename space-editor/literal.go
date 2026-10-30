@@ -16,11 +16,10 @@ import (
 	"strings"
 )
 
-const (
-	literalSourceLimit = 1024 * 1024
-	literalItemLimit   = 8192
-	literalDepthLimit  = 32
-)
+// The table depth is the only bound: it limits recursion. The source size and
+// the number of values and entries are not limited, as in the C parser's sized
+// entry point; memory is the bound.
+const literalDepthLimit = 32
 
 type kind int
 
@@ -59,7 +58,6 @@ func (e *parseError) Error() string {
 type parser struct {
 	source          string
 	position        int
-	values, entries int
 	failure         string
 	failurePosition int
 }
@@ -162,11 +160,6 @@ func (p *parser) skip() bool {
 }
 
 func (p *parser) newValue(k kind) *value {
-	if p.values == literalItemLimit {
-		p.fail("too many literal values")
-		return nil
-	}
-	p.values++
 	return &value{kind: k}
 }
 
@@ -432,41 +425,34 @@ var reservedWords = map[string]bool{
 	"then": true, "true": true, "until": true, "while": true,
 }
 
-func numericKey(v *value) (float64, bool) {
-	switch v.kind {
-	case integerKind:
-		return float64(v.integer), true
-	case numberKind:
-		return v.number, true
-	}
-	return 0, false
+// keyIdentity maps keys to a comparable value so that two keys are the same
+// exactly when the C parser's same_key calls them equal: an integer-valued
+// number is the integer, other numbers compare by value, and strings and
+// booleans by content.
+type keyIdentity struct {
+	class   byte
+	text    string
+	integer int64
+	bits    uint64
 }
 
-func sameKey(a, b *value) bool {
-	if a.kind == integerKind && b.kind == integerKind {
-		return a.integer == b.integer
-	}
-	if x, ok := numericKey(a); ok {
-		if y, ok := numericKey(b); ok {
-			if a.kind == integerKind || b.kind == integerKind {
-				integer, number := a, b.number
-				if a.kind == numberKind {
-					integer, number = b, a.number
-				}
-				return number >= math.MinInt64 && number < -math.MinInt64 &&
-					float64(int64(number)) == number && int64(number) == integer.integer
-			}
-			return x == y
+func identityOf(v *value) keyIdentity {
+	switch v.kind {
+	case integerKind:
+		return keyIdentity{class: 'n', integer: v.integer}
+	case numberKind:
+		if v.number >= math.MinInt64 && v.number < -math.MinInt64 &&
+			float64(int64(v.number)) == v.number {
+			return keyIdentity{class: 'n', integer: int64(v.number)}
 		}
-		return false
+		return keyIdentity{class: 'f', bits: math.Float64bits(v.number)}
+	case booleanKind:
+		if v.boolean {
+			return keyIdentity{class: 'b', integer: 1}
+		}
+		return keyIdentity{class: 'b'}
 	}
-	if a.kind != b.kind {
-		return false
-	}
-	if a.kind == booleanKind {
-		return a.boolean == b.boolean
-	}
-	return a.kind == stringKind && a.text == b.text
+	return keyIdentity{class: 's', text: v.text}
 }
 
 func (p *parser) table(depth int) *value {
@@ -480,15 +466,11 @@ func (p *parser) table(depth int) *value {
 	}
 	p.position++
 	var arrayIndex int64
+	seen := map[keyIdentity]struct{}{}
 	if !p.skip() {
 		return nil
 	}
 	for p.peek() != '}' {
-		if p.entries == literalItemLimit {
-			p.fail("too many table entries")
-			return nil
-		}
-		p.entries++
 		var e entry
 		switch {
 		case p.peek() == '[' && p.bracket(p.position, '[') == p.position:
@@ -545,12 +527,12 @@ func (p *parser) table(depth int) *value {
 		if e.value = p.parseValue(depth + 1); e.value == nil {
 			return nil
 		}
-		for _, prior := range v.entries {
-			if sameKey(prior.key, e.key) {
-				p.fail("duplicate literal table key")
-				return nil
-			}
+		identity := identityOf(e.key)
+		if _, duplicate := seen[identity]; duplicate {
+			p.fail("duplicate literal table key")
+			return nil
 		}
+		seen[identity] = struct{}{}
 		v.entries = append(v.entries, e)
 		if !p.skip() {
 			return nil
@@ -607,9 +589,7 @@ func (p *parser) parseValue(depth int) *value {
 func parseLiteral(source string) (*value, error) {
 	p := &parser{source: source}
 	var root *value
-	if len(source) > literalSourceLimit {
-		p.fail("literal source exceeds limit or is unavailable")
-	} else if nul := strings.IndexByte(source, 0); nul >= 0 {
+	if nul := strings.IndexByte(source, 0); nul >= 0 {
 		p.position = nul
 		p.fail("literal source contains NUL")
 	} else if p.skip() && p.keyword("return") && p.skip() && p.peek() == '{' {
