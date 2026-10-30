@@ -51,6 +51,8 @@ struct mux {
   struct mux_rect rectangles[MUX_PANES];
   struct mux_pane panes[MUX_PANES];
   unsigned focused, tab_width;
+  /* Memory each pane may hold as scrollback (docs/userland/multiplexer.md). */
+  size_t history_bytes;
   bool collapsed, zoomed, prefix, confirm, dirty;
   enum call_status error;
   char notice[128];

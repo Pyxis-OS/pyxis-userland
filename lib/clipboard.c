@@ -12,6 +12,25 @@ static enum call_status clipboard_call(handle_t clipboard, const void *request,
   return result.status;
 }
 
+enum call_status clipboard_info(handle_t clipboard, uint64_t *budget)
+{
+  if (!budget) {
+    return CALL_BAD_REQUEST;
+  }
+  *budget = 0;
+  struct clipboard_info_request request = {.header = {PROTOCOL_CLIPBOARD, CLIPBOARD_INFO}};
+  struct clipboard_info reply;
+  enum call_status status = clipboard_call(clipboard, &request, sizeof(request),
+      &reply, sizeof(reply));
+  if (status == CALL_OK) {
+    if (!reply.budget) {
+      return CALL_BAD_REQUEST;
+    }
+    *budget = reply.budget;
+  }
+  return status;
+}
+
 enum call_status clipboard_publish(handle_t clipboard, uint64_t action_id,
     uint64_t generation, uint64_t mapping_identity, const void *bytes, size_t length)
 {
@@ -94,7 +113,7 @@ enum call_status clipboard_graphics_read(handle_t clipboard, uint64_t action_id,
       bytes, capacity);
   if (result.status >= CALL_STATUS_COUNT ||
       (result.status != CALL_OK && result.reply_size) ||
-      result.reply_size > capacity || result.reply_size > CLIPBOARD_TEXT_MAX) {
+      result.reply_size > capacity) {
     return CALL_BAD_REQUEST;
   }
   if (result.status == CALL_OK) {
@@ -104,12 +123,13 @@ enum call_status clipboard_graphics_read(handle_t clipboard, uint64_t action_id,
 }
 
 enum call_status clipboard_graphics_has(handle_t clipboard, uint64_t action_id,
-    bool *has_text)
+    bool *has_text, size_t *length)
 {
-  if (!has_text) {
+  if (!has_text || !length) {
     return CALL_BAD_REQUEST;
   }
   *has_text = false;
+  *length = 0;
   struct clipboard_graphics_request request = {
     .header = {PROTOCOL_CLIPBOARD, CLIPBOARD_GRAPHICS_HAS},
     .action_id = action_id,
@@ -118,10 +138,12 @@ enum call_status clipboard_graphics_has(handle_t clipboard, uint64_t action_id,
   enum call_status status = clipboard_call(clipboard, &request, sizeof(request),
       &reply, sizeof(reply));
   if (status == CALL_OK) {
-    if (reply.has_text > 1) {
+    if (reply.has_text > 1 || (reply.has_text == 0) != (reply.length == 0) ||
+        reply.length > SIZE_MAX) {
       return CALL_BAD_REQUEST;
     }
     *has_text = reply.has_text != 0;
+    *length = (size_t)reply.length;
   }
   return status;
 }

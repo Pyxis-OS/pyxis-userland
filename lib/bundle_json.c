@@ -8,6 +8,7 @@
 struct parser {
   struct bundle_json *json;
   size_t position;
+  bool memory; /* A failure was memory, not a malformed document. */
 };
 
 static void whitespace(struct parser *parser)
@@ -159,14 +160,51 @@ static bool string(struct parser *parser, char **value)
 
 static bool value(struct parser *parser, size_t depth, size_t *index);
 
-static bool container(struct parser *parser, size_t depth, size_t index, bool object)
+/* The node table grows while parsing, so nothing may hold a pointer into it
+ * across a call that can add a node: links are (owner, child-or-next) pairs. */
+static void attach(struct bundle_json *json, size_t *owner, bool *child, size_t item)
+{
+  if (*child) {
+    json->nodes[*owner].child = item;
+  } else {
+    json->nodes[*owner].next = item;
+  }
+  *owner = item;
+  *child = false;
+}
+
+static const struct bundle_json *sort_json;
+
+static int compare_keys(const void *left, const void *right)
+{
+  return strcmp(sort_json->nodes[*(const size_t *)left].string,
+      sort_json->nodes[*(const size_t *)right].string);
+}
+
+/* Duplicate keys of one object, found by sorting the key nodes: n log n, so
+ * the number of keys is not limited by the cost of checking them. */
+static bool keys_unique(struct parser *parser, size_t *keys, size_t count)
+{
+  sort_json = parser->json;
+  qsort(keys, count, sizeof(*keys), compare_keys);
+  for (size_t i = 1; i < count; ++i) {
+    if (!strcmp(parser->json->nodes[keys[i - 1]].string, parser->json->nodes[keys[i]].string)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool members(struct parser *parser, size_t depth, size_t index, bool object,
+    size_t **keys, size_t *key_count, size_t *key_capacity)
 {
   char end = object ? '}' : ']';
   whitespace(parser);
   if (take(parser, end)) {
     return true;
   }
-  size_t *link = &parser->json->nodes[index].child;
+  size_t owner = index;
+  bool child = true;
   for (;;) {
     size_t item;
     if (object) {
@@ -174,14 +212,18 @@ static bool container(struct parser *parser, size_t depth, size_t index, bool ob
           parser->json->nodes[item].type != BUNDLE_JSON_STRING) {
         return false;
       }
-      for (size_t key = parser->json->nodes[index].child; key;
-          key = parser->json->nodes[parser->json->nodes[key].next].next) {
-        if (!strcmp(parser->json->nodes[key].string, parser->json->nodes[item].string)) {
+      if (*key_count == *key_capacity) {
+        size_t capacity = *key_capacity ? *key_capacity * 2 : 16;
+        size_t *grown = realloc(*keys, capacity * sizeof(**keys));
+        if (!grown) {
+          parser->memory = true;
           return false;
         }
+        *keys = grown;
+        *key_capacity = capacity;
       }
-      *link = item;
-      link = &parser->json->nodes[item].next;
+      (*keys)[(*key_count)++] = item;
+      attach(parser->json, &owner, &child, item);
       whitespace(parser);
       if (!take(parser, ':')) {
         return false;
@@ -190,8 +232,7 @@ static bool container(struct parser *parser, size_t depth, size_t index, bool ob
     if (!value(parser, depth + 1, &item)) {
       return false;
     }
-    *link = item;
-    link = &parser->json->nodes[item].next;
+    attach(parser->json, &owner, &child, item);
     whitespace(parser);
     if (take(parser, end)) {
       return true;
@@ -201,6 +242,15 @@ static bool container(struct parser *parser, size_t depth, size_t index, bool ob
     }
     whitespace(parser);
   }
+}
+
+static bool container(struct parser *parser, size_t depth, size_t index, bool object)
+{
+  size_t *keys = NULL, key_count = 0, key_capacity = 0;
+  bool valid = members(parser, depth, index, object, &keys, &key_count, &key_capacity) &&
+      (!object || keys_unique(parser, keys, key_count));
+  free(keys);
+  return valid;
 }
 
 static bool literal(struct parser *parser, const char *text)
@@ -217,9 +267,21 @@ static bool literal(struct parser *parser, const char *text)
 static bool value(struct parser *parser, size_t depth, size_t *index)
 {
   whitespace(parser);
-  if (depth > JSON_DEPTH_LIMIT || parser->position == parser->json->size ||
-      parser->json->count == parser->json->capacity) {
+  if (depth > JSON_DEPTH_LIMIT || parser->position == parser->json->size) {
     return false;
+  }
+  if (parser->json->count == parser->json->capacity) {
+    size_t capacity = parser->json->capacity * 2;
+    struct bundle_json_node *grown = capacity > SIZE_MAX / sizeof(*grown) ? NULL :
+        realloc(parser->json->nodes, capacity * sizeof(*grown));
+    if (!grown) {
+      parser->memory = true;
+      return false;
+    }
+    memset(grown + parser->json->capacity, 0,
+        (capacity - parser->json->capacity) * sizeof(*grown));
+    parser->json->nodes = grown;
+    parser->json->capacity = capacity;
   }
   *index = parser->json->count++;
   struct bundle_json_node *node = &parser->json->nodes[*index];
@@ -274,7 +336,8 @@ void bundle_json_close(struct bundle_json *json)
 
 enum call_status bundle_json_parse(char *text, size_t size, struct bundle_json *json)
 {
-  *json = (struct bundle_json){.text = text, .size = size, .capacity = size + 1};
+  /* A manifest of any size parses: the node table starts small and doubles. */
+  *json = (struct bundle_json){.text = text, .size = size, .capacity = 64};
   json->nodes = calloc(json->capacity, sizeof(*json->nodes));
   if (!json->nodes) {
     bundle_json_close(json);
@@ -287,7 +350,7 @@ enum call_status bundle_json_parse(char *text, size_t size, struct bundle_json *
   whitespace(&parser);
   if (!valid || parser.position != size) {
     bundle_json_close(json);
-    return CALL_BAD_REQUEST;
+    return parser.memory ? CALL_NO_MEMORY : CALL_BAD_REQUEST;
   }
   return CALL_OK;
 }

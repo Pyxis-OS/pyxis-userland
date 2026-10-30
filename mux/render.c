@@ -168,8 +168,14 @@ static enum call_status compose(struct mux *mux)
   if (mux->confirm) {
     snprintf(footer, sizeof(footer), "Close pane %u and terminate its running work? y/n", mux->focused + 1);
   } else if (focused->browsing) {
-    snprintf(footer, sizeof(footer), "Scrollback %zu/%zu | Page Up/Down, Home/End, Esc returns to live",
-        focused->scrollback, mux_emulator_history_rows(&focused->emulator));
+    size_t kept = mux_emulator_history_rows(&focused->emulator);
+    size_t used = (size_t)snprintf(footer, sizeof(footer), "Scrollback %zu/%zu", focused->scrollback, kept);
+    if (focused->emulator.history_dropped) {
+      used += (size_t)snprintf(footer + used, sizeof(footer) - used,
+          " (%llu older rows dropped at the %zu byte limit)",
+          (unsigned long long)focused->emulator.history_dropped, focused->emulator.history_budget);
+    }
+    snprintf(footer + used, sizeof(footer) - used, " | Page Up/Down, Home/End, Esc returns to live");
   } else {
     snprintf(footer, sizeof(footer), "%s%s | Ctrl+B %s %%/\" split, digits/arrows focus, b/e layout, z zoom, [ history, x close%s",
         mux->layout.kind == MUX_BSP ? "BSP" : "Equal",

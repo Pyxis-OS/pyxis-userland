@@ -242,8 +242,8 @@ static int decode_config(lua_State *state)
 
   config_field(state, 1, "terminal");
   if (!lua_isnil(state, 2)) {
-    const char *terminal_keys[] = {"tab_width"};
-    config_keys(state, 2, terminal_keys, 1);
+    const char *terminal_keys[] = {"tab_width", "scrollback_bytes"};
+    config_keys(state, 2, terminal_keys, 2);
     config_field(state, 2, "tab_width");
     if (!lua_isnil(state, 3)) {
       int integer;
@@ -253,6 +253,16 @@ static int decode_config(lua_State *state)
         return luaL_error(state, "terminal.tab_width must be an integer from 1 to 32");
       }
       config->tab_width = (size_t)width;
+    }
+    lua_pop(state, 1);
+    config_field(state, 2, "scrollback_bytes");
+    if (!lua_isnil(state, 3)) {
+      int integer;
+      lua_Integer bytes = lua_tointegerx(state, 3, &integer);
+      if (lua_type(state, 3) != LUA_TNUMBER || !integer || bytes < 1) {
+        return luaL_error(state, "terminal.scrollback_bytes must be a positive integer");
+      }
+      config->scrollback_bytes = (size_t)bytes;
     }
     lua_pop(state, 1);
   }

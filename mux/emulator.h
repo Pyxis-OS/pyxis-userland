@@ -8,7 +8,6 @@
 #include <terminal/style.h>
 #include <terminal/text.h>
 
-#define MUX_HISTORY_ROWS 1024
 #define MUX_CSI_PARAMETERS TERMINAL_CSI_PARAMETERS
 
 struct mux_selection_point {
@@ -59,14 +58,19 @@ struct mux_emulator {
   bool alternate;
   struct mux_saved_cursor saved[2]; /* Indexed by alternate. */
 
-  /* Owned storage. History retains each row's original width without reflow.
-   * The maximum width seen supplies a stride, so output never allocates. */
+  /* Owned storage. History is a ring of rows, each allocated when it scrolls off
+   * the screen at the width it had, without reflow; its memory is limited by
+   * history_budget bytes, not by a row count, and the oldest rows are evicted
+   * (and counted in history_dropped) to stay within it. */
   struct terminal_cell *cells;
   struct terminal_cell *other_cells;
-  struct terminal_cell *history;
+  struct terminal_cell **history;
   size_t *history_widths;
+  size_t history_capacity; /* Slots in the ring. */
   size_t history_start;
-  size_t history_stride;
+  size_t history_bytes;  /* Cells and bookkeeping held by stored rows. */
+  size_t history_budget; /* Bytes allowed; set by mux_emulator_set_history_budget. */
+  uint64_t history_dropped;
 
   struct terminal_style style;
   bool wrap_pending;
@@ -92,6 +96,9 @@ void mux_emulator_set_tab_width(struct mux_emulator *emulator, unsigned columns)
 /* Rows reachable behind the live screen: history_count, or zero while the
  * alternate screen is live. */
 size_t mux_emulator_history_rows(const struct mux_emulator *emulator);
+/* BYTES of memory the pane's history may hold, from the session's scrollback
+ * budget; rows beyond it are evicted oldest first and counted. */
+void mux_emulator_set_history_budget(struct mux_emulator *emulator, size_t bytes);
 /* Offset zero is the live screen. Larger offsets move back through history,
  * clamped to mux_emulator_history_rows. The borrowed row survives until feed/resize/destroy;
  * its original width can differ from the current screen width. */

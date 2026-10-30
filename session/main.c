@@ -699,7 +699,9 @@ static int launch_session(const struct session_config *config, struct network_co
 
   char tab_width[3];
   snprintf(tab_width, sizeof(tab_width), "%zu", config->tab_width);
-  const char *arguments[] = {image_uri, "--tab-width", tab_width};
+  char scrollback[24];
+  snprintf(scrollback, sizeof(scrollback), "%zu", config->scrollback_bytes);
+  const char *arguments[] = {image_uri, "--tab-width", tab_width, "--history-bytes", scrollback};
   size_t entry_capacity = resource_count + root_count + environment_count +
       captured.count + ENVIRONMENT_STREAM_COUNT + 4;
   entries = calloc(entry_capacity, sizeof(*entries));
@@ -716,7 +718,7 @@ static int launch_session(const struct session_config *config, struct network_co
     .entries = (uintptr_t)entries, .entry_count = entry_count,
     .working_directories = (uintptr_t)directories, .working_directory_count = depth,
     .working_path = (uintptr_t)working_path,
-    .argv = (uintptr_t)arguments, .argc = multiplex ? 3 : 1,
+    .argv = (uintptr_t)arguments, .argc = multiplex ? (config->scrollback_bytes ? 5 : 3) : 1,
   };
   for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
     struct pyxis_stdio_binding stream = bootstrap_stdio(i);

@@ -38,14 +38,11 @@
 #include <string.h>
 #include "bundle_json.h"
 
-/* Development lookup budgets, not disk-format or ABI limits. */
-#define BUNDLE_JSON_MAX_SIZE (64 * 1024)
-#define BUNDLE_COMMAND_LIMIT 32
-#define BUNDLE_RESOURCE_LIMIT 8
-/* Includes the standalone interpreter source declarations. */
-#define BUNDLE_GRANT_LIMIT 32
+/* A manifest has no size, command, resource or grant limit: it is read whole and
+ * its tables grow with what it declares (docs/interfaces/limits.md). What the
+ * launcher can carry in one request is the launch path's bound, not this
+ * library's. A path component is at most NAME_MAX of the native filesystems. */
 #define BUNDLE_COMPONENT_LIMIT 255
-#define BUNDLE_PATH_LIMIT 1024
 #define BUNDLE_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
     DIRECTORY_RIGHT_READ_FILES)
 
@@ -61,16 +58,40 @@ struct bundle_program {
   uint64_t stack_bytes;
   handle_t revision;
   handle_t image;
-  struct environment_value entries[BUNDLE_RESOURCE_LIMIT + 1];
-  const char *resource_paths[BUNDLE_RESOURCE_LIMIT];
-  size_t entry_count;
-  struct bundle_command commands[BUNDLE_COMMAND_LIMIT];
-  size_t command_count;
-  struct bundle_grant_request grants[BUNDLE_GRANT_LIMIT];
-  size_t grant_count;
+  /* Entry 0 is app; resource_paths[i - 1] belongs to entry i. Tables grow. */
+  struct environment_value *entries;
+  const char **resource_paths;
+  size_t entry_count, entry_capacity, path_capacity;
+  struct bundle_command *commands;
+  size_t command_count, command_capacity;
+  struct bundle_grant_request *grants;
+  size_t grant_count, grant_capacity;
   const char **packages; /* The manifest's "packages" IDs, borrowed from it. */
   handle_t package_view;
 };
+
+/* Makes room for NEEDED items of ITEM bytes; new slots are zero. */
+static bool grow(void **array, size_t item, size_t *capacity, size_t needed)
+{
+  if (needed <= *capacity) {
+    return true;
+  }
+  size_t grown = *capacity ? *capacity * 2 : 8;
+  if (grown < needed) {
+    grown = needed;
+  }
+  if (grown > SIZE_MAX / item) {
+    return false;
+  }
+  char *larger = realloc(*array, grown * item);
+  if (!larger) {
+    return false;
+  }
+  memset(larger + *capacity * item, 0, (grown - *capacity) * item);
+  *array = larger;
+  *capacity = grown;
+  return true;
+}
 
 struct grant_right {
   const char *resource;
@@ -208,7 +229,7 @@ static bool valid_interface_name(const char *name)
 static bool valid_path(const char *path)
 {
   size_t size = strlen(path);
-  if (!size || size > BUNDLE_PATH_LIMIT) {
+  if (!size) {
     return false;
   }
   const char *component = path;
@@ -297,8 +318,11 @@ static enum call_status read_json(handle_t file, struct bundle_json *json)
   if (status != CALL_OK) {
     return status;
   }
-  if (!size || size > BUNDLE_JSON_MAX_SIZE) {
-    return size ? CALL_LIMIT : CALL_BAD_REQUEST;
+  if (!size) {
+    return CALL_BAD_REQUEST;
+  }
+  if (size >= SIZE_MAX) {
+    return CALL_LIMIT;
   }
   char *text = malloc(size + 1);
   if (!text) {
@@ -346,12 +370,13 @@ static enum call_status parse_commands(struct bundle_program *program,
   const struct bundle_json_node *nodes = program->manifest.nodes;
   for (size_t key = object->child; key; key = nodes[nodes[key].next].next) {
     const struct bundle_json_node *value = &nodes[nodes[key].next];
-    if (program->command_count == BUNDLE_COMMAND_LIMIT) {
-      return CALL_LIMIT;
-    }
     if (!valid_name(nodes[key].string) || value->type != BUNDLE_JSON_STRING ||
         !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
+    }
+    if (!grow((void **)&program->commands, sizeof(*program->commands),
+        &program->command_capacity, program->command_count + 1)) {
+      return CALL_NO_MEMORY;
     }
     program->commands[program->command_count++] =
         (struct bundle_command){nodes[key].string, value->string};
@@ -368,15 +393,18 @@ static enum call_status parse_resources(struct bundle_program *program,
   const struct bundle_json_node *nodes = program->manifest.nodes;
   for (size_t key = object->child; key; key = nodes[nodes[key].next].next) {
     const struct bundle_json_node *value = &nodes[nodes[key].next];
-    if (program->entry_count == BUNDLE_RESOURCE_LIMIT + 1) {
-      return CALL_LIMIT;
-    }
     if (!valid_name(nodes[key].string) || !strcmp(nodes[key].string, "app") ||
         !strcmp(nodes[key].string, BUNDLE_PACKAGES_ROOT) ||
         !strcmp(nodes[key].string, BUNDLE_SDK_ROOT) ||
         !strcmp(nodes[key].string, BUNDLE_TCP_LISTEN_SOURCE) ||
         value->type != BUNDLE_JSON_STRING || !valid_path(value->string)) {
       return CALL_BAD_REQUEST;
+    }
+    if (!grow((void **)&program->entries, sizeof(*program->entries),
+        &program->entry_capacity, program->entry_count + 1) ||
+        !grow((void **)&program->resource_paths, sizeof(*program->resource_paths),
+        &program->path_capacity, program->entry_count + 1)) {
+      return CALL_NO_MEMORY;
     }
     size_t index = program->entry_count++;
     if (!environment_name(program->entries[index].name, nodes[key].string)) {
@@ -430,11 +458,12 @@ static enum call_status parse_grants(struct bundle_program *program,
   }
   const struct bundle_json_node *nodes = program->manifest.nodes;
   for (size_t index = array->child; index; index = nodes[index].next) {
-    if (program->grant_count == BUNDLE_GRANT_LIMIT) {
-      return CALL_LIMIT;
-    }
     if (nodes[index].type != BUNDLE_JSON_OBJECT) {
       return CALL_BAD_REQUEST;
+    }
+    if (!grow((void **)&program->grants, sizeof(*program->grants), &program->grant_capacity,
+        program->grant_count + 1)) {
+      return CALL_NO_MEMORY;
     }
     struct bundle_grant_request *request = &program->grants[program->grant_count];
     const struct bundle_json_node *rights = NULL;
@@ -521,8 +550,7 @@ static enum call_status parse_grants(struct bundle_program *program,
 static enum call_status parse_packages(struct bundle_program *program,
     const struct bundle_json_node *array)
 {
-  if (array->type != BUNDLE_JSON_ARRAY || !array->child || program->packages ||
-      program->grant_count == BUNDLE_GRANT_LIMIT) {
+  if (array->type != BUNDLE_JSON_ARRAY || !array->child || program->packages) {
     return CALL_BAD_REQUEST;
   }
   const struct bundle_json_node *nodes = program->manifest.nodes;
@@ -546,6 +574,10 @@ static enum call_status parse_packages(struct bundle_program *program,
   for (size_t index = array->child; index; index = nodes[index].next) {
     program->packages[used++] = nodes[index].string;
   }
+  if (!grow((void **)&program->grants, sizeof(*program->grants), &program->grant_capacity,
+      program->grant_count + 1)) {
+    return CALL_NO_MEMORY;
+  }
   program->grants[program->grant_count++] = (struct bundle_grant_request){
     .name = BUNDLE_PACKAGES_ROOT, .resource = "directory", .packages = program->packages,
     .package_count = count, .protocol = PROTOCOL_DIRECTORY, .rights = PACKAGE_TREE_RIGHTS,
@@ -560,11 +592,14 @@ static enum call_status parse_sdk(struct bundle_program *program,
     const struct bundle_json_node *value)
 {
   bool optional = value->type == BUNDLE_JSON_STRING && !strcmp(value->string, "optional");
-  if ((value->type != BUNDLE_JSON_BOOLEAN && !optional) ||
-      program->grant_count == BUNDLE_GRANT_LIMIT) {
+  if (value->type != BUNDLE_JSON_BOOLEAN && !optional) {
     return CALL_BAD_REQUEST;
   }
   if (optional || value->integer) {
+    if (!grow((void **)&program->grants, sizeof(*program->grants), &program->grant_capacity,
+        program->grant_count + 1)) {
+      return CALL_NO_MEMORY;
+    }
     program->grants[program->grant_count++] = (struct bundle_grant_request){
       .name = BUNDLE_SDK_ROOT, .resource = "directory", .sdk = true,
       .protocol = PROTOCOL_DIRECTORY, .rights = PACKAGE_TREE_RIGHTS, .required = !optional,
@@ -581,6 +616,9 @@ static enum call_status parse_manifest(const struct path_context *context,
     return CALL_BAD_REQUEST;
   }
   bool format = false, commands = false, resources = false, grants = false;
+  if (!grow((void **)&program->entries, sizeof(*program->entries), &program->entry_capacity, 1)) {
+    return CALL_NO_MEMORY;
+  }
   memcpy(program->entries[0].name, "app", sizeof("app"));
   program->entries[0].kind = ENVIRONMENT_CAP;
   program->entries[0].flags = ENVIRONMENT_EXPORTED;
@@ -714,6 +752,10 @@ void bundle_program_close(struct bundle_program *program)
     handle_close(program->package_view);
   }
   free(program->packages);
+  free(program->entries);
+  free(program->resource_paths);
+  free(program->commands);
+  free(program->grants);
   bundle_json_close(&program->manifest);
   free(program);
 }

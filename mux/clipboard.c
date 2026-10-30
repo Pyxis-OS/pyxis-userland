@@ -84,12 +84,31 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
     struct mux_pane *pane = &mux->panes[mux->selection_pane];
     char *text = NULL;
     size_t length = 0;
-    status = !mux->dragging && pane->used ?
-        mux_emulator_copy_selection(&pane->emulator, CLIPBOARD_TEXT_MAX, &text, &length) :
-        CALL_NOT_FOUND;
+    /* The text is limited only by the kernel's store, which says how large it is. */
+    uint64_t budget = 0;
+    status = clipboard_info(clipboard, &budget);
+    if (status == CALL_OK) {
+      status = !mux->dragging && pane->used ?
+          mux_emulator_copy_selection(&pane->emulator, budget > SIZE_MAX ? SIZE_MAX : (size_t)budget,
+              &text, &length) : CALL_NOT_FOUND;
+    }
+    char detail[sizeof(mux->notice)];
+    const char *named = NULL;
+    if (status == CALL_LIMIT && !length) {
+      snprintf(detail, sizeof(detail),
+          "Clipboard limit reached: the selection exceeds the %llu byte store",
+          (unsigned long long)budget);
+      named = detail;
+    }
     if (status == CALL_OK) {
       status = clipboard_publish(clipboard, event->action_id, event->generation,
           event->mapping_identity, text, length);
+      if (status == CALL_LIMIT || status == CALL_NO_SPACE) {
+        snprintf(detail, sizeof(detail),
+            "Clipboard limit reached: %zu bytes do not fit (store %llu bytes)", length,
+            (unsigned long long)budget);
+        named = detail;
+      }
     } else {
       enum call_status refused = clipboard_refuse(clipboard, event->action_id,
           event->generation, event->mapping_identity, event->clipboard_operation);
@@ -98,7 +117,8 @@ void mux_clipboard_action(struct mux *mux, const struct pointer_event *event)
       }
     }
     free(text);
-    report(mux, event->clipboard_operation, status, NULL);
+    report(mux, event->clipboard_operation, status,
+        status == CALL_LIMIT || status == CALL_NO_SPACE ? named : NULL);
     return;
   }
   if (event->clipboard_operation == CLIPBOARD_PASTE) {

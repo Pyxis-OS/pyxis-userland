@@ -40,9 +40,9 @@ static const struct terminal_cell *selected_row(const struct mux_emulator *emula
     return NULL;
   }
   if (row < emulator->scrolled_rows) {
-    size_t slot = (emulator->history_start + (size_t)(row - oldest)) % MUX_HISTORY_ROWS;
+    size_t slot = (emulator->history_start + (size_t)(row - oldest)) % emulator->history_capacity;
     *width = emulator->history_widths[slot];
-    return emulator->history + slot * emulator->history_stride;
+    return emulator->history[slot];
   }
   uint64_t live = row - emulator->scrolled_rows;
   if (live >= emulator->rows) {
@@ -181,7 +181,6 @@ bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t row
     .cursor_visible = true,
     .style = {.foreground = TERMINAL_COLOR_DEFAULT, .background = TERMINAL_COLOR_DEFAULT},
     .tab_width = 8,
-    .history_stride = columns,
     .region_bottom = rows - 1,
     .saved = {
       {.style = {.foreground = TERMINAL_COLOR_DEFAULT, .background = TERMINAL_COLOR_DEFAULT}},
@@ -190,9 +189,7 @@ bool mux_emulator_init(struct mux_emulator *emulator, size_t columns, size_t row
   };
   initial.cells = calloc(rows * columns, sizeof(*initial.cells));
   initial.other_cells = calloc(rows * columns, sizeof(*initial.other_cells));
-  initial.history = calloc(MUX_HISTORY_ROWS * columns, sizeof(*initial.history));
-  initial.history_widths = calloc(MUX_HISTORY_ROWS, sizeof(*initial.history_widths));
-  if (!initial.cells || !initial.other_cells || !initial.history || !initial.history_widths) {
+  if (!initial.cells || !initial.other_cells) {
     mux_emulator_destroy(&initial);
     return false;
   }
@@ -206,6 +203,9 @@ void mux_emulator_destroy(struct mux_emulator *emulator)
 {
   free(emulator->cells);
   free(emulator->other_cells);
+  for (size_t i = 0; i < emulator->history_count; ++i) {
+    free(emulator->history[(emulator->history_start + i) % emulator->history_capacity]);
+  }
   free(emulator->history);
   free(emulator->history_widths);
   memset(emulator, 0, sizeof(*emulator));
@@ -249,22 +249,6 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
     free(other_cells);
     return false;
   }
-  struct terminal_cell *history = emulator->history;
-  if (columns > emulator->history_stride) {
-    history = calloc(MUX_HISTORY_ROWS * columns, sizeof(*history));
-    if (!history) {
-      free(cells);
-      free(other_cells);
-      return false;
-    }
-    for (size_t i = 0; i < emulator->history_count; ++i) {
-      size_t slot = (emulator->history_start + i) % MUX_HISTORY_ROWS;
-      memcpy(history + slot * columns,
-          emulator->history + slot * emulator->history_stride,
-          emulator->history_widths[slot] * sizeof(*history));
-    }
-  }
-
   /* The hidden screen keeps the rows around its saved cursor. */
   struct terminal_cell blank = blank_cell(emulator);
   struct mux_saved_cursor *hidden = &emulator->saved[!emulator->alternate];
@@ -279,11 +263,6 @@ bool mux_emulator_resize(struct mux_emulator *emulator, size_t columns, size_t r
   free(emulator->other_cells);
   emulator->cells = cells;
   emulator->other_cells = other_cells;
-  if (history != emulator->history) {
-    free(emulator->history);
-    emulator->history = history;
-    emulator->history_stride = columns;
-  }
   emulator->columns = columns;
   emulator->rows = rows;
   if (emulator->cursor_column >= columns) {
@@ -326,9 +305,9 @@ const struct terminal_cell *mux_emulator_row(const struct mux_emulator *emulator
   }
   size_t row = history_rows - scrollback_offset + visible_row;
   if (row < history_rows) {
-    size_t slot = (emulator->history_start + row) % MUX_HISTORY_ROWS;
+    size_t slot = (emulator->history_start + row) % emulator->history_capacity;
     *width = emulator->history_widths[slot];
-    return emulator->history + slot * emulator->history_stride;
+    return emulator->history[slot];
   }
   *width = emulator->columns;
   return emulator->cells + (row - history_rows) * emulator->columns;
@@ -378,21 +357,92 @@ bool mux_emulator_selected(const struct mux_emulator *emulator,
   });
 }
 
-/* Move screen row `row` into history, as the oldest-evicting ring requires. */
+/* What a stored row costs: its cells and its slot in the ring. */
+static size_t history_cost(size_t width)
+{
+  return width * sizeof(struct terminal_cell) + sizeof(struct terminal_cell *) + sizeof(size_t);
+}
+
+/* Free the oldest stored row; a row evicted to stay within the budget is counted. */
+static void evict_oldest(struct mux_emulator *emulator)
+{
+  size_t slot = emulator->history_start;
+  emulator->history_bytes -= history_cost(emulator->history_widths[slot]);
+  free(emulator->history[slot]);
+  emulator->history[slot] = NULL;
+  emulator->history_start = (slot + 1) % emulator->history_capacity;
+  --emulator->history_count;
+  if (emulator->history_dropped < UINT64_MAX) {
+    ++emulator->history_dropped;
+  }
+}
+
+/* The ring doubles when it is full, so memory follows the output, up to the budget. */
+static bool grow_ring(struct mux_emulator *emulator)
+{
+  size_t capacity = emulator->history_capacity ? emulator->history_capacity * 2 : 256;
+  struct terminal_cell **rows = calloc(capacity, sizeof(*rows));
+  size_t *widths = calloc(capacity, sizeof(*widths));
+  if (!rows || !widths) {
+    free(rows);
+    free(widths);
+    return false;
+  }
+  for (size_t i = 0; i < emulator->history_count; ++i) {
+    size_t slot = (emulator->history_start + i) % emulator->history_capacity;
+    rows[i] = emulator->history[slot];
+    widths[i] = emulator->history_widths[slot];
+  }
+  free(emulator->history);
+  free(emulator->history_widths);
+  emulator->history = rows;
+  emulator->history_widths = widths;
+  emulator->history_capacity = capacity;
+  emulator->history_start = 0;
+  return true;
+}
+
+void mux_emulator_set_history_budget(struct mux_emulator *emulator, size_t bytes)
+{
+  emulator->history_budget = bytes;
+  while (emulator->history_count && emulator->history_bytes > bytes) {
+    evict_oldest(emulator);
+  }
+}
+
+/* Move screen row `row` into history, as the oldest-evicting ring requires. A
+ * row that cannot be kept (the budget is smaller than one row, or memory ran
+ * out) is counted as dropped; output is never refused. */
 static void push_history(struct mux_emulator *emulator, size_t row)
 {
-  size_t slot;
-  if (emulator->history_count == MUX_HISTORY_ROWS) {
-    slot = emulator->history_start;
-    emulator->history_start = (emulator->history_start + 1) % MUX_HISTORY_ROWS;
-  } else {
-    slot = (emulator->history_start + emulator->history_count) % MUX_HISTORY_ROWS;
-    ++emulator->history_count;
+  size_t width = emulator->columns;
+  size_t cost = history_cost(width);
+  while (emulator->history_count && emulator->history_bytes + cost > emulator->history_budget) {
+    evict_oldest(emulator);
   }
-  memcpy(emulator->history + slot * emulator->history_stride,
-      emulator->cells + row * emulator->columns,
-      emulator->columns * sizeof(*emulator->cells));
-  emulator->history_widths[slot] = emulator->columns;
+  bool stored = cost <= emulator->history_budget;
+  if (stored && emulator->history_count == emulator->history_capacity && !grow_ring(emulator)) {
+    if (emulator->history_count) {
+      evict_oldest(emulator);
+    } else {
+      stored = false;
+    }
+  }
+  struct terminal_cell *copy = stored ? malloc(width * sizeof(*copy)) : NULL;
+  while (stored && !copy && emulator->history_count) {
+    evict_oldest(emulator);
+    copy = malloc(width * sizeof(*copy));
+  }
+  if (copy) {
+    memcpy(copy, emulator->cells + row * emulator->columns, width * sizeof(*copy));
+    size_t slot = (emulator->history_start + emulator->history_count) % emulator->history_capacity;
+    emulator->history[slot] = copy;
+    emulator->history_widths[slot] = width;
+    emulator->history_bytes += cost;
+    ++emulator->history_count;
+  } else if (emulator->history_dropped < UINT64_MAX) {
+    ++emulator->history_dropped;
+  }
   if (emulator->scrolled_rows < UINT64_MAX) {
     ++emulator->scrolled_rows;
   }

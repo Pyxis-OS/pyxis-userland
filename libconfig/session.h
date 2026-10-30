@@ -19,6 +19,9 @@ struct session_variable {
 struct session_config {
   char *timezone;
   size_t tab_width;
+  /* Memory each multiplexer pane may hold as scrollback; zero, the default,
+   * lets the multiplexer derive it from installed RAM. */
+  size_t scrollback_bytes;
   uint64_t value_limit_bytes, session_limit_bytes;
   struct session_variable *environment;
   size_t environment_count;

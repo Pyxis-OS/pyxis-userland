@@ -6,6 +6,7 @@
 #include <handle.h>
 #include <launcher.h>
 #include <process.h>
+#include <system_info.h>
 #include <startup.h>
 #include <wait.h>
 #include <stdio.h>
@@ -70,6 +71,23 @@ static enum call_status place(struct mux *mux)
   return CALL_OK;
 }
 
+/* One 512th of the allocator's capacity per pane, at least 8 MiB: the share the
+ * clipboard and package-view budgets take (docs/interfaces/limits.md). A pane's
+ * scrollback is therefore never limited by a row count. */
+#define HISTORY_MIN_BYTES (8u * 1024u * 1024u)
+#define HISTORY_RAM_DIVISOR 512u
+
+static size_t default_history_bytes(void)
+{
+  struct system_info_memory memory;
+  handle_t info = bootstrap_capability("system_info");
+  if (info != HANDLE_INVALID && system_info_get_memory(info, &memory) == CALL_OK &&
+      memory.total_bytes / HISTORY_RAM_DIVISOR > HISTORY_MIN_BYTES) {
+    return (size_t)(memory.total_bytes / HISTORY_RAM_DIVISOR);
+  }
+  return HISTORY_MIN_BYTES;
+}
+
 static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect,
     const struct pyxis_working_snapshot *cwd)
 {
@@ -80,6 +98,7 @@ static bool start_pane(struct mux *mux, unsigned slot, struct mux_rect rect,
     return false;
   }
   mux_emulator_set_tab_width(&pane->emulator, mux->tab_width);
+  mux_emulator_set_history_budget(&pane->emulator, mux->history_bytes);
   enum call_status status = mux_session_start(width, height, mux->tab_width, cwd, &pane->session);
   if (status != CALL_OK) {
     if (status == CALL_OUTCOME_UNKNOWN) {
@@ -695,17 +714,29 @@ int main(int argc, char **argv)
     .clipboard_local = bootstrap_capability("clipboard_local"),
     .clipboard_shared = bootstrap_capability("clipboard_shared"),
   };
-  if (argc == 3 && !strcmp(argv[1], "--tab-width")) {
+  for (int i = 1; i < argc; i += 2) {
     char *end;
-    unsigned long width = strtoul(argv[2], &end, 10);
-    if (!*argv[2] || *end || width < 1 || width > 32) {
-      fputs("mux: tab width must be 1..32\n", stderr);
+    if (i + 1 < argc && !strcmp(argv[i], "--tab-width")) {
+      unsigned long width = strtoul(argv[i + 1], &end, 10);
+      if (!*argv[i + 1] || *end || width < 1 || width > 32) {
+        fputs("mux: tab width must be 1..32\n", stderr);
+        return 1;
+      }
+      mux.tab_width = (unsigned)width;
+    } else if (i + 1 < argc && !strcmp(argv[i], "--history-bytes")) {
+      unsigned long long bytes = strtoull(argv[i + 1], &end, 10);
+      if (!*argv[i + 1] || *end || !bytes || bytes > SIZE_MAX) {
+        fputs("mux: history bytes must be a positive integer\n", stderr);
+        return 1;
+      }
+      mux.history_bytes = (size_t)bytes;
+    } else {
+      fputs("usage: mux [--tab-width 1..32] [--history-bytes BYTES]\n", stderr);
       return 1;
     }
-    mux.tab_width = (unsigned)width;
-  } else if (argc != 1) {
-    fputs("usage: mux [--tab-width 1..32]\n", stderr);
-    return 1;
+  }
+  if (!mux.history_bytes) {
+    mux.history_bytes = default_history_bytes();
   }
   if (mux.terminal.input == HANDLE_INVALID || mux.terminal.output == HANDLE_INVALID ||
       mux.clock == HANDLE_INVALID ||

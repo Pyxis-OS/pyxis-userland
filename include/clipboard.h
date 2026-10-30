@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* The bytes of stored text the kernel allows in all (one 512th of installed
+ * RAM, at least 8 MiB); no other constant limits a copy. Consumes no action. */
+enum call_status clipboard_info(handle_t clipboard, uint64_t *budget);
+
 /* Separate explicitly delegated local/shared controller grants. Each operation
  * consumes one native action; none discovers or reads current clipboard data. */
 enum call_status clipboard_publish(handle_t clipboard, uint64_t action_id,
@@ -21,14 +25,16 @@ enum call_status clipboard_refuse(handle_t clipboard, uint64_t action_id,
 
 /* Graphics calls require the caller's matching physical Copy/Paste action and
  * current display/keyboard ownership. The grant selects one layer. Publish,
- * read and refuse consume the action; has only reveals a live Paste boolean. */
+ * read and refuse consume the action; has only reveals whether there is text
+ * and how long it is. */
 enum call_status clipboard_graphics_publish(handle_t clipboard, uint64_t action_id,
     const void *bytes, size_t length);
-/* Reply bytes have no terminator; capacity must hold CLIPBOARD_TEXT_MAX bytes. */
+/* Reply bytes have no terminator; capacity must hold the whole item (ask has
+ * first): a smaller buffer is CALL_LIMIT, the attempt is spent, nothing is read. */
 enum call_status clipboard_graphics_read(handle_t clipboard, uint64_t action_id,
     void *bytes, size_t capacity, size_t *length);
 enum call_status clipboard_graphics_has(handle_t clipboard, uint64_t action_id,
-    bool *has_text);
+    bool *has_text, size_t *length);
 enum call_status clipboard_graphics_refuse(handle_t clipboard, uint64_t action_id,
     uint64_t operation);
 
