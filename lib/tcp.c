@@ -33,14 +33,14 @@ enum call_status tcp_connect_path(handle_t service, struct net_path path, uint32
 }
 
 enum call_status tcp_listen_path(handle_t service, struct net_path path, uint16_t port,
-    struct tcp_listen_reply *reply)
+    uint32_t backlog, struct tcp_listen_reply *reply)
 {
   if (!reply) {
     return CALL_BAD_REQUEST;
   }
   struct tcp_listen_request request = {
     .header = {PROTOCOL_TCP_SERVICE, TCP_LISTEN},
-    .path = path, .port = port,
+    .path = path, .port = port, .backlog = backlog,
   };
   struct tcp_listen_reply response;
   struct syscall_result result = syscall_call(service, &request, sizeof(request),
@@ -241,7 +241,7 @@ enum call_status tcp_connect(handle_t service, uint32_t address, uint16_t port,
 }
 
 enum call_status tcp_listen(handle_t service, uint32_t address, uint16_t port,
-    struct tcp_listen_reply *reply)
+    uint32_t backlog, struct tcp_listen_reply *reply)
 {
-  return tcp_listen_path(service, (struct net_path){.source = address}, port, reply);
+  return tcp_listen_path(service, (struct net_path){.source = address}, port, backlog, reply);
 }

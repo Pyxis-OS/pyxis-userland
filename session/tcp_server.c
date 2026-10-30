@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <tcp.h>
 
+/* The served tool progresses up to four accepted clients at a time. */
+#define SERVER_BACKLOG 4
+
 int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
 {
   handle_t launcher = bootstrap_capability("launcher"), memory = bootstrap_capability("memory");
@@ -85,7 +88,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
   }
 
   struct tcp_listen_reply reply;
-  status = tcp_listen(tcp, address, port, &reply);
+  status = tcp_listen(tcp, address, port, SERVER_BACKLOG, &reply);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot listen on %u.%u.%u.%u:%u (status %u)\n",
         address >> 24, (address >> 16) & 255, (address >> 8) & 255, address & 255,

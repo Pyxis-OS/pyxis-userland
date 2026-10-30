@@ -40,6 +40,8 @@
 #include <tcp.h>
 
 #define NETWORK_ASSIGNMENT_SLEEP_NS UINT64_C(100000000)
+/* The remote terminal serves one client; the rest of the queue absorbs retries. */
+#define REMOTE_BACKLOG 4
 #define READ_ONLY_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | \
     DIRECTORY_RIGHT_ENUMERATE | DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_FILESYSTEM_INFO)
 
@@ -469,7 +471,7 @@ int launch_remote_server(const struct session_config *config,
   } else {
     struct tcp_listen_reply reply;
     status = tcp_listen_path(tcp, (struct net_path){.interface_id = selected.interface_id,
-      .source = selected.address}, port, &reply);
+      .source = selected.address}, port, REMOTE_BACKLOG, &reply);
     if (status != CALL_OK) {
       fprintf(stderr, "session: cannot start remote listener (status %u)\n", status);
       goto done;
