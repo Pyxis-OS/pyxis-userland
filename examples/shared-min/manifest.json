@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "org.pyxis.shared-min",
+  "entry": "bin/shared-min.pxe",
+  "commands": {"shared-min": "bin/shared-min.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage", "create_shared"], "required": true},
+    {"name": "service", "resource": "service", "rights": ["create"], "required": true},
+    {"name": "launcher", "resource": "launcher", "rights": ["launch"], "required": true},
+    {"name": "clock", "resource": "clock", "rights": ["read"], "required": true}
+  ]
+}

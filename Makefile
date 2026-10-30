@@ -112,7 +112,7 @@ SCREENSHOT_SAVER_OBJECTS := $(BUILD)/screenshot/saver.o $(BUILD)/screenshot/png.
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: cpuclock procs mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest gamepadtest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
-.PHONY: fat32ctl net wifi config pkg jit-min
+.PHONY: fat32ctl net wifi config pkg jit-min shared-min
 all: $(INSTALL_PROGRAMS) cpuclock procs font-min gamepadtest fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Lua scripts for hand-run native checks, installed as boot://share/checks/.
@@ -158,6 +158,8 @@ install: all
 	  install -m 644 examples/font-min/manifest.json "$$staging/share/examples/font-min-manifest.json"; \
 	  install -m 644 examples/jit-min/main.c "$$staging/share/examples/jit-min.c"; \
 	  install -m 644 examples/jit-min/manifest.json "$$staging/share/examples/jit-min-manifest.json"; \
+	  install -m 644 examples/shared-min/main.c "$$staging/share/examples/shared-min.c"; \
+	  install -m 644 examples/shared-min/manifest.json "$$staging/share/examples/shared-min-manifest.json"; \
 	  install -m 644 examples/nvim/init.lua "$$staging/share/examples/nvim/init.lua"; \
 	  install -m 644 "$(BUILD)/share/iobench.bin" "$$staging/share/iobench.bin"; \
 	  install -m 644 "$(BUILD)/share/iobench-small.bin" "$$staging/share/iobench-small.bin"; \
@@ -261,6 +263,7 @@ mousetest: $(BUILD)/mousetest.pxe
 pointer-min: $(BUILD)/pointer-min.pxe
 font-min: $(BUILD)/font-min.pxb/manifest.json
 jit-min: $(BUILD)/jit-min.pxb/manifest.json
+shared-min: $(BUILD)/shared-min.pxb/manifest.json
 gamepadtest: $(BUILD)/gamepadtest.pxb/manifest.json
 screenshot: $(BUILD)/screenshot.pxe
 screenshot-saver: $(BUILD)/screenshot-saver.pxe
@@ -471,6 +474,17 @@ $(BUILD)/jit-min.pxb/manifest.json: $(BUILD)/jit-min.pxe examples/jit-min/manife
 $(BUILD)/jit-min.pxe: $(BUILD)/examples/jit-min/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(LDLIBS)
 
+# Shared memory is an opt-in SDK example, with no default installed executable.
+$(BUILD)/shared-min.pxb/manifest.json: $(BUILD)/shared-min.pxe examples/shared-min/manifest.json
+	@rm -rf "$(@D)"
+	@mkdir -p "$(@D)/app/bin"
+	install -m 644 $(BUILD)/shared-min.pxe "$(@D)/app/bin/"
+	install -m 644 examples/shared-min/manifest.json "$@"
+
+$(BUILD)/examples/shared-min/main.o: private CFLAGS += -Werror
+$(BUILD)/shared-min.pxe: $(BUILD)/examples/shared-min/main.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(LDLIBS)
+
 # font-min links libfont, which is not one of the default libraries.
 $(BUILD)/font-min.pxe: $(BUILD)/examples/font-min/main.o $(FONT_LIBRARY) $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(FONT_LIBRARY) $(LDLIBS)
@@ -513,7 +527,7 @@ clean:
 -include $(INSTALL_SELECTOR_OBJECTS:.o=.d) $(BUILD)/installer/installed_probe.d
 
 -include $(BUILD)/threadprobe/mutex.d $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d
--include $(BUILD)/examples/jit-min/main.d
+-include $(BUILD)/examples/jit-min/main.d $(BUILD)/examples/shared-min/main.d
 
 http-stage: $(BUILD)/http-stage.pxe
 
