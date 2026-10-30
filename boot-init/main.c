@@ -1957,10 +1957,12 @@ static void start_rescue(const struct authority *authority, struct mounts *mount
   };
   static const struct boot_space rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
+    .focus = true,
     .clipboard_local = true, .clipboard_shared = true, .network = true,
   };
   static const struct boot_space pool_rescue = {
     .name = "rescue", .title = "Rescue", .init = RESCUE_INIT, .start = "tmp", .power = true,
+    .focus = true,
     .clipboard_local = true, .clipboard_shared = true, .roots = roots, .root_count = 1,
     .grants = grants, .grant_count = 1, .network = true, .package_management = true,
   };
