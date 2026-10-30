@@ -89,7 +89,7 @@ static enum call_status launch_client(handle_t launcher, handle_t image,
     .argv = (uintptr_t)arguments,
     .argc = sizeof(arguments) / sizeof(arguments[0]),
   };
-  return launcher_launch(launcher, &request, child);
+  return launcher_launch(launcher, &request, child, NULL);
 }
 
 static uint64_t print_content(const struct endpoint_packet *packet, handle_t output)

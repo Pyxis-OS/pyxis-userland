@@ -1,5 +1,105 @@
 #include <process.h>
 #include <syscall.h>
+#include <stdio.h>
+
+bool call_limit_format(const struct call_limit *limit, char *buffer, size_t capacity)
+{
+  if (!buffer || !capacity) {
+    return false;
+  }
+  buffer[0] = '\0';
+  if (!limit || (limit->flags & ~CALL_LIMIT_FLAGS) ||
+      ((limit->flags & CALL_LIMIT_REQUESTED_SATURATED) &&
+      !(limit->flags & CALL_LIMIT_HAS_REQUESTED))) {
+    return false;
+  }
+  const char *what, *source;
+  switch (limit->reason) {
+  case CALL_LIMIT_REQUEST_ENCODING:
+    what = "request size";
+    source = "request encoding";
+    break;
+  case CALL_LIMIT_STARTUP_ADDRESS:
+    what = "startup bytes";
+    source = "user address space";
+    break;
+  case CALL_LIMIT_ENVIRONMENT_ENTRIES:
+    what = "environment entries";
+    source = "environment table admission";
+    break;
+  case CALL_LIMIT_ENVIRONMENT_TEXT:
+    what = "environment names/text bytes";
+    source = "environment table admission";
+    break;
+  case CALL_LIMIT_STACK_ADDRESS:
+    what = "initial stack bytes";
+    source = "stack and guard address space";
+    break;
+  case CALL_LIMIT_HANDLE_ENCODING:
+    what = "handle slots";
+    source = "handle encoding";
+    break;
+  case CALL_LIMIT_REFERENCE_COUNT:
+    what = "object references";
+    source = "reference counter";
+    break;
+  case CALL_LIMIT_GROUP_MEMBERS:
+    what = "execution group members";
+    source = "member counter";
+    break;
+  case CALL_LIMIT_READINESS_BYTES:
+    what = "readiness storage bytes";
+    source = "readiness admission";
+    break;
+  case CALL_LIMIT_FORWARDER_LINEAGE:
+    what = "forwarder lineage nodes";
+    source = "forwarder operation admission";
+    break;
+  case CALL_LIMIT_GROUP_DEPTH:
+    what = "execution group depth";
+    source = "group-tree admission";
+    break;
+  case CALL_LIMIT_GROUP_COUNT:
+    what = "execution groups";
+    source = "space group admission";
+    break;
+  case CALL_LIMIT_GROUP_LAUNCHES:
+    what = "execution group launches";
+    source = "in-flight launch counter";
+    break;
+  case CALL_LIMIT_READINESS_IDENTITY:
+    what = "readiness registration identities";
+    source = "registration identity counter";
+    break;
+  case CALL_LIMIT_READINESS_GENERATION:
+    what = "readiness registration generation";
+    source = "registration generation counter";
+    break;
+  default:
+    return false;
+  }
+  int written;
+  if ((limit->flags & (CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT)) ==
+      (CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT)) {
+    written = snprintf(buffer, capacity, "%s: %s%llu exceeds the limit of %llu (%s)",
+        what, limit->flags & CALL_LIMIT_REQUESTED_SATURATED ? "more than " : "",
+        (unsigned long long)limit->requested, (unsigned long long)limit->limit, source);
+  } else if (limit->flags & CALL_LIMIT_HAS_REQUESTED) {
+    written = snprintf(buffer, capacity, "%s: request %s%llu exceeds capacity (%s)",
+        what, limit->flags & CALL_LIMIT_REQUESTED_SATURATED ? "more than " : "",
+        (unsigned long long)limit->requested, source);
+  } else if (limit->flags & CALL_LIMIT_HAS_LIMIT) {
+    written = snprintf(buffer, capacity, "%s: limit of %llu reached (%s)",
+        what, (unsigned long long)limit->limit, source);
+  } else {
+    written = snprintf(buffer, capacity, "%s: capacity exhausted (%s)", what, source);
+  }
+  if (written < 0 || (size_t)written >= capacity) {
+    buffer[0] = '\0';
+    return false;
+  }
+  return true;
+}
 
 enum call_status process_wait(handle_t process, struct process_result *result)
 {

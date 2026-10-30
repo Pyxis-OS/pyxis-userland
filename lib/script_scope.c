@@ -3,8 +3,12 @@
 #include <handle.h>
 
 enum call_status script_scope_open(bool positional, handle_t launcher,
-    handle_t child_launcher, struct execution_group_create_reply *group)
+    handle_t child_launcher, struct execution_group_create_reply *group,
+    struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   handle_t selected = positional ? launcher : child_launcher;
   if (!group) {
     return CALL_BAD_REQUEST;
@@ -12,7 +16,7 @@ enum call_status script_scope_open(bool positional, handle_t launcher,
   if (selected == HANDLE_INVALID) {
     return positional ? CALL_DENIED : CALL_OK;
   }
-  return launcher_create_group(selected, group);
+  return launcher_create_group(selected, group, limit);
 }
 
 handle_t script_scope_launch_launcher(bool positional, bool foreground,

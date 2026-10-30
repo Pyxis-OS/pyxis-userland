@@ -762,7 +762,7 @@ int counter_authority_close_main(void)
     goto cleanup;
   }
   phase = "empty scoped group creation";
-  status = launcher_create_group(launcher, &group);
+  status = launcher_create_group(launcher, &group, NULL);
   if (status != CALL_OK) {
     goto cleanup;
   }

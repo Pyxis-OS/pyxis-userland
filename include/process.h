@@ -4,6 +4,8 @@
 #include <abi/handle.h>
 #include <abi/process.h>
 #include <abi/syscall.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 /* Requires WAIT authority. Blocks until execution resources have been reclaimed;
  * later calls return the same result. Does not consume or close the handle.
@@ -24,6 +26,10 @@ enum call_status process_terminate(handle_t process);
 /* Human-readable startup diagnostics; no allocation, TLS or I/O. */
 const char *process_start_step_name(uint32_t reason);
 const char *process_start_status_name(uint32_t reason);
+
+/* Format structured capacity detail without allocation or I/O. False leaves an
+ * empty output when detail is unavailable, malformed or the buffer is too small. */
+bool call_limit_format(const struct call_limit *limit, char *buffer, size_t capacity);
 
 /* Requires TERMINATE authority; requests cooperative interruption of only this
  * process. OK means accepted or coalesced, NOT_FOUND means no receiver and

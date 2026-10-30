@@ -86,6 +86,7 @@ void shell_syntax_close(struct shell_syntax *syntax)
         close_word(stage->redirections[k].word);
       }
     }
+    free(command->stages);
   }
   free(syntax->commands);
   *syntax = (struct shell_syntax){0};
@@ -566,7 +567,12 @@ static const char *parse_sequence(const struct shell *shell, const char **cursor
       }
       syntax->commands = commands;
       command = &commands[syntax->count++];
-      *command = (struct shell_syntax_command){.stage_count = 1, .condition = condition};
+      *command = (struct shell_syntax_command){.condition = condition};
+      command->stages = calloc(1, sizeof(*command->stages));
+      if (!command->stages) {
+        return "Out of memory";
+      }
+      command->stage_count = 1;
     }
     struct shell_syntax_stage *stage = &command->stages[command->stage_count - 1];
     if (command->background) {
@@ -596,10 +602,16 @@ static const char *parse_sequence(const struct shell *shell, const char **cursor
       if (pending || !stage->count) {
         return "Pipeline stage requires a command";
       }
-      if (command->stage_count == LAUNCH_BATCH_MAX) {
-        return "Too many pipeline stages";
+      if (command->stage_count >= SIZE_MAX / sizeof(*command->stages)) {
+        return "Pipeline stage storage exceeds address capacity";
       }
-      ++command->stage_count;
+      struct shell_syntax_stage *stages = realloc(command->stages,
+          (command->stage_count + 1) * sizeof(*stages));
+      if (!stages) {
+        return "Out of memory";
+      }
+      command->stages = stages;
+      stages[command->stage_count++] = (struct shell_syntax_stage){0};
       ++read;
       continue;
     }

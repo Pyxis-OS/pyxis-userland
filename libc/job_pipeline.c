@@ -21,8 +21,13 @@ struct pipeline_output {
 
 struct pyxis_pipeline {
   handle_t clock, private_root, pipe_service, launcher, supervision;
-  handle_t observers[LAUNCH_BATCH_MAX];
-  bool stop_requested[LAUNCH_BATCH_MAX], group_stopped, group_complete, uncertain;
+  handle_t *observers;
+  bool *stop_requested, *stage_valid;
+  struct process_result *stages;
+  handle_t readiness;
+  struct readiness_set_registration *registrations;
+  handle_t *registered;
+  bool readiness_failed, group_stopped, group_complete, uncertain;
   handle_t input_writer;
   unsigned char *input;
   uint64_t deadline, limits[2];
@@ -69,11 +74,18 @@ static enum call_status close_input(struct pyxis_pipeline *pipeline)
 static enum call_status discard_pipeline(struct pyxis_pipeline *pipeline)
 {
   enum call_status error = CALL_OK;
-  handle_t *handles[LAUNCH_BATCH_MAX + 10];
-  size_t count = 0;
-  for (size_t i = 0; i < pipeline->result.stage_count; ++i) {
-    handles[count++] = &pipeline->observers[i];
+  enum call_status status = close_handle(&pipeline->readiness);
+  if (error == CALL_OK) {
+    error = status;
   }
+  for (size_t i = 0; pipeline->observers && i < pipeline->result.stage_count; ++i) {
+    status = close_handle(&pipeline->observers[i]);
+    if (error == CALL_OK) {
+      error = status;
+    }
+  }
+  handle_t *handles[10];
+  size_t count = 0;
   handles[count++] = &pipeline->input_writer;
   for (size_t i = 0; i < 2; ++i) {
     handles[count++] = &pipeline->outputs[i].reader;
@@ -90,6 +102,12 @@ static enum call_status discard_pipeline(struct pyxis_pipeline *pipeline)
       error = status;
     }
   }
+  free(pipeline->registered);
+  free(pipeline->registrations);
+  free(pipeline->stages);
+  free(pipeline->stage_valid);
+  free(pipeline->stop_requested);
+  free(pipeline->observers);
   free(pipeline->input);
   free(pipeline);
   return error;
@@ -98,7 +116,7 @@ static enum call_status discard_pipeline(struct pyxis_pipeline *pipeline)
 static bool stages_retired(const struct pyxis_pipeline *pipeline)
 {
   for (size_t i = 0; i < pipeline->result.stage_count; ++i) {
-    if (pipeline->observers[i] && !pipeline->result.stage_valid[i]) {
+    if (pipeline->observers[i] && !pipeline->stage_valid[i]) {
       return false;
     }
   }
@@ -124,7 +142,7 @@ static enum call_status request_stop(struct pyxis_pipeline *pipeline)
   } else {
     for (size_t i = 0; i < pipeline->result.stage_count; ++i) {
       if (!pipeline->observers[i] || pipeline->stop_requested[i] ||
-          pipeline->result.stage_valid[i]) {
+          pipeline->stage_valid[i]) {
         continue;
       }
       enum call_status status = process_terminate(pipeline->observers[i]);
@@ -139,61 +157,138 @@ static enum call_status request_stop(struct pyxis_pipeline *pipeline)
   return remember_error(pipeline, error);
 }
 
-static size_t observation_interests(struct pyxis_pipeline *pipeline,
-    struct wait_interest waits[LAUNCH_BATCH_MAX + 1])
+static enum call_status refresh_readiness(struct pyxis_pipeline *pipeline,
+    struct call_limit *limit)
 {
-  size_t count = 0;
-  for (size_t i = 0; i < pipeline->result.stage_count; ++i) {
-    if (pipeline->observers[i] && !pipeline->result.stage_valid[i]) {
-      waits[count++] = (struct wait_interest){pipeline->observers[i], WAIT_COMPLETE, 0};
+  size_t stages = pipeline->result.stage_count;
+  for (size_t i = 0; i < stages + 4; ++i) {
+    handle_t target;
+    uint64_t events = WAIT_COMPLETE;
+    if (i < stages) {
+      target = pipeline->stage_valid[i] ? HANDLE_INVALID : pipeline->observers[i];
+    } else if (i == stages) {
+      target = pipeline->group_complete ? HANDLE_INVALID : pipeline->supervision;
+    } else if (i < stages + 3) {
+      target = pipeline->outputs[i - stages - 1].reader;
+      events = WAIT_READABLE;
+    } else {
+      target = pipeline->input_writer;
+      events = WAIT_WRITABLE;
+    }
+    if (target == pipeline->registered[i]) {
+      continue;
+    }
+    if (pipeline->registered[i]) {
+      enum call_status status = readiness_set_remove(pipeline->readiness,
+          pipeline->registrations[i]);
+      if (status != CALL_OK) {
+        return status;
+      }
+      pipeline->registered[i] = HANDLE_INVALID;
+    }
+    if (target) {
+      enum call_status status = readiness_set_register(pipeline->readiness, target,
+          events, i, &pipeline->registrations[i], limit);
+      if (status != CALL_OK) {
+        return status;
+      }
+      pipeline->registered[i] = target;
     }
   }
-  if (pipeline->supervision && !pipeline->group_complete) {
-    waits[count++] = (struct wait_interest){pipeline->supervision, WAIT_COMPLETE, 0};
+  return CALL_OK;
+}
+
+static enum call_status observe_completion(struct pyxis_pipeline *pipeline,
+    size_t index, bool *progress)
+{
+  enum call_status status;
+  if (index == pipeline->result.stage_count) {
+    status = execution_group_wait(pipeline->supervision);
+    if (status == CALL_OK) {
+      pipeline->group_complete = true;
+      *progress = true;
+    }
+  } else {
+    status = process_wait(pipeline->observers[index], &pipeline->stages[index]);
+    if (status == CALL_OK) {
+      pipeline->stage_valid[index] = true;
+      *progress = true;
+    }
   }
-  return count;
+  return status;
+}
+
+static enum call_status collect_readiness(struct pyxis_pipeline *pipeline,
+    uint64_t deadline, bool *progress)
+{
+  struct readiness_set_event events[READINESS_SET_BATCH_MAX];
+  size_t count;
+  enum call_status status = readiness_set_wait(pipeline->readiness, deadline,
+      events, READINESS_SET_BATCH_MAX, &count);
+  if (status != CALL_OK) {
+    return status;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    size_t tag = events[i].tag;
+    if (tag >= pipeline->result.stage_count + 4 ||
+        events[i].status >= CALL_STATUS_COUNT) {
+      return CALL_OUTCOME_UNKNOWN;
+    }
+    if (events[i].status != CALL_OK) {
+      return events[i].status;
+    }
+    if (tag <= pipeline->result.stage_count && (events[i].events & WAIT_COMPLETE)) {
+      status = observe_completion(pipeline, tag, progress);
+      if (status != CALL_OK) {
+        return status;
+      }
+    }
+  }
+  return CALL_OK;
+}
+
+/* A readiness admission failure still leaves owned children to retire. Poll
+ * each observer without blocking while stopping and draining that failed job;
+ * this path never admits or pumps a new pipeline through wait_many subsets. */
+static enum call_status observe_failed_readiness(struct pyxis_pipeline *pipeline,
+    bool *progress)
+{
+  for (size_t i = 0; i <= pipeline->result.stage_count; ++i) {
+    handle_t handle = i == pipeline->result.stage_count ?
+        (pipeline->group_complete ? HANDLE_INVALID : pipeline->supervision) :
+        (pipeline->stage_valid[i] ? HANDLE_INVALID : pipeline->observers[i]);
+    if (!handle) {
+      continue;
+    }
+    struct wait_interest interest = {handle, WAIT_COMPLETE, 0};
+    uint64_t events;
+    enum call_status status = wait_many(&interest, 1, 0, &events);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (events & WAIT_COMPLETE) {
+      status = observe_completion(pipeline, i, progress);
+      if (status != CALL_OK) {
+        return status;
+      }
+    }
+  }
+  return CALL_OK;
 }
 
 static enum call_status observe(struct pyxis_pipeline *pipeline, bool *progress)
 {
-  struct wait_interest waits[LAUNCH_BATCH_MAX + 1];
-  uint64_t events[LAUNCH_BATCH_MAX + 1] = {0};
-  size_t count = observation_interests(pipeline, waits);
-  if (!count) {
-    return CALL_OK;
+  if (pipeline->readiness_failed) {
+    return remember_error(pipeline, observe_failed_readiness(pipeline, progress));
   }
-  enum call_status status = wait_many(waits, count, 0, events);
+  enum call_status status = refresh_readiness(pipeline, NULL);
+  if (status == CALL_OK) {
+    status = collect_readiness(pipeline, 0, progress);
+  }
   if (status != CALL_OK) {
-    return remember_error(pipeline, status);
+    pipeline->readiness_failed = true;
   }
-  enum call_status error = CALL_OK;
-  for (size_t i = 0; i < count; ++i) {
-    if (!(events[i] & WAIT_COMPLETE)) {
-      continue;
-    }
-    if (waits[i].handle == pipeline->supervision) {
-      status = execution_group_wait(pipeline->supervision);
-      if (status == CALL_OK) {
-        pipeline->group_complete = true;
-        *progress = true;
-      }
-    } else {
-      for (size_t stage = 0; stage < pipeline->result.stage_count; ++stage) {
-        if (waits[i].handle == pipeline->observers[stage]) {
-          status = process_wait(pipeline->observers[stage], &pipeline->result.stages[stage]);
-          if (status == CALL_OK) {
-            pipeline->result.stage_valid[stage] = true;
-            *progress = true;
-          }
-          break;
-        }
-      }
-    }
-    if (error == CALL_OK) {
-      error = status;
-    }
-  }
-  return remember_error(pipeline, error);
+  return remember_error(pipeline, status);
 }
 
 static enum call_status output_failure(struct pyxis_pipeline *pipeline,
@@ -407,17 +502,32 @@ static enum call_status close_sources(struct pipe_create_reply *sources, size_t 
 }
 
 enum call_status pyxis_pipeline_start(handle_t launcher,
-    const struct pyxis_pipeline_options *options, struct pyxis_pipeline **pipeline)
+    const struct pyxis_pipeline_options *options, struct pyxis_pipeline **pipeline, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!pipeline) {
     return CALL_BAD_REQUEST;
   }
   *pipeline = NULL;
   if (!options || !options->stages || !options->stage_count ||
-      options->stage_count > LAUNCH_BATCH_MAX || !options->deadline_ns ||
+      !options->deadline_ns ||
       (options->input_size && !options->input) ||
       (!options->has_input && (options->input || options->input_size))) {
     return CALL_BAD_REQUEST;
+  }
+  if (options->stage_count > SIZE_MAX / sizeof(struct process_result) ||
+      options->stage_count > SIZE_MAX / sizeof(handle_t[ENVIRONMENT_STREAM_COUNT]) ||
+      options->stage_count > (SIZE_MAX / sizeof(struct pipe_create_reply)) - 2 ||
+      options->stage_count > (SIZE_MAX / sizeof(struct readiness_set_registration)) - 4) {
+    if (limit) {
+      *limit = (struct call_limit){.reason = CALL_LIMIT_REQUEST_ENCODING,
+        .requested = UINT64_MAX, .limit = SIZE_MAX,
+        .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+            CALL_LIMIT_REQUESTED_SATURATED};
+    }
+    return CALL_LIMIT;
   }
   uint64_t root_rights = DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_REMOVE |
       DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_WRITE_FILES;
@@ -437,7 +547,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
   }
   struct libc_pipeline_launch *prepared = NULL;
   status = libc_pipeline_prepare(options->stages, options->stage_count,
-      options->private_root, options->has_input, &prepared);
+      options->private_root, options->has_input, &prepared, limit);
   if (status != CALL_OK) {
     return status;
   }
@@ -446,6 +556,33 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     libc_pipeline_discard(prepared);
     return CALL_NO_MEMORY;
   }
+  owned->observers = calloc(options->stage_count, sizeof(*owned->observers));
+  owned->stop_requested = calloc(options->stage_count, sizeof(*owned->stop_requested));
+  owned->stage_valid = calloc(options->stage_count, sizeof(*owned->stage_valid));
+  owned->stages = calloc(options->stage_count, sizeof(*owned->stages));
+  owned->registrations = calloc(options->stage_count + 4, sizeof(*owned->registrations));
+  owned->registered = calloc(options->stage_count + 4, sizeof(*owned->registered));
+  struct pipe_create_reply *sources = calloc(options->stage_count + 2, sizeof(*sources));
+  handle_t (*streams)[ENVIRONMENT_STREAM_COUNT] =
+      calloc(options->stage_count, sizeof(*streams));
+  if (!owned->observers || !owned->stop_requested || !owned->stage_valid ||
+      !owned->stages || !owned->registrations || !owned->registered || !sources || !streams) {
+    free(streams);
+    free(sources);
+    libc_pipeline_discard(prepared);
+    discard_pipeline(owned);
+    return CALL_NO_MEMORY;
+  }
+  status = readiness_set_create(&owned->readiness, limit);
+  if (status != CALL_OK) {
+    free(streams);
+    free(sources);
+    libc_pipeline_discard(prepared);
+    discard_pipeline(owned);
+    return status;
+  }
+  owned->result.stage_valid = owned->stage_valid;
+  owned->result.stages = owned->stages;
   owned->deadline = options->deadline_ns;
   owned->limits[0] = options->stdout_limit ? options->stdout_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
   owned->limits[1] = options->stderr_limit ? options->stderr_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
@@ -463,16 +600,16 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     }
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0, &owned->clock);
+    status = handle_copy_restricted_with_limit(options->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0, &owned->clock, limit);
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->private_root, root_rights, 0, &owned->private_root);
+    status = handle_copy_restricted_with_limit(options->private_root, root_rights, 0, &owned->private_root, limit);
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->pipe_service, PIPE_SERVICE_RIGHT_CREATE, 0, &owned->pipe_service);
+    status = handle_copy_restricted_with_limit(options->pipe_service, PIPE_SERVICE_RIGHT_CREATE, 0, &owned->pipe_service, limit);
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
+    status = handle_copy_restricted_with_limit(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher, limit);
   }
   uint64_t now;
   if (status == CALL_OK) {
@@ -484,7 +621,6 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
   for (size_t i = 0; i < 2 && status == CALL_OK; ++i) {
     status = libc_capture_file_create_native(owned->private_root, owned->clock, &owned->outputs[i].file);
   }
-  struct pipe_create_reply sources[LAUNCH_BATCH_MAX + 2] = {0};
   size_t middle_count = options->stage_count - 1;
   size_t source_count = middle_count + 2 + options->has_input;
   for (size_t i = 0; i < source_count && status == CALL_OK; ++i) {
@@ -492,7 +628,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
   }
   if (status == CALL_OK && options->fresh_group) {
     struct execution_group_create_reply group = {0};
-    status = launcher_create_group(owned->launcher, &group);
+    status = launcher_create_group(owned->launcher, &group, limit);
     if (status == CALL_OK) {
       owned->supervision = group.supervision;
       status = close_handle(&owned->launcher);
@@ -509,7 +645,6 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     }
   }
   if (status == CALL_OK) {
-    handle_t streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT] = {0};
     for (size_t i = 0; i < options->stage_count; ++i) {
       streams[i][ENVIRONMENT_STDIN] = i ? sources[i - 1].reader :
           options->has_input ? sources[middle_count + 2].reader : HANDLE_INVALID;
@@ -517,7 +652,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
       streams[i][ENVIRONMENT_STDERR] = sources[middle_count + 1].writer;
     }
     status = libc_pipeline_launch(prepared, owned->launcher, streams,
-        owned->observers, &owned->result.failed_stage);
+        owned->observers, &owned->result.failed_stage, limit);
     admitted = status == CALL_OK;
     owned->uncertain = status == CALL_OUTCOME_UNKNOWN;
   }
@@ -533,6 +668,12 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
     }
   }
   enum call_status closed = close_sources(sources, source_count);
+  free(streams);
+  free(sources);
+  if (status == CALL_OK) {
+    status = refresh_readiness(owned, limit);
+    owned->readiness_failed = status != CALL_OK;
+  }
   if (release == CALL_OK) {
     release = closed;
   }
@@ -602,17 +743,6 @@ enum call_status pyxis_pipeline_wait(struct pyxis_pipeline *pipeline,
     if (progress) {
       continue;
     }
-    struct wait_interest waits[LAUNCH_BATCH_MAX + 4];
-    uint64_t events[LAUNCH_BATCH_MAX + 4];
-    size_t count = observation_interests(pipeline, waits);
-    for (size_t i = 0; i < 2; ++i) {
-      if (pipeline->outputs[i].reader) {
-        waits[count++] = (struct wait_interest){pipeline->outputs[i].reader, WAIT_READABLE, 0};
-      }
-    }
-    if (pipeline->input_writer) {
-      waits[count++] = (struct wait_interest){pipeline->input_writer, WAIT_WRITABLE, 0};
-    }
     uint64_t now;
     status = clock_now(pipeline->clock, &now);
     if (status == CALL_OK) {
@@ -621,7 +751,24 @@ enum call_status pyxis_pipeline_wait(struct pyxis_pipeline *pipeline,
           pipeline->deadline < until) {
         until = pipeline->deadline;
       }
-      status = count ? wait_many(waits, count, until, events) : CALL_UNAVAILABLE;
+      if (pipeline->readiness_failed) {
+        /* Failed construction is already stopping. Sleep on one known owner
+         * solely to avoid spinning while cleanup makes progress. */
+        handle_t handle = pipeline->supervision;
+        for (size_t i = 0; !handle && i < pipeline->result.stage_count; ++i) {
+          if (!pipeline->stage_valid[i]) {
+            handle = pipeline->observers[i];
+          }
+        }
+        struct wait_interest interest = {handle, WAIT_COMPLETE, 0};
+        uint64_t events;
+        status = handle ? wait_many(&interest, 1, until, &events) : CALL_UNAVAILABLE;
+      } else {
+        status = refresh_readiness(pipeline, NULL);
+        if (status == CALL_OK) {
+          status = collect_readiness(pipeline, until, &progress);
+        }
+      }
     }
     if (status != CALL_OK && status != CALL_TIMED_OUT) {
       remember_error(pipeline, status);

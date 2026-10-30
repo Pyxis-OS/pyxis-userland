@@ -29,8 +29,11 @@ static bool retired(const struct pyxis_job *job)
 }
 
 static enum call_status launch_job(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job)
+    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!job) {
     return CALL_BAD_REQUEST;
   }
@@ -42,7 +45,7 @@ static enum call_status launch_job(handle_t launcher,
   if (!owned) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = libc_job_launch(launcher, options, private_root, &owned->observer);
+  enum call_status status = libc_job_launch(launcher, options, private_root, &owned->observer, limit);
   if (status != CALL_OK) {
     free(owned);
     return status;
@@ -52,14 +55,20 @@ static enum call_status launch_job(handle_t launcher,
 }
 
 enum call_status pyxis_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, struct pyxis_job **job)
+    const struct pyxis_job_options *options, struct pyxis_job **job, struct call_limit *limit)
 {
-  return launch_job(launcher, options, HANDLE_INVALID, job);
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
+  return launch_job(launcher, options, HANDLE_INVALID, job, limit);
 }
 
 enum call_status pyxis_job_launch_contained(handle_t launcher,
-    const struct pyxis_job_options *options, struct pyxis_job **job)
+    const struct pyxis_job_options *options, struct pyxis_job **job, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!job) {
     return CALL_BAD_REQUEST;
   }
@@ -72,10 +81,10 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
     return CALL_NO_MEMORY;
   }
   struct job_preparation prepared = {0};
-  enum call_status status = libc_job_prepare(&prepared, launcher, options, HANDLE_INVALID);
+  enum call_status status = libc_job_prepare(&prepared, launcher, options, HANDLE_INVALID, limit);
   struct execution_group_create_reply group = {0};
   if (status == CALL_OK) {
-    status = launcher_create_group(prepared.launcher, &group);
+    status = launcher_create_group(prepared.launcher, &group, limit);
     if (status == CALL_OK) {
       owned->supervision = group.supervision;
     } else if (status == CALL_OUTCOME_UNKNOWN) {
@@ -83,7 +92,7 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
     }
   }
   if (status == CALL_OK) {
-    status = libc_job_publish(&prepared, group.launcher, &owned->observer);
+    status = libc_job_publish(&prepared, group.launcher, &owned->observer, limit);
   }
   if (status == CALL_OK) {
     status = execution_group_seal(owned->supervision);
@@ -110,8 +119,11 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
 }
 
 enum call_status pyxis_job_launch_observer(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t *observer)
+    const struct pyxis_job_options *options, handle_t *observer, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!observer) {
     return CALL_BAD_REQUEST;
   }
@@ -119,19 +131,22 @@ enum call_status pyxis_job_launch_observer(handle_t launcher,
   if (!options) {
     return CALL_BAD_REQUEST;
   }
-  return libc_job_launch(launcher, options, HANDLE_INVALID, observer);
+  return libc_job_launch(launcher, options, HANDLE_INVALID, observer, limit);
 }
 
 enum call_status libc_job_launch_captured(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job)
+    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (private_root == HANDLE_INVALID) {
     if (job) {
       *job = NULL;
     }
     return CALL_BAD_REQUEST;
   }
-  return launch_job(launcher, options, private_root, job);
+  return launch_job(launcher, options, private_root, job, limit);
 }
 
 handle_t pyxis_job_observer(const struct pyxis_job *job)

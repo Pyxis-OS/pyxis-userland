@@ -2,6 +2,7 @@
 #define USERSPACE_HANDLE_H
 
 #include <abi/handle.h>
+#include <abi/limit.h>
 #include <abi/describe.h>
 #include <abi/syscall.h>
 
@@ -39,5 +40,9 @@ enum call_status handle_rights(handle_t handle, uint64_t *rights, uint64_t *tran
 enum call_status handle_copy(handle_t source, handle_t *destination);
 enum call_status handle_copy_restricted(handle_t source, uint64_t rights,
     uint64_t transport, handle_t *destination);
+
+/* Same selection and ownership, retaining optional structured limit detail. */
+enum call_status handle_copy_restricted_with_limit(handle_t source, uint64_t rights,
+    uint64_t transport, handle_t *destination, struct call_limit *limit);
 
 #endif

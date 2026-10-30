@@ -227,7 +227,7 @@ static enum call_status launch_client(handle_t launcher, handle_t image,
     .argv = (uintptr_t)arguments,
     .argc = 2,
   };
-  return launcher_launch(launcher, &request, child);
+  return launcher_launch(launcher, &request, child, NULL);
 }
 
 static bool receive_retire(handle_t receiver, uint64_t first_id, uint64_t second_id)

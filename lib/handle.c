@@ -117,14 +117,17 @@ enum call_status handle_describe(handle_t handle, uint64_t flags,
 }
 
 static enum call_status copy(handle_t source, uint64_t rights, uint64_t transport,
-    uint64_t flags,
-                              handle_t *destination)
+    uint64_t flags, handle_t *destination, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!destination) {
     return CALL_BAD_REQUEST;
   }
   *destination = HANDLE_INVALID;
-  struct syscall_result result = syscall_copy(source, rights, transport, flags, destination);
+  struct syscall_result result = syscall_copy_with_limit(source, rights, transport, flags,
+      destination, limit);
   if (result.status == (uint64_t)CALL_UNKNOWN_SYSTEM_CALL) {
     return CALL_UNKNOWN_SYSTEM_CALL;
   }
@@ -140,11 +143,17 @@ static enum call_status copy(handle_t source, uint64_t rights, uint64_t transpor
 
 enum call_status handle_copy(handle_t source, handle_t *destination)
 {
-  return copy(source, 0, 0, HANDLE_COPY_SAME_RIGHTS, destination);
+  return copy(source, 0, 0, HANDLE_COPY_SAME_RIGHTS, destination, NULL);
 }
 
 enum call_status handle_copy_restricted(handle_t source, uint64_t rights,
     uint64_t transport, handle_t *destination)
 {
-  return copy(source, rights, transport, 0, destination);
+  return copy(source, rights, transport, 0, destination, NULL);
+}
+
+enum call_status handle_copy_restricted_with_limit(handle_t source, uint64_t rights,
+    uint64_t transport, handle_t *destination, struct call_limit *limit)
+{
+  return copy(source, rights, transport, 0, destination, limit);
 }

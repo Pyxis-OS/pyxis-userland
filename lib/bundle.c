@@ -647,8 +647,7 @@ static enum call_status parse_manifest(const struct path_context *context,
       status = parse_commands(program, value);
     } else if (!strcmp(name, "stack_bytes")) {
       if (value->type != BUNDLE_JSON_INTEGER ||
-          value->integer < LAUNCH_INITIAL_STACK_MIN_SIZE ||
-          value->integer > LAUNCH_INITIAL_STACK_MAX_SIZE ||
+          value->integer < MEMORY_PAGE_SIZE ||
           value->integer % MEMORY_PAGE_SIZE) {
         return CALL_BAD_REQUEST;
       }

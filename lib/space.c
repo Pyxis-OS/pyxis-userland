@@ -81,8 +81,11 @@ enum call_status space_create_unstarted(handle_t factory, const struct space_def
 
 enum call_status space_create_started(handle_t factory, const struct space_definition *space,
     const uint64_t *cpus, uint64_t cpu_count, const struct launch_request *launch,
-    handle_t *child)
+    handle_t *child, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!child) {
     return CALL_BAD_REQUEST;
   }
@@ -95,8 +98,8 @@ enum call_status space_create_started(handle_t factory, const struct space_defin
   request.cpu_count = cpu_count;
   request.launch = (uintptr_t)launch;
   handle_t reply = HANDLE_INVALID;
-  struct syscall_result result = syscall_call(factory, &request, sizeof(request),
-      &reply, sizeof(reply));
+  struct syscall_result result = syscall_call_with_limit(factory, &request, sizeof(request),
+      &reply, sizeof(reply), limit);
   if (result.status >= CALL_STATUS_COUNT ||
       result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
     return CALL_OUTCOME_UNKNOWN;

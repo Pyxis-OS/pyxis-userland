@@ -345,7 +345,7 @@ static bool pipe_pass(const struct options *options, handle_t image, handle_t cl
   }
   uint64_t failed;
   status = launcher_launch_batch(bootstrap_capability("launcher"), requests, WORKERS,
-      children, &failed);
+      children, &failed, NULL);
   if (status != CALL_OK) {
     goto cleanup;
   }

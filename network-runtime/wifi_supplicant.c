@@ -136,7 +136,7 @@ static void start_attempt(struct network_wifi_supplicant *worker, uint64_t now)
   worker->auth = pair.auth;
   worker->observation = pair.observation;
   struct execution_group_create_reply group = {0};
-  status = launcher_create_group(worker->launcher, &group);
+  status = launcher_create_group(worker->launcher, &group, NULL);
   if (status != CALL_OK) {
     if (status == CALL_OUTCOME_UNKNOWN) {
       disable_worker(worker, status);
@@ -160,7 +160,7 @@ static void start_attempt(struct network_wifi_supplicant *worker, uint64_t now)
     .entries = (uintptr_t)entries, .entry_count = 4,
     .argv = (uintptr_t)arguments, .argc = 1,
   };
-  status = launcher_launch(worker->group_launcher, &request, &worker->process);
+  status = launcher_launch(worker->group_launcher, &request, &worker->process, NULL);
   if (status == CALL_OK) {
     status = execution_group_seal(worker->group);
   }

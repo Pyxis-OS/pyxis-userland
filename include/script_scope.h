@@ -4,6 +4,7 @@
 #include <abi/execution_group.h>
 #include <abi/launcher.h>
 #include <abi/syscall.h>
+#include <abi/limit.h>
 #include <stdbool.h>
 
 /* A handed script owns a foreground subgroup: background and successor
@@ -14,7 +15,8 @@
  * failure preserves GROUP. A handed script without CHILD_LAUNCHER needs no
  * subgroup; a positional script without LAUNCHER returns DENIED. */
 enum call_status script_scope_open(bool positional, handle_t launcher,
-    handle_t child_launcher, struct execution_group_create_reply *group);
+    handle_t child_launcher, struct execution_group_create_reply *group,
+    struct call_limit *limit);
 
 /* Select the launcher used to admit a process, and the launcher it may receive
  * for its own children. COMMAND_LAUNCHER is an owned command scope's bound

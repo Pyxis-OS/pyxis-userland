@@ -104,7 +104,7 @@ static bool run_pkg(const char *const *arguments, size_t argument_count, handle_
     status = bundle_launch_prepare(program, &request, authority,
         sizeof(authority) / sizeof(*authority) - (management == HANDLE_INVALID), &prepared);
     if (status == CALL_OK) {
-      status = launcher_launch(launcher, bundle_launch_request(prepared), &process);
+      status = launcher_launch(launcher, bundle_launch_request(prepared), &process, NULL);
       bundle_launch_admitted(prepared, status, process);
     }
   }

@@ -39,8 +39,10 @@ struct pyxis_pipeline_result {
   uint64_t failed_stage; /* LAUNCH_NO_STAGE or a refused batch stage. */
   enum pyxis_capture_stop stop;
   size_t stage_count;
-  bool stage_valid[LAUNCH_BATCH_MAX];
-  struct process_result stages[LAUNCH_BATCH_MAX];
+  /* Borrowed from the pipeline, valid through its next operation or close.
+   * A shallow copy owns no additional storage and requires no extra close. */
+  const bool *stage_valid;
+  const struct process_result *stages;
   bool has_input, input_closed, input_peer_closed, input_uncertain;
   uint64_t input_size, input_accepted, input_unsent;
   struct pyxis_capture_output stdout_output, stderr_output;
@@ -63,7 +65,7 @@ extern "C" {
  * teardown. A retained fresh group stops/waits without inventing stage results.
  * Synchronous admission and cleanup have no hard wall-time bound. */
 enum call_status pyxis_pipeline_start(handle_t launcher,
-    const struct pyxis_pipeline_options *options, struct pyxis_pipeline **pipeline);
+    const struct pyxis_pipeline_options *options, struct pyxis_pipeline **pipeline, struct call_limit *limit);
 
 /* One bounded round: try input while draining both outputs and observing every
  * stage. Stage exit/fault is a result, not an automatic pump failure. EPIPE
@@ -73,7 +75,7 @@ enum call_status pyxis_pipeline_start(handle_t launcher,
 enum call_status pyxis_pipeline_step(struct pyxis_pipeline *pipeline,
     struct pyxis_pipeline_result *result);
 
-/* Runs concurrent rounds; wait_many only when no immediate progress remains.
+/* Runs concurrent rounds; waits on its readiness set after immediate progress.
  * Drains buffered output through EOF and observes every stage (and the optional
  * fresh group) before completion. After stop, retirement may remain unbounded. */
 enum call_status pyxis_pipeline_wait(struct pyxis_pipeline *pipeline,

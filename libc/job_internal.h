@@ -15,7 +15,8 @@ struct job_stream_selection {
 
 struct job_preparation {
   struct launch_request request;
-  unsigned char *metadata;
+  struct job_metadata *metadata;
+  struct call_limit limit;
   size_t used;
   enum call_status error;
   struct launch_grant *grants;
@@ -31,19 +32,21 @@ struct job_preparation {
  * the existing metadata/authority inventory and flush selected outputs before
  * any contained-scope creation. Publication borrows the selected launcher and
  * may be attempted only once, including after an uncertain result. */
+enum call_status libc_job_validate_metadata(const struct pyxis_job_options *options,
+    struct call_limit *limit);
 enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root);
+    const struct pyxis_job_options *options, handle_t private_root, struct call_limit *limit);
 enum call_status libc_job_publish(struct job_preparation *prepared, handle_t launcher,
-    handle_t *observer);
+    handle_t *observer, struct call_limit *limit);
 enum call_status libc_job_discard_preparation(struct job_preparation *prepared);
 
 enum call_status libc_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer);
+    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer, struct call_limit *limit);
 /* The capture owner retains its output account and supplies absent stdin and
  * FILE-compatible producer outputs. Uncertain publication clears *job; its outer owner
  * must retain storage until cleanup is confirmed or quarantine it. */
 enum call_status libc_job_launch_captured(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job);
+    const struct pyxis_job_options *options, handle_t private_root, struct pyxis_job **job, struct call_limit *limit);
 
 /* Capture inventory: private_root is a legacy pipeline directory or a native
  * retention account. Capture profiles exclude child retention grants. This cannot

@@ -28,7 +28,7 @@ int libc_call_errno(enum call_status status)
   case CALL_NO_SPACE: return ENOSPC;
   case CALL_QUOTA: return EDQUOT;
   case CALL_FILE_TOO_LARGE: return EFBIG;
-  case CALL_LIMIT: return EOVERFLOW;
+  case CALL_LIMIT: return E2BIG;
   case CALL_NOT_FOUND: return ENOENT;
   case CALL_ALREADY_EXISTS: return EEXIST;
   case CALL_READ_ONLY: return EROFS;

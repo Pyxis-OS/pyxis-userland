@@ -301,10 +301,9 @@ static enum call_status validate_source(handle_t handle, uint64_t protocol, uint
 }
 
 static enum call_status validate_options(handle_t launcher,
-    const struct pyxis_capture_options *options)
+    const struct pyxis_capture_options *options, struct call_limit *limit)
 {
   if (!options || !options->deadline_ns ||
-      options->command.grant_count > LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) ||
       (options->command.grant_count && !options->command.grants)) {
     return CALL_BAD_REQUEST;
   }
@@ -313,7 +312,11 @@ static enum call_status validate_options(handle_t launcher,
       return CALL_BAD_REQUEST;
     }
   }
-  enum call_status status = validate_source(launcher, PROTOCOL_LAUNCHER,
+  enum call_status status = libc_job_validate_metadata(&options->command, limit);
+  if (status != CALL_OK) {
+    return status;
+  }
+  status = validate_source(launcher, PROTOCOL_LAUNCHER,
       LAUNCHER_RIGHT_LAUNCH);
   if (status != CALL_OK) {
     return status;
@@ -331,13 +334,16 @@ static enum call_status validate_options(handle_t launcher,
 }
 
 enum call_status pyxis_capture_start(handle_t launcher,
-    const struct pyxis_capture_options *options, struct pyxis_capture **capture)
+    const struct pyxis_capture_options *options, struct pyxis_capture **capture, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!capture) {
     return CALL_BAD_REQUEST;
   }
   *capture = NULL;
-  enum call_status status = validate_options(launcher, options);
+  enum call_status status = validate_options(launcher, options, limit);
   if (status != CALL_OK) {
     return status;
   }
@@ -350,12 +356,12 @@ enum call_status pyxis_capture_start(handle_t launcher,
       PYXIS_CAPTURE_DEFAULT_POLL_NS;
   owned->limits[0] = options->stdout_limit ? options->stdout_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
   owned->limits[1] = options->stderr_limit ? options->stderr_limit : PYXIS_CAPTURE_DEFAULT_LIMIT;
-  status = handle_copy_restricted(options->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0, &owned->clock);
+  status = handle_copy_restricted_with_limit(options->clock, CLOCK_RIGHT_READ | CLOCK_RIGHT_PRECISE, 0, &owned->clock, limit);
   if (status == CALL_OK) {
-    status = handle_copy_restricted(options->output_account, RETENTION_RIGHT_CAPTURE, 0, &owned->output_account);
+    status = handle_copy_restricted_with_limit(options->output_account, RETENTION_RIGHT_CAPTURE, 0, &owned->output_account, limit);
   }
   if (status == CALL_OK) {
-    status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher);
+    status = handle_copy_restricted_with_limit(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &owned->launcher, limit);
   }
   uint64_t now;
   if (status == CALL_OK) {
@@ -372,7 +378,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
       owned->collectors[i] = pair.collector;
       owned->producers[i] = pair.producer;
       handle_t writer = HANDLE_INVALID;
-      status = handle_copy_restricted(pair.producer, FILE_RIGHT_WRITE, 0, &writer);
+      status = handle_copy_restricted_with_limit(pair.producer, FILE_RIGHT_WRITE, 0, &writer, limit);
       if (status == CALL_OK) {
         writers[i] = pyxis_descriptor_adopt(&writer, PYXIS_DESCRIPTOR_WRITE);
         if (writers[i] < 0) {
@@ -384,7 +390,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
   }
   if (status == CALL_OK && options->fresh_group) {
     struct execution_group_create_reply group = {0};
-    status = launcher_create_group(owned->launcher, &group);
+    status = launcher_create_group(owned->launcher, &group, limit);
     if (status == CALL_OK) {
       owned->supervision = group.supervision;
       status = close_handle(&owned->launcher);
@@ -397,7 +403,7 @@ enum call_status pyxis_capture_start(handle_t launcher,
     struct pyxis_job_options command = options->command;
     command.streams[ENVIRONMENT_STDOUT] = writers[0];
     command.streams[ENVIRONMENT_STDERR] = writers[1];
-    status = libc_job_launch_captured(owned->launcher, &command, owned->output_account, &owned->job);
+    status = libc_job_launch_captured(owned->launcher, &command, owned->output_account, &owned->job, limit);
     if (status == CALL_OUTCOME_UNKNOWN) {
       owned->uncertain = true;
     }

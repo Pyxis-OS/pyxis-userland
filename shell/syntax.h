@@ -52,7 +52,7 @@ enum shell_condition { SHELL_ALWAYS, SHELL_ON_SUCCESS, SHELL_ON_FAILURE };
 struct shell_syntax_command {
   /* ALWAYS starts a new list; other connectors bind to its accumulated result. */
   enum shell_condition condition;
-  struct shell_syntax_stage stages[LAUNCH_BATCH_MAX];
+  struct shell_syntax_stage *stages;
   size_t stage_count;
   bool background;
   bool assignment;
@@ -97,7 +97,7 @@ struct shell_expansion {
   struct shell_outcome failure_outcome;
   /* Borrowed records with separately allocated arrays; close only through
    * shell_expansion_close, which owns their per-word CAP references. */
-  struct environment_capture selected[LAUNCH_BATCH_MAX];
+  struct environment_capture *selected;
   struct shell_expanded_word *words;
   size_t word_count;
   /* words and values are parallel in stage/argv order, excluding redirections. */

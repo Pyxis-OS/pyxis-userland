@@ -92,7 +92,7 @@ enum call_status program_runtime_begin(enum program_interpreter_kind kind,
   runtime.child_launcher = source_handle("child_launcher");
   if (mode != PROGRAM_RUNTIME_INTERACTIVE && runtime.launcher != HANDLE_INVALID) {
     status = script_scope_open(mode == PROGRAM_RUNTIME_POSITIONAL,
-        runtime.launcher, runtime.child_launcher, &runtime.group);
+        runtime.launcher, runtime.child_launcher, &runtime.group, NULL);
     if (status != CALL_OK) {
       goto fail;
     }

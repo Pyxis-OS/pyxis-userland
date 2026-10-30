@@ -988,7 +988,7 @@ static int supervise(bool fault, bool parking, bool tls)
     .argv = (uintptr_t)arguments, .argc = 2,
   };
   if (status == CALL_OK) {
-    status = launcher_launch(bootstrap_capability("launcher"), &request, &child);
+    status = launcher_launch(bootstrap_capability("launcher"), &request, &child, NULL);
   }
   bool valid = status == CALL_OK;
   uint64_t supervisor_woken = UINT64_MAX;

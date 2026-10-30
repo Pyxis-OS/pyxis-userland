@@ -84,7 +84,7 @@ struct shell_stage {
 struct shell_command_line {
   size_t stage_count;
   bool background;
-  struct shell_stage stages[LAUNCH_BATCH_MAX];
+  struct shell_stage *stages;
 };
 
 #define SHELL_FAT_MOUNT_LIMIT 4

@@ -257,7 +257,7 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
           sizeof(authority) / sizeof(*authority), &prepared);
     }
     if (status == CALL_OK) {
-      status = launcher_launch(launcher, bundle_launch_request(prepared), &providers->httpfs);
+      status = launcher_launch(launcher, bundle_launch_request(prepared), &providers->httpfs, NULL);
       bundle_launch_admitted(prepared, status, providers->httpfs);
     }
   }
@@ -678,7 +678,7 @@ choose:
     .argv = (uintptr_t)arguments,
     .argc = argument_index,
   };
-  status = launcher_launch(sources[LAUNCHER], &request, &child);
+  status = launcher_launch(sources[LAUNCHER], &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "installer-init: cannot start boot://installer.pxe (status %u)\n", status);
     goto done;

@@ -443,7 +443,7 @@ static void run_reader(handle_t boot, handle_t launcher, handle_t root,
   if (fflush(stdout) != 0) {
     fputs("fat32 mount: output failed\n", stderr);
   } else {
-    status = launcher_launch(launcher, &request, &child);
+    status = launcher_launch(launcher, &request, &child, NULL);
     if (status != CALL_OK) {
       fprintf(stderr, "fat32 mount: reader launch failed (status %u)\n", status);
     } else {
@@ -811,7 +811,7 @@ static int select_scratch_write(void)
     .argv = (uintptr_t)arguments,
     .argc = 3,
   };
-  status = launcher_launch(launcher, &request, &child);
+  status = launcher_launch(launcher, &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 mount: launch failed (status %u)\n", status);
     goto done;
@@ -918,7 +918,7 @@ static int create_browser(bool boot_selected, bool writable)
         boot_selected ? "Boot ESP (read-only)" : "Mounted FAT32 (read-only)",
   };
   status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,
-      &request, &child);
+      &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 mount: space launch failed (status %u)\n", status);
     goto done;

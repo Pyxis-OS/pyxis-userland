@@ -33,7 +33,9 @@ struct pyxis_job_options {
 extern "C" {
 #endif
 
-/* One native image, through the caller's existing launcher. Inputs are borrowed
+/* Admission clears optional LIMIT before validation and preserves its numeric
+ * cause across cleanup. Outputs must be separate from borrowed inputs.
+ * One native image, through the caller's existing launcher. Inputs are borrowed
  * for this call; output must be separate. Snapshots own names, argv, cwd/env
  * and restricted handle copies through synchronous launch capture. Source
  * handles/descriptors survive. Selected buffered outputs flush before launch;
@@ -44,7 +46,7 @@ extern "C" {
  * freeze directories or image bytes. CALL_OUTCOME_UNKNOWN must
  * never be retried automatically. Failure clears *job. Single-owner API. */
 enum call_status pyxis_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, struct pyxis_job **job);
+    const struct pyxis_job_options *options, struct pyxis_job **job, struct call_limit *limit);
 
 /* The same explicit native leaf profile and preparation, in a fresh root or
  * subgroup selected by the launcher binding. The creator stays outside and
@@ -59,7 +61,7 @@ enum call_status pyxis_job_launch(handle_t launcher,
  * scope can confirm cleanup after uncertain leaf admission, but cannot invent
  * a process result. Do not discard a returned record because status failed. */
 enum call_status pyxis_job_launch_contained(handle_t launcher,
-    const struct pyxis_job_options *options, struct pyxis_job **job);
+    const struct pyxis_job_options *options, struct pyxis_job **job, struct call_limit *limit);
 
 /* Same direct launch preparation and authority checks, returning an owned
  * WAIT|TERMINATE observer without a job record. The caller can wait, terminate
@@ -67,7 +69,7 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
  * including unknown admission, which must not be retried. For event-loop
  * adapters with their own lifecycle, not capturing jobs. */
 enum call_status pyxis_job_launch_observer(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t *observer);
+    const struct pyxis_job_options *options, handle_t *observer, struct call_limit *limit);
 
 /* Borrowed WAIT|TERMINATE observer for readiness/queries. Never close it; copy
  * an attenuated WAIT handle to own an independent observer. Closing observers

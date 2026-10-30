@@ -98,7 +98,7 @@ int launch_tcp_server(uint32_t address, uint16_t port, const char *count)
   listener = reply.handle;
   grants[LISTENER] = (struct launch_grant){listener, TCP_LISTENER_RIGHTS, 0};
   handle_t child;
-  status = launcher_launch(launcher, &request, &child);
+  status = launcher_launch(launcher, &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot launch TCP server (status %u)\n", status);
     goto done;

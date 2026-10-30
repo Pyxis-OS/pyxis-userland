@@ -1263,8 +1263,8 @@ static const char *launch_capacity(const struct authority *authority,
       capacity_add(&grants, root_grants) && capacity_add(&grants, granted) &&
       capacity_add(&resources, granted) && capacity_add(&resources, text) &&
       capacity_add(&entries, resources) && capacity_add(&entries, roots);
-  const size_t grant_max = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
-  const size_t entry_max = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry);
+  const size_t grant_max = SIZE_MAX / sizeof(struct launch_grant);
+  const size_t entry_max = SIZE_MAX / sizeof(struct launch_environment_entry);
   if (!counted) {
     return "launch table size overflows";
   }
@@ -1717,7 +1717,7 @@ static bool start_space(const struct authority *authority, struct mounts *mounts
     struct path_context interpreters = {0};
     admission_attempted = true;
     status = program_create_space(authority->factory, &definition, cpus,
-        authority->cpu_count, &request, &interpreters, &child);
+        authority->cpu_count, &request, &interpreters, &child, NULL);
     free(entries);
     if (status == CALL_OK) {
       printf("boot-init: space %s started: %s%s\n", space->name, space->init,

@@ -155,7 +155,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     goto done;
   }
   struct execution_group_create_reply group;
-  status = launcher_create_group(bootstrap_capability("launcher"), &group);
+  status = launcher_create_group(bootstrap_capability("launcher"), &group, NULL);
   if (status != CALL_OK) {
     goto done;
   }
@@ -409,7 +409,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     .argv = (uintptr_t)arguments, .argc = 1,
   };
   admission_attempted = true;
-  status = launcher_launch(bound, &request, &session->process);
+  status = launcher_launch(bound, &request, &session->process, NULL);
 
 done:
   if (bootstrap.caller != HANDLE_INVALID) {

@@ -481,7 +481,7 @@ int launch_remote_server(const struct session_config *config,
         TCP_LISTENER_RIGHT_INSPECT | TCP_LISTENER_RIGHT_ACCEPT, 0};
   }
   handle_t child;
-  status = launcher_launch(launcher, &request, &child);
+  status = launcher_launch(launcher, &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot launch remote server (status %u)\n", status);
     goto done;

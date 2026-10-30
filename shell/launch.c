@@ -119,7 +119,8 @@ struct launch_scope {
   size_t root_count;
   char root_roles[PROVIDER_SETUP_ROOT_MAX * (PROVIDER_SETUP_ROLE_MAX + 1)];
   bool published;
-  struct job_work *delegations[LAUNCH_BATCH_MAX];
+  struct job_work **delegations;
+  size_t delegation_count;
   /* A service's stdout and stderr, when bound to the system log instead of the
    * space's console. Borrowed: the caller closes them after the launch. */
   handle_t log_stdout, log_stderr;
@@ -1885,32 +1886,32 @@ static handle_t arm_interrupt(struct shell *shell)
   return armed;
 }
 
-static_assert(LAUNCH_BATCH_MAX + 1 <= WAIT_MAX_INTERESTS,
-    "a foreground wait watches every stage and the interrupt");
-
 /* Ordinary direct stages get one cooperative request; a later press forces
  * their whole owned scope to stop. Capture/script/helper scopes and input failure
  * retain immediate stop. Observe real completion with the same armed grant. */
 static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *children,
-    size_t stage_count, handle_t armed, uint64_t deadline, bool *cancelled, struct launch_scope *scope)
+    size_t stage_count, handle_t armed, uint64_t deadline, bool *cancelled,
+    struct launch_scope *scope, handle_t readiness, bool *complete,
+    struct readiness_set_registration *registrations)
 {
   handle_t group = scope && scope->owned ? scope->group.supervision : HANDLE_INVALID;
-  bool complete[LAUNCH_BATCH_MAX] = {0};
+  for (size_t i = 0; i < stage_count; ++i) {
+    enum call_status status = readiness_set_register(readiness, children[i],
+        WAIT_COMPLETE, i, &registrations[i], NULL);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
+  if (armed != HANDLE_INVALID) {
+    enum call_status status = readiness_set_register(readiness, armed,
+        WAIT_INTERRUPT, stage_count, &registrations[stage_count], NULL);
+    if (status != CALL_OK) {
+      return status;
+    }
+  }
   bool interrupted = false;
   size_t remaining = stage_count;
   while (remaining) {
-    struct wait_interest interests[LAUNCH_BATCH_MAX + 1];
-    size_t stage_of[LAUNCH_BATCH_MAX];
-    size_t count = 0;
-    for (size_t i = 0; i < stage_count; ++i) {
-      if (!complete[i]) {
-        stage_of[count] = i;
-        interests[count++] = (struct wait_interest){.handle = children[i], .events = WAIT_COMPLETE};
-      }
-    }
-    if (armed != HANDLE_INVALID) {
-      interests[count] = (struct wait_interest){.handle = armed, .events = WAIT_INTERRUPT};
-    }
     uint64_t now;
     enum call_status status = clock_now(shell->clock, &now);
     if (status != CALL_OK) {
@@ -1927,21 +1928,38 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
     if (deadline && deadline < until) {
       until = deadline;
     }
-    uint64_t events[LAUNCH_BATCH_MAX + 1] = {0};
-    status = wait_many(interests, count + (armed != HANDLE_INVALID), until, events);
+    struct readiness_set_event events[READINESS_SET_BATCH_MAX];
+    size_t count;
+    status = readiness_set_wait(readiness, until, events, READINESS_SET_BATCH_MAX, &count);
     if (status == CALL_TIMED_OUT) {
       continue;
     }
     if (status != CALL_OK) {
       return status;
     }
+    uint64_t interrupt_events = 0;
     for (size_t j = 0; j < count; ++j) {
-      if (events[j]) {
-        complete[stage_of[j]] = true;
+      if (events[j].status != CALL_OK) {
+        return events[j].status < CALL_STATUS_COUNT ? events[j].status : CALL_OUTCOME_UNKNOWN;
+      }
+      size_t stage = events[j].tag;
+      if (stage == stage_count) {
+        interrupt_events |= events[j].events;
+        continue;
+      }
+      if (stage > stage_count) {
+        return CALL_OUTCOME_UNKNOWN;
+      }
+      if (!complete[stage] && (events[j].events & WAIT_COMPLETE)) {
+        complete[stage] = true;
         --remaining;
+        status = readiness_set_remove(readiness, registrations[stage]);
+        if (status != CALL_OK) {
+          return status;
+        }
         if (deadline) {
           struct process_result result;
-          status = process_wait(children[stage_of[j]], &result);
+          status = process_wait(children[stage], &result);
           if (status != CALL_OK || result.kind != PROCESS_EXITED || result.exit_status) {
             *cancelled = true;
             for (size_t i = 0; i < stage_count; ++i) {
@@ -1952,8 +1970,8 @@ static enum call_status wait_or_interrupt(struct shell *shell, const handle_t *c
         }
       }
     }
-    if (armed != HANDLE_INVALID && (events[count] & (WAIT_INTERRUPT | WAIT_ERROR))) {
-      bool force = interrupted || (events[count] & WAIT_ERROR) ||
+    if (armed != HANDLE_INVALID && (interrupt_events & (WAIT_INTERRUPT | WAIT_ERROR))) {
+      bool force = interrupted || (interrupt_events & WAIT_ERROR) ||
           (group != HANDLE_INVALID && !scope->cooperative);
       if (!force) {
         /* Consume before dispatch: a press during any request stays latched. */
@@ -2109,7 +2127,7 @@ static enum command_result retire_foreground(struct shell *shell,
 static enum command_result close_foreground(struct shell *shell,
     struct launch_scope *scope, enum command_result result)
 {
-  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
+  for (size_t i = 0; i < scope->delegation_count; ++i) {
     enum call_status status = job_work_close(scope->delegations[i], scope->retired);
     if (status != CALL_OK) {
       scope->error = status;
@@ -2117,6 +2135,9 @@ static enum command_result close_foreground(struct shell *shell,
       shell_directory_error(shell, "shell: delegated job cleanup", "", status);
     }
   }
+  free(scope->delegations);
+  scope->delegations = NULL;
+  scope->delegation_count = 0;
   bool closed = close_handle(&scope->terminal_output);
   closed = close_handle(&scope->group.launcher) && closed;
   closed = close_handle(&scope->group.supervision) && closed;
@@ -2130,8 +2151,8 @@ static enum command_result close_foreground(struct shell *shell,
 
 static enum call_status check_redirect_inputs(const struct shell_stage *stages,
     const struct prepared_stage *prepared,
-    const struct pyxis_stdio_binding streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT],
-    size_t stage_count, size_t *failed_stage, const char **operation, const char **path)
+    const struct pyxis_stdio_binding (*streams)[ENVIRONMENT_STREAM_COUNT],
+    struct file_info_reply *inputs, size_t stage_count, size_t *failed_stage, const char **operation, const char **path)
 {
   bool has_input = false, has_output = false;
   for (size_t i = 0; i < stage_count; ++i) {
@@ -2143,7 +2164,6 @@ static enum call_status check_redirect_inputs(const struct shell_stage *stages,
     return CALL_OK;
   }
 
-  struct file_info_reply inputs[LAUNCH_BATCH_MAX];
   for (size_t i = 0; i < stage_count; ++i) {
     if (streams[i][ENVIRONMENT_STDIN].protocol != PROTOCOL_FILE) {
       continue;
@@ -2218,21 +2238,37 @@ static bool same_native_image(handle_t candidate, handle_t held)
       a.domain == b.domain && a.object == b.object;
 }
 
-static enum command_result launch_stages(struct shell *shell, const struct shell_stage *user_stages,
+struct launch_arrays {
+  size_t capacity;
+  struct shell_stage *stages;
+  size_t *merge_helper, *staging_helper, *owner;
+  size_t (*positioned_helper)[ENVIRONMENT_STREAM_COUNT];
+  struct pipe_create_reply *pipes;
+  struct pyxis_stdio_binding (*streams)[ENVIRONMENT_STREAM_COUNT];
+  handle_t *children;
+  const struct program_image **inputs;
+  struct file_info_reply *input_info;
+  struct process_result *completion;
+  bool *complete;
+  struct readiness_set_registration *registrations;
+  handle_t readiness;
+};
+
+static enum command_result launch_stages_owned(struct shell *shell, const struct shell_stage *user_stages,
     size_t user_count, enum shell_launch_mode mode, const char *service_name,
     handle_t replacement_control,
     bool optional, bool read_only, struct shell_outcome *outcome,
-    struct launch_scope *scope)
+    struct launch_scope *scope, struct launch_arrays *arrays)
 {
   /* Bookkeeping survives normalization of a relay-free policy scope to NULL. */
   struct launch_scope *report_scope = scope;
-  struct shell_stage stages[LAUNCH_BATCH_MAX];
+  struct shell_stage *stages = arrays->stages;
   memcpy(stages, user_stages, user_count * sizeof(*stages));
   size_t stage_count = user_count;
-  size_t merge_helper[LAUNCH_BATCH_MAX], staging_helper[LAUNCH_BATCH_MAX];
-  size_t positioned_helper[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT];
-  size_t owner[LAUNCH_BATCH_MAX];
-  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
+  size_t *merge_helper = arrays->merge_helper, *staging_helper = arrays->staging_helper;
+  size_t (*positioned_helper)[ENVIRONMENT_STREAM_COUNT] = arrays->positioned_helper;
+  size_t *owner = arrays->owner;
+  for (size_t i = 0; i < arrays->capacity; ++i) {
     merge_helper[i] = staging_helper[i] = SIZE_MAX;
     owner[i] = i;
     for (size_t j = 0; j < ENVIRONMENT_STREAM_COUNT; ++j) {
@@ -2240,8 +2276,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
   }
   char *worker_arguments[] = {"boot://http-stage.pxe", NULL};
-  struct prepared_stage *prepared = calloc(LAUNCH_BATCH_MAX, sizeof(*prepared));
-  struct launch_request *requests = malloc(LAUNCH_BATCH_MAX * sizeof(*requests));
+  struct prepared_stage *prepared = calloc(arrays->capacity, sizeof(*prepared));
+  struct launch_request *requests = malloc(arrays->capacity * sizeof(*requests));
   if (!prepared || !requests) {
     free(requests);
     free(prepared);
@@ -2251,8 +2287,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     return shell_directory_error(shell, "shell", stages[0].arguments[0], CALL_NO_MEMORY);
   }
-  struct pipe_create_reply pipes[LAUNCH_BATCH_MAX - 1] = {0};
-  struct pyxis_stdio_binding streams[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT] = {0};
+  struct pipe_create_reply *pipes = arrays->pipes;
+  struct pyxis_stdio_binding (*streams)[ENVIRONMENT_STREAM_COUNT] = arrays->streams;
   const char *operation = "shell: open";
   const char *path = stages[0].arguments[0];
   char conflicting_entry[ENVIRONMENT_NAME_MAX + 1];
@@ -2261,7 +2297,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   size_t failed_stage = 0;
   enum call_status status = CALL_OK;
   uint64_t failure_kind = TERMINAL_COMPLETION_LAUNCH_FAILED;
-  handle_t children[LAUNCH_BATCH_MAX] = {0};
+  handle_t *children = arrays->children;
+  struct call_limit limit = {0};
   handle_t armed = HANDLE_INVALID;
   handle_t default_environment = HANDLE_INVALID;
   uint64_t failed_index = LAUNCH_NO_STAGE;
@@ -2311,7 +2348,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
     }
     prepared[i].image = prepared[i].program->image;
     prepared[i].bundle = prepared[i].program->bundle;
-    status = program_image_prepare(prepared[i].image, &prepared[i].input);
+    status = program_image_prepare(prepared[i].image, &prepared[i].input, &limit);
     if (status != CALL_OK) {
       goto failed;
     }
@@ -2342,8 +2379,8 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         /* A bundle interpreter is launched as its bundle: the preparation takes
          * the selection and its manifest policy replaces the script's. */
         bool bundle = selected && selected->bundle;
-        status = bundle ? program_image_select_interpreter_bundle(prepared[i].input, selected) :
-            program_image_select_interpreter(prepared[i].input, image);
+        status = bundle ? program_image_select_interpreter_bundle(prepared[i].input, selected, &limit) :
+            program_image_select_interpreter(prepared[i].input, image, &limit);
         if (status == CALL_OK && bundle) {
           prepared[i].bundle = program_image_interpreter_bundle(prepared[i].input);
           selected = NULL;
@@ -2495,11 +2532,6 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
         helper = &positioned_helper[i][j];
       }
       if (helper && *helper == SIZE_MAX) {
-        if (stage_count == LAUNCH_BATCH_MAX) {
-          status = CALL_LIMIT;
-          operation = "shell: output workers";
-          goto failed;
-        }
         *helper = stage_count;
         owner[stage_count] = i;
         if (redirect->duplicate_stdout) {
@@ -2523,7 +2555,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       path = "";
       operation = scope->producer != HANDLE_INVALID ?
           "shell: capture group" : "shell: foreground group";
-      status = launcher_create_group(launcher, &scope->group);
+      status = launcher_create_group(launcher, &scope->group, &limit);
       if (status != CALL_OK) {
         if (scope->producer != HANDLE_INVALID) {
           failure_kind = TERMINAL_COMPLETION_REJECTED;
@@ -2843,7 +2875,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   }
 
   /* Compare held objects after pipe wiring, before the first output resize. */
-  status = check_redirect_inputs(stages, prepared, streams, user_count,
+  status = check_redirect_inputs(stages, prepared, streams, arrays->input_info, user_count,
       &failed_stage, &operation, &path);
   if (status != CALL_OK) {
     goto failed;
@@ -2916,16 +2948,16 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   handle_t launcher = script_scope_launch_launcher(shell->positional_script,
       mode == SHELL_FOREGROUND, shell->launcher, &shell->script_group,
       scope && scope->owned ? scope->group.launcher : HANDLE_INVALID);
-  const struct program_image *inputs[LAUNCH_BATCH_MAX];
+  const struct program_image **inputs = arrays->inputs;
   for (size_t i = 0; i < stage_count; ++i) {
     inputs[i] = prepared[i].input;
   }
   if (stage_count == 1) {
     status = program_launch_prepared(launcher, &requests[0], inputs[0], &interpreter_context,
-        &children[0]);
+        &children[0], &limit);
   } else {
     status = program_launch_batch_prepared(launcher, requests, stage_count,
-        inputs, &interpreter_context, children, &failed_index);
+        inputs, &interpreter_context, children, &failed_index, &limit);
   }
   for (size_t i = 0; i < stage_count; ++i) {
     prepared[i].admitted = status == CALL_OK || status == CALL_OUTCOME_UNKNOWN;
@@ -3099,7 +3131,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
   if (armed != HANDLE_INVALID) {
     status = wait_or_interrupt(shell, children, stage_count, armed,
         0, &cancelled,
-        scope);
+        scope, arrays->readiness, arrays->complete, arrays->registrations);
     if (status != CALL_OK) {
       /* Nothing watches the interrupt now; disarm so Ctrl+C is data again
        * rather than silently swallowed. */
@@ -3123,7 +3155,7 @@ static enum command_result launch_stages(struct shell *shell, const struct shell
       }
     }
   }
-  struct process_result completion[LAUNCH_BATCH_MAX] = {0};
+  struct process_result *completion = arrays->completion;
   for (size_t i = 0; i < stage_count; ++i) {
     status = process_wait(children[i], &completion[i]);
     bool closed = close_handle(&children[i]);
@@ -3294,13 +3326,104 @@ failed:
   environment_capture_close(&inherited);
   free(requests);
   free_preparation(prepared, stage_count);
-  enum command_result error = launch_error(shell, stages, user_count, failed_stage,
-      operation, path, missing, status);
+  enum command_result error;
+  char detail[256];
+  if (status == CALL_LIMIT && call_limit_format(&limit, detail, sizeof(detail))) {
+    error = user_count > 1 && failed_stage < user_count ?
+        shell_error(shell, "shell: stage %zu (%s): %s\n", failed_stage + 1,
+            stages[failed_stage].arguments[0], detail) :
+        shell_error(shell, "shell: %s: %s\n", path, detail);
+  } else {
+    error = launch_error(shell, stages, user_count, failed_stage,
+        operation, path, missing, status);
+  }
   set_outcome(outcome, failure_kind, 0);
   if (!closed_sources || cleanup_failure || status == CALL_OUTCOME_UNKNOWN) {
     return COMMAND_FATAL;
   }
   return error;
+}
+
+static enum command_result launch_stages(struct shell *shell, const struct shell_stage *stages,
+    size_t count, enum shell_launch_mode mode, const char *service_name,
+    handle_t replacement_control, bool optional, bool read_only,
+    struct shell_outcome *outcome, struct launch_scope *scope)
+{
+  size_t capacity = count;
+  for (size_t i = 0; i < count; ++i) {
+    if (stages[i].redirection_count > SIZE_MAX - capacity) {
+      return shell_directory_error(shell, "shell: pipeline metadata", "", CALL_LIMIT);
+    }
+    capacity += stages[i].redirection_count;
+  }
+  if (!count || capacity > SIZE_MAX / sizeof(struct prepared_stage) ||
+      capacity > SIZE_MAX / sizeof(struct launch_request) ||
+      capacity > SIZE_MAX / sizeof(struct shell_stage) ||
+      capacity > SIZE_MAX / sizeof(struct pyxis_stdio_binding[ENVIRONMENT_STREAM_COUNT]) ||
+      capacity >= SIZE_MAX / sizeof(struct readiness_set_registration)) {
+    return shell_directory_error(shell, "shell: pipeline metadata", "", CALL_LIMIT);
+  }
+  struct launch_arrays arrays = {.capacity = capacity};
+  arrays.stages = calloc(capacity, sizeof(*arrays.stages));
+  arrays.merge_helper = calloc(capacity, sizeof(*arrays.merge_helper));
+  arrays.staging_helper = calloc(capacity, sizeof(*arrays.staging_helper));
+  arrays.positioned_helper = calloc(capacity, sizeof(*arrays.positioned_helper));
+  arrays.owner = calloc(capacity, sizeof(*arrays.owner));
+  arrays.pipes = calloc(capacity, sizeof(*arrays.pipes));
+  arrays.streams = calloc(capacity, sizeof(*arrays.streams));
+  arrays.children = calloc(capacity, sizeof(*arrays.children));
+  arrays.inputs = calloc(capacity, sizeof(*arrays.inputs));
+  arrays.input_info = calloc(capacity, sizeof(*arrays.input_info));
+  arrays.completion = calloc(capacity, sizeof(*arrays.completion));
+  arrays.complete = calloc(capacity, sizeof(*arrays.complete));
+  arrays.registrations = calloc(capacity + 1, sizeof(*arrays.registrations));
+  bool ready = arrays.stages && arrays.merge_helper && arrays.staging_helper &&
+      arrays.positioned_helper && arrays.owner && arrays.pipes && arrays.streams &&
+      arrays.children && arrays.inputs && arrays.input_info && arrays.completion &&
+      arrays.complete && arrays.registrations;
+  if (ready && scope && mode == SHELL_FOREGROUND) {
+    scope->delegations = calloc(capacity, sizeof(*scope->delegations));
+    ready = scope->delegations != NULL;
+    if (ready) {
+      scope->delegation_count = capacity;
+    }
+  }
+  enum call_status status = ready ? CALL_OK : CALL_NO_MEMORY;
+  struct call_limit limit = {0};
+  if (status == CALL_OK && mode == SHELL_FOREGROUND) {
+    status = readiness_set_create(&arrays.readiness, &limit);
+  }
+  enum command_result result;
+  if (status == CALL_OK) {
+    result = launch_stages_owned(shell, stages, count, mode, service_name,
+        replacement_control, optional, read_only, outcome, scope, &arrays);
+  } else {
+    if (scope) {
+      scope->error = status;
+    }
+    set_outcome(outcome, TERMINAL_COMPLETION_LAUNCH_FAILED, 0);
+    char detail[256];
+    result = status == CALL_LIMIT && call_limit_format(&limit, detail, sizeof(detail)) ?
+        shell_error(shell, "shell: %s\n", detail) :
+        shell_directory_error(shell, "shell: pipeline metadata", "", status);
+  }
+  if (!close_handle(&arrays.readiness)) {
+    result = COMMAND_FATAL;
+  }
+  free(arrays.registrations);
+  free(arrays.complete);
+  free(arrays.completion);
+  free(arrays.input_info);
+  free(arrays.inputs);
+  free(arrays.children);
+  free(arrays.streams);
+  free(arrays.pipes);
+  free(arrays.owner);
+  free(arrays.positioned_helper);
+  free(arrays.staging_helper);
+  free(arrays.merge_helper);
+  free(arrays.stages);
+  return result;
 }
 
 enum command_result shell_launch(struct shell *shell, char **arguments, size_t count,
@@ -3526,7 +3649,7 @@ static enum call_status handoff_transaction_failure(struct shell *shell,
  * worker. The same held root supplies OPEN; dispatch never depends on its name. */
 static enum call_status prepare_output_pipeline(struct shell *shell,
     const struct shell_command_line *command, struct shell_stage *stages,
-    handle_t roots[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT], size_t *count)
+    handle_t (*roots)[ENVIRONMENT_STREAM_COUNT], size_t *count)
 {
   *count = command->stage_count;
   memcpy(stages, command->stages, *count * sizeof(*stages));
@@ -3580,10 +3703,10 @@ static enum call_status prepare_output_pipeline(struct shell *shell,
   return CALL_OK;
 }
 
-static bool close_redirect_roots(handle_t roots[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT])
+static bool close_redirect_roots(handle_t (*roots)[ENVIRONMENT_STREAM_COUNT], size_t count)
 {
   bool closed = true;
-  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
+  for (size_t i = 0; i < count; ++i) {
     for (size_t j = 0; j < ENVIRONMENT_STREAM_COUNT; ++j) {
       closed = close_handle(&roots[i][j]) && closed;
     }
@@ -3591,17 +3714,17 @@ static bool close_redirect_roots(handle_t roots[LAUNCH_BATCH_MAX][ENVIRONMENT_ST
   return closed;
 }
 
-static enum command_result launch_output(struct shell *shell,
+static enum command_result launch_output_owned(struct shell *shell,
     const struct shell_command_line *command, handle_t stdout_producer,
     struct shell_outcome *outcome, bool *evaluated, bool *started,
-    enum call_status *error_status)
+    enum call_status *error_status, struct shell_stage *stages,
+    handle_t (*roots)[ENVIRONMENT_STREAM_COUNT])
 {
   *evaluated = false;
   *started = false;
   *error_status = CALL_BAD_REQUEST;
   set_outcome(outcome, TERMINAL_COMPLETION_REJECTED, 0);
-  if (!command || !command->stage_count || command->stage_count > LAUNCH_BATCH_MAX ||
-      (stdout_producer != HANDLE_INVALID && command->background)) {
+  if (!command || !command->stage_count || (stdout_producer != HANDLE_INVALID && command->background)) {
     return shell_error(shell, "shell: invalid captured pipeline\n");
   }
   for (size_t i = 0; i < command->stage_count; ++i) {
@@ -3618,13 +3741,11 @@ static enum command_result launch_output(struct shell *shell,
     *error_status = status;
     return shell_directory_error(shell, "shell: capture output", "", status);
   }
-  struct shell_stage stages[LAUNCH_BATCH_MAX];
-  handle_t roots[LAUNCH_BATCH_MAX][ENVIRONMENT_STREAM_COUNT] = {0};
   size_t stage_count;
   status = prepare_output_pipeline(shell, command, stages, roots, &stage_count);
   if (status != CALL_OK) {
     *error_status = status;
-    bool closed = close_redirect_roots(roots);
+    bool closed = close_redirect_roots(roots, command->stage_count);
     return !closed ? COMMAND_FATAL :
         shell_directory_error(shell, "shell: output redirection", "", status);
   }
@@ -3639,7 +3760,7 @@ static enum command_result launch_output(struct shell *shell,
     enum command_result result = launch_stages(shell, stages, stage_count,
         command->background ? SHELL_BACKGROUND : SHELL_FOREGROUND, NULL,
         HANDLE_INVALID, false, false, outcome, NULL);
-    return close_redirect_roots(roots) ? result : COMMAND_FATAL;
+    return close_redirect_roots(roots, command->stage_count) ? result : COMMAND_FATAL;
   }
   struct launch_scope scope = {.producer = stdout_producer, .producer_mode = producer_status.mode,
       /* Transactions retain their existing all-producer commit policy. Owning
@@ -3718,7 +3839,37 @@ static enum command_result launch_output(struct shell *shell,
   *evaluated = scope.evaluated;
   *started = scope.started;
   *error_status = scope.error;
-  return close_redirect_roots(roots) ? result : COMMAND_FATAL;
+  return close_redirect_roots(roots, command->stage_count) ? result : COMMAND_FATAL;
+}
+
+static enum command_result launch_output(struct shell *shell,
+    const struct shell_command_line *command, handle_t stdout_producer,
+    struct shell_outcome *outcome, bool *evaluated, bool *started,
+    enum call_status *error_status)
+{
+  *evaluated = *started = false;
+  *error_status = CALL_BAD_REQUEST;
+  if (!command || !command->stage_count || !command->stages) {
+    return shell_error(shell, "shell: invalid captured pipeline\n");
+  }
+  if (command->stage_count > SIZE_MAX / sizeof(*command->stages) ||
+      command->stage_count > SIZE_MAX / sizeof(handle_t[ENVIRONMENT_STREAM_COUNT])) {
+    *error_status = CALL_LIMIT;
+    return shell_directory_error(shell, "shell: pipeline metadata", "", CALL_LIMIT);
+  }
+  struct shell_stage *stages = calloc(command->stage_count, sizeof(*stages));
+  handle_t (*roots)[ENVIRONMENT_STREAM_COUNT] = calloc(command->stage_count, sizeof(*roots));
+  if (!stages || !roots) {
+    free(stages);
+    free(roots);
+    *error_status = CALL_NO_MEMORY;
+    return shell_directory_error(shell, "shell: pipeline metadata", "", CALL_NO_MEMORY);
+  }
+  enum command_result result = launch_output_owned(shell, command, stdout_producer,
+      outcome, evaluated, started, error_status, stages, roots);
+  free(roots);
+  free(stages);
+  return result;
 }
 
 enum command_result shell_launch_capture(struct shell *shell,
@@ -3785,11 +3936,17 @@ enum command_result shell_launch_service_value(struct shell *shell,
 
 enum call_status shell_script_group_open(struct shell *shell)
 {
+  struct call_limit limit = {0};
   enum call_status status = script_scope_open(shell->positional_script,
-      shell->launcher, shell->child_launcher, &shell->script_group);
+      shell->launcher, shell->child_launcher, &shell->script_group, &limit);
   handle_t selected = shell->positional_script ? shell->launcher : shell->child_launcher;
   if (status != CALL_OK && selected != HANDLE_INVALID) {
-    shell_directory_error(shell, "shell", "script group", status);
+    char detail[256];
+    if (status == CALL_LIMIT && call_limit_format(&limit, detail, sizeof(detail))) {
+      shell_error(shell, "shell: script group: %s\n", detail);
+    } else {
+      shell_directory_error(shell, "shell", "script group", status);
+    }
   }
   return status;
 }

@@ -456,7 +456,7 @@ static enum call_status launch_receiver(handle_t launcher, handle_t image,
     .argv = (uintptr_t)arguments,
     .argc = sizeof(arguments) / sizeof(arguments[0]),
   };
-  return launcher_launch(launcher, &request, child);
+  return launcher_launch(launcher, &request, child, NULL);
 }
 
 static enum call_status receive_ready(handle_t bootstrap, enum mode mode,

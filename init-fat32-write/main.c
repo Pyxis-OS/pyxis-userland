@@ -197,7 +197,7 @@ static int select_disk(void)
     .argv = (uintptr_t)arguments,
     .argc = 2,
   };
-  status = launcher_launch(launcher, &request, &child);
+  status = launcher_launch(launcher, &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 selector: launch failed (status %u)\n", status);
     goto done;
@@ -299,7 +299,7 @@ static int create_selector(void)
   };
   struct space_definition space = {.name = "install", .title = "FAT32 Scratch Writer"};
   status = space_create_started(sources[FACTORY], &space, cpus, cpu.online_count,
-      &request, &child);
+      &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "fat32 bootstrap: space launch failed (status %u)\n", status);
     goto done;

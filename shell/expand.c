@@ -23,10 +23,12 @@ bool shell_expansion_close(struct shell_expansion *expansion)
   for (size_t i = 0; expansion->arguments && i < expansion->argument_count; ++i) {
     free(expansion->arguments[i]);
   }
-  for (size_t i = 0; i < LAUNCH_BATCH_MAX; ++i) {
+  for (size_t i = 0; expansion->selected && i < expansion->command.stage_count; ++i) {
     /* Selected entries borrow the owned per-word values above. */
     free(expansion->selected[i].values);
   }
+  free(expansion->selected);
+  free(expansion->command.stages);
   free(expansion->arguments);
   free(expansion->values);
   free(expansion->captures);
@@ -351,6 +353,9 @@ static const char *select_capability(struct environment_capture *capture,
       return NULL;
     }
   }
+  if (capture->count >= SIZE_MAX / sizeof(*capture->values)) {
+    return "Captured entry storage exceeds address capacity";
+  }
   struct environment_value *values = realloc(capture->values,
       (capture->count + 1) * sizeof(*values));
   if (!values) {
@@ -373,10 +378,20 @@ static const char *expand_command(struct shell *shell,
     const struct shell_syntax_stage *stage = &syntax->stages[i];
     size_t stage_words = 0;
     for (size_t j = 0; j < stage->count; ++j) {
-      stage_words += all_arguments(stage->words[j]) ? shell->argument_count : 1;
+      size_t extra = all_arguments(stage->words[j]) ? shell->argument_count : 1;
+      if (extra > SIZE_MAX - stage_words) {
+        *status = CALL_LIMIT;
+        return expansion_error(expansion, status, "Expanded argument count exceeds address capacity");
+      }
+      stage_words += extra;
     }
     if (!stage_words) {
       return "Command expanded to no words";
+    }
+    if (stage_words > SIZE_MAX - expansion->word_count ||
+        stage->redirection_count > SIZE_MAX - redirections) {
+      *status = CALL_LIMIT;
+      return expansion_error(expansion, status, "Expanded command storage exceeds address capacity");
     }
     expansion->word_count += stage_words;
     for (size_t j = 0; j < stage->redirection_count; ++j) {
@@ -398,14 +413,34 @@ static const char *expand_command(struct shell *shell,
       }
     }
   }
+  if (redirections > SIZE_MAX - expansion->word_count ||
+      syntax->stage_count > SIZE_MAX - expansion->word_count - redirections) {
+    *status = CALL_LIMIT;
+    return expansion_error(expansion, status, "Expanded command storage exceeds address capacity");
+  }
   expansion->value_count = expansion->word_count + redirections;
   expansion->argument_count = expansion->value_count + syntax->stage_count;
+  if (expansion->word_count > SIZE_MAX / sizeof(*expansion->words) ||
+      expansion->value_count > SIZE_MAX / sizeof(*expansion->values) ||
+      expansion->value_count > SIZE_MAX / sizeof(*expansion->captures) ||
+      expansion->argument_count > SIZE_MAX / sizeof(*expansion->arguments)) {
+    *status = CALL_LIMIT;
+    return expansion_error(expansion, status, "Expanded command storage exceeds address capacity");
+  }
+  if (syntax->stage_count > SIZE_MAX / sizeof(*expansion->command.stages) ||
+      syntax->stage_count > SIZE_MAX / sizeof(*expansion->selected)) {
+    *status = CALL_LIMIT;
+    return expansion_error(expansion, status, "Pipeline stage storage exceeds address capacity");
+  }
+  expansion->command.stage_count = syntax->stage_count;
+  expansion->command.stages = calloc(syntax->stage_count, sizeof(*expansion->command.stages));
+  expansion->selected = calloc(syntax->stage_count, sizeof(*expansion->selected));
   expansion->words = calloc(expansion->word_count, sizeof(*expansion->words));
   expansion->values = calloc(expansion->value_count, sizeof(*expansion->values));
   expansion->captures = calloc(expansion->value_count, sizeof(*expansion->captures));
   expansion->arguments = calloc(expansion->argument_count, sizeof(*expansion->arguments));
-  if (!expansion->words || !expansion->values || !expansion->captures ||
-      !expansion->arguments) {
+  if (!expansion->command.stages || !expansion->selected || !expansion->words ||
+      !expansion->values || !expansion->captures || !expansion->arguments) {
     return expansion_error(expansion, status, "Out of memory");
   }
   for (size_t i = 0; i < syntax->stage_count; ++i) {

@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <startup.h>
 #include <stdlib.h>
 #include "runtime.h"
@@ -23,6 +24,9 @@ static void run_init_array(void)
 {
   if (!startup_init(info)) {
     libc_start_failed(PROCESS_START_RECORD, CALL_BAD_REQUEST);
+  }
+  if (info->argc > INT_MAX) {
+    libc_start_failed(PROCESS_START_RECORD, CALL_LIMIT);
   }
   libc_thread_bootstrap(info);
   libc_thread_runtime_init();

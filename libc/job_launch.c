@@ -18,35 +18,54 @@
 #include "job_pipeline_launch.h"
 
 struct libc_pipeline_launch {
-  struct job_preparation stages[LAUNCH_BATCH_MAX];
+  struct job_preparation *stages;
+  struct launch_request *requests;
   size_t count;
   handle_t private_root;
   bool attempted;
 };
 
-/* Match the kernel's capture order and eight-byte array alignment, so this
- * owned snapshot cannot exceed the existing synchronous capture budget. */
+struct job_metadata {
+  struct job_metadata *next;
+  unsigned char bytes[];
+};
+
+static enum call_status encoding_limit(struct job_preparation *prepared)
+{
+  prepared->limit = (struct call_limit){.reason = CALL_LIMIT_REQUEST_ENCODING,
+    .requested = UINT64_MAX, .limit = SIZE_MAX,
+    .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+        CALL_LIMIT_REQUESTED_SATURATED};
+  return prepared->error = CALL_LIMIT;
+}
+
+/* Each owned allocation is stable once its address enters the request. */
 static void *capture_array(struct job_preparation *prepared, const void *source,
     size_t count, size_t item_size)
 {
   if (!count || prepared->error != CALL_OK) {
     return NULL;
   }
-  size_t offset = (prepared->used + 7) & ~(size_t)7;
-  if (offset > LAUNCH_CAPTURE_MAX_SIZE ||
-      count > (LAUNCH_CAPTURE_MAX_SIZE - offset) / item_size) {
-    prepared->error = CALL_BAD_REQUEST;
+  if (count > (SIZE_MAX - sizeof(struct job_metadata)) / item_size ||
+      count > (SIZE_MAX - prepared->used) / item_size) {
+    encoding_limit(prepared);
     return NULL;
   }
-  void *result = prepared->metadata + offset;
   size_t bytes = count * item_size;
-  if (source) {
-    memcpy(result, source, bytes);
-  } else {
-    memset(result, 0, bytes);
+  struct job_metadata *allocation = malloc(sizeof(*allocation) + bytes);
+  if (!allocation) {
+    prepared->error = CALL_NO_MEMORY;
+    return NULL;
   }
-  prepared->used = offset + bytes;
-  return result;
+  allocation->next = prepared->metadata;
+  prepared->metadata = allocation;
+  if (source) {
+    memcpy(allocation->bytes, source, bytes);
+  } else {
+    memset(allocation->bytes, 0, bytes);
+  }
+  prepared->used += bytes;
+  return allocation->bytes;
 }
 
 static char *capture_string(struct job_preparation *prepared, const char *source)
@@ -58,16 +77,21 @@ static char *capture_string(struct job_preparation *prepared, const char *source
     prepared->error = CALL_BAD_REQUEST;
     return NULL;
   }
-  size_t remaining = LAUNCH_CAPTURE_MAX_SIZE - prepared->used;
-  size_t length = strnlen(source, remaining);
-  if (length == remaining) {
-    prepared->error = CALL_BAD_REQUEST;
+  size_t length = strlen(source);
+  if (length == SIZE_MAX) {
+    encoding_limit(prepared);
     return NULL;
   }
-  char *result = (char *)prepared->metadata + prepared->used;
-  memcpy(result, source, length + 1);
-  prepared->used += length + 1;
-  return result;
+  return capture_array(prepared, source, length + 1, 1);
+}
+
+static void free_metadata(struct job_preparation *prepared)
+{
+  while (prepared->metadata) {
+    struct job_metadata *allocation = prepared->metadata;
+    prepared->metadata = allocation->next;
+    free(allocation);
+  }
 }
 
 static bool stream_name(const char *name)
@@ -76,22 +100,6 @@ static bool stream_name(const char *name)
       !strcmp(name, "stderr") ||
       !strcmp(name, "stdin.append") || !strcmp(name, "stdout.append") ||
       !strcmp(name, "stderr.append");
-}
-
-static enum call_status validate_startup_size(const struct launch_request *request)
-{
-  size_t metadata = sizeof(struct startup_info) + request->working_directory_count * sizeof(handle_t);
-  if (request->working_path) {
-    metadata += strlen((const char *)(uintptr_t)request->working_path) + 1;
-  }
-  size_t arguments = (request->argc + 1) * sizeof(uint64_t);
-  const char *const *argv = (const void *)(uintptr_t)request->argv;
-  for (size_t i = 0; i < request->argc; ++i) {
-    arguments += strlen(argv[i]) + 1;
-  }
-  metadata = (metadata + MEMORY_PAGE_SIZE - 1) & ~(size_t)(MEMORY_PAGE_SIZE - 1);
-  arguments = (arguments + MEMORY_PAGE_SIZE - 1) & ~(size_t)(MEMORY_PAGE_SIZE - 1);
-  return metadata <= STARTUP_MAX_SIZE && arguments <= STARTUP_MAX_SIZE - metadata ? CALL_OK : CALL_BAD_REQUEST;
 }
 
 static void stage_streams(struct job_preparation *prepared)
@@ -124,14 +132,12 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     return CALL_BAD_REQUEST;
   }
   uint64_t stack = options->initial_stack_bytes;
-  if (stack && (stack < LAUNCH_INITIAL_STACK_MIN_SIZE ||
-      stack > LAUNCH_INITIAL_STACK_MAX_SIZE || stack % MEMORY_PAGE_SIZE)) {
+  if (stack && stack % MEMORY_PAGE_SIZE) {
     return CALL_BAD_REQUEST;
   }
-  size_t limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
   size_t grant_count = options->grant_count;
-  if (grant_count > limit || depth > limit - grant_count || options->entry_count > limit - 6) {
-    return CALL_BAD_REQUEST;
+  if (depth > SIZE_MAX - grant_count || options->entry_count > SIZE_MAX - 6) {
+    return encoding_limit(prepared);
   }
   grant_count += depth;
   for (size_t i = 0; i < ENVIRONMENT_STREAM_COUNT; ++i) {
@@ -139,8 +145,8 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
       return CALL_BAD_REQUEST;
     }
     if (options->streams[i] >= 0 || (pipe_streams && pipe_streams[i])) {
-      if (grant_count == limit) {
-        return CALL_BAD_REQUEST;
+      if (grant_count == SIZE_MAX) {
+        return encoding_limit(prepared);
       }
       ++grant_count;
       if (options->streams[i] >= 0) {
@@ -166,11 +172,17 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     struct launch_environment_entry entry = options->entries[i];
     const char *name = capture_string(prepared, (const char *)(uintptr_t)entry.name);
     char checked[ENVIRONMENT_NAME_MAX + 1];
-    if (!name || !environment_name(checked, name)) {
+    if (!name) {
+      return prepared->error;
+    }
+    if (!environment_name(checked, name)) {
       return CALL_BAD_REQUEST;
     }
     if (stream_name(name)) {
       continue;
+    }
+    if (entry.flags & ~ENVIRONMENT_EXPORTED) {
+      return CALL_BAD_REQUEST;
     }
     for (size_t j = 0; j < request->entry_count; ++j) {
       if (!strcmp(name, (const char *)(uintptr_t)prepared->entries[j].name)) {
@@ -184,7 +196,10 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
       }
     } else if (entry.kind == ENVIRONMENT_TEXT) {
       const char *text = capture_string(prepared, (const char *)(uintptr_t)entry.value);
-      if (!text || strlen(text) != entry.length) {
+      if (!text) {
+        return prepared->error;
+      }
+      if (strlen(text) != entry.length) {
         return CALL_BAD_REQUEST;
       }
       entry.value = (uintptr_t)text;
@@ -223,7 +238,7 @@ static enum call_status capture_metadata(struct job_preparation *prepared,
     argv[i] = capture_string(prepared, argv[i]);
   }
   request->initial_stack_bytes = stack;
-  return prepared->error == CALL_OK ? validate_startup_size(request) : prepared->error;
+  return prepared->error;
 }
 
 static enum call_status validate_directory(handle_t handle, struct handle_info *info)
@@ -324,8 +339,8 @@ static enum call_status copy_grants(struct job_preparation *prepared, size_t cou
   for (size_t i = prepared->copied_grants; i < count; ++i) {
     struct launch_grant *grant = &prepared->grants[i];
     handle_t copy;
-    enum call_status status = handle_copy_restricted(grant->source,
-        grant->rights, grant->transport, &copy);
+    enum call_status status = handle_copy_restricted_with_limit(grant->source,
+        grant->rights, grant->transport, &copy, &prepared->limit);
     if (status != CALL_OK) {
       return status;
     }
@@ -337,8 +352,8 @@ static enum call_status copy_grants(struct job_preparation *prepared, size_t cou
 
 static enum call_status copy_image(struct job_preparation *prepared, handle_t image)
 {
-  enum call_status status = handle_copy_restricted(image, FILE_RIGHT_READ, 0,
-      &prepared->image);
+  enum call_status status = handle_copy_restricted_with_limit(image, FILE_RIGHT_READ, 0,
+      &prepared->image, &prepared->limit);
   if (status == CALL_OK) {
     prepared->request.image = prepared->image;
   }
@@ -378,7 +393,7 @@ static enum call_status capture_handles(struct job_preparation *prepared,
   if (status != CALL_OK) {
     return status;
   }
-  status = handle_copy_restricted(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &prepared->launcher);
+  status = handle_copy_restricted_with_limit(launcher, LAUNCHER_RIGHT_LAUNCH, 0, &prepared->launcher, &prepared->limit);
   if (status != CALL_OK) {
     return status;
   }
@@ -416,7 +431,7 @@ enum call_status libc_job_discard_preparation(struct job_preparation *prepared)
   if (error == CALL_OK) {
     error = status;
   }
-  free(prepared->metadata);
+  free_metadata(prepared);
   prepared->metadata = NULL;
   prepared->copied_grants = 0;
   prepared->image = HANDLE_INVALID;
@@ -424,14 +439,31 @@ enum call_status libc_job_discard_preparation(struct job_preparation *prepared)
   return error;
 }
 
-enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root)
+enum call_status libc_job_validate_metadata(const struct pyxis_job_options *options,
+    struct call_limit *limit)
 {
-  struct pyxis_job_options selected = *options;
-  prepared->metadata = malloc(LAUNCH_CAPTURE_MAX_SIZE);
-  if (!prepared->metadata) {
-    return CALL_NO_MEMORY;
+  if (limit) {
+    *limit = (struct call_limit){0};
   }
+  if (!options) {
+    return CALL_BAD_REQUEST;
+  }
+  struct job_preparation prepared = {0};
+  enum call_status status = capture_metadata(&prepared, options, NULL);
+  if (limit && status == CALL_LIMIT) {
+    *limit = prepared.limit;
+  }
+  free_metadata(&prepared);
+  return status;
+}
+
+enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t launcher,
+    const struct pyxis_job_options *options, handle_t private_root, struct call_limit *limit)
+{
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
+  struct pyxis_job_options selected = *options;
   enum call_status status = capture_metadata(prepared, &selected, NULL);
   if (status == CALL_OK) {
     status = capture_handles(prepared, launcher, &selected, private_root);
@@ -444,28 +476,37 @@ enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t lau
       }
     }
   }
+  if (limit) {
+    *limit = status == CALL_LIMIT ? prepared->limit : (struct call_limit){0};
+  }
   return status;
 }
 
 enum call_status libc_job_publish(struct job_preparation *prepared, handle_t launcher,
-    handle_t *observer)
+    handle_t *observer, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   *observer = HANDLE_INVALID;
   if (prepared->attempted) {
     return CALL_BUSY;
   }
   prepared->attempted = true;
-  return launcher_launch(launcher, &prepared->request, observer);
+  return launcher_launch(launcher, &prepared->request, observer, limit);
 }
 
 enum call_status libc_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer)
+    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   *observer = HANDLE_INVALID;
   struct job_preparation prepared = {0};
-  enum call_status status = libc_job_prepare(&prepared, launcher, options, private_root);
+  enum call_status status = libc_job_prepare(&prepared, launcher, options, private_root, limit);
   if (status == CALL_OK) {
-    status = libc_job_publish(&prepared, prepared.launcher, observer);
+    status = libc_job_publish(&prepared, prepared.launcher, observer, limit);
   }
   int saved_errno = errno;
   libc_job_discard_preparation(&prepared);
@@ -491,29 +532,51 @@ enum call_status libc_pipeline_discard(struct libc_pipeline_launch *prepared)
     if (error == CALL_OK) {
       error = status;
     }
-    free(stage->metadata);
+    free_metadata(stage);
   }
   enum call_status status = release_handle(prepared->private_root);
   if (error == CALL_OK) {
     error = status;
   }
+  free(prepared->requests);
+  free(prepared->stages);
   free(prepared);
   return error;
 }
 
 enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
     size_t count, handle_t private_root, bool has_input,
-    struct libc_pipeline_launch **result)
+    struct libc_pipeline_launch **result, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (result) {
     *result = NULL;
   }
-  if (!result || !stages || !count || count > LAUNCH_BATCH_MAX ||
+  if (!result || !stages || !count ||
       private_root == HANDLE_INVALID) {
     return CALL_BAD_REQUEST;
   }
   struct libc_pipeline_launch *prepared = calloc(1, sizeof(*prepared));
   if (!prepared) {
+    return CALL_NO_MEMORY;
+  }
+  if (count > SIZE_MAX / sizeof(*prepared->stages) ||
+      count > SIZE_MAX / sizeof(*prepared->requests)) {
+    free(prepared);
+    if (limit) {
+      *limit = (struct call_limit){.reason = CALL_LIMIT_REQUEST_ENCODING,
+        .requested = UINT64_MAX, .limit = SIZE_MAX,
+        .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+            CALL_LIMIT_REQUESTED_SATURATED};
+    }
+    return CALL_LIMIT;
+  }
+  prepared->stages = calloc(count, sizeof(*prepared->stages));
+  prepared->requests = calloc(count, sizeof(*prepared->requests));
+  if (!prepared->stages || !prepared->requests) {
+    libc_pipeline_discard(prepared);
     return CALL_NO_MEMORY;
   }
   prepared->count = count;
@@ -529,23 +592,21 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
       break;
     }
     struct job_preparation *stage = &prepared->stages[i];
-    stage->metadata = malloc(LAUNCH_CAPTURE_MAX_SIZE);
-    if (!stage->metadata) {
-      status = CALL_NO_MEMORY;
-      break;
-    }
     const bool pipe_streams[ENVIRONMENT_STREAM_COUNT] = {i != 0 || has_input, true, true};
     status = capture_metadata(stage, &stages[i], pipe_streams);
     if (status == CALL_OK) {
       stage_streams(stage);
     }
     if (status != CALL_OK) {
+      if (limit && status == CALL_LIMIT) {
+        *limit = stage->limit;
+      }
       break;
     }
   }
   if (status == CALL_OK) {
     /* Holding the identity requires no directory content authority. */
-    status = handle_copy_restricted(private_root, 0, 0, &prepared->private_root);
+    status = handle_copy_restricted_with_limit(private_root, 0, 0, &prepared->private_root, limit);
   }
   for (size_t i = 0; i < count && status == CALL_OK; ++i) {
     struct job_preparation *stage = &prepared->stages[i];
@@ -562,6 +623,9 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
     if (status == CALL_OK) {
       status = copy_grants(stage, selected_count);
     }
+    if (limit && status == CALL_LIMIT) {
+      *limit = stage->limit;
+    }
   }
   if (status != CALL_OK) {
     libc_pipeline_discard(prepared);
@@ -573,8 +637,11 @@ enum call_status libc_pipeline_prepare(const struct pyxis_job_options *stages,
 
 enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
     handle_t launcher, const handle_t streams[][ENVIRONMENT_STREAM_COUNT],
-    handle_t *observers, uint64_t *failed_index)
+    handle_t *observers, uint64_t *failed_index, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (prepared && prepared->attempted) {
     return CALL_BUSY;
   }
@@ -627,15 +694,18 @@ enum call_status libc_pipeline_launch(struct libc_pipeline_launch *prepared,
       return status;
     }
   }
-  struct launch_request requests[LAUNCH_BATCH_MAX];
+  struct launch_request *requests = prepared->requests;
   for (size_t i = 0; i < prepared->count; ++i) {
     struct job_preparation *stage = &prepared->stages[i];
     status = copy_grants(stage, stage->request.grant_count);
     if (status != CALL_OK) {
       *failed_index = i;
+      if (limit && status == CALL_LIMIT) {
+        *limit = stage->limit;
+      }
       return status;
     }
     requests[i] = stage->request;
   }
-  return launcher_launch_batch(launcher, requests, prepared->count, observers, failed_index);
+  return launcher_launch_batch(launcher, requests, prepared->count, observers, failed_index, limit);
 }

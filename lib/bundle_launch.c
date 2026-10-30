@@ -757,14 +757,14 @@ static enum call_status prepare_bundle(const struct bundle_program *program,
   for (size_t i = 0; i < resource_count; ++i) {
     explicit_providers |= resources[i].protocol == PROTOCOL_PROVIDER;
   }
-  const size_t grant_limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant);
-  const size_t entry_limit = LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry);
+  const size_t grant_limit = SIZE_MAX / sizeof(struct launch_grant);
+  const size_t entry_limit = SIZE_MAX / sizeof(struct launch_environment_entry);
   if (source->grant_count > grant_limit || bundle_count > grant_limit ||
       resource_count > grant_limit - bundle_count ||
       source->grant_count > grant_limit - bundle_count - resource_count ||
       bundle_count > entry_limit || resource_count > (entry_limit - bundle_count) / 2 ||
       source->entry_count > entry_limit - bundle_count - 2 * resource_count ||
-      source->working_directory_count > LAUNCH_CAPTURE_MAX_SIZE / sizeof(uint64_t)) {
+      source->working_directory_count > SIZE_MAX / sizeof(uint64_t)) {
     return CALL_LIMIT;
   }
   size_t grant_capacity = source->grant_count + bundle_count + resource_count;

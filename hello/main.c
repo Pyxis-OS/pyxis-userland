@@ -253,7 +253,7 @@ static int run_utility(handle_t launcher, handle_t output, handle_t memory,
     grants[request.grant_count++] = (struct launch_grant){stream.handle, rights, transport};
   }
   handle_t child;
-  int result = launcher_launch(launcher, &request, &child) == CALL_OK ? 0 : -1;
+  int result = launcher_launch(launcher, &request, &child, NULL) == CALL_OK ? 0 : -1;
   if (handle_close(image) != 0) {
     result = -1;
   }

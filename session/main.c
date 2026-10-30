@@ -805,8 +805,8 @@ static int launch_session(const struct session_config *config, struct network_co
     goto done;
   }
   handle_t child;
-  status = script ? program_launch(launcher, &request, NULL, &child) :
-      launcher_launch(launcher, &request, &child);
+  status = script ? program_launch(launcher, &request, NULL, &child, NULL) :
+      launcher_launch(launcher, &request, &child, NULL);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot launch %s (status %u)\n", image_uri, status);
     goto done;

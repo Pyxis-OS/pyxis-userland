@@ -223,6 +223,9 @@ void shell_glob_close(struct shell_glob *glob)
   }
   free(glob->words);
   free(glob->arrays);
+  if (glob->command) {
+    free(glob->command->stages);
+  }
   free(glob->command);
   *glob = (struct shell_glob){0};
 }
@@ -410,6 +413,20 @@ const char *shell_glob_prepare(struct shell *shell,
     error = "Out of memory";
   } else {
     *glob->command = *syntax;
+    glob->command->stages = NULL;
+    if (syntax->stage_count > SIZE_MAX / sizeof(*syntax->stages)) {
+      *status = CALL_LIMIT;
+      error = "Pipeline stage storage exceeds address capacity";
+    } else {
+      glob->command->stages = malloc(syntax->stage_count * sizeof(*syntax->stages));
+      if (!glob->command->stages) {
+        *status = CALL_NO_MEMORY;
+        error = "Out of memory";
+      } else {
+        memcpy(glob->command->stages, syntax->stages,
+            syntax->stage_count * sizeof(*syntax->stages));
+      }
+    }
   }
   for (size_t i = 0; !error && i < syntax->stage_count; ++i) {
     const struct shell_syntax_stage *stage = &syntax->stages[i];

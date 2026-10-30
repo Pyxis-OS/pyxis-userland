@@ -80,7 +80,7 @@ extern "C" {
  * A retained fresh group can confirm cleanup without inventing a process result.
  * Source handles/snapshots survive. No implicit state, bundles or descendants. */
 enum call_status pyxis_capture_start(handle_t launcher,
-    const struct pyxis_capture_options *options, struct pyxis_capture **capture);
+    const struct pyxis_capture_options *options, struct pyxis_capture **capture, struct call_limit *limit);
 
 /* Polls readiness and samples the configured size/deadline policy. Native
  * metadata calls may park for worker ownership. No registrations survive.

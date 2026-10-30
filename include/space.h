@@ -3,6 +3,7 @@
 
 #include <abi/handle.h>
 #include <abi/launcher.h>
+#include <abi/limit.h>
 #include <abi/space.h>
 #include <abi/syscall.h>
 
@@ -37,6 +38,6 @@ enum call_status space_create_unstarted(handle_t factory, const struct space_def
  * CALL_OUTCOME_UNKNOWN. Use program_create_space for scripts. */
 enum call_status space_create_started(handle_t factory, const struct space_definition *space,
     const uint64_t *cpus, uint64_t cpu_count, const struct launch_request *request,
-    handle_t *child);
+    handle_t *child, struct call_limit *limit);
 
 #endif

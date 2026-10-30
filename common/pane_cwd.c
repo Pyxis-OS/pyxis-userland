@@ -109,9 +109,9 @@ static enum call_status before_deadline(handle_t clock, uint64_t deadline)
 static bool snapshot_fits(uint64_t directories, uint64_t path_size)
 {
   uint64_t directory_bytes = sizeof(struct launch_grant) + sizeof(uint64_t);
-  return directories && path_size <= LAUNCH_CAPTURE_MAX_SIZE &&
+  return directories && path_size <= SIZE_MAX &&
       directories <= SIZE_MAX / sizeof(handle_t) &&
-      directories <= (LAUNCH_CAPTURE_MAX_SIZE - path_size) / directory_bytes;
+      directories <= (SIZE_MAX - path_size) / directory_bytes;
 }
 
 enum call_status pane_cwd_provider_init(struct pane_cwd_provider *provider,

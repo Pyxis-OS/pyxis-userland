@@ -61,8 +61,11 @@ void program_image_close(struct program_image *prepared)
   }
 }
 
-enum call_status program_image_prepare(handle_t image, struct program_image **result)
+enum call_status program_image_prepare(handle_t image, struct program_image **result, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!result) {
     return CALL_BAD_REQUEST;
   }
@@ -81,7 +84,7 @@ enum call_status program_image_prepare(handle_t image, struct program_image **re
     return CALL_NO_MEMORY;
   }
   uint64_t transport = info.kind == HANDLE_KIND_EXPORTED ? HANDLE_TRANSPORT_CALL : 0;
-  status = handle_copy_restricted(image, FILE_RIGHT_READ, transport, &prepared->image);
+  status = handle_copy_restricted_with_limit(image, FILE_RIGHT_READ, transport, &prepared->image, limit);
   if (status == CALL_OK) {
     prepared->prefix = malloc(SHEBANG_PREFIX_SIZE);
     if (!prepared->prefix) {
@@ -119,7 +122,8 @@ const char *program_image_interpreter(const struct program_image *prepared)
   return prepared ? prepared->interpreter : NULL;
 }
 
-static enum call_status retain_interpreter(struct program_image *prepared, handle_t image)
+static enum call_status retain_interpreter(struct program_image *prepared, handle_t image,
+    struct call_limit *limit)
 {
   if (!prepared || !prepared->interpreter) {
     return CALL_BAD_REQUEST;
@@ -133,7 +137,7 @@ static enum call_status retain_interpreter(struct program_image *prepared, handl
     return CALL_WRONG_TYPE;
   }
   handle_t selected = HANDLE_INVALID;
-  status = handle_copy_restricted(image, FILE_RIGHT_READ, 0, &selected);
+  status = handle_copy_restricted_with_limit(image, FILE_RIGHT_READ, 0, &selected, limit);
   if (status != CALL_OK) {
     return status;
   }
@@ -144,9 +148,13 @@ static enum call_status retain_interpreter(struct program_image *prepared, handl
   return CALL_OK;
 }
 
-enum call_status program_image_select_interpreter(struct program_image *prepared, handle_t image)
+enum call_status program_image_select_interpreter(struct program_image *prepared, handle_t image,
+    struct call_limit *limit)
 {
-  enum call_status status = retain_interpreter(prepared, image);
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
+  enum call_status status = retain_interpreter(prepared, image, limit);
   if (status == CALL_OK) {
     command_selection_close(prepared->interpreter_bundle);
     prepared->interpreter_bundle = NULL;
@@ -173,8 +181,11 @@ static bool names_script(const struct bundle_program *program)
 }
 
 enum call_status program_image_select_interpreter_bundle(struct program_image *prepared,
-    struct command_selection *selection)
+    struct command_selection *selection, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!selection || !selection->bundle) {
     return CALL_BAD_REQUEST;
   }
@@ -183,7 +194,7 @@ enum call_status program_image_select_interpreter_bundle(struct program_image *p
   if (names_script(selection->bundle)) {
     return CALL_ALREADY_EXISTS;
   }
-  enum call_status status = retain_interpreter(prepared, bundle_program_image(selection->bundle));
+  enum call_status status = retain_interpreter(prepared, bundle_program_image(selection->bundle), limit);
   if (status != CALL_OK) {
     return status;
   }
@@ -240,16 +251,22 @@ static void release_script(struct script_scratch *scratch)
 
 static enum call_status prepare_script(const struct launch_request *source,
     const struct program_image *input, const struct path_context *interpreter_context,
-    struct launch_request *request, struct script_scratch *scratch)
+    struct launch_request *request, struct script_scratch *scratch, struct call_limit *limit)
 {
   if (!source->argc || !source->argv ||
       (source->grant_count && !source->grants) ||
       (source->entry_count && !source->entries)) {
     return CALL_BAD_REQUEST;
   }
-  if (source->argc >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(char *) - 1 ||
-      source->grant_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) ||
-      source->entry_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry)) {
+  if (source->argc > SIZE_MAX / sizeof(char *) - 2 ||
+      source->grant_count > SIZE_MAX / sizeof(struct launch_grant) - 1 ||
+      source->entry_count > SIZE_MAX / sizeof(struct launch_environment_entry) - 1) {
+    if (limit) {
+      *limit = (struct call_limit){.reason = CALL_LIMIT_REQUEST_ENCODING,
+        .requested = UINT64_MAX, .limit = SIZE_MAX,
+        .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+            CALL_LIMIT_REQUESTED_SATURATED};
+    }
     return CALL_LIMIT;
   }
   const struct launch_environment_entry *original_entries = (const void *)(uintptr_t)source->entries;
@@ -257,11 +274,6 @@ static enum call_status prepare_script(const struct launch_request *source,
     if (!strcmp((const char *)(uintptr_t)original_entries[i].name, "script")) {
       return CALL_BAD_REQUEST;
     }
-  }
-
-  if (source->grant_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_grant) - 1 ||
-      source->entry_count >= LAUNCH_CAPTURE_MAX_SIZE / sizeof(struct launch_environment_entry) - 1) {
-    return CALL_LIMIT;
   }
 
   scratch->grants = malloc((source->grant_count + 1) * sizeof(*scratch->grants));
@@ -273,8 +285,8 @@ static enum call_status prepare_script(const struct launch_request *source,
   enum call_status status;
   if (input->selected_interpreter != HANDLE_INVALID) {
     /* The preparation pins selected code; failure never resolves mutable roots. */
-    status = handle_copy_restricted(input->selected_interpreter, FILE_RIGHT_READ, 0,
-        &scratch->image);
+    status = handle_copy_restricted_with_limit(input->selected_interpreter, FILE_RIGHT_READ, 0,
+        &scratch->image, limit);
   } else {
     status = open_interpreter(interpreter_context, input->interpreter, &scratch->image);
   }
@@ -325,10 +337,10 @@ static enum call_status prepare_script(const struct launch_request *source,
 
 static enum call_status prepare_program(const struct launch_request *source,
     const struct program_image *input, const struct path_context *interpreter_context,
-    struct launch_request *request, struct script_scratch *scratch)
+    struct launch_request *request, struct script_scratch *scratch, struct call_limit *limit)
 {
   if (!input) {
-    enum call_status status = program_image_prepare(source->image, &scratch->input);
+    enum call_status status = program_image_prepare(source->image, &scratch->input, limit);
     if (status != CALL_OK) {
       return status;
     }
@@ -338,19 +350,25 @@ static enum call_status prepare_program(const struct launch_request *source,
   selected.image = input->image;
   *request = selected;
   return input->interpreter ? prepare_script(&selected, input, interpreter_context,
-      request, scratch) : CALL_OK;
+      request, scratch, limit) : CALL_OK;
 }
 
 enum call_status program_launch(handle_t launcher, const struct launch_request *request,
-    const struct path_context *interpreter_context, handle_t *child)
+    const struct path_context *interpreter_context, handle_t *child, struct call_limit *limit)
 {
-  return program_launch_prepared(launcher, request, NULL, interpreter_context, child);
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
+  return program_launch_prepared(launcher, request, NULL, interpreter_context, child, limit);
 }
 
 enum call_status program_launch_prepared(handle_t launcher, const struct launch_request *request,
     const struct program_image *input, const struct path_context *interpreter_context,
-    handle_t *child)
+    handle_t *child, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!child) {
     return CALL_BAD_REQUEST;
   }
@@ -362,9 +380,9 @@ enum call_status program_launch_prepared(handle_t launcher, const struct launch_
   struct script_scratch scratch = {0};
   struct launch_request prepared;
   enum call_status status = prepare_program(request, input, interpreter_context,
-      &prepared, &scratch);
+      &prepared, &scratch, limit);
   if (status == CALL_OK) {
-    status = launcher_launch(launcher, &prepared, child);
+    status = launcher_launch(launcher, &prepared, child, limit);
   }
   release_script(&scratch);
   return status;
@@ -372,8 +390,11 @@ enum call_status program_launch_prepared(handle_t launcher, const struct launch_
 
 enum call_status program_create_space(handle_t factory, const struct space_definition *space,
     const uint64_t *cpus, uint64_t cpu_count, const struct launch_request *request,
-    const struct path_context *interpreter_context, handle_t *child)
+    const struct path_context *interpreter_context, handle_t *child, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (!child) {
     return CALL_BAD_REQUEST;
   }
@@ -385,9 +406,9 @@ enum call_status program_create_space(handle_t factory, const struct space_defin
   struct script_scratch scratch = {0};
   struct launch_request prepared;
   enum call_status status = prepare_program(request, NULL, interpreter_context,
-      &prepared, &scratch);
+      &prepared, &scratch, limit);
   if (status == CALL_OK) {
-    status = space_create_started(factory, space, cpus, cpu_count, &prepared, child);
+    status = space_create_started(factory, space, cpus, cpu_count, &prepared, child, limit);
   }
   release_script(&scratch);
   return status;
@@ -395,49 +416,66 @@ enum call_status program_create_space(handle_t factory, const struct space_defin
 
 enum call_status program_launch_batch(handle_t launcher, const struct launch_request *requests,
     size_t count, const struct path_context *interpreter_context,
-    handle_t *children, uint64_t *failed_index)
+    handle_t *children, uint64_t *failed_index, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   return program_launch_batch_prepared(launcher, requests, count, NULL, interpreter_context,
-      children, failed_index);
+      children, failed_index, limit);
 }
 
 enum call_status program_launch_batch_prepared(handle_t launcher,
     const struct launch_request *requests, size_t count,
     const struct program_image *const *inputs, const struct path_context *interpreter_context,
-    handle_t *children, uint64_t *failed_index)
+    handle_t *children, uint64_t *failed_index, struct call_limit *limit)
 {
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
   if (failed_index) {
     *failed_index = LAUNCH_NO_STAGE;
   }
-  if (children && count > 0 && count <= LAUNCH_BATCH_MAX) {
-    for (size_t i = 0; i < count; ++i) {
-      children[i] = HANDLE_INVALID;
-    }
-  }
-  if (!requests || !children || !failed_index || !count || count > LAUNCH_BATCH_MAX) {
+  if (!requests || !children || !failed_index || !count) {
     return CALL_BAD_REQUEST;
   }
 
+  if (count > SIZE_MAX / sizeof(struct launch_request) ||
+      count > SIZE_MAX / sizeof(struct script_scratch)) {
+    if (limit) {
+      *limit = (struct call_limit){.reason = CALL_LIMIT_REQUEST_ENCODING,
+        .requested = UINT64_MAX, .limit = SIZE_MAX,
+        .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+            CALL_LIMIT_REQUESTED_SATURATED};
+    }
+    return CALL_LIMIT;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    children[i] = HANDLE_INVALID;
+  }
   struct launch_request *prepared = malloc(count * sizeof(*prepared));
-  if (!prepared) {
+  struct script_scratch *scratch = calloc(count, sizeof(*scratch));
+  if (!prepared || !scratch) {
+    free(prepared);
+    free(scratch);
     return CALL_NO_MEMORY;
   }
-  struct script_scratch scratch[LAUNCH_BATCH_MAX] = {0};
   enum call_status status = CALL_OK;
   for (size_t i = 0; i < count; ++i) {
     status = prepare_program(&requests[i], inputs ? inputs[i] : NULL, interpreter_context,
-        &prepared[i], &scratch[i]);
+        &prepared[i], &scratch[i], limit);
     if (status != CALL_OK) {
       *failed_index = i;
       break;
     }
   }
   if (status == CALL_OK) {
-    status = launcher_launch_batch(launcher, prepared, count, children, failed_index);
+    status = launcher_launch_batch(launcher, prepared, count, children, failed_index, limit);
   }
   for (size_t i = 0; i < count; ++i) {
     release_script(&scratch[i]);
   }
+  free(scratch);
   free(prepared);
   return status;
 }

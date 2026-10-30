@@ -68,7 +68,7 @@ void session_start_screenshot_saver(void)
     .argv = (uintptr_t)arguments, .argc = 1,
   };
   handle_t child;
-  status = launcher_launch(launcher, &request, &child);
+  status = launcher_launch(launcher, &request, &child, NULL);
   if (status != CALL_OK) {
     startup_failure("launch screenshot-saver", status);
   } else if (handle_close(child) != 0) {

@@ -26,7 +26,7 @@ static bool terminated(uint64_t base, uint64_t size, uint64_t address)
 static bool valid_startup(const struct startup_info *info)
 {
   if (!info || (uintptr_t)info % _Alignof(struct startup_info) ||
-      info->version != STARTUP_VERSION || info->size > STARTUP_MAX_SIZE ||
+      info->version != STARTUP_VERSION ||
       info->read_only_size < sizeof(*info) || info->read_only_size >= info->size ||
       (uintptr_t)info > UINTPTR_MAX - info->size || info->thread_fs == HANDLE_INVALID ||
       info->environment_handle == HANDLE_INVALID ||

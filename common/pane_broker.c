@@ -64,9 +64,9 @@ enum call_status pane_broker_receive(handle_t receiver, uint64_t deadline,
 
 bool pane_broker_cwd_fits(uint64_t directories, uint64_t path_size)
 {
-  return path_size <= LAUNCH_CAPTURE_MAX_SIZE &&
+  return path_size <= SIZE_MAX &&
       directories <= SIZE_MAX / sizeof(handle_t) &&
-      directories <= (LAUNCH_CAPTURE_MAX_SIZE - path_size) /
+      directories <= (SIZE_MAX - path_size) /
           (sizeof(struct launch_grant) + sizeof(uint64_t));
 }
 
