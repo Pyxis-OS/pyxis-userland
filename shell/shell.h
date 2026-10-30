@@ -259,8 +259,8 @@ enum command_result shell_resource_detail(struct shell *shell,
 enum command_result shell_directory_error(struct shell *shell, const char *operation,
     const char *path, enum call_status status);
 /* Interactive shells with history only. Load fills memory with the newest
- * saved entries; save merges one recorded line into home://.history unless it
- * starts with a space. Neither reports a missing or read-only home. */
+ * saved entries, reading only the end of home://.history; save appends one
+ * recorded line to it unless it starts with a space. Neither reports a missing or read-only home. */
 void shell_history_load(struct shell *shell);
 /* Validates and applies the trusted launcher's private settings FILE, then
  * closes it. A refused file reports its reason and applies nothing. */

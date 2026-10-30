@@ -3,22 +3,17 @@
 #include "../common/directory.h"
 #include <abi/directory.h>
 #include <abi/file.h>
-#include <clock.h>
 #include <directory.h>
 #include <file.h>
 #include <handle.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define HISTORY_NAME ".history"
-#define HISTORY_FILE_LINES 1000
-#define HISTORY_FILE_BYTES 65536
-/* Room for the whole file plus one new entry and its LF. */
-#define HISTORY_BUFFER (HISTORY_FILE_BYTES + SHELL_LINE_CAPACITY)
-#define HISTORY_SAVE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_READ_FILES | \
-    DIRECTORY_RIGHT_CREATE | DIRECTORY_RIGHT_WRITE_FILES | DIRECTORY_RIGHT_REMOVE)
-#define HISTORY_TEMPORARY_ATTEMPTS 4
+#define HISTORY_SAVE_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_CREATE | \
+    DIRECTORY_RIGHT_WRITE_FILES)
+/* Bytes read per call while scanning the file from its end. */
+#define HISTORY_CHUNK 4096
 
 /* A saved entry is what the editor accepts: printable ASCII, below the line
  * capacity, without a leading space. */
@@ -35,12 +30,61 @@ static bool valid_entry(const char *line, size_t length)
   return true;
 }
 
-/* Reads the newest HISTORY_FILE_BYTES of the file into buffer and returns the
- * byte count, dropping a partial first line when older bytes were skipped. A
- * missing file is empty. */
-static enum call_status read_history(handle_t home, char *buffer, size_t *size)
+static enum call_status read_exact(handle_t file, uint64_t offset, char *buffer, size_t size)
 {
-  *size = 0;
+  for (size_t count = 0; count < size;) {
+    size_t read;
+    enum call_status status = file_read(file, offset + count, buffer + count, size - count, &read);
+    if (status != CALL_OK) {
+      return status;
+    }
+    if (!read) {
+      return CALL_IO;
+    }
+    count += read;
+  }
+  return CALL_OK;
+}
+
+struct history_tail {
+  /* Newest first; each is a valid entry. */
+  char *entries[TERM_HISTORY_ENTRIES];
+  size_t count;
+  /* The line being read, last byte first, until the LF before it. */
+  char reversed[SHELL_LINE_CAPACITY];
+  size_t length;
+  bool overlong;
+  /* Bytes after the last LF belong to a line that was never finished. */
+  bool unfinished;
+};
+
+/* A line ends at the LF just scanned. Longer than a valid entry, or invalid,
+ * it is skipped like anything else the editor would not have accepted. */
+static void finish_line(struct history_tail *tail)
+{
+  if (tail->length && !tail->overlong) {
+    char *entry = malloc(tail->length + 1);
+    if (entry) {
+      for (size_t i = 0; i < tail->length; ++i) {
+        entry[i] = tail->reversed[tail->length - 1 - i];
+      }
+      entry[tail->length] = '\0';
+      if (valid_entry(entry, tail->length)) {
+        tail->entries[tail->count++] = entry;
+      } else {
+        free(entry);
+      }
+    }
+  }
+  tail->length = 0;
+  tail->overlong = false;
+}
+
+/* Reads the file backwards in chunks and stops as soon as it holds the newest
+ * TERM_HISTORY_ENTRIES valid entries, so the file's length does not matter and
+ * only a few kilobytes are read for a long history. A missing file is empty. */
+static enum call_status read_tail(handle_t home, struct history_tail *tail)
+{
   handle_t file;
   enum call_status status = directory_lookup(home, HISTORY_NAME, DIRECTORY_KIND_FILE,
       FILE_RIGHT_READ, &file);
@@ -50,67 +94,34 @@ static enum call_status read_history(handle_t home, char *buffer, size_t *size)
   if (status != CALL_OK) {
     return status;
   }
-  uint64_t total;
-  status = file_size(file, &total);
-  uint64_t offset = total > HISTORY_FILE_BYTES ? total - HISTORY_FILE_BYTES : 0;
-  size_t count = 0;
-  while (status == CALL_OK && offset + count < total) {
-    size_t read;
-    status = file_read(file, offset + count, buffer + count, HISTORY_FILE_BYTES - count, &read);
-    if (status == CALL_OK && !read) {
-      break;
+  uint64_t end;
+  status = file_size(file, &end);
+  tail->unfinished = true;
+  char chunk[HISTORY_CHUNK];
+  while (status == CALL_OK && end && tail->count < TERM_HISTORY_ENTRIES) {
+    size_t size = end < HISTORY_CHUNK ? (size_t)end : HISTORY_CHUNK;
+    end -= size;
+    status = read_exact(file, end, chunk, size);
+    for (size_t i = size; status == CALL_OK && i && tail->count < TERM_HISTORY_ENTRIES; --i) {
+      char byte = chunk[i - 1];
+      if (tail->unfinished) {
+        tail->unfinished = byte != '\n';
+      } else if (byte == '\n') {
+        finish_line(tail);
+      } else if (tail->length < SHELL_LINE_CAPACITY) {
+        tail->reversed[tail->length++] = byte;
+      } else {
+        tail->overlong = true;
+      }
     }
-    count += read;
+  }
+  if (status == CALL_OK && !end && !tail->unfinished && tail->count < TERM_HISTORY_ENTRIES) {
+    finish_line(tail);
   }
   if (handle_close(file) != 0 && status == CALL_OK) {
     status = CALL_IO;
   }
-  if (status != CALL_OK) {
-    return status;
-  }
-  size_t start = 0;
-  if (offset) {
-    char *newline = memchr(buffer, '\n', count);
-    start = newline ? (size_t)(newline - buffer) + 1 : count;
-  }
-  memmove(buffer, buffer + start, count - start);
-  *size = count - start;
-  return CALL_OK;
-}
-
-/* Keeps only valid, LF-terminated entries, compacting them to the front of
- * buffer in order. Returns the new size and sets *lines. */
-static size_t keep_entries(char *buffer, size_t size, size_t *lines)
-{
-  size_t kept = 0;
-  *lines = 0;
-  for (size_t start = 0; start < size;) {
-    char *newline = memchr(buffer + start, '\n', size - start);
-    if (!newline) {
-      break;
-    }
-    size_t length = (size_t)(newline - (buffer + start));
-    if (valid_entry(buffer + start, length)) {
-      memmove(buffer + kept, buffer + start, length + 1);
-      kept += length + 1;
-      ++*lines;
-    }
-    start += length + 1;
-  }
-  return kept;
-}
-
-/* Drops the oldest whole entries until both file bounds hold. */
-static size_t trim_entries(char *buffer, size_t size, size_t lines)
-{
-  size_t start = 0;
-  while (lines > HISTORY_FILE_LINES || size - start > HISTORY_FILE_BYTES) {
-    char *newline = memchr(buffer + start, '\n', size - start);
-    start = (size_t)(newline - buffer) + 1;
-    --lines;
-  }
-  memmove(buffer, buffer + start, size - start);
-  return size - start;
+  return status;
 }
 
 void shell_history_load(struct shell *shell)
@@ -124,97 +135,66 @@ void shell_history_load(struct shell *shell)
   shell->history_home = home;
   shell->history_saving = handle_rights(home, &rights, NULL) == CALL_OK &&
       (rights & HISTORY_SAVE_RIGHTS) == HISTORY_SAVE_RIGHTS;
-  char *buffer = malloc(HISTORY_BUFFER);
-  size_t size, lines;
-  if (!buffer || read_history(home, buffer, &size) != CALL_OK) {
-    free(buffer);
+  struct history_tail *tail = calloc(1, sizeof(*tail));
+  if (!tail) {
     return;
   }
-  size = keep_entries(buffer, size, &lines);
-  size_t skip = lines > TERM_HISTORY_ENTRIES ? lines - TERM_HISTORY_ENTRIES : 0;
-  for (size_t start = 0; start < size;) {
-    char *newline = memchr(buffer + start, '\n', size - start);
-    *newline = '\0';
-    if (skip) {
-      --skip;
-    } else {
-      term_history_add(&shell->history, buffer + start);
+  if (read_tail(home, tail) == CALL_OK) {
+    for (size_t i = tail->count; i; --i) {
+      term_history_add(&shell->history, tail->entries[i - 1]);
     }
-    start = (size_t)(newline - buffer) + 1;
   }
-  free(buffer);
+  for (size_t i = 0; i < tail->count; ++i) {
+    free(tail->entries[i]);
+  }
+  free(tail);
 }
 
-/* Creates an exclusive temporary name beside the history. */
-static enum call_status create_temporary(struct shell *shell, char *name, size_t capacity,
-    handle_t *file)
+/* Opens the history for appending, creating it when it is missing. Another
+ * shell may create it first. */
+static enum call_status open_for_append(handle_t home, handle_t *file)
 {
-  uint64_t stamp = 0;
-  if (shell->clock == HANDLE_INVALID || clock_now(shell->clock, &stamp) != CALL_OK) {
-    stamp = (uint64_t)(uintptr_t)shell;
-  }
-  enum call_status status = CALL_ALREADY_EXISTS;
-  for (unsigned attempt = 0; attempt < HISTORY_TEMPORARY_ATTEMPTS &&
-      status == CALL_ALREADY_EXISTS; ++attempt) {
-    snprintf(name, capacity, HISTORY_NAME ".%016llx", (unsigned long long)(stamp + attempt));
-    status = directory_create(shell->history_home, name, DIRECTORY_KIND_FILE,
-        FILE_RIGHT_WRITE, file);
+  enum call_status status = directory_lookup(home, HISTORY_NAME, DIRECTORY_KIND_FILE,
+      FILE_RIGHT_WRITE, file);
+  if (status == CALL_NOT_FOUND) {
+    status = directory_create(home, HISTORY_NAME, DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, file);
+    if (status == CALL_ALREADY_EXISTS) {
+      status = directory_lookup(home, HISTORY_NAME, DIRECTORY_KIND_FILE, FILE_RIGHT_WRITE, file);
+    }
   }
   return status;
 }
 
-static enum call_status write_all(handle_t file, const char *bytes, size_t size)
+/* One FILE_APPEND selects the end of file and writes the line in a single
+ * mutation of the file, so lines from concurrent shells never overwrite or
+ * split each other: a record is at most SHELL_LINE_CAPACITY bytes, well inside
+ * the 4080 bytes one append carries. The file only grows; nothing is read,
+ * trimmed or replaced. A short write (a full volume) is finished once and
+ * otherwise reported, and the unterminated tail it may leave is ignored when
+ * the history is loaded. */
+static enum call_status save_line(struct shell *shell, const char *line)
 {
-  for (size_t offset = 0; offset < size;) {
-    size_t written;
-    enum call_status status = file_write(file, offset, bytes + offset, size - offset, &written);
-    if (status != CALL_OK) {
-      return status;
-    }
-    offset += written;
-  }
-  return CALL_OK;
-}
+  char record[SHELL_LINE_CAPACITY + 1];
+  size_t size = strlen(line);
+  memcpy(record, line, size);
+  record[size++] = '\n';
 
-/* Merge and replace: the newest file contents plus this line go to a new
- * temporary file, renamed over the history. The rename is the commit point;
- * native volumes flush the moved file before replacing, and syncing the file
- * afterwards commits the rename. Concurrent savers can lose each other's line:
- * the later rename wins. */
-static enum call_status save_line(struct shell *shell, const char *line, char *buffer)
-{
-  size_t size, lines;
-  enum call_status status = read_history(shell->history_home, buffer, &size);
-  if (status != CALL_OK) {
-    return status;
-  }
-  size = keep_entries(buffer, size, &lines);
-  size_t length = strlen(line);
-  memcpy(buffer + size, line, length);
-  buffer[size + length] = '\n';
-  size = trim_entries(buffer, size + length + 1, lines + 1);
-
-  char name[sizeof(HISTORY_NAME) + 18];
   handle_t file;
-  status = create_temporary(shell, name, sizeof(name), &file);
+  enum call_status status = open_for_append(shell->history_home, &file);
   if (status != CALL_OK) {
     return status;
   }
-  status = write_all(file, buffer, size);
-  bool renamed = false;
-  if (status == CALL_OK) {
-    status = directory_rename(shell->history_home, name, shell->history_home, HISTORY_NAME,
-        DIRECTORY_RENAME_REPLACE, DIRECTORY_KIND_FILE);
-    renamed = status == CALL_OK;
+  for (size_t done = 0; status == CALL_OK && done < size;) {
+    uint64_t offset;
+    size_t written;
+    status = file_append(file, record + done, size - done, &offset, &written);
+    done += written;
   }
-  if (renamed) {
+  if (status == CALL_OK) {
     status = file_sync(file);
   }
   if (handle_close(file) != 0 && status == CALL_OK) {
     status = CALL_IO;
-  }
-  if (!renamed) {
-    directory_remove(shell->history_home, name, DIRECTORY_KIND_FILE);
   }
   return status;
 }
@@ -224,9 +204,7 @@ void shell_history_save(struct shell *shell, const char *line)
   if (!shell->history_saving || !valid_entry(line, strlen(line))) {
     return;
   }
-  char *buffer = malloc(HISTORY_BUFFER);
-  enum call_status status = buffer ? save_line(shell, line, buffer) : CALL_NO_MEMORY;
-  free(buffer);
+  enum call_status status = save_line(shell, line);
   if (status != CALL_OK) {
     /* One report per shell; later lines stay in memory only. */
     shell->history_saving = false;
