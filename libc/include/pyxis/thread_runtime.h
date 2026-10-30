@@ -29,9 +29,10 @@ enum call_status libc_thread_context_prepare(handle_t memory,
  * Keep this descriptor outside the context backing. Calling it on a running
  * sibling violates the precondition: BUSY protects native backing but does not
  * synchronize access to mutable runtime metadata. Once backing release commits,
- * the descriptor is cleared even
- * if separate destructor-block, key-value or retained-handle cleanup reports an
- * error. */
+ * the descriptor is cleared even if separate destructor-block or retained-handle
+ * cleanup reports an error. Key-value retirement is best effort: CALL_OK does
+ * not promise its physical backing was reclaimed. Failed/uncertain key backing
+ * stays process-owned until teardown and is never retried by a collector. */
 enum call_status libc_thread_context_release(handle_t memory,
     struct libc_thread_context *context);
 
@@ -69,8 +70,11 @@ enum call_status libc_thread_cleanup_register(void (*cleanup)(void));
  * become eligible on a later pass. The registry grows using retained native
  * MEMORY independent of the creating TCB. Per-thread values allocate lazily:
  * unset get and NULL set do not allocate; non-NULL set may fail on allocation or
- * admission, preserving the previous value. Values release during orderly exit
- * or confirmed stopped-context collection. These calls return native statuses. */
+ * admission, preserving the previous value. Values retire during orderly exit
+ * or confirmed stopped-context collection. Failed retirement of obsolete key
+ * backing retains its actual charge until process teardown; it does not stop
+ * the process or undo a published key/value. Uncertain addresses are forgotten,
+ * never accessed or retried by the collector. These calls return native statuses. */
 enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_key *key);
 enum call_status libc_thread_key_delete(libc_thread_key key);
 enum call_status libc_thread_key_set(libc_thread_key key, void *value);

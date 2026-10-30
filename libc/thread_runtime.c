@@ -70,17 +70,16 @@ static size_t key_capacity(size_t old, size_t required, size_t element_size)
   return capacity;
 }
 
-static void release_key_registry(struct thread_key_registry storage)
+static void retire_key_registry(struct thread_key_registry storage)
 {
   if (!storage.capacity) {
     return;
   }
-  /* A failed release cannot be reported as a failed create after publication.
-   * Match other runtime ownership cleanup: uncertainty stops the process. */
-  if (libc_memory_release(storage.memory, storage.region) != CALL_OK ||
-      handle_close(storage.memory) != 0) {
-    _Exit(EXIT_FAILURE);
-  }
+  /* No reader borrows this table after publication/guard release. Forget it
+   * after retirement returns: process ownership keeps unreleased backing,
+   * and retrying an uncertain address or handle could affect a reused one. */
+  (void)libc_memory_release(storage.memory, storage.region);
+  (void)handle_close(storage.memory);
 }
 
 static libc_thread_key take_key(void (*destructor)(void *))
@@ -123,15 +122,15 @@ enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_
     status = libc_memory_allocate(candidate.memory,
         capacity * sizeof(struct thread_key_entry), &candidate.region);
     if (status != CALL_OK) {
-      if (handle_close(candidate.memory) != 0) {
-        _Exit(EXIT_FAILURE);
-      }
+      /* No publication occurred. Keep the allocation's real failure; a close
+       * with unknown effect leaves any surviving grant to process teardown. */
+      (void)handle_close(candidate.memory);
       return status;
     }
     lock_keys();
     if (key_free_slot || key_registry.capacity != previous_capacity) {
       unlock_keys();
-      release_key_registry(candidate);
+      retire_key_registry(candidate);
       continue;
     }
     struct thread_key_entry *entries = (void *)(uintptr_t)candidate.region.address;
@@ -146,7 +145,7 @@ enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_
     key_free_slot = previous_capacity + 1;
     *key = take_key(destructor);
     unlock_keys();
-    release_key_registry(previous);
+    retire_key_registry(previous);
     return CALL_OK;
   }
 }
@@ -224,8 +223,10 @@ enum call_status libc_thread_key_set(libc_thread_key key, void *value)
   }
   unlock_keys();
   struct memory_region unused = valid ? previous : region;
-  if (unused.size && libc_memory_release(record->memory, unused) != CALL_OK) {
-    _Exit(EXIT_FAILURE);
+  if (unused.size) {
+    /* It is no longer a published value table. Do not retry a failed retirement
+     * later: the same address may have been released and reused meanwhile. */
+    (void)libc_memory_release(record->memory, unused);
   }
   return valid ? CALL_OK : CALL_BAD_REQUEST;
 }
@@ -365,9 +366,9 @@ void libc_thread_destructors(void)
     record->keys = NULL;
     record->key_capacity = 0;
     record->key_region = (struct memory_region){0};
-    if (libc_memory_release(record->memory, region) != CALL_OK) {
-      _Exit(EXIT_FAILURE);
-    }
+    /* Clear the descriptor before retirement, including on failure. A stopped
+     * context collector must never retry an uncertain, potentially reused VA. */
+    (void)libc_memory_release(record->memory, region);
   }
 }
 

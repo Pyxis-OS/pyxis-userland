@@ -128,10 +128,9 @@ enum call_status libc_thread_context_release(handle_t memory,
     block = previous;
   }
   if (keys.size) {
-    enum call_status released = libc_memory_release(owned_memory, keys);
-    if (cleanup == CALL_OK && released != CALL_OK) {
-      cleanup = released;
-    }
+    /* Context ownership is already detached. An unconfirmed key retirement
+     * retains backing under process ownership; never retry its old address. */
+    (void)libc_memory_release(owned_memory, keys);
   }
   if (handle_close(owned_memory) != 0 && cleanup == CALL_OK) {
     cleanup = CALL_OUTCOME_UNKNOWN;
