@@ -32,6 +32,11 @@ session bin://threadprobe.pxe park-refusal
 session bin://threadprobe.pxe park-inspect
 session bin://threadprobe.pxe park-unmap
 session bin://threadprobe.pxe park-stop
+session bin://threadprobe.pxe runtime
+session bin://threadprobe.pxe runtime-time
+session bin://threadprobe.pxe runtime-once
+session bin://threadprobe.pxe runtime-cxx
+session bin://threadprobe.pxe runtime-mutex
 ```
 
 `lifecycle` creates two siblings with independent eager 64 KiB native stacks and
@@ -147,3 +152,9 @@ allocation or stdio. Parent printing happens before sibling creation and after
 completion. These manual probes qualify the narrow TLS runtime; they do not
 advertise thread-safe libc/C++, pthreads or C11 threads. Parking modes require the SDK/kernel address
 WAIT/WAKE gate; there is no cross-process wait, requeue or lock-ownership handoff.
+
+`runtime-mutex` checks free/wrong-owner unlock refusal, normal and recursive
+trylock, held/destroyed/reinitialized objects, C11 timed profiles and invalid
+time values. A timed-out contender and timeout/unlock races must leave an
+ordinary contender able to acquire and retire. It has a process watchdog; a
+watchdog exit is failure, not a successful retirement check.

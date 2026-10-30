@@ -6,7 +6,13 @@
 #include "thread_platform.h"
 #include "thread_sync.h"
 
-#define SYNC_INVALID UINT32_MAX
+#define MUTEX_UNLOCKED UINT64_C(0)
+#define MUTEX_LOCKED UINT64_C(1)
+#define MUTEX_CONTENDED UINT64_C(2)
+#define MUTEX_STATE_MASK UINT64_C(0xffffffff)
+#define MUTEX_WAITER UINT64_C(0x100000000)
+#define MUTEX_WAITERS UINT64_C(0xffffffff00000000)
+#define MUTEX_DESTROYED UINT64_MAX
 #define RWLOCK_WRITER (UINT32_C(1) << 31)
 #define RWLOCK_READERS (RWLOCK_WRITER - 1)
 #define NANOSECONDS_PER_SECOND UINT64_C(1000000000)
@@ -20,15 +26,21 @@ static void notify(uint32_t *word, uint64_t maximum)
   }
 }
 
-int libc_park(uint32_t *word, uint32_t expected, uint64_t deadline)
+static int park_word(uintptr_t address, uint64_t word_size, uint64_t expected,
+    uint64_t deadline)
 {
   handle_t service = libc_thread_service();
   if (service == HANDLE_INVALID) {
     return EACCES;
   }
-  enum call_status status = thread_address_wait(service, (uintptr_t)word,
-      expected, THREAD_ADDRESS_WORD32_BYTES, deadline);
+  enum call_status status = thread_address_wait(service, address,
+      expected, word_size, deadline);
   return status == CALL_WOULD_BLOCK ? 0 : libc_call_errno(status);
+}
+
+int libc_park(uint32_t *word, uint32_t expected, uint64_t deadline)
+{
+  return park_word((uintptr_t)word, THREAD_ADDRESS_WORD32_BYTES, expected, deadline);
 }
 
 int libc_wake(uint32_t *word, uint64_t maximum)
@@ -119,11 +131,11 @@ static int native_deadline(const struct timespec *time, clockid_t clock,
   return 0;
 }
 
-int libc_sync_wait(uint32_t *word, uint32_t expected,
+static int wait_word(uintptr_t address, uint64_t word_size, uint64_t expected,
     const struct timespec *time, clockid_t clock)
 {
   if (!time) {
-    return libc_park(word, expected, THREAD_ADDRESS_NO_DEADLINE);
+    return park_word(address, word_size, expected, THREAD_ADDRESS_NO_DEADLINE);
   }
   int error = libc_sync_validate_time(time, clock);
   if (error) {
@@ -135,12 +147,34 @@ int libc_sync_wait(uint32_t *word, uint32_t expected,
     if (error) {
       return error;
     }
-    error = libc_park(word, expected, deadline);
+    error = park_word(address, word_size, expected, deadline);
     if (error != ETIMEDOUT || clock == CLOCK_MONOTONIC) {
       return error;
     }
     /* Recheck UTC after native expiry instead of treating uptime as UTC. */
   }
+}
+
+int libc_sync_wait(uint32_t *word, uint32_t expected,
+    const struct timespec *time, clockid_t clock)
+{
+  return wait_word((uintptr_t)word, THREAD_ADDRESS_WORD32_BYTES, expected, time, clock);
+}
+
+static void mutex_notify(struct libc_mutex *mutex)
+{
+  uint64_t woken;
+  if (thread_address_wake(libc_thread_service(), (uintptr_t)&mutex->state,
+      THREAD_ADDRESS_WORD64_BYTES, 1, &woken) != CALL_OK) {
+    _Exit(EXIT_FAILURE);
+  }
+}
+
+static bool mutex_owned(struct libc_mutex *mutex, uint64_t self)
+{
+  uint64_t state = __atomic_load_n(&mutex->state, __ATOMIC_ACQUIRE);
+  return state != MUTEX_DESTROYED && (state & MUTEX_STATE_MASK) != MUTEX_UNLOCKED &&
+      __atomic_load_n(&mutex->owner, __ATOMIC_RELAXED) == self;
 }
 
 int libc_mutex_init(struct libc_mutex *mutex, int type)
@@ -157,14 +191,12 @@ int libc_mutex_destroy(struct libc_mutex *mutex)
   if (!mutex) {
     return EINVAL;
   }
-  libc_lock_acquire(&mutex->guard);
-  int error = mutex->type == SYNC_INVALID ? EINVAL :
-      mutex->depth || mutex->waiters ? EBUSY : 0;
-  if (!error) {
-    mutex->type = SYNC_INVALID;
+  uint64_t state = MUTEX_UNLOCKED;
+  if (__atomic_compare_exchange_n(&mutex->state, &state, MUTEX_DESTROYED, false,
+      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    return 0;
   }
-  libc_lock_release(&mutex->guard);
-  return error;
+  return state == MUTEX_DESTROYED ? EINVAL : EBUSY;
 }
 
 static int lock_mutex(struct libc_mutex *mutex, bool try_only,
@@ -180,40 +212,67 @@ static int lock_mutex(struct libc_mutex *mutex, bool try_only,
     }
   }
   uint64_t self = libc_thread_self();
+  uint64_t state = MUTEX_UNLOCKED;
+  bool registered = false;
+  if (__atomic_compare_exchange_n(&mutex->state, &state, MUTEX_LOCKED, false,
+      __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
+    goto acquired;
+  }
   for (;;) {
-    libc_lock_acquire(&mutex->guard);
-    int error = 0;
-    if (mutex->type == SYNC_INVALID) {
-      error = EINVAL;
-    } else if (!mutex->depth) {
-      mutex->owner = self;
-      mutex->depth = 1;
-      __atomic_store_n(&mutex->held, 1, __ATOMIC_RELAXED);
-    } else if ((mutex->type & LIBC_MUTEX_RECURSIVE) && mutex->owner == self) {
-      if (mutex->depth == UINT32_MAX) {
-        error = EAGAIN;
-      } else {
-        mutex->depth++;
-      }
-    } else if (try_only) {
-      error = EBUSY;
-    } else if (mutex->waiters == UINT32_MAX) {
-      error = EAGAIN;
-    } else {
-      mutex->waiters++;
-      libc_lock_release(&mutex->guard);
-      error = libc_sync_wait(&mutex->held, 1, time, clock);
-      libc_lock_acquire(&mutex->guard);
-      mutex->waiters--;
-      libc_lock_release(&mutex->guard);
-      if (error) {
-        return error;
+    if (state == MUTEX_DESTROYED) {
+      return EINVAL;
+    }
+    if ((state & MUTEX_STATE_MASK) == MUTEX_UNLOCKED) {
+      uint64_t next = state - (registered ? MUTEX_WAITER : 0);
+      next |= (registered || (next & MUTEX_WAITERS)) ? MUTEX_CONTENDED : MUTEX_LOCKED;
+      if (__atomic_compare_exchange_n(&mutex->state, &state, next, true,
+          __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
+        goto acquired;
       }
       continue;
     }
-    libc_lock_release(&mutex->guard);
-    return error;
+    if ((mutex->type & LIBC_MUTEX_RECURSIVE) &&
+        __atomic_load_n(&mutex->owner, __ATOMIC_RELAXED) == self) {
+      if (mutex->depth == UINT32_MAX) {
+        return EAGAIN;
+      }
+      ++mutex->depth;
+      return 0;
+    }
+    if (try_only) {
+      return EBUSY;
+    }
+    if (!registered) {
+      if ((state & MUTEX_WAITERS) == MUTEX_WAITERS) {
+        return EAGAIN;
+      }
+      uint64_t next = ((state + MUTEX_WAITER) & MUTEX_WAITERS) | MUTEX_CONTENDED;
+      if (!__atomic_compare_exchange_n(&mutex->state, &state, next, true,
+          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        continue;
+      }
+      registered = true;
+      state = next;
+    }
+    int error = wait_word((uintptr_t)&mutex->state, THREAD_ADDRESS_WORD64_BYTES,
+        state, time, clock);
+    if (error) {
+      uint64_t previous = __atomic_fetch_sub(&mutex->state, MUTEX_WAITER, __ATOMIC_RELEASE);
+      /* A timed-out contender can have consumed the owner's notification.
+       * Transfer it when other registered contenders have an unlocked word. */
+      if ((previous & MUTEX_STATE_MASK) == MUTEX_UNLOCKED &&
+          (previous & MUTEX_WAITERS) > MUTEX_WAITER) {
+        mutex_notify(mutex);
+      }
+      return error;
+    }
+    state = __atomic_load_n(&mutex->state, __ATOMIC_ACQUIRE);
   }
+
+acquired:
+  __atomic_store_n(&mutex->owner, self, __ATOMIC_RELAXED);
+  mutex->depth = 1;
+  return 0;
 }
 
 int libc_mutex_lock(struct libc_mutex *mutex)
@@ -240,23 +299,21 @@ int libc_mutex_unlock(struct libc_mutex *mutex)
   if (!mutex) {
     return EINVAL;
   }
-  libc_lock_acquire(&mutex->guard);
-  int error = 0;
-  bool wake = false;
-  if (mutex->type == SYNC_INVALID) {
-    error = EINVAL;
-  } else if (!mutex->depth || mutex->owner != libc_thread_self()) {
-    error = EPERM;
-  } else if (!--mutex->depth) {
-    mutex->owner = 0;
-    __atomic_store_n(&mutex->held, 0, __ATOMIC_RELEASE);
-    wake = mutex->waiters != 0;
+  if (__atomic_load_n(&mutex->state, __ATOMIC_ACQUIRE) == MUTEX_DESTROYED) {
+    return EINVAL;
   }
-  libc_lock_release(&mutex->guard);
-  if (wake) {
-    notify(&mutex->held, 1);
+  if (!mutex_owned(mutex, libc_thread_self())) {
+    return EPERM;
   }
-  return error;
+  if (--mutex->depth) {
+    return 0;
+  }
+  __atomic_store_n(&mutex->owner, 0, __ATOMIC_RELAXED);
+  uint64_t state = __atomic_fetch_and(&mutex->state, MUTEX_WAITERS, __ATOMIC_RELEASE);
+  if ((state & MUTEX_STATE_MASK) == MUTEX_CONTENDED) {
+    mutex_notify(mutex);
+  }
+  return 0;
 }
 
 struct condition_waiter {
@@ -326,12 +383,9 @@ int libc_condition_wait(struct libc_condition *condition, struct libc_mutex *mut
   if (!error && condition->waiters == UINT32_MAX) {
     error = EAGAIN;
   }
-  libc_lock_acquire(&mutex->guard);
-  if (!error && (mutex->type == SYNC_INVALID || mutex->depth != 1 ||
-      mutex->owner != libc_thread_self())) {
+  if (!error && (!mutex_owned(mutex, libc_thread_self()) || mutex->depth != 1)) {
     error = EINVAL;
   }
-  libc_lock_release(&mutex->guard);
   if (error) {
     libc_lock_release(&condition->guard);
     return error;
@@ -408,6 +462,9 @@ int libc_once_begin(struct libc_once *once, struct libc_once_frame *frame, int *
     return EINVAL;
   }
   *run = 0;
+  if (__atomic_load_n(&once->state, __ATOMIC_ACQUIRE) == 2) {
+    return 0;
+  }
   for (;;) {
     libc_lock_acquire(&once->guard);
     uint32_t state = __atomic_load_n(&once->state, __ATOMIC_RELAXED);

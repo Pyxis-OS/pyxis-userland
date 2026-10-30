@@ -17,16 +17,16 @@ struct libc_lock {
 #define LIBC_MUTEX_TIMED 2
 
 struct libc_mutex {
-  struct libc_lock guard;
-  uint32_t held;
-  uint32_t waiters;
-  uint32_t depth;
+  /* Low word: unlocked/locked/contended. High word: registered waiters.
+   * One CAS excludes both ownership and waiter admission at destruction. */
+  uint64_t state;
+  uint64_t depth;
   uint32_t type;
   uint64_t owner;
 };
 
-#define LIBC_MUTEX_INITIALIZER {{0}, 0, 0, 0, LIBC_MUTEX_NORMAL, 0}
-#define LIBC_RECURSIVE_MUTEX_INITIALIZER {{0}, 0, 0, 0, LIBC_MUTEX_RECURSIVE, 0}
+#define LIBC_MUTEX_INITIALIZER {0, 0, LIBC_MUTEX_NORMAL, 0}
+#define LIBC_RECURSIVE_MUTEX_INITIALIZER {0, 0, LIBC_MUTEX_RECURSIVE, 0}
 
 struct libc_condition {
   struct libc_lock guard;

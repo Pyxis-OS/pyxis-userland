@@ -46,9 +46,9 @@ int mtx_timedlock(mtx_t *mutex, const struct timespec *time)
   if (!mutex) {
     return thrd_error;
   }
-  libc_lock_acquire(&mutex->guard);
-  bool timed = mutex->type != UINT32_MAX && (mutex->type & LIBC_MUTEX_TIMED);
-  libc_lock_release(&mutex->guard);
+  /* The profile is immutable between initialization and destruction;
+   * timedlock validates the atomic ownership word, including destroyed state. */
+  bool timed = (mutex->type & LIBC_MUTEX_TIMED) != 0;
   return timed ? thread_status(libc_mutex_timedlock(mutex, time, CLOCK_REALTIME)) : thrd_error;
 }
 

@@ -177,7 +177,7 @@ procs: $(BUILD)/procs.pxb/manifest.json
 
 threadprobe: $(BUILD)/threadprobe.pxe
 
-$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/runtime.o $(BUILD)/threadprobe/runtime_io.o $(BUILD)/threadprobe/runtime_cxx.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
+$(BUILD)/threadprobe.pxe: $(BUILD)/threadprobe/main.o $(BUILD)/threadprobe/mutex.o $(BUILD)/threadprobe/runtime.o $(BUILD)/threadprobe/runtime_io.o $(BUILD)/threadprobe/runtime_cxx.o $(BUILD)/threadprobe/entry.o $(BUILD)/threadprobe/tls_objects.o $(PYXIS_START) $(PYXIS_LIBRARIES) $(PYXIS_CXX_LIBRARIES) $(PYXIS_LINKER_SCRIPT) Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
 	$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(PYXIS_CXX_LDLIBS)
 
 $(BUILD)/threadprobe/runtime_cxx.o: threadprobe/runtime_cxx.cpp Makefile $(SDK)/share/pyxis.mk $(BUILD)/.config
@@ -512,7 +512,7 @@ clean:
 -include $(PKG_OBJECTS:.o=.d)
 -include $(INSTALL_SELECTOR_OBJECTS:.o=.d) $(BUILD)/installer/installed_probe.d
 
--include $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d
+-include $(BUILD)/threadprobe/mutex.d $(BUILD)/threadprobe/tls_objects.d $(BUILD)/threadprobe/runtime_cxx.d
 -include $(BUILD)/examples/jit-min/main.d
 
 http-stage: $(BUILD)/http-stage.pxe

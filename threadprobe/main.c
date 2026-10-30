@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 
+int threadprobe_runtime_mutex_checks(void);
 int threadprobe_runtime_io(void);
 int threadprobe_runtime_once(void);
 int threadprobe_runtime_cxx(void);
@@ -1065,7 +1066,7 @@ int main(int argc, char **argv)
   if (argc != 2) {
     fputs("usage: session threadprobe "
         "lifecycle|inspect|tls|tls-inspect|tls-stop|tls-fault|bind|refusal|exhaust|stop|fault|close|"
-        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop|runtime|runtime-inspect|runtime-time|runtime-limit|runtime-cxx|runtime-io|runtime-once\n", stderr);
+        "park32|park64|park-refusal|park-inspect|park-unmap|park-stop|runtime|runtime-inspect|runtime-time|runtime-limit|runtime-cxx|runtime-io|runtime-once|runtime-mutex\n", stderr);
     return 1;
   }
   const struct {
@@ -1091,6 +1092,9 @@ int main(int argc, char **argv)
   }
   if (!strcmp(argv[1], "runtime") || !strcmp(argv[1], "runtime-inspect")) {
     return threadprobe_runtime(!strcmp(argv[1], "runtime-inspect"));
+  }
+  if (!strcmp(argv[1], "runtime-mutex")) {
+    return threadprobe_runtime_mutex_checks();
   }
   if (!strcmp(argv[1], "runtime-io")) {
     return threadprobe_runtime_io();
