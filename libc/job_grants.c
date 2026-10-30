@@ -27,6 +27,7 @@
 #include <abi/provider.h>
 #include <abi/random.h>
 #include <abi/screen_capture.h>
+#include <abi/shared_memory.h>
 #include <abi/space.h>
 #include <abi/system_info.h>
 #include <abi/process_view.h>
@@ -57,7 +58,13 @@ static enum call_status validate_authority(const struct handle_info *info,
     allowed_rights = DIRECTORY_RIGHTS;
     break;
   case PROTOCOL_MEMORY:
-    allowed_rights = MEMORY_RIGHT_MANAGE;
+    allowed_rights = MEMORY_RIGHT_MANAGE | MEMORY_RIGHT_CREATE_SHARED;
+    break;
+  case PROTOCOL_SHARED_MEMORY:
+    if (info->kind != HANDLE_KIND_NATIVE || info->transport) {
+      return CALL_WRONG_TYPE;
+    }
+    allowed_rights = SHARED_MEMORY_RIGHTS;
     break;
   case PROTOCOL_JIT:
     if (info->kind != HANDLE_KIND_NATIVE || info->transport) {
