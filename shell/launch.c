@@ -1552,16 +1552,26 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         (struct launch_environment_entry)PROFILE_TEXT(SESSION_WAIT_ENV, "1");
   }
   if (!provider) {
+    const char **skip_names = prepared->captured.count ?
+        malloc(prepared->captured.count * sizeof(*skip_names)) : NULL;
+    if (prepared->captured.count && !skip_names) {
+      return CALL_NO_MEMORY;
+    }
+    size_t skip_count = 0;
+    enum call_status status = CALL_OK;
     for (size_t i = 0; i < prepared->captured.count; ++i) {
       const struct environment_value *entry = &prepared->captured.values[i];
+      /* Keep excluded until the existing inheritance policy selects it. */
+      skip_names[skip_count++] = entry->name;
       bool path = !strcmp(entry->name, "path") && (entry->flags & ENVIRONMENT_EXPORTED);
       if (path) {
         if (entry->kind != ENVIRONMENT_CAP) {
-          return CALL_WRONG_TYPE;
+          status = CALL_WRONG_TYPE;
+          break;
         }
-        enum call_status status = command_list_validate(entry->handle);
+        status = command_list_validate(entry->handle);
         if (status != CALL_OK) {
-          return status;
+          break;
         }
       }
       if (entry->kind != ENVIRONMENT_CAP ||
@@ -1593,9 +1603,9 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
         continue;
       }
       struct handle_info info;
-      enum call_status status = handle_query(entry->handle, &info);
+      status = handle_query(entry->handle, &info);
       if (status != CALL_OK) {
-        return status;
+        break;
       }
       controller = controller && info.protocol == PROTOCOL_FORWARDER;
       bool value = info.protocol == PROTOCOL_FILE || info.protocol == PROTOCOL_FORWARDER || path;
@@ -1603,13 +1613,15 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
           (info.kind != HANDLE_KIND_EXPORTED && !value))) {
         continue;
       }
-      assert(entry_count < entry_capacity);
-      prepared->entries[entry_count++] = (struct launch_environment_entry){
-        .name = (uintptr_t)entry->name, .kind = ENVIRONMENT_CAP,
-        .flags = controller ? 0 : ENVIRONMENT_EXPORTED, .value = grant_count,
-      };
-      assert(grant_count < grant_capacity);
-      grants[grant_count++] = (struct launch_grant){entry->handle, info.rights, info.transport};
+      --skip_count;
+    }
+    if (status == CALL_OK) {
+      status = environment_capture_stage_except(&prepared->captured, skip_names, skip_count,
+          grants, grant_capacity, &grant_count, prepared->entries, entry_capacity, &entry_count);
+    }
+    free(skip_names);
+    if (status != CALL_OK) {
+      return status;
     }
   }
   struct launch_request *request = &prepared->request;

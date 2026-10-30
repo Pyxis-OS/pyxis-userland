@@ -453,30 +453,56 @@ enum call_status environment_stdio(handle_t snapshot, enum environment_stream_in
   return status;
 }
 
-enum call_status environment_capture_stage(const struct environment_capture *capture,
+static bool stage_excluded(const char *name, const char *const *skip_names, size_t skip_count)
+{
+  for (size_t i = 0; i < skip_count; ++i) {
+    if (!strcmp(name, skip_names[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+enum call_status environment_capture_stage_except(const struct environment_capture *capture,
+    const char *const *skip_names, size_t skip_count,
     struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
     struct launch_environment_entry *entries, size_t entry_capacity, size_t *entry_count)
 {
   if (!capture || !grant_count || !entry_count ||
       *grant_count > grant_capacity || *entry_count > entry_capacity ||
-      capture->count > entry_capacity - *entry_count ||
-      (capture->count && !entries)) {
+      (skip_count && !skip_names)) {
     return CALL_BAD_REQUEST;
   }
-  size_t capabilities = 0;
+  for (size_t i = 0; i < skip_count; ++i) {
+    char name[ENVIRONMENT_NAME_MAX + 1];
+    if (!environment_name(name, skip_names[i])) {
+      return CALL_BAD_REQUEST;
+    }
+  }
+  size_t capabilities = 0, selected = 0;
   for (size_t i = 0; i < capture->count; ++i) {
     const struct environment_value *value = &capture->values[i];
+    if (stage_excluded(value->name, skip_names, skip_count)) {
+      continue;
+    }
+    ++selected;
     if (value->kind == ENVIRONMENT_CAP) {
       ++capabilities;
     } else if (value->kind != ENVIRONMENT_TEXT) {
       return CALL_BAD_REQUEST;
     }
   }
+  if (selected > entry_capacity - *entry_count || (selected && !entries)) {
+    return CALL_BAD_REQUEST;
+  }
   if (capabilities > grant_capacity - *grant_count || (capabilities && !grants)) {
     return CALL_LIMIT;
   }
   for (size_t i = 0; i < capture->count; ++i) {
     const struct environment_value *value = &capture->values[i];
+    if (stage_excluded(value->name, skip_names, skip_count)) {
+      continue;
+    }
     struct launch_environment_entry entry = {
       .name = (uintptr_t)value->name, .kind = value->kind, .flags = value->flags,
       .value = (uintptr_t)value->text, .length = value->length,
@@ -489,4 +515,12 @@ enum call_status environment_capture_stage(const struct environment_capture *cap
     entries[(*entry_count)++] = entry;
   }
   return CALL_OK;
+}
+
+enum call_status environment_capture_stage(const struct environment_capture *capture,
+    struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
+    struct launch_environment_entry *entries, size_t entry_capacity, size_t *entry_count)
+{
+  return environment_capture_stage_except(capture, NULL, 0,
+      grants, grant_capacity, grant_count, entries, entry_capacity, entry_count);
 }

@@ -46,6 +46,9 @@ relative `./NAME.pxe` retain their own held authority. Bundle selections preserv
 manifest, stack, grants and versioned resources through admission. `which NAME`
 reports that same resolver's selected entry and package provenance without launch.
 
+The [C environment staging example](lib/ENVIRONMENT.md) inherits an exported
+capture with explicit CAP/TEXT replacements while preserving borrowed ownership.
+
 `config/session.lua` accepts an ordered `path` list, for example
 `path = { "home://tools", "bin://", "boot://" }`. Installed boots use
 `system://config/session.lua`; live boots use `boot://config/session.lua`.

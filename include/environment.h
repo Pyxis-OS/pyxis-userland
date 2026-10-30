@@ -66,6 +66,13 @@ struct environment_capture {
 enum call_status environment_capture_stage(const struct environment_capture *capture,
     struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
     struct launch_environment_entry *entries, size_t entry_capacity, size_t *entry_count);
+/* Stage the same borrowed selection except exact names. Explicit replacements
+ * can already occupy the output prefix; excluded CAPs add no child grants.
+ * Missing/repeated exclusions are harmless. Failure leaves both counts unchanged. */
+enum call_status environment_capture_stage_except(const struct environment_capture *capture,
+    const char *const *skip_names, size_t skip_count,
+    struct launch_grant *grants, size_t grant_capacity, size_t *grant_count,
+    struct launch_environment_entry *entries, size_t entry_capacity, size_t *entry_count);
 
 /* Heap-owned immutable selection. Each CAP and TEXT has independent ownership;
  * close the record once. Borrow find results only while the record is live. */
