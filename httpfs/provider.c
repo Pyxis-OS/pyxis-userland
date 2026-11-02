@@ -12,7 +12,9 @@
 #include <file.h>
 #include <handle.h>
 #include <forwarder.h>
+#include <inttypes.h>
 #include <stdio.h>
+#include <system_info.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -91,6 +93,7 @@ struct loop {
   uint64_t body_cap;
   struct transaction *storage_owner;
   struct http_client client;
+  handle_t memory_info;
   struct exported exports[EXPORT_SLOTS];
   struct transaction *active;
   uint64_t next_id, next_name;
@@ -1033,6 +1036,9 @@ static void body_request(struct loop *loop, struct transaction *transaction,
         transaction->mutation_failure : CALL_BUSY, NULL, 0, NULL, 0);
     return;
   }
+/* The share of total memory a RAM staging upload may never use. */
+#define MEMORY_RESERVE_DIVISOR 8
+
   enum staging_operation kind;
   if (packet->operation == FILE_WRITE) {
     struct file_write_request request;
@@ -1067,8 +1073,6 @@ static void body_request(struct loop *loop, struct transaction *transaction,
   uint64_t admitted_size = kind == STAGING_WRITE ?
       transaction->mutation_offset + transaction->mutation_size : transaction->mutation_size;
   if (loop->body_cap && admitted_size > loop->body_cap) {
-    /* Refused growth never reaches native mutation. Remember the failure even
-     * when a writer ignores its reply, so COMMIT cannot submit a partial body. */
     transaction->mutation_failure = CALL_LIMIT;
     reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
     return;
@@ -1103,13 +1107,35 @@ static void snapshot_read_reply(struct loop *loop, struct transaction *transacti
 static void snapshot_bulk_completed(struct loop *loop, struct transaction *transaction,
     const struct endpoint_packet *packet)
 {
+  /* Refused growth never reaches native mutation. Remember the failure even
+   * when a writer ignores its reply, so COMMIT cannot submit a partial body. */
   /* Native result and cancellation reason remain independent in the packet.
    * The outer read selects cancellation before exposing collected bytes. */
   enum call_status status = packet->reason != CALL_OK ? packet->reason : packet->result;
   struct file_read_reply response = {0};
+    fprintf(stderr, "httpfs: request body of %" PRIu64 " bytes exceeds the staging limit of %"
+        PRIu64 " bytes (--staging-cap)\n", admitted_size, loop->body_cap);
   if (status == CALL_OK) {
     if (packet->size != sizeof(response) || packet->grant_count) {
       status = CALL_IO;
+  /* RAM staging uses the memory every other volume uses, so what the body may still
+   * grow by is the free memory less a reserve: one MEMORY_RESERVE_DIVISOR-th of the total. */
+  struct system_info_memory memory;
+  uint64_t growth = admitted_size > transaction->body_length ?
+      admitted_size - transaction->body_length : 0;
+  if (loop->memory_info != HANDLE_INVALID &&
+      system_info_get_memory(loop->memory_info, &memory) == CALL_OK) {
+    uint64_t reserve = memory.total_bytes / MEMORY_RESERVE_DIVISOR;
+    if (memory.free_bytes < reserve || growth > memory.free_bytes - reserve) {
+      transaction->mutation_failure = CALL_LIMIT;
+      fprintf(stderr, "httpfs: request body of %" PRIu64 " bytes needs %" PRIu64 " more, but only %"
+          PRIu64 " of %" PRIu64 " bytes of memory are free and 1/%u of it is reserved\n",
+          admitted_size, growth, memory.free_bytes, memory.total_bytes,
+          (unsigned)MEMORY_RESERVE_DIVISOR);
+      reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
+      return;
+    }
+  }
     } else {
       memcpy(&response, packet->data, sizeof(response));
       if (response.read > transaction->read_capacity || !response.read ||
@@ -2049,11 +2075,12 @@ static bool alive(const struct loop *loop)
 
 enum call_status httpfs_serve(handle_t service, handle_t receiver,
     handle_t root_controllers[HTTPFS_ROOT_COUNT], const struct http_client *client,
-    bool custom_trust, handle_t staging, bool ram_backing, uint64_t body_cap)
+    bool custom_trust, handle_t staging, bool ram_backing, uint64_t body_cap,
+    handle_t memory_info)
 {
   struct loop loop = {.service = service, .receiver = receiver,
     .client = *client, .next_id = 1, .staging = staging, .body_cap = body_cap,
-    .custom_trust = custom_trust, .ram_backing = ram_backing};
+    .custom_trust = custom_trust, .ram_backing = ram_backing, .memory_info = memory_info};
   for (size_t i = 0; i < HTTPFS_ROOT_COUNT; ++i) {
     loop.roots[i] = root_controllers[i];
     root_controllers[i] = HANDLE_INVALID;
