@@ -4,10 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* A directory with more entries than this is not completed: the list would be
- * unusable, and a prefix common to a partial set would be wrong. */
-#define ENTRY_LIMIT 4096
-
 struct text {
   char *data;
   size_t length, capacity;
@@ -205,15 +201,14 @@ static char *render(const char *value, char quote)
 
 /* Lists DIRECTORY (empty for the working directory) into entries, keeping the
  * names that begin with PREFIX. Not listable, such as for a withheld ENUMERATE
- * right or a missing path, adds nothing. Returns false for too many entries or
- * no memory. */
+ * right or a missing path, adds nothing. Returns false for no memory. */
 static bool list_directory(struct shell *shell, const char *directory, const char *prefix,
     char quote, struct entries *entries)
 {
   struct shell_listing listing;
   enum call_status status = shell_list_directory(shell, *directory ? directory : ".",
-      ENTRY_LIMIT, &listing);
-  if (status == CALL_LIMIT || status == CALL_NO_MEMORY) {
+      0, &listing);
+  if (status == CALL_NO_MEMORY) {
     return false;
   }
   if (status != CALL_OK) {

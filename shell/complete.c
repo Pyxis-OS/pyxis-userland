@@ -7,8 +7,6 @@
 #include <string.h>
 
 /* Names are offered only when they can be typed as a bare word. */
-#define COMPLETION_LIMIT 4096
-
 static const char *const builtins[] = {
   "affinity", "cd", "clear", "describe", "exit", "export", "mount", "poweroff",
   "reboot", "release", "reset", "revoke", "revocable", "service", "session",
@@ -29,9 +27,6 @@ static bool bare_character(unsigned char byte)
 
 static bool add_name(struct names *names, const char *name, size_t length)
 {
-  if (names->count == COMPLETION_LIMIT) {
-    return true;
-  }
   if (names->count == names->capacity) {
     size_t capacity = names->capacity ? names->capacity * 2 : 64;
     char **larger = realloc(names->items, capacity * sizeof(*larger));
