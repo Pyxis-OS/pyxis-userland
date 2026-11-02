@@ -136,9 +136,12 @@ bool log_next_record(const void *bytes, size_t size, size_t *offset,
 
 enum call_status log_write(handle_t log, enum log_level level, const char *text)
 {
-  size_t length = text ? strlen(text) : 0;
-  if (!text || length > LOG_WRITE_MAX) {
+  if (!text) {
     return CALL_BAD_REQUEST;
+  }
+  size_t length = strnlen(text, LOG_WRITE_CALL_MAX + 1);
+  if (length > LOG_WRITE_CALL_MAX) {
+    return CALL_LIMIT;
   }
   struct log_write_request request = {
     .header = {PROTOCOL_LOG, LOG_WRITE}, .level = level,

@@ -19,9 +19,10 @@ enum call_status log_read(handle_t log, struct log_cursor cursor,
 bool log_next_record(const void *bytes, size_t size, size_t *offset,
     struct log_record *record, const char **text);
 
-/* Borrowed WRITE grant. Logs one line, cut at LOG_WRITE_MAX bytes, as the caller's
- * space; control bytes become '?'. Success also covers a line the rate limit
- * dropped. */
+/* Borrowed WRITE grant. Logs the text as the caller's space, in lines of at most
+ * LOG_WRITE_MAX bytes (a longer text continues on the next line); control bytes
+ * become '?'. Text over LOG_WRITE_CALL_MAX fails CALL_LIMIT and logs nothing.
+ * Success also covers a line the rate limit dropped. */
 enum call_status log_write(handle_t log, enum log_level level, const char *text);
 /* Borrowed WRITE grant. On success *stream is a new write-only console-protocol
  * handle whose lines are logged at level; it is HANDLE_INVALID on failure. The
