@@ -89,7 +89,7 @@ static bool verify_target(handle_t tree, const struct pkg_command *command,
       }
       offset += count;
     }
-    if (status == CALL_OK && magic != P1F_MAGIC) {
+    if (status == CALL_OK && magic != P1F_MAGIC && magic != P2F_MAGIC) {
       status = CALL_BAD_REQUEST;
     }
   }

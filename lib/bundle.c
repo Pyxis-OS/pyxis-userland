@@ -723,7 +723,7 @@ static enum call_status open_entry(struct bundle_program *program, const char *p
     }
     position += count;
   }
-  if (status == CALL_OK && magic != P1F_MAGIC) {
+  if (status == CALL_OK && magic != P1F_MAGIC && magic != P2F_MAGIC) {
     status = CALL_BAD_REQUEST;
   }
   if (status != CALL_OK) {
