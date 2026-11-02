@@ -137,6 +137,10 @@ unreadable or invalid key reports the reason and keeps the configured fallback.
 Names are 1–63 ASCII letters, digits and internal hyphens, preserving case;
 the stored key accepts one trailing LF or none. Boot init sets the kernel's
 name once before creating spaces.
+The archive-only `ram_npfs_bytes` defaults to `"auto"`, which selects allocator
+RAM as the shared sparse npfs pool's logical capacity. A positive 4096-aligned
+Lua integer selects explicit bytes; the kernel checks format limits. Capacity
+is fixed once for the pool and does not reserve that much physical memory.
 The configuration's `input` table selects `mouse_scroll_direction` and
 `touchpad_scroll_direction`, each `natural` or `traditional` (natural by default).
 `input.touchpad_speed` is a finite number from -1 to 1, defaulting to 0. It is

@@ -750,10 +750,17 @@ static int decode_archive(lua_State *state)
   memcpy(config->hostname, name, length);
   config->hostname[length] = '\0';
   lua_pop(state, 1);
+  config->ram_npfs_bytes = MOUNT_RAM_AUTO_CAPACITY;
   config_field(state, 1, "ram_npfs_bytes");
-  if (!lua_isnil(state, -1)) {
+  if (lua_type(state, -1) == LUA_TSTRING) {
+    size_t bytes;
+    const char *capacity = lua_tolstring(state, -1, &bytes);
+    if (bytes != sizeof("auto") - 1 || memcmp(capacity, "auto", bytes)) {
+      luaL_error(state, "ram_npfs_bytes must be auto or a positive integer");
+    }
+  } else if (!lua_isnil(state, -1)) {
     config->ram_npfs_bytes = take_integer(state, -1,
-        MOUNT_RAM_MIN_BYTES, MOUNT_RAM_MAX_BYTES, "ram_npfs_bytes");
+        1, LUA_MAXINTEGER, "ram_npfs_bytes");
     if (config->ram_npfs_bytes % MOUNT_RAM_ALIGNMENT) {
       luaL_error(state, "ram_npfs_bytes must be aligned to 4096 bytes");
     }
@@ -970,9 +977,6 @@ bool boot_plan_build(const struct boot_config *config, struct boot_plan *plan,
 
   for (size_t i = 0; i < plan->volume_count; ++i) {
     const struct boot_volume *volume = plan->volumes[i];
-    if (volume->kind == BOOT_VOLUME_RAM_NPFS && !config->ram_npfs_bytes) {
-      return plan_fail(plan, failure, "volume %s requires archive ram_npfs_bytes", volume->name);
-    }
     if (!strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) &&
         (volume->kind != BOOT_VOLUME_RAM && volume->kind != BOOT_VOLUME_NPFS &&
          volume->kind != BOOT_VOLUME_RAM_NPFS)) {

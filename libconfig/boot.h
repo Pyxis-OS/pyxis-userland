@@ -126,7 +126,7 @@ struct boot_config {
   int32_t touchpad_speed; /* Normalized permille; absent means zero in defaults. */
   bool num_lock_present;
   bool num_lock; /* Initial Num Lock state; absent means off in defaults. */
-  uint64_t ram_npfs_bytes; /* Archive-only logical capacity; zero disables creation. */
+  uint64_t ram_npfs_bytes; /* Archive-only logical capacity; zero selects auto. */
   struct boot_volume *volumes;
   size_t volume_count;
   struct boot_space *spaces;

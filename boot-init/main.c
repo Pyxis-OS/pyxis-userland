@@ -429,7 +429,7 @@ static enum call_status mount_volume(const struct authority *authority,
     return status;
   }
   if (volume->kind == BOOT_VOLUME_RAM_NPFS) {
-    if (authority->ram_npfs == HANDLE_INVALID || !authority->ram_npfs_bytes) {
+    if (authority->ram_npfs == HANDLE_INVALID) {
       return CALL_UNAVAILABLE;
     }
     uint64_t rights = (read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) |

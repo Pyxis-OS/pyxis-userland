@@ -16,9 +16,14 @@ enum call_status mount_open_root(handle_t mount, uint64_t access, handle_t *root
  * mutation rights additionally require mount WRITE authority. Success returns
  * an owned root, without consuming authority or binding a URI. Failure clears
  * root; malformed replies are outcome unknown. */
-enum call_status mount_open_ram_volume(handle_t mount, uint64_t capacity,
-    const char *name, uint64_t rights, handle_t *root);
 enum call_status mount_open_volume(handle_t mount, uint64_t partition,
+    const char *name, uint64_t rights, handle_t *root);
+
+/* Opens a volume in the shared sparse RAM pool. MOUNT_RAM_AUTO_CAPACITY selects
+ * allocator RAM as logical capacity; the kernel resolves it once for the pool.
+ * Explicit capacity is MOUNT_RAM_ALIGNMENT-aligned; format limits are checked
+ * by the kernel. Name, rights and returned ownership follow mount_open_volume. */
+enum call_status mount_open_ram_volume(handle_t mount, uint64_t capacity,
     const char *name, uint64_t rights, handle_t *root);
 
 /* Synchronizes every native pool on disk-scoped authority, or the bound FAT

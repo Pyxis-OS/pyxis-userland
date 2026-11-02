@@ -168,9 +168,6 @@ func (c *config) validate() []problem {
 		if !volumeKinds[v.kind] {
 			add(errorProblem, -1, 0, "volume %s: kind must be npfs, ram-npfs, virtio-fs, ram, boot-esp or fat32", v.name)
 		}
-		if v.kind == "ram-npfs" && c.top.field("ram_npfs_bytes") == nil {
-			add(errorProblem, -1, 0, "volume %s requires archive ram_npfs_bytes", v.name)
-		}
 		if v.name == httpWorkVolume {
 			if v.kind != "ram" && !npfsBacked(v) {
 				add(errorProblem, -1, 0, "volume %s requires private RAM or NPFS backing", v.name)

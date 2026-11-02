@@ -75,8 +75,7 @@ enum call_status mount_open_ram_volume(handle_t mount, uint64_t capacity,
 {
   if (!root) return CALL_BAD_REQUEST;
   *root = HANDLE_INVALID;
-  if (!name || capacity < MOUNT_RAM_MIN_BYTES || capacity > MOUNT_RAM_MAX_BYTES ||
-      capacity % MOUNT_RAM_ALIGNMENT || !(rights & DIRECTORY_RIGHT_LOOKUP) ||
+  if (!name || capacity % MOUNT_RAM_ALIGNMENT || !(rights & DIRECTORY_RIGHT_LOOKUP) ||
       (rights & ~DIRECTORY_RIGHTS)) return CALL_BAD_REQUEST;
   size_t length = 0;
   while (name[length]) {
