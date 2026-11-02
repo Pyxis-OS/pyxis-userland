@@ -71,7 +71,7 @@ static enum call_status validate_image(handle_t image)
       position += count;
     }
   }
-  return status == CALL_OK && magic != P1F_MAGIC ? CALL_BAD_REQUEST : status;
+  return status == CALL_OK && magic != P1F_MAGIC && magic != P2F_MAGIC ? CALL_BAD_REQUEST : status;
 }
 
 static enum call_status conventional(const struct path_context *context,
