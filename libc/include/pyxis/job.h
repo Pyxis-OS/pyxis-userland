@@ -67,9 +67,13 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
  * WAIT|TERMINATE observer without a job record. The caller can wait, terminate
  * or close to detach; close never stops the child. Failure clears *observer,
  * including unknown admission, which must not be retried. For event-loop
- * adapters with their own lifecycle, not capturing jobs. */
+ * adapters with their own lifecycle, not capturing jobs. Optional OBSERVATION
+ * selects atomic readiness registration, with launcher_launch_observed's
+ * ownership and uncertainty rules; NULL retains ordinary launch. Registration
+ * is cleared before preparation, including on failure. */
 enum call_status pyxis_job_launch_observer(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t *observer, struct call_limit *limit);
+    const struct pyxis_job_options *options, handle_t *observer,
+    struct launch_observation *observation, struct call_limit *limit);
 
 /* Borrowed WAIT|TERMINATE observer for readiness/queries. Never close it; copy
  * an attenuated WAIT handle to own an independent observer. Closing observers

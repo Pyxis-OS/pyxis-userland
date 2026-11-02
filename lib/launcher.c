@@ -124,6 +124,47 @@ enum call_status launcher_launch(handle_t launcher, const struct launch_request 
   return CALL_OK;
 }
 
+enum call_status launcher_launch_observed(handle_t launcher, const struct launch_request *request,
+    struct launch_observation *observation, handle_t *child, struct call_limit *limit)
+{
+  if (limit) {
+    *limit = (struct call_limit){0};
+  }
+  if (observation) {
+    observation->registration = (struct readiness_set_registration){0};
+  }
+  if (child) {
+    *child = HANDLE_INVALID;
+  }
+  if (!child || !request || !observation) {
+    return CALL_BAD_REQUEST;
+  }
+  struct {
+    struct message_header header;
+    struct launch_observed_request body;
+  } message = {
+    .header = {PROTOCOL_LAUNCHER, LAUNCHER_LAUNCH_OBSERVED},
+    .body = {.request = *request, .set = observation->set, .tag = observation->tag},
+  };
+  struct launch_observed_reply reply = {0};
+  struct syscall_result result = syscall_call_with_limit(launcher, &message, sizeof(message),
+      &reply, sizeof(reply), limit);
+  if (result.status >= CALL_STATUS_COUNT ||
+      result.reply_size != (result.status == CALL_OK ? sizeof(reply) : 0)) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  if (result.status != CALL_OK) {
+    return result.status == CALL_BAD_BUFFER ? CALL_OUTCOME_UNKNOWN : result.status;
+  }
+  if (reply.child == HANDLE_INVALID || !reply.registration.identity ||
+      !reply.registration.generation) {
+    return CALL_OUTCOME_UNKNOWN;
+  }
+  *child = reply.child;
+  observation->registration = reply.registration;
+  return CALL_OK;
+}
+
 enum call_status launcher_launch_batch(handle_t launcher, const struct launch_request *requests,
     size_t count, handle_t *children, uint64_t *failed_index, struct call_limit *limit)
 {

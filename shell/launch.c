@@ -2954,7 +2954,7 @@ static enum command_result launch_stages_owned(struct shell *shell, const struct
   }
   if (stage_count == 1) {
     status = program_launch_prepared(launcher, &requests[0], inputs[0], &interpreter_context,
-        &children[0], &limit);
+        &children[0], NULL, &limit);
   } else {
     status = program_launch_batch_prepared(launcher, requests, stage_count,
         inputs, &interpreter_context, children, &failed_index, &limit);

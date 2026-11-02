@@ -13,6 +13,14 @@ struct command_selection;
 struct path_context;
 struct space_definition;
 
+/* SET and TAG are borrowed inputs. REGISTRATION is cleared before validation
+ * and returned only with a trustworthy successful observed admission. */
+struct launch_observation {
+  handle_t set;
+  uint64_t tag;
+  struct readiness_set_registration registration;
+};
+
 /* Admission detail outputs are nullable, separate from other inputs/outputs,
  * and cleared before validation. CALL_LIMIT supplies an owned numeric copy;
  * later cleanup does not change the refusal. No operation is retried. */
@@ -61,6 +69,14 @@ enum call_status execution_group_wait_result(handle_t observer,
  * published, so never replay that launch automatically. */
 enum call_status launcher_launch(handle_t launcher, const struct launch_request *request,
                                   handle_t *child, struct call_limit *limit);
+
+/* As launcher_launch, atomically registering process completion in the caller's
+ * readiness set before the child becomes runnable. OBSERVATION is required;
+ * inputs and outputs must be separate. Success transfers the owned observer and
+ * registration to the caller, which removes the registration before closing its
+ * source. Failure clears both outputs; unknown admission must never be replayed. */
+enum call_status launcher_launch_observed(handle_t launcher, const struct launch_request *request,
+    struct launch_observation *observation, handle_t *child, struct call_limit *limit);
 
 /* Requests and all source handles are borrowed until return. Valid count is
  * positive and representable in the reply. Both outputs must be separate from
@@ -118,10 +134,11 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
 /* As program_launch, using a previously prepared input when non-NULL. The
  * preparation and any selected interpreter are borrowed until return. Its held
  * FILE replaces request->image; its prefix is not parsed again. NULL prepares
- * request->image normally. */
+ * request->image normally. A non-NULL observation selects observed admission;
+ * NULL uses ordinary launch. Registration is cleared before preparation. */
 enum call_status program_launch_prepared(handle_t launcher, const struct launch_request *request,
     const struct program_image *input, const struct path_context *interpreter_context,
-    handle_t *child, struct call_limit *limit);
+    handle_t *child, struct launch_observation *observation, struct call_limit *limit);
 
 /* As program_launch, but the child becomes the first process of a new space
  * created through FACTORY; see space_create_started for the space's rules. */

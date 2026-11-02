@@ -37,11 +37,12 @@ enum call_status libc_job_validate_metadata(const struct pyxis_job_options *opti
 enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t launcher,
     const struct pyxis_job_options *options, handle_t private_root, struct call_limit *limit);
 enum call_status libc_job_publish(struct job_preparation *prepared, handle_t launcher,
-    handle_t *observer, struct call_limit *limit);
+    handle_t *observer, struct launch_observation *observation, struct call_limit *limit);
 enum call_status libc_job_discard_preparation(struct job_preparation *prepared);
 
 enum call_status libc_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer, struct call_limit *limit);
+    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer,
+    struct launch_observation *observation, struct call_limit *limit);
 /* The capture owner retains its output account and supplies absent stdin and
  * FILE-compatible producer outputs. Uncertain publication clears *job; its outer owner
  * must retain storage until cleanup is confirmed or quarantine it. */

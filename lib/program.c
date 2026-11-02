@@ -359,15 +359,18 @@ enum call_status program_launch(handle_t launcher, const struct launch_request *
   if (limit) {
     *limit = (struct call_limit){0};
   }
-  return program_launch_prepared(launcher, request, NULL, interpreter_context, child, limit);
+  return program_launch_prepared(launcher, request, NULL, interpreter_context, child, NULL, limit);
 }
 
 enum call_status program_launch_prepared(handle_t launcher, const struct launch_request *request,
     const struct program_image *input, const struct path_context *interpreter_context,
-    handle_t *child, struct call_limit *limit)
+    handle_t *child, struct launch_observation *observation, struct call_limit *limit)
 {
   if (limit) {
     *limit = (struct call_limit){0};
+  }
+  if (observation) {
+    observation->registration = (struct readiness_set_registration){0};
   }
   if (!child) {
     return CALL_BAD_REQUEST;
@@ -382,7 +385,8 @@ enum call_status program_launch_prepared(handle_t launcher, const struct launch_
   enum call_status status = prepare_program(request, input, interpreter_context,
       &prepared, &scratch, limit);
   if (status == CALL_OK) {
-    status = launcher_launch(launcher, &prepared, child, limit);
+    status = observation ? launcher_launch_observed(launcher, &prepared, observation, child, limit) :
+        launcher_launch(launcher, &prepared, child, limit);
   }
   release_script(&scratch);
   return status;

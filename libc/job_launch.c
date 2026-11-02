@@ -483,30 +483,39 @@ enum call_status libc_job_prepare(struct job_preparation *prepared, handle_t lau
 }
 
 enum call_status libc_job_publish(struct job_preparation *prepared, handle_t launcher,
-    handle_t *observer, struct call_limit *limit)
+    handle_t *observer, struct launch_observation *observation, struct call_limit *limit)
 {
   if (limit) {
     *limit = (struct call_limit){0};
+  }
+  if (observation) {
+    observation->registration = (struct readiness_set_registration){0};
   }
   *observer = HANDLE_INVALID;
   if (prepared->attempted) {
     return CALL_BUSY;
   }
   prepared->attempted = true;
-  return launcher_launch(launcher, &prepared->request, observer, limit);
+  return observation ?
+      launcher_launch_observed(launcher, &prepared->request, observation, observer, limit) :
+      launcher_launch(launcher, &prepared->request, observer, limit);
 }
 
 enum call_status libc_job_launch(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer, struct call_limit *limit)
+    const struct pyxis_job_options *options, handle_t private_root, handle_t *observer,
+    struct launch_observation *observation, struct call_limit *limit)
 {
   if (limit) {
     *limit = (struct call_limit){0};
+  }
+  if (observation) {
+    observation->registration = (struct readiness_set_registration){0};
   }
   *observer = HANDLE_INVALID;
   struct job_preparation prepared = {0};
   enum call_status status = libc_job_prepare(&prepared, launcher, options, private_root, limit);
   if (status == CALL_OK) {
-    status = libc_job_publish(&prepared, prepared.launcher, observer, limit);
+    status = libc_job_publish(&prepared, prepared.launcher, observer, observation, limit);
   }
   int saved_errno = errno;
   libc_job_discard_preparation(&prepared);

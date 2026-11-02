@@ -45,7 +45,7 @@ static enum call_status launch_job(handle_t launcher,
   if (!owned) {
     return CALL_NO_MEMORY;
   }
-  enum call_status status = libc_job_launch(launcher, options, private_root, &owned->observer, limit);
+  enum call_status status = libc_job_launch(launcher, options, private_root, &owned->observer, NULL, limit);
   if (status != CALL_OK) {
     free(owned);
     return status;
@@ -92,7 +92,7 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
     }
   }
   if (status == CALL_OK) {
-    status = libc_job_publish(&prepared, group.launcher, &owned->observer, limit);
+    status = libc_job_publish(&prepared, group.launcher, &owned->observer, NULL, limit);
   }
   if (status == CALL_OK) {
     status = execution_group_seal(owned->supervision);
@@ -119,10 +119,14 @@ enum call_status pyxis_job_launch_contained(handle_t launcher,
 }
 
 enum call_status pyxis_job_launch_observer(handle_t launcher,
-    const struct pyxis_job_options *options, handle_t *observer, struct call_limit *limit)
+    const struct pyxis_job_options *options, handle_t *observer,
+    struct launch_observation *observation, struct call_limit *limit)
 {
   if (limit) {
     *limit = (struct call_limit){0};
+  }
+  if (observation) {
+    observation->registration = (struct readiness_set_registration){0};
   }
   if (!observer) {
     return CALL_BAD_REQUEST;
@@ -131,7 +135,7 @@ enum call_status pyxis_job_launch_observer(handle_t launcher,
   if (!options) {
     return CALL_BAD_REQUEST;
   }
-  return libc_job_launch(launcher, options, HANDLE_INVALID, observer, limit);
+  return libc_job_launch(launcher, options, HANDLE_INVALID, observer, observation, limit);
 }
 
 enum call_status libc_job_launch_captured(handle_t launcher,
