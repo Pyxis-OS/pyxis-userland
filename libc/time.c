@@ -399,8 +399,9 @@ static time_t make_time(const struct timezone_snapshot *zone, struct tm *calenda
    * matches inside a gap, several match in a fold. */
   int64_t wall = __tm_to_secs(calendar);
   size_t matches = 0, selected = 0;
-  int64_t match_time = 0, selected_time = 0;
+  int64_t first_match = 0, first_selected = 0;
   int match_daylight = 0;
+  int64_t match_time = 0;
   for (size_t i = 0; i < offset_count; ++i) {
     int64_t candidate;
     long offset;
@@ -420,25 +421,64 @@ static time_t make_time(const struct timezone_snapshot *zone, struct tm *calenda
     if (offset != offsets[i]) {
       continue;
     }
+    /* The earliest instant wins among the candidates that remain. */
+    if (!matches || candidate < first_match) {
+      first_match = candidate;
+    }
     ++matches;
     match_time = candidate;
     match_daylight = daylight;
     if (calendar->tm_isdst >= 0 && !daylight == !calendar->tm_isdst) {
+      if (!selected || candidate < first_selected) {
+        first_selected = candidate;
+      }
       ++selected;
-      selected_time = candidate;
     }
   }
-  /* Gaps and folds that tm_isdst cannot settle are a profile restriction. */
-  if (!matches || (matches > 1 && selected != 1)) {
-    errno = ENOTSUP;
-    return -1;
+  bool gap = false;
+  time_t result;
+  if (!matches) {
+    /* A gap: the wall time was skipped when the offset rose from S to D. Like
+     * glibc and musl, read it with the offset in effect before the gap (S),
+     * which lands the same distance after it. Candidates S and D then cross:
+     * the zone reports D at WALL - S and S at WALL - D. */
+    bool found = false;
+    int64_t crossing = 0;
+    for (size_t i = 0; i < offset_count && !found; ++i) {
+      for (size_t j = 0; j < offset_count && !found; ++j) {
+        long before_gap, after_gap;
+        int daylight;
+        const char *designation;
+        int64_t at_s, at_d;
+        if (offsets[j] <= offsets[i] || __builtin_sub_overflow(wall, offsets[i], &at_s) ||
+            __builtin_sub_overflow(wall, offsets[j], &at_d) ||
+            timezone_offset(zone, at_s, &after_gap, &daylight, &designation) ||
+            timezone_offset(zone, at_d, &before_gap, &daylight, &designation)) {
+          continue;
+        }
+        if (after_gap == offsets[j] && before_gap == offsets[i]) {
+          crossing = at_s;
+          found = true;
+        }
+      }
+    }
+    if (!found) {
+      /* The zone data leaves this wall time unspecified. */
+      errno = ENOTSUP;
+      return -1;
+    }
+    gap = true;
+    result = crossing;
+  } else {
+    /* A fold: a tm_isdst that picks exactly one candidate selects it; otherwise
+     * the earlier occurrence. */
+    result = matches == 1 ? match_time : selected ? first_selected : first_match;
   }
-  time_t result = matches == 1 ? match_time : selected_time;
 
   /* A tm_isdst that disagrees with the only match asks for the wall time in
    * the other kind of time, as C specifies: use the offset of the nearest
    * period of that kind. A zone without one, such as UTC, keeps the match. */
-  if (matches == 1 && calendar->tm_isdst >= 0 &&
+  if (!gap && matches == 1 && calendar->tm_isdst >= 0 &&
       !match_daylight != !calendar->tm_isdst) {
     long requested;
     int found = timezone_daylight_offset(zone, match_time, calendar->tm_isdst > 0, &requested);

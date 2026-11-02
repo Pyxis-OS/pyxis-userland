@@ -20,19 +20,16 @@ typedef uint16_t uint_least16_t;
 typedef uint32_t uint_least32_t;
 typedef uint64_t uint_least64_t;
 
-/*
- * The Pyxis ABI, first set by its GCC target: even the 8-bit fast types use
- * 32-bit integers. Clang's __INT_FAST*_TYPE__ predefines instead follow the
- * least-width types; these typedefs are authoritative.
- */
-typedef int int_fast8_t;
-typedef int int_fast16_t;
-typedef int int_fast32_t;
-typedef long int_fast64_t;
-typedef unsigned int uint_fast8_t;
-typedef unsigned int uint_fast16_t;
-typedef unsigned int uint_fast32_t;
-typedef unsigned long uint_fast64_t;
+/* The fast types are the compiler's own (__INT_FAST*_TYPE__), so code that uses
+ * the predefines and code that uses this header see the same types. */
+typedef __INT_FAST8_TYPE__ int_fast8_t;
+typedef __INT_FAST16_TYPE__ int_fast16_t;
+typedef __INT_FAST32_TYPE__ int_fast32_t;
+typedef __INT_FAST64_TYPE__ int_fast64_t;
+typedef __UINT_FAST8_TYPE__ uint_fast8_t;
+typedef __UINT_FAST16_TYPE__ uint_fast16_t;
+typedef __UINT_FAST32_TYPE__ uint_fast32_t;
+typedef __UINT_FAST64_TYPE__ uint_fast64_t;
 
 typedef long intptr_t;
 typedef unsigned long uintptr_t;
@@ -65,18 +62,18 @@ typedef unsigned long uintmax_t;
 #define INT_LEAST64_MAX INT64_MAX
 #define UINT_LEAST64_MAX UINT64_MAX
 
-#define INT_FAST8_MIN INT32_MIN
-#define INT_FAST8_MAX INT32_MAX
-#define UINT_FAST8_MAX UINT32_MAX
-#define INT_FAST16_MIN INT32_MIN
-#define INT_FAST16_MAX INT32_MAX
-#define UINT_FAST16_MAX UINT32_MAX
-#define INT_FAST32_MIN INT32_MIN
-#define INT_FAST32_MAX INT32_MAX
-#define UINT_FAST32_MAX UINT32_MAX
-#define INT_FAST64_MIN INT64_MIN
-#define INT_FAST64_MAX INT64_MAX
-#define UINT_FAST64_MAX UINT64_MAX
+#define INT_FAST8_MIN (-__INT_FAST8_MAX__ - 1)
+#define INT_FAST8_MAX __INT_FAST8_MAX__
+#define UINT_FAST8_MAX __UINT_FAST8_MAX__
+#define INT_FAST16_MIN (-__INT_FAST16_MAX__ - 1)
+#define INT_FAST16_MAX __INT_FAST16_MAX__
+#define UINT_FAST16_MAX __UINT_FAST16_MAX__
+#define INT_FAST32_MIN (-__INT_FAST32_MAX__ - 1)
+#define INT_FAST32_MAX __INT_FAST32_MAX__
+#define UINT_FAST32_MAX __UINT_FAST32_MAX__
+#define INT_FAST64_MIN (-__INT_FAST64_MAX__ - 1)
+#define INT_FAST64_MAX __INT_FAST64_MAX__
+#define UINT_FAST64_MAX __UINT_FAST64_MAX__
 
 #define INTPTR_MIN INT64_MIN
 #define INTPTR_MAX INT64_MAX
