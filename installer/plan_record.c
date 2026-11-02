@@ -129,7 +129,9 @@ bool install_plan_record_valid(const struct install_plan_record *record)
     if (record->boot_first) return false;
     struct install_layout expected = {0};
     if ((record->esp_rebuild && !record->updating) ||
-        !install_layout_plan(&disk, &expected) ||
+        !(record->updating ?
+          install_layout_classic(&disk, record->layout.esp_bytes, &expected) :
+          install_layout_plan(&disk, &expected)) ||
         record->layout.esp_partition != expected.esp_partition ||
         record->layout.pool_partition != expected.pool_partition ||
         record->layout.esp_start != expected.esp_start ||

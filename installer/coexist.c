@@ -2,8 +2,6 @@
 
 #include <string.h>
 
-#define DEFAULT_POOL_BYTES (UINT64_C(64) * 1024 * 1024 * 1024)
-
 void install_coexist_layout(const struct disk_partition_selection *esp,
     const struct disk_partition_selection *pool, struct install_layout *layout)
 {
@@ -128,8 +126,7 @@ bool install_coexist_inspect(const struct install_disk *disk,
     cursor = partition->first_block + partition->block_count;
   }
   consider_gap(cursor, facts->gpt.last_usable + 1, alignment, &facts->gap);
-  uint64_t gap_bytes = facts->gap.block_count * disk->info.block_size;
-  facts->default_bytes = gap_bytes < DEFAULT_POOL_BYTES ? gap_bytes : DEFAULT_POOL_BYTES;
+  facts->default_bytes = facts->gap.block_count * disk->info.block_size;
   if (reason) {
     *reason = candidate_reason(facts);
   }

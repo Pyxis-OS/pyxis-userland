@@ -18,16 +18,31 @@ static const uint8_t pool_type[16] = {
   0x83, 0x0e, 0x4c, 0xb4, 0xed, 0x7a, 0xac, 0x00,
 };
 
-bool install_layout_plan(const struct install_disk *disk, struct install_layout *layout)
+bool install_esp_extent_valid(const struct install_disk *disk,
+    const struct install_layout *layout)
+{
+  uint64_t block_size = disk->info.block_size;
+  return block_size >= 512 && block_size <= NPFS_BLOCK_SIZE &&
+      !(block_size & (block_size - 1)) && layout->esp_bytes &&
+      !(layout->esp_bytes % NPFS_BLOCK_SIZE) &&
+      !(layout->esp_start % block_size) && layout->esp_start <= disk->bytes &&
+      layout->esp_bytes <= disk->bytes - layout->esp_start &&
+      layout->esp_start / block_size <= UINT32_MAX &&
+      layout->esp_bytes / block_size <= UINT32_MAX;
+}
+
+bool install_layout_classic(const struct install_disk *disk, uint64_t esp_bytes,
+    struct install_layout *layout)
 {
   uint64_t block_size = disk->info.block_size;
   if (block_size < 512 || block_size > 4096 || (block_size & (block_size - 1)) ||
       disk->info.block_count > UINT64_MAX / block_size ||
-      disk->bytes != disk->info.block_count * block_size) {
+      disk->bytes != disk->info.block_count * block_size ||
+      !esp_bytes || esp_bytes % NPFS_BLOCK_SIZE || esp_bytes > UINT64_MAX - INSTALL_MIB) {
     return false;
   }
   uint64_t tail_bytes = GPT_ARRAY_BYTES + block_size;
-  uint64_t pool_start = INSTALL_MIB + INSTALL_ESP_BYTES;
+  uint64_t pool_start = INSTALL_MIB + esp_bytes;
   if (disk->bytes <= tail_bytes || disk->bytes - tail_bytes <= pool_start) {
     return false;
   }
@@ -41,10 +56,20 @@ bool install_layout_plan(const struct install_disk *disk, struct install_layout 
   layout->esp_attributes = 0;
   layout->pool_attributes = 0;
   layout->esp_start = INSTALL_MIB;
-  layout->esp_bytes = INSTALL_ESP_BYTES;
+  layout->esp_bytes = esp_bytes;
   layout->pool_start = pool_start;
   layout->pool_bytes = pool_end - pool_start;
-  return true;
+  return install_esp_extent_valid(disk, layout);
+}
+
+bool install_layout_plan(const struct install_disk *disk, struct install_layout *layout)
+{
+  return install_layout_classic(disk, INSTALL_DEFAULT_ESP_BYTES, layout);
+}
+
+uint64_t install_layout_required_bytes(uint64_t block_size, uint64_t pool_bytes)
+{
+  return INSTALL_MIB + INSTALL_DEFAULT_ESP_BYTES + pool_bytes + GPT_ARRAY_BYTES + block_size;
 }
 
 static void partition_entry(uint8_t *entry, const uint8_t type[16],

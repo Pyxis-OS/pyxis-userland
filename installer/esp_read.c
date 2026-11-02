@@ -10,6 +10,7 @@
 #define ESP_FAT_COUNT 2u
 #define ESP_MIN_CLUSTERS 65525u
 #define ESP_FAT_MASK UINT32_C(0x0fffffff)
+#define ESP_FAT_LAST_CLUSTER UINT32_C(0x0fffffef)
 #define ESP_FAT_EOC_MIN UINT32_C(0x0ffffff8)
 #define ESP_MEDIA 0xf8u
 #define ESP_MEDIA_REMOVABLE 0xf0u
@@ -220,7 +221,7 @@ static bool read_metadata(struct esp_inspection *esp)
   }
   esp->clusters = (esp->layout->esp_bytes - esp->data_offset) / ESP_CLUSTER_BYTES;
   esp->root = get32(boot + 44);
-  if (esp->clusters < ESP_MIN_CLUSTERS ||
+  if (esp->clusters < ESP_MIN_CLUSTERS || esp->clusters > ESP_FAT_LAST_CLUSTER - 1 ||
       (uint64_t)(esp->clusters + 2) * 4 > esp->fat_bytes || !valid_cluster(esp, esp->root)) {
     return rebuild(esp, "ESP has invalid FAT32 cluster bounds");
   }
@@ -577,9 +578,7 @@ enum install_esp_state install_esp_inspect(const struct install_disk *disk,
     .disk = disk, .layout = layout, .reason = reason, .state = INSTALL_ESP_VALID,
   };
   if ((disk->info.block_size != 512 && disk->info.block_size != 4096) ||
-      layout->esp_bytes != INSTALL_ESP_BYTES || layout->esp_start % disk->info.block_size ||
-      layout->esp_start > disk->bytes || layout->esp_bytes > disk->bytes - layout->esp_start ||
-      layout->esp_start / disk->info.block_size > UINT32_MAX) {
+      !install_esp_extent_valid(disk, layout)) {
     refuse(&esp, "ESP extent or logical-sector geometry is unsupported");
     return esp.state;
   }

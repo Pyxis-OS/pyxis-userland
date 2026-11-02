@@ -227,12 +227,8 @@ struct install_esp *install_esp_plan(const struct install_disk *disk,
   bool bootstrap = !kernel && !archive;
   if (!disk || !layout || !efi || (!bootstrap && (!kernel || !archive)) || !configuration ||
       !revision || !revision_bytes ||
-      disk->info.block_size < 512 || disk->info.block_size > ESP_CLUSTER_BYTES ||
-      (disk->info.block_size & (disk->info.block_size - 1)) ||
-      layout->esp_bytes != INSTALL_ESP_BYTES ||
-      layout->esp_start % disk->info.block_size || layout->esp_start > disk->bytes ||
-      layout->esp_bytes > disk->bytes - layout->esp_start ||
-      layout->esp_start / disk->info.block_size > UINT32_MAX ||
+      !install_esp_extent_valid(disk, layout) ||
+      layout->esp_bytes / disk->info.block_size <= ESP_RESERVED_SECTORS ||
       efi->bytes > UINT32_MAX || (kernel && kernel->bytes > UINT32_MAX) ||
       (archive && archive->bytes > UINT32_MAX) || configuration_bytes > UINT32_MAX ||
       revision_bytes > UINT32_MAX) {

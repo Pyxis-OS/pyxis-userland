@@ -431,6 +431,29 @@ bool install_plan_revalidate(struct install_plan *plan)
       source_fingerprint(plan, source_hash) && !strcmp(source_hash, plan->record.source_hash);
 }
 
+static bool report_coexist_capacity(const struct install_plan *plan, FILE *output)
+{
+  /* A ready append plan already binds this gap to the reviewed healthy GPT. */
+  const struct install_gpt *gpt = &plan->target.review.gpt->maps[0];
+  const struct install_layout *layout = &plan->record.layout;
+  uint64_t gap_end = (gpt->last_usable + 1) * plan->disk.info.block_size;
+  for (uint32_t i = 0; i < gpt->partition_count; ++i) {
+    uint64_t first = gpt->partitions[i].first_block * plan->disk.info.block_size;
+    if (first > layout->pool_start && first < gap_end) {
+      gap_end = first;
+    }
+  }
+  gap_end -= gap_end % INSTALL_MIB;
+  fprintf(output, "Selected aligned gap: %llu bytes; chosen pool: %llu bytes; "
+      "remaining unallocated tail: %llu bytes.\n",
+      (unsigned long long)(gap_end - layout->pool_start),
+      (unsigned long long)layout->pool_bytes,
+      (unsigned long long)(gap_end - layout->pool_start - layout->pool_bytes));
+  fputs("This pool cannot currently be resized. Choose a smaller size now if you want\n"
+      "to leave unallocated space for another use.\n", output);
+  return !ferror(output);
+}
+
 bool install_plan_report(const struct install_plan *plan, FILE *output, bool verbose)
 {
   if (!plan->ready) {
@@ -453,6 +476,9 @@ bool install_plan_report(const struct install_plan *plan, FILE *output, bool ver
       (unsigned long long)plan->record.layout.esp_partition,
       (unsigned long long)plan->record.layout.pool_partition);
   if (plan->record.coexist) {
+    if (!plan->record.updating && !report_coexist_capacity(plan, output)) {
+      return false;
+    }
     if (install_plan_preserve_firmware(plan)) {
       fputs("Existing firmware entries and BootOrder are retained without writes.\n", output);
     } else {

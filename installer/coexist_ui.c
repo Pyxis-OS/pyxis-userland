@@ -280,6 +280,8 @@ bool install_coexist_ui_choose(struct terminal *terminal, handle_t disks, bool u
     fprintf(stderr, "Largest aligned gap: first=%llu, %llu MiB; unused GPT entry=%llu.\n",
         (unsigned long long)facts->gap.first_block, (unsigned long long)maximum_mib,
         (unsigned long long)facts->gap.partition);
+    fputs("This pool cannot currently be resized. Choose a smaller size now if you want\n"
+        "to leave unallocated space for another use.\n", stderr);
     char initial[32];
     snprintf(initial, sizeof(initial), "%llu", (unsigned long long)(facts->default_bytes / INSTALL_MIB));
     for (;;) {

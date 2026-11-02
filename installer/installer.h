@@ -11,7 +11,7 @@
 #define INSTALL_MIB UINT64_C(1048576)
 /* Coexistence accepts only 512-byte logical sectors; classic also accepts 4096. */
 #define INSTALL_COEXIST_BLOCK_SIZE UINT64_C(512)
-#define INSTALL_ESP_BYTES (UINT64_C(512) * INSTALL_MIB)
+#define INSTALL_DEFAULT_ESP_BYTES (UINT64_C(1024) * INSTALL_MIB)
 #define INSTALL_ESP_CONFIGURATION_MAX_BYTES (64u * 1024u)
 /* The installed boot entries: normal, and rescue, which ignores the pool's
  * boot configuration. The menu waits so the rescue entry stays reachable. */
@@ -126,7 +126,17 @@ bool install_zero(const struct install_disk *disk, uint64_t offset, uint64_t len
 bool install_source_read(const struct install_source *source, uint64_t offset,
     void *bytes, size_t length);
 uint32_t install_crc32(const void *bytes, size_t length);
+/* Classic geometry with a reviewed ESP size; does not establish ownership.
+ * New installs use install_layout_plan and the creation default instead. */
+bool install_layout_classic(const struct install_disk *disk, uint64_t esp_bytes,
+    struct install_layout *layout);
 bool install_layout_plan(const struct install_disk *disk, struct install_layout *layout);
+/* Required media bytes for the creation default and caller's bounded minimum
+ * pool, with supported sector size and NPFS-aligned pool_bytes. */
+uint64_t install_layout_required_bytes(uint64_t block_size, uint64_t pool_bytes);
+/* Raw FAT32 writer/recovery geometry, independent of the creation default. */
+bool install_esp_extent_valid(const struct install_disk *disk,
+    const struct install_layout *layout);
 bool install_gpt_write(const struct install_disk *disk, const struct install_layout *layout);
 void install_guid_text(const uint8_t guid[16], char text[37]);
 

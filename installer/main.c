@@ -33,6 +33,7 @@ struct target {
   struct install_consent consent;
   struct install_update update;
   bool boot_rebuild;
+  uint64_t required_bytes;
 };
 
 static bool read_line(struct terminal *terminal, const char *prompt, const char *initial,
@@ -215,7 +216,13 @@ static bool inventory(handle_t disks, bool read_the_room, bool updating, struct 
     const uint8_t placeholder_id[16] = {1};
     if (!updating && (!install_layout_plan(&disk, &layout) ||
         !pool_header(&layout, 1, placeholder_id, &header))) {
-      *reason_out = "too small for a 512 MiB ESP and writable pool";
+      /* Use the same minimum journal and free-block admission as above. */
+      struct install_layout minimum = {.pool_bytes = INSTALL_MIB};
+      while (!pool_header(&minimum, 1, placeholder_id, &header)) {
+        minimum.pool_bytes += NPFS_BLOCK_SIZE;
+      }
+      target->required_bytes = install_layout_required_bytes(info.block_size, minimum.pool_bytes);
+      *reason_out = "too small for the 1 GiB ESP and writable pool";
       continue;
     }
     install_progress_begin("Opening disk for read-only inspection", INSTALL_PROGRESS_NONE, NULL);
@@ -263,6 +270,11 @@ static struct target *choose_target(struct terminal *terminal, struct target *ta
       fprintf(stderr, "Pyxis installation (boot files damaged: %s)", reason);
     } else {
       fputs(reason, stderr);
+    }
+    if (target->required_bytes) {
+      fprintf(stderr, "; required %llu bytes, available %llu bytes",
+          (unsigned long long)target->required_bytes,
+          (unsigned long long)(target->info.block_count * target->info.block_size));
     }
     fprintf(stderr, "%s\n", degraded ? " (degraded metadata)" : "");
     if (updating && offered) {

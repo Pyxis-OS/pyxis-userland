@@ -1017,7 +1017,13 @@ static bool update_layout(const struct install_disk *disk, const struct gpt_copy
     {0xa3, 0x94, 0x81, 0x1a, 0x07, 0x8a, 0xff, 0x4d,
      0x83, 0x0e, 0x4c, 0xb4, 0xed, 0x7a, 0xac, 0x00},
   };
-  if (map->count < 2 || !install_layout_plan(disk, layout)) {
+  if (map->count < 2) {
+    return false;
+  }
+  uint64_t first = npfs_get_u64(map->table + 32);
+  uint64_t last = npfs_get_u64(map->table + 40);
+  if (last < first || last - first >= disk->info.block_count ||
+      !install_layout_classic(disk, (last - first + 1) * disk->info.block_size, layout)) {
     return false;
   }
   const uint64_t starts[2] = {layout->esp_start, layout->pool_start};
