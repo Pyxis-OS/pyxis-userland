@@ -14,8 +14,8 @@ struct process_list {
 };
 
 /* Lists the caller's own space, with no handle. BUFFER is CAPACITY bytes;
- * PROCESS_LIST_REPLY_MAX is the most a call uses. A short buffer still
- * succeeds with PROCESS_LIST_TRUNCATED set in the header. */
+ * A short buffer still succeeds with PROCESS_LIST_TRUNCATED set in the header
+ * and `total` the full count; a larger buffer than needed costs nothing. */
 enum call_status process_list_own_space(void *buffer, size_t capacity, struct process_list *list);
 /* Lists every space through a held process view with LIST. */
 enum call_status process_list_all(handle_t view, void *buffer, size_t capacity,

@@ -33,8 +33,16 @@ struct options {
 
 struct snapshot {
   void *buffer;
+  size_t capacity;
   struct process_list list;
 };
+
+/* Extra rows asked for beyond the reported total, for processes that start between
+ * the two calls, and how many times a listing is asked again before it is accepted
+ * truncated. */
+#define SNAPSHOT_SLACK_RECORDS 32
+#define SNAPSHOT_ATTEMPTS 8
+#define SNAPSHOT_INITIAL_RECORDS 128
 
 static void usage(FILE *stream)
 {
@@ -65,9 +73,28 @@ static bool parse_sort(const char *text, enum sort *sort)
 static enum call_status take(const struct options *options, handle_t view,
     struct snapshot *snapshot)
 {
-  return options->all ?
-      process_list_all(view, snapshot->buffer, PROCESS_LIST_REPLY_MAX, &snapshot->list) :
-      process_list_own_space(snapshot->buffer, PROCESS_LIST_REPLY_MAX, &snapshot->list);
+  for (unsigned attempt = 1;; ++attempt) {
+    enum call_status status = options->all ?
+        process_list_all(view, snapshot->buffer, snapshot->capacity, &snapshot->list) :
+        process_list_own_space(snapshot->buffer, snapshot->capacity, &snapshot->list);
+    if (status != CALL_OK || snapshot->list.header->returned == snapshot->list.header->total ||
+        attempt == SNAPSHOT_ATTEMPTS) {
+      return status;
+    }
+    uint64_t records = snapshot->list.header->total + SNAPSHOT_SLACK_RECORDS;
+    if (records > (SIZE_MAX - sizeof(struct process_list_header)) /
+        sizeof(struct process_list_record)) {
+      return CALL_NO_MEMORY;
+    }
+    size_t capacity = sizeof(struct process_list_header) +
+        (size_t)records * sizeof(struct process_list_record);
+    void *larger = realloc(snapshot->buffer, capacity);
+    if (!larger) {
+      return CALL_NO_MEMORY;
+    }
+    snapshot->buffer = larger;
+    snapshot->capacity = capacity;
+  }
 }
 
 static const struct process_list_record *find(const struct snapshot *snapshot, uint64_t key)
@@ -375,8 +402,11 @@ int main(int argc, char **argv)
       return EXIT_FAILURE;
     }
   }
+  size_t initial = sizeof(struct process_list_header) +
+      SNAPSHOT_INITIAL_RECORDS * sizeof(struct process_list_record);
   struct snapshot snapshots[2] = {
-    {.buffer = malloc(PROCESS_LIST_REPLY_MAX)}, {.buffer = malloc(PROCESS_LIST_REPLY_MAX)},
+    {.buffer = malloc(initial), .capacity = initial},
+    {.buffer = malloc(initial), .capacity = initial},
   };
   if (!snapshots[0].buffer || !snapshots[1].buffer) {
     fputs("procs: out of memory\n", stderr);
