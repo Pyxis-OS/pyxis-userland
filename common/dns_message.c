@@ -111,7 +111,7 @@ static bool read_name(const uint8_t *bytes, size_t length, size_t *offset, struc
   bool jumped = false;
   /* Backward pointers can still loop through literal labels. Bound traversal
    * independently of expanded length, including pointer-only chains. */
-  for (size_t steps = 0; steps < DNS_REPLY_BYTES; ++steps) {
+  for (size_t steps = 0; steps < DNS_TCP_REPLY_BYTES; ++steps) {
     if (position >= length) {
       return false;
     }
@@ -199,7 +199,7 @@ bool dns_read_record(const uint8_t *bytes, size_t length, size_t *offset, struct
 }
 
 enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
-    const struct dns_name *question, uint16_t id, struct dns_reply *reply)
+    const struct dns_name *question, uint16_t id, size_t limit, struct dns_reply *reply)
 {
   if (length < DNS_HEADER_BYTES || read_u16(bytes + HEADER_ID) != id) {
     return DNS_IGNORE;
@@ -211,7 +211,7 @@ enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
   }
   /* The question fits the supported size even when an oversized datagram was
    * received. Check its matching fields before reporting a limitation. */
-  size_t bounded = length < DNS_REPLY_BYTES ? length : DNS_REPLY_BYTES;
+  size_t bounded = length < limit ? length : limit;
   size_t offset = DNS_HEADER_BYTES;
   struct dns_name echoed;
   if (!read_name(bytes, bounded, &offset, &echoed) || !same_name(question, &echoed) ||
@@ -223,7 +223,7 @@ enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
   if (flags & DNS_FLAG_TRUNCATED) {
     return DNS_TRUNCATED;
   }
-  if (length > DNS_REPLY_BYTES) {
+  if (length > limit) {
     return DNS_OVERSIZED;
   }
 

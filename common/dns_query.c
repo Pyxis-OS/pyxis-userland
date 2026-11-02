@@ -1,5 +1,6 @@
 #include "dns.h"
 #include "udp.h"
+#include "tcp.h"
 #include <completion.h>
 #include <string.h>
 #include <clock.h>
@@ -94,7 +95,8 @@ static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_
     if (peer.address != server || peer.port != DNS_PORT) {
       continue;
     }
-    exchange->response = dns_parse_reply(bytes, peer.length, name, identity[0], &exchange->reply);
+    exchange->response = dns_parse_reply(bytes, peer.length, name, identity[0], DNS_REPLY_BYTES,
+        &exchange->reply);
     if (exchange->response != DNS_IGNORE) {
       break;
     }
@@ -114,7 +116,90 @@ static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_
   }
 }
 
-void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
+/* One TCP exchange (RFC 7766): a two-byte length, then the message, in each
+ * direction, on a connection made through the dns_tcp factory to the same
+ * server. The connection is never reused. */
+static void query_tcp(handle_t tcp, handle_t clock, handle_t random, uint32_t server,
+    const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
+{
+  uint64_t deadline;
+  exchange->operation = "clock";
+  exchange->status = udp_deadline(clock, DNS_ATTEMPT_NS, &deadline);
+  if (exchange->status != CALL_OK) {
+    return;
+  }
+  if (deadline_ns && deadline_ns < deadline) {
+    deadline = deadline_ns;
+  }
+  uint16_t identity;
+  exchange->operation = "random read";
+  exchange->status = random_read(random, &identity, sizeof(identity), deadline);
+  if (exchange->status != CALL_OK) {
+    return;
+  }
+  struct tcp_connect_reply connection;
+  exchange->operation = "TCP connect";
+  exchange->status = tcp_connect(tcp, server, DNS_PORT, deadline, &connection);
+  if (exchange->status != CALL_OK) {
+    return;
+  }
+  handle_t stream = connection.handle;
+  uint8_t request[2 + DNS_QUERY_BYTES];
+  size_t length = dns_make_query(name, identity, false, request + 2);
+  request[0] = length >> 8;
+  request[1] = length;
+  length += 2;
+  for (size_t sent = 0; exchange->status == CALL_OK && sent < length;) {
+    struct tcp_write_reply written;
+    exchange->operation = "TCP send";
+    exchange->status = tcp_write(stream, request + sent, length - sent, deadline, &written);
+    if (exchange->status == CALL_OK) {
+      sent += written.length;
+    }
+  }
+  uint8_t reply[2 + DNS_TCP_REPLY_BYTES];
+  size_t received = 0, expected = 2;
+  while (exchange->status == CALL_OK && received < expected) {
+    struct tcp_read_reply got;
+    exchange->operation = "TCP receive";
+    exchange->status = tcp_read(stream, reply + received, expected - received, deadline, &got);
+    if (exchange->status != CALL_OK) {
+      break;
+    }
+    if (!got.length) {
+      /* The server closed before a whole message arrived. */
+      exchange->status = CALL_BAD_REQUEST;
+      break;
+    }
+    received += got.length;
+    if (received >= 2 && expected == 2) {
+      size_t message = (size_t)reply[0] << 8 | reply[1];
+      if (message > DNS_TCP_REPLY_BYTES) {
+        exchange->response = DNS_OVERSIZED;
+        break;
+      }
+      expected = 2 + message;
+    }
+  }
+  if (exchange->status == CALL_OK && exchange->response != DNS_OVERSIZED) {
+    exchange->response = dns_parse_reply(reply + 2, expected - 2, name, identity,
+        DNS_TCP_REPLY_BYTES, &exchange->reply);
+  }
+  /* A finished exchange is shut down in order; anything else is aborted. */
+  enum call_status stopped = exchange->status == CALL_OK && exchange->response == DNS_COMPLETE ?
+      tcp_shutdown_write(stream) : tcp_abort(stream);
+  int closed = handle_close(stream);
+  enum call_status cleanup = stopped != CALL_OK ? stopped : closed ? CALL_BAD_HANDLE : CALL_OK;
+  if (exchange->cleanup_status == CALL_OK) {
+    exchange->cleanup_status = cleanup;
+  }
+  if (exchange->status == CALL_OK && cleanup != CALL_OK) {
+    exchange->operation = "TCP cleanup";
+    exchange->status = cleanup;
+  }
+}
+
+void dns_query(handle_t udp, handle_t tcp, handle_t clock, handle_t random, uint32_t server,
     const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
 {
   enum call_status cleanup = CALL_OK;
@@ -138,6 +223,13 @@ void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
       continue;
     }
     if (exchange->status != CALL_TIMED_OUT) {
+      if (exchange->status == CALL_OK && exchange->response == DNS_TRUNCATED &&
+          tcp != HANDLE_INVALID) {
+        /* The UDP answer did not fit: fetch the whole one over TCP. */
+        enum call_status cleanup_after_udp = exchange->cleanup_status;
+        *exchange = (struct dns_exchange){.cleanup_status = cleanup_after_udp};
+        query_tcp(tcp, clock, random, server, name, deadline_ns, exchange);
+      }
       return;
     }
   }
@@ -309,7 +401,7 @@ bool dns_query_completion(struct dns_query_state *query, const struct endpoint_p
         query->exchange.status = CALL_BAD_REQUEST;
       } else if (peer.address == query->server && peer.port == DNS_PORT) {
         query->exchange.response = dns_parse_reply(packet->data + sizeof(peer), peer.length,
-            &query->name, query->identity, &query->exchange.reply);
+            &query->name, query->identity, DNS_REPLY_BYTES, &query->exchange.reply);
         if (query->exchange.response != DNS_IGNORE) {
           query->stage = DNS_STAGE_DONE;
         }

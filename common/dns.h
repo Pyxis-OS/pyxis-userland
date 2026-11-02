@@ -14,6 +14,8 @@
 #define DNS_QUERY_BYTES 512
 #define DNS_EDNS_PAYLOAD 1232
 #define DNS_REPLY_BYTES DNS_EDNS_PAYLOAD
+/* A truncated UDP answer is fetched again over TCP, where it may be larger. */
+#define DNS_TCP_REPLY_BYTES 4096
 #define DNS_NAME_BYTES 255
 #define DNS_HEADER_BYTES 12
 #define DNS_TYPE_A 1
@@ -34,7 +36,7 @@ struct dns_record {
 };
 
 struct dns_reply {
-  uint8_t bytes[DNS_REPLY_BYTES];
+  uint8_t bytes[DNS_TCP_REPLY_BYTES];
   size_t length, answers_offset;
   uint16_t answer_count;
   unsigned rcode;
@@ -53,9 +55,11 @@ size_t dns_make_query(const struct dns_name *name, uint16_t id, bool edns,
  * is then repeated without the OPT record (RFC 6891 section 7). */
 bool dns_edns_refused(unsigned rcode);
 /* IGNORE includes malformed/unrelated messages. Only COMPLETE fills reply;
- * all three record sections have then been checked, without printing data. */
+ * all three record sections have then been checked, without printing data.
+ * A message longer than limit (DNS_REPLY_BYTES for UDP, DNS_TCP_REPLY_BYTES
+ * for TCP) is OVERSIZED. */
 enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
-    const struct dns_name *question, uint16_t id, struct dns_reply *reply);
+    const struct dns_name *question, uint16_t id, size_t limit, struct dns_reply *reply);
 bool dns_read_record(const uint8_t *bytes, size_t length, size_t *offset, struct dns_record *record);
 
 /* A validated NOERROR reply; only answer-section IN records are candidates.
@@ -75,8 +79,10 @@ struct dns_exchange {
 };
 
 /* Borrowed authorities; owns and closes each attempt's endpoint. A nonzero
- * absolute deadline caps both attempts; zero allows three seconds per attempt. */
-void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
+ * absolute deadline caps both attempts; zero allows three seconds per attempt.
+ * tcp is the optional dns_tcp factory (HANDLE_INVALID when absent): a truncated
+ * UDP answer is then asked again over one TCP connection to the same server. */
+void dns_query(handle_t udp, handle_t tcp, handle_t clock, handle_t random, uint32_t server,
     const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange);
 
 enum dns_query_step { DNS_QUERY_PROGRESS, DNS_QUERY_WAIT, DNS_QUERY_DONE };

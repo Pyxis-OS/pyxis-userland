@@ -321,6 +321,7 @@ static enum call_status context_init(struct remote_context *context, bool multip
     status = network_environment_from_capture(&context->environment,
         bootstrap_capability("net_registry"),
         bootstrap_capability(bootstrap_capability("net_registry") != HANDLE_INVALID ? "udp" : "dns_udp"),
+        bootstrap_capability(bootstrap_capability("net_registry") != HANDLE_INVALID ? "tcp" : "dns_tcp"),
         &context->inherited);
   }
   if (status != CALL_OK) {
@@ -330,6 +331,14 @@ static enum call_status context_init(struct remote_context *context, bool multip
     size_t index;
     status = context_add(context, "dns_udp", context->environment.dns_udp,
         UDP_SERVICE_RIGHT_OPEN, 0, ENVIRONMENT_EXPORTED, &index);
+    if (status != CALL_OK) {
+      goto done;
+    }
+  }
+  if (context->environment.dns_tcp != HANDLE_INVALID) {
+    size_t index;
+    status = context_add(context, "dns_tcp", context->environment.dns_tcp,
+        TCP_SERVICE_RIGHT_CONNECT, 0, ENVIRONMENT_EXPORTED, &index);
     if (status != CALL_OK) {
       goto done;
     }

@@ -159,6 +159,7 @@ static const struct grant_right grant_rights[] = {
   {"retention_account", "retain", PROTOCOL_RETENTION_ACCOUNT, RETENTION_RIGHT_CAPTURE},
   {"udp", "open", PROTOCOL_UDP_SERVICE, UDP_SERVICE_RIGHT_OPEN},
   {"dns_udp", "open", PROTOCOL_UDP_SERVICE, UDP_SERVICE_RIGHT_OPEN},
+  {"dns_tcp", "connect", PROTOCOL_TCP_SERVICE, TCP_SERVICE_RIGHT_CONNECT},
   {"display", "draw", PROTOCOL_DISPLAY, DISPLAY_RIGHT_DRAW},
   {"audio", "create", PROTOCOL_AUDIO, AUDIO_RIGHT_PLAYBACK},
   {"screen_capture", "capture", PROTOCOL_SCREEN_CAPTURE, SCREEN_CAPTURE_RIGHT_CAPTURE},

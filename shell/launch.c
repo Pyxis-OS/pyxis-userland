@@ -804,6 +804,8 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
       authority[i].source = HANDLE_INVALID;
     } else if (!strcmp(name, "dns_udp")) {
       authority[i].source = environment->dns_udp;
+    } else if (!strcmp(name, "dns_tcp")) {
+      authority[i].source = environment->dns_tcp;
     } else if (!strcmp(name, "pipe") && mode != SHELL_FOREGROUND && !session && !prepared->shell_reentry) {
       authority[i].source = HANDLE_INVALID;
     }
@@ -886,7 +888,7 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
   bool has_output = shell->terminal.output != HANDLE_INVALID;
   size_t output_index = network_config_index + (has_network_config ? 1 : 0);
   size_t grant_count = output_index + (has_output ? 1 : 0);
-  size_t extra_grants = ENVIRONMENT_STREAM_COUNT + 6 + BUNDLE_SOURCE_LIMIT + ordinary_count;
+  size_t extra_grants = ENVIRONMENT_STREAM_COUNT + 7 + BUNDLE_SOURCE_LIMIT + ordinary_count;
   size_t max_grants = SIZE_MAX / sizeof(struct launch_grant);
   if (grant_count > max_grants - extra_grants ||
       prepared->captured.count > max_grants - extra_grants - grant_count) {
@@ -1492,6 +1494,12 @@ static enum call_status prepare_stage(struct shell *shell, struct prepared_stage
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", grant_count);
     assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){environment->dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
+  }
+  if (environment->dns_tcp != HANDLE_INVALID) {
+    assert(resource_count < resource_capacity);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_tcp", grant_count);
+    assert(grant_count < grant_capacity);
+    grants[grant_count++] = (struct launch_grant){environment->dns_tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
   }
   bool wait_session = mode == SHELL_FOREGROUND && scope && scope->owned &&
       prepared->shell_execution;
@@ -2690,7 +2698,9 @@ static enum command_result launch_stages_owned(struct shell *shell, const struct
   }
   status = network_environment_from_capture(&environment, shell->net_registry,
       shell->net_registry != HANDLE_INVALID && shell->udp != HANDLE_INVALID ?
-          shell->udp : bootstrap_capability("dns_udp"), &inherited);
+          shell->udp : bootstrap_capability("dns_udp"),
+      shell->net_registry != HANDLE_INVALID && shell->tcp != HANDLE_INVALID ?
+          shell->tcp : bootstrap_capability("dns_tcp"), &inherited);
   if (status != CALL_OK) {
     goto failed;
   }

@@ -431,7 +431,7 @@ int launch_remote_server(const struct session_config *config,
   };
   request.image = image;
   status = network_environment_read(&refreshed_environment, bootstrap_capability("net_registry"),
-      bootstrap_capability("udp"), environment, environment_count);
+      bootstrap_capability("udp"), bootstrap_capability("tcp"), environment, environment_count);
   if (status != CALL_OK) {
     fprintf(stderr, "session: cannot read remote network environment (status %u)\n", status);
     goto done;
@@ -444,6 +444,12 @@ int launch_remote_server(const struct session_config *config,
     entries[request.entry_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_udp", request.grant_count);
     assert(request.grant_count < grant_capacity);
     grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_udp, UDP_SERVICE_RIGHT_OPEN, 0};
+  }
+  if (refreshed_environment.dns_tcp != HANDLE_INVALID) {
+    assert(request.entry_count < entry_capacity);
+    entries[request.entry_count++] = (struct launch_environment_entry)PROFILE_CAP("dns_tcp", request.grant_count);
+    assert(request.grant_count < grant_capacity);
+    grants[request.grant_count++] = (struct launch_grant){refreshed_environment.dns_tcp, TCP_SERVICE_RIGHT_CONNECT, 0};
   }
   size_t prepared_grants = request.grant_count, prepared_entries = request.entry_count;
   for (size_t i = 0; i < captured.count; ++i) {

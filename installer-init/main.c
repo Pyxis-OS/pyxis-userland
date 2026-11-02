@@ -187,7 +187,7 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
   handle_t source = bootstrap_capability(BUNDLE_SOURCE_PREFIX "http_staging");
   struct bundle_program *program = NULL;
   struct bundle_launch *prepared = NULL;
-  struct network_environment environment = {.dns_udp = HANDLE_INVALID};
+  struct network_environment environment = {.dns_udp = HANDLE_INVALID, .dns_tcp = HANDLE_INVALID};
   struct endpoint_create_reply publication = {0};
   struct launch_environment_entry *entries = NULL;
   handle_t staging = HANDLE_INVALID;
@@ -207,7 +207,7 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
   if (status == CALL_OK) {
     step = "DNS";
     status = network_environment_read(&environment, bootstrap_capability("net_registry"),
-        bootstrap_capability("udp"), NULL, 0);
+        bootstrap_capability("udp"), bootstrap_capability("tcp"), NULL, 0);
   }
   if (status == CALL_OK) {
     step = "publication";
@@ -250,6 +250,7 @@ static void start_httpfs(struct providers *providers, handle_t diagnostics)
       {"clock", clock, PROTOCOL_CLOCK},
       {"tcp", bootstrap_capability("tcp"), PROTOCOL_TCP_SERVICE},
       {"dns_udp", environment.dns_udp, PROTOCOL_UDP_SERVICE},
+      {"dns_tcp", environment.dns_tcp, PROTOCOL_TCP_SERVICE},
       {"random", bootstrap_capability("random"), PROTOCOL_RANDOM},
       {"http_staging", staging, PROTOCOL_DIRECTORY},
     };

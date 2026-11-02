@@ -17,13 +17,14 @@ bool dns_resolve_address(const char *program, const char *target,
     return false;
   }
   handle_t udp = bootstrap_capability("dns_udp"), random = bootstrap_capability("random");
+  handle_t tcp = bootstrap_capability("dns_tcp");
   if (udp == HANDLE_INVALID || random == HANDLE_INVALID) {
     fprintf(stderr, "%s: missing dns_udp or random capability for DNS\n", program);
     return false;
   }
 
   struct dns_exchange exchange;
-  dns_query(udp, clock, random, server, &question, 0, &exchange);
+  dns_query(udp, tcp, clock, random, server, &question, 0, &exchange);
   if (exchange.status != CALL_OK) {
     fprintf(stderr, "%s: DNS %s failed (status %u)%s\n",
         program, exchange.operation, (unsigned)exchange.status,
@@ -34,7 +35,7 @@ bool dns_resolve_address(const char *program, const char *target,
   }
   if (exchange.response != DNS_COMPLETE) {
     fprintf(stderr, exchange.response == DNS_TRUNCATED ?
-        "%s: truncated DNS response; TCP fallback is unavailable\n" :
+        "%s: truncated DNS response; TCP fallback needs the dns_tcp grant\n" :
         "%s: response exceeds the supported 1232-byte DNS limit\n", program);
     return false;
   }

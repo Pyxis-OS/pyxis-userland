@@ -84,7 +84,7 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
   handle_t udp = bootstrap_capability("dns_udp"), clock = bootstrap_capability("clock");
-  handle_t random = bootstrap_capability("random");
+  handle_t random = bootstrap_capability("random"), tcp = bootstrap_capability("dns_tcp");
   if (udp == HANDLE_INVALID || clock == HANDLE_INVALID || random == HANDLE_INVALID) {
     fputs("dig: missing udp, clock or random capability\n", stderr);
     return EXIT_FAILURE;
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
   fflush(stdout);
 
   struct dns_exchange exchange;
-  dns_query(udp, clock, random, server, &question, 0, &exchange);
+  dns_query(udp, tcp, clock, random, server, &question, 0, &exchange);
   if (exchange.status != CALL_OK) {
     fprintf(stderr, "dig: %s failed (status %u)%s\n", exchange.operation, (unsigned)exchange.status,
         exchange.status == CALL_TIMED_OUT ? ": timed out after two attempts" :
@@ -108,7 +108,7 @@ int main(int argc, char **argv)
   }
   if (exchange.response != DNS_COMPLETE) {
     fputs(exchange.response == DNS_TRUNCATED ?
-        "dig: truncated DNS response; TCP fallback is unavailable\n" :
+        "dig: truncated DNS response; TCP fallback needs the dns_tcp grant\n" :
         "dig: response exceeds the supported 1232-byte DNS limit\n", stderr);
     return EXIT_FAILURE;
   }

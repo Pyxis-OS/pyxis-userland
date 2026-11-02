@@ -4,6 +4,7 @@
 #include <clock.h>
 #include <handle.h>
 #include <udp.h>
+#include <tcp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,10 +42,27 @@ enum call_status network_environment_wait(handle_t authority, handle_t clock)
   }
 }
 
-enum call_status network_environment_read(struct network_environment *environment,
-    handle_t registry, handle_t udp, const struct launch_environment_entry *source, size_t count)
+/* The TCP factory for DNS, over the same scope as the UDP one. It is optional:
+ * a refusal or an absent service leaves it HANDLE_INVALID. */
+static void derive_dns_tcp(struct network_environment *environment, handle_t tcp,
+    uint64_t interface_id)
 {
-  *environment = (struct network_environment){.dns_udp = HANDLE_INVALID};
+  if (tcp == HANDLE_INVALID || environment->dns_udp == HANDLE_INVALID) {
+    return;
+  }
+  enum call_status status = interface_id ?
+      tcp_factory_derive(tcp, interface_id, TCP_SERVICE_RIGHT_CONNECT, &environment->dns_tcp) :
+      handle_copy_restricted(tcp, TCP_SERVICE_RIGHT_CONNECT, 0, &environment->dns_tcp);
+  if (status != CALL_OK) {
+    environment->dns_tcp = HANDLE_INVALID;
+  }
+}
+
+enum call_status network_environment_read(struct network_environment *environment,
+    handle_t registry, handle_t udp, handle_t tcp,
+    const struct launch_environment_entry *source, size_t count)
+{
+  *environment = (struct network_environment){.dns_udp = HANDLE_INVALID, .dns_tcp = HANDLE_INVALID};
   if (count > SIZE_MAX / sizeof(*environment->variables) - 1) {
     return CALL_LIMIT;
   }
@@ -68,6 +86,8 @@ enum call_status network_environment_read(struct network_environment *environmen
         status = udp_factory_derive(udp, snapshot.dns_interface_id, UDP_SERVICE_RIGHT_OPEN, &environment->dns_udp);
       }
       if (status == CALL_OK) {
+        derive_dns_tcp(environment, tcp,
+            snapshot.dns_mode == NET_DNS_NUMERIC && !snapshot.dns_interface_id ? 0 : snapshot.dns_interface_id);
         chosen = snapshot.dns_server;
       } else if (status != CALL_DENIED && status != CALL_NOT_FOUND && status != CALL_UNAVAILABLE && status != CALL_NO_ROUTE) {
         return status;
@@ -78,6 +98,8 @@ enum call_status network_environment_read(struct network_environment *environmen
     if (status != CALL_OK) {
       return status;
     }
+    /* Without a registry the inherited dns_tcp (if any) is passed as tcp. */
+    derive_dns_tcp(environment, tcp, 0);
   }
   environment->variables = malloc((count + 1) * sizeof(*environment->variables));
   if (!environment->variables) {
@@ -104,7 +126,7 @@ enum call_status network_environment_read(struct network_environment *environmen
 }
 
 enum call_status network_environment_from_capture(struct network_environment *environment,
-    handle_t registry, handle_t udp, const struct environment_capture *source)
+    handle_t registry, handle_t udp, handle_t tcp, const struct environment_capture *source)
 {
   if (source->count > SIZE_MAX / sizeof(struct launch_environment_entry)) {
     return CALL_LIMIT;
@@ -123,7 +145,7 @@ enum call_status network_environment_from_capture(struct network_environment *en
       entries[count++] = (struct launch_environment_entry)PROFILE_TEXT(value->name, value->text);
     }
   }
-  enum call_status status = network_environment_read(environment, registry, udp, entries, count);
+  enum call_status status = network_environment_read(environment, registry, udp, tcp, entries, count);
   free(entries);
   return status;
 }
@@ -133,6 +155,9 @@ void network_environment_free(struct network_environment *environment)
   if (environment->dns_udp != HANDLE_INVALID) {
     handle_close(environment->dns_udp);
   }
+  if (environment->dns_tcp != HANDLE_INVALID) {
+    handle_close(environment->dns_tcp);
+  }
   free(environment->variables);
-  *environment = (struct network_environment){.dns_udp = HANDLE_INVALID};
+  *environment = (struct network_environment){.dns_udp = HANDLE_INVALID, .dns_tcp = HANDLE_INVALID};
 }

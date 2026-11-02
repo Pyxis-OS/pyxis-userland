@@ -282,7 +282,7 @@ enum call_status mux_session_start(size_t columns, size_t rows, unsigned tab_wid
     {"tcp", TCP_SERVICE_RIGHTS}, {"random", RANDOM_RIGHT_READ},
     {"profile", PROFILE_RIGHT_MEMORY | PROFILE_RIGHT_HOST},
     {"echo", ECHO_RIGHT_SEND}, {"udp", UDP_SERVICE_RIGHT_OPEN},
-    {"dns_udp", UDP_SERVICE_RIGHT_OPEN},
+    {"dns_udp", UDP_SERVICE_RIGHT_OPEN}, {"dns_tcp", TCP_SERVICE_RIGHT_CONNECT},
     {"net_registry", NET_REGISTRY_RIGHT_READ},
     {"wifi", WIFI_RIGHT_READ | WIFI_RIGHT_SCAN | WIFI_RIGHT_CONNECT},
     {"wifi_session_control", FORWARDER_RIGHT_CUT},

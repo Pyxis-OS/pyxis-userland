@@ -511,7 +511,7 @@ static bool resolve(struct http_stream *fetch, const char *host, uint32_t *addre
     return network(fetch, CALL_UNAVAILABLE);
   }
   struct dns_exchange exchange;
-  dns_query(authority->udp, authority->clock, authority->random, authority->dns_server,
+  dns_query(authority->udp, authority->tcp, authority->clock, authority->random, authority->dns_server,
       &name, fetch->deadline, &exchange);
   if (!network(fetch, exchange.status)) {
     return false;
