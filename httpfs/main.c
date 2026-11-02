@@ -165,18 +165,8 @@ int main(int argc, char **argv)
       }
     }
   }
-  handle_t memory_info = bootstrap_capability("system_info");
   if (staging_type != FILESYSTEM_TYPE_RAM) {
     body_cap = 0;
-    memory_info = HANDLE_INVALID;
-  } else if (memory_info == HANDLE_INVALID && !cap_selected) {
-    fputs("httpfs: RAM staging needs the system_info grant or --staging-cap; GET/POST unavailable\n",
-        stderr);
-    status = close_handle(&staging);
-    staging_type = 0;
-    if (status != CALL_OK) {
-      goto done;
-    }
   }
   {
     /* Public TLS is optional for an HTTP-primary instance. */
@@ -251,7 +241,7 @@ int main(int argc, char **argv)
     memset(controllers, 0, sizeof(controllers));
     status = httpfs_serve(service, endpoint.receiver, owned_controllers, &client,
         custom_bundle != NULL, staging, staging_type == FILESYSTEM_TYPE_RAM,
-        body_cap, memory_info);
+        body_cap);
   }
 
 done:

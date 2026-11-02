@@ -12,7 +12,6 @@
     {"name": "tcp", "resource": "tcp", "rights": ["connect"], "required": true},
     {"name": "dns_udp", "resource": "dns_udp", "rights": ["open"], "required": false},
     {"name": "random", "resource": "random", "rights": ["read"], "required": true},
-    {"name": "system_info", "resource": "system_info", "rights": ["read"], "required": false},
     {"name": "staging", "resource": "directory", "source": "http_staging",
      "rights": ["create", "remove", "read-files", "write-files", "filesystem-info"], "required": false}
   ]
