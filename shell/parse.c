@@ -664,11 +664,6 @@ static const char *parse_sequence(const struct shell *shell, const char **cursor
       return error;
     }
     if (pending) {
-      if (word->plain && word->count && word->pieces[0].kind == SHELL_LITERAL &&
-          word->pieces[0].text[0] == '@') {
-        close_word(word);
-        return "@name redirects are retired; use $name";
-      }
       error = restore_assignment(word);
       if (error) {
         close_word(word);
