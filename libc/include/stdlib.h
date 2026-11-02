@@ -127,8 +127,10 @@ void srand(unsigned seed);
  * Providers and unknown/stale ancestry or unavailable live identity fail. */
 char *realpath(const char *__restrict path, char *__restrict resolved);
 
-/* In-place, unstable heapsort with no allocation or recursion. compare returns
- * negative, zero or positive for less than, equal to or greater than. */
+/* Stable merge sort through a temporary buffer of count * size bytes; equal
+ * elements keep their order. Without that memory it falls back to an in-place
+ * heapsort, which is not stable. No recursion. compare returns negative, zero
+ * or positive for less than, equal to or greater than. */
 void qsort(void *base, size_t count, size_t size,
   int (*compare)(const void *, const void *));
 
