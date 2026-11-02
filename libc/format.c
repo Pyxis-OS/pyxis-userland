@@ -15,10 +15,45 @@ struct conversion {
   enum length_modifier length;
 };
 
+static void stream_flush(struct output *out)
+{
+  if (out->pending && !out->sink(out->context, out->buffer, out->pending)) {
+    out->failed = true;
+  }
+  out->pending = 0;
+}
+
+/* Copy count bytes of text, or of fill when text is null, through the chunk.
+ * Stops at the first refused chunk; padding is written, not skipped. */
+static void stream_put(struct output *out, const char *text, char fill, size_t count)
+{
+  while (count && !out->failed) {
+    size_t room = out->capacity - out->pending;
+    size_t part = count < room ? count : room;
+    if (text) {
+      memcpy(out->buffer + out->pending, text, part);
+      text += part;
+    } else {
+      memset(out->buffer + out->pending, fill, part);
+    }
+    out->pending += part;
+    count -= part;
+    if (out->pending == out->capacity) {
+      stream_flush(out);
+    }
+  }
+}
+
 /* Count discarded bytes too, but saturate once the return value cannot fit.
  * Padding takes time proportional to the destination, not a huge field width. */
 void format_append(struct output *out, const char *text, size_t count)
 {
+  if (out->sink) {
+    stream_put(out, text, 0, count);
+    out->length = out->length > INT_MAX || count > (size_t)INT_MAX - out->length ?
+                  (size_t)INT_MAX + 1 : out->length + count;
+    return;
+  }
   size_t available = out->capacity && out->length < out->capacity - 1 ?
                      out->capacity - 1 - out->length : 0;
   size_t copied = count < available ? count : available;
@@ -31,6 +66,12 @@ void format_append(struct output *out, const char *text, size_t count)
 
 void format_pad(struct output *out, char character, size_t count)
 {
+  if (out->sink) {
+    stream_put(out, NULL, character, count);
+    out->length = out->length > INT_MAX || count > (size_t)INT_MAX - out->length ?
+                  (size_t)INT_MAX + 1 : out->length + count;
+    return;
+  }
   size_t available = out->capacity && out->length < out->capacity - 1 ?
                      out->capacity - 1 - out->length : 0;
   size_t copied = count < available ? count : available;
@@ -260,37 +301,55 @@ static int format_conversion(struct output *out, const struct conversion *spec,
   return 0;
 }
 
-int vsnprintf(char *restrict buffer, size_t capacity, const char *format, va_list args)
+/* Runs the conversions over a private copy of args; returns an errno value. */
+static int format_run(struct output *out, const char *format, va_list args)
 {
-  struct output out = {buffer, capacity, 0};
   va_list copy;
   va_copy(copy, args);
   int error = 0;
-  while (*format && !error && out.length <= INT_MAX) {
+  while (*format && !error && !out->failed && out->length <= INT_MAX) {
     if (*format != '%') {
       const char *start = format;
       while (*format && *format != '%') {
         ++format;
       }
-      format_append(&out, start, format - start);
+      format_append(out, start, format - start);
       continue;
     }
     ++format;
     struct conversion spec = {.precision = -1};
     error = parse_conversion(&format, &copy, &spec);
     if (!error) {
-      error = format_conversion(&out, &spec, *format, &copy);
+      error = format_conversion(out, &spec, *format, &copy);
       if (*format) {
         ++format;
       }
     }
   }
   va_end(copy);
+  if (!error && out->length > INT_MAX) {
+    error = EOVERFLOW;
+  }
+  return error;
+}
+
+int format_stream(bool (*sink)(void *context, const char *bytes, size_t count),
+                  void *context, const char *format, va_list args)
+{
+  char chunk[256];
+  struct output out = {.buffer = chunk, .capacity = sizeof(chunk), .sink = sink,
+                       .context = context};
+  int error = format_run(&out, format, args);
+  stream_flush(&out);
+  return out.failed ? -1 : error;
+}
+
+int vsnprintf(char *restrict buffer, size_t capacity, const char *format, va_list args)
+{
+  struct output out = {.buffer = buffer, .capacity = capacity};
+  int error = format_run(&out, format, args);
   if (capacity) {
     buffer[out.length < capacity ? out.length : capacity - 1] = '\0';
-  }
-  if (out.length > INT_MAX) {
-    error = EOVERFLOW;
   }
   if (error) {
     errno = error;

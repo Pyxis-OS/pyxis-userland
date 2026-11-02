@@ -1,8 +1,13 @@
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
+#include "format.h"
 #include "stream.h"
 #include "signal_scope.h"
+
+static bool stream_sink(void *context, const char *bytes, size_t count)
+{
+  return fwrite(bytes, 1, count, context) == count;
+}
 
 int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
 {
@@ -15,30 +20,20 @@ int vfprintf(FILE *restrict stream, const char *restrict format, va_list args)
   if (!stream_byte_ready(stream, true)) {
     return EOF;
   }
+  /* The first pass validates the format, counts the result and fits the common
+   * short line in local. A longer result is formatted again through a bounded
+   * chunk, so output never needs memory in proportion to its size and a bad
+   * format still writes nothing. vsnprintf copies args, so the second pass sees
+   * the same argument list. */
   char local[256];
-  char *buffer = local;
   int length = vsnprintf(local, sizeof(local), format, args);
   if (length < 0) {
     return stream_error(stream, errno);
   }
-  if ((size_t)length >= sizeof(local)) {
-    buffer = malloc((size_t)length + 1);
-    if (!buffer) {
-      return stream_error(stream, errno);
-    }
-    /* vsnprintf copies args, so the second pass sees the same argument list.
-     * Format completely before output; no fixed formatting-length cutoff. */
-    int formatted = vsnprintf(buffer, (size_t)length + 1, format, args);
-    if (formatted != length) {
-      free(buffer);
-      return stream_error(stream, formatted < 0 ? errno : EINVAL);
-    }
+  if ((size_t)length < sizeof(local)) {
+    return fwrite(local, 1, length, stream) == (size_t)length ? length : EOF;
   }
-  bool success = fwrite(buffer, 1, length, stream) == (size_t)length;
-  if (buffer != local) {
-    free(buffer);
-  }
-  return success ? length : EOF;
+  return format_stream(stream_sink, stream, format, args) == 0 ? length : EOF;
 }
 
 int fprintf(FILE *restrict stream, const char *restrict format, ...)
