@@ -8,7 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define DNS_MESSAGE_BYTES 512
+/* Queries are well under a classic 512-byte datagram. They carry an EDNS(0)
+ * OPT record advertising DNS_EDNS_PAYLOAD (RFC 6891, the 1232-byte guideline
+ * that avoids IP fragmentation), so replies may be that large. */
+#define DNS_QUERY_BYTES 512
+#define DNS_EDNS_PAYLOAD 1232
+#define DNS_REPLY_BYTES DNS_EDNS_PAYLOAD
 #define DNS_NAME_BYTES 255
 #define DNS_HEADER_BYTES 12
 #define DNS_TYPE_A 1
@@ -29,7 +34,7 @@ struct dns_record {
 };
 
 struct dns_reply {
-  uint8_t bytes[DNS_MESSAGE_BYTES];
+  uint8_t bytes[DNS_REPLY_BYTES];
   size_t length, answers_offset;
   uint16_t answer_count;
   unsigned rcode;
@@ -40,8 +45,13 @@ enum dns_address_result { DNS_ADDRESS_FOUND, DNS_ADDRESS_MISSING, DNS_ADDRESS_IN
 enum dns_response { DNS_IGNORE, DNS_COMPLETE, DNS_TRUNCATED, DNS_OVERSIZED };
 
 bool dns_name_from_text(const char *text, struct dns_name *name);
-/* name must be a successfully encoded hostname. */
-size_t dns_make_query(const struct dns_name *name, uint16_t id, uint8_t bytes[DNS_MESSAGE_BYTES]);
+/* name must be a successfully encoded hostname. With edns, an OPT record
+ * advertising DNS_EDNS_PAYLOAD follows the question. */
+size_t dns_make_query(const struct dns_name *name, uint16_t id, bool edns,
+    uint8_t bytes[DNS_QUERY_BYTES]);
+/* A server that does not understand EDNS answers FORMERR or NOTIMP; the query
+ * is then repeated without the OPT record (RFC 6891 section 7). */
+bool dns_edns_refused(unsigned rcode);
 /* IGNORE includes malformed/unrelated messages. Only COMPLETE fills reply;
  * all three record sections have then been checked, without printing data. */
 enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
@@ -78,7 +88,7 @@ struct dns_query_state {
   struct dns_exchange exchange;
   uint16_t identity;
   unsigned attempt, stage;
-  bool aborted;
+  bool aborted, plain; /* plain: repeat without EDNS after FORMERR or NOTIMP. */
 };
 void dns_query_begin(struct dns_query_state *query, handle_t udp, handle_t clock,
     handle_t random, uint32_t server, const struct dns_name *name,

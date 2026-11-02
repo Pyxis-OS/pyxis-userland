@@ -12,6 +12,9 @@
 #define DNS_FLAG_RESERVED 0x0040
 #define DNS_RCODE_MASK 0x000f
 #define DNS_QUESTION_TAIL_BYTES 4
+#define DNS_TYPE_OPT 41
+#define DNS_RCODE_FORMERR 1
+#define DNS_RCODE_NOTIMP 4
 #define DNS_RECORD_TAIL_BYTES 10
 
 enum header_offset { HEADER_ID, HEADER_FLAGS = 2, HEADER_QUESTIONS = 4,
@@ -70,7 +73,8 @@ bool dns_name_from_text(const char *text, struct dns_name *name)
   return true;
 }
 
-size_t dns_make_query(const struct dns_name *name, uint16_t id, uint8_t bytes[DNS_MESSAGE_BYTES])
+size_t dns_make_query(const struct dns_name *name, uint16_t id, bool edns,
+    uint8_t bytes[DNS_QUERY_BYTES])
 {
   memset(bytes, 0, DNS_HEADER_BYTES);
   write_u16(bytes + HEADER_ID, id);
@@ -80,7 +84,24 @@ size_t dns_make_query(const struct dns_name *name, uint16_t id, uint8_t bytes[DN
   size_t offset = DNS_HEADER_BYTES + name->length;
   write_u16(bytes + offset, DNS_TYPE_A);
   write_u16(bytes + offset + 2, DNS_CLASS_IN);
-  return offset + DNS_QUESTION_TAIL_BYTES;
+  offset += DNS_QUESTION_TAIL_BYTES;
+  if (edns) {
+    /* OPT pseudo-record: root name, type 41, the class field carries our UDP
+     * payload size, and the TTL field (extended RCODE, version, flags) and
+     * RDATA stay empty. */
+    write_u16(bytes + HEADER_ADDITIONAL, 1);
+    bytes[offset++] = 0;
+    write_u16(bytes + offset, DNS_TYPE_OPT);
+    write_u16(bytes + offset + 2, DNS_EDNS_PAYLOAD);
+    memset(bytes + offset + 4, 0, 6);
+    offset += DNS_RECORD_TAIL_BYTES;
+  }
+  return offset;
+}
+
+bool dns_edns_refused(unsigned rcode)
+{
+  return rcode == DNS_RCODE_FORMERR || rcode == DNS_RCODE_NOTIMP;
 }
 
 static bool read_name(const uint8_t *bytes, size_t length, size_t *offset, struct dns_name *name)
@@ -90,7 +111,7 @@ static bool read_name(const uint8_t *bytes, size_t length, size_t *offset, struc
   bool jumped = false;
   /* Backward pointers can still loop through literal labels. Bound traversal
    * independently of expanded length, including pointer-only chains. */
-  for (size_t steps = 0; steps < DNS_MESSAGE_BYTES; ++steps) {
+  for (size_t steps = 0; steps < DNS_REPLY_BYTES; ++steps) {
     if (position >= length) {
       return false;
     }
@@ -188,9 +209,9 @@ enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
       read_u16(bytes + HEADER_QUESTIONS) != 1) {
     return DNS_IGNORE;
   }
-  /* The question fits the classic limit even when an oversized datagram was
+  /* The question fits the supported size even when an oversized datagram was
    * received. Check its matching fields before reporting a limitation. */
-  size_t bounded = length < DNS_MESSAGE_BYTES ? length : DNS_MESSAGE_BYTES;
+  size_t bounded = length < DNS_REPLY_BYTES ? length : DNS_REPLY_BYTES;
   size_t offset = DNS_HEADER_BYTES;
   struct dns_name echoed;
   if (!read_name(bytes, bounded, &offset, &echoed) || !same_name(question, &echoed) ||
@@ -202,7 +223,7 @@ enum dns_response dns_parse_reply(const uint8_t *bytes, size_t length,
   if (flags & DNS_FLAG_TRUNCATED) {
     return DNS_TRUNCATED;
   }
-  if (length > DNS_MESSAGE_BYTES) {
+  if (length > DNS_REPLY_BYTES) {
     return DNS_OVERSIZED;
   }
 

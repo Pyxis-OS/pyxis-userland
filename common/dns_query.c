@@ -39,7 +39,7 @@ static enum call_status check_deadline(handle_t clock, uint64_t deadline)
 }
 
 static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_t server,
-    const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
+    const struct dns_name *name, uint64_t deadline_ns, bool edns, struct dns_exchange *exchange)
 {
   uint64_t deadline;
   exchange->operation = "clock";
@@ -74,8 +74,8 @@ static void query_attempt(handle_t udp, handle_t clock, handle_t random, uint32_
     return;
   }
 
-  uint8_t query[DNS_MESSAGE_BYTES];
-  size_t query_length = dns_make_query(name, identity[0], query);
+  uint8_t query[DNS_QUERY_BYTES];
+  size_t query_length = dns_make_query(name, identity[0], edns, query);
   exchange->operation = "clock";
   exchange->status = check_deadline(clock, deadline);
   if (exchange->status == CALL_OK) {
@@ -118,6 +118,7 @@ void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
     const struct dns_name *name, uint64_t deadline_ns, struct dns_exchange *exchange)
 {
   enum call_status cleanup = CALL_OK;
+  bool edns = true;
   for (unsigned i = 0; i < DNS_ATTEMPTS; ++i) {
     *exchange = (struct dns_exchange){.cleanup_status = cleanup};
     if (deadline_ns) {
@@ -127,8 +128,15 @@ void dns_query(handle_t udp, handle_t clock, handle_t random, uint32_t server,
         return;
       }
     }
-    query_attempt(udp, clock, random, server, name, deadline_ns, exchange);
+    query_attempt(udp, clock, random, server, name, deadline_ns, edns, exchange);
     cleanup = exchange->cleanup_status;
+    if (edns && exchange->status == CALL_OK && exchange->response == DNS_COMPLETE &&
+        dns_edns_refused(exchange->reply.rcode)) {
+      /* Not an attempt lost to a timeout: ask again without the OPT record. */
+      edns = false;
+      --i;
+      continue;
+    }
     if (exchange->status != CALL_TIMED_OUT) {
       return;
     }
@@ -172,6 +180,14 @@ void dns_query_begin(struct dns_query_state *query, handle_t udp, handle_t clock
 static enum dns_query_step query_done(struct dns_query_state *query)
 {
   query_close(query);
+  if (!query->aborted && !query->plain && query->exchange.status == CALL_OK &&
+      query->exchange.response == DNS_COMPLETE && dns_edns_refused(query->exchange.reply.rcode)) {
+    /* The server does not understand EDNS: ask again without the OPT record. */
+    query->plain = true;
+    query->exchange.response = DNS_IGNORE;
+    query->stage = DNS_STAGE_OPEN;
+    return DNS_QUERY_PROGRESS;
+  }
   if (!query->aborted && query->exchange.status == CALL_TIMED_OUT &&
       ++query->attempt < DNS_ATTEMPTS) {
     query->stage = DNS_STAGE_OPEN;
@@ -237,13 +253,13 @@ enum dns_query_step dns_query_step(struct dns_query_state *query)
     return query_done(query);
   }
   uint64_t operation;
-  unsigned char payload[sizeof(struct completion_udp_send_request) + DNS_MESSAGE_BYTES];
+  unsigned char payload[sizeof(struct completion_udp_send_request) + DNS_QUERY_BYTES];
   size_t size;
   if (query->stage == DNS_STAGE_SEND) {
     operation = UDP_SEND;
     struct completion_udp_send_request request = {
       .address = query->server, .port = DNS_PORT,
-      .size = dns_make_query(&query->name, query->identity,
+      .size = dns_make_query(&query->name, query->identity, !query->plain,
           payload + sizeof(struct completion_udp_send_request)),
     };
     memcpy(payload, &request, sizeof(request));
