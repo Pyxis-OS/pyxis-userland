@@ -29,7 +29,7 @@ enum http_error http_parse_uri(const char *text, struct http_uri *uri)
   switch (http_url_parse(text, uri)) {
   case CALL_OK: return HTTP_OK;
   case CALL_BAD_OPERATION: return HTTP_UNSUPPORTED;
-  case CALL_FILE_TOO_LARGE: return HTTP_LIMIT;
+  case CALL_LIMIT: return HTTP_LIMIT;
   default: return HTTP_INVALID_URI;
   }
 }

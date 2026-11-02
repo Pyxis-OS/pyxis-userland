@@ -66,7 +66,7 @@ static enum call_status reference_parse(const char *text,
   }
   size_t length = strnlen(text, HTTP_URI_MAX + 1);
   if (length > HTTP_URI_MAX) {
-    return CALL_FILE_TOO_LARGE;
+    return CALL_LIMIT;
   }
   for (size_t i = 0; i < length; ++i) {
     unsigned byte = (unsigned char)text[i];
@@ -390,7 +390,7 @@ enum call_status http_url_resolve(const char *base, const char *location,
     target.fragment = current.fragment;
   }
   if (!append_bytes(path, &path_length, HTTP_MERGED_PATH_MAX, target.path.text, target.path.length)) {
-    return CALL_FILE_TOO_LARGE;
+    return CALL_LIMIT;
   }
   if (normalize_path) {
     path_length = remove_dot_segments(path, path_length);
@@ -403,7 +403,7 @@ enum call_status http_url_resolve(const char *base, const char *location,
       !append_part(output, &length, HTTP_URI_MAX, '?', target.query) ||
       !append_part(output, &length, HTTP_URI_MAX, '#', target.fragment)) {
     output[0] = 0;
-    return CALL_FILE_TOO_LARGE;
+    return CALL_LIMIT;
   }
   return CALL_OK;
 }
@@ -485,14 +485,14 @@ enum call_status http_url_key(const char *text, char output[HTTP_URL_KEY_BYTES])
   }
   if (!append_bytes(output, &length, maximum, normalized, count)) {
     output[0] = 0;
-    return CALL_FILE_TOO_LARGE;
+    return CALL_LIMIT;
   }
   if (reference.query.text) {
     count = normalize_escapes(reference.query, normalized);
     if (!append_bytes(output, &length, maximum, "?", 1) ||
         !append_bytes(output, &length, maximum, normalized, count)) {
       output[0] = 0;
-      return CALL_FILE_TOO_LARGE;
+      return CALL_LIMIT;
     }
   }
   return CALL_OK;

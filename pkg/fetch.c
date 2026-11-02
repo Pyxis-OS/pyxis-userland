@@ -329,7 +329,7 @@ enum call_status pkg_fetch(const struct pkg_fetch_authority *authority,
   size_t relative_size = strnlen(relative, HTTP_URI_MAX + 1);
   if (relative_size > HTTP_URI_MAX || base_size > HTTP_URI_MAX - relative_size) {
     set_detail(detail, "repository target exceeds HTTP URL limit");
-    return CALL_FILE_TOO_LARGE;
+    return CALL_LIMIT;
   }
   char url[HTTP_URI_MAX + 1];
   memcpy(url, base, base_size);

@@ -216,11 +216,17 @@ static enum call_status response_status(const struct http_response *response)
 static struct resource_description transaction_description(const struct transaction *transaction)
 {
   struct resource_description description = {0};
+static void report_url_limit(uint64_t target_bytes)
+{
+  fprintf(stderr, "httpfs: URL: %" PRIu64 " bytes exceed the limit of %d (HTTP request packet)\n",
+      target_bytes, HTTP_URI_MAX);
+}
+
   switch (transaction->failure) {
   case CALL_OK: description.outcome = RESOURCE_OK; break;
   case CALL_NOT_FOUND: description.outcome = RESOURCE_NOT_FOUND; break;
   case CALL_DENIED: description.outcome = RESOURCE_DENIED; break;
-  case CALL_FILE_TOO_LARGE: description.outcome = RESOURCE_TOO_LARGE; break;
+  case CALL_FILE_TOO_LARGE: case CALL_LIMIT: description.outcome = RESOURCE_TOO_LARGE; break;
   case CALL_ABANDONED: description.outcome = RESOURCE_ABORTED; break;
   case CALL_OUTCOME_UNKNOWN: description.outcome = RESOURCE_UNCERTAIN; break;
   default: description.outcome = RESOURCE_IO_ERROR; break;
@@ -746,7 +752,8 @@ static void configure_endpoint(struct loop *loop, size_t root,
   int length = snprintf(config->uri, sizeof(config->uri), "%s://%.*s",
       https ? "https" : "http", (int)request.target_size, packet->data + sizeof(request));
   if (length < 0 || (size_t)length >= sizeof(config->uri)) {
-    status = CALL_FILE_TOO_LARGE;
+    report_url_limit(request.target_size);
+    status = CALL_LIMIT;
   }
   memcpy(config->fields, packet->data + sizeof(request) + request.target_size, request.headers_size);
   struct transaction validation = {.work = work,
@@ -930,8 +937,12 @@ static void open_resource(struct loop *loop, size_t root,
     bool https = root == HTTPFS_ROOT_HTTPS || root == HTTPFS_ROOT_JSON_HTTPS;
     int length = snprintf(transaction->work->uri, sizeof(transaction->work->uri), "%s://%.*s",
         https ? "https" : "http", (int)request.target_size, packet->data + prefix);
-    status = length < 0 || (size_t)length >= sizeof(transaction->work->uri) ? CALL_FILE_TOO_LARGE :
-        default_deadline(loop, request.deadline_ns, &transaction->deadline);
+    if (length < 0 || (size_t)length >= sizeof(transaction->work->uri)) {
+      report_url_limit(request.target_size);
+      status = CALL_LIMIT;
+    } else {
+      status = default_deadline(loop, request.deadline_ns, &transaction->deadline);
+    }
   }
   if (status == CALL_OK) {
     status = chain_initialize(transaction);
