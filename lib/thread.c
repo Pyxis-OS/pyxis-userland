@@ -14,8 +14,11 @@ static enum call_status checked_status(struct syscall_result call, size_t reply_
 }
 
 enum call_status thread_create(handle_t threads, const struct thread_create *request,
-    handle_t *completion)
+    handle_t *completion, struct call_limit *detail)
 {
+  if (detail) {
+    *detail = (struct call_limit){0};
+  }
   if (!completion) {
     return CALL_BAD_REQUEST;
   }
@@ -28,8 +31,8 @@ enum call_status thread_create(handle_t threads, const struct thread_create *req
     .body.create = *request,
   };
   struct thread_reply reply;
-  enum call_status status = checked_status(syscall_call(threads, &message,
-      sizeof(message), &reply, sizeof(reply)), sizeof(reply));
+  enum call_status status = checked_status(syscall_call_with_limit(threads, &message,
+      sizeof(message), &reply, sizeof(reply), detail), sizeof(reply));
   if (status == CALL_OK) {
     if (reply.completion == HANDLE_INVALID) {
       return CALL_OUTCOME_UNKNOWN;

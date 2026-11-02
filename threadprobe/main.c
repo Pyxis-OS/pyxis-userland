@@ -161,11 +161,11 @@ static uint64_t parking_child(struct probe_context *context)
 static enum call_status prepare(struct probe_context *context, unsigned index)
 {
   *context = (struct probe_context){.threads = threads, .marker = PROBE_MARKER + index};
-  enum call_status status = memory_allocate_guarded(memory, PROBE_STACK_BYTES, &context->stack);
+  enum call_status status = memory_allocate_guarded(memory, PROBE_STACK_BYTES, &context->stack, NULL);
   if (status != CALL_OK) {
     return status;
   }
-  status = memory_allocate_guarded(memory, MEMORY_PAGE_SIZE, &context->fs);
+  status = memory_allocate_guarded(memory, MEMORY_PAGE_SIZE, &context->fs, NULL);
   if (status != CALL_OK) {
     memory_release_reservation(memory, context->stack.identity);
     context->stack = (struct memory_reservation){0};
@@ -187,7 +187,7 @@ static struct thread_create request_for(struct probe_context *context)
 static enum call_status start(struct probe_context *context)
 {
   struct thread_create request = request_for(context);
-  return thread_create(threads, &request, &context->completion);
+  return thread_create(threads, &request, &context->completion, NULL);
 }
 
 static bool await_ready(struct probe_context *context)
@@ -323,7 +323,7 @@ static void tls_key_callback(void *argument)
       tls_initialized == (uint32_t)context->native.marker;
   ++context->key_count;
   /* Reassign even on the last permitted pass: exit must stop after four. */
-  context->valid &= libc_thread_key_set(callback_key, context) == CALL_OK;
+  context->valid &= libc_thread_key_set(callback_key, context, NULL) == CALL_OK;
 }
 
 static void tls_deleted_callback(void *argument)
@@ -350,7 +350,7 @@ static void tls_deleted_callback(void *argument)
   errno = context->expected_errno;
   void *value = context;
   context->valid &= libc_thread_key_get(callback_key, &value) == CALL_OK && value == NULL;
-  context->valid &= libc_thread_key_set(callback_key, context) == CALL_OK;
+  context->valid &= libc_thread_key_set(callback_key, context, NULL) == CALL_OK;
   threadprobe_tls_objects(context);
   publish(&native->ready, 1);
   while (!load(&native->release)) {
@@ -369,7 +369,7 @@ static void tls_deleted_callback(void *argument)
 
 static bool tls_prepare_pair(void)
 {
-  if (libc_thread_key_create(tls_key_callback, &callback_key) != CALL_OK) {
+  if (libc_thread_key_create(tls_key_callback, &callback_key, NULL) != CALL_OK) {
     return false;
   }
   for (unsigned i = 0; i < 2; ++i) {
@@ -378,8 +378,8 @@ static bool tls_prepare_pair(void)
       .native = {.threads = threads, .marker = PROBE_MARKER + i + 1},
       .expected_errno = i ? ERANGE : ENOENT,
     };
-    if (memory_allocate_guarded(memory, PROBE_STACK_BYTES, &context->native.stack) != CALL_OK ||
-        libc_thread_context_prepare(memory, &context->runtime) != CALL_OK) {
+    if (memory_allocate_guarded(memory, PROBE_STACK_BYTES, &context->native.stack, NULL) != CALL_OK ||
+        libc_thread_context_prepare(memory, &context->runtime, NULL) != CALL_OK) {
       for (unsigned j = 0; j <= i; ++j) {
         libc_thread_context_release(memory, &tls_contexts[j].runtime);
         release_context(&tls_contexts[j].native);
@@ -399,37 +399,37 @@ static enum call_status tls_start(struct tls_probe_context *context)
     .context_identity = context->runtime.reservation.identity,
     .fs_base = context->runtime.fs_base,
   };
-  return thread_create(threads, &request, &context->native.completion);
+  return thread_create(threads, &request, &context->native.completion, NULL);
 }
 
 static bool tls_key_refusal(void)
 {
   libc_thread_key stale = 0, replacement = 0;
   void *value = &stale;
-  bool valid = libc_thread_key_create(NULL, NULL) == CALL_BAD_REQUEST &&
+  bool valid = libc_thread_key_create(NULL, NULL, NULL) == CALL_BAD_REQUEST &&
       libc_thread_key_get(0, &value) == CALL_BAD_REQUEST && value == NULL &&
       libc_thread_key_get(callback_key, NULL) == CALL_BAD_REQUEST &&
-      libc_thread_key_set(0, &stale) == CALL_BAD_REQUEST &&
+      libc_thread_key_set(0, &stale, NULL) == CALL_BAD_REQUEST &&
       libc_thread_key_delete(0) == CALL_BAD_REQUEST;
-  if (libc_thread_key_create(tls_deleted_callback, &stale) != CALL_OK) {
+  if (libc_thread_key_create(tls_deleted_callback, &stale, NULL) != CALL_OK) {
     return false;
   }
-  valid &= libc_thread_key_set(stale, &stale) == CALL_OK;
+  valid &= libc_thread_key_set(stale, &stale, NULL) == CALL_OK;
   valid &= libc_thread_key_delete(stale) == CALL_OK;
   value = &stale;
   valid &= libc_thread_key_get(stale, &value) == CALL_BAD_REQUEST && value == NULL;
-  valid &= libc_thread_key_set(stale, &stale) == CALL_BAD_REQUEST &&
+  valid &= libc_thread_key_set(stale, &stale, NULL) == CALL_BAD_REQUEST &&
       libc_thread_key_delete(stale) == CALL_BAD_REQUEST;
-  if (libc_thread_key_create(tls_deleted_callback, &replacement) != CALL_OK) {
+  if (libc_thread_key_create(tls_deleted_callback, &replacement, NULL) != CALL_OK) {
     return false;
   }
   value = &stale;
   valid &= replacement != stale &&
       libc_thread_key_get(replacement, &value) == CALL_OK && value == NULL;
-  valid &= libc_thread_key_set(replacement, &replacement) == CALL_OK;
+  valid &= libc_thread_key_set(replacement, &replacement, NULL) == CALL_OK;
   value = &stale;
   valid &= libc_thread_key_get(stale, &value) == CALL_BAD_REQUEST && value == NULL &&
-      libc_thread_key_set(stale, &stale) == CALL_BAD_REQUEST &&
+      libc_thread_key_set(stale, &stale, NULL) == CALL_BAD_REQUEST &&
       libc_thread_key_delete(stale) == CALL_BAD_REQUEST;
   valid &= libc_thread_key_get(replacement, &value) == CALL_OK && value == &replacement;
   valid &= libc_thread_key_delete(replacement) == CALL_OK;
@@ -660,7 +660,7 @@ static int parking_refusal(void)
   valid &= thread_address_wait(threads, (uintptr_t)&stack_word, 1,
       THREAD_ADDRESS_WORD64_BYTES, 0) == CALL_WOULD_BLOCK;
   struct memory_region region;
-  if (memory_allocate(memory, MEMORY_PAGE_SIZE, &region) != CALL_OK) {
+  if (memory_allocate(memory, MEMORY_PAGE_SIZE, &region, NULL) != CALL_OK) {
     return 1;
   }
   if (clock_now(clock_service, &now) != CALL_OK || now > UINT64_MAX - UINT64_C(20000000)) {
@@ -696,7 +696,7 @@ static int parking_unmap(void)
     return 1;
   }
   struct memory_region region, replacement;
-  if (memory_allocate(memory, MEMORY_PAGE_SIZE, &region) != CALL_OK) {
+  if (memory_allocate(memory, MEMORY_PAGE_SIZE, &region, NULL) != CALL_OK) {
     release_context(&contexts[0]);
     release_context(&contexts[1]);
     return 1;
@@ -713,7 +713,7 @@ static int parking_unmap(void)
   }
   parking_enter();
   if (memory_release(memory, region) != CALL_OK ||
-      memory_allocate(memory, MEMORY_PAGE_SIZE, &replacement) != CALL_OK) {
+      memory_allocate(memory, MEMORY_PAGE_SIZE, &replacement, NULL) != CALL_OK) {
     stop_process(1);
   }
   bool same_address = replacement.address == region.address;
@@ -762,14 +762,14 @@ static int refusal(void)
   struct thread_create request = request_for(&contexts[1]);
   request.stack_identity = contexts[0].stack.identity;
   handle_t unexpected;
-  enum call_status duplicate_stack = thread_create(threads, &request, &unexpected);
+  enum call_status duplicate_stack = thread_create(threads, &request, &unexpected, NULL);
   if (duplicate_stack == CALL_OK || duplicate_stack == CALL_OUTCOME_UNKNOWN) {
     stop_process(1);
   }
   request = request_for(&contexts[1]);
   request.context_identity = contexts[0].fs.identity;
   request.fs_base = contexts[0].fs.address + MEMORY_PAGE_SIZE;
-  enum call_status duplicate_fs = thread_create(threads, &request, &unexpected);
+  enum call_status duplicate_fs = thread_create(threads, &request, &unexpected, NULL);
   if (duplicate_fs == CALL_OK || duplicate_fs == CALL_OUTCOME_UNKNOWN) {
     stop_process(1);
   }
@@ -780,13 +780,13 @@ static int refusal(void)
   valid &= release_context(&contexts[0]);
   request = request_for(&contexts[1]);
   request.context_identity = stale_identity;
-  enum call_status stale = thread_create(threads, &request, &unexpected);
+  enum call_status stale = thread_create(threads, &request, &unexpected, NULL);
   if (stale == CALL_OK || stale == CALL_OUTCOME_UNKNOWN) {
     stop_process(1);
   }
   request = request_for(&contexts[1]);
   request.entry = contexts[1].fs.address + MEMORY_PAGE_SIZE;
-  enum call_status nx = thread_create(threads, &request, &unexpected);
+  enum call_status nx = thread_create(threads, &request, &unexpected, NULL);
   if (nx == CALL_OK || nx == CALL_OUTCOME_UNKNOWN) {
     stop_process(1);
   }
@@ -828,7 +828,7 @@ static int exhaustion(void)
   for (unsigned phase = 0; phase < 2; ++phase) {
     size_t chunk = phase ? MEMORY_PAGE_SIZE : 1024 * 1024;
     struct memory_region region;
-    while ((allocation_status = memory_allocate(memory, chunk, &region)) == CALL_OK) {
+    while ((allocation_status = memory_allocate(memory, chunk, &region, NULL)) == CALL_OK) {
       struct held_region *node = (void *)(uintptr_t)region.address;
       *node = (struct held_region){head, region};
       head = node;

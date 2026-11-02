@@ -131,7 +131,7 @@ static bool allocate_slot(struct slot *slot, size_t size, enum mode mode,
   ++results->allocations;
   if (mode == PAGES) {
     struct memory_region region;
-    results->error = memory_allocate(memory, size, &region);
+    results->error = memory_allocate(memory, size, &region, NULL);
     if (results->error == CALL_OK) {
       slot->pointer = (void *)(uintptr_t)region.address;
       slot->size = region.size;

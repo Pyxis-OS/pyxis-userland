@@ -54,7 +54,8 @@ static bool key_index(libc_thread_key key, size_t *index, uint32_t *generation)
 }
 
 /* The native page is a starting allocation, not a key-count admission limit. */
-static size_t key_capacity(size_t old, size_t required, size_t element_size)
+static size_t key_capacity(size_t old, size_t required, size_t element_size,
+    struct call_limit *detail)
 {
   size_t maximum = SIZE_MAX / element_size;
   if (maximum > UINT32_MAX) {
@@ -62,6 +63,24 @@ static size_t key_capacity(size_t old, size_t required, size_t element_size)
   }
   size_t capacity = old ? old : MEMORY_PAGE_SIZE / element_size;
   if (required > maximum) {
+    if (detail) {
+      if (required > UINT32_MAX) {
+        *detail = (struct call_limit){
+          .reason = CALL_LIMIT_THREAD_KEY_IDENTITY,
+          .requested = required,
+          .limit = UINT32_MAX,
+          .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT,
+        };
+      } else {
+        *detail = (struct call_limit){
+          .reason = CALL_LIMIT_REQUEST_ENCODING,
+          .requested = UINT64_MAX,
+          .limit = SIZE_MAX,
+          .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+              CALL_LIMIT_REQUESTED_SATURATED,
+        };
+      }
+    }
     return 0;
   }
   while (capacity < required) {
@@ -93,8 +112,12 @@ static libc_thread_key take_key(void (*destructor)(void *))
   return ((uint64_t)entry->generation << 32) | slot;
 }
 
-enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_key *key)
+enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_key *key,
+    struct call_limit *detail)
 {
+  if (detail) {
+    *detail = (struct call_limit){0};
+  }
   if (!key) {
     return CALL_BAD_REQUEST;
   }
@@ -109,18 +132,18 @@ enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_
     size_t previous_capacity = key_registry.capacity;
     unlock_keys();
     size_t capacity = key_capacity(previous_capacity, previous_capacity + 1,
-        sizeof(struct thread_key_entry));
+        sizeof(struct thread_key_entry), detail);
     if (!capacity) {
       return CALL_LIMIT;
     }
     struct thread_key_registry candidate = {.capacity = capacity};
-    enum call_status status = handle_copy_restricted(libc_thread_record()->memory,
-        MEMORY_RIGHT_MANAGE, 0, &candidate.memory);
+    enum call_status status = handle_copy_restricted_with_limit(libc_thread_record()->memory,
+        MEMORY_RIGHT_MANAGE, 0, &candidate.memory, detail);
     if (status != CALL_OK) {
       return status;
     }
     status = libc_memory_allocate(candidate.memory,
-        capacity * sizeof(struct thread_key_entry), &candidate.region);
+        capacity * sizeof(struct thread_key_entry), &candidate.region, detail);
     if (status != CALL_OK) {
       /* No publication occurred. Keep the allocation's real failure; a close
        * with unknown effect leaves any surviving grant to process teardown. */
@@ -178,8 +201,12 @@ enum call_status libc_thread_key_delete(libc_thread_key key)
   return valid ? CALL_OK : CALL_BAD_REQUEST;
 }
 
-enum call_status libc_thread_key_set(libc_thread_key key, void *value)
+enum call_status libc_thread_key_set(libc_thread_key key, void *value,
+    struct call_limit *detail)
 {
+  if (detail) {
+    *detail = (struct call_limit){0};
+  }
   size_t index;
   uint32_t generation;
   if (!key_index(key, &index, &generation)) {
@@ -198,13 +225,13 @@ enum call_status libc_thread_key_set(libc_thread_key key, void *value)
   }
   unlock_keys();
   size_t capacity = key_capacity(record->key_capacity, index + 1,
-      sizeof(struct thread_key_value));
+      sizeof(struct thread_key_value), detail);
   if (!capacity) {
     return CALL_LIMIT;
   }
   struct memory_region region;
   enum call_status status = libc_memory_allocate(record->memory,
-      capacity * sizeof(struct thread_key_value), &region);
+      capacity * sizeof(struct thread_key_value), &region, detail);
   if (status != CALL_OK) {
     return status;
   }
@@ -279,7 +306,7 @@ int __cxa_thread_atexit_impl(void (*function)(void *), void *argument, void *mod
   struct thread_destructor_block *block = record->destructors;
   if (block->count == LIBC_THREAD_DESTRUCTOR_BLOCK) {
     struct memory_region region;
-    if (libc_memory_allocate(record->memory, sizeof(*block), &region) != CALL_OK) {
+    if (libc_memory_allocate(record->memory, sizeof(*block), &region, NULL) != CALL_OK) {
       /* Compiler-generated registration ignores the result. Losing a required
        * destructor would falsely report successful TLS initialization. */
       _Exit(EXIT_FAILURE);

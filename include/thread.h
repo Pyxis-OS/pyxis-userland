@@ -2,15 +2,17 @@
 #define USERSPACE_THREAD_H
 
 #include <abi/thread.h>
+#include <abi/limit.h>
 #include <abi/syscall.h>
 
 /* MANAGE applies to the calling process. Regions are distinct guarded MEMORY
  * reservations. CREATE pins them until native completion, starts at entry with
  * argument in RDI and a 16-byte-aligned RSP, and performs no runtime startup.
  * The entry must EXIT explicitly; it cannot return. Clears *completion on
- * failure. OUTCOME_UNKNOWN must not be retried: publication may have occurred. */
+ * failure. Optional detail is cleared on entry and records CALL_LIMIT reasons.
+ * OUTCOME_UNKNOWN must not be retried: publication may have occurred. */
 enum call_status thread_create(handle_t threads, const struct thread_create *request,
-    handle_t *completion);
+    handle_t *completion, struct call_limit *detail);
 
 /* SET_FS or MANAGE binds the current thread's guarded FS context once.
  * Rebinding returns BUSY.

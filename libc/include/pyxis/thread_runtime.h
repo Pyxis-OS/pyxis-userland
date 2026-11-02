@@ -2,6 +2,7 @@
 #define LIBC_PYXIS_THREAD_RUNTIME_H
 
 #include <abi/memory.h>
+#include <abi/limit.h>
 #include <abi/syscall.h>
 #include <abi/thread.h>
 #include <stddef.h>
@@ -21,9 +22,10 @@ extern "C" {
 /* Native-runtime bridge, not a C11/pthread profile. Prepare does not bind FS or
  * create a task. Each context owns a MEMORY copy and a fresh executable TLS
  * image. Pass reservation.identity/fs_base to native CREATE with a distinct
- * guarded stack. OUTCOME_UNKNOWN must not be retried automatically. */
+ * guarded stack. Optional detail is cleared on entry and records CALL_LIMIT
+ * capacity reasons. OUTCOME_UNKNOWN must not be retried automatically. */
 enum call_status libc_thread_context_prepare(handle_t memory,
-    struct libc_thread_context *context);
+    struct libc_thread_context *context, struct call_limit *detail);
 
 /* Caller-owned unbound context, or one whose native completion is known.
  * Keep this descriptor outside the context backing. Calling it on a running
@@ -74,10 +76,13 @@ enum call_status libc_thread_cleanup_register(void (*cleanup)(void));
  * or confirmed stopped-context collection. Failed retirement of obsolete key
  * backing retains its actual charge until process teardown; it does not stop
  * the process or undo a published key/value. Uncertain addresses are forgotten,
- * never accessed or retried by the collector. These calls return native statuses. */
-enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_key *key);
+ * never accessed or retried by the collector. These calls return native statuses.
+ * Optional create/set detail is cleared on entry and records CALL_LIMIT reasons. */
+enum call_status libc_thread_key_create(void (*destructor)(void *), libc_thread_key *key,
+    struct call_limit *detail);
 enum call_status libc_thread_key_delete(libc_thread_key key);
-enum call_status libc_thread_key_set(libc_thread_key key, void *value);
+enum call_status libc_thread_key_set(libc_thread_key key, void *value,
+    struct call_limit *detail);
 enum call_status libc_thread_key_get(libc_thread_key key, void **value);
 
 #ifdef __cplusplus

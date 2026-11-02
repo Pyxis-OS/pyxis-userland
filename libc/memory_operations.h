@@ -11,12 +11,12 @@
 #define LIBC_VM_ATTEMPTS 8
 
 enum call_status libc_memory_allocate_guarded(handle_t memory, size_t size,
-    struct memory_reservation *reservation);
+    struct memory_reservation *reservation, struct call_limit *detail);
 enum call_status libc_memory_allocate(handle_t memory, size_t size,
-    struct memory_region *region);
+    struct memory_region *region, struct call_limit *detail);
 enum call_status libc_memory_release(handle_t memory, struct memory_region region);
 enum call_status libc_memory_release_reservation(handle_t memory, uint64_t identity);
 enum call_status libc_native_thread_create(handle_t threads,
-    const struct thread_create *request, handle_t *completion);
+    const struct thread_create *request, handle_t *completion, struct call_limit *detail);
 
 #endif

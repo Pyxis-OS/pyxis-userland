@@ -75,6 +75,22 @@ bool call_limit_format(const struct call_limit *limit, char *buffer, size_t capa
     what = "readiness registration generation";
     source = "registration generation counter";
     break;
+  case CALL_LIMIT_MEMORY_ADDRESS:
+    what = "memory bytes";
+    source = "user address space";
+    break;
+  case CALL_LIMIT_MEMORY_IDENTITY:
+    what = "memory reservation identities";
+    source = "reservation identity counter";
+    break;
+  case CALL_LIMIT_THREAD_COUNT:
+    what = "native threads";
+    source = "thread counter";
+    break;
+  case CALL_LIMIT_THREAD_KEY_IDENTITY:
+    what = "thread key slots";
+    source = "key identity encoding";
+    break;
   default:
     return false;
   }

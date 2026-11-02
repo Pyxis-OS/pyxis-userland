@@ -14,9 +14,18 @@ extern const unsigned char __tls_template_init_end[];
 extern const unsigned char __tls_template_end[];
 extern const unsigned char __tls_alignment[];
 
-static bool add_size(size_t left, size_t right, size_t *result)
+static bool add_size(size_t left, size_t right, size_t *result, struct call_limit *detail)
 {
   if (right > SIZE_MAX - left) {
+    if (detail) {
+      *detail = (struct call_limit){
+        .reason = CALL_LIMIT_REQUEST_ENCODING,
+        .requested = UINT64_MAX,
+        .limit = SIZE_MAX,
+        .flags = CALL_LIMIT_HAS_REQUESTED | CALL_LIMIT_HAS_LIMIT |
+            CALL_LIMIT_REQUESTED_SATURATED,
+      };
+    }
     return false;
   }
   *result = left + right;
@@ -24,8 +33,11 @@ static bool add_size(size_t left, size_t right, size_t *result)
 }
 
 enum call_status libc_thread_context_prepare(handle_t memory,
-    struct libc_thread_context *context)
+    struct libc_thread_context *context, struct call_limit *detail)
 {
+  if (detail) {
+    *detail = (struct call_limit){0};
+  }
   if (!context) {
     return CALL_BAD_REQUEST;
   }
@@ -45,22 +57,22 @@ enum call_status libc_thread_context_prepare(handle_t memory,
   size_t initialized = initialized_end - start;
   size_t bytes = end - start;
   size_t rounded, usable;
-  if (!add_size(bytes, tls_alignment - 1, &rounded)) {
-    return CALL_BAD_REQUEST;
+  if (!add_size(bytes, tls_alignment - 1, &rounded, detail)) {
+    return CALL_LIMIT;
   }
   rounded &= ~(tls_alignment - 1);
-  if (!add_size(rounded, sizeof(struct libc_thread_record), &usable) ||
-      !add_size(usable, alignment - 1, &usable)) {
-    return CALL_BAD_REQUEST;
+  if (!add_size(rounded, sizeof(struct libc_thread_record), &usable, detail) ||
+      !add_size(usable, alignment - 1, &usable, detail)) {
+    return CALL_LIMIT;
   }
   handle_t owned_memory;
-  enum call_status status = handle_copy_restricted(memory, MEMORY_RIGHT_MANAGE, 0,
-      &owned_memory);
+  enum call_status status = handle_copy_restricted_with_limit(memory, MEMORY_RIGHT_MANAGE, 0,
+      &owned_memory, detail);
   if (status != CALL_OK) {
     return status;
   }
   struct memory_reservation reservation;
-  status = libc_memory_allocate_guarded(owned_memory, usable, &reservation);
+  status = libc_memory_allocate_guarded(owned_memory, usable, &reservation, detail);
   if (status != CALL_OK) {
     handle_close(owned_memory);
     return status;
@@ -160,7 +172,7 @@ void libc_thread_bootstrap(const struct startup_info *info)
   if (status != CALL_OK || entry.kind != ENVIRONMENT_CAP) {
     libc_start_failed(PROCESS_START_MEMORY, status != CALL_OK ? status : CALL_WRONG_TYPE);
   }
-  status = libc_thread_context_prepare(entry.handle, &context);
+  status = libc_thread_context_prepare(entry.handle, &context, NULL);
   if (status != CALL_OK) {
     libc_start_failed(PROCESS_START_TLS, status);
   }

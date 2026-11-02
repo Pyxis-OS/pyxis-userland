@@ -65,7 +65,7 @@ static enum call_status allocate_pool(size_t pool_bytes, struct memory_region *r
     return CALL_NO_MEMORY;
   }
 
-  return memory_allocate(memory, bytes, region);
+  return memory_allocate(memory, bytes, region, NULL);
 }
 
 static void *allocate(size_t alignment, size_t size)

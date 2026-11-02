@@ -224,7 +224,7 @@ static int reserve_record(struct lifecycle_record **chosen)
   /* Use the initial context's retained MEMORY, independent of the allocating
    * worker's TCB and malloc bootstrap. No registry lock spans admission. */
   struct memory_region region;
-  enum call_status status = libc_memory_allocate(memory, MEMORY_PAGE_SIZE, &region);
+  enum call_status status = libc_memory_allocate(memory, MEMORY_PAGE_SIZE, &region, NULL);
   if (status != CALL_OK) {
     return status == CALL_LIMIT ? EAGAIN : libc_call_errno(status);
   }
@@ -373,9 +373,9 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
     record->start.c11_start = c11_start;
   }
   record->argument = argument;
-  enum call_status status = libc_memory_allocate_guarded(memory, stack_size, &record->stack);
+  enum call_status status = libc_memory_allocate_guarded(memory, stack_size, &record->stack, NULL);
   if (status == CALL_OK) {
-    status = libc_thread_context_prepare(memory, &record->context);
+    status = libc_thread_context_prepare(memory, &record->context, NULL);
   }
   if (status == CALL_OK) {
     struct libc_thread_record *context = (void *)record->context.fs_base;
@@ -387,7 +387,7 @@ static int create_record(uint64_t *thread, size_t stack_size, enum entry_kind ki
       .context_identity = record->context.reservation.identity,
       .fs_base = record->context.fs_base,
     };
-    status = libc_native_thread_create(service, &request, &record->completion);
+    status = libc_native_thread_create(service, &request, &record->completion, NULL);
   }
   if (status == CALL_OUTCOME_UNKNOWN) {
     /* The sibling may own these pins already. Only process teardown may
@@ -591,7 +591,7 @@ int pthread_equal(pthread_t left, pthread_t right)
 
 int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
 {
-  enum call_status status = libc_thread_key_create(destructor, key);
+  enum call_status status = libc_thread_key_create(destructor, key, NULL);
   return status == CALL_LIMIT ? EAGAIN : libc_call_errno(status);
 }
 
@@ -602,7 +602,7 @@ int pthread_key_delete(pthread_key_t key)
 
 int pthread_setspecific(pthread_key_t key, const void *value)
 {
-  enum call_status status = libc_thread_key_set(key, (void *)value);
+  enum call_status status = libc_thread_key_set(key, (void *)value, NULL);
   return status == CALL_LIMIT ? EAGAIN : libc_call_errno(status);
 }
 
