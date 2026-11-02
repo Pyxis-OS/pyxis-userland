@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "org.pyxis.bootmgr",
+  "entry": "bin/bootmgr.pxe",
+  "commands": {"bootmgr": "bin/bootmgr.pxe"},
+  "resource_dirs": {},
+  "grants": [
+    {"name": "memory", "resource": "memory", "rights": ["manage"], "required": true},
+    {"name": "uefi", "resource": "uefi", "rights": ["manage"], "required": true}
+  ]
+}

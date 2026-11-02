@@ -177,7 +177,7 @@ struct authority {
   handle_t acpi_tables;
   /* Granted only to spaces that set power or remote_power. */
   handle_t power;
-  handle_t uefi; /* Boot-entry variable grant; only the Install space receives it. */
+  handle_t uefi; /* Boot-entry variable grant: the Install space, and spaces that set boot_manager. */
   handle_t wifi; /* Boot-only policy right is never forwarded. */
   uint64_t cpu_count;
   const char *remote_beacon;
@@ -1233,7 +1233,7 @@ static const char *launch_capacity(const struct authority *authority,
   granted += space->installer ? 7 : 0; /* installer_sources */
   granted += space->tcp_listen + space->fat32_mount + space->jobs + (space->launch ? 2 : 0) +
       space->multiplexer + space->remote_multiplexer + space->screenshot +
-      space->power + space->remote_power;
+      space->power + space->boot_manager + space->remote_power;
   if (space->wifi_rights) {
     /* wifi, plus wifi_auth_setup and wifi_session_control with CONNECT. */
     granted += 1 + ((space->wifi_rights & WIFI_RIGHT_CONNECT) ? 2 : 0);
@@ -1554,6 +1554,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
     launch_add(launch, LAUNCH_RESOURCES,
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", 0),
         &(struct launch_grant){authority->power, POWER_RIGHTS, 0});
+  }
+  if (space->boot_manager && authority->uefi != HANDLE_INVALID) {
+    launch_add(launch, LAUNCH_RESOURCES,
+        (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"uefi", 0),
+        &(struct launch_grant){authority->uefi, UEFI_RIGHT_BOOT_MANAGE, 0});
   }
   if (space->remote_power && authority->power != HANDLE_INVALID) {
     launch_add(launch, LAUNCH_RESOURCES,

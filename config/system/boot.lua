@@ -42,6 +42,7 @@ return {
       jobs = true,
       screenshot = true,
       power = true,
+      boot_manager = true,
       clipboard_local = true,
       clipboard_shared = true,
       package_management = true,

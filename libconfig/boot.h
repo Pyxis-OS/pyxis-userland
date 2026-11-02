@@ -107,6 +107,7 @@ struct boot_space {
   bool screenshot; /* Whole-screen capture plus the initial private Print Screen saver. */
   bool acpi_tables; /* Receives the read-only ACPI table root as acpi://. */
   bool power; /* Receives power-off and restart authority. */
+  bool boot_manager; /* Receives the firmware boot-variable authority (uefi, MANAGE). */
   uint64_t wifi_rights; /* Explicit controller READ/SCAN/CONNECT; default none. */
   bool remote_power; /* Opts remote root shells into power authority. */
   /* The installer capability. Boot init sets it only on its built-in install

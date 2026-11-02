@@ -29,6 +29,7 @@
 #include <abi/system_info.h>
 #include <abi/process_view.h>
 #include <abi/tcp.h>
+#include <abi/uefi.h>
 #include <abi/endpoint.h>
 #include <abi/udp.h>
 #include <file.h>
@@ -139,6 +140,7 @@ static const struct grant_right grant_rights[] = {
   {"disks", "enumerate", PROTOCOL_DISKS, DISKS_RIGHT_ENUMERATE},
   {"disks", "mount-read-only", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_ONLY},
   {"disks", "mount-read-write", PROTOCOL_DISKS, DISKS_RIGHT_MOUNT_READ_WRITE},
+  {"uefi", "manage", PROTOCOL_UEFI, UEFI_RIGHT_BOOT_MANAGE},
   {"clock", "read", PROTOCOL_CLOCK, CLOCK_RIGHT_READ},
   {"clock", "sleep", PROTOCOL_CLOCK, CLOCK_RIGHT_SLEEP},
   {"clock", "precise", PROTOCOL_CLOCK, CLOCK_RIGHT_PRECISE},

@@ -26,6 +26,7 @@
 #include <abi/pipe.h>
 #include <abi/stream.h>
 #include <abi/power.h>
+#include <abi/uefi.h>
 #include <abi/wifi.h>
 #include <abi/forwarder.h>
 #include <abi/keyboard.h>
@@ -147,7 +148,7 @@ static int launch_session(const struct session_config *config, struct network_co
   }
 
   enum { INPUT, OUTPUT, MEMORY, LAUNCHER, FIRST_OPTIONAL };
-  enum { OPTIONAL_RESOURCE_COUNT = 40 };
+  enum { OPTIONAL_RESOURCE_COUNT = 41 };
   struct environment_capture captured = {0};
   status = environment_capture_init(startup_environment_handle(),
       ENVIRONMENT_SNAPSHOT_INCLUDE_PRIVATE, &captured);
@@ -589,6 +590,14 @@ static int launch_session(const struct session_config *config, struct network_co
     resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"power", grant_count);
     assert(grant_count < grant_capacity);
     grants[grant_count++] = (struct launch_grant){power, POWER_RIGHTS, 0};
+  }
+  /* Like power, only a local interactive shell receives the boot manager. */
+  handle_t uefi = bootstrap_capability("uefi");
+  if (uefi != HANDLE_INVALID && !start_remote_services) {
+    assert(resource_count < grant_capacity);
+    resources[resource_count++] = (struct launch_environment_entry)PROFILE_CAP((uintptr_t)"uefi", grant_count);
+    assert(grant_count < grant_capacity);
+    grants[grant_count++] = (struct launch_grant){uefi, UEFI_RIGHT_BOOT_MANAGE, 0};
   }
   handle_t remote_mux_terminal = bootstrap_capability("remote_mux_terminal");
   if (remote_mux_terminal != HANDLE_INVALID) {

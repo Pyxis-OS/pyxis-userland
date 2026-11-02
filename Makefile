@@ -50,7 +50,7 @@ PROGRAM_OBJECTS := $(BUILD)/http/main.o $(BUILD)/pcm/main.o $(BUILD)/remote-term
                    $(BUILD)/ttcp/main.o \
                    $(BUILD)/shell/main.o $(BUILD)/mandelbrot/main.o $(BUILD)/mousetest/main.o $(BUILD)/gamepadtest/main.o $(BUILD)/examples/pointer-min/main.o $(BUILD)/examples/font-min/main.o $(BUILD)/session/main.o $(BUILD)/installer-init/main.o \
                    $(BUILD)/init-fat32-inspect/main.o $(BUILD)/init-fat32-mount/main.o $(BUILD)/fat32-inspect/main.o \
-                   $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o $(BUILD)/net/main.o $(BUILD)/wifi/main.o
+                   $(BUILD)/init-fat32-write/main.o $(BUILD)/fat32-write/main.o $(BUILD)/fat32ctl/main.o $(BUILD)/bootmgr/main.o $(BUILD)/net/main.o $(BUILD)/wifi/main.o
 SHELL_OBJECTS := $(BUILD)/shell/parse.o $(BUILD)/shell/capture.o $(BUILD)/shell/expand.o $(BUILD)/shell/values.o $(BUILD)/shell/environment.o $(BUILD)/shell/directory.o \
                  $(BUILD)/shell/launch.o $(BUILD)/shell/command.o $(BUILD)/shell/fat32.o \
                  $(BUILD)/shell/script.o $(BUILD)/shell/history.o $(BUILD)/shell/settings.o $(BUILD)/shell/complete.o \
@@ -112,8 +112,8 @@ SCREENSHOT_SAVER_OBJECTS := $(BUILD)/screenshot/saver.o $(BUILD)/screenshot/png.
 UTILITY_OBJECT := $(BUILD)/common/directory.o
 
 .PHONY: cpuclock procs mux remote-terminal xfer http all install libhttp libtls httpfs allocbench iobench ipcbench threadprobe session boot-init installer-init init-fat32-inspect init-fat32-mount init-fat32-mount-write fat32-inspect init-fat32-write fat32-write installer hello client server counter textfs cat cp echo head log hostname lspci lsusb ls acpidump mkdir rm rmdir mv ln tree sync date sleep ping dig tcp ttcp udp-send udp-echo shell mandelbrot mousetest gamepadtest pointer-min font-min screenshot screenshot-saver pcm clean FORCE
-.PHONY: fat32ctl net wifi config pkg jit-min shared-min
-all: $(INSTALL_PROGRAMS) cpuclock procs font-min gamepadtest fat32ctl net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
+.PHONY: fat32ctl bootmgr net wifi config pkg jit-min shared-min
+all: $(INSTALL_PROGRAMS) cpuclock procs font-min gamepadtest fat32ctl bootmgr net wifi config pkg $(BUILD)/shell.pxb/manifest.json $(BUILD)/httpfs.pxb $(BUILD)/share/hello.txt $(TLS_LIBRARY)
 
 # Lua scripts for hand-run native checks, installed as boot://share/checks/.
 CHECK_SCRIPTS := console-burst.lua console-flood.lua cpu-busy.lua exit-latency.lua
@@ -131,7 +131,7 @@ install: all
 	    if [ "$$program" = shell ]; then name=init-shell; fi; \
 	    install -m 644 "$(BUILD)/$$program.pxe" "$$staging/$$name.pxe"; \
 	  done; \
-	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/net.pxb" "$(BUILD)/wifi.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$(BUILD)/font-min.pxb" "$(BUILD)/gamepadtest.pxb" "$(BUILD)/cpuclock.pxb" "$(BUILD)/procs.pxb" "$$staging/"; \
+	  cp -a "$(BUILD)/fat32ctl.pxb" "$(BUILD)/bootmgr.pxb" "$(BUILD)/net.pxb" "$(BUILD)/wifi.pxb" "$(BUILD)/httpfs.pxb" "$(BUILD)/config.pxb" "$(BUILD)/pkg.pxb" "$(BUILD)/shell.pxb" "$(BUILD)/font-min.pxb" "$(BUILD)/gamepadtest.pxb" "$(BUILD)/cpuclock.pxb" "$(BUILD)/procs.pxb" "$$staging/"; \
 	  install -m 644 init/development.pxs "$$staging/init"; \
 	  install -m 644 init/readonly.pxs "$$staging/init-readonly"; \
 	  install -m 644 init/services.pxs "$$staging/init-services"; \
@@ -255,6 +255,7 @@ udp-send: $(BUILD)/udp-send.pxe
 udp-echo: $(BUILD)/udp-echo.pxe
 shell: $(BUILD)/shell.pxe
 fat32ctl: $(BUILD)/fat32ctl.pxb/manifest.json
+bootmgr: $(BUILD)/bootmgr.pxb/manifest.json
 net: $(BUILD)/net.pxb/manifest.json
 wifi: $(BUILD)/wifi.pxb/manifest.json
 config: $(BUILD)/config.pxb/manifest.json
@@ -364,6 +365,13 @@ $(BUILD)/fat32ctl.pxb/manifest.json: $(BUILD)/fat32ctl.pxe fat32ctl/manifest.jso
 	install -m 644 $(BUILD)/fat32ctl.pxe "$(@D)/app/bin/"
 	install -m 644 fat32ctl/README.md "$(@D)/app/"
 	install -m 644 fat32ctl/manifest.json "$@"
+
+$(BUILD)/bootmgr.pxb/manifest.json: $(BUILD)/bootmgr.pxe bootmgr/manifest.json bootmgr/README.md
+	@rm -rf "$(@D)"
+	@mkdir -p "$(@D)/app/bin"
+	install -m 644 $(BUILD)/bootmgr.pxe "$(@D)/app/bin/"
+	install -m 644 bootmgr/README.md "$(@D)/app/"
+	install -m 644 bootmgr/manifest.json "$@"
 
 $(BUILD)/net.pxb/manifest.json: $(BUILD)/net.pxe net/manifest.json net/README.md
 	@rm -rf "$(@D)"
