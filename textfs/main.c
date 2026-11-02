@@ -1,7 +1,6 @@
 #include "../common/bootstrap_environment.h"
 #include <abi/file.h>
 #include <abi/provider.h>
-#include <clock.h>
 #include <endpoint.h>
 #include <handle.h>
 #include <forwarder.h>
@@ -396,7 +395,6 @@ int main(int argc, char **argv)
 {
   handle_t service = bootstrap_capability("service");
   handle_t publication = bootstrap_take_capability("publication");
-  handle_t clock = bootstrap_capability("clock");
   struct endpoint_create_reply endpoint = {0};
   handle_t client = HANDLE_INVALID;
   struct provider provider = {.service = service, .welcome = default_welcome};
@@ -410,7 +408,7 @@ int main(int argc, char **argv)
     status = CALL_BAD_REQUEST;
     goto done;
   }
-  if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
+  if (service == HANDLE_INVALID || publication == HANDLE_INVALID) {
     fputs("textfs: missing provider authority\n", stderr);
     status = CALL_UNAVAILABLE;
     goto done;
@@ -431,7 +429,7 @@ int main(int argc, char **argv)
     goto done;
   }
   struct endpoint_grant grant = {client, PROVIDER_RIGHT_OPEN_READ, HANDLE_TRANSPORT_CALL};
-  status = provider_setup_report(publication, clock, CALL_OK, CALL_OK, &grant, &publication_attempted);
+  status = provider_setup_report(publication, CALL_OK, CALL_OK, &grant, &publication_attempted);
   enum call_status closed = close_handle(&client);
   if (closed != CALL_OK) {
     cleanup_status = closed;
@@ -443,9 +441,7 @@ int main(int argc, char **argv)
     goto done;
   }
   provider.published = true;
-  closed = close_handle(&publication);
-  enum call_status clock_closed = close_handle(&clock);
-  status = closed != CALL_OK ? closed : clock_closed;
+  status = close_handle(&publication);
   if (status == CALL_OK) {
     status = serve(&provider);
   }
@@ -470,8 +466,8 @@ done:
     status = cleanup_status;
   }
   if (!publication_attempted && publication != HANDLE_INVALID) {
-    enum call_status reported = provider_setup_report(publication, clock,
-        status, cleanup_status, NULL, NULL);
+    enum call_status reported = provider_setup_report(publication, status, cleanup_status,
+        NULL, NULL);
     if (reported != CALL_OK) {
       fprintf(stderr, "textfs: setup report failed (status %u)\n", reported);
     }

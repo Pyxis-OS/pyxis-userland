@@ -232,7 +232,7 @@ int main(int argc, char **argv)
     roots[ready_count++] = (struct provider_setup_root){.role = roots[i].role,
       .grant = {published[index], rights, HANDLE_TRANSPORT_CALL}};
   }
-  status = provider_setup_report_roots(publication, clock, CALL_OK, CALL_OK,
+  status = provider_setup_report_roots(publication, CALL_OK, CALL_OK,
       roots, ready_count, &publication_attempted);
   for (size_t i = 0; i < HTTPFS_ROOT_COUNT; ++i) {
     if (close_handle(&published[i]) != CALL_OK) {
@@ -274,7 +274,7 @@ done:
     status = cleanup;
   }
   if (!publication_attempted && publication != HANDLE_INVALID) {
-    enum call_status reported = provider_setup_report(publication, clock, status, cleanup, NULL, NULL);
+    enum call_status reported = provider_setup_report(publication, status, cleanup, NULL, NULL);
     if (reported != CALL_OK) {
       fprintf(stderr, "httpfs: setup report failed (status %u)\n", reported);
     }

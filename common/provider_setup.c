@@ -1,25 +1,30 @@
 #include "provider_setup.h"
 #include <abi/wait.h>
+#include <clock.h>
 #include <stdint.h>
 #include <wait.h>
 
 enum call_status provider_setup_receive(handle_t clock, handle_t process, handle_t receiver,
     handle_t armed, struct endpoint_packet *packet)
 {
-  uint64_t now;
-  enum call_status status = clock_now(clock, &now);
-  if (status != CALL_OK || now > UINT64_MAX - PROVIDER_SETUP_TIMEOUT_NS) {
-    return status == CALL_OK ? CALL_LIMIT : status;
-  }
-  uint64_t deadline = now + PROVIDER_SETUP_TIMEOUT_NS;
   for (;;) {
+    /* Setup has no deadline; each wait is renewed at the kernel's maximum. */
+    uint64_t now;
+    enum call_status status = clock_now(clock, &now);
+    if (status != CALL_OK) {
+      return status;
+    }
+    uint64_t until = now > UINT64_MAX - WAIT_MAX_WAIT_NS ? UINT64_MAX : now + WAIT_MAX_WAIT_NS;
     struct wait_interest interests[] = {
       {.handle = receiver, .events = WAIT_READABLE},
       {.handle = process, .events = WAIT_COMPLETE},
       {.handle = armed, .events = WAIT_INTERRUPT},
     };
     uint64_t events[3] = {0};
-    status = wait_many(interests, armed != HANDLE_INVALID ? 3 : 2, deadline, events);
+    status = wait_many(interests, armed != HANDLE_INVALID ? 3 : 2, until, events);
+    if (status == CALL_TIMED_OUT) {
+      continue;
+    }
     if (status != CALL_OK) {
       return status;
     }

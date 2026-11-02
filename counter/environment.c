@@ -15,13 +15,12 @@ static int provide(bool once)
 {
   handle_t service = bootstrap_capability("service");
   handle_t publication = bootstrap_take_capability("publication");
-  handle_t clock = bootstrap_capability("clock");
   struct endpoint_create_reply endpoint = {0};
   handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = CALL_OK;
   enum call_status cleanup_status = CALL_OK;
   bool publication_attempted = false;
-  if (service == HANDLE_INVALID || publication == HANDLE_INVALID || clock == HANDLE_INVALID) {
+  if (service == HANDLE_INVALID || publication == HANDLE_INVALID) {
     fputs("counter: missing provider authority\n", stderr);
     status = CALL_UNAVAILABLE;
     goto done;
@@ -40,7 +39,7 @@ static int provide(bool once)
   }
   struct endpoint_grant grant = {client,
       COUNTER_RIGHT_READ | COUNTER_RIGHT_WRITE, HANDLE_TRANSPORT_CALL};
-  status = provider_setup_report(publication, clock, CALL_OK, CALL_OK, &grant, &publication_attempted);
+  status = provider_setup_report(publication, CALL_OK, CALL_OK, &grant, &publication_attempted);
   if (handle_close(client) != 0) {
     cleanup_status = CALL_BAD_HANDLE;
     if (status == CALL_OK) {
@@ -128,8 +127,8 @@ done:
     status = cleanup_status;
   }
   if (!publication_attempted && publication != HANDLE_INVALID) {
-    enum call_status reported = provider_setup_report(publication, clock,
-        status, cleanup_status, NULL, NULL);
+    enum call_status reported = provider_setup_report(publication, status, cleanup_status,
+        NULL, NULL);
     if (reported != CALL_OK) {
       fprintf(stderr, "counter: setup report failed (status %u)\n", reported);
     }

@@ -25,6 +25,7 @@
 #include <abi/system_info.h>
 #include <bundle.h>
 #include <bundle_launch.h>
+#include <clock.h>
 #include <directory.h>
 #include <endpoint.h>
 #include <handle.h>

@@ -1,13 +1,10 @@
 #ifndef USERSPACE_PROVIDER_SETUP_H
 #define USERSPACE_PROVIDER_SETUP_H
 
-#include <clock.h>
 #include <endpoint.h>
 #include <handle.h>
 #include <stdbool.h>
 #include <string.h>
-
-#define PROVIDER_SETUP_TIMEOUT_NS UINT64_C(10000000000)
 
 #define PROVIDER_SETUP_ROOT_MAX 4
 #define PROVIDER_SETUP_ROLE_MAX 31
@@ -18,8 +15,8 @@
  * fixes destination names, masks and optionality before starting the leaf.
  * Success carries 1..4 unique roles; failure carries no roles or grants.
  * Cleanup failure is never optional. Every in-tree provider uses this layout.
- * Ready submission needs a bounded clock; attempted changes only on submission.
- * A cleaned-up failure can still report when its clock is unavailable. */
+ * The report CALL has no deadline: the launcher replies, or closes its receiver
+ * when it stops waiting. ATTEMPTED changes only on submission. */
 struct provider_setup {
   uint64_t status;
   uint64_t cleanup_status;
@@ -33,7 +30,7 @@ struct provider_setup_root {
 };
 
 static inline enum call_status provider_setup_report_roots(handle_t publication,
-    handle_t clock, enum call_status status, enum call_status cleanup_status,
+    enum call_status status, enum call_status cleanup_status,
     const struct provider_setup_root *roots, size_t root_count, bool *attempted)
 {
   if (root_count > PROVIDER_SETUP_ROOT_MAX || (root_count && !roots) ||
@@ -56,24 +53,12 @@ static inline enum call_status provider_setup_report_roots(handle_t publication,
     memcpy(setup.roles[i], roots[i].role, length);
     grants[i] = roots[i].grant;
   }
-  uint64_t now;
-  uint64_t deadline = 0;
-  enum call_status clock_status = clock_now(clock, &now);
-  if (clock_status == CALL_OK && now > UINT64_MAX - PROVIDER_SETUP_TIMEOUT_NS) {
-    clock_status = CALL_LIMIT;
-  }
-  if (clock_status == CALL_OK) {
-    deadline = now + PROVIDER_SETUP_TIMEOUT_NS;
-  } else if (root_count) {
-    /* The caller must release failed setup before reporting it. */
-    return clock_status;
-  }
   struct endpoint_packet response = {0};
   if (attempted) {
     *attempted = true;
   }
   enum call_status result = endpoint_request(publication, &setup, sizeof(setup),
-      grants, root_count, deadline, &response);
+      grants, root_count, 0, &response);
   for (size_t i = 0; i < response.grant_count; ++i) {
     if (handle_close(response.grants[i].handle) != 0 && result == CALL_OK) {
       result = CALL_BAD_HANDLE;
@@ -88,22 +73,22 @@ static inline enum call_status provider_setup_report_roots(handle_t publication,
 }
 
 static inline enum call_status provider_setup_report(handle_t publication,
-    handle_t clock, enum call_status status, enum call_status cleanup_status,
+    enum call_status status, enum call_status cleanup_status,
     const struct endpoint_grant *grant, bool *attempted)
 {
   struct provider_setup_root root = {.role = PROVIDER_SETUP_DEFAULT_ROLE};
   if (grant) {
     root.grant = *grant;
   }
-  return provider_setup_report_roots(publication, clock, status, cleanup_status,
+  return provider_setup_report_roots(publication, status, cleanup_status,
       grant ? &root : NULL, grant ? 1 : 0, attempted);
 }
 
 /* The launcher side, shared by the shell's service start and installer-init. */
 
-/* Waits until RECEIVER holds the provider's report, at most the setup timeout
- * read from CLOCK. CALL_IO: PROCESS completed first. CALL_ABANDONED: the
- * optional ARMED interrupt fired. */
+/* Waits without a deadline until RECEIVER holds the provider's report; CLOCK
+ * only renews the bounded kernel wait. CALL_IO: PROCESS completed first.
+ * CALL_ABANDONED: the optional ARMED interrupt fired. */
 enum call_status provider_setup_receive(handle_t clock, handle_t process, handle_t receiver,
     handle_t armed, struct endpoint_packet *packet);
 
