@@ -54,8 +54,7 @@ new root and walks the source tree. The name comes from the clock and random gra
 that libc `mkstemp` uses (a tree copy fails without them) and is retried on
 ALREADY_EXISTS, so no other run's leftover marker can match it. Finding it means the
 destination lies inside the source, since no object identity exists to compare; cp
-removes the marker and the new root and fails. The walk also enforces the limits (32 levels below the root,
-65,536 entries, 255-byte names) and rejects symbolic links, special and unknown
+removes the marker and the new root and fails. The walk also enforces the 255-byte name limit and rejects symbolic links, special and unknown
 entries, so those failures normally occur before any file is copied. The copy pass
 checks them again, because enumeration is live. An enumeration CHANGED outcome fails
 the operand without restarting.
@@ -63,6 +62,6 @@ the operand without restarting.
 The first failure stops that operand and keeps what was copied; nothing is rolled back
 or removed beyond cp's own confirmed temporary. cp reports the path and a summary of the
 files and directories created. Later operands continue after an ordinary failure.
-Traversal is iterative over a fixed stack (about 10 KiB) and uses no heap per entry.
+Traversal is iterative over a level stack that grows on the heap (two handles per level); there is no entry or nesting limit.
 Source directories need LOOKUP, ENUMERATE and READ_FILES; the destination needs the
 rights above, which created directories request again.

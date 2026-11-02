@@ -8,13 +8,12 @@
 #include <random.h>
 #include <startup.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* cp settings, not ABI: nesting below the root, entries per tree and entry
- * name bytes. The traversal is iterative over a fixed stack, so these bound
- * handles and time, not the program stack or the heap. */
-#define TREE_MAX_DEPTH 32
-#define TREE_MAX_ENTRIES 65536
+/* The traversal is iterative over a level stack that grows on the heap: a tree
+ * has no entry or nesting limit, only the memory and handles to open its levels. */
+#define LEVEL_INITIAL_CAPACITY 64
 #define TREE_NAME_BYTES CP_NAME_BYTES
 #define SENTINEL_PREFIX ".cp-tree-"
 #define SENTINEL_RANDOM_BYTES 8
@@ -36,12 +35,12 @@ struct tree {
   const char *destination;
   char sentinel[SENTINEL_BYTES];
   bool copy;
-  uint64_t entries;
   uint64_t files;
   uint64_t directories;
 };
 
-static struct level levels[TREE_MAX_DEPTH + 1];
+static struct level *levels;
+static size_t level_capacity;
 static char source_path[PATH_BYTES];
 static char destination_path[PATH_BYTES];
 
@@ -58,6 +57,25 @@ static void append(char *out, size_t *used, const char *text)
 }
 
 /* Display text such as root/a/b/leaf; long paths are truncated. */
+/* Make levels[0..depth] addressable. A pointer into the stack does not survive this. */
+static bool reserve_level(unsigned depth)
+{
+  if (depth < level_capacity) {
+    return true;
+  }
+  size_t capacity = level_capacity ? level_capacity : LEVEL_INITIAL_CAPACITY;
+  while (capacity <= depth) {
+    capacity *= 2;
+  }
+  struct level *grown = realloc(levels, capacity * sizeof(*grown));
+  if (!grown) {
+    return false;
+  }
+  levels = grown;
+  level_capacity = capacity;
+  return true;
+}
+
 static const char *entry_path(char *out, const char *root, unsigned depth, const char *leaf)
 {
   size_t used = 0;
@@ -116,6 +134,10 @@ static enum cp_result copy_entry_file(struct tree *tree, unsigned depth, const c
  * limits, entry kinds and sentinel. The walk closes every non-root level. */
 static enum cp_result walk(struct tree *tree, handle_t source_root, handle_t destination_root)
 {
+  if (!reserve_level(0)) {
+    fail_text(tree, 0, NULL, "Out of memory");
+    return CP_FAILED;
+  }
   levels[0] = (struct level){.source = source_root, .destination = destination_root};
   unsigned depth = 0;
   enum cp_result result = CP_SUCCESS;
@@ -154,11 +176,6 @@ static enum cp_result walk(struct tree *tree, handle_t source_root, handle_t des
       break;
     }
     level->cursor = reply.cursor;
-    if (++tree->entries > TREE_MAX_ENTRIES) {
-      fail_text(tree, depth, NULL, "More than 65536 entries");
-      result = CP_FAILED;
-      break;
-    }
     if (!tree->copy && !strcmp(entry, tree->sentinel)) {
       fail_text(tree, depth, entry,
           "Destination is inside the source");
@@ -174,11 +191,14 @@ static enum cp_result walk(struct tree *tree, handle_t source_root, handle_t des
         }
       }
     } else if (reply.kind == DIRECTORY_KIND_DIRECTORY) {
-      if (depth == TREE_MAX_DEPTH) {
-        fail_text(tree, depth, entry, "Directories nested deeper than 32 levels");
+      if (!reserve_level(depth + 1)) {
+        char text[64];
+        snprintf(text, sizeof(text), "Out of memory at nesting level %u", depth + 1);
+        fail_text(tree, depth, entry, text);
         result = CP_FAILED;
         break;
       }
+      level = &levels[depth];
       handle_t source = HANDLE_INVALID;
       handle_t destination = HANDLE_INVALID;
       status = directory_lookup(level->source, entry, DIRECTORY_KIND_DIRECTORY,
@@ -336,7 +356,6 @@ enum cp_result cp_copy_tree(handle_t source_root, const char *source, handle_t p
   }
 
   tree.copy = true;
-  tree.entries = 0;
   tree.directories = 1;
   result = walk(&tree, source_root, root);
   if (result != CP_SUCCESS) {
