@@ -245,7 +245,10 @@ int main(int argc, char **argv)
       {shell.launcher, PROTOCOL_LAUNCHER, LAUNCHER_RIGHT_LAUNCH},
       {shell.pipe, PROTOCOL_PIPE_SERVICE, PIPE_SERVICE_RIGHT_CREATE},
     };
-    for (size_t i = 0; i < sizeof(required) / sizeof(*required); ++i) {
+    /* A background launch withholds pipe; the script then runs without pipes,
+     * and a pipeline or capture in it fails when it needs one. */
+    size_t count = sizeof(required) / sizeof(*required) - (shell.pipe == HANDLE_INVALID);
+    for (size_t i = 0; i < count; ++i) {
       struct handle_info info;
       if (handle_query(required[i].handle, &info) != CALL_OK ||
           info.kind != HANDLE_KIND_NATIVE || info.protocol != required[i].protocol ||
