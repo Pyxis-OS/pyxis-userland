@@ -1777,25 +1777,25 @@ void descriptor_report_finalize_error(void)
 
 int descriptor_finish(void)
 {
-  /* Joined workers and closed thread admission precede orderly finalizers.
-   * Keep diagnostics available until all nonstandard transactions are closed. */
+  /* Sibling threads may still run, so each slot and the table size are read
+   * under the guard and the table itself stays until _Exit. Keep diagnostics
+   * available until all nonstandard transactions are closed. */
   int error = 0;
   for (size_t pass = 0; pass < 2; ++pass) {
-    size_t begin = pass ? 0 : ENVIRONMENT_STREAM_COUNT;
-    size_t end = pass ? ENVIRONMENT_STREAM_COUNT : capacity;
-    for (size_t i = begin; i < end; ++i) {
-      if (entries[i].state == DESCRIPTOR_OPEN && descriptor_close((int)i) < 0 && !error) {
+    for (size_t i = pass ? 0 : ENVIRONMENT_STREAM_COUNT;; ++i) {
+      libc_lock_acquire(&table_guard);
+      size_t end = pass ? ENVIRONMENT_STREAM_COUNT : capacity;
+      bool open = i < end && entries[i].state == DESCRIPTOR_OPEN;
+      libc_lock_release(&table_guard);
+      if (i >= end) {
+        break;
+      }
+      if (open && descriptor_close((int)i) < 0 && !error) {
         error = errno;
         descriptor_report_finalize_error();
       }
     }
   }
-  if (entries != startup_entries) {
-    free(entries);
-  }
-  entries = startup_entries;
-  capacity = ENVIRONMENT_STREAM_COUNT;
-  memset(startup_entries, 0, sizeof(startup_entries));
   return error ? fail(error) : 0;
 }
 

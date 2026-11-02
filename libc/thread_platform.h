@@ -15,7 +15,6 @@ handle_t libc_thread_sleep_clock(void);
 uint64_t libc_thread_self(void);
 bool libc_thread_is_initial(void);
 void libc_thread_runtime_init(void);
-bool libc_thread_shutdown_ready(void);
 
 struct libc_once_frame *libc_thread_once_head(void);
 void libc_thread_once_push(struct libc_once_frame *frame);

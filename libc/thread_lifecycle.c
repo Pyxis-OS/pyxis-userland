@@ -49,7 +49,6 @@ struct lifecycle_record {
 static struct lifecycle_record records[LIBC_THREAD_LIMIT];
 static struct libc_lock registry_lock;
 static handle_t service, clock_read, clock_sleep, memory;
-static bool creations_closed;
 /* Records marked detached and not yet collected; lets the collection scan skip
  * the common case of none. Guarded by registry_lock. */
 static size_t detached_live;
@@ -155,25 +154,6 @@ void libc_thread_once_pop(struct libc_once_frame *frame)
 
 static void collect_detached(void);
 
-bool libc_thread_shutdown_ready(void)
-{
-  /* Orderly finalizers require the initial thread and collected workers. A
-   * forced process exit cannot wait for a stopped lock owner to run callbacks. */
-  bool ready = libc_thread_self() == identity(&records[0]);
-  if (ready) {
-    collect_detached();
-  }
-  libc_lock_acquire(&registry_lock);
-  for (size_t index = 1; ready && index < LIBC_THREAD_LIMIT; index++) {
-    ready = records[index].state == THREAD_FREE;
-  }
-  if (ready) {
-    creations_closed = true;
-  }
-  libc_lock_release(&registry_lock);
-  return ready;
-}
-
 static struct lifecycle_record *find_record(uint64_t value)
 {
   uint32_t slot = value;
@@ -189,7 +169,7 @@ static struct lifecycle_record *reserve_record(void)
 {
   struct lifecycle_record *chosen = NULL;
   libc_lock_acquire(&registry_lock);
-  for (size_t index = 1; !creations_closed && index < LIBC_THREAD_LIMIT; index++) {
+  for (size_t index = 1; index < LIBC_THREAD_LIMIT; index++) {
     struct lifecycle_record *record = &records[index];
     if (record->state == THREAD_FREE && record->generation != UINT32_MAX) {
       uint32_t generation = record->generation + 1;

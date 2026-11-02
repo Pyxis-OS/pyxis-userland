@@ -1125,14 +1125,33 @@ int pyxis_fclose_abandon(FILE *stream)
   return close_stream(stream, true);
 }
 
+/* Exit claims each writable FILE once per pass under the list guard, so the
+ * walk allocates nothing and tolerates siblings opening and closing streams. */
+static FILE *next_finish_stream(uint8_t pass)
+{
+  libc_lock_acquire(&stream_guard);
+  FILE *current = streams;
+  while (current && (current->finish_pass >= pass || !current->writable || current->closing ||
+                     current->references == UINT32_MAX)) {
+    current = current->next;
+  }
+  if (current) {
+    current->finish_pass = pass;
+    ++current->references;
+  }
+  libc_lock_release(&stream_guard);
+  return current;
+}
+
 int stdio_finish(void)
 {
-  /* Normal exit has joined workers and closed thread admission. Drain every
-   * producer before closing any alias; no allocation is needed to walk FILEs. */
+  /* Sibling threads may still run. Drain every producer before closing any
+   * alias. Read-only streams are never locked, so a sibling blocked reading
+   * stdin cannot hold exit; one blocked inside a write to a FILE can. */
   int error = 0;
-  for (FILE *stream = streams; stream; stream = stream->next) {
-    if (stream_acquire(stream)) {
-      if (stream->writable && flush_output(stream) < 0 && !error) {
+  for (FILE *stream; (stream = next_finish_stream(1));) {
+    if (stream_acquire_retained(stream)) {
+      if (flush_output(stream) < 0 && !error) {
         error = errno;
       }
       stream_end(stream);
@@ -1140,8 +1159,8 @@ int stdio_finish(void)
       error = errno;
     }
   }
-  for (FILE *stream = streams; stream; stream = stream->next) {
-    if (stream_acquire(stream)) {
+  for (FILE *stream; (stream = next_finish_stream(2));) {
+    if (stream_acquire_retained(stream)) {
       if (descriptor_object_transaction_pending(stream->operation) && stream->error) {
         if (!error) {
           error = EIO;
@@ -1159,14 +1178,7 @@ int stdio_finish(void)
   if (descriptor_finish() < 0 && !error) {
     error = errno;
   }
-  while (streams) {
-    FILE *stream = streams;
-    streams = stream->next;
-    dispose_stream(stream);
-    if (stream->allocated) {
-      free(stream);
-    }
-  }
+  /* FILE storage stays: siblings may use their streams until _Exit. */
   if (error) {
     errno = error;
   }

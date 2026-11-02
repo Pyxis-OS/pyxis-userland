@@ -119,8 +119,9 @@ static void run_fini_array(void)
 
 [[noreturn]] void exit(int status)
 {
-  if (!libc_thread_shutdown_ready() ||
-      __atomic_exchange_n(&exit_started, 1, __ATOMIC_ACQ_REL)) {
+  /* Finalization runs on the exiting thread while siblings keep running, as in
+   * glibc and musl (chronium, 2026-11-02). A second exit ends the process. */
+  if (__atomic_exchange_n(&exit_started, 1, __ATOMIC_ACQ_REL)) {
     _Exit(status);
   }
   libc_once_thread_cleanup();
