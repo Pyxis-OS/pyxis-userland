@@ -10,13 +10,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "guide.h"
 #include "../common/provider_setup.h"
 
 #define SERVICE_ID UINT64_C(1)
 #define FILE_FIRST_ID UINT64_C(2)
-#define FILE_SLOTS (ENDPOINT_EXPORTS_MAX - 1)
+/* The file table doubles when every slot is in use; only memory limits open files. */
+#define FILE_SLOTS_INITIAL 16
 
 static const char default_welcome[] =
     "Welcome to Pyxis. This immutable file comes from a userspace provider.\n"
@@ -37,7 +39,8 @@ struct provider {
   handle_t controller;
   const char *welcome;
   bool published;
-  struct file_export files[FILE_SLOTS];
+  struct file_export *files;
+  size_t file_capacity;
 };
 
 static enum call_status close_handle(handle_t *handle)
@@ -179,11 +182,20 @@ static enum call_status open_file(struct provider *provider,
     outcome = RESOURCE_NOT_FOUND;
   }
   size_t slot = 0;
-  while (slot < FILE_SLOTS && provider->files[slot].live) {
+  while (slot < provider->file_capacity && provider->files[slot].live) {
     ++slot;
   }
-  if (slot == FILE_SLOTS) {
-    return reply(packet, CALL_LIMIT, NULL, 0, NULL);
+  if (slot == provider->file_capacity) {
+    size_t capacity = provider->file_capacity ? provider->file_capacity * 2 : FILE_SLOTS_INITIAL;
+    struct file_export *grown = capacity <= SIZE_MAX / sizeof(*grown) ?
+        realloc(provider->files, capacity * sizeof(*grown)) : NULL;
+    if (!grown) {
+      return reply(packet, CALL_NO_MEMORY, NULL, 0, NULL);
+    }
+    memset(grown + provider->file_capacity, 0,
+        (capacity - provider->file_capacity) * sizeof(*grown));
+    provider->files = grown;
+    provider->file_capacity = capacity;
   }
   handle_t client = HANDLE_INVALID, controller = HANDLE_INVALID;
   enum call_status status = endpoint_export(provider->service, provider->receiver,
@@ -331,7 +343,7 @@ static enum call_status serve(struct provider *provider)
         }
         provider->published = false;
       } else if (packet.object_id >= FILE_FIRST_ID &&
-          packet.object_id - FILE_FIRST_ID < FILE_SLOTS &&
+          packet.object_id - FILE_FIRST_ID < provider->file_capacity &&
           packet.protocol == PROTOCOL_FILE &&
           provider->files[packet.object_id - FILE_FIRST_ID].live) {
         status = close_handle(&provider->files[packet.object_id - FILE_FIRST_ID].controller);
@@ -347,7 +359,7 @@ static enum call_status serve(struct provider *provider)
         return status;
       }
       bool live = provider->published;
-      for (size_t i = 0; i < FILE_SLOTS; ++i) {
+      for (size_t i = 0; i < provider->file_capacity; ++i) {
         live = live || provider->files[i].live;
       }
       if (!live) {
@@ -368,7 +380,7 @@ static enum call_status serve(struct provider *provider)
         provider->published) {
       status = open_file(provider, &packet);
     } else if (packet.object_id >= FILE_FIRST_ID &&
-        packet.object_id - FILE_FIRST_ID < FILE_SLOTS && packet.protocol == PROTOCOL_FILE &&
+        packet.object_id - FILE_FIRST_ID < provider->file_capacity && packet.protocol == PROTOCOL_FILE &&
         provider->files[packet.object_id - FILE_FIRST_ID].live) {
       status = serve_file(&provider->files[packet.object_id - FILE_FIRST_ID], &packet);
     } else {
@@ -442,11 +454,12 @@ done:
   if (close_handle(&provider.controller) != CALL_OK) {
     cleanup_status = CALL_BAD_HANDLE;
   }
-  for (size_t i = 0; i < FILE_SLOTS; ++i) {
+  for (size_t i = 0; i < provider.file_capacity; ++i) {
     if (close_handle(&provider.files[i].controller) != CALL_OK) {
       cleanup_status = CALL_BAD_HANDLE;
     }
   }
+  free(provider.files);
   enum call_status client_closed = close_handle(&client);
   enum call_status caller_closed = close_handle(&endpoint.caller);
   enum call_status receiver_closed = close_handle(&endpoint.receiver);

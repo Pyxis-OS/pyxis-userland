@@ -20,7 +20,9 @@
 #include <strings.h>
 #include <wait.h>
 
-#define EXPORT_SLOTS (ENDPOINT_EXPORTS_MAX - HTTPFS_ROOT_COUNT)
+/* The export table starts at this many slots and doubles when a transaction needs more; the
+ * kernel limits only the memory exports use. */
+#define EXPORT_SLOTS_INITIAL 64
 #define RESPONSE_BYTES 8192u
 #define REQUEST_FIELDS_MAX 256u
 #define REDIRECT_DETAIL_BYTES 220u
@@ -91,10 +93,11 @@ struct loop {
   handle_t service, receiver, staging;
   handle_t roots[HTTPFS_ROOT_COUNT];
   uint64_t body_cap;
+  handle_t memory_info;
   struct transaction *storage_owner;
   struct http_client client;
-  handle_t memory_info;
-  struct exported exports[EXPORT_SLOTS];
+  struct exported *exports;
+  size_t export_capacity;
   struct transaction *active;
   uint64_t next_id, next_name;
   bool custom_trust, ram_backing;
@@ -213,15 +216,15 @@ static enum call_status response_status(const struct http_response *response)
   return http_result_status(&result);
 }
 
-static struct resource_description transaction_description(const struct transaction *transaction)
-{
-  struct resource_description description = {0};
 static void report_url_limit(uint64_t target_bytes)
 {
   fprintf(stderr, "httpfs: URL: %" PRIu64 " bytes exceed the limit of %d (HTTP request packet)\n",
       target_bytes, HTTP_URI_MAX);
 }
 
+static struct resource_description transaction_description(const struct transaction *transaction)
+{
+  struct resource_description description = {0};
   switch (transaction->failure) {
   case CALL_OK: description.outcome = RESOURCE_OK; break;
   case CALL_NOT_FOUND: description.outcome = RESOURCE_NOT_FOUND; break;
@@ -426,20 +429,49 @@ static void abort_transaction(struct loop *loop, struct transaction *transaction
   }
 }
 
+/* COUNT unused export slots, growing the table when there are too few. Indices stay
+ * valid across growth; pointers into the table do not, and no caller holds one here. */
+static enum call_status free_slots(struct loop *loop, size_t count, size_t *slots)
+{
+  size_t found = 0;
+  for (size_t i = 0; i < loop->export_capacity && found < count; ++i) {
+    if (!loop->exports[i].owner && !loop->exports[i].config) {
+      slots[found++] = i;
+    }
+  }
+  if (found == count) {
+    return CALL_OK;
+  }
+  size_t capacity = loop->export_capacity ? loop->export_capacity : EXPORT_SLOTS_INITIAL;
+  while (capacity - loop->export_capacity < count - found) {
+    if (capacity > SIZE_MAX / 2 / sizeof(*loop->exports)) {
+      return CALL_LIMIT;
+    }
+    capacity *= 2;
+  }
+  struct exported *grown = realloc(loop->exports, capacity * sizeof(*grown));
+  if (!grown) {
+    return CALL_NO_MEMORY;
+  }
+  memset(grown + loop->export_capacity, 0, (capacity - loop->export_capacity) * sizeof(*grown));
+  for (size_t i = loop->export_capacity; found < count; ++i) {
+    slots[found++] = i;
+  }
+  loop->exports = grown;
+  loop->export_capacity = capacity;
+  return CALL_OK;
+}
+
 static enum call_status reserve(struct loop *loop, size_t count,
     struct transaction **result)
 {
   if (loop->active) {
     return CALL_BUSY;
   }
-  size_t slots[5], found = 0;
-  for (size_t i = 0; i < EXPORT_SLOTS && found < count; ++i) {
-    if (!loop->exports[i].owner && !loop->exports[i].config) {
-      slots[found++] = i;
-    }
-  }
-  if (found != count) {
-    return CALL_LIMIT;
+  size_t slots[5];
+  enum call_status found = free_slots(loop, count, slots);
+  if (found != CALL_OK) {
+    return found;
   }
   struct transaction *transaction = calloc(1, sizeof(*transaction));
   if (!transaction) {
@@ -720,15 +752,9 @@ static void configure_endpoint(struct loop *loop, size_t root,
   }
   uint64_t deadline;
   enum call_status status = default_deadline(loop, request.deadline_ns, &deadline);
-  size_t slot = EXPORT_SLOTS;
-  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
-    if (!loop->exports[i].owner && !loop->exports[i].config) {
-      slot = i;
-      break;
-    }
-  }
-  if (status == CALL_OK && slot == EXPORT_SLOTS) {
-    status = CALL_LIMIT;
+  size_t slot = 0;
+  if (status == CALL_OK) {
+    status = free_slots(loop, 1, &slot);
   }
   if (status != CALL_OK) {
     reply(loop, packet, status, NULL, 0, NULL, 0);
@@ -1010,6 +1036,9 @@ static void stage_request(struct loop *loop, struct transaction *transaction,
   }
 }
 
+/* The share of total memory a RAM staging upload may never use. */
+#define MEMORY_RESERVE_DIVISOR 8
+
 static void body_request(struct loop *loop, struct transaction *transaction,
     struct endpoint_packet *packet)
 {
@@ -1047,9 +1076,6 @@ static void body_request(struct loop *loop, struct transaction *transaction,
         transaction->mutation_failure : CALL_BUSY, NULL, 0, NULL, 0);
     return;
   }
-/* The share of total memory a RAM staging upload may never use. */
-#define MEMORY_RESERVE_DIVISOR 8
-
   enum staging_operation kind;
   if (packet->operation == FILE_WRITE) {
     struct file_write_request request;
@@ -1083,10 +1109,32 @@ static void body_request(struct loop *loop, struct transaction *transaction,
   }
   uint64_t admitted_size = kind == STAGING_WRITE ?
       transaction->mutation_offset + transaction->mutation_size : transaction->mutation_size;
+  /* Refused growth never reaches native mutation. Remember the failure even
+   * when a writer ignores its reply, so COMMIT cannot submit a partial body. */
   if (loop->body_cap && admitted_size > loop->body_cap) {
     transaction->mutation_failure = CALL_LIMIT;
+    fprintf(stderr, "httpfs: request body of %" PRIu64 " bytes exceeds the staging limit of %"
+        PRIu64 " bytes (--staging-cap)\n", admitted_size, loop->body_cap);
     reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
     return;
+  }
+  /* RAM staging uses the memory every other volume uses, so what the body may still
+   * grow by is the free memory less a reserve: one MEMORY_RESERVE_DIVISOR-th of the total. */
+  struct system_info_memory memory;
+  uint64_t growth = admitted_size > transaction->body_length ?
+      admitted_size - transaction->body_length : 0;
+  if (loop->memory_info != HANDLE_INVALID &&
+      system_info_get_memory(loop->memory_info, &memory) == CALL_OK) {
+    uint64_t reserve = memory.total_bytes / MEMORY_RESERVE_DIVISOR;
+    if (memory.free_bytes < reserve || growth > memory.free_bytes - reserve) {
+      transaction->mutation_failure = CALL_LIMIT;
+      fprintf(stderr, "httpfs: request body of %" PRIu64 " bytes needs %" PRIu64 " more, but only %"
+          PRIu64 " of %" PRIu64 " bytes of memory are free and 1/%u of it is reserved\n",
+          admitted_size, growth, memory.free_bytes, memory.total_bytes,
+          (unsigned)MEMORY_RESERVE_DIVISOR);
+      reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
+      return;
+    }
   }
   transaction->staging_operation = kind;
   transaction->mutation_queued = true;
@@ -1118,35 +1166,13 @@ static void snapshot_read_reply(struct loop *loop, struct transaction *transacti
 static void snapshot_bulk_completed(struct loop *loop, struct transaction *transaction,
     const struct endpoint_packet *packet)
 {
-  /* Refused growth never reaches native mutation. Remember the failure even
-   * when a writer ignores its reply, so COMMIT cannot submit a partial body. */
   /* Native result and cancellation reason remain independent in the packet.
    * The outer read selects cancellation before exposing collected bytes. */
   enum call_status status = packet->reason != CALL_OK ? packet->reason : packet->result;
   struct file_read_reply response = {0};
-    fprintf(stderr, "httpfs: request body of %" PRIu64 " bytes exceeds the staging limit of %"
-        PRIu64 " bytes (--staging-cap)\n", admitted_size, loop->body_cap);
   if (status == CALL_OK) {
     if (packet->size != sizeof(response) || packet->grant_count) {
       status = CALL_IO;
-  /* RAM staging uses the memory every other volume uses, so what the body may still
-   * grow by is the free memory less a reserve: one MEMORY_RESERVE_DIVISOR-th of the total. */
-  struct system_info_memory memory;
-  uint64_t growth = admitted_size > transaction->body_length ?
-      admitted_size - transaction->body_length : 0;
-  if (loop->memory_info != HANDLE_INVALID &&
-      system_info_get_memory(loop->memory_info, &memory) == CALL_OK) {
-    uint64_t reserve = memory.total_bytes / MEMORY_RESERVE_DIVISOR;
-    if (memory.free_bytes < reserve || growth > memory.free_bytes - reserve) {
-      transaction->mutation_failure = CALL_LIMIT;
-      fprintf(stderr, "httpfs: request body of %" PRIu64 " bytes needs %" PRIu64 " more, but only %"
-          PRIu64 " of %" PRIu64 " bytes of memory are free and 1/%u of it is reserved\n",
-          admitted_size, growth, memory.free_bytes, memory.total_bytes,
-          (unsigned)MEMORY_RESERVE_DIVISOR);
-      reply(loop, packet, CALL_LIMIT, NULL, 0, NULL, 0);
-      return;
-    }
-  }
     } else {
       memcpy(&response, packet->data, sizeof(response));
       if (response.read > transaction->read_capacity || !response.read ||
@@ -1817,7 +1843,7 @@ static bool progress_reads(struct loop *loop)
       http_stream_pending(loop->active->engine))) {
     return false;
   }
-  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+  for (size_t i = 0; i < loop->export_capacity; ++i) {
     struct transaction *transaction = loop->exports[i].owner;
     if (!transaction || !transaction->work->read.receipt || transaction->pending) {
       continue;
@@ -1882,7 +1908,7 @@ static void canceled(struct loop *loop, handle_t receipt)
       return;
     }
   }
-  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+  for (size_t i = 0; i < loop->export_capacity; ++i) {
     transaction = loop->exports[i].owner;
     if (transaction && transaction->work && transaction->work->read.receipt == receipt) {
       bool bulk = transaction->work->read.operation == FILE_READ_BULK;
@@ -1918,7 +1944,7 @@ static void retired(struct loop *loop, const struct endpoint_packet *packet)
     return;
   }
   if (packet->object_id < HTTPFS_TRANSACTION_OBJECT_BASE ||
-      packet->object_id - HTTPFS_TRANSACTION_OBJECT_BASE >= EXPORT_SLOTS) {
+      packet->object_id - HTTPFS_TRANSACTION_OBJECT_BASE >= loop->export_capacity) {
     loop->fatal = CALL_BAD_REQUEST;
     return;
   }
@@ -2014,7 +2040,7 @@ static void receive_packet(struct loop *loop, struct endpoint_packet *packet)
     return;
   }
   if (packet->object_id < HTTPFS_TRANSACTION_OBJECT_BASE ||
-      packet->object_id - HTTPFS_TRANSACTION_OBJECT_BASE >= EXPORT_SLOTS) {
+      packet->object_id - HTTPFS_TRANSACTION_OBJECT_BASE >= loop->export_capacity) {
     reply(loop, packet, CALL_BAD_REQUEST, NULL, 0, NULL, 0);
     return;
   }
@@ -2076,7 +2102,7 @@ static bool alive(const struct loop *loop)
       return true;
     }
   }
-  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+  for (size_t i = 0; i < loop->export_capacity; ++i) {
     if (loop->exports[i].owner || loop->exports[i].config) {
       return true;
     }
@@ -2142,7 +2168,7 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
       loop.fatal = CALL_BAD_HANDLE;
     }
   }
-  for (size_t i = 0; i < EXPORT_SLOTS; ++i) {
+  for (size_t i = 0; i < loop.export_capacity; ++i) {
     if (loop.exports[i].config) {
       erase(loop.exports[i].config, sizeof(*loop.exports[i].config));
       free(loop.exports[i].config);
@@ -2151,5 +2177,6 @@ enum call_status httpfs_serve(handle_t service, handle_t receiver,
       loop.fatal = CALL_BAD_HANDLE;
     }
   }
+  free(loop.exports);
   return loop.fatal;
 }
