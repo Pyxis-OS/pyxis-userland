@@ -2938,7 +2938,7 @@ static enum command_result launch_stages_owned(struct shell *shell, const struct
   operation = "shell: launch";
   path = stages[0].arguments[0];
   /* Arm before launch so Ctrl+C during startup cannot reach a stage as data. */
-  if (mode == SHELL_FOREGROUND || (scope && scope->service)) {
+  if (mode == SHELL_FOREGROUND || mode == SHELL_SERVICE) {
     armed = arm_interrupt(shell);
   }
   struct path_context interpreter_context = {0};
@@ -3041,13 +3041,23 @@ static enum command_result launch_stages_owned(struct shell *shell, const struct
       children[0] = HANDLE_INVALID;
     }
     struct endpoint_packet packet = {0};
-    status = scope && scope->service ?
-        provider_setup_receive(shell->clock, scope->service->process, publication.receiver,
-            armed, &packet) :
-        endpoint_receive(publication.receiver, &packet);
+    handle_t provider = scope && scope->service ? scope->service->process : children[0];
+    status = provider_setup_receive(shell->clock, provider, publication.receiver, armed, &packet);
     if (status != CALL_OK) {
       if (scope) {
         scope->error = status;
+      }
+      if (children[0] != HANDLE_INVALID) {
+        /* As for a multi-root start, an unpublished provider does not outlive
+         * its failed or cancelled start. */
+        enum call_status stopped = process_terminate(children[0]);
+        if (stopped == CALL_OK) {
+          struct process_result completion;
+          stopped = process_wait(children[0], &completion);
+        }
+        if (stopped != CALL_OK) {
+          shell_error(shell, "service: startup cleanup failed (status %u)\n", stopped);
+        }
       }
       bool closed = close_handle(&children[0]);
       closed = close_handle(&publication.caller) && closed;
@@ -3058,6 +3068,12 @@ static enum command_result launch_stages_owned(struct shell *shell, const struct
           scope->error = CALL_BAD_HANDLE;
         }
         return COMMAND_FATAL;
+      }
+      if (status == CALL_IO) {
+        return shell_error(shell, "service: provider exited before reporting\n");
+      }
+      if (status == CALL_ABANDONED) {
+        return shell_error(shell, "service: start cancelled\n");
       }
       return shell_error(shell, "service: publication receive failed (status %u)\n", status);
     }

@@ -599,10 +599,13 @@ publication. Future jobs omit that entry; already launched children keep their
 own entries. Closing a slot controller leaves its target retained until the
 remaining slot holders release it.
 
-The provider's publication CALL expires after ten seconds, but the shell can
-remain waiting if a provider exits before sending it: RECEIVE cannot wait on
-provider exit at the same time. A failed provider setup is reported independently
-from publication or cleanup errors.
+Service setup has no deadline (chronium, 2026-11-02). Every service launch,
+single-root or multi-root, waits for the provider's publication CALL and for the
+provider process together: a provider that exits before reporting fails the
+start at once, and Ctrl+C cancels a start that never reports. A failed or
+cancelled start stops its unpublished provider. installer-init has no Ctrl+C, so
+a provider that blocks forever before reporting holds it. A failed provider setup
+is reported independently from publication or cleanup errors.
 
 The compiler must include the Pyxis x87/SSE2 defaults and floating-point runtime
 helpers (compiler-rt builtins). `mandelbrot` draws through a mapped display buffer using double
