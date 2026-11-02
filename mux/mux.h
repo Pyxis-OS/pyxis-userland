@@ -87,14 +87,7 @@ static inline bool mux_pointer_view_pending(const struct mux *mux)
 
 static inline struct mux_rect mux_viewport(const struct mux *mux)
 {
-  size_t columns = mux->geometry.columns, rows = mux->geometry.rows;
-  if (columns > TERMINAL_COLUMNS_MAX) {
-    columns = TERMINAL_COLUMNS_MAX;
-  }
-  if (rows > TERMINAL_ROWS_MAX + 2) {
-    rows = TERMINAL_ROWS_MAX + 2;
-  }
-  return (struct mux_rect){.width = columns, .height = rows};
+  return (struct mux_rect){.width = mux->geometry.columns, .height = mux->geometry.rows};
 }
 
 #endif
