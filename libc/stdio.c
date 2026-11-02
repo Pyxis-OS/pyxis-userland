@@ -334,6 +334,66 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
   return pyxis_fopen(path, mode, NULL);
 }
 
+static int close_association(FILE *stream, bool abandon);
+
+FILE *freopen(const char *restrict path, const char *restrict mode, FILE *restrict stream)
+{
+  struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
+      libc_signal_scope_begin();
+  struct descriptor_mode options;
+  if (!path) {
+    errno = ENOTSUP; /* Changing a stream's mode in place is not supported. */
+    return NULL;
+  }
+  if (!parse_mode(mode, &options)) {
+    errno = EINVAL;
+    return NULL;
+  }
+  if (!stream_retain(stream)) {
+    errno = EBADF;
+    return NULL;
+  }
+  int error = libc_mutex_lock(&stream->lock);
+  if (error) {
+    __builtin_trap();
+  }
+  if (stream->closed || stream->memory_stream || stream->operation_depth) {
+    errno = stream->closed ? EBADF : ENOTSUP;
+    stream_unlock(stream);
+    stream_release(stream);
+    return NULL;
+  }
+  /* The old file is closed first and an error doing so is ignored; the FILE
+   * keeps its identity (and its place in the registry) across the reopen. */
+  close_association(stream, false);
+  if (stream->output_owned) {
+    free(stream->output);
+  }
+  stream->output = NULL;
+  stream->output_count = stream->output_capacity = 0;
+  stream->output_owned = false;
+  stream->output_mode = _IONBF;
+  stream->output_flush_failed = false;
+  stream->eof = stream->error = false;
+  stream->transaction_read_blocked = false;
+  stream->io_started = stream->input_unbuffered = false;
+  stream->orientation = STREAM_UNORIENTED;
+  stream->wide_input = (mbstate_t){0};
+  discard_pushback(stream);
+  stream->readable = options.readable;
+  stream->writable = options.writable;
+  FILE *result = stream;
+  if (descriptor_open_result(path, &options, stream, NULL) < 0) {
+    error = errno;
+    stream->closed = true; /* A failed freopen leaves the stream closed. */
+    errno = error;
+    result = NULL;
+  }
+  stream_unlock(stream);
+  stream_release(stream);
+  return result;
+}
+
 FILE *open_memstream(char **buffer, size_t *size)
 {
   struct libc_signal_scope signals __attribute__((cleanup(libc_signal_scope_end))) =
@@ -1039,32 +1099,11 @@ static void dispose_stream(FILE *stream)
   stream->output_count = 0;
 }
 
-static int close_stream(FILE *stream, bool abandon)
+/* Under the FILE lock: drain output and close the descriptor association,
+ * leaving the FILE itself for the caller. Returns the first error, or 0. */
+static int close_association(FILE *stream, bool abandon)
 {
-  libc_lock_acquire(&stream_guard);
-  FILE **link = &streams;
-  while (*link && *link != stream) {
-    link = &(*link)->next;
-  }
-  if (!*link || stream->closing) {
-    libc_lock_release(&stream_guard);
-    errno = EBADF;
-    return EOF;
-  }
-  if (stream->references == UINT32_MAX) {
-    libc_lock_release(&stream_guard);
-    errno = EOVERFLOW;
-    return EOF;
-  }
-  stream->closing = true;
-  ++stream->references; /* Closing owner prevents storage reclamation. */
-  libc_lock_release(&stream_guard);
-  /* Already admitted users retain storage; queued users can observe closed.
-   * Raw descriptor close never waits on this FILE operation lock. */
-  int error = libc_mutex_lock(&stream->lock);
-  if (error) {
-    __builtin_trap();
-  }
+  int error;
   int descriptor = __atomic_load_n(&stream->descriptor, __ATOMIC_ACQUIRE);
   stream->operation = descriptor >= 0 ? descriptor_hold(descriptor) : NULL;
   bool cursor = descriptor_file_begin(stream->operation);
@@ -1095,6 +1134,36 @@ static int close_stream(FILE *stream, bool abandon)
   }
   descriptor_drop(stream->operation);
   stream->operation = NULL;
+  return error;
+}
+
+static int close_stream(FILE *stream, bool abandon)
+{
+  libc_lock_acquire(&stream_guard);
+  FILE **link = &streams;
+  while (*link && *link != stream) {
+    link = &(*link)->next;
+  }
+  if (!*link || stream->closing) {
+    libc_lock_release(&stream_guard);
+    errno = EBADF;
+    return EOF;
+  }
+  if (stream->references == UINT32_MAX) {
+    libc_lock_release(&stream_guard);
+    errno = EOVERFLOW;
+    return EOF;
+  }
+  stream->closing = true;
+  ++stream->references; /* Closing owner prevents storage reclamation. */
+  libc_lock_release(&stream_guard);
+  /* Already admitted users retain storage; queued users can observe closed.
+   * Raw descriptor close never waits on this FILE operation lock. */
+  int error = libc_mutex_lock(&stream->lock);
+  if (error) {
+    __builtin_trap();
+  }
+  error = close_association(stream, abandon);
   dispose_stream(stream);
   libc_lock_acquire(&stream_guard);
   link = &streams;

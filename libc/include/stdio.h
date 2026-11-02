@@ -35,7 +35,7 @@ extern FILE *stderr;
  * Read-ahead is private and never accompanies a delegated stream: do not read a
  * stream you will delegate with buffered input. ftell excludes read-ahead; a
  * successful fseek or a write drops it, a failed seek keeps it. Standard
- * descriptors adopt exclusive startup handles once. No freopen. Byte/wide
+ * descriptors adopt exclusive startup handles once. Byte/wide
  * orientation is selected by the first I/O operation (or fwide), remains until
  * close and rejects mixing with EINVAL. Zero-sized transfers do not orient.
  * Descriptor O_NONBLOCK applies to backend stream transfers, including these
@@ -49,6 +49,13 @@ extern FILE *stderr;
  * its indicators; its read() whitelist is separate. FILE/provider backing
  * operations still finish first. */
 FILE *fopen(const char *__restrict path, const char *__restrict mode);
+/* Close stream's file (ignoring any error), then open path with mode on the same
+ * FILE, which keeps its identity: this replaces stdin, stdout or stderr. Buffering
+ * mode, indicators, orientation and pushback reset. A failed open leaves the
+ * stream closed and returns NULL. A NULL path (changing the mode in place) and a
+ * memory stream fail with ENOTSUP. */
+FILE *freopen(const char *__restrict path, const char *__restrict mode,
+    FILE *__restrict stream);
 /* Associate one FILE with an existing descriptor using fopen mode syntax.
  * Failure retains caller ownership; success transfers it to fclose. Requested
  * access must fit the descriptor, and FILE operations obey that selection.
