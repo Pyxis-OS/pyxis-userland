@@ -68,6 +68,8 @@ return {
         home = {
           access = "read-write",
           optional = true,
+          -- Programs and libraries under development may be imported from here.
+          import = true,
         },
         pkg = {
           view = "pkg",

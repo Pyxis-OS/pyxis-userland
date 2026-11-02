@@ -319,7 +319,7 @@ static enum call_status walk(const struct path_context *context, const char *pat
 enum call_status path_open_directory_native(const struct path_context *context, const char *path,
     uint64_t required_rights, struct path_workspace *workspace, handle_t *handle)
 {
-  if (!handle || (required_rights & ~DIRECTORY_RIGHTS)) {
+  if (!handle || (required_rights & ~(DIRECTORY_RIGHTS | DIRECTORY_RIGHT_IMPORT))) {
     return CALL_BAD_REQUEST;
   }
   *handle = HANDLE_INVALID;
@@ -378,7 +378,7 @@ static enum call_status resolve(const struct path_context *context, const char *
   *handle = HANDLE_INVALID;
   uint64_t directory_rights = DIRECTORY_RIGHT_LOOKUP;
   if (kind == DIRECTORY_KIND_FILE) {
-    if (rights & ~FILE_RIGHTS) {
+    if (rights & ~(FILE_RIGHTS | FILE_RIGHT_IMPORT)) {
       return CALL_BAD_REQUEST;
     }
     if (rights & FILE_RIGHT_READ) {
@@ -387,8 +387,11 @@ static enum call_status resolve(const struct path_context *context, const char *
     if (rights & FILE_RIGHT_WRITE) {
       directory_rights |= DIRECTORY_RIGHT_WRITE_FILES;
     }
+    if (rights & FILE_RIGHT_IMPORT) {
+      directory_rights |= DIRECTORY_RIGHT_IMPORT;
+    }
   } else if (kind == DIRECTORY_KIND_DIRECTORY) {
-    if (rights & ~DIRECTORY_RIGHTS) {
+    if (rights & ~(DIRECTORY_RIGHTS | DIRECTORY_RIGHT_IMPORT)) {
       return CALL_BAD_REQUEST;
     }
     directory_rights |= rights;
@@ -469,7 +472,7 @@ enum call_status path_create_file(const struct path_context *context, const char
     return CALL_BAD_REQUEST;
   }
   *handle = HANDLE_INVALID;
-  if (!path || !*path || (rights & ~FILE_RIGHTS)) {
+  if (!path || !*path || (rights & ~(FILE_RIGHTS | FILE_RIGHT_IMPORT))) {
     return CALL_BAD_REQUEST;
   }
   if (path[strlen(path) - 1] == '/') {

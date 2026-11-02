@@ -67,7 +67,11 @@ return {
           access = "read-write",
           optional = true,
         },
-        home = "read-write",
+        home = {
+          access = "read-write",
+          -- Programs and libraries under development may be imported from here.
+          import = true,
+        },
         system = {
           access = "read-only",
           optional = true,

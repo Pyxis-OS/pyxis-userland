@@ -426,7 +426,7 @@ enum call_status disk_open_volume(handle_t disk, uint64_t partition,
   }
   *root = HANDLE_INVALID;
   if (!partition || partition > UINT32_MAX || !name ||
-      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~DIRECTORY_RIGHTS)) {
+      !(rights & DIRECTORY_RIGHT_LOOKUP) || (rights & ~(DIRECTORY_RIGHTS | DIRECTORY_RIGHT_IMPORT))) {
     return CALL_BAD_REQUEST;
   }
   size_t length = 0;

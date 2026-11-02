@@ -7,8 +7,9 @@
 #include <string.h>
 #include <syscall.h>
 
+/* Package views carry IMPORT when the packages root does. */
 #define COMMAND_DIRECTORY_RIGHTS (DIRECTORY_RIGHT_LOOKUP | DIRECTORY_RIGHT_ENUMERATE | \
-    DIRECTORY_RIGHT_READ_FILES)
+    DIRECTORY_RIGHT_READ_FILES | DIRECTORY_RIGHT_IMPORT)
 
 static enum call_status native_directory(handle_t handle)
 {

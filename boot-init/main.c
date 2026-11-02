@@ -335,16 +335,17 @@ static uint64_t observe_rights(handle_t mount)
 
 /* RAM volumes are named subdirectories of boot init's RAM directory, so
  * spaces granted one cannot reach the others. */
-static enum call_status open_ram_volume(handle_t ram, const char *name, handle_t *root)
+static enum call_status open_ram_volume(handle_t ram, const char *name, bool import,
+    handle_t *root)
 {
   if (ram == HANDLE_INVALID) {
     return CALL_UNAVAILABLE;
   }
-  enum call_status status = directory_create(ram, name, DIRECTORY_KIND_DIRECTORY,
-      TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, root);
+  uint64_t rights = TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO |
+      (import ? DIRECTORY_RIGHT_IMPORT : 0);
+  enum call_status status = directory_create(ram, name, DIRECTORY_KIND_DIRECTORY, rights, root);
   if (status == CALL_ALREADY_EXISTS) {
-    status = directory_lookup(ram, name, DIRECTORY_KIND_DIRECTORY,
-        TMP_ROOT_RIGHTS | DIRECTORY_RIGHT_FILESYSTEM_INFO, root);
+    status = directory_lookup(ram, name, DIRECTORY_KIND_DIRECTORY, rights, root);
   }
   return status;
 }
@@ -397,9 +398,13 @@ static enum call_status selected_fat32_disk(handle_t disks, handle_t clock, cons
   }
 }
 
+/* IMPORT reaches a volume's root only on native and RAM volumes, for the
+ * packages volume and any space root that asks for it. */
 static enum call_status mount_volume(const struct authority *authority,
-    const struct boot_volume *volume, bool read_write, struct mounted_volume *mounted)
+    const struct boot_volume *volume, bool read_write, bool import,
+    struct mounted_volume *mounted)
 {
+  uint64_t import_right = import ? DIRECTORY_RIGHT_IMPORT : 0;
   handle_t *root = &mounted->root;
   if (volume->kind == BOOT_VOLUME_BOOT_ESP || volume->kind == BOOT_VOLUME_FAT32) {
     struct mount_fat32_reply pair = {HANDLE_INVALID, HANDLE_INVALID};
@@ -433,12 +438,12 @@ static enum call_status mount_volume(const struct authority *authority,
       return CALL_UNAVAILABLE;
     }
     uint64_t rights = (read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) |
-        observe_rights(authority->ram_npfs);
+        observe_rights(authority->ram_npfs) | import_right;
     return mount_open_ram_volume(authority->ram_npfs, authority->ram_npfs_bytes,
         volume->volume, rights, root);
   }
   if (volume->kind == BOOT_VOLUME_RAM) {
-    return open_ram_volume(authority->ram, volume->name, root);
+    return open_ram_volume(authority->ram, volume->name, import, root);
   }
   if (volume->kind == BOOT_VOLUME_VIRTIO_FS) {
     if (authority->host_mount == HANDLE_INVALID) {
@@ -452,7 +457,7 @@ static enum call_status mount_volume(const struct authority *authority,
     return CALL_UNAVAILABLE;
   }
   uint64_t rights = (read_write ? DIRECTORY_CONTENT_RIGHTS : BOOT_ROOT_RIGHTS) |
-      observe_rights(authority->native_mount);
+      observe_rights(authority->native_mount) | import_right;
   return mount_open_volume(authority->native_mount, volume->partition, volume->volume,
       rights, root);
 }
@@ -602,12 +607,15 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
          !strcmp(volume->name, BOOT_HTTP_WORK_VOLUME) ||
          (volume->kind == BOOT_VOLUME_RAM_NPFS && !strcmp(volume->name, BOOT_SYSTEM_VOLUME)));
     bool used = maintenance, read_write = maintenance;
+    /* pkg:// views of the packages volume always carry IMPORT. */
+    bool import = !strcmp(volume->name, BOOT_PACKAGES_VOLUME);
     for (size_t j = 0; j < plan->space_count; ++j) {
       const struct boot_space *space = plan->spaces[j];
       for (size_t k = 0; k < space->root_count; ++k) {
         if (!strcmp(space->roots[k].volume, volume->name)) {
           used = true;
           read_write |= space->roots[k].read_write;
+          import |= space->roots[k].import;
         }
       }
       for (size_t k = 0; k < space->grant_count; ++k) {
@@ -623,7 +631,7 @@ static bool mount_plan(const struct authority *authority, const struct boot_plan
     struct mounted_volume *mounted = &mounts->entries[mounts->count++];
     *mounted = (struct mounted_volume){.volume = volume,
       .root = HANDLE_INVALID, .control = HANDLE_INVALID};
-    mounted->status = mount_volume(authority, volume, read_write, mounted);
+    mounted->status = mount_volume(authority, volume, read_write, import, mounted);
     if (mounted->status != CALL_OK) {
       printf("boot-init: volume %s unavailable (status %u)\n", volume->name, mounted->status);
     }
@@ -1051,7 +1059,8 @@ static const char *installer_sources(const struct authority *authority,
       console.protocol != PROTOCOL_CONSOLE) {
     return "the installer capability is incomplete";
   }
-  enum call_status status = open_ram_volume(authority->ram, "installer", &launch->installer_scratch);
+  enum call_status status = open_ram_volume(authority->ram, "installer", false,
+      &launch->installer_scratch);
   if (status != CALL_OK) {
     snprintf(reason, size, "installer scratch unavailable (status %u)", status);
     return reason;
@@ -1370,9 +1379,11 @@ static const char *build_launch(const struct authority *authority, struct mounts
         return reason;
       }
       launch->views[launch->view_count++] = view;
+      uint64_t view_rights = PACKAGE_TREE_RIGHTS |
+          (root->view == BOOT_ROOT_PKG ? DIRECTORY_RIGHT_IMPORT : 0);
       launch_add(launch, LAUNCH_ROOTS,
           (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, 0),
-          &(struct launch_grant){view, PACKAGE_TREE_RIGHTS, 0});
+          &(struct launch_grant){view, view_rights, 0});
       continue;
     }
     struct handle_info info;
@@ -1381,7 +1392,13 @@ static const char *build_launch(const struct authority *authority, struct mounts
       snprintf(reason, size, "volume %s unavailable (status %u)", root->volume, status);
       return reason;
     }
-    uint64_t rights = info.rights & (root->read_write ? DIRECTORY_RIGHTS : READ_ONLY_ROOT_RIGHTS);
+    uint64_t rights = info.rights & ((root->read_write ? DIRECTORY_RIGHTS : READ_ONLY_ROOT_RIGHTS) |
+        (root->import ? DIRECTORY_RIGHT_IMPORT : 0));
+    if (root->import && !(rights & DIRECTORY_RIGHT_IMPORT)) {
+      snprintf(reason, size, "root %s: volume %s cannot carry import", root->name,
+          root->volume);
+      return reason;
+    }
     launch_add(launch, LAUNCH_ROOTS,
         (struct launch_environment_entry)PROFILE_CAP((uintptr_t)root->name, 0),
         &(struct launch_grant){mounted->root, rights, 0});
@@ -1891,7 +1908,7 @@ static struct mounted_volume *mount_builtin_volume(const struct authority *autho
   mounted = &mounts->entries[mounts->count++];
   *mounted = (struct mounted_volume){.volume = volume,
     .root = HANDLE_INVALID, .control = HANDLE_INVALID};
-  mounted->status = mount_volume(authority, volume, true, mounted);
+  mounted->status = mount_volume(authority, volume, true, false, mounted);
   if (mounted->status != CALL_OK) {
     printf("boot-init: volume %s unavailable (status %u)\n", volume->name, mounted->status);
   }

@@ -63,6 +63,9 @@ struct boot_root {
   enum boot_root_view view;
   bool read_write;
   bool optional;
+  /* DIRECTORY_RIGHT_IMPORT: libraries here may be imported into processes.
+   * Volume roots on npfs, ram-npfs or ram only; pkg views always carry it. */
+  bool import;
 };
 
 enum boot_grant_kind {

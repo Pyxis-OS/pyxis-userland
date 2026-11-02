@@ -275,7 +275,7 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
 {
   const char *access_name = NULL;
   if (lua_type(state, -1) == LUA_TTABLE) {
-    static const char *const keys[] = {"access", "optional", "view"};
+    static const char *const keys[] = {"access", "optional", "view", "import"};
     config_keys(state, -1, keys, sizeof(keys) / sizeof(keys[0]));
     config_field(state, -1, "optional");
     if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
@@ -284,8 +284,19 @@ static void read_root(lua_State *state, struct boot_space *space, struct boot_ro
     }
     root->optional = lua_toboolean(state, -1);
     lua_pop(state, 1);
+    config_field(state, -1, "import");
+    if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+      luaL_error(state, "space %s: root %s: import must be a boolean", space->name,
+          root->name);
+    }
+    root->import = lua_toboolean(state, -1);
+    lua_pop(state, 1);
     config_field(state, -1, "view");
     if (!lua_isnil(state, -1)) {
+      if (root->import) {
+        luaL_error(state, "space %s: root %s: views choose their own import", space->name,
+            root->name);
+      }
       const char *view = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "";
       if (strcmp(view, "pkg") && strcmp(view, "sdk")) {
         luaL_error(state, "space %s: root %s: view must be \"pkg\" or \"sdk\"", space->name,

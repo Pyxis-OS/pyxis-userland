@@ -153,7 +153,7 @@ enum call_status directory_lookup_typed(handle_t directory, const char *name,
     return CALL_BAD_REQUEST;
   }
   *reply = (struct directory_typed_lookup_reply){0};
-  if (!name || (file_rights & ~FILE_RIGHTS) || (directory_rights & ~DIRECTORY_RIGHTS)) {
+  if (!name || (file_rights & ~(FILE_RIGHTS | FILE_RIGHT_IMPORT)) || (directory_rights & ~(DIRECTORY_RIGHTS | DIRECTORY_RIGHT_IMPORT))) {
     return CALL_BAD_REQUEST;
   }
   struct handle_info info;
