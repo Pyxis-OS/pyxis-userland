@@ -109,7 +109,7 @@ int main(int argc, char **argv)
   if (exchange.response != DNS_COMPLETE) {
     fputs(exchange.response == DNS_TRUNCATED ?
         "dig: truncated DNS response; TCP fallback is unavailable\n" :
-        "dig: response exceeds the supported 512-byte DNS limit\n", stderr);
+        "dig: response exceeds the supported 1232-byte DNS limit\n", stderr);
     return EXIT_FAILURE;
   }
   return print_answers(&exchange.reply) && !ferror(stderr) ? EXIT_SUCCESS : EXIT_FAILURE;

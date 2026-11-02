@@ -35,7 +35,7 @@ bool dns_resolve_address(const char *program, const char *target,
   if (exchange.response != DNS_COMPLETE) {
     fprintf(stderr, exchange.response == DNS_TRUNCATED ?
         "%s: truncated DNS response; TCP fallback is unavailable\n" :
-        "%s: response exceeds the supported 512-byte DNS limit\n", program);
+        "%s: response exceeds the supported 1232-byte DNS limit\n", program);
     return false;
   }
   if (exchange.reply.rcode) {
